@@ -2,7 +2,9 @@ import asyncio
 import contextlib
 
 import asyncpg
+import httpx
 
+from dcdash.connectors.simulator import SimulatorConfig, SimulatorConnector
 from dcdash.core.crypto import encrypt
 
 
@@ -57,3 +59,14 @@ async def wait_for(check, expected, timeout: float = 10.0):
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError(f"timed out: last value {value!r}, expected {expected!r}")
         await asyncio.sleep(0.1)
+
+
+def sim_factory(sim_app):
+    """A ConnectorFactory whose simulator connectors talk to an in-process app."""
+
+    def factory(type_name, config, secret):
+        return SimulatorConnector(
+            SimulatorConfig(**config), secret, transport=httpx.ASGITransport(app=sim_app)
+        )
+
+    return factory
