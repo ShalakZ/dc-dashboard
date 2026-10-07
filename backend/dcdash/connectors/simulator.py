@@ -2,13 +2,13 @@ import asyncio
 import time
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 from pydantic import AnyHttpUrl, BaseModel
 
 from dcdash.connectors.base import (
     BAD, GOOD, Claim, ConnectionCheck, Connector, ConnectorError, PointDescriptor, PointValue, register,
+    url_host_port,
 )
 
 
@@ -39,10 +39,13 @@ class SimulatorConnector(Connector):
 
     @classmethod
     def endpoint_key(cls, config: dict[str, Any]) -> tuple[str, int, str] | None:
-        parsed = urlparse(str(config.get("url", "")))
-        if not parsed.hostname:
+        if not isinstance(config, dict):
             return None
-        return parsed.hostname.lower(), parsed.port or (443 if parsed.scheme == "https" else 80), ""
+        found = url_host_port(config.get("url"))
+        if found is None:
+            return None
+        host, port, scheme = found
+        return host, port if port is not None else (443 if scheme == "https" else 80), ""
 
     def __init__(
         self,

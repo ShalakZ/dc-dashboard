@@ -185,7 +185,7 @@ implements:
 | Operation | Purpose |
 |---|---|
 | `config_schema` | A Pydantic model describing the connection settings; the UI renders its form from this. |
-| `probe(host, port)` | Phase 2, a classmethod (there is no configured instance yet). Returns a claim (suggested config, a label, whether credentials are needed) if something this connector understands is at the address, otherwise nothing. Probes use only requests the connector may already issue. |
+| `probe(host, port)` | Phase 2, a classmethod (there is no configured instance yet). Returns a claim (suggested config, a label) if something this connector understands is at the address, otherwise nothing. Probes use only requests the connector may already issue. |
 | `endpoint_key(config)` | Phase 2, a classmethod. A normalized `(host, port, qualifier)` tuple used to match a discovered endpoint to an existing source. |
 | `test()` | Connects and reports OK with latency, authentication failed, timeout, or protocol error. |
 | `browse()` | Lists the points the source offers. |

@@ -87,10 +87,14 @@ class ModbusConnector(Connector):
 
     @classmethod
     def endpoint_key(cls, config: dict[str, Any]) -> tuple[str, int, str] | None:
-        host = config.get("host")
-        if not host:
+        if not isinstance(config, dict):
             return None
-        return str(host).lower(), int(config.get("port", 502)), f"unit{int(config.get('unit_id', 1))}"
+        host = config.get("host")
+        port = _bounded_int(config.get("port", 502), 1, 65535)
+        unit_id = _bounded_int(config.get("unit_id", 1), 0, 247)
+        if not isinstance(host, str) or not host or port is None or unit_id is None:
+            return None
+        return host.lower(), port, f"unit{unit_id}"
 
     def __init__(self, config: ModbusConfig, secret: str | None = None) -> None:
         super().__init__(config, secret)
@@ -222,6 +226,15 @@ class ModbusConnector(Connector):
             else PointValue(address=a, ts=ts, value=None, quality=BAD)
             for a in addresses
         ]
+
+
+def _bounded_int(value: object, low: int, high: int) -> int | None:
+    """An int (or ASCII digit string) within [low, high]; None for anything else. Never raises."""
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        return None
+    return value
 
 
 def _is_no_response(exc: BaseException) -> bool:
