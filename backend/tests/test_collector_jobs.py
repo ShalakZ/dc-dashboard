@@ -82,3 +82,32 @@ async def test_fail_stale_jobs(db):
     row = await job(db, stale)
     assert row["status"] == "failed" and row["result"] == {"error": "collector restarted"}
     assert (await job(db, pending))["status"] == "pending"
+
+
+async def test_jobs_run_concurrently_up_to_four(db):
+    """Six slow test jobs: with a semaphore of 4 the peak in-flight count is 4, not 1 and not 6."""
+    import asyncio
+
+    from dcdash.connectors.base import ConnectionCheck
+
+    in_flight = 0
+    peak = 0
+
+    class SlowConnector:
+        async def test(self) -> ConnectionCheck:
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.05)
+            in_flight -= 1
+            return ConnectionCheck(True, "ok", 1.0, "ok")
+
+        async def close(self) -> None:
+            return None
+
+    source = await make_source(db)
+    for _ in range(6):
+        await add_job(db, "test_source", source)
+    processed = await run_pending_jobs(db, factory=lambda *_: SlowConnector())
+    assert processed == 6 and peak == 4
+    assert await db.fetchval("SELECT count(*) FROM jobs WHERE status = 'done'") == 6

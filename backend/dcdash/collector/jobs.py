@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import asdict
 from typing import Any
@@ -62,26 +63,39 @@ async def _browse_source(pool: asyncpg.Pool, params: dict[str, Any], factory: Co
 _HANDLERS = {"test_source": _test_source, "browse_source": _browse_source}
 
 
-async def run_pending_jobs(pool: asyncpg.Pool, factory: ConnectorFactory = create_connector) -> int:
-    """Run every pending job, one at a time. Returns how many were processed."""
-    processed = 0
+async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFactory) -> None:
+    try:
+        handler = _HANDLERS.get(job["kind"])
+        if handler is None:
+            raise ValueError(f"unknown job kind: {job['kind']}")
+        result = await handler(pool, job["params"], factory)
+        status = "done"
+    except Exception as exc:
+        log.warning("job %s (%s) failed: %s", job["id"], job["kind"], exc)
+        result = {"error": str(exc) or type(exc).__name__}
+        status = "failed"
+    await pool.execute(
+        "UPDATE jobs SET status = $2, result = $3, finished_at = now() WHERE id = $1",
+        job["id"], status, result,
+    )
+
+
+async def run_pending_jobs(
+    pool: asyncpg.Pool, factory: ConnectorFactory = create_connector, concurrency: int = 4
+) -> int:
+    """Claim every pending job and run up to `concurrency` handlers at once. Returns the count."""
+    gate = asyncio.Semaphore(concurrency)
+
+    async def guarded(job: asyncpg.Record) -> None:
+        async with gate:
+            await _run_one(pool, job, factory)
+
+    tasks: list[asyncio.Task[None]] = []
     while (job := await pool.fetchrow(_CLAIM)) is not None:
-        try:
-            handler = _HANDLERS.get(job["kind"])
-            if handler is None:
-                raise ValueError(f"unknown job kind: {job['kind']}")
-            result = await handler(pool, job["params"], factory)
-            status = "done"
-        except Exception as exc:
-            log.warning("job %s (%s) failed: %s", job["id"], job["kind"], exc)
-            result = {"error": str(exc) or type(exc).__name__}
-            status = "failed"
-        await pool.execute(
-            "UPDATE jobs SET status = $2, result = $3, finished_at = now() WHERE id = $1",
-            job["id"], status, result,
-        )
-        processed += 1
-    return processed
+        tasks.append(asyncio.create_task(guarded(job)))
+    if tasks:
+        await asyncio.gather(*tasks)
+    return len(tasks)
 
 
 async def fail_stale_jobs(pool: asyncpg.Pool) -> int:

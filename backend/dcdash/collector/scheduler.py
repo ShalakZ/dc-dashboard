@@ -146,25 +146,31 @@ async def run_group(
 
 
 class Scheduler:
-    """Runs one polling task per PollGroup and rebuilds them when configuration changes."""
+    """Runs one polling task per PollGroup and restarts only the groups that changed."""
 
     def __init__(self, pool: asyncpg.Pool, writer: Writer, factory: ConnectorFactory = create_connector) -> None:
         self._pool = pool
         self._writer = writer
         self._factory = factory
-        self._tasks: list[asyncio.Task[None]] = []
+        # Keyed by (source_id, interval): load_groups yields one PollGroup per such pair.
+        self._running: dict[tuple[int, int], tuple[PollGroup, asyncio.Task[None]]] = {}
 
     async def reload(self) -> int:
         groups = await load_groups(self._pool)  # load first so a failure leaves the old tasks running
-        await self.stop()
-        self._tasks = [
-            asyncio.create_task(run_group(group, self._pool, self._writer, self._factory))
-            for group in groups
-        ]
+        wanted = {(group.source_id, group.interval): group for group in groups}
+        stale = [key for key, (group, _) in self._running.items() if wanted.get(key) != group]
+        await self._cancel(stale)
+        for key, group in wanted.items():
+            if key not in self._running:
+                task = asyncio.create_task(run_group(group, self._pool, self._writer, self._factory))
+                self._running[key] = (group, task)
         return len(groups)
 
-    async def stop(self) -> None:
-        for task in self._tasks:
+    async def _cancel(self, keys: list[tuple[int, int]]) -> None:
+        tasks = [self._running.pop(key)[1] for key in keys]
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks = []
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def stop(self) -> None:
+        await self._cancel(list(self._running))
