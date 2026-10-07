@@ -114,7 +114,11 @@ export interface GraphModel {
   layout: Record<string, { x: number; y: number }>;
 }
 export interface AcceptPointIn { point_id: number; metric: Metric; scale: number; interval_seconds: number | null; custom_unit: string | null }
-export type AcceptIn = { source_id: number; points: AcceptPointIn[] } & ({ asset_id: number } | { new_asset: { name: string; parent_id: number | null } });
+/** Exactly one target: an existing asset or a new one. The `never` keeps a body that names both from compiling. */
+export type AcceptIn = { source_id: number; points: AcceptPointIn[] } & (
+  | { asset_id: number; new_asset?: never }
+  | { new_asset: { name: string; parent_id: number | null }; asset_id?: never }
+);
 export interface AcceptResult { asset_id: number; mapping_ids: number[] }
 export interface AuditEntry { id: number; user_id: number | null; username: string | null; action: string; detail: Record<string, unknown>; ts: string }
 export interface AuditPage { total: number; items: AuditEntry[] }

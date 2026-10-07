@@ -1,25 +1,51 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GraphModel, GraphPoint } from "../api/types";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { DiscoveryPage } from "./DiscoveryPage";
 
+// What React Flow reports as overlapping the dropped node; set per test.
+const flow = vi.hoisted(() => {
+  const state = { intersecting: [] as { id: string; type?: string }[] };
+  return { state, getIntersectingNodes: vi.fn((_node: unknown) => state.intersecting) };
+});
+
 // React Flow measures the DOM, which jsdom cannot do: render the nodes plainly and expose the props the page wires up.
+// `drag-{id}` plays a whole drag as React Flow does it (start, the final position change, stop) and ends at 7,8.
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
   return {
     ...actual,
     Handle: () => null,
-    ReactFlow: ({ nodes, nodeTypes, onNodeClick, onNodeDragStop, onNodesChange }: any) => (
+    useReactFlow: () => ({ getIntersectingNodes: flow.getIntersectingNodes }),
+    ReactFlow: ({ nodes, nodeTypes, onNodeClick, onNodeDragStart, onNodeDragStop, onNodesChange }: any) => (
       <div data-testid="flow">
         {nodes.map((n: any) => {
           const Node = nodeTypes[n.type];
+          const dropped = { ...n, position: { x: 7, y: 8 } };
           return (
             <div key={n.id} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} onClick={(e) => onNodeClick?.(e, n)}>
               <Node id={n.id} data={n.data} />
               <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
-              <button data-testid={`drag-${n.id}`} onClick={(e) => onNodeDragStop?.(e, n, [{ ...n, position: { x: 7, y: 8 } }])} />
+              <button data-testid={`dragstart-${n.id}`} onClick={(e) => onNodeDragStart?.(e, n, [n])} />
+              <button
+                data-testid={`drag-${n.id}`}
+                onClick={(e) => {
+                  onNodeDragStart?.(e, n, [n]);
+                  onNodesChange?.([{ id: n.id, type: "position", position: { x: 7, y: 8 }, dragging: false }]);
+                  onNodeDragStop?.(e, dropped, [dropped]);
+                }}
+              />
+              <button
+                data-testid={`dragwith-${n.id}`}
+                onClick={(e) => {
+                  const other = nodes.find((o: any) => o.id !== n.id);
+                  const together = [dropped, { ...other, position: { x: 9, y: 9 } }];
+                  onNodeDragStart?.(e, n, [n, other]);
+                  onNodeDragStop?.(e, dropped, together);
+                }}
+              />
             </div>
           );
         })}
@@ -214,5 +240,204 @@ describe("DiscoveryPage", () => {
     mockFetch({ ...routes("operator"), "GET /api/discovery/graph": { status: 500, body: { detail: "database down" } } });
     open();
     expect(await screen.findByRole("alert")).toHaveTextContent("database down");
+  });
+});
+
+describe("DiscoveryPage mapping", () => {
+  beforeEach(() => {
+    flow.state.intersecting = [];
+    flow.getIntersectingNodes.mockClear();
+  });
+
+  // Source 1 is open with LVP01 expanded; LVP02 is fully mapped already.
+  const mappedLvp02 = () => {
+    const model = graph();
+    model.sources[0].clusters[1].points = [point(3, "LVP02 kW", { asset_id: 10, mapping_id: 7, mapped_metric: "active_power_kw" })];
+    return model;
+  };
+  const start = async (role: string, model: GraphModel | (() => GraphModel) = graph(), extra: Record<string, unknown> = {}) => {
+    const calls = mockFetch({ ...routes(role, model), ...extra });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Expand Plant OPC" }));
+    await userEvent.click(screen.getByRole("button", { name: "Expand LVP01" }));
+    return calls;
+  };
+  const puts = <T extends { method: string }>(calls: T[]) => calls.filter((c) => c.method === "PUT");
+  const dialog = () => screen.findByRole("dialog", { name: "Review mappings" });
+
+  it("a cluster dropped on an asset opens the review dialog on that asset, snaps back, and saves no layout", async () => {
+    const calls = await start("admin");
+    const [x, y] = [node("cluster:1:LVP01").dataset.x, node("cluster:1:LVP01").dataset.y];
+    flow.state.intersecting = [{ id: "src:1", type: "source" }, { id: "asset:11", type: "asset" }];
+    await userEvent.click(screen.getByTestId("drag-cluster:1:LVP01"));
+    const review = await dialog();
+    expect(within(review).getByLabelText("Asset")).toHaveValue("11");
+    expect(within(review).getAllByRole("checkbox")).toHaveLength(2); // LVP01 kW and LVP01 V
+    expect(flow.getIntersectingNodes).toHaveBeenCalledWith(expect.objectContaining({ id: "cluster:1:LVP01" }));
+    expect(puts(calls)).toHaveLength(0);
+    expect(node("cluster:1:LVP01")).toHaveAttribute("data-x", x);
+    expect(node("cluster:1:LVP01")).toHaveAttribute("data-y", y);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    // The drop position was not remembered either: after the dialog goes away a rebuild still puts the node at its start.
+    await userEvent.click(within(review).getByRole("button", { name: "Cancel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Collapse LVP01" }));
+    expect(node("cluster:1:LVP01")).toHaveAttribute("data-x", x);
+  });
+
+  it("a point dropped on an asset opens the dialog with just that point", async () => {
+    flow.state.intersecting = [{ id: "asset:10", type: "asset" }];
+    const calls = await start("admin");
+    await userEvent.click(screen.getByTestId("drag-point:1"));
+    const review = await dialog();
+    expect(within(review).getByRole("checkbox", { name: "Map LVP01 kW" })).toBeChecked();
+    expect(within(review).getAllByRole("checkbox")).toHaveLength(1);
+    expect(within(review).getByLabelText("Asset")).toHaveValue("10");
+    expect(puts(calls)).toHaveLength(0);
+  });
+
+  it("a cluster dropped on empty canvas saves its position and offers to create an asset from it", async () => {
+    const calls = await start("admin");
+    await userEvent.click(screen.getByTestId("drag-cluster:1:LVP01"));
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(puts(calls)[0]).toMatchObject({ path: "/api/discovery/layout", body: { nodes: [{ node_id: "cluster:1:LVP01", x: 7, y: 8 }] } });
+    expect(screen.getByRole("status")).toHaveTextContent('Create asset "LVP01" from this cluster?');
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await userEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Create asset…" }));
+    const review = await dialog();
+    expect(within(review).getByRole("radio", { name: "New asset" })).toBeChecked();
+    expect(within(review).getByLabelText("New asset name")).toHaveValue("LVP01");
+    expect(within(review).getByLabelText("Parent asset")).toHaveValue("");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("Dismiss removes the offer", async () => {
+    await start("admin");
+    await userEvent.click(screen.getByTestId("drag-cluster:1:LVP01"));
+    await userEvent.click(within(await screen.findByRole("status")).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("starting another drag removes the offer", async () => {
+    await start("admin");
+    await userEvent.click(screen.getByTestId("drag-cluster:1:LVP01"));
+    await screen.findByRole("status");
+    await userEvent.click(screen.getByTestId("dragstart-asset:10"));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("the offer goes away by itself after ten seconds, and a newer offer gets its own ten", async () => {
+    await start("admin");
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByTestId("drag-cluster:1:LVP01"));
+      expect(screen.getByRole("status")).toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(6_000));
+      fireEvent.click(screen.getByTestId("drag-cluster:1:LVP02")); // replaces the offer: the old timer must not cut it short
+      await act(() => vi.advanceTimersByTimeAsync(6_000));
+      expect(screen.getByRole("status")).toHaveTextContent('Create asset "LVP02"');
+      await act(() => vi.advanceTimersByTimeAsync(4_000));
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("no offer for a point, the Ungrouped bag or a cluster with nothing left to map; their position is still saved", async () => {
+    const calls = await start("admin", mappedLvp02());
+    await userEvent.click(screen.getByTestId("drag-point:1"));
+    await userEvent.click(screen.getByTestId("drag-cluster:1:LVP02")); // fully mapped
+    await userEvent.click(screen.getByTestId("drag-cluster:1:__ungrouped__"));
+    await waitFor(() => expect(puts(calls)).toHaveLength(3));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("dropping something that cannot be mapped onto an asset just moves it", async () => {
+    flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+    const calls = await start("admin");
+    await userEvent.click(screen.getByTestId("drag-src:1"));
+    await userEvent.click(screen.getByTestId("drag-cluster:1:__ungrouped__"));
+    await waitFor(() => expect(puts(calls)).toHaveLength(2));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(node("src:1")).toHaveAttribute("data-x", "7");
+  });
+
+  it("dragging several nodes together only moves them", async () => {
+    flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+    const calls = await start("admin");
+    await userEvent.click(screen.getByTestId("dragwith-cluster:1:LVP01"));
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect((puts(calls)[0].body as { nodes: unknown[] }).nodes).toHaveLength(2);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("the Map button opens the dialog with no asset chosen yet", async () => {
+    await start("admin");
+    await userEvent.click(screen.getByRole("button", { name: "Map LVP01 to asset…" }));
+    const review = await dialog();
+    expect(within(review).getByRole("radio", { name: "Existing asset" })).toBeChecked();
+    expect(within(review).getByLabelText("Asset")).toHaveValue("");
+    expect(within(review).getByRole("button", { name: "Create mappings" })).toBeDisabled();
+    expect(within(review).getAllByRole("checkbox")).toHaveLength(2);
+  });
+
+  it("the New asset button opens the dialog on a new asset named after the cluster", async () => {
+    await start("admin");
+    await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+    const review = await dialog();
+    expect(within(review).getByRole("radio", { name: "New asset" })).toBeChecked();
+    expect(within(review).getByLabelText("New asset name")).toHaveValue("LVP01");
+  });
+
+  it("a point has a Map button but no New asset button, and the Ungrouped bag and a fully mapped cluster have neither", async () => {
+    await start("admin", mappedLvp02());
+    await userEvent.click(screen.getByRole("button", { name: "Map LVP01 kW to asset…" }));
+    expect(within(await dialog()).getAllByRole("checkbox")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "New asset from LVP01 kW…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Map|New asset from) Ungrouped/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Map LVP02 to asset…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New asset from LVP02…" })).not.toBeInTheDocument();
+  });
+
+  it("a mapped point has no Map button", async () => {
+    const model = graph();
+    model.sources[0].clusters[0].points[0] = point(1, "LVP01 kW", { asset_id: 11, mapping_id: 4, mapped_metric: "active_power_kw" });
+    await start("admin", model);
+    expect(screen.queryByRole("button", { name: "Map LVP01 kW to asset…" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Map LVP01 V to asset…" })).toBeInTheDocument();
+  });
+
+  it("creating the mappings closes the dialog and shows the refreshed graph", async () => {
+    let mapped = false;
+    const model = () => {
+      const m = graph();
+      if (mapped) m.sources[0].clusters[0].points = m.sources[0].clusters[0].points.map((p) => ({ ...p, asset_id: 11, mapping_id: p.id + 100, mapped_metric: "voltage_v" as const }));
+      return m;
+    };
+    const calls = await start("admin", model, {
+      "POST /api/discovery/accept": () => { mapped = true; return { status: 201, body: { asset_id: 11, mapping_ids: [101, 102] } }; },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Map LVP01 to asset…" }));
+    const review = await dialog();
+    await userEvent.selectOptions(within(review).getByLabelText("Asset"), "11");
+    await userEvent.click(within(review).getByRole("button", { name: "Create mappings" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.filter((c) => c.method === "POST")[0].body).toMatchObject({ source_id: 1, asset_id: 11 });
+    expect(await screen.findByText("2 mapped")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Map LVP01 to asset…" })).not.toBeInTheDocument(); // nothing left to map
+  });
+
+  it("an operator gets no map buttons, no dialog, no offer and nothing saved", async () => {
+    flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+    const calls = await start("operator");
+    expect(screen.queryByRole("button", { name: /to asset…/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New asset from/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("drag-cluster:1:LVP01")); // onto an asset
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(node("cluster:1:LVP01")).toHaveAttribute("data-x", "7"); // moved for this operator only
+    flow.state.intersecting = [];
+    await userEvent.click(screen.getByTestId("drag-cluster:1:LVP02")); // onto empty canvas
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method === "PUT" || c.method === "POST")).toBe(false);
   });
 });
