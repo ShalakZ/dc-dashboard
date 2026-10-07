@@ -100,12 +100,12 @@ The smoke test requires the asset "Smoke Panel" to have exactly two metrics, so 
 - Consumes: `GET /api/assets/{id}/summary` → `{"metrics": [{"metric": str, "value": float|None, ...}], ...}` (existing).
 - Produces: nothing for later tasks.
 
-- [ ] **Step 1: Reproduce the failure**
+- [x] **Step 1: Reproduce the failure**
 
 Run: `scripts/setup.sh --profile dev && uv run --project backend python scripts/smoke.py`
 Expected: if the local database still has a third mapping on "Smoke Panel", it prints `FAILED: timed out waiting for live values`. If it unexpectedly passes, continue; the change below is still correct.
 
-- [ ] **Step 2: Fix the check**
+- [x] **Step 2: Fix the check**
 
 Replace the body of `live()` so it waits only for the two metrics the script mapped:
 
@@ -119,12 +119,12 @@ Replace the body of `live()` so it waits only for the two metrics the script map
 
 Leave the printing loop below it unchanged (it prints every metric on the asset).
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `uv run --project backend python scripts/smoke.py`
 Expected: prints `browsed 60 points`, the metric lines and `OK`.
 
-- [ ] **Step 4: Tear down and commit**
+- [x] **Step 4: Tear down and commit**
 
 ```bash
 docker compose --profile dev down
@@ -154,7 +154,7 @@ git push
   - `async def audit(db: AsyncSession, user_id: int | None, action: str, detail: dict[str, Any] | None = None) -> None` — adds a row to the session's transaction; the caller commits.
   - `async def audit_pool(pool: asyncpg.Pool, user_id: int | None, action: str, detail: dict[str, Any] | None = None) -> None` — inserts and commits immediately.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `backend/tests/test_schema.py` (extend `EXPECTED_TABLES` with `"scan_scopes", "scans", "scan_findings", "graph_layout"` too):
 
@@ -231,12 +231,12 @@ async def test_audit_model_reads_the_row(db):
     assert row.action == "a" and row.detail == {} and row.ts is not None
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd backend && uv run pytest tests/test_schema.py tests/test_audit.py -v`
 Expected: FAIL (`scan_scopes` missing, `dcdash.core.audit` not found).
 
-- [ ] **Step 3: Write the migration, models and helper**
+- [x] **Step 3: Write the migration, models and helper**
 
 `0003_discovery.py` (read `0001_initial.py` for how statements are executed and how `downgrade` is written, and mirror it):
 
@@ -394,12 +394,12 @@ async def audit_pool(
 
 In `tests/conftest.py` change `TABLES` so the truncate covers the new tables: `"audit_log, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, readings, mappings, points, assets, sources, sessions, users, settings"`.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd backend && uv run pytest tests/test_schema.py tests/test_audit.py tests/test_schema_tiers.py -v`
 Expected: PASS. Then the whole suite: `uv run pytest -q` — all green (nothing else should change behaviour).
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add backend
@@ -435,7 +435,7 @@ git push
   - `def local_addresses() -> list[str]` — this machine's non-loopback IPv4 addresses (impure)
   - `Settings.scan_max_hosts: int = 1024` (env `DCDASH_SCAN_MAX_HOSTS`, `ge=1, le=65536`), `Settings.scan_extra_ports: str = ""` (env `DCDASH_SCAN_EXTRA_PORTS`, comma-separated ports)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_discovery_logic.py`:
 
@@ -605,12 +605,12 @@ def test_scan_limits_have_defaults_and_can_be_overridden(monkeypatch):
     assert settings.scan_max_hosts == 256 and settings.scan_extra_ports == "5020,1502"
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd backend && uv run pytest tests/test_discovery_logic.py tests/test_config.py -v`
 Expected: FAIL (module not found).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/core/discovery.py`:
 
@@ -856,12 +856,12 @@ In `compose.yaml` add these two lines under `x-backend-env: &backend-env` (the e
 ```
 and in `.env.example` add, commented out, `# DCDASH_SCAN_MAX_HOSTS=1024` and `# DCDASH_SCAN_EXTRA_PORTS=5020   # extra scan ports offered when creating a scope (the dev simulator's Modbus port)`. Verify with `docker compose config | grep SCAN` that both variables reach both services.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd backend && uv run pytest tests/test_discovery_logic.py tests/test_config.py -v`
 Expected: PASS. If a case in `test_bad_or_oversized_targets_are_rejected` unexpectedly passes validation, fix the implementation (not the test): every listed target must raise `TargetError`.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add backend
@@ -891,7 +891,7 @@ git push
   - Simulator HTTP `GET /` → `{"service": "dcdash-simulator"}`, unauthenticated.
   - Spec wording to fix in this task's commit: section 5's `endpoint_key(config)` row says "A normalized address string"; change it to "A normalized `(host, port, qualifier)` tuple".
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `backend/tests/helpers.py`:
 
@@ -1046,12 +1046,12 @@ async def test_modbus_and_opcua_do_not_claim_the_http_simulator():
         assert await OpcUaConnector.probe("127.0.0.1", port, timeout=1) is None
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd backend && uv run pytest tests/test_connector_probe.py -v`
 Expected: FAIL (`Claim` cannot be imported).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `connectors/base.py` — add above `Connector`:
 
@@ -1185,12 +1185,12 @@ Only function codes 43/14 and 3 are used, both already permitted. Tune the exact
 
 Also edit the spec row for `endpoint_key` in `docs/superpowers/specs/2026-10-06-dc-dashboard-design.md` section 5 as described under **Interfaces**.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd backend && uv run pytest tests/test_connector_probe.py tests/test_connector_base.py tests/test_connector_simulator.py tests/test_connector_opcua.py tests/test_connector_modbus.py tests/test_simulator.py -v`
 Expected: PASS (existing connector tests unaffected).
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add backend docs
@@ -1215,7 +1215,7 @@ git push
   - `async def sweep(pairs: list[tuple[str, int]], *, concurrency: int = 64, rate_per_second: float = 200.0, timeout: float = 1.0, on_progress: Callable[[int, int], None] | None = None) -> list[tuple[str, int]]` — the pairs that accepted a TCP connection, in input order; `on_progress(checked, open_count)` is called after every attempt. Module constants `SWEEP_CONCURRENCY = 64`, `SWEEP_RATE_PER_SECOND = 200.0`, `SWEEP_TIMEOUT = 1.0` are the defaults.
   - `async def publish_networks(pool: asyncpg.Pool) -> list[str]` — writes `settings` row `collector_networks` = `{"cidrs": [...]}` and returns the list; never raises.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_sweep.py`:
 
@@ -1318,12 +1318,12 @@ async def test_failures_never_propagate(db, monkeypatch):
     assert await publish_networks(db) == []
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd backend && uv run pytest tests/test_sweep.py tests/test_networks.py -v`
 Expected: FAIL (modules not found).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `collector/sweep.py`:
 
@@ -1413,12 +1413,12 @@ async def publish_networks(pool: asyncpg.Pool) -> list[str]:
 
 `collector/main.py`: import `publish_networks` and call `await publish_networks(pool)` right after `await fail_stale_jobs(pool)`.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd backend && uv run pytest tests/test_sweep.py tests/test_networks.py tests/test_collector_main.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add backend
@@ -1448,7 +1448,7 @@ git push
   - Audit row `scan.finished` with detail `{"scan_id", "status", **final progress, "error"?}` and `user_id = scans.started_by`.
   - `fail_stale_jobs` additionally sets scans with `status = 'running'` to `failed` with `error = 'collector restarted'` and `finished_at = now()`; `queued` scans are left alone (their job is still pending and will run).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_collector_scan.py` (real in-process servers; read `tests/helpers.py` and `test_collector_jobs.py` for the style):
 
@@ -1618,12 +1618,12 @@ async def test_stale_running_scans_fail_at_collector_start_but_queued_ones_stay(
     assert await db.fetchval("SELECT status FROM scans WHERE id = $1", queued) == "queued"
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd backend && uv run pytest tests/test_collector_scan.py tests/test_collector_jobs.py -v`
 Expected: FAIL (`dcdash.collector.scan` not found; stale-scan test fails).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 First the refactor (existing tests must stay green): create `collector/browse.py` containing `connector_for` (the former `_connector_for`), `_UPSERT_POINT`, and
 
@@ -1726,12 +1726,12 @@ followed by `run_scan`, which does, in order:
 
 Keep each stage in its own small function so `run_scan` reads as a list of steps.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd backend && uv run pytest tests/test_collector_scan.py tests/test_collector_jobs.py tests/test_scheduler.py tests/test_end_to_end.py -v`
 Expected: PASS. Then `uv run pytest -q` — the whole suite green (the browse refactor must not break `test_collector_jobs.py`).
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add backend
@@ -1760,7 +1760,7 @@ git push
   - `GET /scans` (operator) → newest 20: `[{id, scope_id, scope_name, status, stage, progress, created_at, finished_at, error}]`; `GET /scans/{id}` (operator) → same fields plus `scope_snapshot` and `findings: [{host, port, source_id, connector_type, outcome, detail}]`; 404 if missing.
   - `GET /sources` now omits sources with `origin = 'discovered'` that have no mapping; `SourceOut` gains `origin: str`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_api_scans.py`:
 
@@ -1958,12 +1958,12 @@ async def test_sources_list_hides_discovered_sources_until_they_are_mapped(clien
     assert manual and hidden
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd backend && uv run pytest tests/test_api_scans.py -v`
 Expected: FAIL (404s — router missing).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `api/scans.py`:
 
@@ -2053,12 +2053,12 @@ async def start_scan(scope_id: int, body: ScanStart, user: User = Admin, db: Asy
 
 `api/sources.py`: add `origin: str` to `SourceOut`; change `list_sources` to show manual sources plus discovered sources that have at least one mapped point, using `or_(Source.origin == "manual", exists().where(Point.source_id == Source.id, Mapping.point_id == Point.id))` (adjust the correlated `exists()` until the test passes). Register `scans.router` in `api/main.py`.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd backend && uv run pytest tests/test_api_scans.py tests/test_api_sources.py -v` then `uv run pytest -q`.
 Expected: PASS, whole suite green.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add backend
@@ -2107,7 +2107,7 @@ git push
   - `GET /audit?limit=50&offset=0` (admin; `limit` 1–200) → `{"total": int, "items": [{"id", "user_id", "username": str|null, "action", "detail", "ts"}]}` newest first.
   - Node-id scheme the frontend will use for layout keys: `src:{source_id}`, `cluster:{source_id}:{key}`, `point:{point_id}`, `asset:{asset_id}`, `unid:{host}:{port}` (the API stores whatever strings it is given).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_api_discovery.py`:
 
@@ -2420,12 +2420,12 @@ async def test_audit_is_admin_only_and_newest_first_with_paging_and_usernames(cl
     assert (await client.get("/api/audit")).status_code == 403
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd backend && uv run pytest tests/test_api_discovery.py tests/test_api_audit.py -v`
 Expected: FAIL (404 — routers missing).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `api/audit.py`:
 
@@ -2510,16 +2510,16 @@ Accept flow:
 5. Then `db.add(Asset(...))` and `flush` if new, build the `Mapping` rows, `db.add_all`, and `flush` inside `try/except IntegrityError` → `await db.rollback()` then `HTTPException(409, "this point is already mapped, or the asset already has this metric")`.
 6. Finally `source.enabled = True`, `await audit(...)`, `await notify(db, CONFIG_CHANNEL)`, `await db.commit()`; return 201 `{"asset_id", "mapping_ids"}`.
 
-Graph route: one `select` each for sources, points, mappings, assets, layout and the latest done scan; group points by source in Python; use `suggest_groups` / `guess_mapping` per source; `needs_credentials = point_count == 0 and source.last_error is not None`. Layout PUT: `sqlalchemy.dialects.postgresql.insert(GraphLayout).values([...]).on_conflict_do_update(index_elements=["node_id"], set_={"x": excluded.x, "y": excluded.y})`; empty `nodes` → 204 without executing.
+Graph route: one `select` each for sources, points, mappings, assets, layout and the latest done scan; group points by source in Python; use `suggest_groups` / `guess_mapping` per source; `needs_credentials = point_count == 0 and latest scan-finding outcome == "needs_credentials"` (the most recent `scan_findings` row for that source). Layout PUT: `sqlalchemy.dialects.postgresql.insert(GraphLayout).values([...]).on_conflict_do_update(index_elements=["node_id"], set_={"x": excluded.x, "y": excluded.y})`; empty `nodes` → 204 without executing.
 
 Register `discovery.router` and `audit.router` in `api/main.py`.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd backend && uv run pytest tests/test_api_discovery.py tests/test_api_audit.py -v` then `uv run pytest -q`.
 Expected: PASS, whole suite green.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add backend
@@ -2555,7 +2555,7 @@ Verified against `frontend/` on 2026-10-07:
   - `lib/scope.ts`: `parseTargets(text: string): string[]`, `parsePorts(text: string): number[]` (throws `Error` with a readable message).
   - Routes `/scans` and `/discovery` for operator and above, `/audit` for admin; nav links Scans and Discovery (operator+), Audit (admin).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `frontend/src/lib/scope.test.ts`:
 
@@ -2680,12 +2680,12 @@ describe("ScansPage", () => {
 ```
 Add to `Layout.test.tsx` (follow its existing style): operator sees links Scans and Discovery and not Audit; admin also sees Audit; viewer sees none of the three.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd frontend && npm test -- src/lib/scope.test.ts src/pages/ScansPage.test.tsx src/components/Layout.test.tsx`
 Expected: FAIL (modules missing).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `types.ts` additions (exact):
 
@@ -2758,12 +2758,12 @@ export function parsePorts(text: string): number[] {
 
 `ScansPage`: heading "Scans"; scopes table (Name, Targets joined, Ports joined) with, for admins only, buttons "Scan", "Edit", "Delete" (`window.confirm`) per row and a "New scope" button (opens `ScopeForm` with `useScopeSuggestions(true)`); "Scan" fetches `/api/scopes/{id}/preview`, shows `{hosts} hosts × {ports} ports ({pairs} probes)` with buttons "Start scan" and "Cancel"; "Start scan" posts `{ confirm_host_count: preview.hosts }`, sets the active scan id, invalidates `keys.scans`; errors from `useAction` render as `<p className="error" role="alert">`. Below: "Recent scans" table from `useScans()` (Scope, Status, Started, claimed/points) with a "Details" button per row that sets the active scan; the active scan renders `ScanProgress`. Wire routes and nav in `main.tsx` and `Layout.tsx` as described under **Interfaces**.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd frontend && npm test` then `npm run typecheck`
 Expected: PASS, no type errors.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add frontend
@@ -2789,7 +2789,7 @@ git push
   - `components/graph/nodes.tsx` exports `nodeTypes` (the five components). Interactive callbacks are injected into `node.data` by the page: `onToggle?: (nodeId: string) => void` (source and cluster), `onMap?: (nodeId: string) => void` and `onNewAsset?: (nodeId: string) => void` (Task 10). A button renders only if its callback is present. Buttons carry the React Flow class `nodrag` and `aria-label`s: `Expand {name}` / `Collapse {name}`, `Map {name} to asset…`, `New asset from {name}…`. The visible title element has class `node-title` (e2e grabs nodes by it).
   - `SourcePanel({ source, canEdit, onClose })`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `frontend/src/lib/graph.test.ts` (fixture: one discovered source `id: 1` with clusters `LVP01` (3 points) and `LVP02` (3 points) and ungrouped `[Status]`, one manual source `id: 2` with one cluster holding two points mapped to asset 10, `assets: [{id:10,parent_id:null,name:"Site"},{id:11,parent_id:10,name:"Panel 1"}]`, `unidentified: [{host:"10.0.0.9",port:8080,scan_id:4}]`, `layout: {}`):
 
@@ -2929,12 +2929,12 @@ vi.mock("@xyflow/react", async (importOriginal) => {
 ```
 Tests: nodes for sources and assets render collapsed; clicking `Expand {name}` shows the cluster nodes; clicking a source node opens the panel; an operator drag does not call `PUT /api/discovery/layout` (layout saving is covered in Task 10's wiring and the e2e); the page shows "nothing discovered yet — run a scan" with a link to `/scans` when the model has no sources.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd frontend && npm install @xyflow/react && npm test -- src/lib/graph.test.ts src/components/graph src/pages/DiscoveryPage.test.tsx`
 Expected: FAIL (modules missing). If `npm install` reports a React 19 peer conflict, report it instead of forcing `--legacy-peer-deps`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add to `src/test/setup.ts` (React Flow measures with these in jsdom):
 
@@ -2956,12 +2956,12 @@ vi.stubGlobal("DOMMatrixReadOnly", class { m22 = 1; constructor(_transform?: str
 
 `DiscoveryPage`: wrap the content in `ReactFlowProvider`; `useGraph()`; state `open: OpenState`; `built = useMemo(() => buildGraph(model, open), ...)`; keep `nodes`/`edges` in `useNodesState`/`useEdgesState`, re-seeded in an effect when `built` changes, with `data.onToggle` injected (toggling a source adds/removes it from `open.sources`; toggling a cluster adds/removes its node id from `open.clusters`); `onNodeClick` on a `source` node selects it for the panel; `ReactFlow` props `nodeTypes`, `nodesConnectable={false}`, `deleteKeyCode={null}`, `fitView`, with `<Controls />` and `<Background />`; import `@xyflow/react/dist/style.css`; give the canvas wrapper an explicit height (`calc(100vh - 120px)`); a "Refresh" button invalidates `keys.graph`. `onNodeDragStop` (admin only) saves moved nodes with `api.put("/api/discovery/layout", { nodes: [{ node_id, x, y }] })` through `useAction` (Task 10 refines this for drops). Empty model: `<p className="muted">Nothing discovered yet — <Link to="/scans">run a scan</Link>.</p>`. Add the `/discovery` route (operator+) if Task 8 did not.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd frontend && npm test` then `npm run typecheck` then `npm run build`
 Expected: PASS; the production build succeeds with `@xyflow/react` bundled.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add frontend
@@ -2991,7 +2991,7 @@ git push
   - `acceptBody(sourceId: number, target: { kind: "existing"; assetId: number } | { kind: "new"; name: string; parentId: number | null }, rows: ReviewRow[]): AcceptIn` — checked rows only.
   - `ReviewDialog({ model, payload, initialTarget, onClose })` where `initialTarget` is `{ kind: "existing"; assetId: number | null } | { kind: "new"; name: string; parentId: number | null }`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `frontend/src/lib/drop.test.ts` (reuse the `point`/`source`/`model` builders from `graph.test.ts` by moving them to `src/test/graphFixtures.ts` and importing them in both test files):
 
@@ -3080,12 +3080,12 @@ describe("acceptBody", () => {
 
 `ReviewDialog.test.tsx` (render with `renderWithProviders`, mocks as in Task 8): (1) opening with an existing asset target lists one row per point with checkboxes named `Map {name}`; (2) rows whose metric the asset already has are unchecked and show their note; (3) choosing "New asset" shows "New asset name" prefilled with the cluster label and a "Parent asset" select, and the posted body contains `new_asset`; (4) editing "Metric for {name}" and the scale input changes the posted row; (5) checking a conflicting row disables "Create mappings" and shows a message naming the conflict; (6) clicking "Create mappings" posts exactly `acceptBody(...)` to `POST /api/discovery/accept`, then calls `onClose` and the graph is refetched (assert `GET /api/discovery/graph` is called again when a graph query is mounted, or assert `onClose` only); (7) a 409 response keeps the dialog open and shows the server message in a `role="alert"`; (8) "Cancel" posts nothing; (9) with `initialTarget.assetId === null` the button stays disabled until an asset is chosen from the "Asset" select.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd frontend && npm test -- src/lib/drop.test.ts src/components/graph/ReviewDialog.test.tsx`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `lib/drop.ts` — implement the signatures above. `dropPayload` parses ids with `^cluster:(\d+):(.+)$` and `^point:(\d+)$`, finds the cluster by key in `model.sources`, and keeps only points with `asset_id === null`. `reviewRows` carries `suggestion.custom_unit` into `customUnit`. `acceptBody` maps checked rows to `{ point_id, metric, scale, interval_seconds: intervalSeconds, custom_unit: customUnit }`.
 
@@ -3099,12 +3099,12 @@ Expected: FAIL.
 
 Add unit tests to `DiscoveryPage.test.tsx` using the mocked `ReactFlow` (extend the mock to also expose `onNodeDragStop` through a test button, and mock `useReactFlow` to return `{ getIntersectingNodes: () => intersecting }`): a drop that intersects an asset opens the dialog with that asset preselected and does not call `PUT /api/discovery/layout`; a drop on empty canvas calls `PUT /api/discovery/layout` and shows the offer bar; "Map LVP01 to asset…" and "New asset from LVP01…" open the dialog with the right initial target; an operator sees none of these controls.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd frontend && npm test` then `npm run typecheck`
 Expected: PASS.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add frontend
@@ -3124,7 +3124,7 @@ git push
 - Consumes: `useAudit(limit, offset)`, `AuditPage` type (Task 8); `GET /api/audit?limit=&offset=` (Task 7).
 - Produces: the Audit screen: heading "Audit log"; table with headers Time / User / Action / Detail (`<code>` with `JSON.stringify(detail)`); "Showing {from}–{to} of {total}"; buttons "Previous" and "Next" (disabled at the ends); page size 50; user shown as `username` or "—" when null.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```tsx
 import { screen } from "@testing-library/react";
@@ -3173,21 +3173,21 @@ describe("AuditPage", () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd frontend && npm test -- src/pages/AuditPage.test.tsx`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `AuditPage`: `const [offset, setOffset] = useState(0)`, `useAudit(50, offset)`, loading text `<p className="muted">loading…</p>`, errors in `<p className="error" role="alert">{error.message}</p>`, empty state "No audit entries yet.", `new Date(ts).toLocaleString()` for the time column.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd frontend && npm test` then `npm run typecheck`
 Expected: PASS.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add frontend
@@ -3210,7 +3210,7 @@ git push
 
 Facts verified for this task (2026-10-07): in the dev stack the OPC UA simulator accepts anonymous sessions when `SIM_OPCUA_PASSWORD` is empty (`simulator/main.py` passes `None`), Modbus needs no credentials, and the HTTP simulator needs `sim-key`. After `journey.spec.ts` the HTTP simulator already exists as the manual source `sim`, so the scan **reuses** it ("existing source") and finds two new browsable sources (OPC UA and Modbus). The credentials path is covered by the Task 5 scan test, the Task 9 `SourcePanel` test and the final browser walkthrough on a fresh database. The dev Modbus simulator listens on **5020**, which is not a default port, so the e2e types `9000, 4840, 5020` into the scope form.
 
-- [ ] **Step 1: Make the spec order explicit**
+- [x] **Step 1: Make the spec order explicit**
 
 In `playwright.config.ts` replace `projects` with two projects so discovery always runs after the first-run journey (alphabetical file order is not guaranteed to be relied on):
 
@@ -3226,7 +3226,7 @@ In `playwright.config.ts` replace `projects` with two projects so discovery alwa
   ],
 ```
 
-- [ ] **Step 2: Write the discovery spec**
+- [x] **Step 2: Write the discovery spec**
 
 `frontend/e2e/discovery.spec.ts` — one linear test in the style of `journey.spec.ts` (role/label/text locators; the canvas is addressed through React Flow's `data-id` attribute and the `.node-title` element). Helper:
 
@@ -3264,16 +3264,16 @@ The test, in order:
 
 Selector note: if the 1600×1000 viewport cannot show a cluster and the asset it must reach, click "Fit view" first; the nodes are small. If a drag fails to register, the bug is in the drag handling, not in the test: report it instead of weakening the assertion.
 
-- [ ] **Step 3: Run it**
+- [x] **Step 3: Run it**
 
 Run: `E2E_I_UNDERSTAND_DATA_LOSS=yes scripts/e2e.sh`
 Expected: both specs pass. This deletes the local `dbdata` volume (the script's documented behaviour); the user has accepted that for e2e runs.
 
-- [ ] **Step 4: README**
+- [x] **Step 4: README**
 
 Update `README.md`: the status line (Phase 2); a **Discovery** section covering scopes, the per-run confirmation ("N hosts × M ports"), what a scan does (TCP connect, then each connector's read-only probe, then browse), that discovered sources are disabled until points are mapped, the graph (left discovered, right assets, dashed vs solid, expand/collapse, saved positions), drop-to-map plus the "Map to asset…" / "New asset from…" buttons and the review dialog, entering credentials for a source that needs them, and the audit log; the environment variables `DCDASH_SCAN_MAX_HOSTS` (default 1024) and `DCDASH_SCAN_EXTRA_PORTS` (for the dev simulator set it to `5020`, or type the port into the scope form); the scan limits (64 concurrent connects, 200 attempts/s, 1 s connect timeout, 3 s probe timeout); IPv4 only; and "Phase 1 actions are not audited". Add the new e2e spec to the "End-to-end test" section.
 
-- [ ] **Step 5: Tick, commit and push**
+- [x] **Step 5: Tick, commit and push**
 
 Tick every checkbox in this plan that was completed (Tasks 0–12), then:
 
