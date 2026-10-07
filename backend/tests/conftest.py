@@ -21,7 +21,7 @@ TABLES = (
 @pytest.fixture(scope="session")
 def database_url():
     container = PostgresContainer(
-        "timescale/timescaledb:latest-pg16",
+        "timescale/timescaledb:2.30.2-pg16",
         username="dcdash",
         password="dcdash",
         dbname="dcdash",

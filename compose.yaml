@@ -7,7 +7,7 @@ x-backend-env: &backend-env
 
 services:
   db:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:2.30.2-pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: dcdash
@@ -57,7 +57,7 @@ services:
     environment:
       SIM_API_KEY: sim-key
     ports:
-      - "9000:9000"
+      - "127.0.0.1:9000:9000"
 
 volumes:
   dbdata: {}
