@@ -1,11 +1,22 @@
-"""Storage settings endpoints (admin). The /api/storage stats endpoint joins this router later in plan 1C."""
+"""Storage settings and statistics endpoints (admin)."""
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
-from dcdash.core.storage import StorageSettings, load_storage_settings, save_storage_settings
+from dcdash.core.storage import (
+    StorageSettings,
+    StorageStats,
+    load_storage_settings,
+    save_storage_settings,
+    storage_stats,
+)
 
 router = APIRouter(prefix="/api", tags=["storage"], dependencies=[Depends(require_role("admin"))])
+
+
+@router.get("/storage", response_model=StorageStats)
+async def get_storage(db: AsyncSession = Depends(get_db)) -> StorageStats:
+    return await storage_stats(db)
 
 
 @router.get("/settings/storage", response_model=StorageSettings)

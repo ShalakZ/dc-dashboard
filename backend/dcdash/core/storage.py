@@ -5,6 +5,8 @@ Settings persist under the `storage` key of the shared `settings` table (see set
 """
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
+
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,3 +59,76 @@ async def save_storage_settings(db: AsyncSession, s: StorageSettings) -> None:
     await set_setting(db, STORAGE_KEY, s.model_dump())
     await apply_policies(db, s)
     await db.commit()
+
+
+class DayRows(BaseModel):
+    day: date
+    rows: int
+
+
+class StorageStats(BaseModel):
+    database_bytes: int
+    readings_bytes_uncompressed: int
+    readings_bytes_compressed: int
+    readings_bytes_total: int
+    rollup_1m_bytes: int
+    rollup_1h_bytes: int
+    rows_per_day: list[DayRows]
+    growth_bytes_per_day: float
+    disk_capacity_bytes: int
+    used_pct: float
+    days_until_full: float | None
+    warn: bool
+    settings: StorageSettings
+
+
+# hypertable_compression_stats returns no row until a chunk has been compressed, hence the coalesce.
+_STATS_SQL = text(
+    """
+    SELECT pg_database_size(current_database()) AS database_bytes,
+           hypertable_size('readings') AS readings_total,
+           coalesce((SELECT before_compression_total_bytes FROM hypertable_compression_stats('readings')), 0) AS before_c,
+           coalesce((SELECT after_compression_total_bytes FROM hypertable_compression_stats('readings')), 0) AS after_c,
+           hypertable_size((SELECT format('%I.%I', materialization_hypertable_schema, materialization_hypertable_name)
+                            FROM timescaledb_information.continuous_aggregates WHERE view_name = 'readings_1m')::regclass) AS m1,
+           hypertable_size((SELECT format('%I.%I', materialization_hypertable_schema, materialization_hypertable_name)
+                            FROM timescaledb_information.continuous_aggregates WHERE view_name = 'readings_1h')::regclass) AS h1,
+           (SELECT min(ts) FROM readings) AS oldest
+    """
+)
+_ROWS_SQL = text(
+    """
+    SELECT d::date AS day, coalesce(sum(r.n), 0)::bigint AS rows
+    FROM generate_series(:first, :today, INTERVAL '1 day') AS d
+    LEFT JOIN readings_1h r ON r.bucket >= d AND r.bucket < d + INTERVAL '1 day'
+    GROUP BY d ORDER BY d
+    """
+)
+
+
+async def storage_stats(db: AsyncSession) -> StorageStats:
+    s = await load_storage_settings(db)
+    row = (await db.execute(_STATS_SQL)).mappings().one()
+    today = datetime.now(timezone.utc).date()
+    rows = (await db.execute(_ROWS_SQL, {"first": today - timedelta(days=6), "today": today})).mappings().all()
+    oldest = row["oldest"]
+    days = max((datetime.now(timezone.utc) - oldest).total_seconds() / 86400, 1.0) if oldest else 1.0
+    growth = row["readings_total"] / days if oldest else 0.0
+    capacity = int(s.disk_capacity_gb * 1024**3)
+    used_pct = row["database_bytes"] / capacity * 100
+    remaining = capacity - row["database_bytes"]
+    return StorageStats(
+        database_bytes=row["database_bytes"],
+        readings_bytes_uncompressed=row["before_c"],
+        readings_bytes_compressed=row["after_c"],
+        readings_bytes_total=row["readings_total"],
+        rollup_1m_bytes=row["m1"],
+        rollup_1h_bytes=row["h1"],
+        rows_per_day=[DayRows(day=r["day"], rows=r["rows"]) for r in rows],
+        growth_bytes_per_day=growth,
+        disk_capacity_bytes=capacity,
+        used_pct=round(used_pct, 2),
+        days_until_full=None if growth <= 0 or remaining <= 0 else round(remaining / growth, 1),
+        warn=used_pct >= s.warn_threshold_pct,
+        settings=s,
+    )
