@@ -1,0 +1,63 @@
+name: dcdash
+
+x-backend-env: &backend-env
+  DCDASH_DATABASE_URL: postgresql://dcdash:${DCDASH_DB_PASSWORD}@db:5432/dcdash
+  DCDASH_SECRET_KEY: ${DCDASH_SECRET_KEY}
+  DCDASH_TIMEZONE: ${DCDASH_TIMEZONE:-UTC}
+
+services:
+  db:
+    image: timescale/timescaledb:2.30.2-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dcdash
+      POSTGRES_PASSWORD: ${DCDASH_DB_PASSWORD}
+      POSTGRES_DB: dcdash
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dcdash -d dcdash"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ./backend
+    image: dcdash-backend:local
+    restart: unless-stopped
+    command: sh -c "alembic upgrade head && uvicorn dcdash.api.main:app --host 0.0.0.0 --port 8000"
+    environment: *backend-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  collector:
+    build: ./backend
+    image: dcdash-backend:local
+    restart: unless-stopped
+    command: python -m dcdash.collector.main
+    environment: *backend-env
+    depends_on:
+      api:
+        condition: service_healthy
+
+  simulator:
+    build: ./backend
+    image: dcdash-backend:local
+    profiles: [dev]
+    restart: unless-stopped
+    command: uvicorn dcdash.simulator.app:app --host 0.0.0.0 --port 9000
+    environment:
+      SIM_API_KEY: sim-key
+    ports:
+      - "127.0.0.1:9000:9000"
+
+volumes:
+  dbdata: {}

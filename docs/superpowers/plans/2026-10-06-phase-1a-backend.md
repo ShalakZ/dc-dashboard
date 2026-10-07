@@ -123,7 +123,7 @@ backend/
 - Produces: `dcdash.core.config.Settings` with fields `database_url: str`, `secret_key: str`, `session_hours: int = 12`, `timezone: str = "UTC"` and property `sqlalchemy_url: str`; `get_settings() -> Settings` (cached; `get_settings.cache_clear()` resets).
 - Produces: `dcdash.api.main.create_app() -> FastAPI` and module-level `app`; `GET /api/health` returns `{"status": "ok"}`.
 
-- [ ] **Step 1: Create the branch and repo-level files**
+- [x] **Step 1: Create the branch and repo-level files**
 
 ```bash
 git checkout -b phase-1a-backend
@@ -148,7 +148,7 @@ backups/
 *.ps1 text eol=crlf
 ```
 
-- [ ] **Step 2: Create `backend/pyproject.toml`**
+- [x] **Step 2: Create `backend/pyproject.toml`**
 
 ```toml
 [project]
@@ -193,7 +193,7 @@ testpaths = ["tests"]
 
 Create the three empty `__init__.py` files, then run `cd backend && uv sync`. Expected: a `.venv` and `uv.lock` are created.
 
-- [ ] **Step 3: Write the failing tests**
+- [x] **Step 3: Write the failing tests**
 
 `backend/tests/conftest.py`:
 
@@ -241,12 +241,12 @@ async def test_health():
     assert response.json() == {"status": "ok"}
 ```
 
-- [ ] **Step 4: Run the tests to verify they fail**
+- [x] **Step 4: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_config.py tests/test_health.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.core.config'`
 
-- [ ] **Step 5: Implement config and the app factory**
+- [x] **Step 5: Implement config and the app factory**
 
 `backend/dcdash/core/config.py`:
 
@@ -293,12 +293,12 @@ def create_app() -> FastAPI:
 app = create_app()
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_config.py tests/test_health.py -v`
 Expected: 3 passed
 
-- [ ] **Step 7: Add the container and stack files**
+- [x] **Step 7: Add the container and stack files**
 
 `backend/.dockerignore`:
 
@@ -434,12 +434,12 @@ if (-not (Test-Path .env)) {
 docker compose @args up -d --build
 ```
 
-- [ ] **Step 8: Verify the image builds**
+- [x] **Step 8: Verify the image builds**
 
 Run (repo root): `docker build -t dcdash-backend:local backend`
 Expected: build succeeds.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add .gitignore .gitattributes compose.yaml scripts backend
@@ -465,7 +465,7 @@ git push -u origin phase-1a-backend
 - Produces (`dcdash.core.models`): `Base`, `User`, `UserSession`, `Source` (with `has_secret` property), `Point`, `Asset`, `Mapping`, `PointLatest`, `Job`.
 - Produces (tests): fixtures `database_url` (session), `pool` (session), `db` (truncates all tables, returns the pool); helpers `make_source`, `make_point`, `make_asset`, `make_mapping`, `listening`, `wait_for`.
 
-- [ ] **Step 1: Extend the test fixtures**
+- [x] **Step 1: Extend the test fixtures**
 
 Replace `backend/tests/conftest.py` with:
 
@@ -602,7 +602,7 @@ async def wait_for(check, expected, timeout: float = 10.0):
 
 `helpers.py` imports `dcdash.core.crypto`, which Task 3 creates. Until then, Task 2's tests use raw SQL and do not import `helpers`.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `backend/tests/test_schema.py`:
 
@@ -684,12 +684,12 @@ async def test_orm_round_trip_applies_defaults(db):
     assert source.status == "unknown" and source.enabled is True and source.has_secret is False
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_schema.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.core.db'`
 
-- [ ] **Step 4: Implement the pool, engine and models**
+- [x] **Step 4: Implement the pool, engine and models**
 
 `backend/dcdash/core/pg.py`:
 
@@ -836,7 +836,7 @@ class Job(Base):
     finished_at: Mapped[datetime | None] = mapped_column(TZ)
 ```
 
-- [ ] **Step 5: Add Alembic and the initial migration**
+- [x] **Step 5: Add Alembic and the initial migration**
 
 `backend/alembic.ini`:
 
@@ -1010,12 +1010,12 @@ def downgrade() -> None:
 
 `readings.point_id` deliberately has no foreign key: readings for a deleted point age out through retention (1C) instead of blocking or slowing deletes.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_schema.py -v`
 Expected: 7 passed (the first run pulls the TimescaleDB image and takes longer)
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend
@@ -1036,7 +1036,7 @@ git push
 - Produces: `encrypt(plain: str) -> str`, `decrypt(token: str) -> str`.
 - Produces: `Metric` (`StrEnum`: `active_power_kw`, `energy_kwh`, `voltage_v`, `current_a`, `power_factor`, `frequency_hz`, `reactive_power_kvar`, `apparent_power_kva`, `custom`); `default_interval(metric: Metric) -> int`; `unit_for(metric: Metric, custom_unit: str | None) -> str`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_crypto.py`:
 
@@ -1093,12 +1093,12 @@ def test_metric_values_match_the_spec_list():
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_crypto.py tests/test_metrics.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.core.crypto'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/core/crypto.py`:
 
@@ -1161,12 +1161,12 @@ def unit_for(metric: Metric, custom_unit: str | None) -> str:
     return _UNITS[metric]
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_crypto.py tests/test_metrics.py -v`
 Expected: 5 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend
@@ -1185,7 +1185,7 @@ git push
 **Interfaces:**
 - Produces: `Sample = tuple[datetime, float]`; `Energy(kwh: float, estimated: bool)` (frozen dataclass); `from_counter(samples: list[Sample]) -> float`; `from_power(samples: list[Sample], max_gap_seconds: float) -> float`; `consumption(counter: list[Sample] | None, power: list[Sample] | None, max_gap_seconds: float = 300) -> Energy | None`. Samples must be sorted by time.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_energy.py`:
 
@@ -1247,12 +1247,12 @@ def test_consumption_without_any_source_is_none():
     assert consumption(None, None) is None
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_energy.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.core.energy'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/core/energy.py`:
 
@@ -1309,12 +1309,12 @@ def consumption(
     return None
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_energy.py -v`
 Expected: 9 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend
@@ -1336,7 +1336,7 @@ git push
 - Produces: `Connector` (ABC) with class attributes `type: str`, `config_schema: type[BaseModel]`; `__init__(self, config: BaseModel, secret: str | None = None)`; `async test() -> ConnectionCheck`; `async browse() -> list[PointDescriptor]`; `async read(addresses: list[str]) -> list[PointValue]`; `async close() -> None`.
 - Produces: `register(cls)` (class decorator), `connector_types() -> dict[str, type[Connector]]`, `create_connector(type_name: str, config: dict[str, Any], secret: str | None = None) -> Connector`; type alias `ConnectorFactory = Callable[[str, dict[str, Any], str | None], Connector]`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_connector_base.py`:
 
@@ -1403,12 +1403,12 @@ async def test_close_is_optional():
     await create_connector("echo-test", {"host": "h"}).close()
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_connector_base.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.connectors'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/connectors/base.py`:
 
@@ -1501,12 +1501,12 @@ def create_connector(type_name: str, config: dict[str, Any], secret: str | None 
     return cls(cls.config_schema.model_validate(config), secret)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_connector_base.py -v`
 Expected: 6 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend
@@ -1526,7 +1526,7 @@ git push
 - Produces (`model`): `PANELS` (`["LVP01", ..., "LVP10"]`), `SIGNALS` (dict signal → unit: `kW`, `kWh`, `V`, `A`, `PF`, `Hz`), `power_kw(panel_index: int, t: datetime) -> float`, class `Simulator` with attributes `offline: bool`, `reject_auth: bool` and methods `points() -> list[dict]`, `advance(now: datetime) -> None`, `read(address: str, now: datetime) -> float | None`, `reset_counter(panel: str) -> None`. Point addresses are `f"{panel}_{signal}"`, e.g. `LVP01_kW`.
 - Produces (`app`): `create_sim_app(sim: Simulator | None = None, api_key: str | None = None) -> FastAPI`, module-level `app`. Routes: `GET /points` → `{"points": [{"address", "name", "unit"}]}`; `GET /read?addresses=a,b` → `{"values": [{"address", "ts", "value"}]}`; both require header `X-API-Key`; `POST /admin/fault` body `{"offline": bool, "reject_auth": bool}`; `POST /admin/reset-counter/{panel}`. Responses: 401 on a bad key or `reject_auth`, 503 when `offline`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_simulator.py`:
 
@@ -1619,12 +1619,12 @@ async def test_reset_counter_endpoint():
     assert sim.read("LVP03_kWh", NOON) == 0.0
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_simulator.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.simulator'`
 
-- [ ] **Step 3: Implement the model**
+- [x] **Step 3: Implement the model**
 
 `backend/dcdash/simulator/model.py`:
 
@@ -1695,7 +1695,7 @@ class Simulator:
         return 50.0
 ```
 
-- [ ] **Step 4: Implement the app**
+- [x] **Step 4: Implement the app**
 
 `backend/dcdash/simulator/app.py`:
 
@@ -1760,12 +1760,12 @@ def create_sim_app(sim: Simulator | None = None, api_key: str | None = None) -> 
 app = create_sim_app()
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_simulator.py -v`
 Expected: 9 passed
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend
@@ -1788,7 +1788,7 @@ git push
 - Produces: `SimulatorConfig(url: AnyHttpUrl = "http://simulator:9000", timeout_seconds: float = 5.0)`; `SimulatorConnector(config, secret=None, transport: httpx.AsyncBaseTransport | None = None)` registered as type `"simulator"`. The secret is sent as the `X-API-Key` header.
 - Produces (tests): `helpers.sim_factory(sim_app) -> ConnectorFactory`, which builds simulator connectors wired to an in-process simulator app.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_connector_simulator.py`:
 
@@ -1880,12 +1880,12 @@ async def test_read_raises_connector_error_on_failure():
     assert raised.value.status == "protocol_error"
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_connector_simulator.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.connectors.simulator'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/connectors/simulator.py`:
 
@@ -2005,12 +2005,12 @@ def sim_factory(sim_app):
 
 (Move the two imports to the top of the file with the others.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_connector_simulator.py tests/test_connector_base.py -v`
 Expected: 17 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend
@@ -2031,7 +2031,7 @@ git push
 - Produces: `Row = tuple[int, datetime, float | None, int]` (point_id, ts, value, quality); `Writer(pool: asyncpg.Pool, max_buffer: int = 100_000)` with `add(rows: list[Row]) -> None`, property `pending: int`, `async flush() -> int` (rows written; 0 on failure, rows kept), `async run(interval: float = 1.0) -> None` (flushes forever).
 - Produces: each successful flush sends `NOTIFY dcdash_latest` with a JSON payload `[[point_id, epoch_seconds, value_or_null, quality], ...]`, at most 100 entries per notification, holding the newest value per point.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_writer.py`:
 
@@ -2138,12 +2138,12 @@ async def test_buffer_is_bounded_and_drops_oldest(db):
     assert [r["value"] for r in values] == [2.0, 3.0, 4.0]
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_writer.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.collector'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/collector/writer.py`:
 
@@ -2224,12 +2224,12 @@ class Writer:
             await self.flush()
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_writer.py -v`
 Expected: 9 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend
@@ -2250,7 +2250,7 @@ git push
 - Produces: frozen dataclass `PollGroup(source_id: int, connector_type: str, config: dict, secret: str | None, interval: int, points: tuple[tuple[int, str], ...])` where each point is `(point_id, address)` and `secret` is already decrypted.
 - Produces: `async load_groups(pool) -> list[PollGroup]` (one group per enabled source and interval, mapped points only); `async poll_once(group, connector, writer) -> None`; `backoff_delay(interval: int, failures: int) -> float`; `async mark_source(pool, source_id: int, online: bool, error: str | None = None) -> bool`; `async run_group(group, pool, writer, factory=create_connector, sleep=asyncio.sleep) -> None`; class `Scheduler(pool, writer, factory=create_connector)` with `async reload() -> int` (number of groups now running) and `async stop() -> None`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_scheduler.py`:
 
@@ -2436,12 +2436,12 @@ async def test_scheduler_collects_from_the_simulator_and_reloads(db):
         await scheduler.stop()
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_scheduler.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.collector.scheduler'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/collector/scheduler.py`:
 
@@ -2618,12 +2618,12 @@ class Scheduler:
         self._tasks = []
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_scheduler.py -v`
 Expected: 9 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend
@@ -2646,7 +2646,7 @@ git push
 - Produces (`collector.jobs`): `async run_pending_jobs(pool, factory=create_connector) -> int` (jobs processed); `async fail_stale_jobs(pool) -> int`. Job kinds: `test_source` and `browse_source`, both with params `{"source_id": int}`. Results: `test_source` → `{"ok", "status", "latency_ms", "message"}`; `browse_source` → `{"count": int}`; any failure → status `failed`, result `{"error": str}`.
 - Produces (`collector.main`): `async run(stop: asyncio.Event | None = None, factory: ConnectorFactory = create_connector) -> None`; `main()`; runnable as `python -m dcdash.collector.main`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_listen.py`:
 
@@ -2840,12 +2840,12 @@ async def test_collector_runs_jobs_and_collects_after_config_change(db):
         await asyncio.wait_for(task, timeout=10)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_listen.py tests/test_collector_jobs.py tests/test_collector_main.py -v`
 Expected: FAIL with `ImportError: cannot import name 'listen_forever'`
 
-- [ ] **Step 3: Add `listen_forever` to `backend/dcdash/core/pg.py`**
+- [x] **Step 3: Add `listen_forever` to `backend/dcdash/core/pg.py`**
 
 Add `import asyncio` and `from collections.abc import Callable` to the imports, then append:
 
@@ -2885,7 +2885,7 @@ async def listen_forever(
         await asyncio.sleep(retry_seconds)
 ```
 
-- [ ] **Step 4: Implement the job runner**
+- [x] **Step 4: Implement the job runner**
 
 `backend/dcdash/collector/jobs.py`:
 
@@ -2985,7 +2985,7 @@ async def fail_stale_jobs(pool: asyncpg.Pool) -> int:
     return int(tag.split()[-1])
 ```
 
-- [ ] **Step 5: Implement the entrypoint**
+- [x] **Step 5: Implement the entrypoint**
 
 `backend/dcdash/collector/main.py`:
 
@@ -3075,12 +3075,12 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_listen.py tests/test_collector_jobs.py tests/test_collector_main.py -v`
 Expected: 10 passed
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend
@@ -3106,7 +3106,7 @@ git push
 - Produces (`main`): a 503 `{"detail": "database unavailable"}` response when the database cannot be reached.
 - Produces (tests): fixtures `app`, `client` (cookie-persisting `httpx.AsyncClient`); helper `login_as(client, db, role="admin", username=None, password="correct-horse")`.
 
-- [ ] **Step 1: Add the test fixtures and helper**
+- [x] **Step 1: Add the test fixtures and helper**
 
 Append to `backend/tests/conftest.py` (add `import httpx` at the top):
 
@@ -3142,7 +3142,7 @@ async def login_as(client, db, role="admin", username=None, password="correct-ho
     assert response.status_code == 200, response.text
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `backend/tests/test_security.py`:
 
@@ -3286,12 +3286,12 @@ async def test_database_outage_returns_503(app, client):
     assert response.json() == {"detail": "database unavailable"}
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_security.py tests/test_auth.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.api.security'`
 
-- [ ] **Step 4: Implement security helpers and dependencies**
+- [x] **Step 4: Implement security helpers and dependencies**
 
 `backend/dcdash/api/security.py`:
 
@@ -3422,7 +3422,7 @@ async def notify(db: AsyncSession, channel: str, payload: str = "") -> None:
     )
 ```
 
-- [ ] **Step 5: Implement the auth routes and wire them in**
+- [x] **Step 5: Implement the auth routes and wire them in**
 
 `backend/dcdash/api/auth.py`:
 
@@ -3557,12 +3557,12 @@ def create_app() -> FastAPI:
 app = create_app()
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_security.py tests/test_auth.py tests/test_health.py -v`
 Expected: 16 passed
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend
@@ -3598,7 +3598,7 @@ git push
 
 Creating, changing or deleting a source queues a NOTIFY on `dcdash_config`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_api_sources.py`:
 
@@ -3739,12 +3739,12 @@ async def test_points_listing_shows_mappings(client, db):
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_api_sources.py -v`
 Expected: FAIL — every request returns 404 because the routes do not exist.
 
-- [ ] **Step 3: Implement the jobs router**
+- [x] **Step 3: Implement the jobs router**
 
 `backend/dcdash/api/jobs.py`:
 
@@ -3785,7 +3785,7 @@ async def get_job(job_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, 
     }
 ```
 
-- [ ] **Step 4: Implement the sources router**
+- [x] **Step 4: Implement the sources router**
 
 `backend/dcdash/api/sources.py`:
 
@@ -3983,12 +3983,12 @@ In `backend/dcdash/api/main.py`, change the import to `from dcdash.api import au
         app.include_router(router)
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_api_sources.py -v`
 Expected: 8 passed
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend
@@ -4026,7 +4026,7 @@ git push
 
 Every mapping change and asset deletion queues a NOTIFY on `dcdash_config`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_api_assets.py`:
 
@@ -4205,12 +4205,12 @@ async def test_mapping_changes_notify_the_collector(client, db, database_url):
         await asyncio.wait_for(received.get(), timeout=5)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_api_assets.py tests/test_api_mappings.py -v`
 Expected: FAIL — requests return 404 because the routes do not exist.
 
-- [ ] **Step 3: Implement the assets router**
+- [x] **Step 3: Implement the assets router**
 
 `backend/dcdash/api/assets.py`:
 
@@ -4309,7 +4309,7 @@ async def delete_asset(asset_id: int, db: AsyncSession = Depends(get_db)) -> Non
     await db.commit()
 ```
 
-- [ ] **Step 4: Implement the mappings router**
+- [x] **Step 4: Implement the mappings router**
 
 `backend/dcdash/api/mappings.py`:
 
@@ -4424,12 +4424,12 @@ In `backend/dcdash/api/main.py`, change the import to `from dcdash.api import as
         app.include_router(router)
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_api_assets.py tests/test_api_mappings.py -v`
 Expected: 13 passed
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend
@@ -4465,7 +4465,7 @@ git push
 `value`, `ts` and `quality` are null until a reading arrives; `energy_today` is null when neither the asset nor any descendant has an energy or power mapping. Values are already multiplied by the mapping's scale.
 - Route `GET /api/assets/{id}/series?metric=&start=&end=&buckets=` (viewer) → `{"metric", "unit", "points": [{"ts", "avg", "min", "max"}]}`. `start`/`end` are ISO-8601 with offset; defaults are the last hour; `buckets` is 10–2000 (default 300). 404 if the asset has no such metric; 422 if `end <= start`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_api_data.py`:
 
@@ -4652,12 +4652,12 @@ async def test_series_errors(client, db):
     assert (await client.get(url, params={"metric": "active_power_kw", "buckets": 5})).status_code == 422
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_api_data.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.api.data'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/api/data.py`:
 
@@ -4819,12 +4819,12 @@ In `backend/dcdash/api/main.py`, change the import to `from dcdash.api import as
         app.include_router(router)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_api_data.py -v`
 Expected: 13 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend
@@ -4847,7 +4847,7 @@ git push
 - Route `GET /api/stream` (any signed-in user) → `text/event-stream`. Each event is `data: [[point_id, epoch_seconds, value_or_null, quality], ...]` with values already scaled; a comment line `: keepalive` is sent when idle.
 - Produces (`main`): `create_app()` sets `app.state.broadcaster` and a lifespan that runs the listener and keeps scales current.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_api_stream.py`:
 
@@ -4935,12 +4935,12 @@ async def test_lifespan_relays_database_notifications_scaled(db):
         await wait_for(relayed, [[point, 1.0, 5.0, 0]])
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_api_stream.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'dcdash.api.stream'`
 
-- [ ] **Step 3: Implement the broadcaster and endpoint**
+- [x] **Step 3: Implement the broadcaster and endpoint**
 
 `backend/dcdash/api/stream.py`:
 
@@ -5024,7 +5024,7 @@ async def stream(request: Request) -> StreamingResponse:
     )
 ```
 
-- [ ] **Step 4: Add the lifespan**
+- [x] **Step 4: Add the lifespan**
 
 Replace `backend/dcdash/api/main.py` with:
 
@@ -5110,12 +5110,12 @@ def create_app() -> FastAPI:
 app = create_app()
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_api_stream.py tests/test_auth.py tests/test_health.py -v`
 Expected: 19 passed
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend
@@ -5135,7 +5135,7 @@ git push
 - Consumes: everything above. `run(stop, factory)` (Task 10); `client` fixture and `sim_factory`, `wait_for` helpers; the HTTP API of Tasks 11–14.
 - Produces: `scripts/smoke.py [base_url]`, which exits 0 after driving a running dev-profile stack from setup to live data.
 
-- [ ] **Step 1: Write the end-to-end tests**
+- [x] **Step 1: Write the end-to-end tests**
 
 These use only code that already exists, so they should pass immediately. They prove the API and collector work together through the database, which no earlier test does.
 
@@ -5247,12 +5247,12 @@ async def test_source_outage_is_reported_and_recovers(client):
         assert (await client.get("/api/sources")).json()[0]["last_error"] is None
 ```
 
-- [ ] **Step 2: Run the whole suite**
+- [x] **Step 2: Run the whole suite**
 
 Run: `uv run pytest -v`
 Expected: every test passes, including the 2 new ones. If an end-to-end test fails, the fault is in the integration between tasks; fix the owning module and its unit test, not this test.
 
-- [ ] **Step 3: Write the smoke script**
+- [x] **Step 3: Write the smoke script**
 
 `scripts/smoke.py`:
 
@@ -5334,7 +5334,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 4: Run the real stack and the smoke test**
+- [x] **Step 4: Run the real stack and the smoke test**
 
 From the repo root:
 
@@ -5354,7 +5354,7 @@ docker compose --profile dev down
 
 (`down` keeps the database volume. `docker compose --profile dev down -v` also deletes the data.)
 
-- [ ] **Step 5: Write the README**
+- [x] **Step 5: Write the README**
 
 `README.md`:
 
@@ -5426,7 +5426,7 @@ decorated with `@register`, and import it in
 example. Nothing else changes.
 ````
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend scripts README.md
