@@ -10,6 +10,7 @@ import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SetupPage } from "./pages/SetupPage";
+import { SourcesPage } from "./pages/SourcesPage";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 
@@ -23,7 +24,7 @@ export function App() {
         <Route path="/" element={<Navigate to="/assets" replace />} />
         <Route path="/assets" element={<AssetsPage />} />
         <Route path="/assets/:id" element={<AssetPage />} />
-        <Route path="/sources" element={<p>sources (Task 8)</p>} />
+        <Route path="/sources" element={<SourcesPage />} />
         <Route path="/sources/:id/points" element={<p>points (Task 10)</p>} />
       </Route>
     </Routes>
