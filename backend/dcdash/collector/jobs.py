@@ -5,9 +5,10 @@ from typing import Any
 
 import asyncpg
 
+from dcdash.collector.browse import browse_source, connector_for
+from dcdash.collector.scan import run_scan
 from dcdash.collector.scheduler import mark_source
-from dcdash.connectors.base import Connector, ConnectorFactory, create_connector
-from dcdash.core.crypto import decrypt
+from dcdash.connectors.base import ConnectorFactory, create_connector
 
 log = logging.getLogger(__name__)
 
@@ -19,25 +20,11 @@ _CLAIM = """
     )
     RETURNING id, kind, params
 """
-_UPSERT_POINT = """
-    INSERT INTO points (source_id, address, name, data_type, unit_hint)
-    VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT (source_id, address) DO UPDATE
-        SET name = EXCLUDED.name, data_type = EXCLUDED.data_type, unit_hint = EXCLUDED.unit_hint
-"""
-
-
-async def _connector_for(pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory) -> Connector:
-    row = await pool.fetchrow("SELECT connector_type, config, secret FROM sources WHERE id = $1", source_id)
-    if row is None:
-        raise LookupError(f"source {source_id} not found")
-    secret = decrypt(row["secret"]) if row["secret"] else None
-    return factory(row["connector_type"], row["config"], secret)
 
 
 async def _test_source(pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFactory) -> dict[str, Any]:
     source_id = params["source_id"]
-    connector = await _connector_for(pool, source_id, factory)
+    connector = await connector_for(pool, source_id, factory)
     try:
         check = await connector.test()
     finally:
@@ -47,20 +34,15 @@ async def _test_source(pool: asyncpg.Pool, params: dict[str, Any], factory: Conn
 
 
 async def _browse_source(pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFactory) -> dict[str, Any]:
-    source_id = params["source_id"]
-    connector = await _connector_for(pool, source_id, factory)
-    try:
-        descriptors = await connector.browse()
-    finally:
-        await connector.close()
-    await pool.executemany(
-        _UPSERT_POINT,
-        [(source_id, d.address, d.name, d.data_type, d.unit_hint) for d in descriptors],
-    )
-    return {"count": len(descriptors)}
+    return {"count": await browse_source(pool, params["source_id"], factory)}
 
 
-_HANDLERS = {"test_source": _test_source, "browse_source": _browse_source}
+async def _scan(pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFactory) -> dict[str, Any]:
+    await run_scan(pool, params["scan_id"], factory)
+    return {"scan_id": params["scan_id"]}
+
+
+_HANDLERS = {"test_source": _test_source, "browse_source": _browse_source, "scan": _scan}
 
 
 async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFactory) -> None:
@@ -101,9 +83,16 @@ async def run_pending_jobs(
 
 
 async def fail_stale_jobs(pool: asyncpg.Pool) -> int:
-    """Fail jobs a previous collector process left in the running state."""
+    """Fail jobs (and scans) a previous collector process left in the running state.
+
+    Queued scans are left alone: their job is still pending and will run.
+    """
     tag = await pool.execute(
         "UPDATE jobs SET status = 'failed', result = $1, finished_at = now() WHERE status = 'running'",
         {"error": "collector restarted"},
+    )
+    await pool.execute(
+        "UPDATE scans SET status = 'failed', error = 'collector restarted', finished_at = now() "
+        "WHERE status = 'running'"
     )
     return int(tag.split()[-1])

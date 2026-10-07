@@ -139,3 +139,12 @@ async def test_jobs_are_not_claimed_before_a_worker_is_free(db):
     release.set()
     assert await task == 6
     assert await db.fetchval("SELECT count(*) FROM jobs WHERE status = 'done'") == 6
+
+
+async def test_stale_running_scans_fail_at_collector_start_but_queued_ones_stay(db):
+    running = await db.fetchval("INSERT INTO scans (scope_snapshot, status) VALUES ('{}', 'running') RETURNING id")
+    queued = await db.fetchval("INSERT INTO scans (scope_snapshot, status) VALUES ('{}', 'queued') RETURNING id")
+    await fail_stale_jobs(db)
+    row = await db.fetchrow("SELECT status, error, finished_at FROM scans WHERE id = $1", running)
+    assert row["status"] == "failed" and row["error"] == "collector restarted" and row["finished_at"] is not None
+    assert await db.fetchval("SELECT status FROM scans WHERE id = $1", queued) == "queued"
