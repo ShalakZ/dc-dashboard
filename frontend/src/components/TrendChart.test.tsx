@@ -90,6 +90,9 @@ describe("TrendChart", () => {
     const two = [...metrics, { ...metrics[0], mapping_id: 7, point_id: 8 }];
     renderWithProviders(<TrendChart assetId={4} metrics={two} />);
     await screen.findByTestId("chart");
+    // the empty option means "whatever the backend picks" (its lowest-id mapping), not every mapping
+    expect(screen.getByRole("option", { name: "default" })).toHaveValue("");
+    expect(screen.queryByRole("option", { name: "all" })).not.toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText("Mapping"), "7");
     const urls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.includes("mapping_id=7"))).toBe(true);

@@ -65,7 +65,7 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
         {mappings.length > 1 && (
           <label>Mapping
             <select aria-label="Mapping" value={chosenMapping ?? ""} onChange={(e) => setMappingId(e.target.value ? Number(e.target.value) : undefined)}>
-              <option value="">all</option>
+              <option value="">default</option>
               {mappings.map((m) => <option key={m.mapping_id} value={m.mapping_id}>point {m.point_id}</option>)}
             </select>
           </label>

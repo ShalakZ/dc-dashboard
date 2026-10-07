@@ -2490,11 +2490,11 @@ API details not verifiable against installed packages at planning time (neither 
 
 ## Done when
 
-- [ ] `cd backend && uv run pytest -q` passes with the new files `test_schema_tiers.py`, `test_storage_settings.py`, `test_api_data_tiers.py`, `test_api_storage.py`, `test_simulator_opcua.py`, `test_connector_opcua.py`, `test_registers.py`, `test_profiles.py`, `test_simulator_modbus.py`, `test_connector_modbus.py`, `test_scheduler_protocols.py` present and green.
-- [ ] `cd frontend && npm run lint && npm test -- --run && npm run build` pass, with `StoragePage.test.tsx` and the tier/mapping cases in `TrendChart.test.tsx` / `AssetPage.test.tsx`.
-- [ ] `docker compose --profile dev up -d --build` brings up `db`, `api`, `web`, `collector`, `simulator`; `ss -ltn` on the host shows 4840 and 5020 bound to 127.0.0.1 only.
-- [ ] An `opcua` source and a `modbus` source against the simulator both report `ok`; stopping the simulator container flips them to `offline` with `unreachable: …`, starting it flips them back.
-- [ ] `/storage` shows sizes and the rows-per-day table; saving raw retention 45 d changes `timescaledb_information.jobs` within one request.
-- [ ] `scripts/backup_smoke.sh` prints `backup smoke OK`.
-- [ ] All five Review Focus tests exist under the names given and pass.
-- [ ] Every item in "Verify at execution" has been checked against the installed package and the plan text corrected where it differed, before the task that depends on it is committed.
+- [x] `cd backend && uv run pytest -q` passes with the new files `test_schema_tiers.py`, `test_storage_settings.py`, `test_api_data_tiers.py`, `test_api_storage.py`, `test_simulator_opcua.py`, `test_connector_opcua.py`, `test_registers.py`, `test_profiles.py`, `test_simulator_modbus.py`, `test_connector_modbus.py`, `test_scheduler_protocols.py` present and green.
+- [x] `cd frontend && npm test -- --run && npm run build` pass (there is no `lint` script in `package.json`; `npx tsc --noEmit` is clean), with `StoragePage.test.tsx` and the tier/mapping cases in `TrendChart.test.tsx` / `AssetPage.test.tsx`.
+- [x] `docker compose --profile dev up -d --build` brings up `db`, `api`, `web`, `collector`, `simulator`; `ss -ltn` on the host shows 4840 and 5020 bound to 127.0.0.1 only.
+- [x] An `opcua` source and a `modbus` source against the simulator both report `ok`; stopping the simulator container flips them to `offline` with `unreachable: …`, starting it flips them back.
+- [x] `/storage` shows sizes and the rows-per-day table; saving raw retention 45 d changes `timescaledb_information.jobs` within one request.
+- [x] `scripts/backup_smoke.sh` prints `backup smoke OK` (and `restore failure-path OK` for the corrupted-dump path).
+- [x] All five Review Focus tests exist under the names given and pass.
+- [x] Every item in "Verify at execution" has been checked against the installed package and the plan text corrected where it differed, before the task that depends on it is committed.
