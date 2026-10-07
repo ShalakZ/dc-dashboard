@@ -4,6 +4,7 @@ import logging
 from dcdash import connectors  # noqa: F401  (registers built-in connectors)
 from dcdash.collector.housekeeping import housekeeping_loop
 from dcdash.collector.jobs import fail_stale_jobs, run_pending_jobs
+from dcdash.collector.networks import publish_networks
 from dcdash.collector.scheduler import Scheduler
 from dcdash.collector.writer import Writer
 from dcdash.connectors.base import ConnectorFactory, create_connector
@@ -24,6 +25,7 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
     reload_needed = asyncio.Event()
     jobs_ready = asyncio.Event()
     await fail_stale_jobs(pool)
+    await publish_networks(pool)
 
     def catch_up() -> None:
         reload_needed.set()
