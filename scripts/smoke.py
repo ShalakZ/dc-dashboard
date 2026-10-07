@@ -67,7 +67,8 @@ def main() -> None:
 
         summary = wait(live, "live values")
         for metric in summary["metrics"]:
-            print(f"{metric['metric']}: {metric['value']:.2f} {metric['unit']}")
+            value = "n/a" if metric["value"] is None else f"{metric['value']:.2f}"
+            print(f"{metric['metric']}: {value} {metric['unit']}")
         print(f"energy today: {summary['energy_today']}")
         print("OK")
 
