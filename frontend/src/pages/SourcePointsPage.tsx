@@ -5,6 +5,7 @@ import { keys, useAssets, useInvalidate, usePoints } from "../api/queries";
 import type { PointRow } from "../api/types";
 import { JobStatus } from "../components/JobStatus";
 import { MappingForm, type MappingBody } from "../components/MappingForm";
+import { useAction } from "../hooks/useAction";
 
 export function SourcePointsPage() {
   const sourceId = Number(useParams().id);
@@ -14,18 +15,19 @@ export function SourcePointsPage() {
   const [browseJob, setBrowseJob] = useState<number | null>(null);
   const [editing, setEditing] = useState<PointRow | null>(null);
   const assetName = (id: number) => assets.find((a) => a.id === id)?.name ?? `#${id}`;
+  const { run, error: actionError } = useAction();
 
-  const browse = async () => {
+  const browse = () => run(async () => {
     const { job_id } = await api.post<{ job_id: number }>(`/api/sources/${sourceId}/browse`);
     setBrowseJob(job_id);
-  };
+  });
   const refresh = async () => { await invalidate(keys.points(sourceId)); setEditing(null); };
   const save = async (body: MappingBody) => {
     if (editing!.mapping) await api.patch(`/api/mappings/${editing!.mapping.id}`, body);
     else await api.post("/api/mappings", { point_id: editing!.id, ...body });
     await refresh();
   };
-  const unmap = async (mappingId: number) => { await api.del(`/api/mappings/${mappingId}`); await refresh(); };
+  const unmap = (mappingId: number) => run(async () => { await api.del(`/api/mappings/${mappingId}`); await refresh(); });
 
   if (isLoading) return <p className="muted">loading…</p>;
   if (error) return <p className="error" role="alert">{error.message}</p>;
@@ -38,6 +40,7 @@ export function SourcePointsPage() {
         <JobStatus jobId={browseJob} />
         {browseJob !== null && <button onClick={() => invalidate(keys.points(sourceId))}>Refresh list</button>}
       </div>
+      {actionError && <p className="error" role="alert">{actionError}</p>}
       {points.length === 0 && <p className="muted">No points yet. Browse the source to discover them.</p>}
       <table>
         <thead><tr><th>Address</th><th>Name</th><th>Type</th><th>Unit hint</th><th>Mapped to</th><th></th></tr></thead>

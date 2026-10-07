@@ -5,6 +5,7 @@ import { keys, useInvalidate, useSources } from "../api/queries";
 import { useAuth } from "../auth/AuthProvider";
 import { JobStatus } from "../components/JobStatus";
 import { SourceForm } from "../components/SourceForm";
+import { useAction } from "../hooks/useAction";
 
 export function SourcesPage() {
   const { hasRole } = useAuth();
@@ -12,21 +13,23 @@ export function SourcesPage() {
   const invalidate = useInvalidate();
   const [jobs, setJobs] = useState<Record<number, number>>({});
   const [showAdd, setShowAdd] = useState(false);
+  const { run, busy, error: actionError } = useAction();
 
-  const testOne = async (id: number) => {
+  const testOne = (id: number) => run(async () => {
     const { job_id } = await api.post<{ job_id: number }>(`/api/sources/${id}/test`);
     setJobs((j) => ({ ...j, [id]: job_id }));
-  };
-  const testAll = async () => {
+  });
+  const testAll = () => run(async () => {
     const { job_ids } = await api.post<{ job_ids: number[] }>("/api/sources/test-all");
-    const enabled = sources.filter((s) => s.enabled).map((s) => s.id);
+    // The API creates one job per enabled source in Source.id order; the list itself is sorted by name.
+    const enabled = sources.filter((s) => s.enabled).map((s) => s.id).sort((a, b) => a - b);
     setJobs(Object.fromEntries(enabled.map((id, i) => [id, job_ids[i]])));
-  };
-  const remove = async (id: number, name: string) => {
+  });
+  const remove = (id: number, name: string) => run(async () => {
     if (!window.confirm(`Delete source "${name}", its points and mappings?`)) return;
     await api.del(`/api/sources/${id}`);
     await invalidate(keys.sources);
-  };
+  });
 
   if (isLoading) return <p className="muted">loading…</p>;
   if (error) return <p className="error" role="alert">{error.message}</p>;
@@ -34,9 +37,10 @@ export function SourcesPage() {
     <>
       <h1>Sources</h1>
       <div className="row">
-        <button onClick={testAll} disabled={sources.length === 0}>Test all</button>
+        <button onClick={testAll} disabled={sources.length === 0 || busy}>Test all</button>
         {hasRole("admin") && <button onClick={() => setShowAdd((v) => !v)}>Add source</button>}
       </div>
+      {actionError && <p className="error" role="alert">{actionError}</p>}
       {showAdd && <SourceForm onDone={() => setShowAdd(false)} />}
       <table>
         <thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th>Status</th><th>Last seen</th><th>Last error</th><th>Test result</th><th></th></tr></thead>
