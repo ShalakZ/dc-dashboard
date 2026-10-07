@@ -10,6 +10,10 @@ ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 
 _hasher = PasswordHasher()
 
+# Verified against when the username does not exist, so a login attempt costs the same
+# time whether or not the account is real.
+DUMMY_HASH = _hasher.hash(secrets.token_urlsafe(16))
+
 
 def hash_password(password: str) -> str:
     return _hasher.hash(password)

@@ -98,3 +98,17 @@ async def test_database_outage_returns_503(app, client):
     response = await client.get("/api/setup")
     assert response.status_code == 503
     assert response.json() == {"detail": "database unavailable"}
+
+
+async def test_unknown_username_still_runs_a_verify(client, db, monkeypatch):
+    from dcdash.api import auth as auth_module
+    calls: list[str] = []
+    real = auth_module.verify_password
+
+    def spy(password_hash: str, password: str) -> bool:
+        calls.append(password_hash)
+        return real(password_hash, password)
+
+    monkeypatch.setattr(auth_module, "verify_password", spy)
+    assert (await client.post("/api/login", json={"username": "nobody", "password": "whatever1"})).status_code == 401
+    assert len(calls) == 1 and calls[0].startswith("$argon2")

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import COOKIE, current_user, get_db
 from dcdash.api.security import (
-    LoginLimiter, hash_password, hash_token, new_session_token, verify_password,
+    DUMMY_HASH, LoginLimiter, hash_password, hash_token, new_session_token, verify_password,
 )
 from dcdash.core.config import get_settings
 from dcdash.core.models import User, UserSession
@@ -24,6 +24,11 @@ class NewAdmin(BaseModel):
 class Credentials(BaseModel):
     username: str = Field(max_length=256)
     password: str = Field(max_length=256)
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
 
 
 class UserOut(BaseModel):
@@ -74,7 +79,8 @@ async def login(
     user = (
         await db.execute(select(User).where(User.username == body.username, User.active))
     ).scalar_one_or_none()
-    if user is None or not verify_password(user.password_hash, body.password):
+    stored_hash = user.password_hash if user is not None else DUMMY_HASH
+    if not verify_password(stored_hash, body.password) or user is None:
         limiter.record_failure(key)
         raise HTTPException(401, "invalid username or password")
     limiter.reset(key)
@@ -95,3 +101,26 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(current_user)) -> User:
     return user
+
+
+@router.post("/me/password", status_code=204)
+async def change_my_password(
+    body: PasswordChange,
+    request: Request,
+    user: User = Depends(current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    host = request.client.host if request.client else "-"
+    key = f"{host}:{user.username.lower()}"
+    if limiter.blocked(key):
+        raise HTTPException(429, "too many failed attempts, try again later")
+    if not verify_password(user.password_hash, body.current_password):
+        limiter.record_failure(key)
+        raise HTTPException(401, "current password is incorrect")
+    limiter.reset(key)
+    user.password_hash = hash_password(body.new_password)
+    keep = hash_token(request.cookies.get(COOKIE, ""))
+    await db.execute(
+        delete(UserSession).where(UserSession.user_id == user.id, UserSession.id != keep)
+    )
+    await db.commit()
