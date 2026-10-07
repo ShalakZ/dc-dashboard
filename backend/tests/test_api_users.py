@@ -56,3 +56,18 @@ async def test_deactivate_revokes_sessions(client, db):
     client.cookies.set("dcdash_session", operator_cookie)
     assert (await client.get("/api/me")).status_code == 401
     assert (await client.post("/api/login", json={"username": "operator", "password": "correct-horse"})).status_code == 401
+
+
+async def test_admin_password_reset_revokes_sessions(app, client, db):
+    """A password reset signs the target out everywhere; only the new password gets back in."""
+    import httpx
+
+    await login_as(client, db)
+    uid = (await client.post("/api/users", json={"username": "ops", "password": "longenough", "role": "operator"})).json()["id"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as target:
+        await login_as(target, db, "operator", username="ops", password="longenough")
+        assert (await target.get("/api/me")).status_code == 200
+        assert (await client.patch(f"/api/users/{uid}", json={"password": "newpassword1"})).status_code == 200
+        assert await db.fetchval("SELECT count(*) FROM sessions WHERE user_id = $1", uid) == 0
+        assert (await target.get("/api/me")).status_code == 401
+        assert (await target.post("/api/login", json={"username": "ops", "password": "newpassword1"})).status_code == 200

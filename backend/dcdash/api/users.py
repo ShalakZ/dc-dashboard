@@ -69,8 +69,9 @@ async def patch_user(
         user.password_hash = hash_password(body.password)
     if body.active is not None:
         user.active = body.active
-        if not body.active:
-            await db.execute(delete(UserSession).where(UserSession.user_id == user.id))
+    if body.password is not None or body.active is False:
+        # an admin-reset password or a deactivation signs the target out everywhere
+        await db.execute(delete(UserSession).where(UserSession.user_id == user.id))
     await db.commit()
     await db.refresh(user)
     return user
