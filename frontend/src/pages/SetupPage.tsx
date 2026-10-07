@@ -3,14 +3,15 @@ import { Navigate, useNavigate } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
 
 export function SetupPage() {
-  const { setup, setupNeeded, loading } = useAuth();
+  const { setup, setupNeeded, loading, user } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  if (!loading && !setupNeeded) return <Navigate to="/login" replace />;
+  // After a successful setup the user is signed in; go straight to the app rather than /login.
+  if (!loading && !setupNeeded) return <Navigate to={user ? "/assets" : "/login"} replace />;
 
   async function submit(event: FormEvent) {
     event.preventDefault();

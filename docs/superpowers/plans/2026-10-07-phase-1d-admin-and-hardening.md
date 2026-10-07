@@ -124,13 +124,13 @@ README.md                        Users, Settings, TLS, e2e sections
 - Produces: `async get_setting(db: AsyncSession, key: str, default: dict[str, Any]) -> dict[str, Any]` and `async set_setting(db: AsyncSession, key: str, value: dict[str, Any]) -> None` (upsert; caller commits). 1C's storage endpoints call these with key `"storage"`.
 - Produces: `GENERAL_KEY = "general"` constant.
 
-- [ ] **Step 1: Create the branch**
+- [x] **Step 1: Create the branch**
 
 ```bash
 git checkout phase-1b-web-ui && git checkout -b phase-1d-admin-hardening
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 `backend/tests/test_settings_store.py`:
 
@@ -156,7 +156,7 @@ async def test_set_then_get_and_overwrite(db):
     assert await db.fetchval("SELECT value->>'timezone' FROM settings WHERE key = 'general'") == "Asia/Dubai"
 ```
 
-- [ ] **Step 3: Run it**
+- [x] **Step 3: Run it**
 
 ```bash
 cd backend && uv run pytest -q tests/test_settings_store.py
@@ -164,7 +164,7 @@ cd backend && uv run pytest -q tests/test_settings_store.py
 
 Expected: `ModuleNotFoundError: No module named 'dcdash.core.settings_store'`.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 `backend/dcdash/core/settings_store.py`:
 
@@ -220,7 +220,7 @@ DCDASH_TIMEZONE=UTC
 #DCDASH_TLS_KEY=/certs/privkey.pem
 ```
 
-- [ ] **Step 5: Run, commit, push**
+- [x] **Step 5: Run, commit, push**
 
 ```bash
 cd backend && uv run pytest -q tests/test_settings_store.py
@@ -246,7 +246,7 @@ git commit -m "Add settings store and .env.example" && git push -u origin phase-
 - Produces: `GET /api/users` -> `[UserRow]`, `POST /api/users` {username, password, role} -> 201 `UserRow`, `PATCH /api/users/{id}` {role?, active?, password?} -> `UserRow`. `UserRow = {id, username, role, active}`.
 - Errors: 409 `username already exists`, 409 `cannot deactivate or demote yourself`, 404 `user not found`, 422 for a bad role or short password.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_api_users.py`:
 
@@ -310,7 +310,7 @@ async def test_deactivate_revokes_sessions(client, db):
     assert (await client.post("/api/login", json={"username": "operator", "password": "correct-horse"})).status_code == 401
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd backend && uv run pytest -q tests/test_api_users.py
@@ -318,7 +318,7 @@ cd backend && uv run pytest -q tests/test_api_users.py
 
 Expected: 5 failures with `404` (router not mounted).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/api/users.py`:
 
@@ -409,7 +409,7 @@ from dcdash.api import assets, auth, data, jobs, mappings, settings, sources, st
 
 and add `users.router` and `settings.router` to the list that is passed to `app.include_router` (the `for router in (...)` loop near line 75). `settings` is created in Task 4; until then add only `users.router` and import only `users` so this task's test suite is green.
 
-- [ ] **Step 4: Run, commit, push**
+- [x] **Step 4: Run, commit, push**
 
 ```bash
 cd backend && uv run pytest -q tests/test_api_users.py tests/test_auth.py
@@ -434,7 +434,7 @@ git commit -m "Add admin users API" && git push
 - Produces: `POST /api/me/password` {current_password, new_password} -> 204; 401 `current password is incorrect` (also counts as a login failure for the limiter), 422 if `new_password` < 8. Deletes every session of the user except the one presented in the cookie.
 - Produces: `DUMMY_HASH` in `security.py` (an argon2 hash of a random value computed at import) so login on an unknown username still runs one verify.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_api_me_password.py`:
 
@@ -486,7 +486,7 @@ async def test_unknown_username_still_runs_a_verify(client, db, monkeypatch):
     assert len(calls) == 1 and calls[0].startswith("$argon2")
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd backend && uv run pytest -q tests/test_api_me_password.py tests/test_auth.py
@@ -494,7 +494,7 @@ cd backend && uv run pytest -q tests/test_api_me_password.py tests/test_auth.py
 
 Expected: `test_api_me_password.py` fails with 404; the dummy-verify test fails with `len(calls) == 0`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/api/security.py` — add after `_hasher = PasswordHasher()`:
 
@@ -553,7 +553,7 @@ async def change_my_password(
     await db.commit()
 ```
 
-- [ ] **Step 4: Run, commit, push**
+- [x] **Step 4: Run, commit, push**
 
 ```bash
 cd backend && uv run pytest -q tests/test_api_me_password.py tests/test_auth.py tests/test_api_users.py
@@ -579,7 +579,7 @@ git commit -m "Add change-my-password and dummy verify on unknown username" && g
 - Produces: `GET /api/settings/general` -> `{timezone: str}` (admin), `PUT /api/settings/general` {timezone} -> same (admin); 422 `unknown timezone: X`.
 - Produces: `async current_timezone(db) -> str` in `api/settings.py`, used by `data.summary`. Seeds `settings.general` from `get_settings().timezone` on API startup (`lifespan`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_api_settings.py`:
 
@@ -630,7 +630,7 @@ async def test_summary_uses_stored_timezone(client, db):
 
 The readings column list `(point_id, ts, value, quality)` is copied from `backend/tests/test_api_data.py` line 24; the `quality` value used there (`"good"` or an integer code) must be mirrored, as must the exact `energy_today` shape (`{"kwh": ..., "estimated": ...}` per `api/data.py`; adapt the two asserts if the key differs). Note the test is only deterministic when run before 20:00 UTC; guard it with `pytest.mark.skipif(datetime.now(timezone.utc).hour >= 20, reason="day-boundary test")`.
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd backend && uv run pytest -q tests/test_api_settings.py
@@ -638,7 +638,7 @@ cd backend && uv run pytest -q tests/test_api_settings.py
 
 Expected: 3 failures (404).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/api/settings.py`:
 
@@ -726,7 +726,7 @@ and add `from dcdash.api.settings import current_timezone`. Remove the `get_sett
 
 Place the imports at the top of the file in the normal import block (shown inline for brevity). If `lifespan` already retries the DB connection in a loop (it handles `OperationalError`/`InterfaceError`), put the seed inside the same retry so a slow DB does not crash the API.
 
-- [ ] **Step 4: Run, commit, push**
+- [x] **Step 4: Run, commit, push**
 
 ```bash
 cd backend && uv run pytest -q tests/test_api_settings.py tests/test_api_data.py tests/test_health.py
@@ -752,7 +752,7 @@ git commit -m "Add general settings API; timezone comes from the DB" && git push
 - Produces: `async housekeep(pool: asyncpg.Pool, job_retention_days: int = 7) -> dict[str, int]` returning `{"sessions": n, "jobs": n}` deleted.
 - Produces: `async housekeeping_loop(pool, interval_seconds=3600, stop: asyncio.Event | None = None)` run as a task in `collector.main.run`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `backend/tests/test_housekeeping.py`:
 
@@ -783,7 +783,7 @@ async def test_housekeep_deletes_expired_sessions_and_old_jobs(db, pool):
     assert await housekeep(pool) == {"sessions": 0, "jobs": 0}
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd backend && uv run pytest -q tests/test_housekeeping.py
@@ -791,7 +791,7 @@ cd backend && uv run pytest -q tests/test_housekeeping.py
 
 Expected: `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/collector/housekeeping.py`:
 
@@ -840,7 +840,7 @@ async def housekeeping_loop(
 
 `backend/dcdash/collector/main.py` — import `from dcdash.collector.housekeeping import housekeeping_loop` and add `asyncio.create_task(housekeeping_loop(pool, stop=stop))` to the `tasks = [...]` list (line 60), passing the same `stop` event `run()` already receives (`stop = stop or asyncio.Event()` is how `run` normalises it; if `run` only creates the event lazily, pass the normalised variable).
 
-- [ ] **Step 4: Run, commit, push**
+- [x] **Step 4: Run, commit, push**
 
 ```bash
 cd backend && uv run pytest -q tests/test_housekeeping.py tests/test_collector_main.py
@@ -865,7 +865,7 @@ git commit -m "Add hourly housekeeping of expired sessions and old jobs" && git 
 - Changes: `run_pending_jobs(pool, factory=create_connector, concurrency: int = 4) -> int` runs handlers under `asyncio.Semaphore(concurrency)`; claim order and result writing are unchanged.
 - Changes: `Scheduler.reload()` keeps `self._running: dict[int, tuple[PollGroup, asyncio.Task[None]]]` keyed by `source_id`; a source whose `PollGroup` compares equal keeps its task. `Scheduler.stop()` cancels all. `reload()` still returns the number of groups.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `backend/tests/test_collector_jobs.py`:
 
@@ -931,7 +931,7 @@ async def test_reload_keeps_unchanged_groups(db, pool, sim_app):
 
 Match the `Writer` constructor and `sim_factory` usage to the existing tests in `test_scheduler.py` (they already build a `Scheduler` with the simulator).
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd backend && uv run pytest -q tests/test_collector_jobs.py tests/test_scheduler.py
@@ -939,7 +939,7 @@ cd backend && uv run pytest -q tests/test_collector_jobs.py tests/test_scheduler
 
 Expected: `peak == 1` assertion fails; `AttributeError: 'Scheduler' object has no attribute '_running'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `backend/dcdash/collector/jobs.py` — replace `run_pending_jobs`:
 
@@ -1014,7 +1014,7 @@ class Scheduler:
 
 `load_groups` returns one `PollGroup` per (source, interval); if a source has points at two intervals it yields two groups with the same `source_id`. Key the dict by `(group.source_id, group.interval)` instead if `grep -n "interval" backend/dcdash/collector/scheduler.py` shows grouping by interval inside a source; the test then indexes `_running[(a, 5)]`. Decide at execution time from the real `load_groups` and keep the test consistent.
 
-- [ ] **Step 4: Run, commit, push**
+- [x] **Step 4: Run, commit, push**
 
 ```bash
 cd backend && uv run pytest -q
@@ -1037,7 +1037,7 @@ git commit -m "Bound job concurrency to 4 and restart only changed poll groups" 
 **Interfaces:**
 - Backend image runs as uid 10001 `dcdash`; the collector and API share the image. Caddy runs as uid 10002 `web` and binds 80/443 via `cap_net_bind_service` on the binary.
 
-- [ ] **Step 1: Backend Dockerfile**
+- [x] **Step 1: Backend Dockerfile**
 
 ```dockerfile
 FROM python:3.12-slim
@@ -1053,7 +1053,7 @@ USER dcdash
 CMD ["uvicorn", "dcdash.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-- [ ] **Step 2: Frontend Dockerfile**
+- [x] **Step 2: Frontend Dockerfile**
 
 ```dockerfile
 FROM node:22-alpine AS build
@@ -1078,7 +1078,7 @@ ENTRYPOINT ["/entrypoint.sh"]
 
 `deploy/Caddyfile.tls` and `deploy/entrypoint.sh` are created in Task 8; to keep this task buildable on its own, create `deploy/entrypoint.sh` now with the HTTP-only body (`exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile`) and an empty `deploy/Caddyfile.tls`, then Task 8 fills both in.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 ```bash
 docker compose build api web
@@ -1088,7 +1088,7 @@ docker compose run --rm --no-deps --entrypoint id web
 
 Expected: `uid=10001(dcdash) gid=10001(dcdash)` and `uid=10002(web) gid=10002(web)`. Then `docker compose up -d && curl -s -o /dev/null -w '%{http_code}\n' http://localhost/api/setup` prints `200`; `docker compose down`.
 
-- [ ] **Step 4: Commit, push**
+- [x] **Step 4: Commit, push**
 
 ```bash
 git add backend/Dockerfile frontend/Dockerfile deploy/entrypoint.sh deploy/Caddyfile.tls
@@ -1108,7 +1108,7 @@ git commit -m "Run API, collector and web containers as non-root" && git push
 - Env: `DCDASH_TLS_CERT`, `DCDASH_TLS_KEY` (container paths under `/certs`). Both set -> HTTPS on 443 and HTTP 80 redirects to HTTPS. Else -> plain HTTP on 80 (today's behaviour).
 - `_start_session(db, user, response, secure: bool)`; `secure` is `request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `backend/tests/test_auth.py`:
 
@@ -1125,7 +1125,7 @@ async def test_cookie_secure_when_forwarded_https(client, db):
     assert "httponly" in tls.headers["set-cookie"].lower()
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd backend && uv run pytest -q tests/test_auth.py -k secure
@@ -1133,7 +1133,7 @@ cd backend && uv run pytest -q tests/test_auth.py -k secure
 
 Expected: `assert "; secure" in ...` fails.
 
-- [ ] **Step 3: Implement the cookie flag**
+- [x] **Step 3: Implement the cookie flag**
 
 `backend/dcdash/api/auth.py`:
 
@@ -1156,7 +1156,7 @@ Update the two callers: `setup(...)` gains `request: Request` in its signature a
 
 Caddy sets `X-Forwarded-Proto` on `reverse_proxy` by default, so no Caddyfile change is needed for this header.
 
-- [ ] **Step 4: Caddy files**
+- [x] **Step 4: Caddy files**
 
 `deploy/Caddyfile.tls`:
 
@@ -1247,7 +1247,7 @@ docker compose down
 rm -f certs/privkey.pem certs/fullchain.pem
 ```
 
-- [ ] **Step 5: Run, verify, commit, push**
+- [x] **Step 5: Run, verify, commit, push**
 
 ```bash
 cd backend && uv run pytest -q tests/test_auth.py
@@ -1273,7 +1273,7 @@ git commit -m "Optional TLS through Caddy; Secure cookie behind HTTPS" && git pu
 - Produces in `types.ts`: `UserRow { id: number; username: string; role: Role; active: boolean }`, `GeneralSettings { timezone: string }`.
 - Produces in `queries.ts`: `keys.users`, `keys.general`; `useUsers()`, `useCreateUser()`, `usePatchUser()`, `useChangePassword()`, `useGeneralSettings()`, `usePutGeneralSettings()` (TanStack `useMutation` wrappers that invalidate the matching key on success).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `frontend/src/api/queries.test.tsx`:
 
@@ -1305,7 +1305,7 @@ describe("user queries", () => {
 });
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd frontend && npm test -- src/api/queries.test.tsx
@@ -1313,7 +1313,7 @@ cd frontend && npm test -- src/api/queries.test.tsx
 
 Expected: fails, `useUsers` is not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `frontend/src/api/types.ts`:
 
@@ -1372,7 +1372,7 @@ const TrendChart = lazy(() => import("../components/TrendChart").then((m) => ({ 
 
 and wrap the usage: `<Suspense fallback={<p className="muted">loading chart…</p>}><TrendChart assetId={id} metrics={data.metrics} /></Suspense>`.
 
-- [ ] **Step 4: Run, build, commit, push**
+- [x] **Step 4: Run, build, commit, push**
 
 ```bash
 cd frontend && npm test && npm run build 2>&1 | grep -E "dist/assets/index-.*\.js"
@@ -1396,7 +1396,7 @@ git commit -m "Add users/settings query hooks, api.put, lazy TrendChart" && git 
 **Interfaces:**
 - Route `/users` (admin). Table of users with role `<select>`, `Deactivate`/`Activate` button, `Reset password` (prompt-free inline form), and a `Create user` form (username, password, role).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `frontend/src/pages/UsersPage.test.tsx`:
 
@@ -1459,7 +1459,7 @@ describe("UsersPage", () => {
 });
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd frontend && npm test -- src/pages/UsersPage.test.tsx
@@ -1467,7 +1467,7 @@ cd frontend && npm test -- src/pages/UsersPage.test.tsx
 
 Expected: fails, module not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/pages/UsersPage.tsx`:
 
@@ -1552,7 +1552,7 @@ export function UsersPage() {
 
 Check how `ApiError.detail` is populated in `client.ts` (1B: `detail: unknown` is the parsed JSON body); adjust `errorText` so the 409 body `{detail: "username already exists"}` renders as the bare message. The own-row test queries `getByRole("combobox")` within the row, so the `aria-label` on the select is fine.
 
-- [ ] **Step 4: Run, typecheck, commit, push**
+- [x] **Step 4: Run, typecheck, commit, push**
 
 ```bash
 cd frontend && npm test -- src/pages/UsersPage.test.tsx && npm run typecheck
@@ -1577,7 +1577,7 @@ git commit -m "Add Users page" && git push
 - `/settings` (admin): a form with one text input `Timezone` (IANA name, `list="tz-options"` datalist populated from `Intl.supportedValuesOf("timeZone")` when available) and a `Save` button; shows `saved` on success and the API's 422 message on failure.
 - `/password` (any user): `Current password`, `New password`, `Repeat new password`; client-side check that the two match and length ≥ 8; shows `Password changed. Other sessions were signed out.`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `frontend/src/pages/SettingsPage.test.tsx`:
 
@@ -1665,7 +1665,7 @@ describe("PasswordPage", () => {
 
 Note: a 401 from `POST /api/me/password` must **not** trigger the AuthProvider's "redirect to login" path. Check how 1B's `client.ts` / `AuthProvider` reacts to 401 (`test_login_redirects_back_after_401`); if it is global, make the password mutation call `api.post` with an option `{ noRedirect: true }` — add that option to `client.ts` only if needed, and mention it in the commit.
 
-- [ ] **Step 2: Run them**
+- [x] **Step 2: Run them**
 
 ```bash
 cd frontend && npm test -- src/pages/SettingsPage.test.tsx src/pages/PasswordPage.test.tsx
@@ -1673,7 +1673,7 @@ cd frontend && npm test -- src/pages/SettingsPage.test.tsx src/pages/PasswordPag
 
 Expected: both files fail with module not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/pages/SettingsPage.tsx`:
 
@@ -1756,7 +1756,7 @@ export function PasswordPage() {
 
 `minLength={8}` is deliberately not on the input: jsdom's constraint validation would block `submit` before the component's own message is shown, and the test asserts the message. The API enforces the minimum anyway.
 
-- [ ] **Step 4: Run, typecheck, commit, push**
+- [x] **Step 4: Run, typecheck, commit, push**
 
 ```bash
 cd frontend && npm test && npm run typecheck
@@ -1781,7 +1781,7 @@ git commit -m "Add Settings and Change-password pages" && git push
 - Routes `/users`, `/settings` (rendered inside `RequireAuth` + `Layout`; the pages themselves show the API's 403 if a non-admin types the URL), `/password`.
 - Nav: `Users` and `Settings` links for `hasRole("admin")`; a `Password` link next to the username for everyone.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `frontend/src/components/Layout.test.tsx`:
 
@@ -1810,7 +1810,7 @@ describe("Layout nav", () => {
 });
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd frontend && npm test -- src/components/Layout.test.tsx
@@ -1818,7 +1818,7 @@ cd frontend && npm test -- src/components/Layout.test.tsx
 
 Expected: fails, no `Users` link.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/components/Layout.tsx` — after the `Sources` link add:
 
@@ -1837,7 +1837,7 @@ and next to the username span: `<NavLink to="/password">Password</NavLink>`.
         <Route path="/password" element={<PasswordPage />} />
 ```
 
-- [ ] **Step 4: Run, build, commit, push**
+- [x] **Step 4: Run, build, commit, push**
 
 ```bash
 cd frontend && npm test && npm run typecheck && npm run build | tail -8
@@ -1862,7 +1862,7 @@ git commit -m "Route Users, Settings and Password pages; nav links" && git push
 - `npm run e2e` = `playwright test -c e2e/playwright.config.ts`. `baseURL` `http://localhost/` (override with `E2E_BASE_URL`). Chromium only. Requires the dev-profile stack on a fresh database (setup must be needed).
 - `scripts/e2e.sh`: `docker compose --profile dev down -v` (deletes `dbdata`!), `up -d --build`, `npm run e2e`, `down`. Exit code is the test's.
 
-- [ ] **Step 1: Install and configure**
+- [x] **Step 1: Install and configure**
 
 ```bash
 cd frontend && npm install --save-dev @playwright/test@^1.48.0 && npx playwright install chromium
@@ -1920,7 +1920,7 @@ export default async function globalSetup(config: FullConfig) {
 }
 ```
 
-- [ ] **Step 2: Write the journey**
+- [x] **Step 2: Write the journey**
 
 `frontend/e2e/journey.spec.ts`:
 
@@ -1981,7 +1981,7 @@ test("first-run journey: setup, simulator source, map two points, live values", 
 
 Before running, open `frontend/src/pages/SetupPage.tsx`, `SourceForm.tsx`, `SourcePointsPage.tsx`, `AssetForm.tsx`, `MappingForm.tsx` and `MetricsTable.tsx` and align every label / button name used above with the real text (the regexes are a first guess; the 1B plan names the buttons `Add source`, `Test`, `Map`, and the point rows embed the mapping). Prefer `getByLabel` / `getByRole` over `data-testid`; add an `aria-label` only where no accessible name exists.
 
-- [ ] **Step 3: `scripts/e2e.sh`**
+- [x] **Step 3: `scripts/e2e.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -2005,7 +2005,7 @@ exit $status
 
 `chmod +x scripts/e2e.sh`. On Windows, run it from WSL (`wsl bash scripts/e2e.sh`) or run the three commands by hand in PowerShell.
 
-- [ ] **Step 4: Run it**
+- [x] **Step 4: Run it**
 
 ```bash
 E2E_I_UNDERSTAND_DATA_LOSS=yes scripts/e2e.sh
@@ -2020,7 +2020,7 @@ Expected tail of the output:
 
 If step 6 times out, check `docker compose logs collector` for `schedule loaded: 1 poll groups` and the stream route (`GET /api/stream`) in the browser trace (`npx playwright show-report`).
 
-- [ ] **Step 5: Commit, push**
+- [x] **Step 5: Commit, push**
 
 ```bash
 git add frontend/e2e frontend/package.json frontend/package-lock.json frontend/.gitignore frontend/tsconfig.json scripts/e2e.sh
@@ -2034,7 +2034,7 @@ git commit -m "Add Playwright first-run journey and scripts/e2e.sh" && git push
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: README sections**
+- [x] **Step 1: README sections**
 
 Under `## Run it`, after the existing `.env` paragraph, add:
 
@@ -2084,7 +2084,7 @@ The collector deletes expired sessions and finished jobs older than 7 days every
 (`backend/dcdash/collector/housekeeping.py`). "Test all" runs at most 4 connector tests at once.
 ```
 
-- [ ] **Step 2: Full verification**
+- [x] **Step 2: Full verification**
 
 ```bash
 cd backend && uv run pytest -q
@@ -2094,7 +2094,7 @@ docker compose build && docker compose up -d && python3 ../scripts/smoke.py; doc
 
 Expected: backend suite passed; frontend tests passed; `index-*.js` under 500 kB; smoke passes.
 
-- [ ] **Step 3: Commit, push**
+- [x] **Step 3: Commit, push**
 
 ```bash
 git add README.md

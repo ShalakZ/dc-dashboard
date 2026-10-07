@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import asdict
 from typing import Any
@@ -62,25 +63,40 @@ async def _browse_source(pool: asyncpg.Pool, params: dict[str, Any], factory: Co
 _HANDLERS = {"test_source": _test_source, "browse_source": _browse_source}
 
 
-async def run_pending_jobs(pool: asyncpg.Pool, factory: ConnectorFactory = create_connector) -> int:
-    """Run every pending job, one at a time. Returns how many were processed."""
+async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFactory) -> None:
+    try:
+        handler = _HANDLERS.get(job["kind"])
+        if handler is None:
+            raise ValueError(f"unknown job kind: {job['kind']}")
+        result = await handler(pool, job["params"], factory)
+        status = "done"
+    except Exception as exc:
+        log.warning("job %s (%s) failed: %s", job["id"], job["kind"], exc)
+        result = {"error": str(exc) or type(exc).__name__}
+        status = "failed"
+    await pool.execute(
+        "UPDATE jobs SET status = $2, result = $3, finished_at = now() WHERE id = $1",
+        job["id"], status, result,
+    )
+
+
+async def run_pending_jobs(
+    pool: asyncpg.Pool, factory: ConnectorFactory = create_connector, concurrency: int = 4
+) -> int:
+    """Run pending jobs with up to `concurrency` workers. Returns the count processed.
+
+    Each worker claims one job at a time, so queued jobs stay 'pending' (not 'running') until
+    a worker is free, and a collector restart only fails the jobs actually in flight.
+    """
     processed = 0
-    while (job := await pool.fetchrow(_CLAIM)) is not None:
-        try:
-            handler = _HANDLERS.get(job["kind"])
-            if handler is None:
-                raise ValueError(f"unknown job kind: {job['kind']}")
-            result = await handler(pool, job["params"], factory)
-            status = "done"
-        except Exception as exc:
-            log.warning("job %s (%s) failed: %s", job["id"], job["kind"], exc)
-            result = {"error": str(exc) or type(exc).__name__}
-            status = "failed"
-        await pool.execute(
-            "UPDATE jobs SET status = $2, result = $3, finished_at = now() WHERE id = $1",
-            job["id"], status, result,
-        )
-        processed += 1
+
+    async def worker() -> None:
+        nonlocal processed
+        while (job := await pool.fetchrow(_CLAIM)) is not None:
+            processed += 1
+            await _run_one(pool, job, factory)
+
+    await asyncio.gather(*(worker() for _ in range(concurrency)))
     return processed
 
 

@@ -6,3 +6,5 @@ node_modules/
 dist/
 backups/
 compose.override.yaml
+certs/*
+!certs/.gitkeep

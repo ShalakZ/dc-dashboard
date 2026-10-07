@@ -1,0 +1,24 @@
+{
+	auto_https off
+}
+
+:80 {
+	redir https://{host}{uri} 308
+}
+
+:443 {
+	tls {env.DCDASH_TLS_CERT} {env.DCDASH_TLS_KEY}
+	header Strict-Transport-Security "max-age=31536000"
+
+	handle /api/* {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

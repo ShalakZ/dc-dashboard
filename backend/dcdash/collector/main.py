@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from dcdash import connectors  # noqa: F401  (registers built-in connectors)
+from dcdash.collector.housekeeping import housekeeping_loop
 from dcdash.collector.jobs import fail_stale_jobs, run_pending_jobs
 from dcdash.collector.scheduler import Scheduler
 from dcdash.collector.writer import Writer
@@ -62,6 +63,7 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
         asyncio.create_task(writer.run()),
         asyncio.create_task(reload_loop()),
         asyncio.create_task(jobs_loop()),
+        asyncio.create_task(housekeeping_loop(pool, stop=stop)),
     ]
     try:
         await stop.wait()

@@ -44,6 +44,12 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
+    environment:
+      DCDASH_TLS_CERT: ${DCDASH_TLS_CERT:-}
+      DCDASH_TLS_KEY: ${DCDASH_TLS_KEY:-}
+    volumes:
+      - ./certs:/certs:ro
     depends_on:
       api:
         condition: service_healthy

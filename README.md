@@ -32,6 +32,21 @@ credentials cannot be decrypted. Set `DCDASH_TIMEZONE` in `.env` (for example
 
 Later starts need only `docker compose up -d`.
 
+### Optional HTTPS
+
+Put your certificate chain and private key in `./certs/` (the folder is mounted read-only into the
+`web` container at `/certs`) and add to `.env`:
+
+    DCDASH_TLS_CERT=/certs/fullchain.pem
+    DCDASH_TLS_KEY=/certs/privkey.pem
+
+Then `docker compose up -d`. Port 443 serves HTTPS and port 80 redirects to it; the session cookie
+gets the `Secure` flag automatically. The `web` container runs as uid/gid 10002, so give it the key
+without making the file world-readable: `sudo chown 10002:10002 certs/privkey.pem && chmod 640
+certs/privkey.pem`. If either file is missing or unreadable the `web` container exits with
+`TLS file not readable inside the container: ...` in `docker compose logs web`. Leave both variables
+unset for plain HTTP. `scripts/check_tls.sh` exercises both paths with a throwaway self-signed cert.
+
 Open `http://localhost/`. The first visit asks you to create the admin
 account. Then: Sources → Add source → Test → Points → Browse points → Map;
 Assets → open the asset to see live and historical values.
@@ -53,6 +68,14 @@ scripts/check_web.sh                                     # SPA, proxy and SSE ro
 | `collector` | Polls sources and runs connection tests and browses; read-only toward sources |
 | `simulator` | Stand-in SCADA, dev profile only |
 | `web` | Caddy: serves the UI, proxies `/api` to `api` |
+
+UI screens, besides Assets, Sources and Points:
+
+- **Users** (admin): create users, change roles, deactivate / reactivate, reset a password.
+  Deactivating signs that user out everywhere. You cannot deactivate or demote yourself.
+- **Settings** (admin): site timezone (IANA name). It decides where "today" starts for energy totals.
+  `DCDASH_TIMEZONE` in `.env` only seeds this on first start.
+- **Password** (everyone): change your own password; your other sessions are signed out.
 
 ## Develop
 
@@ -77,6 +100,22 @@ npm run typecheck
 For `npm run dev` to reach the API without Caddy, temporarily publish it:
 `docker compose run --rm -p 8000:8000 api` or add `ports: ["8000:8000"]` to a
 `compose.override.yaml` (ignored by git).
+
+### End-to-end test
+
+`frontend/e2e/journey.spec.ts` drives a real browser through first-run setup, adding the simulator,
+mapping two points and watching live values, against the dev-profile stack on `http://localhost/`.
+It needs a fresh database (setup must still be pending).
+
+    E2E_I_UNDERSTAND_DATA_LOSS=yes scripts/e2e.sh     # deletes the local dbdata volume, then runs it
+
+or, with a fresh stack already running: `cd frontend && npx playwright test -c e2e/playwright.config.ts`.
+First time only: `npx playwright install chromium`. Reports: `npx playwright show-report`.
+
+### Housekeeping
+
+The collector deletes expired sessions and finished jobs older than 7 days every hour
+(`backend/dcdash/collector/housekeeping.py`). "Test all" runs at most 4 connector tests at once.
 
 ## Add a connector
 

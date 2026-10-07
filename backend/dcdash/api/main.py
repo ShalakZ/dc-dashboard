@@ -7,9 +7,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 
-from dcdash.api import assets, auth, data, jobs, mappings, sources, stream
+from dcdash.api import assets, auth, data, jobs, mappings, settings, sources, stream, users
+from dcdash.api.settings import seed_general
 from dcdash.api.stream import Broadcaster
 from dcdash.core.config import get_settings
+from dcdash.core.db import get_sessionmaker
 from dcdash.core.pg import CONFIG_CHANNEL, LATEST_CHANNEL, create_pool, listen_forever
 
 log = logging.getLogger(__name__)
@@ -24,12 +26,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     broadcaster: Broadcaster = app.state.broadcaster
     pool = await create_pool()
     scales_stale = asyncio.Event()
+    seeded = False
 
     async def scales_loop() -> None:
+        nonlocal seeded
         while True:
             await scales_stale.wait()
             scales_stale.clear()
             try:
+                if not seeded:
+                    # Seed inside the retry loop so a slow DB does not crash the API at startup.
+                    async with get_sessionmaker()() as session:
+                        await seed_general(session)
+                    seeded = True
                 await broadcaster.load_scales(pool)
             except Exception:
                 log.exception("could not load mapping scales, retrying")
@@ -70,7 +79,7 @@ def create_app() -> FastAPI:
 
     for router in (
         auth.router, jobs.router, sources.router, assets.router,
-        mappings.router, data.router, stream.router,
+        mappings.router, data.router, stream.router, users.router, settings.router,
     ):
         app.include_router(router)
     return app

@@ -7,7 +7,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
-from dcdash.core.config import get_settings
+from dcdash.api.settings import current_timezone
 from dcdash.core.energy import Energy
 from dcdash.core.metrics import Metric, unit_for
 from dcdash.core.models import Asset, Mapping, PointLatest
@@ -122,7 +122,7 @@ async def summary(asset_id: int, db: AsyncSession = Depends(get_db)) -> dict[str
         }
         for mapping, latest in rows
     ]
-    start = day_start(datetime.now(timezone.utc), get_settings().timezone)
+    start = day_start(datetime.now(timezone.utc), await current_timezone(db))
     energy = await asset_energy(db, asset_id, start, start + timedelta(days=1))
     return {
         "asset": {"id": asset.id, "name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind},

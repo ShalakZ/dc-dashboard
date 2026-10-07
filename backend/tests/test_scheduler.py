@@ -177,3 +177,59 @@ async def test_scheduler_collects_from_the_simulator_and_reloads(db):
         assert await scheduler.reload() == 2
     finally:
         await scheduler.stop()
+
+
+async def test_reload_keeps_unchanged_groups(db):
+    sim_app = create_sim_app(Simulator(), api_key="k")
+    a = await make_source(db, name="a", secret="k")
+    b = await make_source(db, name="b", secret="k")
+    asset = await make_asset(db, "MV2")
+    await make_mapping(db, await make_point(db, a, "sim.p1"), asset)
+    await make_mapping(db, await make_point(db, b, "sim.p1"), asset, metric="energy_kwh")
+    scheduler = Scheduler(db, Writer(db), sim_factory(sim_app))
+    key_a, key_b = (a, 5), (b, 5)  # groups are keyed by (source_id, interval); make_mapping defaults to 5s
+    try:
+        assert await scheduler.reload() == 2
+        task_a = scheduler._running[key_a][1]
+        task_b = scheduler._running[key_b][1]
+        await db.execute("UPDATE sources SET config = '{\"url\": \"http://changed:1\"}' WHERE id = $1", b)
+        assert await scheduler.reload() == 2
+        assert scheduler._running[key_a][1] is task_a            # untouched
+        assert scheduler._running[key_b][1] is not task_b and task_b.cancelled()
+        await db.execute("UPDATE sources SET enabled = false WHERE id = $1", a)
+        assert await scheduler.reload() == 1 and key_a not in scheduler._running and task_a.cancelled()
+    finally:
+        await scheduler.stop()
+    assert scheduler._running == {}
+
+
+async def test_reload_restarts_a_group_whose_task_finished(db):
+    """A factory failure ends run_group early; the next reload must start that group again."""
+    sim_app = create_sim_app(Simulator(), api_key="k")
+    source = await make_source(db, secret="k")
+    await make_mapping(db, await make_point(db, source, "sim.p1"), await make_asset(db, "MV2"))
+    real_factory = sim_factory(sim_app)
+    calls = 0
+
+    def flaky_factory(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("url is required")
+        return real_factory(*args)
+
+    scheduler = Scheduler(db, Writer(db), flaky_factory)
+    try:
+        assert await scheduler.reload() == 1
+        first = scheduler._running[(source, 5)][1]
+        await asyncio.wait_for(first, 2)
+        assert first.done() and calls == 1
+        assert await scheduler.reload() == 1
+        second = scheduler._running[(source, 5)][1]
+        assert second is not first and not second.done()
+        async def factory_calls() -> int:
+            return calls
+
+        await wait_for(factory_calls, 2)
+    finally:
+        await scheduler.stop()

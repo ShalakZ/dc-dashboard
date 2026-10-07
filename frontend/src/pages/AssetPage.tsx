@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { lazy, Suspense, useMemo } from "react";
 import { Link, useParams } from "react-router";
 import { useSummary } from "../api/queries";
 import { EnergyTile } from "../components/EnergyTile";
 import { fmt, MetricsTable } from "../components/MetricsTable";
-import { TrendChart } from "../components/TrendChart";
 import { useStream } from "../hooks/useStream";
+
+const TrendChart = lazy(() => import("../components/TrendChart").then((m) => ({ default: m.TrendChart })));
 
 export function AssetPage() {
   const id = Number(useParams().id);
@@ -24,7 +25,9 @@ export function AssetPage() {
       <div className="tile"><div className="muted">Live power</div><div className="big">{power ? `${fmt(livePower)} kW` : "—"}</div></div>
       <EnergyTile energy={data.energy_today} />
       <h2>Trend</h2>
-      <TrendChart assetId={id} metrics={data.metrics} />
+      <Suspense fallback={<p className="muted">loading chart…</p>}>
+        <TrendChart assetId={id} metrics={data.metrics} />
+      </Suspense>
       <h2>Metrics</h2>
       <MetricsTable metrics={data.metrics} live={live} />
     </>

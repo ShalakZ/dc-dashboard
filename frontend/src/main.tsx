@@ -4,14 +4,17 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import "./app.css";
 import { AuthProvider } from "./auth/AuthProvider";
-import { RequireAuth } from "./auth/RequireAuth";
+import { RequireAuth, RequireRole } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { LoginPage } from "./pages/LoginPage";
+import { PasswordPage } from "./pages/PasswordPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { SourcePointsPage } from "./pages/SourcePointsPage";
 import { SourcesPage } from "./pages/SourcesPage";
+import { UsersPage } from "./pages/UsersPage";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 
@@ -26,6 +29,9 @@ export function App() {
         <Route path="/assets/:id" element={<AssetPage />} />
         <Route path="/sources" element={<SourcesPage />} />
         <Route path="/sources/:id/points" element={<SourcePointsPage />} />
+        <Route path="/users" element={<RequireRole min="admin"><UsersPage /></RequireRole>} />
+        <Route path="/settings" element={<RequireRole min="admin"><SettingsPage /></RequireRole>} />
+        <Route path="/password" element={<PasswordPage />} />
       </Route>
     </Routes>
   );
