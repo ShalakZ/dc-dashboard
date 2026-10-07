@@ -9,9 +9,12 @@ import { Layout } from "./components/Layout";
 import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { LoginPage } from "./pages/LoginPage";
+import { PasswordPage } from "./pages/PasswordPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { SourcePointsPage } from "./pages/SourcePointsPage";
 import { SourcesPage } from "./pages/SourcesPage";
+import { UsersPage } from "./pages/UsersPage";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 
@@ -26,6 +29,9 @@ export function App() {
         <Route path="/assets/:id" element={<AssetPage />} />
         <Route path="/sources" element={<SourcesPage />} />
         <Route path="/sources/:id/points" element={<SourcePointsPage />} />
+        <Route path="/users" element={<UsersPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/password" element={<PasswordPage />} />
       </Route>
     </Routes>
   );

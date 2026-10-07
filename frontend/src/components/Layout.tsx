@@ -10,8 +10,11 @@ export function Layout() {
         <strong>DC Dashboard</strong>
         <NavLink to="/assets">Assets</NavLink>
         {hasRole("operator") && <NavLink to="/sources">Sources</NavLink>}
+        {hasRole("admin") && <NavLink to="/users">Users</NavLink>}
+        {hasRole("admin") && <NavLink to="/settings">Settings</NavLink>}
         <span className="spacer" />
         <span className="muted">{user?.username} ({user?.role})</span>
+        <NavLink to="/password">Password</NavLink>
         <button onClick={() => logout().then(() => navigate("/login"))}>Sign out</button>
       </nav>
       <main>
