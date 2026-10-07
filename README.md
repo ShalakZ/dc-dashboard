@@ -118,6 +118,11 @@ blocks:
       - {name: Current, offset: 6, data_type: float32, unit: A}
 ```
 
+Each point takes `data_type` (`int16`, `uint16`, `int32`, `uint32`, `float32`, ...), an optional
+`unit` and an optional `scale` (default `1.0`) that the decoded register value is multiplied by, so
+an `int16` register holding `1234` with `scale: 0.1` reads as `123.4`. A device that accepts the
+TCP connection but never answers is reported as `timeout` after about twice `timeout_seconds`.
+
 ### Storage tiers
 
 | Tier | Table | Contents | Kept for (default) |

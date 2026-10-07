@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 from pymodbus.client import AsyncModbusTcpClient
-from pymodbus.exceptions import ModbusException
+from pymodbus.exceptions import ModbusException, ModbusIOException
 from pymodbus.pdu.mei_message import ReadDeviceInformationRequest
 
 from dcdash.connectors.base import (
@@ -40,9 +40,13 @@ class ModbusConnector(Connector):
     def __init__(self, config: ModbusConfig, secret: str | None = None) -> None:
         super().__init__(config, secret)
         self.config: ModbusConfig = config
+        self._profile: Profile | None = None  # auto-resolved profile, cached across polls
 
     async def _connect(self) -> AsyncModbusTcpClient:
-        client = AsyncModbusTcpClient(self.config.host, port=self.config.port, timeout=self.config.timeout_seconds)
+        # retries=1: a dead device costs at most ~2x the timeout instead of pymodbus' default 3 retries.
+        client = AsyncModbusTcpClient(
+            self.config.host, port=self.config.port, timeout=self.config.timeout_seconds, retries=1
+        )
         try:
             ok = await asyncio.wait_for(client.connect(), self.config.timeout_seconds + 1)
         except asyncio.TimeoutError:
@@ -57,7 +61,11 @@ class ModbusConnector(Connector):
     async def _identify(self, client: AsyncModbusTcpClient) -> tuple[str | None, str | None]:
         try:
             rr = await client.execute(False, ReadDeviceInformationRequest(read_code=1, dev_id=self.config.unit_id))
-        except (ModbusException, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            raise ConnectorError("timeout", "device identification timed out") from None
+        except ModbusException as exc:
+            if _is_no_response(exc):
+                raise ConnectorError("timeout", "device identification timed out") from None
             return None, None
         if rr.isError():
             return None, None
@@ -72,10 +80,13 @@ class ModbusConnector(Connector):
                 return load_profile(self.config.profile)
             except KeyError:
                 raise ConnectorError("needs_profile", f"profile {self.config.profile!r} is not installed") from None
+        if self._profile is not None:
+            return self._profile
         vendor, product = await self._identify(client)
         matched = match_profile(vendor, product)
         if matched is None:
             raise ConnectorError("needs_profile", f"no profile matches {vendor or '?'}/{product or '?'}; pick one")
+        self._profile = matched
         return matched
 
     async def test(self) -> ConnectionCheck:
@@ -88,6 +99,7 @@ class ModbusConnector(Connector):
             finally:
                 client.close()
         except ConnectorError as exc:
+            self._profile = None
             return ConnectionCheck(ok=False, status=exc.status, message=exc.message)
         return ConnectionCheck(
             ok=True,
@@ -100,6 +112,9 @@ class ModbusConnector(Connector):
         client = await self._connect()
         try:
             profile = await self.resolve_profile(client)
+        except ConnectorError:
+            self._profile = None
+            raise
         finally:
             client.close()
         return [
@@ -117,6 +132,8 @@ class ModbusConnector(Connector):
         except asyncio.TimeoutError:
             raise ConnectorError("timeout", f"block {block.function}:{block.start} timed out") from None
         except (ModbusException, OSError) as exc:
+            if _is_no_response(exc):
+                raise ConnectorError("timeout", f"block {block.function}:{block.start} timed out") from None
             raise ConnectorError("unreachable", str(exc)) from exc
         if rr.isError():
             raise ConnectorError("protocol_error", f"exception response for block {block.function}:{block.start}: {rr}")
@@ -137,7 +154,11 @@ class ModbusConnector(Connector):
                 for p, address in points:
                     if address in wanted:
                         n = register_count(p.data_type)
-                        results[address] = float(decode(regs[p.offset:p.offset + n], p.data_type, block.word_order))
+                        raw = decode(regs[p.offset:p.offset + n], p.data_type, block.word_order)
+                        results[address] = float(raw) * p.scale
+        except ConnectorError:
+            self._profile = None  # re-identify next poll: the device may have been swapped
+            raise
         finally:
             client.close()
         return [
@@ -146,6 +167,11 @@ class ModbusConnector(Connector):
             else PointValue(address=a, ts=ts, value=None, quality=BAD)
             for a in addresses
         ]
+
+
+def _is_no_response(exc: BaseException) -> bool:
+    """pymodbus reports a silent device as ModbusIOException('No response received ...')."""
+    return isinstance(exc, ModbusIOException) and "no response" in str(exc).lower()
 
 
 def _text(value: bytes | list | None) -> str:

@@ -73,3 +73,58 @@ async def test_needs_profile_when_identification_unknown(monkeypatch):
 async def test_unreachable_and_timeout():
     c = create_connector("modbus", {"host": "127.0.0.1", "port": 1, "timeout_seconds": 1})
     assert (await c.test()).status == "unreachable"
+
+
+async def test_read_applies_profile_scale(tmp_path, monkeypatch):
+    import dcdash.profiles as profiles
+
+    import shutil
+
+    shutil.copy(profiles.profiles_dir() / "simulator.yaml", tmp_path)   # the simulator server loads it too
+    (tmp_path / "scaled.yaml").write_text(
+        "name: scaled\nblocks:\n  - {function: 3, start: 0, count: 1, points: [{name: Temp, offset: 0, data_type: int16, scale: 0.1}]}\n"
+    )
+    monkeypatch.setattr(profiles, "profiles_dir", lambda: tmp_path)
+    profiles.load_profile.cache_clear()
+    try:
+        async with modbus_server() as srv:
+            srv._slave.setValues(3, 0, [1234])
+            c = create_connector("modbus", _cfg(srv, profile="scaled"))
+            (v,) = await c.read(["3:0"])
+            assert v.value == pytest.approx(123.4)
+    finally:
+        profiles.load_profile.cache_clear()
+
+
+async def test_silent_device_times_out_quickly():
+    import socket
+    import time
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(1)                                   # accepts TCP, never answers
+    try:
+        c = create_connector("modbus", {"host": "127.0.0.1", "port": sock.getsockname()[1], "timeout_seconds": 0.5})
+        started = time.perf_counter()
+        check = await c.test()
+        assert check.status == "timeout", check
+        assert time.perf_counter() - started < 2.5
+    finally:
+        sock.close()
+
+
+async def test_auto_profile_identified_once_and_cached(monkeypatch):
+    async with modbus_server() as srv:
+        c = create_connector("modbus", _cfg(srv))
+        calls = 0
+        original = c._identify
+
+        async def spy(client):
+            nonlocal calls
+            calls += 1
+            return await original(client)
+
+        monkeypatch.setattr(c, "_identify", spy)
+        await c.read(["3:4"])
+        await c.read(["3:4"])
+        assert calls == 1
