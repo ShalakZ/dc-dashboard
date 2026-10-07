@@ -22,8 +22,8 @@ class NewAdmin(BaseModel):
 
 
 class Credentials(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=256)
+    password: str = Field(max_length=256)
 
 
 class UserOut(BaseModel):

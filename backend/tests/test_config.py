@@ -1,4 +1,12 @@
+import pytest
+from pydantic import ValidationError
+
 from dcdash.core.config import Settings
+
+
+def test_unknown_timezone_is_rejected_at_startup():
+    with pytest.raises(ValidationError, match="unknown timezone"):
+        Settings(secret_key="k", timezone="Mars/Olympus")
 
 
 def test_sqlalchemy_url_uses_asyncpg_driver():

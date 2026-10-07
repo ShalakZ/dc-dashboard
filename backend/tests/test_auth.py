@@ -56,6 +56,12 @@ async def test_login_and_logout(client, db):
     assert (await client.get("/api/me")).json()["role"] == "admin"
 
 
+async def test_login_rejects_oversized_credentials(client):
+    await client.post("/api/setup", json=ADMIN)
+    huge = await client.post("/api/login", json={"username": "admin", "password": "x" * 300})
+    assert huge.status_code == 422
+
+
 async def test_me_requires_a_session(client):
     assert (await client.get("/api/me")).status_code == 401
 

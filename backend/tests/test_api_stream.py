@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import pytest
 from asgi_lifespan import LifespanManager
 
 from dcdash.api.main import create_app
@@ -53,6 +54,18 @@ async def test_event_stream_emits_data_keepalives_and_unsubscribes():
     assert await anext(stream) == "data: [[1, 1.0, 2.0, 0]]\n\n"
     assert await anext(stream) == ": keepalive\n\n"
     await stream.aclose()
+    assert broadcaster.subscriber_count == 0
+
+
+async def test_event_stream_ends_when_the_session_is_no_longer_valid():
+    async def logged_out() -> bool:
+        return False
+
+    broadcaster = Broadcaster()
+    stream = event_stream(broadcaster, keepalive_seconds=0.05, is_still_authenticated=logged_out)
+    assert await anext(stream) == ": connected\n\n"
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
     assert broadcaster.subscriber_count == 0
 
 

@@ -1,9 +1,9 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import asyncpg
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from dcdash.api.deps import authenticate
@@ -49,7 +49,12 @@ class Broadcaster:
         self.scales = {row["point_id"]: row["scale"] for row in rows}
 
 
-async def event_stream(broadcaster: Broadcaster, keepalive_seconds: float = 15.0) -> AsyncIterator[str]:
+async def event_stream(
+    broadcaster: Broadcaster,
+    keepalive_seconds: float = 15.0,
+    is_still_authenticated: Callable[[], Awaitable[bool]] | None = None,
+) -> AsyncIterator[str]:
+    """Yield SSE frames; on each keepalive tick, end the stream if the session is gone."""
     queue = broadcaster.subscribe()
     try:
         yield ": connected\n\n"
@@ -57,6 +62,8 @@ async def event_stream(broadcaster: Broadcaster, keepalive_seconds: float = 15.0
             try:
                 message = await asyncio.wait_for(queue.get(), timeout=keepalive_seconds)
             except TimeoutError:
+                if is_still_authenticated is not None and not await is_still_authenticated():
+                    return
                 yield ": keepalive\n\n"
             else:
                 yield f"data: {message}\n\n"
@@ -68,10 +75,18 @@ async def event_stream(broadcaster: Broadcaster, keepalive_seconds: float = 15.0
 async def stream(request: Request) -> StreamingResponse:
     # Authenticate with a short-lived session: a dependency-held session would
     # keep a database connection open for as long as the browser stays connected.
+    async def still_authenticated() -> bool:
+        try:
+            async with get_sessionmaker()() as db:
+                await authenticate(request, db)
+        except HTTPException:
+            return False
+        return True
+
     async with get_sessionmaker()() as db:
         await authenticate(request, db)
     return StreamingResponse(
-        event_stream(request.app.state.broadcaster),
+        event_stream(request.app.state.broadcaster, is_still_authenticated=still_authenticated),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
