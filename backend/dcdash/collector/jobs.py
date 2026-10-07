@@ -83,19 +83,21 @@ async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFa
 async def run_pending_jobs(
     pool: asyncpg.Pool, factory: ConnectorFactory = create_connector, concurrency: int = 4
 ) -> int:
-    """Claim every pending job and run up to `concurrency` handlers at once. Returns the count."""
-    gate = asyncio.Semaphore(concurrency)
+    """Run pending jobs with up to `concurrency` workers. Returns the count processed.
 
-    async def guarded(job: asyncpg.Record) -> None:
-        async with gate:
+    Each worker claims one job at a time, so queued jobs stay 'pending' (not 'running') until
+    a worker is free, and a collector restart only fails the jobs actually in flight.
+    """
+    processed = 0
+
+    async def worker() -> None:
+        nonlocal processed
+        while (job := await pool.fetchrow(_CLAIM)) is not None:
+            processed += 1
             await _run_one(pool, job, factory)
 
-    tasks: list[asyncio.Task[None]] = []
-    while (job := await pool.fetchrow(_CLAIM)) is not None:
-        tasks.append(asyncio.create_task(guarded(job)))
-    if tasks:
-        await asyncio.gather(*tasks)
-    return len(tasks)
+    await asyncio.gather(*(worker() for _ in range(concurrency)))
+    return processed
 
 
 async def fail_stale_jobs(pool: asyncpg.Pool) -> int:
