@@ -9,7 +9,7 @@ from typing import Any
 import asyncpg
 
 from dcdash.collector.writer import Row, Writer
-from dcdash.connectors.base import BAD, Connector, ConnectorFactory, create_connector
+from dcdash.connectors.base import BAD, Connector, ConnectorError, ConnectorFactory, create_connector
 from dcdash.core.crypto import decrypt
 
 log = logging.getLogger(__name__)
@@ -132,7 +132,10 @@ async def run_group(
                 failures += 1
                 if online is not False:
                     log.warning("source %s went offline: %s", group.source_id, exc)
-                    message = str(exc) or type(exc).__name__
+                    if isinstance(exc, ConnectorError):
+                        message = f"{exc.status}: {exc.message}"
+                    else:
+                        message = str(exc) or type(exc).__name__
                     if await mark_source(pool, group.source_id, False, message):
                         online = False
             else:
