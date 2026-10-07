@@ -42,3 +42,16 @@ async def test_summary_uses_stored_timezone(client, db):
     # In UTC those readings belong to yesterday: no energy today. In Dubai 03:30-03:40 is today.
     assert before is None or before["kwh"] == 0
     assert after is not None and after["kwh"] == 10.0
+
+
+async def test_get_falls_back_when_stored_timezone_is_unknown(client, db):
+    """A stored zone that no longer resolves (tzdata removed, typo via SQL) must not 500 the page."""
+    await login_as(client, db)
+    await db.execute(
+        "INSERT INTO settings (key, value) VALUES ('general', $1) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        {"timezone": "Mars/Olympus"},
+    )
+    response = await client.get("/api/settings/general")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"timezone": "UTC"}

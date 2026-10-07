@@ -158,6 +158,10 @@ class Scheduler:
     async def reload(self) -> int:
         groups = await load_groups(self._pool)  # load first so a failure leaves the old tasks running
         wanted = {(group.source_id, group.interval): group for group in groups}
+        # a task that already returned (e.g. the factory failed) is forgotten so the group is retried
+        finished = [key for key, (_, task) in self._running.items() if task.done()]
+        for key in finished:
+            del self._running[key]
         stale = [key for key, (group, _) in self._running.items() if wanted.get(key) != group]
         await self._cancel(stale)
         for key, group in wanted.items():

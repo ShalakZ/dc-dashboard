@@ -201,3 +201,35 @@ async def test_reload_keeps_unchanged_groups(db):
     finally:
         await scheduler.stop()
     assert scheduler._running == {}
+
+
+async def test_reload_restarts_a_group_whose_task_finished(db):
+    """A factory failure ends run_group early; the next reload must start that group again."""
+    sim_app = create_sim_app(Simulator(), api_key="k")
+    source = await make_source(db, secret="k")
+    await make_mapping(db, await make_point(db, source, "sim.p1"), await make_asset(db, "MV2"))
+    real_factory = sim_factory(sim_app)
+    calls = 0
+
+    def flaky_factory(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("url is required")
+        return real_factory(*args)
+
+    scheduler = Scheduler(db, Writer(db), flaky_factory)
+    try:
+        assert await scheduler.reload() == 1
+        first = scheduler._running[(source, 5)][1]
+        await asyncio.wait_for(first, 2)
+        assert first.done() and calls == 1
+        assert await scheduler.reload() == 1
+        second = scheduler._running[(source, 5)][1]
+        assert second is not first and not second.done()
+        async def factory_calls() -> int:
+            return calls
+
+        await wait_for(factory_calls, 2)
+    finally:
+        await scheduler.stop()
