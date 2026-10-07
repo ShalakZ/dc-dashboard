@@ -4,6 +4,7 @@ import contextlib
 import asyncpg
 import httpx
 
+from dcdash.api.security import hash_password
 from dcdash.connectors.simulator import SimulatorConfig, SimulatorConnector
 from dcdash.core.crypto import encrypt
 
@@ -70,3 +71,15 @@ def sim_factory(sim_app):
         )
 
     return factory
+
+
+async def login_as(client, db, role="admin", username=None, password="correct-horse") -> None:
+    """Create a user with the given role if needed, and sign the client in as them."""
+    username = username or role
+    await db.execute(
+        "INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) "
+        "ON CONFLICT (username) DO NOTHING",
+        username, hash_password(password), role,
+    )
+    response = await client.post("/api/login", json={"username": username, "password": password})
+    assert response.status_code == 200, response.text

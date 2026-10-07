@@ -4,6 +4,7 @@ import sys
 import time
 from pathlib import Path
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
 from testcontainers.postgres import PostgresContainer
@@ -62,3 +63,19 @@ async def pool(database_url):
 async def db(pool):
     await pool.execute(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE")
     return pool
+
+
+@pytest.fixture
+def app(db):
+    from dcdash.api import auth
+    from dcdash.api.main import create_app
+
+    auth.limiter.clear()
+    return create_app()
+
+
+@pytest.fixture
+async def client(app):
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
