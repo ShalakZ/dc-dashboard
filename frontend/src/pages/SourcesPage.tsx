@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { keys, useInvalidate, useSources } from "../api/queries";
 import { useAuth } from "../auth/AuthProvider";
 import { JobStatus } from "../components/JobStatus";
+import { SourceForm } from "../components/SourceForm";
 
 export function SourcesPage() {
   const { hasRole } = useAuth();
@@ -36,7 +37,7 @@ export function SourcesPage() {
         <button onClick={testAll} disabled={sources.length === 0}>Test all</button>
         {hasRole("admin") && <button onClick={() => setShowAdd((v) => !v)}>Add source</button>}
       </div>
-      {showAdd && <p className="muted">(form: Task 9)</p>}
+      {showAdd && <SourceForm onDone={() => setShowAdd(false)} />}
       <table>
         <thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th>Status</th><th>Last seen</th><th>Last error</th><th>Test result</th><th></th></tr></thead>
         <tbody>
