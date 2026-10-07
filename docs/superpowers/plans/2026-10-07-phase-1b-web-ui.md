@@ -111,7 +111,7 @@ README.md                          Run it / Status / Develop updated
 - Produces: `src/api/types.ts` with `User`, `Asset`, `Source`, `Connector`, `PointRow`, `Mapping`, `Summary`, `Series`, `Job`, `Metric` (mirroring the Pydantic models in `backend/dcdash/api/*.py`).
 - Produces: `mockFetch(routes)` in `src/test/fetchMock.ts` where `routes` maps `"GET /api/me"` style keys to `{ status, body }` or a function of the request.
 
-- [ ] **Step 1: Create the branch and scaffold**
+- [x] **Step 1: Create the branch and scaffold**
 
 ```bash
 git checkout -b phase-1b-web-ui
@@ -253,7 +253,7 @@ ul.tree li { margin: 2px 0; }
 .selected { font-weight: bold; }
 ```
 
-- [ ] **Step 2: Write the failing API client test**
+- [x] **Step 2: Write the failing API client test**
 
 `frontend/src/test/setup.ts`:
 
@@ -338,7 +338,7 @@ describe("api client", () => {
 });
 ```
 
-- [ ] **Step 3: Install and run the test to see it fail**
+- [x] **Step 3: Install and run the test to see it fail**
 
 ```bash
 cd frontend && npm install
@@ -347,7 +347,7 @@ npm test -- src/api/client.test.ts
 
 Expected: `Error: Failed to resolve import "./client"`.
 
-- [ ] **Step 4: Implement the client and types**
+- [x] **Step 4: Implement the client and types**
 
 `frontend/src/api/client.ts`:
 
@@ -490,7 +490,7 @@ createRoot(document.getElementById("root")!).render(
 );
 ```
 
-- [ ] **Step 5: Run the tests, typecheck and the dev server**
+- [x] **Step 5: Run the tests, typecheck and the dev server**
 
 ```bash
 npm test -- src/api/client.test.ts
@@ -502,7 +502,7 @@ kill %1
 
 Expected: `Tests  4 passed (4)`; typecheck prints nothing; curl prints `1`.
 
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**
 
 ```bash
 cd .. && git add frontend && git commit -m "Scaffold frontend with Vite, API client and fetch mock" && git push -u origin phase-1b-web-ui
@@ -520,7 +520,7 @@ cd .. && git add frontend && git commit -m "Scaffold frontend with Vite, API cli
 - Produces: `buildTree(assets: Asset[]): TreeNode[]` with `TreeNode = Asset & { children: TreeNode[] }`, siblings ordered by `sort_order` then `name`; an asset whose parent is absent becomes a root. `descendantIds(nodes, id): Set<number>` returns `id` and everything below it (used to block moving an asset under itself).
 - Produces: `RANGES = ["1h", "6h", "24h", "7d"]`, `type Range`, `rangeToQuery(range, now = new Date()): { start: string; end: string; buckets: number }` with ISO strings and `buckets` of 300 for all ranges (the API caps at 2000; 300 keeps charts readable).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `frontend/src/lib/tree.test.ts`:
 
@@ -584,7 +584,7 @@ describe("rangeToQuery", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 ```bash
 npm test -- src/lib
@@ -592,7 +592,7 @@ npm test -- src/lib
 
 Expected: two `Failed to resolve import` errors.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/lib/tree.ts`:
 
@@ -656,7 +656,7 @@ export function rangeToQuery(range: Range, now: Date = new Date()) {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 ```bash
 npm test -- src/lib && npm run typecheck
@@ -664,7 +664,7 @@ npm test -- src/lib && npm run typecheck
 
 Expected: `Tests  9 passed (9)`.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add frontend/src/lib && git commit -m "Add asset tree and time range helpers" && git push
@@ -682,7 +682,7 @@ git add frontend/src/lib && git commit -m "Add asset tree and time range helpers
 - Produces: `FormField { name; label; kind: "string" | "number" | "integer" | "boolean"; required; default?: unknown; description? }`, `fieldsFromSchema(schema: JsonSchema): FormField[]` (property order preserved; `anyOf` with a `null` member means optional; unknown types fall back to `string`), `initialValues(fields): Record<string, string | boolean>`, `coerceValues(fields, raw): Record<string, unknown>` (numbers parsed, booleans passed through, empty optional strings dropped, empty required strings kept so the API reports them).
 - Produces: `LiveValue { ts: string; value: number | null; quality: number }`, `parseStreamMessage(data: string): [number, LiveValue][]` (invalid JSON yields `[]`), `applyUpdates(current: Map<number, LiveValue>, updates, wanted: Set<number>): Map<number, LiveValue>` returning a new Map only when something in `wanted` changed.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `frontend/src/lib/schemaForm.test.ts`:
 
@@ -802,7 +802,7 @@ describe("applyUpdates", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 ```bash
 npm test -- src/lib/schemaForm.test.ts src/lib/stream.test.ts
@@ -810,7 +810,7 @@ npm test -- src/lib/schemaForm.test.ts src/lib/stream.test.ts
 
 Expected: `Failed to resolve import "./schemaForm"` and `"./stream"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/lib/schemaForm.ts`:
 
@@ -926,7 +926,7 @@ export function applyUpdates(
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 ```bash
 npm test -- src/lib && npm run typecheck
@@ -934,7 +934,7 @@ npm test -- src/lib && npm run typecheck
 
 Expected: `Tests  20 passed (20)`.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add frontend/src/lib && git commit -m "Add JSON Schema form and SSE parsing helpers" && git push
@@ -957,7 +957,7 @@ git add frontend/src/lib && git commit -m "Add JSON Schema form and SSE parsing 
 - Produces: `renderWithProviders(ui, { route })` in `src/test/render.tsx`: QueryClient (retry off) + MemoryRouter + AuthProvider.
 - Produces: `queries.ts` hooks used by later tasks: `useAssets`, `useSummary(id)`, `useSeries(id, metric, range)`, `useSources`, `useConnectors`, `usePoints(sourceId)`; mutation helpers `useInvalidate(keys)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `frontend/src/test/render.tsx`:
 
@@ -1068,7 +1068,7 @@ describe("LoginPage", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 ```bash
 npm test -- src/auth src/pages/LoginPage.test.tsx
@@ -1076,7 +1076,7 @@ npm test -- src/auth src/pages/LoginPage.test.tsx
 
 Expected: `Failed to resolve import "../auth/AuthProvider"`.
 
-- [ ] **Step 3: Implement queries, auth, pages, layout and router**
+- [x] **Step 3: Implement queries, auth, pages, layout and router**
 
 `frontend/src/api/queries.ts`:
 
@@ -1395,7 +1395,7 @@ createRoot(document.getElementById("root")!).render(
 );
 ```
 
-- [ ] **Step 4: Run the tests and try it against the real API**
+- [x] **Step 4: Run the tests and try it against the real API**
 
 ```bash
 npm test -- src/auth src/pages && npm run typecheck
@@ -1405,7 +1405,7 @@ Expected: `Tests  6 passed (6)`.
 
 With the 1A stack running (`docker compose up -d`, API on :8000), `npm run dev`, open `http://localhost:5173/`: a fresh database shows the setup form; after creating the admin the nav shows `admin (admin)` and both links. Sign out, sign in again. The `dcdash_session` cookie is set by the API through the Vite proxy because both share the origin `localhost:5173`.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add frontend && git commit -m "Add auth provider, setup and login pages, router shell" && git push
@@ -1425,7 +1425,7 @@ git add frontend && git commit -m "Add auth provider, setup and login pages, rou
 - Produces: `AssetForm({ assets, initial?, excludeIds, onSubmit })` with fields name, parent (select of assets minus `excludeIds`, plus "(none)"), kind, sort order; submits `AssetIn`.
 - Uses: `GET /api/assets` (viewer), `POST /api/assets` (admin, 201), `PATCH /api/assets/{id}` (admin; 422 when moving under own descendant), `DELETE /api/assets/{id}` (admin, 204).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `frontend/src/pages/AssetsPage.test.tsx`:
 
@@ -1481,9 +1481,9 @@ describe("AssetsPage", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**: `npm test -- src/pages/AssetsPage.test.tsx` → `Failed to resolve import "./AssetsPage"`.
+- [x] **Step 2: Run it to see it fail**: `npm test -- src/pages/AssetsPage.test.tsx` → `Failed to resolve import "./AssetsPage"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/components/AssetTree.tsx`:
 
@@ -1617,9 +1617,9 @@ export function AssetsPage() {
 
 In `main.tsx`, import `AssetsPage` and replace the `/assets` placeholder with `<AssetsPage />`.
 
-- [ ] **Step 4: Run**: `npm test -- src/pages/AssetsPage.test.tsx && npm run typecheck` → `Tests  3 passed (3)`. Note the third test's `Save` sends `parent_id: null` for "Site"; the mock's 422 is what the test checks, not the body.
+- [x] **Step 4: Run**: `npm test -- src/pages/AssetsPage.test.tsx && npm run typecheck` → `Tests  3 passed (3)`. Note the third test's `Save` sends `parent_id: null` for "Site"; the mock's 422 is what the test checks, not the body.
 
-- [ ] **Step 5: Commit and push**: `git add frontend && git commit -m "Add assets tree with admin add, rename, move and delete" && git push`
+- [x] **Step 5: Commit and push**: `git add frontend && git commit -m "Add assets tree with admin add, rename, move and delete" && git push`
 
 ---
 
@@ -1636,7 +1636,7 @@ In `main.tsx`, import `AssetsPage` and replace the `/assets` placeholder with `<
 - Produces: `EnergyTile({ energy })`: `n.nn kWh`, ` (estimated)` when flagged, `no energy data` when `null`.
 - Uses: `GET /api/assets/{id}/summary` (viewer), `GET /api/stream` (SSE, any authenticated user).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `frontend/src/pages/AssetPage.test.tsx`:
 
@@ -1701,9 +1701,9 @@ describe("AssetPage", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**: `npm test -- src/pages/AssetPage.test.tsx` → `Failed to resolve import "./AssetPage"`.
+- [x] **Step 2: Run it to see it fail**: `npm test -- src/pages/AssetPage.test.tsx` → `Failed to resolve import "./AssetPage"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/hooks/useStream.ts`:
 
@@ -1809,9 +1809,9 @@ export function AssetPage() {
 
 In `main.tsx`, import `AssetPage` and replace the `/assets/:id` placeholder with `<AssetPage />`.
 
-- [ ] **Step 4: Run**: `npm test -- src/pages/AssetPage.test.tsx && npm run typecheck` → `Tests  2 passed (2)`. Against the real stack with a mapped simulator panel, the value changes every polling interval without a reload.
+- [x] **Step 4: Run**: `npm test -- src/pages/AssetPage.test.tsx && npm run typecheck` → `Tests  2 passed (2)`. Against the real stack with a mapped simulator panel, the value changes every polling interval without a reload.
 
-- [ ] **Step 5: Commit and push**: `git add frontend && git commit -m "Add asset page with live values over SSE" && git push`
+- [x] **Step 5: Commit and push**: `git add frontend && git commit -m "Add asset page with live values over SSE" && git push`
 
 ---
 
@@ -1828,7 +1828,7 @@ In `main.tsx`, import `AssetPage` and replace the `/assets/:id` placeholder with
 - Produces: `TrendChart({ assetId, metrics })`: metric `<select>` (default `active_power_kw` when mapped, else the first metric) + `RangePicker` + `ReactECharts`.
 - Uses: `GET /api/assets/{id}/series?metric=&start=&end=&buckets=` (viewer; 404 when the asset lacks the metric; 422 without timezone offsets — `toISOString()` always includes `Z`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `frontend/src/components/TrendChart.test.tsx`:
 
@@ -1875,9 +1875,9 @@ describe("TrendChart", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**: `npm test -- src/components/TrendChart.test.tsx` → `Failed to resolve import "./TrendChart"`.
+- [x] **Step 2: Run it to see it fail**: `npm test -- src/components/TrendChart.test.tsx` → `Failed to resolve import "./TrendChart"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/components/RangePicker.tsx`:
 
@@ -1948,9 +1948,9 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
 
 In `AssetPage.tsx`, import `TrendChart` and add `<h2>Trend</h2><TrendChart assetId={id} metrics={data.metrics} />` between the tiles and the Metrics heading.
 
-- [ ] **Step 4: Run**: `npm test -- src/components/TrendChart.test.tsx src/pages/AssetPage.test.tsx && npm run typecheck` → `Tests  4 passed (4)`. (The AssetPage test already mocks `GET /api/assets/4/series`.)
+- [x] **Step 4: Run**: `npm test -- src/components/TrendChart.test.tsx src/pages/AssetPage.test.tsx && npm run typecheck` → `Tests  4 passed (4)`. (The AssetPage test already mocks `GET /api/assets/4/series`.)
 
-- [ ] **Step 5: Commit and push**: `git add frontend && git commit -m "Add trend chart with range picker" && git push`
+- [x] **Step 5: Commit and push**: `git add frontend && git commit -m "Add trend chart with range picker" && git push`
 
 ---
 
@@ -1966,7 +1966,7 @@ In `AssetPage.tsx`, import `TrendChart` and add `<h2>Trend</h2><TrendChart asset
 - Produces: `JobStatus({ jobId })`: `running…` while pending/running; on done shows `result.status` and `result.message` (test) or `result.count` points (browse); on failed shows `result.error`.
 - Uses: `GET /api/sources` (operator), `POST /api/sources/{id}/test` → 202 `{job_id}` (operator), `POST /api/sources/test-all` → 202 `{job_ids}` (operator), `GET /api/jobs/{id}` (operator).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `frontend/src/hooks/useJob.test.tsx`:
 
@@ -2040,9 +2040,9 @@ describe("SourcesPage", () => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**: `npm test -- src/hooks src/pages/SourcesPage.test.tsx` → two `Failed to resolve import` errors.
+- [x] **Step 2: Run them to see them fail**: `npm test -- src/hooks src/pages/SourcesPage.test.tsx` → two `Failed to resolve import` errors.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/hooks/useJob.ts`:
 
@@ -2151,9 +2151,9 @@ export function SourcesPage() {
 
 In `main.tsx`, import `SourcesPage` and replace the `/sources` placeholder.
 
-- [ ] **Step 4: Run**: `npm test -- src/hooks src/pages/SourcesPage.test.tsx && npm run typecheck` → `Tests  4 passed (4)`.
+- [x] **Step 4: Run**: `npm test -- src/hooks src/pages/SourcesPage.test.tsx && npm run typecheck` → `Tests  4 passed (4)`.
 
-- [ ] **Step 5: Commit and push**: `git add frontend && git commit -m "Add sources list with connection tests and job polling" && git push`
+- [x] **Step 5: Commit and push**: `git add frontend && git commit -m "Add sources list with connection tests and job polling" && git push`
 
 ---
 
@@ -2168,7 +2168,7 @@ In `main.tsx`, import `SourcesPage` and replace the `/sources` placeholder.
 - Produces: `SchemaForm({ fields, values, onChange })`: one labelled input per `FormField` (`type="checkbox"` for boolean, `type="number"` with `step="any"`/`step="1"` for number/integer, text otherwise; `required` attribute mirrors the field).
 - Produces: `SourceForm({ onDone })`: name, connector type `<select>` from `GET /api/connectors`, generated config fields, a separate `Secret` password input (sent as `secret`, `null` when blank), `Enabled` checkbox; submits `POST /api/sources` (admin, 201; 409 on duplicate name; 422 with pydantic list on bad config).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `frontend/src/components/SchemaForm.test.tsx`:
 
@@ -2224,9 +2224,9 @@ describe("SourceForm", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**: `npm test -- src/components/SchemaForm.test.tsx` → `Failed to resolve import "./SourceForm"`.
+- [x] **Step 2: Run it to see it fail**: `npm test -- src/components/SchemaForm.test.tsx` → `Failed to resolve import "./SourceForm"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/components/SchemaForm.tsx`:
 
@@ -2315,9 +2315,9 @@ export function SourceForm({ onDone }: { onDone: () => void }) {
 
 In `SourcesPage.tsx` replace `{showAdd && <p className="muted">(form: Task 9)</p>}` with `{showAdd && <SourceForm onDone={() => setShowAdd(false)} />}` and import it.
 
-- [ ] **Step 4: Run**: `npm test -- src/components/SchemaForm.test.tsx src/pages/SourcesPage.test.tsx && npm run typecheck` → `Tests  5 passed (5)`. Against the real stack: add `simulator` with secret `sim-key`, Test → `ok 3 ms`.
+- [x] **Step 4: Run**: `npm test -- src/components/SchemaForm.test.tsx src/pages/SourcesPage.test.tsx && npm run typecheck` → `Tests  5 passed (5)`. Against the real stack: add `simulator` with secret `sim-key`, Test → `ok 3 ms`.
 
-- [ ] **Step 5: Commit and push**: `git add frontend && git commit -m "Add schema-generated source form" && git push`
+- [x] **Step 5: Commit and push**: `git add frontend && git commit -m "Add schema-generated source form" && git push`
 
 ---
 
@@ -2332,7 +2332,7 @@ In `SourcesPage.tsx` replace `{showAdd && <p className="muted">(form: Task 9)</p
 - Produces: `MappingForm({ assets, initial?, onSubmit, onCancel })` with Asset `<select>`, Metric `<select>` from `METRICS`, Interval (seconds, blank = API default), Scale (default 1), Custom unit (enabled only for metric `custom`); submits `Omit<MappingIn, "point_id">`.
 - Uses: `POST /api/sources/{id}/browse` → 202 `{job_id}` (admin), `GET /api/sources/{id}/points` (operator; rows embed `mapping`), `POST /api/mappings` (admin, 201; 409 when the point is already mapped or the asset already has that metric), `PATCH /api/mappings/{id}`, `DELETE /api/mappings/{id}` (admin, 204), `GET /api/assets` for the asset select.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `frontend/src/pages/SourcePointsPage.test.tsx`:
 
@@ -2395,9 +2395,9 @@ describe("SourcePointsPage", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**: `npm test -- src/pages/SourcePointsPage.test.tsx` → `Failed to resolve import "./SourcePointsPage"`.
+- [x] **Step 2: Run it to see it fail**: `npm test -- src/pages/SourcePointsPage.test.tsx` → `Failed to resolve import "./SourcePointsPage"`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `frontend/src/components/MappingForm.tsx`:
 
@@ -2527,9 +2527,9 @@ export function SourcePointsPage() {
 
 In `main.tsx`, import `SourcePointsPage` and replace the last placeholder; `App` now has no placeholders.
 
-- [ ] **Step 4: Run the whole suite**: `npm test && npm run typecheck` → `Tests  47 passed (47)` (Tasks 1–10: 4 + 9 + 11 + 6 + 3 + 2 + 2 + 4 + 3 + 3).
+- [x] **Step 4: Run the whole suite**: `npm test && npm run typecheck` → `Tests  47 passed (47)` (Tasks 1–10: 4 + 9 + 11 + 6 + 3 + 2 + 2 + 4 + 3 + 3).
 
-- [ ] **Step 5: Commit and push**: `git add frontend && git commit -m "Add points table with browse, map, edit and unmap" && git push`
+- [x] **Step 5: Commit and push**: `git add frontend && git commit -m "Add points table with browse, map, edit and unmap" && git push`
 
 ---
 
@@ -2543,7 +2543,7 @@ In `main.tsx`, import `SourcePointsPage` and replace the last placeholder; `App`
 **Interfaces:**
 - Produces: `web` service on `:80`: static `dist` with SPA fallback to `index.html`; `/api/*` proxied to `api:8000` unbuffered so SSE events arrive as they are sent.
 
-- [ ] **Step 1: Write the stack check (fails until `web` exists)**
+- [x] **Step 1: Write the stack check (fails until `web` exists)**
 
 `scripts/check_web.sh`:
 
@@ -2565,7 +2565,7 @@ chmod +x scripts/check_web.sh && scripts/check_web.sh
 
 Expected: `curl: (7) Failed to connect to localhost port 80`.
 
-- [ ] **Step 2: Create the Caddyfile and image**
+- [x] **Step 2: Create the Caddyfile and image**
 
 `deploy/Caddyfile`:
 
@@ -2600,7 +2600,7 @@ COPY deploy/Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /app/dist /srv
 ```
 
-- [ ] **Step 3: Update compose.yaml and smoke.py**
+- [x] **Step 3: Update compose.yaml and smoke.py**
 
 In `compose.yaml`, delete the `ports:` block under `api` (the healthcheck stays; it runs inside the container) and add after `api`:
 
@@ -2626,7 +2626,7 @@ BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost"
 
 and the docstring line to `Then run:  uv run --project backend python scripts/smoke.py [base_url]   (default http://localhost, through Caddy)`.
 
-- [ ] **Step 4: Build, start and check**
+- [x] **Step 4: Build, start and check**
 
 ```bash
 docker compose --profile dev up -d --build
@@ -2637,7 +2637,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8000/api/health
 
 Expected: the four `ok` lines; smoke.py finishes with its existing success message; the last curl prints `000` (port 8000 is no longer published). In a browser at `http://localhost/`, the setup page loads and, after mapping a panel, values on the asset page update within a few seconds (SSE through Caddy).
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add deploy frontend/Dockerfile compose.yaml scripts && git commit -m "Serve the UI through Caddy and proxy /api" && git push
@@ -2650,7 +2650,7 @@ git add deploy frontend/Dockerfile compose.yaml scripts && git commit -m "Serve 
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Update the README**
+- [x] **Step 1: Update the README**
 
 Replace the `Status:` paragraph with:
 
@@ -2698,7 +2698,7 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 
 Add `compose.override.yaml` to `.gitignore`.
 
-- [ ] **Step 2: Final verification**
+- [x] **Step 2: Final verification**
 
 ```bash
 cd frontend && npm ci && npm run build && npm test && cd ..
@@ -2708,7 +2708,7 @@ git status --short
 
 Expected: `vite build` reports `dist/index.html` and assets; all tests pass; stack checks print `ok`; `git status` shows only `README.md` and `.gitignore`.
 
-- [ ] **Step 3: Commit and push**
+- [x] **Step 3: Commit and push**
 
 ```bash
 git add README.md .gitignore && git commit -m "Document the web UI and dev workflow" && git push
