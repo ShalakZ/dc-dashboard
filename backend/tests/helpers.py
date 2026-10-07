@@ -1,5 +1,7 @@
 import asyncio
 import contextlib
+import socket
+from datetime import timedelta
 
 import asyncpg
 import httpx
@@ -83,3 +85,14 @@ async def login_as(client, db, role="admin", username=None, password="correct-ho
     )
     response = await client.post("/api/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+async def insert_readings(db, point_id: int, start, step_seconds: int, values: list[float]) -> None:
+    rows = [(point_id, start + timedelta(seconds=i * step_seconds), v, 0) for i, v in enumerate(values)]
+    await db.executemany("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", rows)

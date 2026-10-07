@@ -62,6 +62,16 @@ async def pool(database_url):
 @pytest.fixture
 async def db(pool):
     await pool.execute(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE")
+    # TRUNCATE leaves already-materialized rollup rows behind; a full refresh over an empty
+    # source drops them. refresh_continuous_aggregate must run outside a transaction, which
+    # asyncpg's autocommitting pool.execute satisfies.
+    await pool.execute("CALL refresh_continuous_aggregate('readings_1m', NULL, NULL)")
+    await pool.execute("CALL refresh_continuous_aggregate('readings_1h', NULL, NULL)")
+    await pool.execute(
+        """INSERT INTO settings (key, value) VALUES ('storage', '{"raw_retention_days": 30,
+           "compress_after_days": 7, "rollup_1m_retention_days": 730, "disk_capacity_gb": 100,
+           "warn_threshold_pct": 80}'::jsonb) ON CONFLICT (key) DO NOTHING"""
+    )
     return pool
 
 

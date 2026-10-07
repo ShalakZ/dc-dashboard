@@ -14,6 +14,9 @@ dependencies = [
     "argon2-cffi>=23.1",
     "cryptography>=42",
     "tzdata>=2024.1",
+    "asyncua>=1.1.5,<1.2",
+    "pymodbus>=3.8.3,<3.9",
+    "pyyaml>=6.0.2",
 ]
 
 [dependency-groups]
