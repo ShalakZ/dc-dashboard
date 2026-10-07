@@ -23,6 +23,16 @@ export class ApiError extends Error {
   }
 }
 
+type UnauthorizedHandler = () => void;
+let onUnauthorized: UnauthorizedHandler | null = null;
+/** Endpoints where a 401 is an expected answer rather than a lost session. */
+const AUTH_PATHS = new Set(["/api/login", "/api/setup", "/api/me"]);
+
+/** Register the callback invoked when any non-auth request answers 401 (session expired). */
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  onUnauthorized = handler;
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method, credentials: "same-origin", headers: {} };
   if (body !== undefined) {
@@ -39,6 +49,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     data = text;
   }
   if (!response.ok) {
+    if (response.status === 401 && !AUTH_PATHS.has(path.split("?")[0])) onUnauthorized?.();
     const detail = data && typeof data === "object" && "detail" in data ? (data as { detail: unknown }).detail : data;
     throw new ApiError(response.status, detail);
   }

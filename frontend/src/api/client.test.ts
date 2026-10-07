@@ -1,5 +1,5 @@
 import { mockFetch } from "../test/fetchMock";
-import { api, ApiError } from "./client";
+import { api, ApiError, setUnauthorizedHandler } from "./client";
 
 describe("api client", () => {
   it("sends JSON with same-origin credentials and parses the reply", async () => {
@@ -16,6 +16,27 @@ describe("api client", () => {
     mockFetch({ "GET /api/me": { status: 401, body: { detail: "not authenticated" } } });
     await expect(api.get("/api/me")).rejects.toMatchObject({ status: 401, detail: "not authenticated" });
     await expect(api.get("/api/me")).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("calls the unauthorized handler on 401, except for auth endpoints", async () => {
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+    try {
+      mockFetch({
+        "GET /api/assets": { status: 401, body: { detail: "not authenticated" } },
+        "GET /api/me": { status: 401, body: { detail: "not authenticated" } },
+        "POST /api/login": { status: 401, body: { detail: "bad credentials" } },
+        "GET /api/sources": { status: 403, body: { detail: "forbidden" } },
+      });
+      await expect(api.get("/api/assets")).rejects.toBeInstanceOf(ApiError);
+      expect(handler).toHaveBeenCalledTimes(1);
+      await expect(api.get("/api/me")).rejects.toBeInstanceOf(ApiError);
+      await expect(api.post("/api/login", {})).rejects.toBeInstanceOf(ApiError);
+      await expect(api.get("/api/sources")).rejects.toBeInstanceOf(ApiError);
+      expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      setUnauthorizedHandler(null);
+    }
   });
 
   it("returns undefined on 204", async () => {

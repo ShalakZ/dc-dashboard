@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, setUnauthorizedHandler } from "../api/client";
 import { ROLE_LEVEL, type Role, type User } from "../api/types";
 
 export const RETURN_KEY = "dcdash.returnTo";
@@ -45,6 +45,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setUser(null);
+      queryClient.clear();
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [queryClient]);
 
   const login = useCallback(async (username: string, password: string) => {
     setUser(await api.post<User>("/api/login", { username, password }));
