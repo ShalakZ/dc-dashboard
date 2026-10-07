@@ -39,6 +39,9 @@ class UserOut(BaseModel):
 
 
 def _is_https(request: Request) -> bool:
+    # X-Forwarded-Proto is trusted because only Caddy can reach `api`: the service has no host
+    # `ports:` in compose.yaml, so every request arrives through the proxy, which sets the header
+    # itself. Publishing `ports:` on `api` would let a client spoof it and get a non-Secure cookie.
     return request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").lower() == "https"
 
 

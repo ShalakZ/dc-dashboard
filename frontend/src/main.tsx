@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import "./app.css";
 import { AuthProvider } from "./auth/AuthProvider";
-import { RequireAuth } from "./auth/RequireAuth";
+import { RequireAuth, RequireRole } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
@@ -29,8 +29,8 @@ export function App() {
         <Route path="/assets/:id" element={<AssetPage />} />
         <Route path="/sources" element={<SourcesPage />} />
         <Route path="/sources/:id/points" element={<SourcePointsPage />} />
-        <Route path="/users" element={<UsersPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/users" element={<RequireRole min="admin"><UsersPage /></RequireRole>} />
+        <Route path="/settings" element={<RequireRole min="admin"><SettingsPage /></RequireRole>} />
         <Route path="/password" element={<PasswordPage />} />
       </Route>
     </Routes>

@@ -6,7 +6,10 @@ cd "$(dirname "$0")/.."
 mkdir -p certs
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=localhost" \
   -keyout certs/privkey.pem -out certs/fullchain.pem 2>/dev/null
-chmod 644 certs/privkey.pem certs/fullchain.pem
+# the web container runs as uid/gid 10002: owner+group read on the key, no world access
+chmod 644 certs/fullchain.pem
+sudo chown 10002:10002 certs/privkey.pem
+sudo chmod 640 certs/privkey.pem
 export DCDASH_TLS_CERT=/certs/fullchain.pem DCDASH_TLS_KEY=/certs/privkey.pem
 docker compose up -d --build web
 sleep 3

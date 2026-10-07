@@ -41,8 +41,9 @@ Put your certificate chain and private key in `./certs/` (the folder is mounted 
     DCDASH_TLS_KEY=/certs/privkey.pem
 
 Then `docker compose up -d`. Port 443 serves HTTPS and port 80 redirects to it; the session cookie
-gets the `Secure` flag automatically. If either file is missing or unreadable (the container runs as
-uid 10002, so the key must be world-readable or owned by that uid) the `web` container exits with
+gets the `Secure` flag automatically. The `web` container runs as uid/gid 10002, so give it the key
+without making the file world-readable: `sudo chown 10002:10002 certs/privkey.pem && chmod 640
+certs/privkey.pem`. If either file is missing or unreadable the `web` container exits with
 `TLS file not readable inside the container: ...` in `docker compose logs web`. Leave both variables
 unset for plain HTTP. `scripts/check_tls.sh` exercises both paths with a throwaway self-signed cert.
 

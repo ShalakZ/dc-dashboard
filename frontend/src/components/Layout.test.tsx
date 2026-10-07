@@ -1,4 +1,5 @@
 import { screen } from "@testing-library/react";
+import { RequireRole } from "../auth/RequireAuth";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { Layout } from "./Layout";
@@ -21,5 +22,26 @@ describe("Layout nav", () => {
     expect(await screen.findByRole("link", { name: "Password" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Sources" })).not.toBeInTheDocument();
+  });
+});
+
+describe("RequireRole", () => {
+  it("shows a viewer visiting /users an Admins only page instead of the API error", async () => {
+    mockFetch(routes("viewer"));
+    renderWithProviders(
+      <RequireRole min="admin"><p>users page</p></RequireRole>,
+      { route: "/users", path: "/users" },
+    );
+    expect(await screen.findByText("Admins only")).toBeInTheDocument();
+    expect(screen.queryByText("users page")).not.toBeInTheDocument();
+  });
+
+  it("renders the page for an admin", async () => {
+    mockFetch(routes("admin"));
+    renderWithProviders(
+      <RequireRole min="admin"><p>users page</p></RequireRole>,
+      { route: "/users", path: "/users" },
+    );
+    expect(await screen.findByText("users page")).toBeInTheDocument();
   });
 });
