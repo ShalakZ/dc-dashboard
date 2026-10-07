@@ -6,6 +6,7 @@ import "./app.css";
 import { AuthProvider } from "./auth/AuthProvider";
 import { RequireAuth } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
+import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SetupPage } from "./pages/SetupPage";
@@ -21,7 +22,7 @@ export function App() {
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
         <Route path="/" element={<Navigate to="/assets" replace />} />
         <Route path="/assets" element={<AssetsPage />} />
-        <Route path="/assets/:id" element={<p>asset (Task 6)</p>} />
+        <Route path="/assets/:id" element={<AssetPage />} />
         <Route path="/sources" element={<p>sources (Task 8)</p>} />
         <Route path="/sources/:id/points" element={<p>points (Task 10)</p>} />
       </Route>
