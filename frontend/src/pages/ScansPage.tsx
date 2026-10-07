@@ -38,7 +38,17 @@ export function ScansPage() {
     await invalidate(keys.scans);
     setActiveScan(scanId);
   });
+  // A preview describes the scope as it was when previewed, so any change to the scope discards it.
+  const edit = (scope: Scope) => {
+    setPending(null);
+    setForm(scope);
+  };
+  const saved = () => {
+    setPending(null);
+    setForm(null);
+  };
   const remove = (scope: Scope) => run(async () => {
+    setPending(null);
     if (!window.confirm(`Delete scope "${scope.name}"?`)) return;
     await api.del(`/api/scopes/${scope.id}`);
     await invalidate(keys.scopes);
@@ -57,11 +67,11 @@ export function ScansPage() {
       {form === "new" && !suggestions.isPending && (
         <>
           {suggestions.error && <p className="muted">Could not load suggestions: {suggestions.error.message}</p>}
-          <ScopeForm suggestions={suggestions.data} onSaved={() => setForm(null)} onCancel={() => setForm(null)} />
+          <ScopeForm suggestions={suggestions.data} onSaved={saved} onCancel={() => setForm(null)} />
         </>
       )}
       {form !== null && form !== "new" && (
-        <ScopeForm key={form.id} initial={form} onSaved={() => setForm(null)} onCancel={() => setForm(null)} />
+        <ScopeForm key={form.id} initial={form} onSaved={saved} onCancel={() => setForm(null)} />
       )}
       {pending && (
         <div className="panel">
@@ -82,7 +92,7 @@ export function ScansPage() {
               {isAdmin && (
                 <td className="row">
                   <button onClick={() => requestPreview(s)} disabled={busy}>Scan</button>
-                  <button onClick={() => setForm(s)}>Edit</button>
+                  <button onClick={() => edit(s)}>Edit</button>
                   <button onClick={() => remove(s)} disabled={busy}>Delete</button>
                 </td>
               )}

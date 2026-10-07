@@ -124,4 +124,58 @@ describe("ScansPage", () => {
     expect(await screen.findByRole("heading", { name: "Scan #7 — done" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open the discovery graph" })).toBeInTheDocument();
   });
+
+  describe("confirmation panel never outlives the scope it was previewed for", () => {
+    const confirmation = "2 hosts × 3 ports (6 probes)";
+
+    it("closes when the scope is edited", async () => {
+      const calls = mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6 } } });
+      open();
+      await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+      expect(await screen.findByText(confirmation)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+      expect(screen.queryByText(confirmation)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Start scan" })).not.toBeInTheDocument();
+      expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/scan"))).toBe(false);
+    });
+
+    it("closes when the scope is deleted", async () => {
+      const calls = mockFetch({
+        ...base("admin"),
+        "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6 } },
+        "DELETE /api/scopes/3": { status: 204 },
+      });
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      open();
+      await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+      expect(await screen.findByText(confirmation)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/scopes/3")).toBe(true));
+      expect(screen.queryByText(confirmation)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Start scan" })).not.toBeInTheDocument();
+    });
+
+    it("closes when an edit is saved, and the next Scan previews the new size", async () => {
+      let ports = 3;
+      const calls = mockFetch({
+        ...base("admin"),
+        "GET /api/scopes/3/preview": () => ({ body: { hosts: 2, ports, pairs: 2 * ports } }),
+        "PATCH /api/scopes/3": ({ body }) => { ports = (body as { ports: number[] }).ports.length; return { body: scope }; },
+      });
+      open();
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      // The edit form stays open while the operator previews again; saving must still discard that preview.
+      await userEvent.click(screen.getByRole("button", { name: "Scan" }));
+      expect(await screen.findByText(confirmation)).toBeInTheDocument();
+      await userEvent.clear(screen.getByLabelText("Ports"));
+      await userEvent.type(screen.getByLabelText("Ports"), "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
+      expect(screen.queryByText(confirmation)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Start scan" })).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Scan" }));
+      expect(await screen.findByText("2 hosts × 20 ports (40 probes)")).toBeInTheDocument();
+      expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/scan"))).toBe(false);
+    });
+  });
 });
