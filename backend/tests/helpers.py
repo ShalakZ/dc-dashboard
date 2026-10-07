@@ -10,6 +10,7 @@ from dcdash.api.security import hash_password
 from dcdash.connectors.simulator import SimulatorConfig, SimulatorConnector
 from dcdash.core.crypto import encrypt
 from dcdash.simulator.model import Simulator
+from dcdash.simulator.modbus import ModbusSim
 from dcdash.simulator.opcua import OpcUaSim
 
 
@@ -101,6 +102,18 @@ async def opcua_server(sim: Simulator | None = None, password: str | None = None
     srv = OpcUaSim(sim or Simulator(), free_port(), password=password)
     await srv.start()
     await srv.refresh()
+    try:
+        yield srv
+    finally:
+        await srv.stop()
+
+
+@contextlib.asynccontextmanager
+async def modbus_server(sim: Simulator | None = None):
+    """Run an in-process Modbus TCP simulator server on a free port."""
+    srv = ModbusSim(sim or Simulator(), free_port())
+    await srv.start()
+    srv.refresh()
     try:
         yield srv
     finally:
