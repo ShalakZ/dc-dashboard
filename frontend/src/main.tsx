@@ -8,6 +8,7 @@ import { RequireAuth, RequireRole } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
+import { AuditPage } from "./pages/AuditPage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PasswordPage } from "./pages/PasswordPage";
@@ -37,6 +38,7 @@ export function App() {
         <Route path="/users" element={<RequireRole min="admin"><UsersPage /></RequireRole>} />
         <Route path="/settings" element={<RequireRole min="admin"><SettingsPage /></RequireRole>} />
         <Route path="/storage" element={<RequireRole min="admin"><StoragePage /></RequireRole>} />
+        <Route path="/audit" element={<RequireRole min="admin"><AuditPage /></RequireRole>} />
         <Route path="/password" element={<PasswordPage />} />
       </Route>
     </Routes>

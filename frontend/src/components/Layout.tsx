@@ -15,6 +15,7 @@ export function Layout() {
         {hasRole("admin") && <NavLink to="/users">Users</NavLink>}
         {hasRole("admin") && <NavLink to="/settings">Settings</NavLink>}
         {hasRole("admin") && <NavLink to="/storage">Storage</NavLink>}
+        {hasRole("admin") && <NavLink to="/audit">Audit</NavLink>}
         <span className="spacer" />
         <span className="muted">{user?.username} ({user?.role})</span>
         <NavLink to="/password">Password</NavLink>
