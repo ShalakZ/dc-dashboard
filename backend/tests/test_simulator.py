@@ -1,10 +1,14 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from asyncua import Client
+from pymodbus.client import AsyncModbusTcpClient
 
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.model import PANELS, Simulator, power_kw
+from tests.helpers import wait_for
 
 NOON = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
 
@@ -84,3 +88,29 @@ async def test_reset_counter_endpoint():
         assert (await client.post("/admin/reset-counter/LVP03")).status_code == 200
         assert (await client.post("/admin/reset-counter/NOPE")).status_code == 404
     assert sim.read("LVP03_kWh", NOON) == 0.0
+
+
+async def test_main_serves_all_three_protocols():
+    from dcdash.simulator.main import serve
+    from tests.helpers import free_port
+    http, ua_port, mb_port = free_port(), free_port(), free_port()
+    task = asyncio.create_task(serve(http_port=http, opcua_port=ua_port, modbus_port=mb_port, host="127.0.0.1",
+                                     api_key="sim-key"))
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{http}", headers={"X-API-Key": "sim-key"}) as c:
+            await wait_for(lambda: _ok(c), True)
+            assert len((await c.get("/points")).json()["points"]) == 60
+        async with Client(f"opc.tcp://127.0.0.1:{ua_port}/dcdash/") as ua_client:
+            assert await ua_client.nodes.objects.get_child(["2:Panels"]) is not None
+        mb = AsyncModbusTcpClient("127.0.0.1", port=mb_port)
+        assert await mb.connect()
+        mb.close()
+    finally:
+        task.cancel()
+
+
+async def _ok(c):
+    try:
+        return (await c.get("/points")).status_code == 200
+    except httpx.HTTPError:
+        return False
