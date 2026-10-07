@@ -71,4 +71,28 @@ describe("TrendChart", () => {
     expect(urls.some((u) => u.includes("metric=active_power_kw") && u.includes("buckets=300"))).toBe(true);
     expect(calls.filter((c) => c.path === "/api/assets/4/series").length).toBeGreaterThanOrEqual(2);
   });
+
+  it("labels the storage tier the series came from", async () => {
+    mockFetch({
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/assets/4/series": { body: { ...series, tier: "1h" } },
+    });
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    await screen.findByTestId("chart");
+    expect(screen.getByText("1-hour rollup")).toBeInTheDocument();
+  });
+
+  it("offers a mapping picker when a metric has several mappings and requests the chosen one", async () => {
+    const calls = mockFetch({
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/assets/4/series": { body: series },
+    });
+    const two = [...metrics, { ...metrics[0], mapping_id: 7, point_id: 8 }];
+    renderWithProviders(<TrendChart assetId={4} metrics={two} />);
+    await screen.findByTestId("chart");
+    await userEvent.selectOptions(screen.getByLabelText("Mapping"), "7");
+    const urls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("mapping_id=7"))).toBe(true);
+    expect(calls.filter((c) => c.path === "/api/assets/4/series").length).toBeGreaterThanOrEqual(2);
+  });
 });

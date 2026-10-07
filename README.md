@@ -5,9 +5,10 @@ hierarchy you define, and serves live values, history and energy use.
 
 Design: `docs/superpowers/specs/2026-10-06-dc-dashboard-design.md`
 
-Status: Phase 1B. The web UI is served at `http://localhost/`; the API is
-proxied at `http://localhost/api` (interactive docs at `/api/docs`). Storage
-panel, user management, OPC UA and Modbus connectors arrive in Phase 1C.
+Status: Phase 1C. The web UI is served at `http://localhost/`; the API is
+proxied at `http://localhost/api` (interactive docs at `/api/docs`). Sources
+can be the simulator, OPC UA servers or Modbus TCP devices; readings are kept
+in raw, 1-minute and 1-hour tiers (see "Storage tiers").
 
 ## Run it
 
@@ -66,7 +67,7 @@ scripts/check_web.sh                                     # SPA, proxy and SSE ro
 | `db` | PostgreSQL + TimescaleDB |
 | `api` | HTTP API; never contacts a source |
 | `collector` | Polls sources and runs connection tests and browses; read-only toward sources |
-| `simulator` | Stand-in SCADA, dev profile only |
+| `simulator` | Stand-in SCADA, dev profile only: HTTP `:9000`, OPC UA `opc.tcp://simulator:4840/dcdash/` (user `sim`), Modbus TCP `simulator:5020` (unit 1); all three bound to `127.0.0.1` on the host |
 | `web` | Caddy: serves the UI, proxies `/api` to `api` |
 
 UI screens, besides Assets, Sources and Points:
@@ -75,7 +76,61 @@ UI screens, besides Assets, Sources and Points:
   Deactivating signs that user out everywhere. You cannot deactivate or demote yourself.
 - **Settings** (admin): site timezone (IANA name). It decides where "today" starts for energy totals.
   `DCDASH_TIMEZONE` in `.env` only seeds this on first start.
+- **Storage** (admin): database and per-tier sizes, compression ratio, rows per day, growth and a
+  projected days-until-full figure. Free disk space is not visible from the API container, so disk
+  capacity is a setting: set it to the size of the volume holding the database. The page also edits
+  raw retention, compression delay, 1-minute rollup retention and the warning threshold.
 - **Password** (everyone): change your own password; your other sessions are signed out.
+
+### Protocols
+
+Every connector is read-only toward the source; only `collector` opens connections. A source's
+`last_error` reads `<status>: <message>` with status `ok`, `auth_failed`, `timeout`, `unreachable`,
+`protocol_error` or `needs_profile`.
+
+**OPC UA** (`opcua`): `endpoint` (`opc.tcp://...`), `security_policy` (`none` or `basic256sha256`),
+optional `username` (the password is the source secret), `root_node` (default `i=85`, the Objects
+folder; browsing descends from here) and `timeout_seconds`. With `basic256sha256` the collector
+signs and encrypts with a client certificate it expects as `dcdash_client_cert.pem` and
+`dcdash_client_key.pem` in its working directory.
+
+**Modbus TCP** (`modbus`): `host`, `port` (502), `unit_id` (1), `profile` (`auto` or the name of an
+installed profile) and `timeout_seconds`. Only function codes 3, 4 and 43/14 (device identification)
+are ever sent. Point addresses are `fc:register`, e.g. `4:0` is input register 0. A profile is a
+YAML file in `backend/dcdash/profiles/` describing the register layout; `auto` matches the device's
+vendor/product from FC 43 against the installed profiles and fails with `needs_profile` when nothing
+matches (pick a profile on the source) or the chosen profile is not installed. Example
+(`generic_float32.yaml`):
+
+```yaml
+name: generic_float32
+vendor: null          # set vendor/product_code to let `auto` match the device
+product_code: null
+blocks:
+  - function: 4       # 3 = holding registers, 4 = input registers
+    start: 0
+    count: 8
+    word_order: little
+    points:
+      - {name: Active power, offset: 0, data_type: float32, unit: kW}
+      - {name: Energy, offset: 2, data_type: float32, unit: kWh}
+      - {name: Voltage, offset: 4, data_type: float32, unit: V}
+      - {name: Current, offset: 6, data_type: float32, unit: A}
+```
+
+### Storage tiers
+
+| Tier | Table | Contents | Kept for (default) |
+|---|---|---|---|
+| raw | `readings` | every sample, compressed after `compress_after_days` (7) | `raw_retention_days` (30) |
+| 1m | `readings_1m` | per-minute avg/min/max of good samples (`quality = 0`) | `rollup_1m_retention_days` (730) |
+| 1h | `readings_1h` | per-hour avg/min/max of good samples | forever |
+
+A chart reads whichever tier matches its bucket width: raw under one minute per bucket, `1m` under
+one hour, `1h` beyond; the `series` response carries the chosen `tier` and the chart shows it as
+"raw samples", "1-minute rollup" or "1-hour rollup". Rollups and retention are TimescaleDB
+continuous aggregates and policies configured from the Storage settings; no application code ever
+deletes readings.
 
 ## Develop
 

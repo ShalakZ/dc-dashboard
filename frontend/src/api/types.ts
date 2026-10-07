@@ -53,7 +53,8 @@ export interface Summary {
   energy_today: { kwh: number; estimated: boolean } | null;
 }
 export interface SeriesPoint { ts: string; avg: number; min: number; max: number }
-export interface Series { metric: Metric; unit: string; points: SeriesPoint[] }
+export type SeriesTier = "raw" | "1m" | "1h";
+export interface Series { metric: Metric; unit: string; points: SeriesPoint[]; tier?: SeriesTier }
 
 export type JobStatus = "pending" | "running" | "done" | "failed";
 export interface Job {

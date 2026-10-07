@@ -8,7 +8,8 @@ import type {
 export const keys = {
   assets: ["assets"] as const,
   summary: (id: number) => ["assets", id, "summary"] as const,
-  series: (id: number, metric: Metric, range: Range) => ["assets", id, "series", metric, range] as const,
+  series: (id: number, metric: Metric, range: Range, mappingId?: number) =>
+    ["assets", id, "series", metric, range, mappingId ?? null] as const,
   sources: ["sources"] as const,
   connectors: ["connectors"] as const,
   points: (sourceId: number) => ["sources", sourceId, "points"] as const,
@@ -23,14 +24,15 @@ export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => 
 export const useSummary = (id: number) =>
   useQuery({ queryKey: keys.summary(id), queryFn: () => api.get<Summary>(`/api/assets/${id}/summary`), refetchInterval: 60_000 });
 
-export const useSeries = (id: number, metric: Metric | null, range: Range) =>
+export const useSeries = (id: number, metric: Metric | null, range: Range, mappingId?: number) =>
   useQuery({
-    queryKey: keys.series(id, metric ?? "custom", range),
+    queryKey: keys.series(id, metric ?? "custom", range, mappingId),
     enabled: metric !== null,
     refetchInterval: 30_000,
     queryFn: () => {
       const q = rangeToQuery(range);
       const params = new URLSearchParams({ metric: metric!, start: q.start, end: q.end, buckets: String(q.buckets) });
+      if (mappingId !== undefined) params.set("mapping_id", String(mappingId));
       return api.get<Series>(`/api/assets/${id}/series?${params}`);
     },
   });
