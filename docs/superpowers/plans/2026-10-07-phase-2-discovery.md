@@ -2085,7 +2085,7 @@ git push
       "layout": {"src:1": {"x": 10.0, "y": 20.0}}
     }
     ```
-    where `POINT = {"id", "address", "name", "unit_hint", "mapping_id": int|null, "asset_id": int|null, "suggestion": {"metric", "scale", "interval_seconds", "custom_unit"}}`. `needs_credentials` = the source has zero points and a non-null `last_error`. `unidentified` = `unclaimed` findings of the most recent `done` scan. Cluster order = natural key order; points inside a cluster keep name order.
+    where `POINT = {"id", "address", "name", "unit_hint", "mapping_id": int|null, "asset_id": int|null, "mapped_metric": str|null, "suggestion": {"metric", "scale", "interval_seconds", "custom_unit"}}` (`mapped_metric` is the metric of the point's existing mapping, so the UI can detect a metric the target asset already has). `needs_credentials` = the source has zero points and a non-null `last_error`. `unidentified` = `unclaimed` findings of the most recent `done` scan. Cluster order = natural key order; points inside a cluster keep name order.
   - `PUT /discovery/layout` (admin) body `{"nodes": [{"node_id": str, "x": float, "y": float}]}` (at most 2000, `node_id` 1–200 chars) → 204; upserts.
   - `POST /discovery/accept` (admin) body
     ```json
@@ -2170,7 +2170,9 @@ async def test_graph_shows_mappings_assets_layout_and_manual_sources(client, db)
     assert graph["assets"] == [{"id": site, "parent_id": None, "name": "Site", "kind": "generic"}]
     assert graph["layout"] == {f"asset:{site}": {"x": 5.0, "y": 6.0}}
     mapped = next(p for c in graph["sources"][0]["clusters"] for p in c["points"] if p["id"] == ids["LVP01_kW"])
-    assert mapped["mapping_id"] == mapping and mapped["asset_id"] == site
+    assert mapped["mapping_id"] == mapping and mapped["asset_id"] == site and mapped["mapped_metric"] == "active_power_kw"
+    unmapped = next(p for c in graph["sources"][0]["clusters"] for p in c["points"] if p["id"] == ids["LVP01_kWh"])
+    assert unmapped["mapping_id"] is None and unmapped["mapped_metric"] is None
 
 
 async def test_needs_credentials_when_a_source_has_no_points_and_an_error(client, db):
