@@ -10,11 +10,11 @@ import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SetupPage } from "./pages/SetupPage";
+import { SourcePointsPage } from "./pages/SourcePointsPage";
 import { SourcesPage } from "./pages/SourcesPage";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 
-// Pages added by later tasks are imported here as they land (Tasks 5, 6, 8, 10).
 export function App() {
   return (
     <Routes>
@@ -25,7 +25,7 @@ export function App() {
         <Route path="/assets" element={<AssetsPage />} />
         <Route path="/assets/:id" element={<AssetPage />} />
         <Route path="/sources" element={<SourcesPage />} />
-        <Route path="/sources/:id/points" element={<p>points (Task 10)</p>} />
+        <Route path="/sources/:id/points" element={<SourcePointsPage />} />
       </Route>
     </Routes>
   );
