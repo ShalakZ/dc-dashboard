@@ -33,6 +33,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["dcdash"]
+include = ["dcdash/**/*.py", "dcdash/profiles/*.yaml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
