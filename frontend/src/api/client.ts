@@ -25,8 +25,8 @@ export class ApiError extends Error {
 
 type UnauthorizedHandler = () => void;
 let onUnauthorized: UnauthorizedHandler | null = null;
-/** Endpoints where a 401 is an expected answer rather than a lost session. */
-const AUTH_PATHS = new Set(["/api/login", "/api/setup", "/api/me"]);
+/** Endpoints where a 401 is an expected answer rather than a lost session (wrong credentials or wrong current password). */
+const AUTH_PATHS = new Set(["/api/login", "/api/setup", "/api/me", "/api/me/password"]);
 
 /** Register the callback invoked when any non-auth request answers 401 (session expired). */
 export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {

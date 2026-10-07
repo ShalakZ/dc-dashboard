@@ -26,12 +26,14 @@ describe("api client", () => {
         "GET /api/assets": { status: 401, body: { detail: "not authenticated" } },
         "GET /api/me": { status: 401, body: { detail: "not authenticated" } },
         "POST /api/login": { status: 401, body: { detail: "bad credentials" } },
+        "POST /api/me/password": { status: 401, body: { detail: "current password is incorrect" } },
         "GET /api/sources": { status: 403, body: { detail: "forbidden" } },
       });
       await expect(api.get("/api/assets")).rejects.toBeInstanceOf(ApiError);
       expect(handler).toHaveBeenCalledTimes(1);
       await expect(api.get("/api/me")).rejects.toBeInstanceOf(ApiError);
       await expect(api.post("/api/login", {})).rejects.toBeInstanceOf(ApiError);
+      await expect(api.post("/api/me/password", {})).rejects.toBeInstanceOf(ApiError);
       await expect(api.get("/api/sources")).rejects.toBeInstanceOf(ApiError);
       expect(handler).toHaveBeenCalledTimes(1);
     } finally {
