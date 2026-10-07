@@ -19,3 +19,18 @@ ul.tree li { margin: 2px 0; }
 .selected { font-weight: bold; }
 textarea { font: inherit; width: 100%; }
 .panel { border: 1px solid #000; padding: 12px; margin: 8px 0; max-width: 480px; display: grid; gap: 8px; }
+
+/* Discovery graph */
+main:has(.graph-page) { max-width: none; }
+.graph-layout { display: flex; gap: 12px; height: calc(100vh - 120px); min-height: 320px; }
+.graph-canvas { flex: 1; min-width: 0; border: 1px solid #000; }
+.gpanel { width: 320px; flex: none; align-content: start; overflow: auto; margin: 0; }
+.gpanel h2 { margin: 0; font-size: 16px; }
+.gpanel .spacer { flex: 1; }
+.gnode { width: 220px; padding: 6px 8px; background: #fff; border: 1px solid #000; border-style: solid; font-size: 12px; }
+.gnode-source.discovered, .gnode-cluster, .gnode-point { border-style: dashed; }
+.gnode-unidentified { background: #eee; color: #555; border-color: #888; }
+.gnode .node-title { font-weight: 600; overflow-wrap: anywhere; }
+.gnode .row { gap: 4px; flex-wrap: nowrap; justify-content: space-between; }
+.gnode button { padding: 0 6px; font-size: 11px; }
+.gnode .badge { display: inline-block; margin-top: 2px; padding: 0 4px; border: 1px solid #b00; color: #b00; }

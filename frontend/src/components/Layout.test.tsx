@@ -42,6 +42,23 @@ describe("Layout scans link", () => {
   });
 });
 
+describe("Layout discovery link", () => {
+  it("shows Discovery to operators and admins but not viewers", async () => {
+    mockFetch(routes("operator"));
+    const operator = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    expect(await screen.findByRole("link", { name: "Discovery" })).toHaveAttribute("href", "/discovery");
+    operator.unmount();
+    mockFetch(routes("admin"));
+    const admin = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    expect(await screen.findByRole("link", { name: "Discovery" })).toHaveAttribute("href", "/discovery");
+    admin.unmount();
+    mockFetch(routes("viewer"));
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    expect(await screen.findByRole("link", { name: "Password" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Discovery" })).not.toBeInTheDocument();
+  });
+});
+
 describe("RequireRole", () => {
   it("shows a viewer visiting /users an Admins only page instead of the API error", async () => {
     mockFetch(routes("viewer"));

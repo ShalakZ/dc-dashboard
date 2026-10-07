@@ -11,6 +11,7 @@ export function Layout() {
         <NavLink to="/assets">Assets</NavLink>
         {hasRole("operator") && <NavLink to="/sources">Sources</NavLink>}
         {hasRole("operator") && <NavLink to="/scans">Scans</NavLink>}
+        {hasRole("operator") && <NavLink to="/discovery">Discovery</NavLink>}
         {hasRole("admin") && <NavLink to="/users">Users</NavLink>}
         {hasRole("admin") && <NavLink to="/settings">Settings</NavLink>}
         {hasRole("admin") && <NavLink to="/storage">Storage</NavLink>}
