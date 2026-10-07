@@ -173,8 +173,9 @@ points are not collected.
 | `audit_log` | id, user_id, action, detail, ts |
 | `settings` | key, value |
 
-Phase 2 adds scan scopes and graph layout positions. Phase 3 adds `tariffs`,
-`dashboards`, and `widgets`.
+Phase 2 adds `scan_scopes`, `scans`, `scan_findings`, `graph_layout`, and
+`sources.origin` (section 7.2). Phase 3 adds `tariffs`, `dashboards`, and
+`widgets`.
 
 ## 5. Connectors
 
@@ -184,7 +185,8 @@ implements:
 | Operation | Purpose |
 |---|---|
 | `config_schema` | A Pydantic model describing the connection settings; the UI renders its form from this. |
-| `probe(host, port)` | Phase 2. Returns an identification if something this connector understands is at the address, otherwise nothing. |
+| `probe(host, port)` | Phase 2, a classmethod (there is no configured instance yet). Returns a claim (suggested config, a label, whether credentials are needed) if something this connector understands is at the address, otherwise nothing. Probes use only requests the connector may already issue. |
+| `endpoint_key(config)` | Phase 2, a classmethod. A normalized address string used to match a discovered endpoint to an existing source. |
 | `test()` | Connects and reports OK with latency, authentication failed, timeout, or protocol error. |
 | `browse()` | Lists the points the source offers. |
 | `read(points)` | Returns current values with timestamps and quality. |
@@ -251,22 +253,114 @@ defines where a "day" and a "month" begin for energy and cost.
 
 ## 7. Discovery (phase 2)
 
-1. The admin confirms a scope. The tool proposes the host's own subnets; the
-   admin can add ranges and specific URLs. No scan runs without confirmation.
-2. The collector sweeps the scope for known ports with a small concurrency
-   limit and a rate limit.
-3. Each connector probes the endpoints that answered and claims what it
-   recognizes.
-4. Claimed sources are browsed for points.
-5. Results appear in the graph as discovered and are not yet collected.
-   Points cluster around their source. Points sharing a name prefix
-   (`LVP01_kW`, `LVP01_kWh`) are pre-grouped as a suggested asset.
-6. The admin accepts a suggestion or drags points onto assets. Mapping starts
-   collection.
+Updated 2026-10-07 after the phase 2 design review. Everything here is
+read-only toward the network: a scan opens TCP connections and issues the same
+data-retrieval requests connectors already use, nothing else.
 
-Every scan is recorded in `audit_log` with user, time, and scope. Because the
-SCADA side is behind a firewall, a scan finds only what the network team has
-opened to the host.
+### 7.1 Flow
+
+1. The admin keeps named **scan scopes**: a list of targets (CIDR ranges, host
+   names or addresses, URLs) and a list of ports. A new scope form is
+   pre-filled with each of the collector's own network interfaces, clamped to
+   the /24 around its address (in development this contains the simulator).
+2. Pressing Scan shows "N hosts × M ports" and asks for confirmation on every
+   run. The confirmation is enforced by the API: the start request must carry
+   `confirm_host_count`, which must equal the API's own expansion of the
+   scope's targets, or it is rejected and nothing runs. A scan never exceeds
+   `DCDASH_SCAN_MAX_HOSTS` hosts (default 1024).
+3. The collector runs one `scan` job:
+   1. **Sweep**: a TCP connect to every (host, port) pair, at most 64 at a
+      time and 200 attempts per second, 1 second timeout. Only pairs that
+      accept a connection continue.
+   2. **Probe**: every connector's `probe` is tried on each open endpoint (3
+      second timeout each); the first to claim it wins. Open endpoints nobody
+      claims are recorded as unidentified services.
+   3. **Adopt as discovered sources**: each claim becomes a `sources` row with
+      `origin = 'discovered'` and `enabled = false`. Claims are matched to
+      existing sources by an endpoint key computed by the connector, so a
+      source the admin added by hand at the same address is reused, never
+      duplicated, and a re-scan updates rows instead of adding new ones.
+   4. **Browse**: claimed sources are browsed (4 at a time) with the existing
+      browse logic, which writes `points`. A source that answers
+      `auth_failed` is flagged as needing credentials and the scan continues.
+4. Progress (stage and counters) is written to the `scans` row; the UI polls it
+   once a second, as it does for jobs.
+5. Disabled discovered sources are never polled or tested. Collection starts
+   only when the admin maps points (7.5).
+
+Because the SCADA side is behind a firewall, a scan finds only what the
+network team has opened to the host.
+
+### 7.2 Data model additions
+
+| Table / column | Contents |
+|---|---|
+| `scan_scopes` | id, name, targets (JSON list), ports (JSON list), created_by, created_at. |
+| `scans` | id, scope_id (null if the scope was deleted), scope_snapshot (JSON: exact targets, ports, host count), status (queued, running, done, failed), stage (sweep, probe, browse), progress (JSON counters), started_by, created_at, finished_at, error. A `jobs` row of kind `scan` only triggers execution; scan history does not depend on job housekeeping. |
+| `scan_findings` | scan_id, host, port, source_id (null if unclaimed), connector_type, outcome (claimed, needs_credentials, unclaimed), detail. |
+| `graph_layout` | node_id (stable text such as `src:12`, `cluster:12:LVP01`, `asset:5`), x, y. Shared by all users. |
+| `sources.origin` | `manual` (default) or `discovered`. Discovered, not yet adopted sources are hidden from the Sources screen until they have a mapping. |
+
+### 7.3 Suggestions
+
+`suggest_groups(points)` is a pure function evaluated per source when the graph
+is built; nothing is stored.
+
+- **Grouping**: split each point name on `_`, space, `.`, `/`, `:` and `-`;
+  the group key is every token except the last (`LVP01 kW` → `LVP01`). A group
+  needs at least two points; the rest are shown ungrouped. Groups never span
+  sources: the same panel offered over HTTP, OPC UA and Modbus appears once per
+  source, and the admin adopts the set from the source they prefer.
+- **Metric and scale** are guessed from the point's unit hint: kW →
+  `active_power_kw`, kWh → `energy_kwh`, V, A, PF, Hz, kvar, kVA to their
+  metrics, W → kW and Wh → kWh with scale 0.001, anything else `custom` with
+  its own unit. The interval is the existing per-metric default.
+
+### 7.4 Graph
+
+A single React Flow canvas on its own screen.
+
+- **Left, discovered**: source → cluster → point nodes with dashed borders.
+  Sources and clusters start collapsed; expanding a cluster shows its points.
+  Unidentified services appear as grey nodes. A source that needs credentials
+  is marked, and selecting a source opens a side panel to enter credentials
+  and re-browse it.
+- **Right, assets**: the admin's hierarchy as nodes joined by parent edges.
+- **Mapped points** (including those on manually added sources) are joined to
+  their asset by a solid edge.
+- Node positions are saved to `graph_layout` when dragging ends.
+- The API returns the domain model (sources, clusters, points, assets,
+  mappings); the browser builds nodes, edges and default positions.
+
+### 7.5 Drag and drop
+
+- Dropping a cluster or a single point on an asset opens a **review dialog**:
+  one row per point showing the guessed metric, scale and interval, all
+  editable. Rows whose metric the asset already has default to unchecked.
+  One click commits every checked row.
+- Dropping on empty canvas offers **create asset from suggestion**: the asset
+  is named after the cluster key and placed under the asset the admin picks.
+- Commit calls `POST /api/discovery/accept` with the source, the target asset
+  (existing, or a new one with its parent and name) and the list of
+  `{point_id, metric, scale, interval_seconds}`. In one transaction it creates
+  the asset if needed, creates the mappings with the same validation as the
+  mappings API, enables the source if it is disabled, and writes the audit row.
+  The collector reloads its schedule and collection starts.
+
+### 7.6 Access
+
+Admin: scope create, edit and delete, start a scan, accept, save layout, view
+the audit log. Operator: view the scans, the graph and its layout. Viewer: none.
+
+### 7.7 Audit
+
+`audit_log` gains a small helper used by discovery. Actions recorded, each
+with the user and time: `scope.created`, `scope.updated`, `scope.deleted`,
+`scan.started` (scope snapshot and host count), `scan.finished` (counts of
+open endpoints, claimed sources, points found, unidentified services),
+`discovery.accepted` (source, asset, number of mappings). A read-only admin
+Audit screen lists entries newest first with paging. Phase 1 actions (user
+management, source edits and so on) are not audited yet.
 
 ## 8. Users and security
 
