@@ -414,6 +414,8 @@ git push
 **Files:**
 - Create: `backend/dcdash/core/discovery.py`
 - Modify: `backend/dcdash/core/config.py` (two settings)
+- Modify: `compose.yaml` (`x-backend-env`: pass both variables to **both** `api` and `collector`, which share that anchor, so the two services can never disagree about the cap)
+- Modify: `.env.example` (document both variables, commented out)
 - Create: `backend/tests/test_discovery_logic.py`
 - Modify: `backend/tests/test_config.py` (one test)
 
@@ -459,7 +461,7 @@ def test_single_address_name_and_duplicates():
 
 
 def test_host_bits_in_a_cidr_are_tolerated():
-    assert hosts(["10.0.0.5/30"]) == ["10.0.0.1", "10.0.0.2"]
+    assert hosts(["10.0.0.5/30"]) == ["10.0.0.5", "10.0.0.6"]  # 10.0.0.5/30 is the network 10.0.0.4/30
 
 
 def test_url_adds_its_host_and_its_own_port():
@@ -845,6 +847,14 @@ In `core/config.py` add to `Settings`:
     scan_extra_ports: str = ""
 ```
 (import `Field` from pydantic.)
+
+In `compose.yaml` add these two lines under `x-backend-env: &backend-env` (the existing anchor already feeds `api` and `collector`):
+
+```yaml
+  DCDASH_SCAN_MAX_HOSTS: ${DCDASH_SCAN_MAX_HOSTS:-1024}
+  DCDASH_SCAN_EXTRA_PORTS: ${DCDASH_SCAN_EXTRA_PORTS:-}
+```
+and in `.env.example` add, commented out, `# DCDASH_SCAN_MAX_HOSTS=1024` and `# DCDASH_SCAN_EXTRA_PORTS=5020   # extra scan ports offered when creating a scope (the dev simulator's Modbus port)`. Verify with `docker compose config | grep SCAN` that both variables reach both services.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -1706,7 +1716,7 @@ followed by `run_scan`, which does, in order:
 1. Load the scan row (`LookupError(f"scan {scan_id} not found")` if absent); set `status='running'`.
 2. Everything else sits in a `try/except Exception` that sets `status='failed'`, `error=str(exc)`, `finished_at=now()`, writes the `scan.finished` audit row with `status: "failed"` and `error`, then re-raises.
 3. Expand targets with `get_settings().scan_max_hosts`.
-4. Stage `sweep`, with `on_progress` writing counters at most once a second (a closure that schedules `_set_stage` via `asyncio.create_task` and drops updates while one is in flight).
+4. Stage `sweep`, with `on_progress` writing counters at most once a second. Do this through a small `_ProgressWriter` helper that holds at most one in-flight `asyncio.create_task(_set_stage(...))` and drops updates while one is running. Its `async def flush()` awaits the in-flight task, and **every stage transition and the final `done`/`failed` UPDATE must `await writer.flush()` first**, so a late sweep update can never overwrite a later stage or the final progress. Add a test: slow `_set_stage` (monkeypatch it to `await asyncio.sleep(0.05)` before writing), run a scan over several ports, and assert the recorded stages are exactly `sweep, probe, browse` (no repeats) and the final `progress["checked"]` equals the number of pairs.
 5. Stage `probe`, with a semaphore of `PROBE_CONCURRENCY`.
 6. Build the existing-source index with `_normalised` over all `sources` rows; the first source wins per key.
 7. Adopt each claim. A key match reuses the source and changes nothing. Otherwise insert with `enabled false`, `origin 'discovered'` and `name = claim.label`.
@@ -2076,6 +2086,7 @@ git push
       "sources": [{
         "id": 1, "name": "...", "connector_type": "opcua", "origin": "discovered", "enabled": false,
         "status": "unknown", "last_error": null, "has_secret": false, "needs_credentials": false,
+        "config": {"endpoint": "opc.tcp://h:4840/"},
         "point_count": 60,
         "clusters": [{"key": "LVP01", "points": [POINT, ...]}],
         "ungrouped": [POINT, ...]
@@ -2085,7 +2096,7 @@ git push
       "layout": {"src:1": {"x": 10.0, "y": 20.0}}
     }
     ```
-    where `POINT = {"id", "address", "name", "unit_hint", "mapping_id": int|null, "asset_id": int|null, "mapped_metric": str|null, "suggestion": {"metric", "scale", "interval_seconds", "custom_unit"}}` (`mapped_metric` is the metric of the point's existing mapping, so the UI can detect a metric the target asset already has). `needs_credentials` = the source has zero points and a non-null `last_error`. `unidentified` = `unclaimed` findings of the most recent `done` scan. Cluster order = natural key order; points inside a cluster keep name order.
+    where `POINT = {"id", "address", "name", "unit_hint", "mapping_id": int|null, "asset_id": int|null, "mapped_metric": str|null, "suggestion": {"metric", "scale", "interval_seconds", "custom_unit"}}` (`mapped_metric` is the metric of the point's existing mapping, so the UI can detect a metric the target asset already has). `needs_credentials` = the source has zero points **and** its most recent `scan_findings` row (highest `id` for that `source_id`) has outcome `needs_credentials`. A source that failed for another reason (for example a Modbus device in `needs_profile`, whose `last_error` is a bare message — `mark_source` stores no status prefix) is **not** `needs_credentials`; the UI shows its `last_error` text instead. `unidentified` = `unclaimed` findings of the most recent `done` scan. Cluster order = natural key order; points inside a cluster keep name order.
   - `PUT /discovery/layout` (admin) body `{"nodes": [{"node_id": str, "x": float, "y": float}]}` (at most 2000, `node_id` 1–200 chars) → 204; upserts.
   - `POST /discovery/accept` (admin) body
     ```json
@@ -2150,6 +2161,7 @@ async def test_graph_groups_points_into_clusters_with_suggestions(client, db):
     [src] = graph["sources"]
     assert src["id"] == source and src["origin"] == "discovered" and src["enabled"] is False
     assert src["point_count"] == 7 and src["needs_credentials"] is False
+    assert src["config"] == {"endpoint": "opc.tcp://h:4840/"} and "secret" not in src
     assert [c["key"] for c in src["clusters"]] == ["LVP01", "LVP02"]
     first = src["clusters"][0]["points"]
     assert {p["name"] for p in first} == {"LVP01 kW", "LVP01 kWh", "LVP01 V"}
@@ -2175,15 +2187,45 @@ async def test_graph_shows_mappings_assets_layout_and_manual_sources(client, db)
     assert unmapped["mapping_id"] is None and unmapped["mapped_metric"] is None
 
 
-async def test_needs_credentials_when_a_source_has_no_points_and_an_error(client, db):
+async def finding(db, source, outcome):
+    scan = await db.fetchval("INSERT INTO scans (scope_snapshot, status) VALUES ('{}', 'done') RETURNING id")
+    await db.execute(
+        "INSERT INTO scan_findings (scan_id, host, port, source_id, outcome) VALUES ($1, 'h', 9000, $2, $3)",
+        scan, source, outcome,
+    )
+
+
+async def test_needs_credentials_comes_from_the_scan_finding_when_there_are_no_points(client, db):
     await login_as(client, db, "admin")
     source = await make_source(db, "locked", "simulator", {"url": "http://h:9000"})
-    await db.execute(
-        "UPDATE sources SET origin = 'discovered', enabled = false, last_error = 'credentials rejected' WHERE id = $1",
-        source,
-    )
+    await db.execute("UPDATE sources SET origin = 'discovered', enabled = false WHERE id = $1", source)
+    await finding(db, source, "needs_credentials")
     [src] = (await client.get("/api/discovery/graph")).json()["sources"]
     assert src["needs_credentials"] is True and src["clusters"] == [] and src["ungrouped"] == []
+
+
+async def test_other_browse_failures_are_not_credential_problems(client, db):
+    await login_as(client, db, "admin")
+    source = await make_source(db, "modbus-box", "modbus", {"host": "h"})
+    await db.execute(
+        "UPDATE sources SET origin = 'discovered', enabled = false, last_error = 'no profile matches ?/?; pick one' WHERE id = $1",
+        source,
+    )
+    await finding(db, source, "claimed")
+    [src] = (await client.get("/api/discovery/graph")).json()["sources"]
+    assert src["needs_credentials"] is False and src["last_error"] == "no profile matches ?/?; pick one"
+
+
+async def test_needs_credentials_clears_once_points_exist_or_a_later_scan_found_it_claimed(client, db):
+    await login_as(client, db, "admin")
+    source, _ = await seed_source(db)  # has points
+    await finding(db, source, "needs_credentials")
+    assert (await client.get("/api/discovery/graph")).json()["sources"][0]["needs_credentials"] is False
+    empty = await make_source(db, "empty", "simulator", {"url": "http://h:9000"})
+    await finding(db, empty, "needs_credentials")
+    await finding(db, empty, "claimed")  # a later scan browsed it fine
+    flags = {s["id"]: s["needs_credentials"] for s in (await client.get("/api/discovery/graph")).json()["sources"]}
+    assert flags[empty] is False
 
 
 async def test_unidentified_services_come_from_the_latest_finished_scan_only(client, db):
@@ -2243,7 +2285,7 @@ async def test_accept_maps_points_enables_the_source_audits_and_notifies(client,
     async with listening(database_url, "dcdash_config") as received:
         response = await client.post("/api/discovery/accept", json=body(source, asset, points))
         assert response.status_code == 201
-        assert await received.get() is not None
+        assert await asyncio.wait_for(received.get(), 5) is not None
     result = response.json()
     assert result["asset_id"] == asset and len(result["mapping_ids"]) == 3
     rows = {r["metric"]: r for r in await db.fetch("SELECT metric, scale, interval_seconds, asset_id FROM mappings")}
@@ -2419,6 +2461,8 @@ async def list_audit(
     return {"total": total, "items": items}
 ```
 
+Add `import asyncio` at the top of `tests/test_api_discovery.py`. In the graph route compute `latest_outcome` per source from one query over `scan_findings` ordered by `id` (last row per `source_id` wins) and set `needs_credentials = point_count == 0 and latest_outcome == "needs_credentials"`; `mapped_metric` comes from the point's mapping row.
+
 `api/discovery.py` — schemas and routes per **Interfaces**. Key code:
 
 ```python
@@ -2483,4 +2527,769 @@ git commit -m "feat: discovery graph model, layout, atomic accept and audit API"
 git push
 ```
 
-<!-- FRONTEND TASKS -->
+---
+
+## Frontend conventions (apply to Tasks 8–11)
+
+Verified against `frontend/` on 2026-10-07:
+
+- Plain global CSS in `src/app.css` (no modules, no Tailwind); add new classes there. Vitest runs with `globals: true`, `environment: "jsdom"`, `css: false`, setup file `src/test/setup.ts`; `e2e/` is excluded from Vitest and from `tsc`.
+- Tests are colocated (`X.test.tsx` next to `X.tsx`) and use `renderWithProviders(ui, { route, path })` from `src/test/render.tsx` and `mockFetch(routes)` from `src/test/fetchMock.ts` (keys are `"METHOD /path"`, query strings ignored, `calls` records `{method, path, body}`). Every test must mock `"GET /api/setup": { body: { needed: false } }` and `"GET /api/me": { body: { id: 1, username: "u", role } }`.
+- Data access: `api.get/post/patch/put/del` from `src/api/client.ts`; hooks and `keys` live in `src/api/queries.ts`; types in `src/api/types.ts` (the point row type is `PointRow`, there is no `Point`). Mutations in pages use `useAction().run(fn)` plus `useInvalidate()`; `useJob`/`JobStatus` handle only `browse_source` and `test_source` jobs.
+- Role gating: nav links are hard-coded in `src/components/Layout.tsx` with `hasRole(...)`; routes in `src/main.tsx` use `RequireRole` (from `src/auth/RequireAuth`).
+- **Keep logic out of components.** Graph building and drop decisions are pure functions with Vitest tests. Do **not** try to test mouse dragging in Vitest; real dragging is covered once in Playwright (Task 12).
+
+### Task 8: Data layer, nav, and the Scans page
+
+**Files:**
+- Modify: `frontend/src/api/types.ts`, `frontend/src/api/queries.ts`, `frontend/src/components/Layout.tsx`, `frontend/src/components/Layout.test.tsx`, `frontend/src/main.tsx`, `frontend/src/app.css`
+- Create: `frontend/src/lib/scope.ts`, `frontend/src/lib/scope.test.ts`
+- Create: `frontend/src/components/ScopeForm.tsx`, `frontend/src/components/ScanProgress.tsx`
+- Create: `frontend/src/pages/ScansPage.tsx`, `frontend/src/pages/ScansPage.test.tsx`
+
+**Interfaces:**
+- Consumes: the Task 6 and Task 7 API shapes (see their **Interfaces** blocks); `api`, `useAction`, `useInvalidate`, `keys`.
+- Produces (used by Tasks 9–11):
+  - Types in `types.ts`: `Source.origin: "manual" | "discovered"` (required; fix any test fixtures typed as `Source` that now fail typecheck), `Scope`, `ScopeIn`, `ScopePreview`, `ScopeSuggestions`, `ScanStatus`, `ScanCounters`, `Finding`, `ScanSummary`, `ScanDetail`, `Suggestion`, `GraphPoint`, `GraphCluster`, `GraphSource`, `GraphModel`, `AcceptPointIn`, `AcceptIn`, `AcceptResult`, `AuditEntry`, `AuditPage` — exact fields below.
+  - `keys.scopes`, `keys.suggestions`, `keys.scans`, `keys.scan(id)`, `keys.graph`, `keys.audit(limit, offset)`; hooks `useScopes()`, `useScopeSuggestions(enabled: boolean)`, `useScans()`, `useScan(scanId: number | null)` (polls `GET /api/scans/{id}` every second until `status` is `done` or `failed`; this is the progress hook — `JobStatus` is **not** used for scans), `useGraph()` (no polling; refresh by invalidation), `useAudit(limit: number, offset: number)`.
+  - `lib/scope.ts`: `parseTargets(text: string): string[]`, `parsePorts(text: string): number[]` (throws `Error` with a readable message).
+  - Routes `/scans` and `/discovery` for operator and above, `/audit` for admin; nav links Scans and Discovery (operator+), Audit (admin).
+
+- [ ] **Step 1: Write the failing tests**
+
+`frontend/src/lib/scope.test.ts`:
+
+```ts
+import { parsePorts, parseTargets } from "./scope";
+
+describe("scope parsing", () => {
+  it("splits targets on lines and commas and drops blanks", () => {
+    expect(parseTargets("10.0.0.0/24\n simulator ,, http://plc:8080 \n")).toEqual(["10.0.0.0/24", "simulator", "http://plc:8080"]);
+    expect(parseTargets("  \n ")).toEqual([]);
+  });
+  it("parses ports separated by commas or spaces", () => {
+    expect(parsePorts("9000, 4840 5020")).toEqual([9000, 4840, 5020]);
+  });
+  it.each(["", "  ", "0", "70000", "80,abc", "1.5", "-2"])("rejects %j", (text) => {
+    expect(() => parsePorts(text)).toThrow();
+  });
+});
+```
+
+`frontend/src/pages/ScansPage.test.tsx` (use the conventions above; `role` parameter as in `SourcesPage.test.tsx`):
+
+```tsx
+import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { mockFetch } from "../test/fetchMock";
+import { renderWithProviders } from "../test/render";
+import { ScansPage } from "./ScansPage";
+
+const scope = { id: 3, name: "lab", targets: ["simulator"], ports: [9000, 4840, 5020], created_at: "2026-10-07T10:00:00Z" };
+const done = {
+  id: 7, scope_id: 3, scope_name: "lab", status: "done", stage: "browse", created_at: "t", finished_at: "t", error: null,
+  progress: { hosts: 1, pairs: 3, checked: 3, open: 3, claimed: 2, points: 120, unidentified: 0, needs_credentials: 1 },
+  scope_snapshot: {},
+  findings: [
+    { host: "simulator", port: 4840, source_id: 5, connector_type: "opcua", outcome: "claimed", detail: "60 points" },
+    { host: "simulator", port: 9000, source_id: 6, connector_type: "simulator", outcome: "needs_credentials", detail: "credentials rejected" },
+  ],
+};
+const base = (role: string) => ({
+  "GET /api/setup": { body: { needed: false } },
+  "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/scopes": { body: [scope] },
+  "GET /api/scans": { body: [{ ...done, findings: undefined }] },
+  "GET /api/scopes/suggestions": { body: { targets: ["172.18.0.0/24"], ports: [502, 4840, 9000] } },
+});
+const open = () => renderWithProviders(<ScansPage />, { route: "/scans", path: "/scans" });
+
+describe("ScansPage", () => {
+  it("lets an operator read scopes and history but not change anything", async () => {
+    mockFetch(base("operator"));
+    open();
+    expect(await screen.findByText("lab")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New scope" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Scan" })).not.toBeInTheDocument();
+  });
+
+  it("creates a scope from a prefilled form and sends parsed targets and ports", async () => {
+    const calls = mockFetch({ ...base("admin"), "POST /api/scopes": { status: 201, body: scope } });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "New scope" }));
+    expect(await screen.findByLabelText("Targets")).toHaveValue("172.18.0.0/24");
+    expect(screen.getByLabelText("Ports")).toHaveValue("502, 4840, 9000");
+    await userEvent.type(screen.getByLabelText("Name"), "lab");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const post = calls.find((c) => c.method === "POST" && c.path === "/api/scopes");
+    expect(post?.body).toEqual({ name: "lab", targets: ["172.18.0.0/24"], ports: [502, 4840, 9000] });
+  });
+
+  it("shows a port error without calling the API", async () => {
+    const calls = mockFetch(base("admin"));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "New scope" }));
+    await userEvent.type(await screen.findByLabelText("Name"), "x");
+    await userEvent.clear(screen.getByLabelText("Ports"));
+    await userEvent.type(screen.getByLabelText("Ports"), "99999");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/invalid port/i);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("asks for confirmation with the host and port counts, then starts the scan with that count", async () => {
+    let polls = 0;
+    const calls = mockFetch({
+      ...base("admin"),
+      "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6 } },
+      "POST /api/scopes/3/scan": { status: 202, body: { scan_id: 7, job_id: 1 } },
+      "GET /api/scans/7": () => ({ body: ++polls < 2 ? { ...done, status: "running", stage: "probe", findings: [] } : done }),
+    });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+    expect(await screen.findByText("2 hosts × 3 ports (6 probes)")).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")).toBe(false); // nothing runs before confirming
+    await userEvent.click(screen.getByRole("button", { name: "Start scan" }));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({ confirm_host_count: 2 });
+    expect(await screen.findByText(/running/i)).toBeInTheDocument();
+    const row = await screen.findByRole("row", { name: /simulator.*9000/ }, { timeout: 5000 });
+    expect(within(row).getByText("needs_credentials")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open the discovery graph" })).toHaveAttribute("href", "/discovery");
+  });
+
+  it("cancelling the confirmation runs nothing", async () => {
+    const calls = mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6 } } });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/scan"))).toBe(false);
+  });
+
+  it("shows the server's reason when the count is stale or a scan is running", async () => {
+    mockFetch({
+      ...base("admin"),
+      "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6 } },
+      "POST /api/scopes/3/scan": { status: 409, body: { detail: "a scan is already in progress" } },
+    });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start scan" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("a scan is already in progress");
+  });
+});
+```
+Add to `Layout.test.tsx` (follow its existing style): operator sees links Scans and Discovery and not Audit; admin also sees Audit; viewer sees none of the three.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cd frontend && npm test -- src/lib/scope.test.ts src/pages/ScansPage.test.tsx src/components/Layout.test.tsx`
+Expected: FAIL (modules missing).
+
+- [ ] **Step 3: Implement**
+
+`types.ts` additions (exact):
+
+```ts
+export type ScanStatus = "queued" | "running" | "done" | "failed";
+export interface ScanCounters { hosts?: number; pairs?: number; checked?: number; open?: number; claimed?: number; points?: number; unidentified?: number; needs_credentials?: number }
+export interface Scope { id: number; name: string; targets: string[]; ports: number[]; created_at: string }
+export interface ScopeIn { name: string; targets: string[]; ports: number[] }
+export interface ScopePreview { hosts: number; ports: number; pairs: number }
+export interface ScopeSuggestions { targets: string[]; ports: number[] }
+export interface Finding { host: string; port: number; source_id: number | null; connector_type: string | null; outcome: "claimed" | "needs_credentials" | "unclaimed"; detail: string }
+export interface ScanSummary { id: number; scope_id: number | null; scope_name: string; status: ScanStatus; stage: "sweep" | "probe" | "browse" | null; progress: ScanCounters; created_at: string; finished_at: string | null; error: string | null }
+export interface ScanDetail extends ScanSummary { scope_snapshot: Record<string, unknown>; findings: Finding[] }
+export interface Suggestion { metric: Metric; scale: number; interval_seconds: number; custom_unit: string | null }
+export interface GraphPoint { id: number; address: string; name: string; unit_hint: string | null; mapping_id: number | null; asset_id: number | null; mapped_metric: Metric | null; suggestion: Suggestion }
+export interface GraphCluster { key: string; points: GraphPoint[] }
+export interface GraphSource {
+  id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";
+  enabled: boolean; status: string; last_error: string | null; has_secret: boolean; needs_credentials: boolean;
+  point_count: number; clusters: GraphCluster[]; ungrouped: GraphPoint[];
+}
+export interface GraphModel {
+  sources: GraphSource[];
+  unidentified: { host: string; port: number; scan_id: number }[];
+  assets: Pick<Asset, "id" | "parent_id" | "name" | "kind">[];
+  layout: Record<string, { x: number; y: number }>;
+}
+export interface AcceptPointIn { point_id: number; metric: Metric; scale: number; interval_seconds: number | null; custom_unit: string | null }
+export type AcceptIn = { source_id: number; points: AcceptPointIn[] } & ({ asset_id: number } | { new_asset: { name: string; parent_id: number | null } });
+export interface AcceptResult { asset_id: number; mapping_ids: number[] }
+export interface AuditEntry { id: number; user_id: number | null; username: string | null; action: string; detail: Record<string, unknown>; ts: string }
+export interface AuditPage { total: number; items: AuditEntry[] }
+```
+(The graph's per-source `config` field is part of the Task 7 API; it never contains secrets.)
+
+`queries.ts`: add the keys and hooks listed under **Interfaces**; `useScan` is
+
+```ts
+export const useScan = (scanId: number | null) =>
+  useQuery({
+    queryKey: scanId === null ? ["scans", "none"] : keys.scan(scanId),
+    enabled: scanId !== null,
+    queryFn: () => api.get<ScanDetail>(`/api/scans/${scanId}`),
+    refetchInterval: (query) => (["done", "failed"].includes(query.state.data?.status ?? "") ? false : 1000),
+  });
+```
+with `keys.scans = ["scans"] as const` and `keys.scan = (id: number) => ["scans", id] as const` (so invalidating `keys.scans` also refreshes details).
+
+`lib/scope.ts`:
+
+```ts
+export function parseTargets(text: string): string[] {
+  return text.split(/[\n,]/).map((t) => t.trim()).filter(Boolean);
+}
+
+export function parsePorts(text: string): number[] {
+  const parts = text.split(/[\s,]+/).filter(Boolean);
+  if (parts.length === 0) throw new Error("add at least one port");
+  return parts.map((part) => {
+    const port = Number(part);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`invalid port: ${part}`);
+    return port;
+  });
+}
+```
+
+`ScopeForm` (props `{ initial?: Scope; suggestions?: ScopeSuggestions; onSaved: () => void; onCancel: () => void }`): labels "Name", "Targets" (textarea, one per line or comma separated, helper text listing CIDR, host name, URL), "Ports"; prefill a new scope from `suggestions` (`targets.join("\n")`, `ports.join(", ")`); Save → `parsePorts`/`parseTargets` (show a thrown message in `<p className="error" role="alert">`), then `api.post("/api/scopes", body)` or `api.patch(`/api/scopes/${id}`, body)`, invalidate `keys.scopes`, `onSaved()`.
+
+`ScanProgress` (props `{ scanId: number }`): uses `useScan`; shows `Scan #{id} — {status}` plus the stage while running, the counters (`checked/pairs probed`, `open`, `claimed`, `points`, `needs credentials`), `error` text on failure, and when done a table with headers Host / Port / Type / Outcome / Detail and `<Link to="/discovery">Open the discovery graph</Link>`.
+
+`ScansPage`: heading "Scans"; scopes table (Name, Targets joined, Ports joined) with, for admins only, buttons "Scan", "Edit", "Delete" (`window.confirm`) per row and a "New scope" button (opens `ScopeForm` with `useScopeSuggestions(true)`); "Scan" fetches `/api/scopes/{id}/preview`, shows `{hosts} hosts × {ports} ports ({pairs} probes)` with buttons "Start scan" and "Cancel"; "Start scan" posts `{ confirm_host_count: preview.hosts }`, sets the active scan id, invalidates `keys.scans`; errors from `useAction` render as `<p className="error" role="alert">`. Below: "Recent scans" table from `useScans()` (Scope, Status, Started, claimed/points) with a "Details" button per row that sets the active scan; the active scan renders `ScanProgress`. Wire routes and nav in `main.tsx` and `Layout.tsx` as described under **Interfaces**.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `cd frontend && npm test` then `npm run typecheck`
+Expected: PASS, no type errors.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add frontend
+git commit -m "feat: scans page, scan progress hook and discovery data layer"
+git push
+```
+
+---
+
+### Task 9: The discovery graph (read-only canvas)
+
+**Files:**
+- Modify: `frontend/package.json`, `frontend/package-lock.json` (`npm install @xyflow/react`), `frontend/src/test/setup.ts`, `frontend/src/main.tsx`, `frontend/src/components/Layout.tsx` (only if the Discovery link is not yet there), `frontend/src/app.css`
+- Create: `frontend/src/lib/graph.ts`, `frontend/src/lib/graph.test.ts`
+- Create: `frontend/src/components/graph/nodes.tsx`, `frontend/src/components/graph/SourcePanel.tsx`, `frontend/src/components/graph/SourcePanel.test.tsx`
+- Create: `frontend/src/pages/DiscoveryPage.tsx`, `frontend/src/pages/DiscoveryPage.test.tsx`
+
+**Interfaces:**
+- Consumes: `GraphModel`, `GraphSource`, `GraphPoint`, `GraphCluster`, `useGraph`, `JobStatus`, `useAction`, `useInvalidate`, `keys` (Task 8); `PATCH /api/sources/{id}` `{secret?, config?}`, `POST /api/sources/{id}/browse` → `{job_id}`, `PUT /api/discovery/layout` (existing / Task 7).
+- Produces:
+  - `lib/graph.ts` exports `UNGROUPED = "__ungrouped__"`, `nodeId = { source(id), cluster(sourceId, key), point(id), asset(id), unidentified(host, port) }` producing `src:{id}`, `cluster:{sourceId}:{key}`, `point:{id}`, `asset:{id}`, `unid:{host}:{port}`; `interface OpenState { sources: ReadonlySet<number>; clusters: ReadonlySet<string> }` (cluster entries are cluster node ids); `buildGraph(model: GraphModel, open: OpenState): { nodes: Node[]; edges: Edge[] }` (pure).
+  - Node `type` values and `data` shapes: `source` → `{ source: GraphSource; expanded: boolean }`; `cluster` → `{ sourceId: number; key: string; label: string; count: number; mappedCount: number; expanded: boolean; ungrouped: boolean }`; `point` → `{ sourceId: number; clusterKey: string; point: GraphPoint }`; `asset` → `{ asset: GraphModel["assets"][number]; depth: number }`; `unidentified` → `{ host: string; port: number }`. All nodes are `draggable: true`.
+  - `components/graph/nodes.tsx` exports `nodeTypes` (the five components). Interactive callbacks are injected into `node.data` by the page: `onToggle?: (nodeId: string) => void` (source and cluster), `onMap?: (nodeId: string) => void` and `onNewAsset?: (nodeId: string) => void` (Task 10). A button renders only if its callback is present. Buttons carry the React Flow class `nodrag` and `aria-label`s: `Expand {name}` / `Collapse {name}`, `Map {name} to asset…`, `New asset from {name}…`. The visible title element has class `node-title` (e2e grabs nodes by it).
+  - `SourcePanel({ source, canEdit, onClose })`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`frontend/src/lib/graph.test.ts` (fixture: one discovered source `id: 1` with clusters `LVP01` (3 points) and `LVP02` (3 points) and ungrouped `[Status]`, one manual source `id: 2` with one cluster holding two points mapped to asset 10, `assets: [{id:10,parent_id:null,name:"Site"},{id:11,parent_id:10,name:"Panel 1"}]`, `unidentified: [{host:"10.0.0.9",port:8080,scan_id:4}]`, `layout: {}`):
+
+```ts
+import { UNGROUPED, buildGraph, nodeId, type OpenState } from "./graph";
+import type { GraphModel, GraphPoint } from "../api/types";
+
+const none: OpenState = { sources: new Set(), clusters: new Set() };
+const point = (id: number, name: string, extra: Partial<GraphPoint> = {}): GraphPoint => ({
+  id, address: `a${id}`, name, unit_hint: null, mapping_id: null, asset_id: null, mapped_metric: null,
+  suggestion: { metric: "custom", scale: 1, interval_seconds: 5, custom_unit: null }, ...extra,
+});
+const source = (id: number, over: object = {}) => ({
+  id, name: `s${id}`, connector_type: "opcua", config: {}, origin: "discovered" as const, enabled: false, status: "unknown",
+  last_error: null, has_secret: false, needs_credentials: false, point_count: 0, clusters: [], ungrouped: [], ...over,
+});
+const model = (over: Partial<GraphModel> = {}): GraphModel => ({
+  sources: [
+    source(1, {
+      point_count: 7,
+      clusters: [{ key: "LVP01", points: [point(1, "LVP01 kW"), point(2, "LVP01 kWh"), point(3, "LVP01 V")] },
+                 { key: "LVP02", points: [point(4, "LVP02 kW"), point(5, "LVP02 kWh"), point(6, "LVP02 V")] }],
+      ungrouped: [point(7, "Status")],
+    }),
+    source(2, { origin: "manual", enabled: true, clusters: [{ key: "M", points: [
+      point(8, "M kW", { asset_id: 10, mapping_id: 1, mapped_metric: "active_power_kw" }),
+      point(9, "M V", { asset_id: 10, mapping_id: 2, mapped_metric: "voltage_v" })] }] }),
+  ],
+  unidentified: [{ host: "10.0.0.9", port: 8080, scan_id: 4 }],
+  assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }, { id: 11, parent_id: 10, name: "Panel 1", kind: "generic" }],
+  layout: {}, ...over,
+});
+const ids = (nodes: { id: string }[]) => nodes.map((n) => n.id).sort();
+
+describe("buildGraph", () => {
+  it("collapsed: one node per source, per asset and per unidentified service, nothing else", () => {
+    const { nodes } = buildGraph(model(), none);
+    expect(ids(nodes)).toEqual(["asset:10", "asset:11", "src:1", "src:2", "unid:10.0.0.9:8080"]);
+  });
+
+  it("expanding a source adds its clusters plus an Ungrouped pseudo-cluster", () => {
+    const { nodes, edges } = buildGraph(model(), { sources: new Set([1]), clusters: new Set() });
+    expect(ids(nodes.filter((n) => n.type === "cluster"))).toEqual([
+      nodeId.cluster(1, "LVP01"), nodeId.cluster(1, "LVP02"), nodeId.cluster(1, UNGROUPED)]);
+    expect(edges.filter((e) => e.source === "src:1")).toHaveLength(3);
+    expect(nodes.find((n) => n.id === nodeId.cluster(1, UNGROUPED))?.data).toMatchObject({ ungrouped: true, count: 1 });
+  });
+
+  it("expanding a cluster adds its point nodes with dashed edges", () => {
+    const open = { sources: new Set([1]), clusters: new Set([nodeId.cluster(1, "LVP01")]) };
+    const { nodes, edges } = buildGraph(model(), open);
+    expect(ids(nodes.filter((n) => n.type === "point"))).toEqual(["point:1", "point:2", "point:3"]);
+    expect(edges.find((e) => e.target === "point:1")?.style).toMatchObject({ strokeDasharray: expect.any(String) });
+  });
+
+  it("asset hierarchy becomes solid parent-to-child edges", () => {
+    const { edges } = buildGraph(model(), none);
+    const edge = edges.find((e) => e.source === "asset:10" && e.target === "asset:11");
+    expect(edge).toBeDefined();
+    expect(edge?.style?.strokeDasharray).toBeUndefined();
+  });
+
+  it("a collapsed source with mapped points links to each asset with a count", () => {
+    const { edges } = buildGraph(model(), none);
+    expect(edges.find((e) => e.source === "src:2" && e.target === "asset:10")?.label).toBe("2 mapped");
+  });
+
+  it("a collapsed cluster aggregates its mapped points; an expanded one links each point", () => {
+    const collapsed = buildGraph(model(), { sources: new Set([2]), clusters: new Set() });
+    expect(collapsed.edges.find((e) => e.source === nodeId.cluster(2, "M") && e.target === "asset:10")?.label).toBe("2 mapped");
+    const expanded = buildGraph(model(), { sources: new Set([2]), clusters: new Set([nodeId.cluster(2, "M")]) });
+    expect(expanded.edges.filter((e) => e.target === "asset:10" && e.source.startsWith("point:"))).toHaveLength(2);
+    expect(expanded.edges.some((e) => e.source === nodeId.cluster(2, "M") && e.target === "asset:10")).toBe(false);
+  });
+
+  it("never links to an asset that does not exist", () => {
+    const m = model({ assets: [] });
+    expect(buildGraph(m, none).edges).toHaveLength(0);
+  });
+
+  it("saved layout overrides default positions; others get distinct defaults", () => {
+    const { nodes } = buildGraph(model({ layout: { "src:1": { x: 5, y: 6 } } }), none);
+    expect(nodes.find((n) => n.id === "src:1")?.position).toEqual({ x: 5, y: 6 });
+    const positions = nodes.filter((n) => n.id !== "src:1").map((n) => `${n.position.x},${n.position.y}`);
+    expect(new Set(positions).size).toBe(positions.length);
+  });
+
+  it("discovered nodes sit left of asset nodes by default", () => {
+    const { nodes } = buildGraph(model(), { sources: new Set([1]), clusters: new Set() });
+    const maxLeft = Math.max(...nodes.filter((n) => n.type !== "asset").map((n) => n.position.x));
+    const minAsset = Math.min(...nodes.filter((n) => n.type === "asset").map((n) => n.position.x));
+    expect(maxLeft).toBeLessThan(minAsset);
+  });
+
+  it("survives an asset whose parent is missing or that points at itself", () => {
+    const m = model({ assets: [{ id: 10, parent_id: 99, name: "Orphan", kind: "generic" }, { id: 11, parent_id: 11, name: "Loop", kind: "generic" }] });
+    expect(() => buildGraph(m, none)).not.toThrow();
+    expect(buildGraph(m, none).nodes.filter((n) => n.type === "asset")).toHaveLength(2);
+  });
+
+  it("an empty model yields an empty graph", () => {
+    expect(buildGraph({ sources: [], unidentified: [], assets: [], layout: {} }, none)).toEqual({ nodes: [], edges: [] });
+  });
+
+  it("handles a thousand clusters without quadratic blow-up", () => {
+    const clusters = Array.from({ length: 1000 }, (_, i) => ({ key: `D${i}`, points: [point(i * 2 + 1, `D${i} a`), point(i * 2 + 2, `D${i} b`)] }));
+    const big = model({ sources: [source(1, { clusters })] });
+    const started = performance.now();
+    expect(buildGraph(big, { sources: new Set([1]), clusters: new Set() }).nodes.length).toBe(1000 + 1 + 2);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+});
+```
+
+`SourcePanel.test.tsx` (mock routes as in Task 8): (a) a `needs_credentials` source shows "needs credentials"; as admin, typing a secret and clicking "Save and browse" sends `PATCH /api/sources/{id}` with `{secret, config}` where `config` equals the source's `config` (plus `username` for `opcua` when typed), then `POST /api/sources/{id}/browse`, and shows "found 60 points" from the polled job; (b) a source with `last_error` and `needs_credentials: false` shows the error text and **no** credentials form hint; (c) `canEdit={false}` shows no buttons.
+
+`DiscoveryPage.test.tsx`: mock the library so the test does not depend on React Flow's measuring:
+
+```tsx
+vi.mock("@xyflow/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@xyflow/react")>();
+  return {
+    ...actual,
+    Handle: () => null,
+    ReactFlow: ({ nodes, nodeTypes, onNodeClick }: any) => (
+      <div data-testid="flow">
+        {nodes.map((n: any) => {
+          const Node = nodeTypes[n.type];
+          return <div key={n.id} data-id={n.id} onClick={(e) => onNodeClick?.(e, n)}><Node id={n.id} data={n.data} /></div>;
+        })}
+      </div>
+    ),
+    Background: () => null,
+    Controls: () => null,
+  };
+});
+```
+Tests: nodes for sources and assets render collapsed; clicking `Expand {name}` shows the cluster nodes; clicking a source node opens the panel; an operator drag does not call `PUT /api/discovery/layout` (layout saving is covered in Task 10's wiring and the e2e); the page shows "nothing discovered yet — run a scan" with a link to `/scans` when the model has no sources.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cd frontend && npm install @xyflow/react && npm test -- src/lib/graph.test.ts src/components/graph src/pages/DiscoveryPage.test.tsx`
+Expected: FAIL (modules missing). If `npm install` reports a React 19 peer conflict, report it instead of forcing `--legacy-peer-deps`.
+
+- [ ] **Step 3: Implement**
+
+Add to `src/test/setup.ts` (React Flow measures with these in jsdom):
+
+```ts
+class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
+vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+vi.stubGlobal("DOMMatrixReadOnly", class { m22 = 1; constructor(_transform?: string) {} });
+```
+
+`lib/graph.ts` — implement `buildGraph` with these rules (the tests above are the contract):
+- Default columns `X = { source: 0, cluster: 360, point: 720, asset: 1200 }`, row height `64`. Walk sources in order with a running `cursor`; a source's block starts at `cursor`; its clusters (real clusters, then the `UNGROUPED` pseudo-cluster if `ungrouped.length > 0`) stack one row each below it when the source is open; an open cluster's points stack under that cluster; `cursor += max(rows, 1) * 64 + 40`. Unidentified services stack in the source column after the last source. Assets are laid out by depth-first walk of the parent map (orphans and self-parents are treated as roots, cycles are broken by a visited set) at `x = 1200 + depth * 220`, `y = index * 64`.
+- `position = model.layout[id] ?? default`.
+- Edges: source→cluster and cluster→point have `style: { strokeDasharray: "6 4" }`; asset parent→child edges have no dash. Mapped links (`asset_id !== null`, asset exists): from each visible **point** node when its cluster is open; else from the **cluster** node (one edge per asset, `label: "n mapped"` when n > 1) when its source is open; else from the **source** node. Edge ids are unique strings (`e:`, `m:`, `a:` prefixes).
+- Use `Map`/`Set` lookups so a source with a thousand clusters builds in well under 500 ms.
+
+`nodes.tsx`: five small components, each `<div className="gnode gnode-{type}">` with a `<div className="node-title">` and `Handle`s (`Position.Left` target, `Position.Right` source); source nodes show connector type, `origin`, status, point count and a "needs credentials" badge; cluster nodes show `label (count)` and `n mapped`; point nodes show the name, unit hint and mapped metric; asset nodes show the name; unidentified nodes are grey `host:port — unidentified service`. Style with new classes in `app.css` (dashed border for discovered nodes: `.gnode-source.discovered, .gnode-cluster, .gnode-point { border-style: dashed }`; solid for assets).
+
+`SourcePanel`: facts (name, type, status, point count, `last_error`); if `source.needs_credentials` show "This source needs credentials." and, for `canEdit`, a form with "Secret" (password input), plus "Username" when `connector_type === "opcua"` (prefilled from `config.username`); "Save and browse" does `api.patch(`/api/sources/${id}`, { secret, config: { ...source.config, ...(username ? { username } : {}) } })` then `api.post(`/api/sources/${id}/browse`)`, shows `<JobStatus jobId>`, and when the job finishes invalidates `keys.graph` and `keys.sources`. A plain "Browse again" button (admin) covers sources that do not need credentials. Never display or pre-fill the stored secret.
+
+`DiscoveryPage`: wrap the content in `ReactFlowProvider`; `useGraph()`; state `open: OpenState`; `built = useMemo(() => buildGraph(model, open), ...)`; keep `nodes`/`edges` in `useNodesState`/`useEdgesState`, re-seeded in an effect when `built` changes, with `data.onToggle` injected (toggling a source adds/removes it from `open.sources`; toggling a cluster adds/removes its node id from `open.clusters`); `onNodeClick` on a `source` node selects it for the panel; `ReactFlow` props `nodeTypes`, `nodesConnectable={false}`, `deleteKeyCode={null}`, `fitView`, with `<Controls />` and `<Background />`; import `@xyflow/react/dist/style.css`; give the canvas wrapper an explicit height (`calc(100vh - 120px)`); a "Refresh" button invalidates `keys.graph`. `onNodeDragStop` (admin only) saves moved nodes with `api.put("/api/discovery/layout", { nodes: [{ node_id, x, y }] })` through `useAction` (Task 10 refines this for drops). Empty model: `<p className="muted">Nothing discovered yet — <Link to="/scans">run a scan</Link>.</p>`. Add the `/discovery` route (operator+) if Task 8 did not.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `cd frontend && npm test` then `npm run typecheck` then `npm run build`
+Expected: PASS; the production build succeeds with `@xyflow/react` bundled.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add frontend
+git commit -m "feat: discovery graph canvas with expandable sources and clusters"
+git push
+```
+
+---
+
+### Task 10: Drop mapping, the review dialog and the non-drag path
+
+**Files:**
+- Create: `frontend/src/lib/drop.ts`, `frontend/src/lib/drop.test.ts`
+- Create: `frontend/src/components/graph/ReviewDialog.tsx`, `frontend/src/components/graph/ReviewDialog.test.tsx`
+- Modify: `frontend/src/pages/DiscoveryPage.tsx`, `frontend/src/pages/DiscoveryPage.test.tsx`, `frontend/src/app.css`
+
+**Interfaces:**
+- Consumes: Task 9 (`nodeId`, `UNGROUPED`, `GraphModel`, node `data` shapes, injected `onMap` / `onNewAsset`); `POST /api/discovery/accept` (Task 7); `keys.graph`, `keys.sources`, `keys.assets`, `keys.points(sourceId)`.
+- Produces in `lib/drop.ts`:
+  - `interface DropPayload { source: GraphSource; points: GraphPoint[]; label: string; kind: "cluster" | "point" }`
+  - `dropPayload(model: GraphModel, id: string): DropPayload | null` — for `cluster:{sid}:{key}` (not `UNGROUPED`) the cluster's points that are not mapped; for `point:{id}` that single unmapped point; anything else, or nothing mappable → `null`.
+  - `pickDropTarget(intersecting: { id: string; type?: string }[]): number | null` — the id of the first `asset:{n}` node, else `null`.
+  - `takenMetrics(model: GraphModel, assetId: number): Set<Metric>` — non-`custom` metrics already mapped on that asset.
+  - `interface ReviewRow { pointId: number; name: string; checked: boolean; metric: Metric; scale: number; intervalSeconds: number | null; customUnit: string | null; note: string | null }`
+  - `reviewRows(points: GraphPoint[], taken: ReadonlySet<Metric>): ReviewRow[]` — one row per point from its suggestion; a row is unchecked with a note when its non-`custom` metric is in `taken` or already used by an earlier row.
+  - `metricConflicts(rows: ReviewRow[], taken: ReadonlySet<Metric>): number[]` — point ids of **checked** rows whose non-`custom` metric is in `taken` or repeated by another checked row.
+  - `acceptBody(sourceId: number, target: { kind: "existing"; assetId: number } | { kind: "new"; name: string; parentId: number | null }, rows: ReviewRow[]): AcceptIn` — checked rows only.
+  - `ReviewDialog({ model, payload, initialTarget, onClose })` where `initialTarget` is `{ kind: "existing"; assetId: number | null } | { kind: "new"; name: string; parentId: number | null }`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`frontend/src/lib/drop.test.ts` (reuse the `point`/`source`/`model` builders from `graph.test.ts` by moving them to `src/test/graphFixtures.ts` and importing them in both test files):
+
+```ts
+import { acceptBody, dropPayload, metricConflicts, pickDropTarget, reviewRows, takenMetrics } from "./drop";
+import { nodeId, UNGROUPED } from "./graph";
+
+describe("dropPayload", () => {
+  it("a cluster yields its unmapped points and the source", () => {
+    const p = dropPayload(model(), nodeId.cluster(1, "LVP01"))!;
+    expect(p.kind).toBe("cluster");
+    expect(p.label).toBe("LVP01");
+    expect(p.source.id).toBe(1);
+    expect(p.points.map((x) => x.id)).toEqual([1, 2, 3]);
+  });
+  it("skips points that are already mapped, and returns null when nothing is left", () => {
+    expect(dropPayload(model(), nodeId.cluster(2, "M"))).toBeNull();
+  });
+  it("a single unmapped point yields a point payload", () => {
+    expect(dropPayload(model(), nodeId.point(4))).toMatchObject({ kind: "point", label: "LVP02 kW" });
+  });
+  it("sources, assets, the Ungrouped bag and unknown ids are not droppable", () => {
+    for (const id of ["src:1", "asset:10", nodeId.cluster(1, UNGROUPED), "cluster:9:x", "point:999", "nonsense"]) {
+      expect(dropPayload(model(), id)).toBeNull();
+    }
+  });
+});
+
+describe("pickDropTarget", () => {
+  it("returns the first asset node id and ignores everything else", () => {
+    expect(pickDropTarget([{ id: "src:1" }, { id: "asset:11", type: "asset" }, { id: "asset:10" }])).toBe(11);
+    expect(pickDropTarget([{ id: "src:1" }, { id: "cluster:1:x" }])).toBeNull();
+    expect(pickDropTarget([])).toBeNull();
+  });
+});
+
+describe("review rows", () => {
+  const kw = point(1, "P kW", { suggestion: { metric: "active_power_kw", scale: 1, interval_seconds: 5, custom_unit: null } });
+  const kw2 = point(2, "P2 kW", { suggestion: { metric: "active_power_kw", scale: 1, interval_seconds: 5, custom_unit: null } });
+  const c1 = point(3, "T a", { suggestion: { metric: "custom", scale: 1, interval_seconds: 5, custom_unit: "degC" } });
+  const c2 = point(4, "T b", { suggestion: { metric: "custom", scale: 1, interval_seconds: 5, custom_unit: "degC" } });
+
+  it("rows come from the suggestions and start checked", () => {
+    const rows = reviewRows([kw], new Set());
+    expect(rows[0]).toMatchObject({ pointId: 1, checked: true, metric: "active_power_kw", scale: 1, intervalSeconds: 5, note: null });
+  });
+  it("a metric the asset already has starts unchecked with a note", () => {
+    const [row] = reviewRows([kw], new Set(["active_power_kw"] as const));
+    expect(row.checked).toBe(false);
+    expect(row.note).toMatch(/already/);
+  });
+  it("the second point with the same metric starts unchecked; several custom points are all fine", () => {
+    expect(reviewRows([kw, kw2], new Set()).map((r) => r.checked)).toEqual([true, false]);
+    expect(reviewRows([c1, c2], new Set()).map((r) => r.checked)).toEqual([true, true]);
+  });
+  it("metricConflicts reports checked rows that collide", () => {
+    const rows = reviewRows([kw, kw2], new Set());
+    expect(metricConflicts(rows, new Set())).toEqual([]);
+    rows[1].checked = true;
+    expect(metricConflicts(rows, new Set()).sort()).toEqual([1, 2]);
+    expect(metricConflicts([{ ...rows[0] }], new Set(["active_power_kw"] as const))).toEqual([1]);
+  });
+  it("takenMetrics reads the metrics mapped on an asset and ignores custom", () => {
+    const m = model();
+    expect([...takenMetrics(m, 10)].sort()).toEqual(["active_power_kw", "voltage_v"]);
+    expect([...takenMetrics(m, 11)]).toEqual([]);
+  });
+});
+
+describe("acceptBody", () => {
+  it("sends only checked rows, for an existing asset", () => {
+    const rows = reviewRows([point(1, "P kW", { suggestion: { metric: "active_power_kw", scale: 0.001, interval_seconds: 5, custom_unit: null } }), point(2, "P2 kW")], new Set());
+    rows[1].checked = false;
+    expect(acceptBody(7, { kind: "existing", assetId: 5 }, rows)).toEqual({
+      source_id: 7, asset_id: 5,
+      points: [{ point_id: 1, metric: "active_power_kw", scale: 0.001, interval_seconds: 5, custom_unit: null }],
+    });
+  });
+  it("builds a new-asset body", () => {
+    const body = acceptBody(7, { kind: "new", name: "LVP01", parentId: 10 }, reviewRows([point(1, "P kW")], new Set()));
+    expect(body).toMatchObject({ source_id: 7, new_asset: { name: "LVP01", parent_id: 10 } });
+    expect("asset_id" in body).toBe(false);
+  });
+});
+```
+
+`ReviewDialog.test.tsx` (render with `renderWithProviders`, mocks as in Task 8): (1) opening with an existing asset target lists one row per point with checkboxes named `Map {name}`; (2) rows whose metric the asset already has are unchecked and show their note; (3) choosing "New asset" shows "New asset name" prefilled with the cluster label and a "Parent asset" select, and the posted body contains `new_asset`; (4) editing "Metric for {name}" and the scale input changes the posted row; (5) checking a conflicting row disables "Create mappings" and shows a message naming the conflict; (6) clicking "Create mappings" posts exactly `acceptBody(...)` to `POST /api/discovery/accept`, then calls `onClose` and the graph is refetched (assert `GET /api/discovery/graph` is called again when a graph query is mounted, or assert `onClose` only); (7) a 409 response keeps the dialog open and shows the server message in a `role="alert"`; (8) "Cancel" posts nothing; (9) with `initialTarget.assetId === null` the button stays disabled until an asset is chosen from the "Asset" select.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cd frontend && npm test -- src/lib/drop.test.ts src/components/graph/ReviewDialog.test.tsx`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement**
+
+`lib/drop.ts` — implement the signatures above. `dropPayload` parses ids with `^cluster:(\d+):(.+)$` and `^point:(\d+)$`, finds the cluster by key in `model.sources`, and keeps only points with `asset_id === null`. `reviewRows` carries `suggestion.custom_unit` into `customUnit`. `acceptBody` maps checked rows to `{ point_id, metric, scale, interval_seconds: intervalSeconds, custom_unit: customUnit }`.
+
+`ReviewDialog` — `<div role="dialog" aria-label="Review mappings" className="dialog">`; a target section with radios "Existing asset" / "New asset", select "Asset" (assets from the model, indented by depth, first option "(choose)"), input "New asset name", select "Parent asset" (first option "(root)"); a table with, per row, a checkbox (`aria-label="Map {name}"`), the point name, a select (`aria-label="Metric for {name}"`, options `METRICS`), a number input (`aria-label="Scale for {name}"`), a number input (`aria-label="Interval for {name}"`, blank = default), and the note. Switching the asset recomputes `reviewRows` for the new `takenMetrics`. Buttons "Create mappings" (disabled while no target is chosen, no row is checked, or `metricConflicts(...)` is non-empty; the reason is shown as text) and "Cancel". Commit: `api.post<AcceptResult>("/api/discovery/accept", acceptBody(...))` through `useAction`, then `invalidate(keys.graph, keys.sources, keys.assets, keys.points(source.id))` and `onClose()`. Errors (including 409) render as `<p className="error" role="alert">` and keep the dialog open.
+
+`DiscoveryPage` wiring:
+- Inject `onMap(nodeId)` and `onNewAsset(nodeId)` into `cluster` and unmapped `point` nodes (admin only; `onNewAsset` for clusters only). Both call `dropPayload`; `onMap` opens `ReviewDialog` with `{ kind: "existing", assetId: null }`, `onNewAsset` with `{ kind: "new", name: payload.label, parentId: null }`. **These buttons are the deterministic, keyboard-reachable way in; the drag is an extra.**
+- `onNodeDragStart` remembers the node's starting position in a ref. `onNodeDragStop(_, node)` (admin only): `const payload = dropPayload(model, node.id)`; if `payload` and `pickDropTarget(getIntersectingNodes(node))` returns an asset id → **move the node back to its remembered position, do not save layout**, and open `ReviewDialog` with `{ kind: "existing", assetId }`. Otherwise save the node position with `PUT /api/discovery/layout`; and if `payload?.kind === "cluster"`, show the offer bar (below). Use `useReactFlow().getIntersectingNodes`.
+- Offer bar (fixed at the bottom of the canvas, `role="status"`): `Create asset "{label}" from this cluster?` with a "Create asset…" button (opens the dialog with `{ kind: "new", name: label, parentId: null }`) and "Dismiss"; it disappears on its own after 10 seconds and when another drag starts.
+- Operators (non-admin) can still drag nodes locally but never see the map buttons, the offer bar or the dialog, and nothing is saved.
+
+Add unit tests to `DiscoveryPage.test.tsx` using the mocked `ReactFlow` (extend the mock to also expose `onNodeDragStop` through a test button, and mock `useReactFlow` to return `{ getIntersectingNodes: () => intersecting }`): a drop that intersects an asset opens the dialog with that asset preselected and does not call `PUT /api/discovery/layout`; a drop on empty canvas calls `PUT /api/discovery/layout` and shows the offer bar; "Map LVP01 to asset…" and "New asset from LVP01…" open the dialog with the right initial target; an operator sees none of these controls.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `cd frontend && npm test` then `npm run typecheck`
+Expected: PASS.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add frontend
+git commit -m "feat: drop-to-map with a review dialog, plus button path and create-asset offer"
+git push
+```
+
+---
+
+### Task 11: The Audit page
+
+**Files:**
+- Create: `frontend/src/pages/AuditPage.tsx`, `frontend/src/pages/AuditPage.test.tsx`
+- Modify: `frontend/src/main.tsx` (route `/audit` in `RequireRole min="admin"`), `frontend/src/components/Layout.tsx` (admin-only "Audit" link), if Task 8 did not already add them.
+
+**Interfaces:**
+- Consumes: `useAudit(limit, offset)`, `AuditPage` type (Task 8); `GET /api/audit?limit=&offset=` (Task 7).
+- Produces: the Audit screen: heading "Audit log"; table with headers Time / User / Action / Detail (`<code>` with `JSON.stringify(detail)`); "Showing {from}–{to} of {total}"; buttons "Previous" and "Next" (disabled at the ends); page size 50; user shown as `username` or "—" when null.
+
+- [ ] **Step 1: Write the failing test**
+
+```tsx
+import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { mockFetch } from "../test/fetchMock";
+import { renderWithProviders } from "../test/render";
+import { AuditPage } from "./AuditPage";
+
+const entry = (id: number, action: string, username: string | null = "admin") => ({
+  id, user_id: username ? 1 : null, username, action, detail: { scan_id: id }, ts: "2026-10-07T10:00:00Z",
+});
+const admin = { "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "u", role: "admin" } } };
+
+describe("AuditPage", () => {
+  it("lists entries newest first with who, what and details, and pages", async () => {
+    const calls = mockFetch({
+      ...admin,
+      "GET /api/audit": ({ url }) =>
+        url.includes("offset=50")
+          ? { body: { total: 51, items: [entry(1, "scope.created", null)] } }
+          : { body: { total: 51, items: [entry(51, "scan.finished"), entry(50, "scan.started")] } },
+    });
+    renderWithProviders(<AuditPage />, { route: "/audit", path: "/audit" });
+    expect(await screen.findByText("scan.finished")).toBeInTheDocument();
+    expect(screen.getByText('{"scan_id":51}')).toBeInTheDocument();
+    expect(screen.getByText("Showing 1–2 of 51")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("scope.created")).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(calls.some((c) => c.path === "/api/audit")).toBe(true);
+  });
+
+  it("says so when there is nothing yet", async () => {
+    mockFetch({ ...admin, "GET /api/audit": { body: { total: 0, items: [] } } });
+    renderWithProviders(<AuditPage />, { route: "/audit", path: "/audit" });
+    expect(await screen.findByText("No audit entries yet.")).toBeInTheDocument();
+  });
+
+  it("shows an error when the request fails", async () => {
+    mockFetch({ ...admin, "GET /api/audit": { status: 403, body: { detail: "insufficient role" } } });
+    renderWithProviders(<AuditPage />, { route: "/audit", path: "/audit" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("insufficient role");
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cd frontend && npm test -- src/pages/AuditPage.test.tsx`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement**
+
+`AuditPage`: `const [offset, setOffset] = useState(0)`, `useAudit(50, offset)`, loading text `<p className="muted">loading…</p>`, errors in `<p className="error" role="alert">{error.message}</p>`, empty state "No audit entries yet.", `new Date(ts).toLocaleString()` for the time column.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `cd frontend && npm test` then `npm run typecheck`
+Expected: PASS.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git add frontend
+git commit -m "feat: read-only audit log page"
+git push
+```
+
+---
+
+### Task 12: End-to-end journey, README, and the done-when check
+
+**Files:**
+- Modify: `frontend/e2e/playwright.config.ts` (explicit project order), `README.md`
+- Create: `frontend/e2e/discovery.spec.ts`
+- Modify: `docs/superpowers/plans/2026-10-07-phase-2-discovery.md` (tick every checkbox), `docs/superpowers/specs/2026-10-06-dc-dashboard-design.md` (nothing to tick in the spec itself; only fix drift found while documenting)
+
+**Interfaces:**
+- Consumes: everything above; the existing `journey.spec.ts` (creates admin `admin` / `correct-horse`, the manual source `sim` = `simulator` connector at `http://simulator:9000` with key `sim-key`, and the asset `MV2`); `global-setup.ts` (fails unless first-run setup is still pending, so **one** `playwright test` run covers both specs on a fresh database); `scripts/e2e.sh`.
+- Produces: a green end-to-end run of both specs and the documented Discovery workflow.
+
+Facts verified for this task (2026-10-07): in the dev stack the OPC UA simulator accepts anonymous sessions when `SIM_OPCUA_PASSWORD` is empty (`simulator/main.py` passes `None`), Modbus needs no credentials, and the HTTP simulator needs `sim-key`. After `journey.spec.ts` the HTTP simulator already exists as the manual source `sim`, so the scan **reuses** it ("existing source") and finds two new browsable sources (OPC UA and Modbus). The credentials path is covered by the Task 5 scan test, the Task 9 `SourcePanel` test and the final browser walkthrough on a fresh database. The dev Modbus simulator listens on **5020**, which is not a default port, so the e2e types `9000, 4840, 5020` into the scope form.
+
+- [ ] **Step 1: Make the spec order explicit**
+
+In `playwright.config.ts` replace `projects` with two projects so discovery always runs after the first-run journey (alphabetical file order is not guaranteed to be relied on):
+
+```ts
+  projects: [
+    { name: "journey", testMatch: "journey.spec.ts", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "discovery",
+      testMatch: "discovery.spec.ts",
+      dependencies: ["journey"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
+    },
+  ],
+```
+
+- [ ] **Step 2: Write the discovery spec**
+
+`frontend/e2e/discovery.spec.ts` — one linear test in the style of `journey.spec.ts` (role/label/text locators; the canvas is addressed through React Flow's `data-id` attribute and the `.node-title` element). Helper:
+
+```ts
+import { expect, test, type Locator, type Page } from "@playwright/test";
+
+async function drag(page: Page, from: Locator, to: Locator | { x: number; y: number }) {
+  const a = (await from.boundingBox())!;
+  const start = { x: a.x + a.width / 2, y: a.y + a.height / 2 };
+  let end: { x: number; y: number };
+  if ("x" in to) {
+    end = to;
+  } else {
+    const b = (await to.boundingBox())!;
+    end = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  }
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 6, start.y + 6, { steps: 3 }); // d3-drag needs real intermediate moves; locator.dragTo is not enough
+  await page.mouse.move(end.x, end.y, { steps: 25 });
+  await page.mouse.up();
+}
+const node = (page: Page, id: string) => page.locator(`.react-flow__node[data-id="${id}"]`);
+```
+
+The test, in order:
+1. Sign in at `/login` as `admin` / `correct-horse`. Through `page.request` (shares the session cookie) create the asset `Site` (root) and `Panel 01` (child of `Site`).
+2. Scans page: "New scope"; Name `sim`; Targets `simulator`; Ports `9000, 4840, 5020`; Save; click "Scan" on that row; expect the text `1 hosts × 3 ports (3 probes)`; click "Start scan"; wait (timeout 90 s) for the findings table: three rows, with `opcua` and `modbus` claimed and `simulator` "existing source".
+3. Discovery page (`Discovery` link). Click "Fit view" (the React Flow control, accessible name `fit view`) whenever the layout changes. Expand the OPC UA source (`Expand …OPC UA…`), expect ten cluster nodes `LVP01`…`LVP10` plus no `Ungrouped` node (all 60 points group).
+4. **Real drag 1**: drag the `LVP01` cluster's `.node-title` onto the `Panel 01` asset node. Expect the dialog "Review mappings" with six checked rows, no conflict note; click "Create mappings"; expect the dialog to close and the `LVP01` cluster to show `6 mapped`.
+5. **Real drag 2**: drag `LVP02` onto an empty point of the canvas (`.react-flow__pane` bounding box, bottom-right corner offset by 40 px). Expect the offer bar `Create asset "LVP02" from this cluster?`; click "Create asset…"; in the dialog choose parent `Site`, confirm the name `LVP02`, "Create mappings".
+6. For `LVP03` … `LVP10`: click `New asset from LVPnn…` (button path), choose parent `Site`, "Create mappings". (Eight iterations; no dragging.)
+7. Assert the done-when through the API (`page.request.get`): `GET /api/discovery/graph` → for the OPC UA source all 60 points have `mapping_id`; `GET /api/assets` has `Panel 01` plus nine new assets `LVP02`…`LVP10`, each with 6 mappings of 6 distinct metrics (`active_power_kw`, `energy_kwh`, `voltage_v`, `current_a`, `power_factor`, `frequency_hz`); open `/assets/{id}` of `LVP05` and expect a live value within 30 s (`getByText("live", { exact: true })`).
+8. Audit page (`Audit` link): expect one `scope.created`, one `scan.started`, one `scan.finished` and exactly ten `discovery.accepted` rows.
+
+Selector note: if the 1600×1000 viewport cannot show a cluster and the asset it must reach, click "Fit view" first; the nodes are small. If a drag fails to register, the bug is in the drag handling, not in the test: report it instead of weakening the assertion.
+
+- [ ] **Step 3: Run it**
+
+Run: `E2E_I_UNDERSTAND_DATA_LOSS=yes scripts/e2e.sh`
+Expected: both specs pass. This deletes the local `dbdata` volume (the script's documented behaviour); the user has accepted that for e2e runs.
+
+- [ ] **Step 4: README**
+
+Update `README.md`: the status line (Phase 2); a **Discovery** section covering scopes, the per-run confirmation ("N hosts × M ports"), what a scan does (TCP connect, then each connector's read-only probe, then browse), that discovered sources are disabled until points are mapped, the graph (left discovered, right assets, dashed vs solid, expand/collapse, saved positions), drop-to-map plus the "Map to asset…" / "New asset from…" buttons and the review dialog, entering credentials for a source that needs them, and the audit log; the environment variables `DCDASH_SCAN_MAX_HOSTS` (default 1024) and `DCDASH_SCAN_EXTRA_PORTS` (for the dev simulator set it to `5020`, or type the port into the scope form); the scan limits (64 concurrent connects, 200 attempts/s, 1 s connect timeout, 3 s probe timeout); IPv4 only; and "Phase 1 actions are not audited". Add the new e2e spec to the "End-to-end test" section.
+
+- [ ] **Step 5: Tick, commit and push**
+
+Tick every checkbox in this plan that was completed (Tasks 0–12), then:
+
+```bash
+git add README.md frontend docs
+git commit -m "feat: discovery end-to-end journey and documentation"
+git push
+```
+
+---
+
+## Phase review and merge (orchestrator; no product code)
+
+1. **Whole-branch review.** Dispatch two fresh subagents on model `opus` over `git diff main...phase-2-discovery`, in parallel:
+   - **Code review** against the spec section 7, the Global Constraints and the five Review Focus items: read-only toward the network (grep for any non-read request in `probe` and the scan), role enforcement on every new endpoint, atomicity of accept, scan limits actually applied, no secrets in any response or log, migration down/up.
+   - **Browser walkthrough** with the Playwright MCP tools against a freshly started dev stack (`E2E_I_UNDERSTAND_DATA_LOSS=yes` is **not** needed: start with `docker compose down -v`, then `scripts/setup.sh --profile dev`). Cover: first-run setup, scope creation with the prefilled form, the confirmation text and Cancel, a scan to completion, the HTTP simulator **as a discovered source needing credentials** (enter `sim-key`, browse, see points), expanding sources and clusters, one real drag onto an asset and one onto empty canvas, the review dialog's conflict handling, the buttons path, reloading the page to confirm node positions persisted, the Audit page, then sign in as an operator and as a viewer to confirm what each can and cannot see or do. Save screenshots and the browser console log to the scratchpad directory and list any console errors.
+2. **Fix the Important findings.** One fresh `sonnet` subagent per fix group, each with only the finding and the relevant plan section; re-run `cd backend && uv run pytest -q`, `cd frontend && npm test && npm run typecheck`, and the e2e script after the last fix.
+3. **Close out.** Tick the spec section 14 phase 2 "Done when" only if the e2e assertion in Task 12 step 2.7 passed; update the README status; commit.
+4. **Merge.** `git checkout main && git merge --no-ff phase-2-discovery -m "Merge phase-2-discovery: scan scopes, scan job, graph, drag-and-drop mapping, audit (Phase 2)"` with the trailer lines, `git push origin main`.
