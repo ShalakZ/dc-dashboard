@@ -14,6 +14,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { SourcePointsPage } from "./pages/SourcePointsPage";
 import { SourcesPage } from "./pages/SourcesPage";
+import { StoragePage } from "./pages/StoragePage";
 import { UsersPage } from "./pages/UsersPage";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
@@ -31,6 +32,7 @@ export function App() {
         <Route path="/sources/:id/points" element={<SourcePointsPage />} />
         <Route path="/users" element={<RequireRole min="admin"><UsersPage /></RequireRole>} />
         <Route path="/settings" element={<RequireRole min="admin"><SettingsPage /></RequireRole>} />
+        <Route path="/storage" element={<RequireRole min="admin"><StoragePage /></RequireRole>} />
         <Route path="/password" element={<PasswordPage />} />
       </Route>
     </Routes>

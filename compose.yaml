@@ -60,6 +60,8 @@ services:
     restart: unless-stopped
     command: python -m dcdash.collector.main
     environment: *backend-env
+    volumes:
+      - ./certs:/certs:ro          # OPC UA client certificate for basic256sha256 (see README)
     depends_on:
       api:
         condition: service_healthy
@@ -69,11 +71,14 @@ services:
     image: dcdash-backend:local
     profiles: [dev]
     restart: unless-stopped
-    command: uvicorn dcdash.simulator.app:app --host 0.0.0.0 --port 9000
+    command: python -m dcdash.simulator.main
     environment:
       SIM_API_KEY: sim-key
+      SIM_OPCUA_PASSWORD: ${SIM_OPCUA_PASSWORD:-}
     ports:
       - "127.0.0.1:9000:9000"
+      - "127.0.0.1:4840:4840"
+      - "127.0.0.1:5020:5020"
 
 volumes:
   dbdata: {}

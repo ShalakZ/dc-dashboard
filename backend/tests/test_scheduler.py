@@ -137,7 +137,7 @@ async def test_run_group_records_the_error_while_offline(db):
 
     with pytest.raises(asyncio.CancelledError):
         await run_group(group, db, Writer(db), lambda *_: Flaky(fail_times=99), stop_after_first)
-    assert await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source) == "no answer"
+    assert await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source) == "timeout: no answer"
 
 
 async def test_run_group_marks_source_offline_on_invalid_config(db):

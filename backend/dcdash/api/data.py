@@ -46,7 +46,7 @@ _POWER_KWH = text(
     WHERE ts - prev_ts <= make_interval(secs => :max_gap)
     """
 )
-_SERIES = text(
+_SERIES_RAW = text(
     f"""
     SELECT time_bucket(make_interval(secs => :width), ts) AS bucket,
            avg(value) AS avg_value, min(value) AS min_value, max(value) AS max_value
@@ -55,6 +55,30 @@ _SERIES = text(
     GROUP BY bucket ORDER BY bucket
     """
 )
+# Rollup tiers carry sum/n so the re-bucketed average is weighted by sample
+# count, not a mean of per-bucket means. Both views are real-time caggs, so
+# the not-yet-materialized tail is included.
+_SERIES_ROLLUP = {
+    tier: text(
+        f"""
+        SELECT time_bucket(make_interval(secs => :width), bucket) AS bucket,
+               sum(sum_value) / sum(n) AS avg_value, min(min_value) AS min_value, max(max_value) AS max_value
+        FROM {view}
+        WHERE point_id = :point AND bucket >= :start AND bucket < :end
+        GROUP BY 1 ORDER BY 1
+        """
+    )
+    for tier, view in {"1m": "readings_1m", "1h": "readings_1h"}.items()
+}
+
+
+def pick_tier(width_seconds: float) -> str:
+    """Which readings tier serves a chart whose buckets are `width_seconds` wide."""
+    if width_seconds < 60:
+        return "raw"
+    if width_seconds < 3600:
+        return "1m"
+    return "1h"
 
 
 def day_start(now: datetime, tz_name: str) -> datetime:
@@ -138,6 +162,7 @@ async def series(
     start: datetime | None = None,
     end: datetime | None = None,
     buckets: int = Query(default=300, ge=10, le=2000),
+    mapping_id: int | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     end = end or datetime.now(timezone.utc)
@@ -146,22 +171,20 @@ async def series(
         raise HTTPException(422, "start and end must include a timezone offset")
     if end <= start:
         raise HTTPException(422, "end must be after start")
-    mapping = (
-        await db.scalars(
-            select(Mapping)
-            .where(Mapping.asset_id == asset_id, Mapping.metric == metric.value)
-            .order_by(Mapping.id)
-        )
-    ).first()
+    query = select(Mapping).where(Mapping.asset_id == asset_id, Mapping.metric == metric.value)
+    if mapping_id is not None:
+        query = query.where(Mapping.id == mapping_id)
+    mapping = (await db.scalars(query.order_by(Mapping.id))).first()
     if mapping is None:
         raise HTTPException(404, "this asset has no such metric")
     width = max((end - start).total_seconds() / buckets, 1.0)
-    rows = await db.execute(
-        _SERIES, {"width": width, "point": mapping.point_id, "start": start, "end": end}
-    )
+    tier = pick_tier(width)
+    statement = _SERIES_RAW if tier == "raw" else _SERIES_ROLLUP[tier]
+    rows = await db.execute(statement, {"width": width, "point": mapping.point_id, "start": start, "end": end})
     return {
         "metric": metric.value,
         "unit": unit_for(metric, mapping.custom_unit),
+        "tier": tier,
         "points": [
             {
                 "ts": row.bucket,

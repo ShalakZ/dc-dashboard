@@ -1,5 +1,7 @@
 import asyncio
 import contextlib
+import socket
+from datetime import timedelta
 
 import asyncpg
 import httpx
@@ -7,6 +9,9 @@ import httpx
 from dcdash.api.security import hash_password
 from dcdash.connectors.simulator import SimulatorConfig, SimulatorConnector
 from dcdash.core.crypto import encrypt
+from dcdash.simulator.model import Simulator
+from dcdash.simulator.modbus import ModbusSim
+from dcdash.simulator.opcua import OpcUaSim
 
 
 async def make_source(db, name="sim", connector_type="simulator", config=None, secret=None, enabled=True) -> int:
@@ -83,3 +88,38 @@ async def login_as(client, db, role="admin", username=None, password="correct-ho
     )
     response = await client.post("/api/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@contextlib.asynccontextmanager
+async def opcua_server(sim: Simulator | None = None, password: str | None = None):
+    """Run an in-process OPC UA simulator server on a free port."""
+    srv = OpcUaSim(sim or Simulator(), free_port(), password=password)
+    await srv.start()
+    await srv.refresh()
+    try:
+        yield srv
+    finally:
+        await srv.stop()
+
+
+@contextlib.asynccontextmanager
+async def modbus_server(sim: Simulator | None = None):
+    """Run an in-process Modbus TCP simulator server on a free port."""
+    srv = ModbusSim(sim or Simulator(), free_port())
+    await srv.start()
+    srv.refresh()
+    try:
+        yield srv
+    finally:
+        await srv.stop()
+
+
+async def insert_readings(db, point_id: int, start, step_seconds: int, values: list[float]) -> None:
+    rows = [(point_id, start + timedelta(seconds=i * step_seconds), v, 0) for i, v in enumerate(values)]
+    await db.executemany("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", rows)
