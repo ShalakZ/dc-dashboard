@@ -8,7 +8,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+from urllib.parse import urlparse
 
 from asyncua import Client, Node, ua
 from pydantic import BaseModel, Field
@@ -16,6 +17,7 @@ from pydantic import BaseModel, Field
 from dcdash.connectors.base import (
     BAD,
     GOOD,
+    Claim,
     ConnectionCheck,
     Connector,
     ConnectorError,
@@ -57,6 +59,27 @@ def _translate(exc: BaseException) -> ConnectorError:
 class OpcUaConnector(Connector):
     type = "opcua"
     config_schema = OpcUaConfig
+    default_ports = (4840,)
+
+    @classmethod
+    async def probe(cls, host: str, port: int, timeout: float = 3.0) -> Claim | None:
+        client = Client(f"opc.tcp://{host}:{port}", timeout=timeout)
+        try:
+            endpoints = await asyncio.wait_for(client.connect_and_get_server_endpoints(), timeout)
+        except Exception:  # noqa: BLE001 - not an OPC UA server, or unreachable
+            return None
+        if not endpoints:
+            return None
+        path = urlparse(endpoints[0].EndpointUrl).path
+        config = OpcUaConfig(endpoint=f"opc.tcp://{host}:{port}{path}").model_dump(mode="json")
+        return Claim("opcua", config, f"OPC UA server at {host}:{port}")
+
+    @classmethod
+    def endpoint_key(cls, config: dict[str, Any]) -> tuple[str, int, str] | None:
+        parsed = urlparse(str(config.get("endpoint", "")))
+        if not parsed.hostname:
+            return None
+        return parsed.hostname.lower(), parsed.port or 4840, ""
 
     def __init__(self, config: OpcUaConfig, secret: str | None = None) -> None:
         super().__init__(config, secret)

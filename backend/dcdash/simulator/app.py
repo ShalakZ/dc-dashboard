@@ -24,6 +24,10 @@ def create_sim_app(sim: Simulator | None = None, api_key: str | None = None) -> 
         if sim.reject_auth or x_api_key != key:
             raise HTTPException(401, "bad api key")
 
+    @app.get("/")
+    def identify() -> dict:
+        return {"service": "dcdash-simulator"}
+
     @app.get("/points", dependencies=[Depends(guard)])
     def points() -> dict:
         return {"points": sim.points()}

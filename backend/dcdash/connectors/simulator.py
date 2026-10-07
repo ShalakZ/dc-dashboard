@@ -1,12 +1,14 @@
+import asyncio
 import time
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import AnyHttpUrl, BaseModel
 
 from dcdash.connectors.base import (
-    BAD, GOOD, ConnectionCheck, Connector, ConnectorError, PointDescriptor, PointValue, register,
+    BAD, GOOD, Claim, ConnectionCheck, Connector, ConnectorError, PointDescriptor, PointValue, register,
 )
 
 
@@ -19,6 +21,28 @@ class SimulatorConfig(BaseModel):
 class SimulatorConnector(Connector):
     type = "simulator"
     config_schema = SimulatorConfig
+    default_ports = (9000,)
+
+    @classmethod
+    async def probe(cls, host: str, port: int, timeout: float = 3.0) -> Claim | None:
+        url = f"http://{host}:{port}"
+        try:
+            # httpx timeouts apply per phase; the outer deadline bounds a server that trickles bytes.
+            async with asyncio.timeout(timeout), httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(f"{url}/")
+            if response.status_code != 200 or response.json().get("service") != "dcdash-simulator":
+                return None
+            config = SimulatorConfig(url=url).model_dump(mode="json")
+        except (httpx.HTTPError, httpx.InvalidURL, TimeoutError, ValueError, AttributeError):  # ValueError: JSON, pydantic
+            return None
+        return Claim("simulator", config, f"DCDash simulator at {host}:{port}")
+
+    @classmethod
+    def endpoint_key(cls, config: dict[str, Any]) -> tuple[str, int, str] | None:
+        parsed = urlparse(str(config.get("url", "")))
+        if not parsed.hostname:
+            return None
+        return parsed.hostname.lower(), parsed.port or (443 if parsed.scheme == "https" else 80), ""
 
     def __init__(
         self,

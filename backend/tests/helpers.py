@@ -120,6 +120,43 @@ async def modbus_server(sim: Simulator | None = None):
         await srv.stop()
 
 
+@contextlib.asynccontextmanager
+async def http_server(app):
+    """Serve an ASGI app on a free 127.0.0.1 port with uvicorn; yields the port."""
+    import uvicorn
+
+    port = free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    task = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.02)
+    try:
+        yield port
+    finally:
+        server.should_exit = True
+        await task
+
+
+@contextlib.asynccontextmanager
+async def silent_server():
+    """A TCP server that accepts connections and never answers; yields its port."""
+    held = []
+
+    async def handle(reader, writer):
+        held.append((writer, asyncio.current_task()))
+        await asyncio.sleep(3600)
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    try:
+        yield server.sockets[0].getsockname()[1]
+    finally:
+        for writer, task in held:
+            writer.close()
+            task.cancel()
+        server.close()
+        await server.wait_closed()
+
+
 async def insert_readings(db, point_id: int, start, step_seconds: int, values: list[float]) -> None:
     rows = [(point_id, start + timedelta(seconds=i * step_seconds), v, 0) for i, v in enumerate(values)]
     await db.executemany("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", rows)

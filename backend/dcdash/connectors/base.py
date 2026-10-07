@@ -34,6 +34,15 @@ class ConnectionCheck:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class Claim:
+    """What a probe recognised at an address: a ready-to-store source configuration."""
+
+    connector_type: str
+    config: dict[str, Any]
+    label: str
+
+
 class ConnectorError(Exception):
     def __init__(self, status: str, message: str) -> None:
         super().__init__(message)
@@ -46,6 +55,21 @@ class Connector(ABC):
 
     type: ClassVar[str]
     config_schema: ClassVar[type[BaseModel]]
+    default_ports: ClassVar[tuple[int, ...]] = ()
+
+    @classmethod
+    async def probe(cls, host: str, port: int, timeout: float = 3.0) -> Claim | None:
+        """Return a Claim if this connector understands the service at host:port, else None.
+
+        Must only issue requests the connector may already issue (read-only), and must give up
+        after `timeout` seconds. Never raises for an unreachable or unrecognised service.
+        """
+        return None
+
+    @classmethod
+    def endpoint_key(cls, config: dict[str, Any]) -> tuple[str, int, str] | None:
+        """(host lowercased, port, qualifier) identifying the endpoint a configuration points at."""
+        return None
 
     def __init__(self, config: BaseModel, secret: str | None = None) -> None:
         self.config = config
