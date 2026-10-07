@@ -128,7 +128,7 @@ async def _resolve(host: str) -> str:
     try:
         infos = await asyncio.get_running_loop().getaddrinfo(host, None, family=socket.AF_INET, type=socket.SOCK_STREAM)
         return infos[0][4][0]
-    except (OSError, IndexError):
+    except (OSError, ValueError, IndexError):  # ValueError: UnicodeError for a malformed name such as "a..b"
         return host.lower()
 
 

@@ -9,6 +9,7 @@ from dcdash.collector.browse import browse_source, connector_for
 from dcdash.collector.scan import run_scan
 from dcdash.collector.scheduler import mark_source
 from dcdash.connectors.base import ConnectorFactory, create_connector
+from dcdash.core.audit import audit_pool
 
 log = logging.getLogger(__name__)
 
@@ -82,17 +83,26 @@ async def run_pending_jobs(
     return processed
 
 
-async def fail_stale_jobs(pool: asyncpg.Pool) -> int:
-    """Fail jobs (and scans) a previous collector process left in the running state.
+# A running scan died with the old collector. So did a queued scan whose job is gone, finished or
+# failed (including a job that was claimed and then failed just above): nothing will ever run it.
+# A queued scan whose job is still pending stays queued and will run.
+_FAIL_STALE_SCANS = """
+    UPDATE scans SET status = 'failed', error = 'collector restarted', finished_at = now()
+    WHERE status = 'running'
+       OR (status = 'queued' AND NOT EXISTS (
+            SELECT 1 FROM jobs
+            WHERE kind = 'scan' AND status IN ('pending', 'running') AND params->>'scan_id' = scans.id::text))
+    RETURNING id, started_by, progress
+"""
 
-    Queued scans are left alone: their job is still pending and will run.
-    """
+
+async def fail_stale_jobs(pool: asyncpg.Pool) -> int:
+    """Fail jobs, and the scans that depend on them, which a previous collector process left unfinished."""
     tag = await pool.execute(
         "UPDATE jobs SET status = 'failed', result = $1, finished_at = now() WHERE status = 'running'",
         {"error": "collector restarted"},
     )
-    await pool.execute(
-        "UPDATE scans SET status = 'failed', error = 'collector restarted', finished_at = now() "
-        "WHERE status = 'running'"
-    )
+    for scan in await pool.fetch(_FAIL_STALE_SCANS):  # after the jobs update: it orphans claimed scan jobs
+        detail = {"scan_id": scan["id"], "status": "failed", **(scan["progress"] or {}), "error": "collector restarted"}
+        await audit_pool(pool, scan["started_by"], "scan.finished", detail)
     return int(tag.split()[-1])

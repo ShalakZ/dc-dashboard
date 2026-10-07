@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
@@ -8,6 +9,7 @@ import pytest
 from dcdash.collector import scan as scan_module
 from dcdash.collector.jobs import run_pending_jobs
 from dcdash.collector.scan import run_scan
+from dcdash.connectors.base import connector_types
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.model import Simulator
 from helpers import free_port, http_server, make_source, modbus_server, opcua_server, silent_server
@@ -232,13 +234,31 @@ async def test_a_service_that_never_answers_is_unclaimed_and_does_not_stall_the_
     monkeypatch.setattr(scan_module, "PROBE_TIMEOUT", 0.4)
     async with silent_server() as port:
         scan = await make_scan(db, ["127.0.0.1"], [port, free_port()])
+        started = time.perf_counter()
         await run_scan(db, scan)
+        elapsed = time.perf_counter() - started
+    # Connectors are probed one after another, each bounded by PROBE_TIMEOUT (+1 s outer guard).
+    assert elapsed < len(connector_types()) * (0.4 + 1) + 2
     finding = await db.fetchrow("SELECT outcome, source_id, detail FROM scan_findings")
     assert finding["outcome"] == "unclaimed" and finding["source_id"] is None
     assert finding["detail"] == "no connector recognised the service"
     assert await db.fetchval("SELECT status FROM scans WHERE id = $1", scan) == "done"
     assert await db.fetchval("SELECT count(*) FROM sources") == 0
     assert (await db.fetchval("SELECT progress FROM scans WHERE id = $1", scan))["unidentified"] == 1
+
+
+@pytest.mark.parametrize("host", ["a..b", "a" * 300])
+async def test_a_hand_added_source_with_a_malformed_host_does_not_break_the_scan(db, simulator_network, host):
+    bad = await make_source(
+        db, "bad host", "modbus", {"host": host, "port": 502, "unit_id": 1, "profile": "auto"}, enabled=False
+    )
+    scan = await make_scan(db, ["127.0.0.1"], [simulator_network["modbus"]])
+    await run_scan(db, scan)
+    assert await db.fetchval("SELECT status FROM scans WHERE id = $1", scan) == "done"
+    finding = await db.fetchrow("SELECT source_id, outcome, detail FROM scan_findings")
+    assert finding["source_id"] != bad and finding["outcome"] == "claimed" and finding["detail"] == "60 points"
+    assert await db.fetchval("SELECT count(*) FROM sources") == 2  # the bad source was simply not matched
+    assert await db.fetchval("SELECT origin FROM sources WHERE id = $1", bad) == "manual"
 
 
 async def test_a_scope_that_finds_nothing_completes(db):

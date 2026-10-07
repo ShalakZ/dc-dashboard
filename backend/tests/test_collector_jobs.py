@@ -1,3 +1,5 @@
+import pytest
+
 from dcdash.collector.jobs import fail_stale_jobs, run_pending_jobs
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.model import Simulator
@@ -141,10 +143,69 @@ async def test_jobs_are_not_claimed_before_a_worker_is_free(db):
     assert await db.fetchval("SELECT count(*) FROM jobs WHERE status = 'done'") == 6
 
 
+async def add_user(db) -> int:
+    return await db.fetchval(
+        "INSERT INTO users (username, password_hash, role) VALUES ('a', 'x', 'admin') RETURNING id"
+    )
+
+
+async def add_scan(db, status: str, job_status: str | None = None, user: int | None = None, progress=None) -> int:
+    """A scan row in `status`, plus a `scan` job in `job_status` (none when None)."""
+    scan = await db.fetchval(
+        "INSERT INTO scans (scope_snapshot, status, started_by, progress) VALUES ('{}', $1, $2, $3) RETURNING id",
+        status, user, progress or {},
+    )
+    if job_status is not None:
+        await db.execute(
+            "INSERT INTO jobs (kind, params, status) VALUES ('scan', $1, $2)", {"scan_id": scan}, job_status
+        )
+    return scan
+
+
+async def scan_row(db, scan: int):
+    return await db.fetchrow("SELECT status, error, finished_at FROM scans WHERE id = $1", scan)
+
+
 async def test_stale_running_scans_fail_at_collector_start_but_queued_ones_stay(db):
-    running = await db.fetchval("INSERT INTO scans (scope_snapshot, status) VALUES ('{}', 'running') RETURNING id")
-    queued = await db.fetchval("INSERT INTO scans (scope_snapshot, status) VALUES ('{}', 'queued') RETURNING id")
+    running = await add_scan(db, "running", "running")
+    queued = await add_scan(db, "queued", "pending")  # its job is still pending and will run
     await fail_stale_jobs(db)
-    row = await db.fetchrow("SELECT status, error, finished_at FROM scans WHERE id = $1", running)
+    row = await scan_row(db, running)
     assert row["status"] == "failed" and row["error"] == "collector restarted" and row["finished_at"] is not None
-    assert await db.fetchval("SELECT status FROM scans WHERE id = $1", queued) == "queued"
+    assert (await scan_row(db, queued))["status"] == "queued"
+
+
+async def test_a_restart_failed_scan_is_audited_for_the_user_who_started_it(db):
+    user = await add_user(db)
+    running = await add_scan(db, "running", "running", user, {"checked": 7, "open": 2})
+    queued = await add_scan(db, "queued", "pending", user)
+    await fail_stale_jobs(db)
+    rows = await db.fetch("SELECT user_id, detail FROM audit_log WHERE action = 'scan.finished'")
+    assert len(rows) == 1  # the still-queued scan is not finished, so not audited
+    assert rows[0]["user_id"] == user
+    assert rows[0]["detail"]["scan_id"] == running and rows[0]["detail"]["status"] == "failed"
+    assert rows[0]["detail"]["error"] == "collector restarted"
+    assert rows[0]["detail"]["checked"] == 7 and rows[0]["detail"]["open"] == 2  # the progress so far is kept
+    assert (await scan_row(db, queued))["status"] == "queued"
+
+
+@pytest.mark.parametrize("job_status", [None, "failed", "running", "done"])
+async def test_a_queued_scan_without_a_live_job_is_failed_and_audited(db, job_status):
+    """Its job is gone, failed, or was claimed and died with the old collector: nothing will ever run it."""
+    user = await add_user(db)
+    orphan = await add_scan(db, "queued", job_status, user)
+    await fail_stale_jobs(db)
+    row = await scan_row(db, orphan)
+    assert row["status"] == "failed" and row["error"] == "collector restarted" and row["finished_at"] is not None
+    audit = await db.fetchrow("SELECT user_id, detail FROM audit_log WHERE action = 'scan.finished'")
+    assert audit["user_id"] == user and audit["detail"]["scan_id"] == orphan
+    assert audit["detail"]["status"] == "failed" and audit["detail"]["error"] == "collector restarted"
+
+
+async def test_a_queued_scan_with_a_pending_job_stays_queued_and_unaudited(db):
+    queued = await add_scan(db, "queued", "pending")
+    other = await add_scan(db, "queued", "failed")  # a job for another scan must not keep this one alive
+    await fail_stale_jobs(db)
+    assert (await scan_row(db, queued))["status"] == "queued"
+    assert (await scan_row(db, other))["status"] == "failed"
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'scan.finished'") == 1

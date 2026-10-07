@@ -31,7 +31,7 @@ Failure modes the spec implies that a person using this will hit; each has a tes
 
 1. **Bad or huge scopes** (`10.0.0.0/8`, `0.0.0.0/0`, `::1`, `999.1.1.1`, `not a host!`, empty list, 21 ports) must be rejected with a readable 422 before anything is enumerated or scanned — never a hang or a multi-million-element list. (Task 2 `expand_targets`; Task 6 `POST /api/scopes`.)
 2. **Re-scanning** must not duplicate sources, must not touch an adopted source's `enabled`, `secret`, `config` or `origin`, and a hand-added source addressed by host name must be matched to the same endpoint found by IP. (Task 5.)
-3. **A service that accepts TCP and then never answers** (or closes at once) must not stall the scan: the endpoint is recorded as unidentified within the probe timeout. (Tasks 3 and 5.)
+3. **A service that accepts TCP and then never answers** (or closes at once) must not stall the scan: the endpoint is recorded as unidentified within the per-connector probe timeouts (at most connectors x (PROBE_TIMEOUT + 1) per endpoint). (Tasks 3 and 5.)
 4. **Accept is all-or-nothing**: a duplicate metric on the target asset, a point that is already mapped, or a point from another source must leave no new asset, no partial mappings and the source still disabled. (Task 7.)
 5. **A collector restart mid-scan** must not leave the scan `running` forever, and a second scan must not start while one is queued or running. (Tasks 5 and 6.)
 
