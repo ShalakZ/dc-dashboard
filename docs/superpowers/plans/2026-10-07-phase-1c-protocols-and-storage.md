@@ -120,7 +120,7 @@ settings row 'storage' = {"raw_retention_days":30,"compress_after_days":7,"rollu
 helpers.insert_readings(db, point_id, start, step_seconds, values) -> None
 ```
 
-- [ ] **Step 1: Branch and dependencies**
+- [x] **Step 1: Branch and dependencies**
 
 ```bash
 cd /home/ziad/Projects/DC_Dashboard
@@ -137,7 +137,7 @@ Edit `backend/pyproject.toml` `dependencies` — append:
 
 Run `cd backend && uv lock && uv sync --group dev`. Expected: `Resolved ... packages`, no errors.
 
-- [ ] **Step 2: Write the failing schema test**
+- [x] **Step 2: Write the failing schema test**
 
 `backend/tests/test_schema_tiers.py`:
 
@@ -231,11 +231,11 @@ async def insert_readings(db, point_id: int, start, step_seconds: int, values: l
 
 (`from datetime import timedelta` at the top of helpers.)
 
-- [ ] **Step 3: Run, expect failure**
+- [x] **Step 3: Run, expect failure**
 
 `cd backend && uv run pytest tests/test_schema_tiers.py -q` → `5 failed` (`compression_enabled` is False; views missing; settings row missing).
 
-- [ ] **Step 4: Write the migration**
+- [x] **Step 4: Write the migration**
 
 `backend/migrations/versions/0002_storage_tiers.py`:
 
@@ -329,7 +329,7 @@ def downgrade() -> None:
 
 Note: `avg` is deliberately not stored; the API computes `sum_value / n` so the hourly tier weights minutes by their sample count instead of averaging averages.
 
-- [ ] **Step 5: Keep the test fixture truncation working**
+- [x] **Step 5: Keep the test fixture truncation working**
 
 `TRUNCATE readings ... CASCADE` on a hypertable with continuous aggregates succeeds in TimescaleDB 2.30 but leaves already-materialized rollup rows behind. Change the `db` fixture in `backend/tests/conftest.py`:
 
@@ -349,11 +349,11 @@ async def db(pool):
 
 Refreshing over `NULL, NULL` with an empty source table removes stale materialized rows, which is the behaviour the tests need. `refresh_continuous_aggregate` must run outside a transaction; asyncpg's `pool.execute` autocommits, so this is fine.
 
-- [ ] **Step 6: Run, expect pass**
+- [x] **Step 6: Run, expect pass**
 
 `uv run pytest tests/test_schema_tiers.py tests/test_schema.py -q` → all pass. Then the whole suite: `uv run pytest -q` → all pass (the truncate change affects every db test).
 
-- [ ] **Step 7: Commit and push**
+- [x] **Step 7: Commit and push**
 
 ```bash
 git add backend/pyproject.toml backend/uv.lock backend/migrations backend/tests
@@ -388,7 +388,7 @@ GET /api/settings/storage  (admin) -> StorageSettings
 PUT /api/settings/storage  (admin, body StorageSettings) -> StorageSettings ; 422 on validator failure
 ```
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `backend/tests/test_storage_settings.py`:
 
@@ -463,9 +463,9 @@ async def test_readings_1h_never_gets_a_retention_policy(client, db):
 
 Note `timescaledb_information.jobs.config` is JSONB; the exact string form of `drop_after` (`"45 days"`) is what 2.30 stores for an interval given as `INTERVAL '45 days'` — verify at execution and adjust the assertion to compare `config['drop_after']` parsed as an interval if it differs.
 
-- [ ] **Step 2: Run, expect failure** — `uv run pytest tests/test_storage_settings.py -q` → `ModuleNotFoundError: dcdash.core.storage`.
+- [x] **Step 2: Run, expect failure** — `uv run pytest tests/test_storage_settings.py -q` → `ModuleNotFoundError: dcdash.core.storage`.
 
-- [ ] **Step 3: Implement `core/storage.py`**
+- [x] **Step 3: Implement `core/storage.py`**
 
 ```python
 from __future__ import annotations
@@ -530,7 +530,7 @@ async def save_storage_settings(db: AsyncSession, s: StorageSettings) -> None:
     await db.commit()
 ```
 
-- [ ] **Step 4: Implement `api/storage.py` (settings part; stats endpoint arrives in Task 4)**
+- [x] **Step 4: Implement `api/storage.py` (settings part; stats endpoint arrives in Task 4)**
 
 ```python
 from typing import Any
@@ -558,9 +558,9 @@ async def put_storage_settings(body: StorageSettings, db: AsyncSession = Depends
 
 In `backend/dcdash/api/main.py` change the import line to `from dcdash.api import assets, auth, data, jobs, mappings, sources, storage, stream` and add `storage.router` to the list of routers that the `include_router` loop iterates (same place `data.router` is listed).
 
-- [ ] **Step 5: Run, expect pass** — `uv run pytest tests/test_storage_settings.py -q` → `7 passed`.
+- [x] **Step 5: Run, expect pass** — `uv run pytest tests/test_storage_settings.py -q` → `7 passed`.
 
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**
 
 ```bash
 git add backend/dcdash backend/tests && git commit -m "Add admin-editable storage settings applied as Timescale policies" && git push
@@ -582,7 +582,7 @@ GET /api/assets/{id}/series?metric=&start=&end=&buckets=&mapping_id=
   -> {"metric", "unit", "tier": "raw"|"1m"|"1h", "points": [{"ts","avg","min","max"}]}   # tier is a new, additive key
 ```
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `backend/tests/test_api_data_tiers.py`:
 
@@ -662,9 +662,9 @@ async def test_series_mapping_id_selects_custom_mapping(client, db):
     assert r3.status_code == 404
 ```
 
-- [ ] **Step 2: Run, expect failure** — `uv run pytest tests/test_api_data_tiers.py -q` → `ImportError: cannot import name 'pick_tier'`.
+- [x] **Step 2: Run, expect failure** — `uv run pytest tests/test_api_data_tiers.py -q` → `ImportError: cannot import name 'pick_tier'`.
 
-- [ ] **Step 3: Implement in `api/data.py`**
+- [x] **Step 3: Implement in `api/data.py`**
 
 Replace the single `_SERIES` statement with three and add the selector. Keep `_GOOD` and the existing imports; add `Query` param `mapping_id`.
 
@@ -717,9 +717,9 @@ In `series`, add the parameter `mapping_id: int | None = Query(default=None)` af
 
 and add `"tier": tier,` to the returned dict next to `"unit"`. Leave `summary`, `energy` and `_ENERGY_*` untouched (energy stays on raw; it needs the trapezoid over actual samples).
 
-- [ ] **Step 4: Run, expect pass** — `uv run pytest tests/test_api_data_tiers.py tests/test_api_data.py -q` → all pass.
+- [x] **Step 4: Run, expect pass** — `uv run pytest tests/test_api_data_tiers.py tests/test_api_data.py -q` → all pass.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add backend && git commit -m "Select raw/1m/1h tier for series and accept mapping_id" && git push
@@ -753,7 +753,7 @@ class StorageStats(BaseModel):
 GET /api/storage (admin) -> StorageStats
 ```
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `backend/tests/test_api_storage.py`:
 
@@ -794,9 +794,9 @@ async def test_storage_warn_when_capacity_tiny(client, db):
     assert body["used_pct"] > 50 and body["warn"] is True
 ```
 
-- [ ] **Step 2: Run, expect failure** — `uv run pytest tests/test_api_storage.py -q` → 404s.
+- [x] **Step 2: Run, expect failure** — `uv run pytest tests/test_api_storage.py -q` → 404s.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `core/storage.py`:
 
@@ -886,9 +886,9 @@ async def get_storage(db: AsyncSession = Depends(get_db)) -> StorageStats:
     return await storage_stats(db)
 ```
 
-- [ ] **Step 4: Run, expect pass** — `uv run pytest tests/test_api_storage.py -q` → `3 passed`.
+- [x] **Step 4: Run, expect pass** — `uv run pytest tests/test_api_storage.py -q` → `3 passed`.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add backend && git commit -m "Add storage statistics endpoint" && git push
@@ -920,7 +920,7 @@ async def opcua_server(sim: Simulator | None = None, password: str | None = None
 
 Address space: `Objects → Panels (object) → LVP01 … LVP10 (objects) → kW, kWh, V, A, PF, Hz (Double variables)`. Each variable's DisplayName is `"LVP01 kW"` (the same name the HTTP simulator returns) and carries an `EngineeringUnits` property (`ua.EUInformation` with `DisplayName=LocalizedText(unit)`) when the unit is non-empty. Fault modes: `sim.offline` → `stop()` the server is not enough to emulate (the connector would simply fail to connect, which is what we want — `OpcUaSim.run` calls `stop()` when `sim.offline` becomes true and `start()` again when it clears). `sim.reject_auth` → the user manager returns `None` for every login.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `backend/tests/test_simulator_opcua.py`:
 
@@ -969,9 +969,9 @@ async def test_reject_auth_refuses_password_login():
             raise AssertionError("login should have been rejected")
 ```
 
-- [ ] **Step 2: Run, expect failure** — `uv run pytest tests/test_simulator_opcua.py -q` → `ImportError`.
+- [x] **Step 2: Run, expect failure** — `uv run pytest tests/test_simulator_opcua.py -q` → `ImportError`.
 
-- [ ] **Step 3: Implement `simulator/opcua.py`**
+- [x] **Step 3: Implement `simulator/opcua.py`**
 
 ```python
 from __future__ import annotations
@@ -1072,9 +1072,9 @@ async def opcua_server(sim: Simulator | None = None, password: str | None = None
         await srv.stop()
 ```
 
-- [ ] **Step 4: Run, expect pass** — `uv run pytest tests/test_simulator_opcua.py -q` → `3 passed`.
+- [x] **Step 4: Run, expect pass** — `uv run pytest tests/test_simulator_opcua.py -q` → `3 passed`.
 
-- [ ] **Step 5: Commit and push** — `git add backend && git commit -m "Serve the simulator over OPC UA" && git push`
+- [x] **Step 5: Commit and push** — `git add backend && git commit -m "Serve the simulator over OPC UA" && git push`
 
 ---
 
@@ -1100,7 +1100,7 @@ class OpcUaConnector(Connector):  type = "opcua"; config_schema = OpcUaConfig
 
 Error mapping: `ua.UaStatusCodeError` with `BadUserAccessDenied`/`BadIdentityTokenRejected`/`BadIdentityTokenInvalid` → `auth_failed`; `asyncio.TimeoutError` → `timeout`; `OSError`/`ConnectionRefusedError` → `unreachable`; other `ua.UaError` → `protocol_error`. A fresh `Client` is created per `test`/`browse`/`read` call and disconnected in `finally`, so a half-dead session is never reused (Review Focus 5). `read` returns a `BAD` `PointValue` for a node whose status is not Good instead of raising.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `backend/tests/test_connector_opcua.py`:
 
@@ -1174,9 +1174,9 @@ async def test_read_after_server_stop_raises_unreachable():
         assert (await c.read([addr]))[0].quality == GOOD
 ```
 
-- [ ] **Step 2: Run, expect failure** — `uv run pytest tests/test_connector_opcua.py -q` → `ValueError: unknown connector type: opcua`.
+- [x] **Step 2: Run, expect failure** — `uv run pytest tests/test_connector_opcua.py -q` → `ValueError: unknown connector type: opcua`.
 
-- [ ] **Step 3: Implement `connectors/opcua.py`**
+- [x] **Step 3: Implement `connectors/opcua.py`**
 
 ```python
 from __future__ import annotations
@@ -1307,9 +1307,9 @@ async def _unit(var: Node) -> str | None:
 
 Add `from dcdash.connectors import modbus, opcua, simulator  # noqa: F401` to `connectors/__init__.py` (the `modbus` module arrives in Task 9; until then import only `opcua, simulator`).
 
-- [ ] **Step 4: Run, expect pass** — `uv run pytest tests/test_connector_opcua.py tests/test_connector_base.py -q` → all pass. `test_api_sources.py::test_connectors_lists_types_with_a_config_schema` (1A) indexes connectors by type and keeps passing with more types.
+- [x] **Step 4: Run, expect pass** — `uv run pytest tests/test_connector_opcua.py tests/test_connector_base.py -q` → all pass. `test_api_sources.py::test_connectors_lists_types_with_a_config_schema` (1A) indexes connectors by type and keeps passing with more types.
 
-- [ ] **Step 5: Commit and push** — `git add backend && git commit -m "Add OPC UA connector" && git push`
+- [x] **Step 5: Commit and push** — `git add backend && git commit -m "Add OPC UA connector" && git push`
 
 ---
 
@@ -1338,7 +1338,7 @@ def profiles_dir() -> Path; def list_profiles() -> list[str]; def load_profile(n
 def match_profile(vendor: str | None, product_code: str | None) -> Profile | None   # case-insensitive equality on both
 ```
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `backend/tests/test_registers.py`:
 
@@ -1417,9 +1417,9 @@ def test_match_profile_by_identification():
     assert match_profile("Acme", "X1") is None
 ```
 
-- [ ] **Step 2: Run, expect failure** — `uv run pytest tests/test_registers.py tests/test_profiles.py -q` → `ModuleNotFoundError`.
+- [x] **Step 2: Run, expect failure** — `uv run pytest tests/test_registers.py tests/test_profiles.py -q` → `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement `core/registers.py`**
+- [x] **Step 3: Implement `core/registers.py`**
 
 ```python
 from __future__ import annotations
@@ -1451,7 +1451,7 @@ def encode(value: int | float, data_type: DataType, word_order: WordOrder) -> li
     return words if word_order == "big" else list(reversed(words))
 ```
 
-- [ ] **Step 4: Implement `profiles/__init__.py`**
+- [x] **Step 4: Implement `profiles/__init__.py`**
 
 ```python
 from __future__ import annotations
@@ -1566,9 +1566,9 @@ blocks:
 
 Add to `pyproject.toml` under `[tool.hatch.build.targets.wheel]`: `include = ["dcdash/**/*.py", "dcdash/profiles/*.yaml"]`.
 
-- [ ] **Step 5: Run, expect pass** — `uv run pytest tests/test_registers.py tests/test_profiles.py -q` → `10 passed`.
+- [x] **Step 5: Run, expect pass** — `uv run pytest tests/test_registers.py tests/test_profiles.py -q` → `10 passed`.
 
-- [ ] **Step 6: Commit and push** — `git add backend && git commit -m "Add Modbus register codec and YAML device profiles" && git push`
+- [x] **Step 6: Commit and push** — `git add backend && git commit -m "Add Modbus register codec and YAML device profiles" && git push`
 
 ---
 
@@ -1595,7 +1595,7 @@ async def modbus_server(sim: Simulator | None = None) -> AsyncIterator[ModbusSim
 
 Fault modes: `sim.offline` → the server is stopped (same pattern as OPC UA). `sim.reject_auth` has no Modbus meaning (no authentication in the protocol) and is ignored.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `backend/tests/test_simulator_modbus.py`:
 
@@ -1639,9 +1639,9 @@ async def test_offline_stops_listening():
         client.close()
 ```
 
-- [ ] **Step 2: Run, expect failure** — `ImportError`.
+- [x] **Step 2: Run, expect failure** — `ImportError`.
 
-- [ ] **Step 3: Implement `simulator/modbus.py`**
+- [x] **Step 3: Implement `simulator/modbus.py`**
 
 ```python
 from __future__ import annotations
@@ -1726,9 +1726,9 @@ async def modbus_server(sim: Simulator | None = None):
         await srv.stop()
 ```
 
-- [ ] **Step 4: Run, expect pass** — `uv run pytest tests/test_simulator_modbus.py -q` → `3 passed`.
+- [x] **Step 4: Run, expect pass** — `uv run pytest tests/test_simulator_modbus.py -q` → `3 passed`.
 
-- [ ] **Step 5: Commit and push** — `git add backend && git commit -m "Serve the simulator over Modbus TCP" && git push`
+- [x] **Step 5: Commit and push** — `git add backend && git commit -m "Serve the simulator over Modbus TCP" && git push`
 
 ---
 
@@ -1753,7 +1753,7 @@ class ModbusConnector(Connector):  type = "modbus"; config_schema = ModbusConfig
 
 Status mapping: `needs_profile` is a `ConnectorError.status`, surfaced by `test()` as `ConnectionCheck(ok=False, status="needs_profile", message="no profile matches <vendor>/<product>; pick one")` and by `read()` as a raised `ConnectorError`, which the scheduler already stores in `sources.last_error` (Task 10 makes the status word itself visible).
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `backend/tests/test_connector_modbus.py`:
 
@@ -1833,9 +1833,9 @@ async def test_unreachable_and_timeout():
     assert (await c.test()).status == "unreachable"
 ```
 
-- [ ] **Step 2: Run, expect failure** — `ValueError: unknown connector type: modbus`.
+- [x] **Step 2: Run, expect failure** — `ValueError: unknown connector type: modbus`.
 
-- [ ] **Step 3: Implement `connectors/modbus.py`**
+- [x] **Step 3: Implement `connectors/modbus.py`**
 
 ```python
 from __future__ import annotations
@@ -1978,9 +1978,9 @@ Note: `ProfilePoint.scale` is intentionally **not** applied in `read` — 1A sto
 
 Change `connectors/__init__.py` to `from dcdash.connectors import modbus, opcua, simulator  # noqa: F401`.
 
-- [ ] **Step 4: Run, expect pass** — `uv run pytest tests/test_connector_modbus.py tests/test_api_sources.py -q` → all pass (`test_connectors_lists_types_with_a_config_schema` indexes by type, so it keeps passing).
+- [x] **Step 4: Run, expect pass** — `uv run pytest tests/test_connector_modbus.py tests/test_api_sources.py -q` → all pass (`test_connectors_lists_types_with_a_config_schema` indexes by type, so it keeps passing).
 
-- [ ] **Step 5: Commit and push** — `git add backend && git commit -m "Add Modbus TCP connector with YAML profiles" && git push`
+- [x] **Step 5: Commit and push** — `git add backend && git commit -m "Add Modbus TCP connector with YAML profiles" && git push`
 
 ---
 
@@ -1997,7 +1997,7 @@ sources.status stays 'online' | 'offline'; sources.last_error becomes "<status>:
    e.g. "needs_profile: no profile matches Acme/X1; pick one", "unreachable: [Errno 111] Connection refused"
 ```
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `backend/tests/test_scheduler_protocols.py` (uses the 1A scheduler entrypoint `run_group` and the helper `wait_for` exactly as `test_scheduler.py` does — copy its group construction verbatim and swap the source):
 
@@ -2062,9 +2062,9 @@ async def test_modbus_needs_profile_is_surfaced(db, monkeypatch):
 
 `run_group(group, pool, writer, factory=create_connector, sleep=asyncio.sleep)` and `load_groups(pool)` are the 1A symbols `test_scheduler.py` already exercises; `Writer(db)` is constructed the same way there. The default `backoff_delay` makes recovery take a few seconds, hence `timeout=20`.
 
-- [ ] **Step 2: Run, expect failure** — the first test fails on `last_error` not starting with `unreachable:` (1A stores only the message).
+- [x] **Step 2: Run, expect failure** — the first test fails on `last_error` not starting with `unreachable:` (1A stores only the message).
 
-- [ ] **Step 3: Implement** — in `collector/scheduler.py` `run_group`, the `except Exception as exc:` block around `poll_once` builds `message = str(exc) or type(exc).__name__` before calling `mark_source(pool, group.source_id, False, message)`. Replace that line with:
+- [x] **Step 3: Implement** — in `collector/scheduler.py` `run_group`, the `except Exception as exc:` block around `poll_once` builds `message = str(exc) or type(exc).__name__` before calling `mark_source(pool, group.source_id, False, message)`. Replace that line with:
 
 ```python
                     if isinstance(exc, ConnectorError):
@@ -2075,9 +2075,9 @@ async def test_modbus_needs_profile_is_surfaced(db, monkeypatch):
 
 and add `ConnectorError` to the existing `from dcdash.connectors.base import ...` line.
 
-- [ ] **Step 4: Run, expect pass** — `uv run pytest tests/test_scheduler_protocols.py tests/test_scheduler.py -q` → all pass (adjust 1A assertions that compared `last_error` to a bare message to the new `"<status>: <message>"` form).
+- [x] **Step 4: Run, expect pass** — `uv run pytest tests/test_scheduler_protocols.py tests/test_scheduler.py -q` → all pass (adjust 1A assertions that compared `last_error` to a bare message to the new `"<status>: <message>"` form).
 
-- [ ] **Step 5: Commit and push** — `git add backend && git commit -m "Surface connector status words in source errors; protocol scheduler tests" && git push`
+- [x] **Step 5: Commit and push** — `git add backend && git commit -m "Surface connector status words in source errors; protocol scheduler tests" && git push`
 
 ---
 
@@ -2094,7 +2094,7 @@ python -m dcdash.simulator.main       env: SIM_HTTP_PORT=9000 SIM_OPCUA_PORT=484
 compose simulator ports: 127.0.0.1:9000:9000, 127.0.0.1:4840:4840, 127.0.0.1:5020:5020
 ```
 
-- [ ] **Step 1: Failing test** — append to `backend/tests/test_simulator.py`:
+- [x] **Step 1: Failing test** — append to `backend/tests/test_simulator.py`:
 
 ```python
 async def test_main_serves_all_three_protocols():
@@ -2124,9 +2124,9 @@ async def _ok(c):
 
 (imports at top of the file: `asyncio`, `httpx`, `from asyncua import Client`, `from pymodbus.client import AsyncModbusTcpClient`, `from tests.helpers import wait_for`.)
 
-- [ ] **Step 2: Run, expect failure** — `ModuleNotFoundError: dcdash.simulator.main`.
+- [x] **Step 2: Run, expect failure** — `ModuleNotFoundError: dcdash.simulator.main`.
 
-- [ ] **Step 3: Implement `simulator/main.py`**
+- [x] **Step 3: Implement `simulator/main.py`**
 
 ```python
 from __future__ import annotations
@@ -2169,7 +2169,7 @@ if __name__ == "__main__":
 
 Check `create_sim_app`'s existing signature `(sim: Simulator | None = None, api_key: str | None = None)` — it already accepts the shared model, which is why the three protocols agree on every counter.
 
-- [ ] **Step 4: compose and env**
+- [x] **Step 4: compose and env**
 
 In `compose.yaml` `simulator` service: replace `command: uvicorn dcdash.simulator.app:app --host 0.0.0.0 --port 9000` with `command: python -m dcdash.simulator.main`; add to its `environment` block `SIM_OPCUA_PASSWORD: ${SIM_OPCUA_PASSWORD:-}`; replace its `ports` list with:
 
@@ -2193,9 +2193,9 @@ SIM_OPCUA_PASSWORD=           # optional: simulator OPC UA password (username "s
 
 Confirm `scripts/setup.sh`/`setup.ps1` already write the variables that `compose.yaml` reads; if they write `.env` from a template, point them at `.env.example`.
 
-- [ ] **Step 5: Run, expect pass** — `uv run pytest tests/test_simulator.py -q` → all pass. `docker compose config` → valid.
+- [x] **Step 5: Run, expect pass** — `uv run pytest tests/test_simulator.py -q` → all pass. `docker compose config` → valid.
 
-- [ ] **Step 6: Commit and push** — `git add backend compose.yaml .env.example scripts && git commit -m "Run HTTP, OPC UA and Modbus simulator servers in one process" && git push`
+- [x] **Step 6: Commit and push** — `git add backend compose.yaml .env.example scripts && git commit -m "Run HTTP, OPC UA and Modbus simulator servers in one process" && git push`
 
 ---
 
@@ -2212,7 +2212,7 @@ scripts/restore.sh <dump> [--force]                -> stops api+collector, pre_r
 scripts/backup_smoke.sh                            -> backs up, wipes assets, restores, asserts assets are back and a mismatched .version is refused
 ```
 
-- [ ] **Step 1: `scripts/backup.sh`**
+- [x] **Step 1: `scripts/backup.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -2226,7 +2226,7 @@ docker compose exec -T db psql -U dcdash -d dcdash -tAc "SELECT version_num FROM
 echo "wrote $FILE (schema $(cat "$FILE.version"))"
 ```
 
-- [ ] **Step 2: `scripts/restore.sh`**
+- [x] **Step 2: `scripts/restore.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -2248,9 +2248,9 @@ docker compose start api collector      # api runs `alembic upgrade head`, which
 echo "restored $DUMP"
 ```
 
-- [ ] **Step 3: PowerShell twins** — `scripts/backup.ps1` and `scripts/restore.ps1` are the same commands with `$args`, `Get-Date -Format yyyyMMdd-HHmmss`, `docker compose exec -T ... | Set-Content -Encoding Byte`/`Get-Content -Raw | docker compose exec -T db pg_restore ...` and `exit 3` on mismatch. CRLF line endings for `*.ps1` only (already covered by `.gitattributes`).
+- [x] **Step 3: PowerShell twins** — `scripts/backup.ps1` and `scripts/restore.ps1` are the same commands with `$args`, `Get-Date -Format yyyyMMdd-HHmmss`, `docker compose exec -T ... | Set-Content -Encoding Byte`/`Get-Content -Raw | docker compose exec -T db pg_restore ...` and `exit 3` on mismatch. CRLF line endings for `*.ps1` only (already covered by `.gitattributes`).
 
-- [ ] **Step 4: `scripts/backup_smoke.sh`**
+- [x] **Step 4: `scripts/backup_smoke.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -2273,9 +2273,9 @@ AFTER="$(psql "SELECT count(*) FROM assets")"
 
 Expected when run against a running stack: `wrote backups/...`, `refusing: dump schema 'bogus' differs ...`, `restored ...`, `backup smoke OK (N assets)`. Check the `assets` column names against `0001_initial.py` before running (`name`, `parent_id`).
 
-- [ ] **Step 5: README** — add a "Backup and restore" section with the three commands, the `--force` semantics, and the note that compression/retention policies are part of the dump and come back with it.
+- [x] **Step 5: README** — add a "Backup and restore" section with the three commands, the `--force` semantics, and the note that compression/retention policies are part of the dump and come back with it.
 
-- [ ] **Step 6: Commit and push** — `chmod +x scripts/*.sh; git add scripts README.md && git commit -m "Add backup and restore scripts with Timescale pre/post restore" && git push`
+- [x] **Step 6: Commit and push** — `chmod +x scripts/*.sh; git add scripts README.md && git commit -m "Add backup and restore scripts with Timescale pre/post restore" && git push`
 
 ---
 
@@ -2296,7 +2296,7 @@ useStorage(): UseQueryResult<StorageStats>; useStorageSettings(); useSaveStorage
 Route /storage (admin-only via hasRole("admin")), NavLink "Storage"
 ```
 
-- [ ] **Step 1: Failing test** — `frontend/src/pages/StoragePage.test.tsx`:
+- [x] **Step 1: Failing test** — `frontend/src/pages/StoragePage.test.tsx`:
 
 ```tsx
 import { screen, waitFor } from "@testing-library/react";
@@ -2353,9 +2353,9 @@ describe("StoragePage", () => {
 
 `mockFetch` (1B, `frontend/src/test/fetchMock.ts`) takes `Record<"METHOD /path", Reply | (req: {url, body}) => Reply>` with `Reply = {status?, body?}` and returns the recorded calls `{method, path, body}[]`; the test above uses exactly that shape.
 
-- [ ] **Step 2: Run, expect failure** — `cd frontend && npm test -- StoragePage` → cannot resolve `./StoragePage`.
+- [x] **Step 2: Run, expect failure** — `cd frontend && npm test -- StoragePage` → cannot resolve `./StoragePage`.
 
-- [ ] **Step 3: Implement** — `client.ts`: add `put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),` to `api`. `types.ts`: add the two types above. `queries.ts`:
+- [x] **Step 3: Implement** — `client.ts`: add `put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),` to `api`. `types.ts`: add the two types above. `queries.ts`:
 
 ```ts
 export const useStorage = () => useQuery({ queryKey: keys.storage, queryFn: () => api.get<StorageStats>("/api/storage") });
@@ -2438,9 +2438,9 @@ export function StoragePage() {
 
 `Layout.tsx`: after the Sources link add `{hasRole("admin") && <NavLink to="/storage">Storage</NavLink>}`. `main.tsx`: add `<Route path="/storage" element={<StoragePage />} />` beside the `/sources` routes (inside the same `RequireAuth` layout route). `RequireAuth` (1B) only checks for a session, so the page relies on the API's 403 for non-admins, which `useStorage` surfaces through the `role="alert"` error paragraph; the nav link is hidden for them by `hasRole("admin")`.
 
-- [ ] **Step 4: Run, expect pass** — `npm test -- StoragePage` → `3 passed`; `npm run lint && npm run build` clean.
+- [x] **Step 4: Run, expect pass** — `npm test -- StoragePage` → `3 passed`; `npm run lint && npm run build` clean.
 
-- [ ] **Step 5: Commit and push** — `git add frontend && git commit -m "Add admin Storage page with retention and capacity settings" && git push`
+- [x] **Step 5: Commit and push** — `git add frontend && git commit -m "Add admin Storage page with retention and capacity settings" && git push`
 
 ---
 
@@ -2457,15 +2457,15 @@ useSeries(id, metric, range, mappingId?: number)  // appends &mapping_id= when g
 TrendChart shows a badge: "raw samples" | "1-minute rollup" | "1-hour rollup"
 ```
 
-- [ ] **Step 1: Failing test** — add to `TrendChart.test.tsx` a case that renders the chart with a series whose `tier` is `"1h"` (same fixture shape the file already uses) and asserts `screen.getByText("1-hour rollup")`; and a case in the `useSeries` tests (or `AssetPage.test.tsx`, whichever already mocks `/api/assets/:id/series`) asserting the request URL contains `mapping_id=7` when the hook is called with `7`.
+- [x] **Step 1: Failing test** — add to `TrendChart.test.tsx` a case that renders the chart with a series whose `tier` is `"1h"` (same fixture shape the file already uses) and asserts `screen.getByText("1-hour rollup")`; and a case in the `useSeries` tests (or `AssetPage.test.tsx`, whichever already mocks `/api/assets/:id/series`) asserting the request URL contains `mapping_id=7` when the hook is called with `7`.
 
-- [ ] **Step 2: Run, expect failure** — `npm test -- TrendChart AssetPage` → badge not found / URL mismatch.
+- [x] **Step 2: Run, expect failure** — `npm test -- TrendChart AssetPage` → badge not found / URL mismatch.
 
-- [ ] **Step 3: Implement** — `types.ts`: add `tier?: "raw" | "1m" | "1h"` to the series type. `queries.ts`: give `useSeries` a fourth optional parameter `mappingId?: number`, include it in the query key array and append `&mapping_id=${mappingId}` to the path when defined. `TrendChart.tsx`: render `<span className="muted">{label[series.tier ?? "raw"]}</span>` with `const label = { raw: "raw samples", "1m": "1-minute rollup", "1h": "1-hour rollup" }` next to the existing range picker. In `AssetPage.tsx`, where the metric is chosen for the chart, if the summary lists more than one mapping for the selected metric, render a `<select aria-label="Mapping">` of them (`mapping_id` → point name or id) and pass the chosen id into `useSeries`.
+- [x] **Step 3: Implement** — `types.ts`: add `tier?: "raw" | "1m" | "1h"` to the series type. `queries.ts`: give `useSeries` a fourth optional parameter `mappingId?: number`, include it in the query key array and append `&mapping_id=${mappingId}` to the path when defined. `TrendChart.tsx`: render `<span className="muted">{label[series.tier ?? "raw"]}</span>` with `const label = { raw: "raw samples", "1m": "1-minute rollup", "1h": "1-hour rollup" }` next to the existing range picker. In `AssetPage.tsx`, where the metric is chosen for the chart, if the summary lists more than one mapping for the selected metric, render a `<select aria-label="Mapping">` of them (`mapping_id` → point name or id) and pass the chosen id into `useSeries`.
 
-- [ ] **Step 4: README** — add sections: "Protocols" (OPC UA fields incl. `root_node`, security policy note that `basic256sha256` needs client cert files `dcdash_client_cert.pem`/`dcdash_client_key.pem` in the collector working directory; Modbus fields, profile YAML format with the `generic_float32.yaml` example, `needs_profile` meaning, address format `fc:register`), "Storage tiers" (table from Task 1, which tier a chart uses, that retention never runs in code), "Simulator" (ports 9000/4840/5020, bound to 127.0.0.1), "Backup and restore" (from Task 12 if not yet written).
+- [x] **Step 4: README** — add sections: "Protocols" (OPC UA fields incl. `root_node`, security policy note that `basic256sha256` needs client cert files `dcdash_client_cert.pem`/`dcdash_client_key.pem` in the collector working directory; Modbus fields, profile YAML format with the `generic_float32.yaml` example, `needs_profile` meaning, address format `fc:register`), "Storage tiers" (table from Task 1, which tier a chart uses, that retention never runs in code), "Simulator" (ports 9000/4840/5020, bound to 127.0.0.1), "Backup and restore" (from Task 12 if not yet written).
 
-- [ ] **Step 5: Full verification**
+- [x] **Step 5: Full verification**
 
 ```bash
 cd backend && uv run pytest -q                 # expected: all passed, 0 failed
@@ -2475,7 +2475,7 @@ cd .. && docker compose config > /dev/null && echo compose-ok
 
 Then with the stack up (`docker compose --profile dev up -d --build`): create an `opcua` source at `opc.tcp://simulator:4840/dcdash/`, a `modbus` source at `simulator:5020` with profile `auto`, test both (expect `ok`, Modbus message `profile simulator`), browse, map LVP01 kW on each to an asset, watch the asset page update, open `/storage`, change raw retention to 45 and confirm `SELECT config FROM timescaledb_information.jobs` reflects it, run `scripts/backup_smoke.sh`.
 
-- [ ] **Step 6: Commit and push** — `git add frontend README.md && git commit -m "Show chart tier, select mapping, document protocols and storage" && git push`
+- [x] **Step 6: Commit and push** — `git add frontend README.md && git commit -m "Show chart tier, select mapping, document protocols and storage" && git push`
 
 ---
 
