@@ -79,6 +79,9 @@ def downgrade() -> None:
     with op.get_context().autocommit_block():
         op.execute("DROP MATERIALIZED VIEW IF EXISTS readings_1h")
         op.execute("DROP MATERIALIZED VIEW IF EXISTS readings_1m")
+        # Compression cannot be disabled while compressed chunks exist; decompress them first
+        # (if_compressed => true skips chunks that are already plain).
+        op.execute("SELECT decompress_chunk(c, true) FROM show_chunks('readings') c")
     op.execute("SELECT remove_retention_policy('readings', if_exists => true)")
     op.execute("SELECT remove_compression_policy('readings', if_exists => true)")
     op.execute("ALTER TABLE readings SET (timescaledb.compress = false)")

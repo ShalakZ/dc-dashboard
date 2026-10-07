@@ -64,3 +64,34 @@ async def test_storage_settings_default_row(db):
     assert row is not None
     assert row["value"]["raw_retention_days"] == 30
     assert row["value"]["compress_after_days"] == 7
+
+
+def _alembic(*args: str) -> None:
+    import os
+    import subprocess
+    import sys
+
+    from tests.conftest import BACKEND
+
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", *args], cwd=BACKEND, env=os.environ.copy(), capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+
+async def test_downgrade_with_compressed_chunks_then_upgrade(db):
+    sid = await make_source(db)
+    pid = await make_point(db, sid, "LVP01_kW")
+    await insert_readings(db, pid, datetime.now(timezone.utc) - timedelta(days=10), 60, [1.0] * 5)
+    await db.execute("SELECT compress_chunk(c, true) FROM show_chunks('readings') c")
+    assert await db.fetchval(
+        "SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name = 'readings' AND is_compressed"
+    ) >= 1
+    try:
+        _alembic("downgrade", "0001")
+        assert await db.fetchval("SELECT version_num FROM alembic_version") == "0001"
+        assert await db.fetchval("SELECT count(*) FROM readings WHERE point_id = $1", pid) == 5
+    finally:
+        _alembic("upgrade", "head")
+    assert await db.fetchval("SELECT version_num FROM alembic_version") == "0002"
+    assert await db.fetchval("SELECT count(*) FROM timescaledb_information.continuous_aggregates") == 2
