@@ -2,6 +2,8 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from dcdash.collector.writer import Writer
 from dcdash.core.pg import LATEST_CHANNEL, create_pool
 from helpers import listening, make_point, make_source
@@ -88,6 +90,30 @@ async def test_failed_flush_keeps_rows_for_retry(db, database_url):
     writer._pool = db  # the database comes back
     assert await writer.flush() == 1
     assert await db.fetchval("SELECT count(*) FROM readings") == 1
+
+
+class _HangingPool:
+    """A pool whose acquire() never completes, so a flush can be cancelled mid-way."""
+
+    def acquire(self):
+        return self
+
+    async def __aenter__(self):
+        await asyncio.Event().wait()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+async def test_cancelled_flush_keeps_rows():
+    writer = Writer(_HangingPool())
+    writer.add([(1, T0, 10.0, 0), (1, T0 + timedelta(seconds=5), 12.0, 0)])
+    task = asyncio.create_task(writer.flush())
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert writer.pending == 2
 
 
 async def test_buffer_is_bounded_and_drops_oldest(db):

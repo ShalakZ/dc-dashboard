@@ -61,11 +61,13 @@ class Writer:
                 for start in range(0, len(payload), NOTIFY_CHUNK):
                     chunk = json.dumps(payload[start : start + NOTIFY_CHUNK])
                     await conn.execute("SELECT pg_notify($1, $2)", LATEST_CHANNEL, chunk)
-        except Exception as exc:  # database unavailable: keep the rows and retry
-            log.warning("flush failed, keeping %d readings: %s", len(rows), exc)
+        except BaseException as exc:  # database unavailable or cancelled: keep the rows
             self._buffer = rows + self._buffer
             self._trim()
-            return 0
+            if isinstance(exc, Exception):
+                log.warning("flush failed, keeping %d readings: %s", len(rows), exc)
+                return 0
+            raise
         return len(rows)
 
     async def run(self, interval: float = 1.0) -> None:
