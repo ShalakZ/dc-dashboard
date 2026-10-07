@@ -117,6 +117,23 @@ First time only: `npx playwright install chromium`. Reports: `npx playwright sho
 The collector deletes expired sessions and finished jobs older than 7 days every hour
 (`backend/dcdash/collector/housekeeping.py`). "Test all" runs at most 4 connector tests at once.
 
+## Backup and restore
+
+Both scripts talk to the `db` container of the running stack (`.ps1` twins exist for Windows).
+
+    scripts/backup.sh [out_dir]            # ./backups/dcdash-YYYYmmdd-HHMMSS.dump + .version (Alembic revision)
+    scripts/restore.sh <dump> [--force]    # stops api+collector, recreates the database, restores, restarts
+    scripts/backup_smoke.sh                # backs up, deletes an asset, restores, checks it is back
+
+`restore.sh` refuses (exit 3) when the dump's `.version` differs from the running schema.
+`--force` restores anyway; the `api` container then runs `alembic upgrade head` on start, which
+brings an older dump up to the current schema. Never force-restore a dump from a *newer* version.
+
+The dump is a full `pg_dump -Fc` wrapped in `timescaledb_pre_restore()` / `timescaledb_post_restore()`,
+so hypertables, the 1-minute and 1-hour rollups and their compression and retention policies are
+part of the backup and come back with it; nothing has to be re-created by hand. The `pg_dump`
+warning about `continuous_agg` circular foreign keys is expected and harmless for a full dump.
+
 ## Add a connector
 
 Create `backend/dcdash/connectors/<name>.py` with a `Connector` subclass
