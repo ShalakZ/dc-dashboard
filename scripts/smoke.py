@@ -62,7 +62,8 @@ def main() -> None:
         def live():
             summary = client.get(f"/api/assets/{panel['id']}/summary").json()
             values = {m["metric"]: m["value"] for m in summary["metrics"]}
-            return summary if all(v is not None for v in values.values()) and len(values) == 2 else None
+            wanted = ("active_power_kw", "energy_kwh")
+            return summary if all(values.get(metric) is not None for metric in wanted) else None
 
         summary = wait(live, "live values")
         for metric in summary["metrics"]:
