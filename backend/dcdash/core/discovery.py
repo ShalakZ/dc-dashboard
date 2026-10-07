@@ -120,6 +120,8 @@ def expand_targets(targets: list[str], ports: list[int], max_hosts: int) -> Expa
                 add(host)
         else:
             add(_single_host(target))
+    if len(set(clean_ports) | {port for _, port in extra}) > MAX_PORTS:  # URL ports count too
+        raise TargetError(f"too many ports (at most {MAX_PORTS})")
     return Expansion(tuple(hosts), clean_ports, tuple(extra))
 
 
@@ -142,7 +144,7 @@ def _tokens(name: str) -> list[str]:
 
 
 def _natural(key: str) -> list[tuple[int, int | str]]:
-    return [(0, int(part)) if part.isdigit() else (1, part.casefold()) for part in re.split(r"(\d+)", key) if part]
+    return [(0, int(part)) if part.isdecimal() else (1, part.casefold()) for part in re.split(r"(\d+)", key) if part]
 
 
 def suggest_groups(points: list[PointInfo]) -> tuple[list[Group], list[int]]:

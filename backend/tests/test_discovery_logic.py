@@ -70,6 +70,28 @@ def test_empty_target_list_and_bad_ports():
         expand_targets([], [502], 10)
 
 
+def test_url_ports_count_towards_the_port_limit():
+    listed = list(range(1, MAX_PORTS + 1))
+    with pytest.raises(TargetError, match="too many ports"):
+        expand_targets(["http://10.0.0.1:9999"], listed, 10)  # 20 listed + 1 URL port = 21 distinct
+
+
+def test_url_port_that_fits_the_port_limit_is_accepted():
+    listed = list(range(1, MAX_PORTS))  # 19 ports
+    exp = expand_targets(["http://10.0.0.1:9999"], listed, 10)  # the 20th distinct port
+    assert ("10.0.0.1", 9999) in exp.pairs and len(exp.ports) == MAX_PORTS - 1
+    # A URL port that is already listed adds nothing, even at the limit.
+    assert expand_targets(["http://10.0.0.1:20"], list(range(1, MAX_PORTS + 1)), 10).extra == (("10.0.0.1", 20),)
+
+
+def test_many_url_ports_on_one_host_are_limited():
+    urls = [f"http://10.0.0.1:{port}" for port in range(1000, 1100)]
+    with pytest.raises(TargetError, match="too many ports"):
+        expand_targets(urls, [502], 1)
+    ok = [f"http://10.0.0.1:{port}" for port in range(1000, 1000 + MAX_PORTS - 1)]  # + listed 502 = 20 distinct
+    assert len(expand_targets(ok, [502], 1).pairs) == MAX_PORTS
+
+
 def p(i, name, unit=None):
     return PointInfo(i, f"addr{i}", name, unit)
 
@@ -107,6 +129,12 @@ def test_groups_sort_naturally_and_duplicate_names_are_kept():
     groups, _ = suggest_groups([p(i, n) for i, n in enumerate(names, 1)])
     assert [g.key for g in groups] == ["LVP2", "LVP10"]
     assert groups[0].point_ids == (3, 4, 5)
+
+
+@pytest.mark.parametrize("first,second,key", [("Room 1² kW", "Room 1² V", "Room 1²"), ("① kW", "① V", "①")])
+def test_non_decimal_digit_characters_do_not_crash_sorting(first, second, key):
+    groups, ungrouped = suggest_groups([p(1, first), p(2, second)])
+    assert [(g.key, g.point_ids) for g in groups] == [(key, (1, 2))] and ungrouped == []
 
 
 def test_multi_token_keys():
