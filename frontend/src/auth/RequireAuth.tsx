@@ -15,13 +15,13 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Client-side guard for admin-only routes, so a direct visit shows a short notice, not an API error. */
+/** Client-side guard for role-restricted routes, so a direct visit shows a short notice, not an API error. */
 export function RequireRole({ min, children }: { min: Role; children: ReactNode }) {
   const { hasRole } = useAuth();
   if (!hasRole(min)) {
     return (
       <section>
-        <h1>Admins only</h1>
+        <h1>{min === "admin" ? "Admins only" : "Operators only"}</h1>
         <p className="muted">Your account does not have access to this page.</p>
       </section>
     );

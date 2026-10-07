@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { api } from "./client";
 import type {
-  Asset, Connector, GeneralSettings, Metric, PointRow, Role, Series, Source, StorageSettings, StorageStats, Summary, UserRow,
+  Asset, AuditPage, Connector, GeneralSettings, GraphModel, Metric, PointRow, Role, ScanDetail, ScanSummary, Scope,
+  ScopeSuggestions, Series, Source, StorageSettings, StorageStats, Summary, UserRow,
 } from "./types";
 
 export const keys = {
@@ -17,6 +18,12 @@ export const keys = {
   general: ["settings", "general"] as const,
   storage: ["storage"] as const,
   storageSettings: ["settings", "storage"] as const,
+  scopes: ["scopes"] as const,
+  suggestions: ["scope-suggestions"] as const,
+  scans: ["scans"] as const,
+  scan: (id: number) => ["scans", id] as const,
+  graph: ["graph"] as const,
+  audit: (limit: number, offset: number) => ["audit", limit, offset] as const,
 };
 
 export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets") });
@@ -99,3 +106,41 @@ export function useSaveStorageSettings() {
     onSuccess: () => invalidate(keys.storageSettings, keys.storage),
   });
 }
+
+export const useScopes = () => useQuery({ queryKey: keys.scopes, queryFn: () => api.get<Scope[]>("/api/scopes") });
+
+/** Admin-only on the server: callers enable it only for admins, and only while the new-scope form is open. */
+export const useScopeSuggestions = (enabled: boolean) =>
+  useQuery({
+    queryKey: keys.suggestions,
+    queryFn: () => api.get<ScopeSuggestions>("/api/scopes/suggestions"),
+    enabled,
+  });
+
+const ACTIVE_SCANS = new Set(["queued", "running"]);
+
+/** Scan history, newest first. Polls while any listed scan is still queued or running so a finished scan shows up. */
+export const useScans = () =>
+  useQuery({
+    queryKey: keys.scans,
+    queryFn: () => api.get<ScanSummary[]>("/api/scans"),
+    refetchInterval: (query) => (query.state.data?.some((scan) => ACTIVE_SCANS.has(scan.status)) ? 2000 : false),
+  });
+
+/** Scan progress: polls `GET /api/scans/{id}` every second until the scan is done or failed. */
+export const useScan = (scanId: number | null) =>
+  useQuery({
+    queryKey: scanId === null ? ["scans", "none"] : keys.scan(scanId),
+    enabled: scanId !== null,
+    queryFn: () => api.get<ScanDetail>(`/api/scans/${scanId}`),
+    refetchInterval: (query) => (["done", "failed"].includes(query.state.data?.status ?? "") ? false : 1000),
+  });
+
+/** The discovery graph. No polling: refresh it by invalidating `keys.graph`. */
+export const useGraph = () => useQuery({ queryKey: keys.graph, queryFn: () => api.get<GraphModel>("/api/discovery/graph") });
+
+export const useAudit = (limit: number, offset: number) =>
+  useQuery({
+    queryKey: keys.audit(limit, offset),
+    queryFn: () => api.get<AuditPage>(`/api/audit?${new URLSearchParams({ limit: String(limit), offset: String(offset) })}`),
+  });
