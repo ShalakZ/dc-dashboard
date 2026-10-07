@@ -65,3 +65,26 @@ export interface CheckResult { ok: boolean; status: string; latency_ms: number |
 
 export interface UserRow { id: number; username: string; role: Role; active: boolean }
 export interface GeneralSettings { timezone: string }
+
+export interface StorageSettings {
+  raw_retention_days: number;
+  compress_after_days: number;
+  rollup_1m_retention_days: number;
+  disk_capacity_gb: number;
+  warn_threshold_pct: number;
+}
+export interface StorageStats {
+  database_bytes: number;
+  readings_bytes_uncompressed: number;
+  readings_bytes_compressed: number;
+  readings_bytes_total: number;
+  rollup_1m_bytes: number;
+  rollup_1h_bytes: number;
+  rows_per_day: { day: string; rows: number }[];
+  growth_bytes_per_day: number;
+  disk_capacity_bytes: number;
+  used_pct: number;
+  days_until_full: number | null;
+  warn: boolean;
+  settings: StorageSettings;
+}

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { api } from "./client";
 import type {
-  Asset, Connector, GeneralSettings, Metric, PointRow, Role, Series, Source, Summary, UserRow,
+  Asset, Connector, GeneralSettings, Metric, PointRow, Role, Series, Source, StorageSettings, StorageStats, Summary, UserRow,
 } from "./types";
 
 export const keys = {
@@ -14,6 +14,8 @@ export const keys = {
   points: (sourceId: number) => ["sources", sourceId, "points"] as const,
   users: ["users"] as const,
   general: ["settings", "general"] as const,
+  storage: ["storage"] as const,
+  storageSettings: ["settings", "storage"] as const,
 };
 
 export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets") });
@@ -80,5 +82,18 @@ export function usePutGeneralSettings() {
   return useMutation({
     mutationFn: (body: GeneralSettings) => api.put<GeneralSettings>("/api/settings/general", body),
     onSuccess: () => invalidate(keys.general),
+  });
+}
+
+export const useStorage = () => useQuery({ queryKey: keys.storage, queryFn: () => api.get<StorageStats>("/api/storage") });
+
+export const useStorageSettings = () =>
+  useQuery({ queryKey: keys.storageSettings, queryFn: () => api.get<StorageSettings>("/api/settings/storage") });
+
+export function useSaveStorageSettings() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: StorageSettings) => api.put<StorageSettings>("/api/settings/storage", body),
+    onSuccess: () => invalidate(keys.storageSettings, keys.storage),
   });
 }
