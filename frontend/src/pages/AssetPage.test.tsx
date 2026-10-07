@@ -6,6 +6,7 @@ import { AssetPage } from "./AssetPage";
 class FakeEventSource {
   static last: FakeEventSource | null = null;
   onmessage: ((e: MessageEvent) => void) | null = null;
+  onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
   constructor(public url: string) { FakeEventSource.last = this; }
@@ -38,11 +39,33 @@ describe("AssetPage", () => {
     expect(screen.getByText("10.50")).toBeInTheDocument();
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
     expect(FakeEventSource.last?.url).toBe("/api/stream");
-    act(() => FakeEventSource.last!.emit([[7, "2026-10-07T10:00:05+00:00", 11.25, 0], [99, "t", 1, 0]]));
+    act(() => FakeEventSource.last!.emit([[7, Date.now() / 1000, 11.25, 0], [99, 1, 1, 0]]));
     expect(screen.getByText("11.25")).toBeInTheDocument();
-    act(() => FakeEventSource.last!.emit([[7, "2026-10-07T10:00:10+00:00", null, 1]]));
+    act(() => FakeEventSource.last!.emit([[7, Date.now() / 1000, null, 1]]));
     expect(screen.queryByText("11.25")).not.toBeInTheDocument();
+    expect(screen.queryByText("10.50")).not.toBeInTheDocument();
+    expect(screen.getByText("— kW")).toBeInTheDocument();
     expect(screen.getByText("bad quality")).toBeInTheDocument();
+  });
+
+  it("shows the stream's epoch timestamp as a current time, not 1970", async () => {
+    mockFetch(routes(null));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    await screen.findByRole("heading", { name: "Panel 1" });
+    const now = new Date(2026, 9, 7, 13, 45, 30);
+    act(() => FakeEventSource.last!.emit([[7, now.getTime() / 1000, 11.25, 0]]));
+    expect(screen.getByText(now.toLocaleTimeString())).toBeInTheDocument();
+    expect(screen.queryByText(new Date(0).toLocaleTimeString())).not.toBeInTheDocument();
+  });
+
+  it("shows the stream state next to the heading", async () => {
+    mockFetch(routes(null));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    await screen.findByRole("heading", { name: "Panel 1" });
+    act(() => FakeEventSource.last!.onopen?.());
+    expect(screen.getByText("live")).toBeInTheDocument();
+    act(() => FakeEventSource.last!.onerror?.());
+    expect(screen.getByText("reconnecting…")).toBeInTheDocument();
   });
 
   it("labels estimated energy and handles missing energy", async () => {

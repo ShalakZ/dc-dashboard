@@ -4,7 +4,10 @@ export interface LiveValue {
   quality: number;
 }
 
-/** Parse one SSE `data:` payload: a JSON list of [point_id, ts, value|null, quality]. */
+/**
+ * Parse one SSE `data:` payload: a JSON list of [point_id, ts, value|null, quality].
+ * The collector publishes `ts` as epoch seconds (float); ISO strings are accepted too.
+ */
 export function parseStreamMessage(data: string): [number, LiveValue][] {
   let parsed: unknown;
   try {
@@ -16,7 +19,8 @@ export function parseStreamMessage(data: string): [number, LiveValue][] {
   const out: [number, LiveValue][] = [];
   for (const row of parsed) {
     if (!Array.isArray(row) || row.length < 4 || typeof row[0] !== "number") continue;
-    const [pointId, ts, value, quality] = row as [number, string, number | null, number];
+    const [pointId, rawTs, value, quality] = row as [number, number | string, number | null, number];
+    const ts = typeof rawTs === "number" ? new Date(rawTs * 1000).toISOString() : rawTs;
     out.push([pointId, { ts, value: typeof value === "number" ? value : null, quality }]);
   }
   return out;
