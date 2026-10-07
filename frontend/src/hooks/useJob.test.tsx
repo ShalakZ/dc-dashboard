@@ -18,6 +18,17 @@ describe("JobStatus", () => {
     expect(polls).toBe(settled);
   }, 10_000);
 
+  it("stops polling after the cap and reports the job as still running", async () => {
+    let polls = 0;
+    mockFetch({ ...auth, "GET /api/jobs/5": () => { polls++; return { body: job("running", null) }; } });
+    renderWithProviders(<JobStatus jobId={5} maxWaitMs={1500} />);
+    expect(await screen.findByText("running…")).toBeInTheDocument();
+    expect(await screen.findByText(/still running/, {}, { timeout: 5000 })).toBeInTheDocument();
+    const settled = polls;
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(polls).toBe(settled);
+  }, 10_000);
+
   it("shows error from failed job", async () => {
     mockFetch({ ...auth, "GET /api/jobs/5": { body: job("failed", { error: "collector restarted" }) } });
     renderWithProviders(<JobStatus jobId={5} />);

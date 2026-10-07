@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { api } from "../api/client";
-import { keys, useAssets, useInvalidate, usePoints } from "../api/queries";
+import { keys, useAssets, useInvalidate, usePoints, useSources } from "../api/queries";
 import type { PointRow } from "../api/types";
 import { JobStatus } from "../components/JobStatus";
 import { MappingForm, type MappingBody } from "../components/MappingForm";
@@ -11,6 +11,8 @@ export function SourcePointsPage() {
   const sourceId = Number(useParams().id);
   const { data: points = [], error, isLoading } = usePoints(sourceId);
   const { data: assets = [] } = useAssets();
+  const { data: sources } = useSources();
+  const sourceName = sources?.find((s) => s.id === sourceId)?.name ?? `source ${sourceId}`;
   const invalidate = useInvalidate();
   const [browseJob, setBrowseJob] = useState<number | null>(null);
   const [editing, setEditing] = useState<PointRow | null>(null);
@@ -33,7 +35,7 @@ export function SourcePointsPage() {
   if (error) return <p className="error" role="alert">{error.message}</p>;
   return (
     <>
-      <p><Link to="/sources">Sources</Link> / source {sourceId}</p>
+      <p><Link to="/sources">Sources</Link> / {sourceName}</p>
       <h1>Points</h1>
       <div className="row">
         <button onClick={browse}>Browse points</button>

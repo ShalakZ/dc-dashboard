@@ -12,6 +12,7 @@ const points = [
 const routes = {
   "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "a", role: "admin" } },
   "GET /api/assets": { body: [{ id: 4, parent_id: null, name: "Panel 1", kind: "panel", sort_order: 0 }] },
+  "GET /api/sources": { body: [{ id: 2, name: "sim", connector_type: "simulator", config: {}, enabled: true, status: "online", last_seen: null, last_error: null, has_secret: false }] },
   "GET /api/sources/2/points": { body: points },
   "POST /api/sources/2/browse": { status: 202, body: { job_id: 11 } },
   "GET /api/jobs/11": { body: { id: 11, kind: "browse_source", status: "done", result: { count: 2 }, created_at: "t", finished_at: "t" } },
@@ -24,6 +25,7 @@ describe("SourcePointsPage", () => {
     const calls = mockFetch(routes);
     renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
     await userEvent.click(await screen.findByRole("button", { name: "Browse points" }));
+    expect(await screen.findByText("/ sim")).toBeInTheDocument();
     expect(await screen.findByText("found 2 points")).toBeInTheDocument();
     const row = (await screen.findByText("panel1/power")).closest("tr")!;
     await userEvent.click(within(row).getByRole("button", { name: "Map" }));
