@@ -38,13 +38,17 @@ class UserOut(BaseModel):
     role: str
 
 
-def _start_session(db: AsyncSession, user: User, response: Response) -> None:
+def _is_https(request: Request) -> bool:
+    return request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").lower() == "https"
+
+
+def _start_session(db: AsyncSession, user: User, response: Response, secure: bool) -> None:
     token, token_hash = new_session_token()
     hours = get_settings().session_hours
     expires = datetime.now(timezone.utc) + timedelta(hours=hours)
     db.add(UserSession(id=token_hash, user_id=user.id, expires_at=expires))
     response.set_cookie(
-        COOKIE, token, max_age=hours * 3600, httponly=True, samesite="strict", path="/"
+        COOKIE, token, max_age=hours * 3600, httponly=True, samesite="strict", path="/", secure=secure
     )
 
 
@@ -55,7 +59,9 @@ async def setup_status(db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
 
 
 @router.post("/setup", response_model=UserOut, status_code=201)
-async def setup(body: NewAdmin, response: Response, db: AsyncSession = Depends(get_db)) -> User:
+async def setup(
+    body: NewAdmin, request: Request, response: Response, db: AsyncSession = Depends(get_db)
+) -> User:
     # The lock stops two simultaneous first-run requests from both creating an admin.
     await db.execute(text("LOCK TABLE users IN EXCLUSIVE MODE"))
     if await db.scalar(select(func.count()).select_from(User)):
@@ -63,7 +69,7 @@ async def setup(body: NewAdmin, response: Response, db: AsyncSession = Depends(g
     user = User(username=body.username, password_hash=hash_password(body.password), role="admin")
     db.add(user)
     await db.flush()
-    _start_session(db, user, response)
+    _start_session(db, user, response, _is_https(request))
     await db.commit()
     return user
 
@@ -84,7 +90,7 @@ async def login(
         limiter.record_failure(key)
         raise HTTPException(401, "invalid username or password")
     limiter.reset(key)
-    _start_session(db, user, response)
+    _start_session(db, user, response, _is_https(request))
     await db.commit()
     return user
 

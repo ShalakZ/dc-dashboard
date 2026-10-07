@@ -112,3 +112,15 @@ async def test_unknown_username_still_runs_a_verify(client, db, monkeypatch):
     monkeypatch.setattr(auth_module, "verify_password", spy)
     assert (await client.post("/api/login", json={"username": "nobody", "password": "whatever1"})).status_code == 401
     assert len(calls) == 1 and calls[0].startswith("$argon2")
+
+
+async def test_cookie_secure_when_forwarded_https(client, db):
+    await login_as(client, db, "viewer")
+    plain = await client.post("/api/login", json={"username": "viewer", "password": "correct-horse"})
+    assert "secure" not in plain.headers["set-cookie"].lower()
+    tls = await client.post(
+        "/api/login", json={"username": "viewer", "password": "correct-horse"},
+        headers={"x-forwarded-proto": "https"},
+    )
+    assert "; secure" in tls.headers["set-cookie"].lower()
+    assert "httponly" in tls.headers["set-cookie"].lower()
