@@ -60,6 +60,8 @@ services:
     restart: unless-stopped
     command: python -m dcdash.collector.main
     environment: *backend-env
+    volumes:
+      - ./certs:/certs:ro          # OPC UA client certificate for basic256sha256 (see README)
     depends_on:
       api:
         condition: service_healthy

@@ -49,6 +49,27 @@ describe("StoragePage", () => {
     expect((put()[0].body as { raw_retention_days: number }).raw_retention_days).toBe(45);
   });
 
+  it("says full when capacity is exhausted and not growing only when growth is zero", async () => {
+    mockFetch({
+      ...base,
+      "GET /api/storage": { body: { ...stats, used_pct: 104.5, days_until_full: null, warn: true } },
+      "GET /api/settings/storage": { body: settings },
+    });
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    expect(await screen.findByText(/^full /)).toBeInTheDocument();
+    expect(screen.queryByText(/not growing/)).not.toBeInTheDocument();
+  });
+
+  it("says not growing when growth is zero and capacity remains", async () => {
+    mockFetch({
+      ...base,
+      "GET /api/storage": { body: { ...stats, growth_bytes_per_day: 0, days_until_full: null } },
+      "GET /api/settings/storage": { body: settings },
+    });
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    expect(await screen.findByText(/not growing/)).toBeInTheDocument();
+  });
+
   it("shows the warning when the threshold is crossed", async () => {
     mockFetch({
       ...base,

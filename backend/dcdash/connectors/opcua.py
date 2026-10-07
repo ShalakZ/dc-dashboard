@@ -7,6 +7,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 from asyncua import Client, Node, ua
@@ -37,6 +38,9 @@ class OpcUaConfig(BaseModel):
     username: str | None = None  # the password is the source secret
     root_node: str = "i=85"  # Objects folder
     timeout_seconds: float = Field(5.0, ge=0.5, le=60)
+    # Only used with basic256sha256; the collector mounts ./certs read-only at /certs.
+    client_cert: str = "/certs/opcua-client.pem"
+    client_key: str = "/certs/opcua-client-key.pem"
 
 
 def _translate(exc: BaseException) -> ConnectorError:
@@ -66,8 +70,11 @@ class OpcUaConnector(Connector):
             client.set_user(self.config.username)
             client.set_password(self.secret or "")
         if self.config.security_policy == "basic256sha256":
+            for path in (self.config.client_cert, self.config.client_key):
+                if not Path(path).is_file():
+                    raise ConnectorError("protocol_error", f"client certificate not found: {path}")
             await client.set_security_string(
-                "Basic256Sha256,SignAndEncrypt,dcdash_client_cert.pem,dcdash_client_key.pem"
+                f"Basic256Sha256,SignAndEncrypt,{self.config.client_cert},{self.config.client_key}"
             )
         try:
             await asyncio.wait_for(client.connect(), self.config.timeout_seconds)

@@ -91,8 +91,18 @@ Every connector is read-only toward the source; only `collector` opens connectio
 **OPC UA** (`opcua`): `endpoint` (`opc.tcp://...`), `security_policy` (`none` or `basic256sha256`),
 optional `username` (the password is the source secret), `root_node` (default `i=85`, the Objects
 folder; browsing descends from here) and `timeout_seconds`. With `basic256sha256` the collector
-signs and encrypts with a client certificate it expects as `dcdash_client_cert.pem` and
-`dcdash_client_key.pem` in its working directory.
+signs and encrypts with a client certificate read from `client_cert` / `client_key` (default
+`/certs/opcua-client.pem` and `/certs/opcua-client-key.pem`; `./certs` is mounted read-only into
+the collector). Without the files the source reports `protocol_error: client certificate not
+found: <path>`. Generate a self-signed client certificate with:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=dcdash" \
+  -addext "subjectAltName=URI:urn:dcdash:collector" \
+  -keyout certs/opcua-client-key.pem -out certs/opcua-client.pem
+```
+
+Trust `certs/opcua-client.pem` on the OPC UA server afterwards.
 
 **Modbus TCP** (`modbus`): `host`, `port` (502), `unit_id` (1), `profile` (`auto` or the name of an
 installed profile) and `timeout_seconds`. Only function codes 3, 4 and 43/14 (device identification)

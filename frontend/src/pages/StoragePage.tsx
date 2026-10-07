@@ -18,6 +18,12 @@ export function validate(s: StorageSettings): string | null {
   return null;
 }
 
+// days_until_full is null both when the database is already over capacity and when it is not growing.
+export function projection(usedPct: number, daysUntilFull: number | null): string {
+  if (usedPct >= 100) return "full";
+  return daysUntilFull === null ? "not growing" : `${Math.round(daysUntilFull)} days`;
+}
+
 export function StoragePage() {
   const stats = useStorage();
   const settings = useStorageSettings();
@@ -49,7 +55,7 @@ export function StoragePage() {
         <dt>Rollups</dt><dd>1 min {gib(s.rollup_1m_bytes)}, 1 h {gib(s.rollup_1h_bytes)}</dd>
         <dt>Growth</dt><dd>{gib(s.growth_bytes_per_day)} / day</dd>
         <dt>Projected full</dt>
-        <dd>{s.days_until_full === null ? "not growing" : `${Math.round(s.days_until_full)} days`} ({s.used_pct}% of {gib(s.disk_capacity_bytes)})</dd>
+        <dd>{projection(s.used_pct, s.days_until_full)} ({s.used_pct}% of {gib(s.disk_capacity_bytes)})</dd>
       </dl>
       <p className="muted">
         Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.

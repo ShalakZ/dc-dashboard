@@ -65,3 +65,26 @@ async def test_read_after_server_stop_raises_unreachable():
         assert exc.value.status == "unreachable"
         await srv.start()
         assert (await c.read([addr]))[0].quality == GOOD
+
+
+async def test_basic256sha256_without_client_cert_is_a_clear_error(tmp_path):
+    missing = str(tmp_path / "opcua-client.pem")
+    cfg = {
+        "endpoint": "opc.tcp://127.0.0.1:1", "security_policy": "basic256sha256",
+        "client_cert": missing, "client_key": str(tmp_path / "opcua-client-key.pem"),
+    }
+    c = create_connector("opcua", cfg)
+    check = await c.test()
+    assert not check.ok and check.status == "protocol_error"
+    assert check.message == f"client certificate not found: {missing}"
+    with pytest.raises(ConnectorError) as exc:
+        await c.read(["i=2258"])
+    assert exc.value.status == "protocol_error" and "client certificate not found" in exc.value.message
+    with pytest.raises(ConnectorError):
+        await c.browse()
+
+
+def test_opcua_defaults_point_at_mounted_certs():
+    from dcdash.connectors.opcua import OpcUaConfig
+    cfg = OpcUaConfig(endpoint="opc.tcp://h:4840")
+    assert cfg.client_cert == "/certs/opcua-client.pem" and cfg.client_key == "/certs/opcua-client-key.pem"

@@ -82,17 +82,18 @@ class StorageStats(BaseModel):
     settings: StorageSettings
 
 
-# hypertable_compression_stats returns no row until a chunk has been compressed, hence the coalesce.
+# hypertable_compression_stats returns no row until a chunk has been compressed, and a missing
+# continuous aggregate would make hypertable_size(NULL) NULL, hence the coalesces.
 _STATS_SQL = text(
     """
     SELECT pg_database_size(current_database()) AS database_bytes,
            hypertable_size('readings') AS readings_total,
            coalesce((SELECT before_compression_total_bytes FROM hypertable_compression_stats('readings')), 0) AS before_c,
            coalesce((SELECT after_compression_total_bytes FROM hypertable_compression_stats('readings')), 0) AS after_c,
-           hypertable_size((SELECT format('%I.%I', materialization_hypertable_schema, materialization_hypertable_name)
-                            FROM timescaledb_information.continuous_aggregates WHERE view_name = 'readings_1m')::regclass) AS m1,
-           hypertable_size((SELECT format('%I.%I', materialization_hypertable_schema, materialization_hypertable_name)
-                            FROM timescaledb_information.continuous_aggregates WHERE view_name = 'readings_1h')::regclass) AS h1,
+           coalesce(hypertable_size((SELECT format('%I.%I', materialization_hypertable_schema, materialization_hypertable_name)
+                            FROM timescaledb_information.continuous_aggregates WHERE view_name = 'readings_1m')::regclass), 0) AS m1,
+           coalesce(hypertable_size((SELECT format('%I.%I', materialization_hypertable_schema, materialization_hypertable_name)
+                            FROM timescaledb_information.continuous_aggregates WHERE view_name = 'readings_1h')::regclass), 0) AS h1,
            (SELECT min(ts) FROM readings) AS oldest
     """
 )
