@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router";
 import { useSummary } from "../api/queries";
 import { EnergyTile } from "../components/EnergyTile";
 import { fmt, MetricsTable } from "../components/MetricsTable";
+import { TrendChart } from "../components/TrendChart";
 import { useStream } from "../hooks/useStream";
 
 export function AssetPage() {
@@ -21,6 +22,8 @@ export function AssetPage() {
       <h1>{data.asset.name}</h1>
       <div className="tile"><div className="muted">Live power</div><div className="big">{power ? `${fmt(livePower)} kW` : "—"}</div></div>
       <EnergyTile energy={data.energy_today} />
+      <h2>Trend</h2>
+      <TrendChart assetId={id} metrics={data.metrics} />
       <h2>Metrics</h2>
       <MetricsTable metrics={data.metrics} live={live} />
     </>
