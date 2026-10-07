@@ -80,12 +80,33 @@ async def test_energy_today_from_counter_handles_reset(client, db):
     assert await energy_today(client, asset) == {"kwh": pytest.approx(13.0), "estimated": False}
 
 
-async def test_energy_today_ignores_yesterday(client, db):
+async def test_energy_today_starts_from_last_reading_before_midnight(client, db):
     await login_as(client, db, "viewer")
     asset, _, kwh = await panel(db)
     await add_readings(db, kwh, today() - 20 * MINUTE, [50.0, 90.0])  # 23:40 and 23:50 yesterday
     await add_readings(db, kwh, today(), [100.0, 104.0])
-    assert (await energy_today(client, asset))["kwh"] == pytest.approx(4.0)
+    # 90 -> 100 happened (at least partly) today; 50 -> 90 did not
+    assert (await energy_today(client, asset))["kwh"] == pytest.approx(14.0)
+
+
+async def test_energy_today_counts_an_outage_spanning_midnight(client, db):
+    await login_as(client, db, "viewer")
+    asset, _, kwh = await panel(db)
+    await add_readings(db, kwh, today() - 60 * MINUTE, [200.0])  # 23:00 yesterday
+    await add_readings(db, kwh, today() + 9 * 60 * MINUTE, [260.0, 262.0], step=60 * MINUTE)  # 09:00, 10:00
+    assert await energy_today(client, asset) == {"kwh": pytest.approx(62.0), "estimated": False}
+
+
+async def test_power_estimate_does_not_reach_before_midnight(client, db):
+    await login_as(client, db, "viewer")
+    source = await make_source(db)
+    asset = await make_asset(db, "LV Panel 1")
+    kw = await make_point(db, source, "LVP01_kW")
+    await make_mapping(db, kw, asset, "active_power_kw", interval=600)  # max gap 1800 s
+    await add_readings(db, kw, today() - 10 * MINUTE, [10.0])  # 23:50 yesterday
+    await add_readings(db, kw, today() + 10 * MINUTE, [10.0, 10.0])  # 00:10 and 00:20
+    # 23:50 -> 00:10 is within the gap limit but belongs to yesterday; only 00:10 -> 00:20 counts
+    assert (await energy_today(client, asset))["kwh"] == pytest.approx(10 / 6)
 
 
 async def test_energy_today_is_estimated_from_power_when_there_is_no_counter(client, db):

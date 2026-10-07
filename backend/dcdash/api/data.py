@@ -8,16 +8,43 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
 from dcdash.core.config import get_settings
-from dcdash.core.energy import Energy, Sample, consumption
+from dcdash.core.energy import Energy
 from dcdash.core.metrics import Metric, unit_for
 from dcdash.core.models import Asset, Mapping, PointLatest
 
 router = APIRouter(prefix="/api", tags=["data"], dependencies=[Depends(require_role("viewer"))])
 
 _GOOD = "quality = 0 AND value IS NOT NULL"
-_SAMPLES = text(
-    f"SELECT ts, value FROM readings "
-    f"WHERE point_id = :point AND ts >= :start AND ts < :end AND {_GOOD} ORDER BY ts"
+# Counter consumption: sum of increases between consecutive good samples; a
+# decrease is a reset and contributes nothing. The window starts at the last
+# good sample before :start so that what the meter accumulated between that
+# sample and the first one of today is counted toward today.
+_COUNTER_KWH = text(
+    f"""
+    SELECT coalesce(sum(CASE WHEN value >= prev THEN value - prev ELSE 0 END), 0)
+    FROM (
+        SELECT value, lag(value) OVER (ORDER BY ts) AS prev
+        FROM readings
+        WHERE point_id = :point AND {_GOOD}
+          AND ts >= coalesce(
+              (SELECT max(ts) FROM readings WHERE point_id = :point AND ts < :start AND {_GOOD}),
+              :start)
+          AND ts < :end
+    ) steps
+    """
+)
+# Power estimate: trapezoidal integral of kW over consecutive good samples, in
+# kWh. Steps longer than :max_gap seconds are outages and contribute nothing.
+_POWER_KWH = text(
+    f"""
+    SELECT coalesce(sum((value + prev) / 2 * extract(epoch FROM ts - prev_ts) / 3600), 0)
+    FROM (
+        SELECT ts, value, lag(ts) OVER (ORDER BY ts) AS prev_ts, lag(value) OVER (ORDER BY ts) AS prev
+        FROM readings
+        WHERE point_id = :point AND ts >= :start AND ts < :end AND {_GOOD}
+    ) steps
+    WHERE ts - prev_ts <= make_interval(secs => :max_gap)
+    """
 )
 _SERIES = text(
     f"""
@@ -36,11 +63,6 @@ def day_start(now: datetime, tz_name: str) -> datetime:
     return local.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-async def _samples(db: AsyncSession, mapping: Mapping, start: datetime, end: datetime) -> list[Sample]:
-    rows = await db.execute(_SAMPLES, {"point": mapping.point_id, "start": start, "end": end})
-    return [(ts, value * mapping.scale) for ts, value in rows]
-
-
 async def _own_energy(db: AsyncSession, asset_id: int, start: datetime, end: datetime) -> Energy | None:
     wanted = [Metric.ENERGY_KWH.value, Metric.ACTIVE_POWER_KW.value]
     rows = await db.scalars(
@@ -49,11 +71,15 @@ async def _own_energy(db: AsyncSession, asset_id: int, start: datetime, end: dat
     by_metric = {mapping.metric: mapping for mapping in rows}
     counter = by_metric.get(Metric.ENERGY_KWH.value)
     if counter is not None:
-        return consumption(await _samples(db, counter, start, end), None)
+        params = {"point": counter.point_id, "start": start, "end": end}
+        kwh = await db.scalar(_COUNTER_KWH, params)
+        return Energy(float(kwh) * counter.scale, estimated=False)
     power = by_metric.get(Metric.ACTIVE_POWER_KW.value)
     if power is not None:
         max_gap = max(3 * power.interval_seconds, 30)
-        return consumption(None, await _samples(db, power, start, end), max_gap)
+        params = {"point": power.point_id, "start": start, "end": end, "max_gap": max_gap}
+        kwh = await db.scalar(_POWER_KWH, params)
+        return Energy(float(kwh) * power.scale, estimated=True)
     return None
 
 
