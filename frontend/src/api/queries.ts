@@ -1,7 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { api } from "./client";
-import type { Asset, Connector, Metric, PointRow, Series, Source, Summary } from "./types";
+import type {
+  Asset, Connector, GeneralSettings, Metric, PointRow, Role, Series, Source, Summary, UserRow,
+} from "./types";
 
 export const keys = {
   assets: ["assets"] as const,
@@ -10,6 +12,8 @@ export const keys = {
   sources: ["sources"] as const,
   connectors: ["connectors"] as const,
   points: (sourceId: number) => ["sources", sourceId, "points"] as const,
+  users: ["users"] as const,
+  general: ["settings", "general"] as const,
 };
 
 export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets") });
@@ -42,4 +46,39 @@ export function useInvalidate() {
   const client = useQueryClient();
   return (...queryKeys: readonly (readonly unknown[])[]) =>
     Promise.all(queryKeys.map((queryKey) => client.invalidateQueries({ queryKey })));
+}
+
+export const useUsers = () => useQuery({ queryKey: keys.users, queryFn: () => api.get<UserRow[]>("/api/users") });
+
+export function useCreateUser() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: { username: string; password: string; role: Role }) => api.post<UserRow>("/api/users", body),
+    onSuccess: () => invalidate(keys.users),
+  });
+}
+
+export function usePatchUser() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: { role?: Role; active?: boolean; password?: string } }) =>
+      api.patch<UserRow>(`/api/users/${id}`, body),
+    onSuccess: () => invalidate(keys.users),
+  });
+}
+
+export const useChangePassword = () =>
+  useMutation({
+    mutationFn: (body: { current_password: string; new_password: string }) => api.post<void>("/api/me/password", body),
+  });
+
+export const useGeneralSettings = () =>
+  useQuery({ queryKey: keys.general, queryFn: () => api.get<GeneralSettings>("/api/settings/general") });
+
+export function usePutGeneralSettings() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: GeneralSettings) => api.put<GeneralSettings>("/api/settings/general", body),
+    onSuccess: () => invalidate(keys.general),
+  });
 }

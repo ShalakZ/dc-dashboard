@@ -39,6 +39,12 @@ describe("api client", () => {
     }
   });
 
+  it("put sends JSON body with PUT", async () => {
+    const calls = mockFetch({ "PUT /api/settings/general": { body: { timezone: "UTC" } } });
+    await expect(api.put("/api/settings/general", { timezone: "UTC" })).resolves.toEqual({ timezone: "UTC" });
+    expect(calls[0]).toEqual({ method: "PUT", path: "/api/settings/general", body: { timezone: "UTC" } });
+  });
+
   it("returns undefined on 204", async () => {
     mockFetch({ "DELETE /api/assets/3": { status: 204 } });
     await expect(api.del("/api/assets/3")).resolves.toBeUndefined();

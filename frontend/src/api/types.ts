@@ -62,3 +62,6 @@ export interface Job {
 }
 /** result of a done test_source job (dataclasses.asdict(ConnectionCheck)) */
 export interface CheckResult { ok: boolean; status: string; latency_ms: number | null; message: string }
+
+export interface UserRow { id: number; username: string; role: Role; active: boolean }
+export interface GeneralSettings { timezone: string }
