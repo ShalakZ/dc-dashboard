@@ -5,8 +5,9 @@ hierarchy you define, and serves live values, history and energy use.
 
 Design: `docs/superpowers/specs/2026-10-06-dc-dashboard-design.md`
 
-Status: backend only (Phase 1A). The web UI is the next phase; until then the
-API is at `http://localhost:8000/api` with interactive docs at `/api/docs`.
+Status: Phase 1B. The web UI is served at `http://localhost/`; the API is
+proxied at `http://localhost/api` (interactive docs at `/api/docs`). Storage
+panel, user management, OPC UA and Modbus connectors arrive in Phase 1C.
 
 ## Run it
 
@@ -31,11 +32,16 @@ credentials cannot be decrypted. Set `DCDASH_TIMEZONE` in `.env` (for example
 
 Later starts need only `docker compose up -d`.
 
+Open `http://localhost/`. The first visit asks you to create the admin
+account. Then: Sources → Add source → Test → Points → Browse points → Map;
+Assets → open the asset to see live and historical values.
+
 To include the SCADA simulator (10 LV panels), add the dev profile:
 
 ```bash
 scripts/setup.sh --profile dev
-uv run --project backend python scripts/smoke.py
+uv run --project backend python scripts/smoke.py          # drives http://localhost through Caddy
+scripts/check_web.sh                                     # SPA, proxy and SSE route checks
 ```
 
 ## Services
@@ -46,6 +52,7 @@ uv run --project backend python scripts/smoke.py
 | `api` | HTTP API; never contacts a source |
 | `collector` | Polls sources and runs connection tests and browses; read-only toward sources |
 | `simulator` | Stand-in SCADA, dev profile only |
+| `web` | Caddy: serves the UI, proxies `/api` to `api` |
 
 ## Develop
 
@@ -56,6 +63,20 @@ uv run pytest
 ```
 
 Tests start their own TimescaleDB container, so Docker must be running.
+
+Frontend (needs the stack running for the API):
+
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:5173, /api proxied to localhost:8000
+npm test
+npm run typecheck
+```
+
+For `npm run dev` to reach the API without Caddy, temporarily publish it:
+`docker compose run --rm -p 8000:8000 api` or add `ports: ["8000:8000"]` to a
+`compose.override.yaml` (ignored by git).
 
 ## Add a connector
 
