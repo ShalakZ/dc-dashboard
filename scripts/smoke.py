@@ -1,7 +1,7 @@
 """Drive a running stack from first-run setup to live data.
 
 Start the stack with the dev profile first:  scripts/setup.sh --profile dev
-Then run:  uv run --project backend python scripts/smoke.py [base_url]
+Then run:  uv run --project backend python scripts/smoke.py [base_url]   (default http://localhost, through Caddy)
 """
 
 import sys
@@ -9,7 +9,7 @@ import time
 
 import httpx
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost"
 ADMIN = {"username": "admin", "password": "smoke-test-password"}
 SOURCE = {
     "name": "smoke-sim",
