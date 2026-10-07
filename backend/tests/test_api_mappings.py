@@ -1,0 +1,92 @@
+import asyncio
+
+from dcdash.core.pg import CONFIG_CHANNEL
+from helpers import listening, login_as, make_asset, make_point, make_source
+
+
+async def setup(client, db):
+    await login_as(client, db)
+    source = await make_source(db)
+    asset = await make_asset(db, "LV Panel 1")
+    kw = await make_point(db, source, "LVP01_kW")
+    kwh = await make_point(db, source, "LVP01_kWh")
+    return asset, kw, kwh
+
+
+def body(point_id: int, asset_id: int, metric: str, **extra) -> dict:
+    return {"point_id": point_id, "asset_id": asset_id, "metric": metric, **extra}
+
+
+async def test_only_admins_can_map(client, db):
+    asset, kw, _ = await setup(client, db)
+    await login_as(client, db, "operator")
+    assert (await client.post("/api/mappings", json=body(kw, asset, "active_power_kw"))).status_code == 403
+
+
+async def test_default_intervals_follow_the_metric(client, db):
+    asset, kw, kwh = await setup(client, db)
+    power = await client.post("/api/mappings", json=body(kw, asset, "active_power_kw"))
+    energy = await client.post("/api/mappings", json=body(kwh, asset, "energy_kwh"))
+    assert power.status_code == 201 and energy.status_code == 201
+    assert power.json()["interval_seconds"] == 5 and power.json()["scale"] == 1.0
+    assert energy.json()["interval_seconds"] == 60
+
+
+async def test_explicit_interval_scale_and_custom_unit(client, db):
+    asset, kw, _ = await setup(client, db)
+    response = await client.post(
+        "/api/mappings",
+        json=body(kw, asset, "custom", interval_seconds=1, scale=0.001, custom_unit="MW"),
+    )
+    assert response.json()["interval_seconds"] == 1
+    assert response.json()["scale"] == 0.001 and response.json()["custom_unit"] == "MW"
+
+
+async def test_validation(client, db):
+    asset, kw, _ = await setup(client, db)
+    for bad in (
+        body(kw, asset, "horsepower"),
+        body(kw, asset, "active_power_kw", interval_seconds=0),
+        body(kw, asset, "active_power_kw", scale=0),
+    ):
+        assert (await client.post("/api/mappings", json=bad)).status_code == 422
+    assert (await client.post("/api/mappings", json=body(999, asset, "custom"))).status_code == 404
+    assert (await client.post("/api/mappings", json=body(kw, 999, "custom"))).status_code == 404
+
+
+async def test_conflicts(client, db):
+    asset, kw, kwh = await setup(client, db)
+    assert (await client.post("/api/mappings", json=body(kw, asset, "active_power_kw"))).status_code == 201
+    same_point = await client.post("/api/mappings", json=body(kw, asset, "voltage_v"))
+    same_metric = await client.post("/api/mappings", json=body(kwh, asset, "active_power_kw"))
+    assert same_point.status_code == 409 and same_metric.status_code == 409
+
+
+async def test_patch_and_delete(client, db):
+    asset, kw, _ = await setup(client, db)
+    other = await make_asset(db, "LV Panel 2")
+    mapping = (await client.post("/api/mappings", json=body(kw, asset, "active_power_kw"))).json()
+
+    patched = await client.patch(
+        f"/api/mappings/{mapping['id']}",
+        json={"interval_seconds": 1, "scale": 0.5, "metric": "apparent_power_kva", "asset_id": other},
+    )
+    assert patched.status_code == 200
+    assert patched.json() == {**mapping, "interval_seconds": 1, "scale": 0.5,
+                              "metric": "apparent_power_kva", "asset_id": other}
+    assert (await client.patch(f"/api/mappings/{mapping['id']}", json={"asset_id": 999})).status_code == 404
+    assert (await client.patch(f"/api/mappings/{mapping['id']}", json={"interval_seconds": 0})).status_code == 422
+
+    assert (await client.delete(f"/api/mappings/{mapping['id']}")).status_code == 204
+    assert (await client.delete(f"/api/mappings/{mapping['id']}")).status_code == 404
+
+
+async def test_mapping_changes_notify_the_collector(client, db, database_url):
+    asset, kw, _ = await setup(client, db)
+    async with listening(database_url, CONFIG_CHANNEL) as received:
+        mapping = (await client.post("/api/mappings", json=body(kw, asset, "active_power_kw"))).json()
+        await asyncio.wait_for(received.get(), timeout=5)
+        await client.patch(f"/api/mappings/{mapping['id']}", json={"interval_seconds": 2})
+        await asyncio.wait_for(received.get(), timeout=5)
+        await client.delete(f"/api/mappings/{mapping['id']}")
+        await asyncio.wait_for(received.get(), timeout=5)

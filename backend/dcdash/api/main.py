@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 
-from dcdash.api import auth, jobs, sources
+from dcdash.api import assets, auth, jobs, mappings, sources
 
 
 async def _database_unavailable(_request: Request, _exc: Exception) -> JSONResponse:
@@ -18,7 +18,7 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    for router in (auth.router, jobs.router, sources.router):
+    for router in (auth.router, jobs.router, sources.router, assets.router, mappings.router):
         app.include_router(router)
     return app
 
