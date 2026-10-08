@@ -272,7 +272,10 @@ are the unit; days and months are sums of hours in the site timezone.
 - A parent asset's consumption is its own meter if it has one, otherwise the
   sum of its children. An own meter counts only from its first reading: hours
   before it are the sum of the children (so adding a parent meter later does
-  not zero the past). A meter with no readings at all counts 0 and does not
+  not zero the past). If an energy counter is mapped to an asset that already
+  had a power meter, hours before the counter's first reading also use the
+  children's sum, not the asset's own power estimate (backlog). A meter with
+  no readings at all counts 0 and does not
   fall back to its children; an asset with no energy or power mapping anywhere
   in its subtree has no figure.
 
