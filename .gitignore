@@ -8,3 +8,4 @@ backups/
 compose.override.yaml
 certs/*
 !certs/.gitkeep
+.playwright-mcp/

@@ -22,7 +22,15 @@ textarea { font: inherit; width: 100%; }
 
 /* Discovery graph */
 main:has(.graph-page) { max-width: none; }
-.graph-layout { display: flex; gap: 12px; height: calc(100vh - 120px); min-height: 320px; }
+/* The page is exactly one window tall (nav, then main taking the rest), and the canvas takes what the header leaves, so
+   nothing scrolls and nothing at the canvas edge is clipped. A canvas is never shorter than 320px (the page scrolls then). */
+#root:has(.graph-page) { height: 100vh; display: flex; flex-direction: column; }
+#root:has(.graph-page) > nav { flex: none; }
+main:has(.graph-page) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.graph-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.graph-page h1 { margin: 0; }
+.graph-page > .row { flex: none; margin-bottom: 8px; }
+.graph-layout { flex: 1; min-height: 320px; display: flex; gap: 12px; }
 .graph-canvas { flex: 1; min-width: 0; border: 1px solid #000; position: relative; }
 .gpanel { width: 320px; flex: none; align-content: start; overflow: auto; margin: 0; }
 .gpanel h2 { margin: 0; font-size: 16px; }
@@ -34,7 +42,7 @@ main:has(.graph-page) { max-width: none; }
 .gnode .row { gap: 4px; flex-wrap: nowrap; justify-content: space-between; }
 .gnode button { padding: 0 6px; font-size: 11px; }
 .gnode .badge { display: inline-block; margin-top: 2px; padding: 0 4px; border: 1px solid #b00; color: #b00; }
-.offer-bar { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 10; display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: #fff; border: 1px solid #000; }
+.offer-bar { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10; display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: #fff; border: 1px solid #000; }
 
 /* Review mappings dialog */
 .dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, 0.4); }
@@ -48,3 +56,6 @@ main:has(.graph-page) { max-width: none; }
 .dialog-rows table { margin: 0; }
 .dialog input[type="number"] { width: 7em; }
 .dialog tr.conflict td { background: #fdd; }
+
+/* Audit log: the detail is JSON with no spaces, so it must wrap or the page scrolls sideways */
+td code { overflow-wrap: anywhere; white-space: pre-wrap; }
