@@ -255,19 +255,33 @@ are the unit; days and months are sums of hours in the site timezone.
   gap in the data attributes what the meter counted to the hour in which the
   next value arrives. With no earlier bucket, the first hour counts
   `last - min`.
-- A decrease is a counter reset or rollover. If an hour's minimum is below the
-  previous bucket's last value, the hour counts
+- A decrease is a counter reset or rollover. If an hour's last value is below
+  the previous bucket's last value, the hour counts
   `max(0, max - previous_last) + (last - min)`: the step across the reset adds
-  nothing, no negative or inflated consumption is recorded, and one reset per
-  hour is recovered exactly.
+  nothing and one reset per hour is recovered. A dip that recovers inside the
+  hour (a glitch reading of 0) is not a reset: the hour counts
+  `last - previous_last`, so a single bad sample cannot add the whole counter.
 - If an asset has only `active_power_kw`, the consumption of an hour is its
-  average power times the time covered by samples (`n` times the mapping
-  interval, at most one hour), so outages add nothing. It is labeled as
-  estimated wherever it is shown.
+  average power times the time covered by samples, so outages add nothing: for
+  polling intervals up to 60 seconds the covered time is the minutes of the
+  hour that contain a sample (taken from the data, so changing the interval
+  later does not rescale history), for slower polling `n` times the interval;
+  at most one hour. It is labeled as estimated wherever it is shown.
 - A parent asset's consumption is its own meter if it has one, otherwise the
-  sum of its children. A meter with no readings in the period counts 0 and
-  does not fall back to its children; an asset with no energy or power mapping
-  anywhere in its subtree has no figure.
+  sum of its children. An own meter counts only from its first reading: hours
+  before it are the sum of the children (so adding a parent meter later does
+  not zero the past). A meter with no readings at all counts 0 and does not
+  fall back to its children; an asset with no energy or power mapping anywhere
+  in its subtree has no figure.
+
+Billing follows the current configuration. Past months are recomputed from
+today's mappings, scale factors, asset tree, tariffs and site timezone, so
+re-pointing a panel to another source, changing a scale or the timezone, moving
+an asset or deleting one changes past figures. Deleting an asset that has
+children, mappings or tariffs, or a source with mapped points, therefore asks
+for explicit confirmation and is audited. Keeping a history of which point fed
+which asset (effective-dated mappings) is not part of phase 3. The hourly
+rollup is the only permanent copy of this data: back it up (section 12).
 
 ### Time
 
@@ -459,7 +473,11 @@ database; it never contacts a source.
 - Every cost figure carries `estimated` (any part is estimated, section 6) and
   `partial` (some hour of the period with consumption had no rate). The cost is
   null when no hour of the period has a rate; the UI shows a dash, never zero.
-  An hour with no consumption never makes a figure partial.
+  An hour with no consumption never makes a figure partial. A period with no
+  data at all (an outage, or before the first reading) under a rate costs 0.00
+  and carries `no_data`; the dash always means "no rate".
+- Viewers see the rate in effect on Billing; the tariff history (the list of
+  rows) is read by operators and admins.
 - Admins add, edit and delete tariffs and set the currency. Editing a past
   rate recalculates history; cost is for visibility, not invoicing.
 
@@ -467,12 +485,14 @@ database; it never contacts a source.
 
 - A Billing screen (everyone) shows one month at a time (previous/next, default
   the current month): the asset tree by day with kWh, cost, month totals and
-  the rate in effect, `~` marking estimated and `*` partial figures. A missing
-  rate shows a dash, with a pointer to Tariffs for admins. A CSV button
+  the rate in effect, `~` marking estimated and `*` partial figures; figures
+  for days without data are shown muted (`no_data`). A missing rate shows a
+  dash, with a pointer to Tariffs for admins. A CSV button
   exports the month.
 - `GET /api/billing/costs?month=YYYY-MM` returns the whole tree in one call;
   `GET /api/billing/costs.csv?month=YYYY-MM` is the same data in long form: one
-  row per asset per day with kWh, cost, currency, estimated and partial.
+  row per asset per day with kWh, cost, currency, estimated, partial and
+  no_data.
 - The asset summary gains today's cost and its energy figure comes from the
   engine; the asset page shows a cost tile.
 
@@ -500,8 +520,8 @@ for each type.
 
 | Type | Behavior |
 |---|---|
-| Time series | One line per asset. Metrics use the tier rules of section 6 and show the average with a min–max band; energy and cost are bucketed by hour (ranges up to 48 hours) or by day (longer ranges). |
-| Bar | `bars: asset` is one bar per asset (the aggregation over the range); `bars: time` is one bar per bucket, grouped by asset. |
+| Time series | One line per asset. Metrics use the tier rules of section 6 and always show the average with a min–max band (the aggregation setting is ignored here); energy and cost are bucketed by hour (ranges up to 48 hours) or by day (longer ranges); buckets without data are gaps. |
+| Bar | `bars: asset` is one bar per asset (the aggregation over the range); `bars: time` is one bar per bucket (hour buckets up to 48 hours, local-day buckets beyond) for every source, each bar being the configured aggregation inside its bucket, grouped by asset. |
 | Stat | One asset: the aggregation over the range, with its unit or currency. |
 | Gauge | One asset, source `metric`, aggregation `last` only; `min` (default 0) and `max` are set in the config. Live. |
 | Table | One row per asset with the aggregation over the range. |
@@ -510,8 +530,20 @@ for each type.
   mappings and a widget names none of them); custom metrics stay on the asset
   page.
 - Aggregations: `avg`, `min`, `max`, `last` for metrics; `sum` for energy and
-  cost. `last` on a rolling range is the latest reading and updates live over
-  the stream; on a finished calendar range it is the last value in it.
+  cost. The cumulative `energy_kwh` metric is allowed only with `last` (the
+  meter reading). `last` on a preset that ends now is the latest reading and
+  updates live over the stream; it carries the reading's time, is empty when
+  that time is before the range start, and is marked stale when older than
+  three polling intervals (at least 60 seconds); on a finished calendar range
+  it is the last value in it.
+- Energy and cost over a rolling preset cover the N most recent whole hours
+  including the current partial hour (1h is the current hour so far, 24h is 24
+  hour buckets); the widget shows the window it used.
+- A metric widget uses an asset's own mapping for that metric. An asset that
+  has none is skipped and reported (`no_metric`); the editor lists only assets
+  that have the metric. Energy and cost roll up the tree as in section 6.
+- A saved widget that names an asset deleted since is shown without it, with a
+  notice; the editor lets the user remove the stale entry.
 - Live widgets (stat and gauge with `last`) share one stream subscription per
   dashboard; the others refetch every 30 to 60 seconds. Gaps are drawn as gaps.
 - Parent and child assets are not netted against each other: a widget showing
@@ -530,8 +562,8 @@ for each type.
 
 ### 10.7 Access and audit
 
-Admin: tariffs and currency. Operator: read tariffs; create, edit and delete
-dashboards. Everyone: read dashboards, billing, widget data and CSV. Audited
+Admin: tariffs and currency (the Tariffs screen is admin-only; operators read
+tariffs through the API). Operator: create, edit and delete dashboards. Everyone: read dashboards, billing, widget data and CSV. Audited
 actions: `tariff.created`, `tariff.updated`, `tariff.deleted`,
 `billing.currency_changed`, `dashboard.created`, `dashboard.updated`,
 `dashboard.deleted`. Reads and exports are not audited.
@@ -547,6 +579,11 @@ load only on the pages that use them.
 
 Custom date ranges, per-user or default dashboards, time-of-use tariffs
 (section 15), image export, and the real-network items in the backlog.
+Also deferred (backlog): effective-dated mappings, spreading a counter gap
+over the hours it spans, ending a tariff override without deleting it, a
+this-year view, sessions for wall-screen displays, a plausibility ceiling on
+meters, summing children for metric widgets on parents, caching energy at
+larger scale.
 
 ## 11. Error handling
 
