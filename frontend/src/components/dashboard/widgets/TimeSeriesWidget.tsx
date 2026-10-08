@@ -4,6 +4,7 @@ import { memo } from "react";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { chartLabels, escapeHtml, figureText, formatValue, labelBucket, unitSuffix } from "../../../lib/widgetFormat";
+import { useLegendSelection } from "./legendSelection";
 
 type Point = WidgetData["series"][number]["points"][number];
 type Row = [string, number | null];
@@ -125,6 +126,12 @@ export function timeSeriesOption(data: WidgetData, timezone: string): EChartsOpt
  * makes echarts-for-react call setOption with notMerge, which resets the legend and closes an open tooltip.
  */
 export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone }: { data: WidgetData; timezone: string }) {
+  const legend = useLegendSelection();
   if (data.series.every((s) => s.points.every((p) => p.no_data))) return <p className="muted">No data in this range.</p>;
-  return <ReactECharts option={timeSeriesOption(data, timezone)} style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge />;
+  return (
+    <ReactECharts
+      option={legend.apply(timeSeriesOption(data, timezone))} onEvents={legend.onEvents}
+      style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge
+    />
+  );
 });

@@ -4,6 +4,7 @@
 // every line of a 24h chart vanish slipped through once.
 import * as echarts from "echarts";
 import { seriesData, seriesPoint } from "../../../test/dashboardFixtures";
+import { withLegendSelection } from "./legendSelection";
 import { timeSeriesOption } from "./TimeSeriesWidget";
 
 vi.mock("echarts-for-react", () => ({ default: () => null }));
@@ -52,4 +53,41 @@ describe("time series, drawn by the real chart library", () => {
       expect(dotsOf(paths, colorOf(option))).toHaveLength(0);
     },
   );
+});
+
+describe("legend selection, kept by the real chart library", () => {
+  const twoAssets = (base: number) => seriesData({
+    series: [5, 6].map((id) => ({
+      asset_id: id, name: id === 5 ? "A" : "B", estimated: false, partial: false,
+      points: [0, 1, 2].map((i) => seriesPoint({ ts: `2026-10-08T0${i}:00:00+00:00`, value: base + id + i, min: base + id + i - 1, max: base + id + i + 1 })),
+    })),
+  });
+  const shownLegend = (chart: echarts.ECharts) => (chart.getOption() as { legend: { selected: Record<string, boolean> }[] }).legend[0].selected;
+
+  it("shows a switched-off entry again after a plain setOption with notMerge, and keeps it off with the remembered selection", () => {
+    const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: 600, height: 300 });
+    /** The stroked paths of a data line of three points (two segments) in `color`. */
+    const dataLines = (color: string) => (chart.renderToSVGString().match(/<path\b[^>]*>/g) ?? [])
+      .filter((tag) => attr(tag, "stroke") === color && ((attr(tag, "d") ?? "").match(/L/g) ?? []).length === 2);
+    let reported: Record<string, boolean> | null = null;
+    chart.on("legendselectchanged", (event) => { reported = (event as unknown as { selected: Record<string, boolean> }).selected; });
+    chart.setOption(timeSeriesOption(twoAssets(0), "Asia/Qatar"), { notMerge: true });
+    expect(dataLines("#cf222e")).toHaveLength(1); // both assets are drawn to begin with (B has the second palette colour)
+    chart.dispatchAction({ type: "legendToggleSelect", name: "B" });
+    expect(reported).toEqual({ A: true, B: false }); // the event and payload the widgets listen to
+    expect(shownLegend(chart)).toEqual({ A: true, B: false });
+    expect(dataLines("#cf222e")).toHaveLength(0);
+
+    // what a 30 s refetch did without the fix: a new option, notMerge, and B is back
+    chart.setOption(timeSeriesOption(twoAssets(100), "Asia/Qatar"), { notMerge: true });
+    expect(shownLegend(chart).B).not.toBe(false); // an empty selection: every entry on
+    expect(dataLines("#cf222e")).toHaveLength(1);
+
+    chart.dispatchAction({ type: "legendToggleSelect", name: "B" });
+    chart.setOption(withLegendSelection(timeSeriesOption(twoAssets(200), "Asia/Qatar"), reported!), { notMerge: true });
+    expect(shownLegend(chart)).toEqual({ A: true, B: false });
+    expect(dataLines("#1f6feb")).toHaveLength(1); // asset A's line
+    expect(dataLines("#cf222e")).toHaveLength(0); // asset B's is not drawn
+    chart.dispose();
+  });
 });
