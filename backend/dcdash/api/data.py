@@ -3,7 +3,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
@@ -12,6 +12,7 @@ from dcdash.core.cost import cost_by_hour, load_tariffs, no_data, rate_at, summa
 from dcdash.core.energy import hourly_energy, total
 from dcdash.core.metrics import Metric, unit_for
 from dcdash.core.models import Asset, Mapping, PointLatest
+from dcdash.core.series import find_mapping, metric_series, pick_tier  # noqa: F401  (pick_tier: tests import it from here)
 from dcdash.core.settings_store import get_currency
 from dcdash.core.timeutil import day_bounds, day_start  # noqa: F401  (day_start: existing importers use this path)
 from dcdash.core.tree import AssetTree
@@ -22,42 +23,6 @@ router = APIRouter(prefix="/api", tags=["data"], dependencies=[Depends(require_r
 def _now() -> datetime:
     """The clock `summary()` reads; tests monkeypatch `dcdash.api.data._now`."""
     return datetime.now(timezone.utc)
-
-
-_GOOD = "quality = 0 AND value IS NOT NULL"
-_SERIES_RAW = text(
-    f"""
-    SELECT time_bucket(make_interval(secs => :width), ts) AS bucket,
-           avg(value) AS avg_value, min(value) AS min_value, max(value) AS max_value
-    FROM readings
-    WHERE point_id = :point AND ts >= :start AND ts < :end AND {_GOOD}
-    GROUP BY bucket ORDER BY bucket
-    """
-)
-# Rollup tiers carry sum/n so the re-bucketed average is weighted by sample
-# count, not a mean of per-bucket means. Both views are real-time caggs, so
-# the not-yet-materialized tail is included.
-_SERIES_ROLLUP = {
-    tier: text(
-        f"""
-        SELECT time_bucket(make_interval(secs => :width), bucket) AS bucket,
-               sum(sum_value) / sum(n) AS avg_value, min(min_value) AS min_value, max(max_value) AS max_value
-        FROM {view}
-        WHERE point_id = :point AND bucket >= :start AND bucket < :end
-        GROUP BY 1 ORDER BY 1
-        """
-    )
-    for tier, view in {"1m": "readings_1m", "1h": "readings_1h"}.items()
-}
-
-
-def pick_tier(width_seconds: float) -> str:
-    """Which readings tier serves a chart whose buckets are `width_seconds` wide."""
-    if width_seconds < 60:
-        return "raw"
-    if width_seconds < 3600:
-        return "1m"
-    return "1h"
 
 
 @router.get("/assets/{asset_id}/summary")
@@ -127,27 +92,13 @@ async def series(
         raise HTTPException(422, "start and end must include a timezone offset")
     if end <= start:
         raise HTTPException(422, "end must be after start")
-    query = select(Mapping).where(Mapping.asset_id == asset_id, Mapping.metric == metric.value)
-    if mapping_id is not None:
-        query = query.where(Mapping.id == mapping_id)
-    mapping = (await db.scalars(query.order_by(Mapping.id))).first()
+    mapping = await find_mapping(db, asset_id, metric, mapping_id)
     if mapping is None:
         raise HTTPException(404, "this asset has no such metric")
-    width = max((end - start).total_seconds() / buckets, 1.0)
-    tier = pick_tier(width)
-    statement = _SERIES_RAW if tier == "raw" else _SERIES_ROLLUP[tier]
-    rows = await db.execute(statement, {"width": width, "point": mapping.point_id, "start": start, "end": end})
+    found = await metric_series(db, mapping, start, end, buckets)
     return {
         "metric": metric.value,
         "unit": unit_for(metric, mapping.custom_unit),
-        "tier": tier,
-        "points": [
-            {
-                "ts": row.bucket,
-                "avg": row.avg_value * mapping.scale,
-                "min": row.min_value * mapping.scale,
-                "max": row.max_value * mapping.scale,
-            }
-            for row in rows
-        ],
+        "tier": found.tier,
+        "points": [{"ts": p.ts, "avg": p.avg, "min": p.min, "max": p.max} for p in found.points],
     }
