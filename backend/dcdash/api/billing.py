@@ -34,6 +34,22 @@ def _figure(cost: Cost) -> dict[str, Any]:
     return {"kwh": cost.kwh, "cost": cost.cost, "estimated": cost.estimated, "partial": cost.partial}
 
 
+def _month_total(entries: list[dict[str, Any] | None]) -> dict[str, Any] | None:
+    """The month figure, built from the day entries that are returned, so it always equals what the days show:
+    kwh = their sum, cost = the sum of the costs they have (None if none has one), estimated and partial = any.
+    None when no day has an entry (an asset with no energy figure, or a month that has not begun)."""
+    shown = [entry for entry in entries if entry is not None]
+    if not shown:
+        return None
+    costs = [entry["cost"] for entry in shown if entry["cost"] is not None]
+    return {
+        "kwh": sum(entry["kwh"] for entry in shown),
+        "cost": sum(costs) if costs else None,
+        "estimated": any(entry["estimated"] for entry in shown),
+        "partial": any(entry["partial"] for entry in shown),
+    }
+
+
 def _split_by_day(
     hours: dict[datetime, HourCost], day_starts: list[datetime], end: datetime
 ) -> list[list[HourCost]]:
@@ -86,19 +102,14 @@ async def month_costs(db: AsyncSession, month: str | None) -> dict[str, Any]:
                     # A day with no energy hours used nothing: it costs 0 where a rate is in effect that day.
                     on_day = rate_at(tariffs, tree, asset_id, days[index][0]) is not None
                     entries[index] = _figure(summarize(day_hours, rate_in_effect=on_day))
-        has_figure = any(entry is not None for entry in entries)
-        rate = rate_at(tariffs, tree, asset_id, rate_day)
         assets.append({
             "asset_id": asset_id,
             "parent_id": tree.nodes[asset_id].parent_id,
             "name": tree.nodes[asset_id].name,
             "path": tree.path(asset_id),
-            "rate_per_kwh": rate,
+            "rate_per_kwh": rate_at(tariffs, tree, asset_id, rate_day),
             "days": entries,
-            "total": (
-                _figure(summarize(hours.values(), rate_in_effect=rate is not None))
-                if hours is not None and has_figure else None
-            ),
+            "total": _month_total(entries),
         })
     return {
         "month": month,

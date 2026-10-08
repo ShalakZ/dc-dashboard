@@ -61,6 +61,15 @@ async def test_a_bad_month_is_422(client, db, month):
         assert (await client.get(url, params={"month": month})).status_code == 422, (url, month)
 
 
+@pytest.mark.parametrize("month", ["1969-12", "2101-01"])
+async def test_a_year_outside_1970_to_2100_passes_the_pattern_but_is_422_from_month_bounds(client, db, month):
+    await login_as(client, db, "viewer")
+    for url in URLS:
+        response = await client.get(url, params={"month": month})
+        # The route pattern lets these through, so this detail (not a validation-error list) proves month_bounds ran.
+        assert response.status_code == 422 and response.json()["detail"] == "month must look like 2026-10", (url, month)
+
+
 async def test_a_stored_zone_without_whole_hour_offsets_is_409(client, db):
     await set_zone(db, "Asia/Kolkata")
     await login_as(client, db, "viewer")
@@ -199,6 +208,12 @@ async def test_a_parent_without_a_meter_sums_its_children_including_a_child_over
         check(rows[parent]["days"][day], 24.0, 9.6, estimated=True)  # 6 x 0.10 + 18 x 0.50
         check(rows[parent]["total"], 24.0, 9.6, estimated=True)
     assert [rows[n]["rate_per_kwh"] for n in ("Site", "MV2", "LV Panel 1", "LV Panel 2")] == [0.10, 0.10, 0.10, 0.50]
+    # The CSV names each asset by its full path, so two assets called "Panel" under different parents stay apart.
+    csv_rows = await get_csv(client)
+    assert {row[0] for row in csv_rows[1:]} == {
+        "Site", "Site / MV2", "Site / MV2 / LV Panel 1", "Site / MV2 / LV Panel 2",
+    }
+    assert ["Site / MV2 / LV Panel 1", "2026-03-10", "6", "0.6", "", "false", "false"] in csv_rows
 
 
 async def test_a_parent_is_partial_when_only_one_child_has_a_rate(client, db):  # Review Focus 3
@@ -281,6 +296,42 @@ async def test_a_counter_silent_all_month_costs_zero_under_a_rate_and_nothing_wi
     csv_rows = await get_csv(client)
     assert {tuple(row[3:]) for row in csv_rows[1:] if row[0] == "Priced"} == {("0", "QAR", "false", "false")}
     assert {tuple(row[3:]) for row in csv_rows[1:] if row[0] == "Unpriced"} == {("", "QAR", "false", "false")}
+
+
+async def test_the_current_month_total_leaves_out_future_days(client, db):  # Review Focus 3
+    # A power-only meter with no April readings is an estimated zero for every hour of the requested range,
+    # future days included. The rate starts on 20 April, after today (15 April): nothing shown has a rate.
+    await add_power(db, "Panel", [at(2026, 3, 10, 10)])
+    await add_tariff(db, 0.20, "2026-04-20")
+    await settle_rollups(db)
+    await login_as(client, db, "viewer")
+
+    panel = by_name(await get_costs(client, "2026-04"))["Panel"]  # NOW is 15 April 10:20 UTC
+    assert panel["rate_per_kwh"] is None
+    assert panel["days"][15:] == [None] * 15
+    for day in panel["days"][:15]:
+        check(day, 0.0, None, estimated=True)
+    check(panel["total"], 0.0, None, estimated=True)  # not 0.0: the priced hours of 20-30 April are not shown
+
+
+async def test_the_month_total_is_built_from_the_days_it_shows(client, db):  # Review Focus 3
+    # A counter read 1-10 March and then went silent; the site rate starts on 15 March. Days 1-10 consumed energy
+    # with no rate (partial); 11-14 are silent with no rate (dash); 15-31 are silent under a rate (a real 0).
+    await add_counter(db, "Meter", at(2026, 3, 1, 0), 240)
+    await add_tariff(db, 0.20, "2026-03-15")
+    await settle_rollups(db)
+    await login_as(client, db, "viewer")
+
+    meter = by_name(await get_costs(client))["Meter"]
+    check(meter["days"][0], 23.0, None, partial=True)  # the first hour is the baseline and counts 0
+    for day in meter["days"][1:10]:
+        check(day, 24.0, None, partial=True)
+    for day in meter["days"][10:14]:
+        check(day, 0.0, None)
+    for day in meter["days"][14:]:
+        check(day, 0.0, 0.0)
+    check(meter["total"], 239.0, 0.0, partial=True)
+    assert meter["total"]["kwh"] == pytest.approx(sum(day["kwh"] for day in meter["days"]))
 
 
 async def test_no_tariff_means_no_cost_anywhere_and_an_empty_csv_cell(client, db):  # Review Focus 3
