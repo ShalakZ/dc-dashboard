@@ -90,7 +90,6 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
 
   return (
     <>
-      <UnsavedGuard when={dirty} />
       <div className="row dash-head">
         <label htmlFor={nameId}>Dashboard name</label>
         <input id={nameId} value={name} maxLength={MAX_TEXT} onChange={(e) => setName(e.target.value)} />
@@ -125,6 +124,9 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
         />
       )}
       {confirmCancel && <LeaveDialog onStay={() => setConfirmCancel(false)} onLeave={onCancel} />}
+      {/* Last on purpose: every dialog backdrop has the same z-index, so the leave prompt must come after the widget dialog
+          to paint above it (and it is the one that traps the focus, being opened last). */}
+      <UnsavedGuard when={dirty} />
     </>
   );
 }

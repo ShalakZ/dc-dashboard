@@ -386,6 +386,42 @@ describe("leaving with unsaved changes", () => {
     expect(router.state.location.pathname).toBe("/dashboards/3");
   });
 
+  it("puts the prompt on top of an open widget dialog, with the focus in it, and returns to that dialog on Keep editing", async () => {
+    const { router } = open("operator");
+    await startEditing();
+    await userEvent.type(screen.getByLabelText("Dashboard name"), " edited");
+    await userEvent.click(add());
+    const widgetDialog = await screen.findByRole("dialog", { name: "Add widget" });
+    const titleInput = within(widgetDialog).getByLabelText("Title");
+    await userEvent.type(titleInput, "Draft");
+    expect(titleInput).toHaveFocus();
+    // the mouse Back button: a navigation the blocker catches while the widget dialog is open
+    act(() => { void router.navigate("/dashboards"); });
+    const prompt = await screen.findByRole("alertdialog", { name: "Unsaved changes" });
+    expect(router.state.location.pathname).toBe("/dashboards/3");
+    // both backdrops share a z-index, so the one later in the document paints on top: it must be the prompt's
+    const backdrops = [...document.querySelectorAll(".dialog-backdrop")];
+    expect(backdrops).toHaveLength(2);
+    expect(backdrops[0]).toContainElement(widgetDialog);
+    expect(backdrops[1]).toContainElement(prompt);
+    // and the prompt, not the widget dialog under it, holds the focus
+    expect(prompt).toContainElement(document.activeElement as HTMLElement);
+    expect(document.activeElement).toHaveTextContent("Keep editing");
+    await userEvent.click(titleInput);
+    expect(prompt).toContainElement(document.activeElement as HTMLElement);
+    await userEvent.click(within(prompt).getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Add widget" })).toBe(widgetDialog);
+    expect(titleInput).toHaveValue("Draft");
+    expect(widgetDialog).toContainElement(document.activeElement as HTMLElement); // focus is back in the dialog it left
+    await userEvent.type(titleInput, "!");
+    expect(titleInput).toHaveValue("Draft!"); // typing works again
+    // a second attempt: Leave drops the edits and goes
+    act(() => { void router.navigate("/dashboards"); });
+    await userEvent.click(await screen.findByRole("button", { name: "Leave and discard changes" }));
+    expect(await screen.findByText("dashboards page")).toBeInTheDocument();
+  });
+
   it("lets a clean editor leave without asking", async () => {
     open("operator");
     await startEditing();
