@@ -83,8 +83,8 @@ Frontend (`frontend/src/`):
 
 Files added while the task sections were written (not in the tables above):
 
-- Backend: `dcdash/core/series.py` (Task 6: series querying extracted from `api/data.py`); test helpers `Meter`, `assemble`, `load_meters`, `settle_rollups`, `day_bounds`-based fixtures in `tests/helpers.py` (Task 2); `tests/billing_helpers.py` (Task 4); many `tests/test_*.py` named in the tasks.
-- Frontend: `src/App.tsx` (routes, moved out of `main.tsx` in Task 7), `src/lib/scanText.ts` (Task 0), `src/components/dashboard/useDialogFocus.ts` (Task 9), `src/test/reactGridLayout.smoke.test.tsx` (Task 7).
+- Backend: `dcdash/core/series.py` (Task 6: series querying extracted from `api/data.py`); `Meter`, `assemble`, `load_meters` in `dcdash/core/energy.py` and the test helper `settle_rollups` in `tests/helpers.py` (Task 2); `tests/billing_helpers.py` (Task 4); many `tests/test_*.py` named in the tasks.
+- Frontend: `src/App.tsx` (routes, moved out of `main.tsx` in Task 7), `src/lib/scanText.ts` (Task 0), `src/hooks/useDialogFocus.ts` (Task 9), `src/test/reactGridLayout.smoke.test.tsx` (Task 7).
 - `frontend/e2e/global-setup.ts` (Task 11: error text no longer points at `scripts/e2e.sh`), `README.md`, `docs/superpowers/backlog.md` (Task 11).
 
 ## Execution grouping
@@ -1111,7 +1111,7 @@ docker compose -p dcdash_e2e --profile dev down -v
 docker volume ls
 ```
 
-Expected: `journey` and `discovery` projects PASS (`1 hosts × 3 ports (3 probes)`, `claimed` / `existing source` finding cells, the LVP01..LVP10 mapping flow); the final `docker volume ls` still lists `dcdash_dbdata`. If it does not, stop and report; do not recreate it. Afterwards rebuild the normal stack (`docker compose --profile dev up -d --build`) because the isolated run re-tags the shared images.
+Expected: `journey` and `discovery` projects PASS (`1 hosts × 3 ports (3 probes)`, `claimed` / `existing source` finding cells, the LVP01..LVP10 mapping flow); the final `docker volume ls` still lists `dcdash_dbdata`. If it does not, stop and report; do not recreate it. Leave the normal stack stopped (`stop` keeps its containers and the volume) and say in your report that the owner restarts it: the isolated run re-tagged the shared images, so the owner rebuilds with `docker compose --profile dev up -d --build` when they are ready. Do not start or rebuild it yourself.
 
 - [ ] **G3. Commit any fix the verification forced.** If G1 or G2 required a change, stage exactly those files and commit with the real subject below; if nothing changed there is nothing to commit and the task is done.
 
@@ -3067,8 +3067,7 @@ from dcdash.core.tree import AssetTree
     energy = total(result.hours.get(asset_id))
 ```
 
-Run: `cd backend && uv run pytest tests/test_api_data.py tests/test_api_data_tiers.py -v`
-Expected: all PASS.
+(Do not run the tests yet: edit 4 calls `_now()`, which edit 5 defines.)
 
 5. Add the clock seam directly below the `router = APIRouter(...)` line near the top of `backend/dcdash/api/data.py` (Task 4's tests, and the cost tile, patch this name):
 
@@ -6982,7 +6981,7 @@ async def latest_values(db: AsyncSession, mappings: Sequence[Mapping]) -> dict[i
     return out
 ```
 
-Now edit `backend/dcdash/api/data.py` with targeted edits (Tasks 1 and 4 also edit this file: do NOT replace the whole file). `Read` it first, then:
+Now edit `backend/dcdash/api/data.py` with targeted edits (Tasks 2 and 4 also edit this file: do NOT replace the whole file). `Read` it first, then:
 
 1. Add to the imports: `from dcdash.core.series import find_mapping, metric_series, pick_tier  # noqa: F401  (pick_tier is re-exported: tests import it from here)`.
 2. Delete the block from `_SERIES_RAW = text(` through the closing `}` of `_SERIES_ROLLUP` (including the three comment lines above `_SERIES_ROLLUP`), and delete `def pick_tier(...)` with its docstring. They now live in `core/series.py`.
@@ -7001,7 +7000,7 @@ Now edit `backend/dcdash/api/data.py` with targeted edits (Tasks 1 and 4 also ed
     }
 ```
 
-4. Run `grep -n "_GOOD\|text(\|\btext\b" dcdash/api/data.py`: delete the `_GOOD` constant and the `text` import only if nothing else in the file still uses them (after Task 4 removed the raw energy SQL, usually neither is used). Keep `select`, `Mapping`, `Asset`, `PointLatest`, `Query` if still used.
+4. Run `grep -n "_GOOD\|text(\|\btext\b" dcdash/api/data.py`: delete the `_GOOD` constant and the `text` import only if nothing else in the file still uses them (after Task 2 removed the raw energy SQL, usually neither is used). Keep `select`, `Mapping`, `Asset`, `PointLatest`, `Query` if still used.
 
 Run: `cd backend && uv run pytest tests/test_api_data.py tests/test_api_data_tiers.py -v`
 Expected: PASS, unchanged tests (same response keys: `metric`, `unit`, `tier`, `points[ts, avg, min, max]`; `pick_tier` still importable from `dcdash.api.data`).
@@ -14055,6 +14054,6 @@ After row L (Task 11): **Opus whole-branch review** of `git diff main...HEAD`:
 | Sections 8 and 9 (roles, cost tile) | Tasks 3-5, 8 |
 | Backlog section A | Task 0 |
 
-The reviewer also checks: Global Constraints one by one; `grep -rn "Review Focus [1-5]" backend/tests frontend/src` finds a test for every item; no `down -v`, `e2e.sh` or normal-stack command was run (Task 11 Step 7 only with the owner's go-ahead); the main bundle chunk does not contain react-grid-layout or ECharts.
+The reviewer also checks: Global Constraints one by one; `grep -rn "Review Focus [1-5]" backend/tests frontend/src` finds a test for every item; no `down -v`, no `e2e.sh`, and no normal-stack `up` or rebuild was run (`docker compose --profile dev stop` is allowed; Task 11 Step 7 only with the owner's go-ahead); the main bundle chunk does not contain react-grid-layout or ECharts.
 
 Then: one Sonnet fixer per finding cluster, an Opus re-review, `git push`. **Merge only after the owner approves**: `git checkout main && git pull --ff-only && git merge --no-ff phase-3-dashboards-billing -m "Merge phase-3-dashboards-billing: energy engine, tariffs, billing, dashboards and widgets (Phase 3)"` then `git push origin main`. Finally update the project memory (`dc-dashboard-project`: Phase 3 done, next is backlog sections B and C on the SCADA workstation).
