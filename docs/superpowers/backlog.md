@@ -4,7 +4,7 @@ Handover for the next session. Source: the per-task reviews, the final code revi
 
 Recommended order: (1) Phase 3 brainstorm, spec update and plan, with **Task 0 = section A below**; (2) execute Phase 3 the same way as Phase 2; (3) section B just before the first real scan, on the SCADA workstation. Phase 3 does not depend on the real network and can be built against the simulator.
 
-Working rules that still apply: implementers on `sonnet`, reviewers on `opus`, never Fable (weekly budget); one fresh subagent per task; never run `docker compose down -v` on the default project (it deletes the owner's `dcdash_dbdata` volume) — use `docker compose -p dcdash_e2e ...` as documented in the README and project memory. `scripts/e2e.sh` now always runs in the `dcdash_e2e` project and refuses any other name, so it is safe to run (with the normal stack stopped).
+Working rules that still apply: implementers on `sonnet`, reviewers on `opus`, never Fable (weekly budget); one fresh subagent per task; never run `docker compose down -v` on the default project (it deletes the owner's `dcdash_dbdata` volume) — use `docker compose -p dcdash_e2e ...` as documented in the README and project memory. `scripts/e2e.sh` now always runs in the `dcdash_e2e` project and refuses any other name, so its teardown cannot touch the owner's data (run it with the normal stack stopped). It still re-tags the `dcdash-backend:local` and `dcdash-web:local` images, so read the README e2e section before starting the normal stack again (a later `up -d` there migrates the owner's database).
 
 ## A. Phase 3 Task 0 (cheap, and Phase 3 touches these areas) — DONE
 
@@ -112,3 +112,4 @@ Engines and API
 - `core/widgets.py:18` imports `api.settings`: move `current_timezone` to `core/settings_store` (layering only).
 - A tariff `asset_path` option for the picker: asset names are bare and not unique, so add `asset_path` (via `AssetTree.path`) to `TariffOut` (`tariffs.py:84-103`).
 - Test hygiene: the `finally` blocks in `test_schema_tiers.py` run a statement before the upgrade (`:187-188` and the later refusal tests).
+- After migration 0004 refused over dropped raw data and the operator waited, the invalidations that `drop_chunks` logged stay pending in the rollups' invalidation log, just below the 7-day window. No production code path refreshes wider than the policies (checked: nothing in `backend/dcdash`, `backend/migrations` or `scripts` calls `refresh_continuous_aggregate`), but a manual `refresh_continuous_aggregate(..., NULL, NULL)` on such a database deletes those minutes and hours. Say so in the runbook if a full refresh is ever scripted, or clear the log below the oldest raw chunk then.

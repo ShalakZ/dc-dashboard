@@ -475,7 +475,11 @@ interval are not collected.
      (`docker compose exec db psql -U dcdash -d dcdash`; the Storage page of the Phase 2 app does the same
      when that app is running.) Start the upgrade again (step 3) after the date and time that the message
      prints: the newest of the affected minutes is then more than 8 days old. The rollup rows that lost
-     their raw data stay as they are until then.
+     their raw data stay as they are until then. Until then there is no collection and no UI on the
+     Phase 3 images. The database is still at `0003`, so you can run Phase 2 meanwhile: do step 6 without
+     its sub-step 5 (nothing was migrated, so no restore: sub-steps 1 to 4, then 6), raise the retention on
+     Phase 2's Storage page instead of with the SQL above, and `git checkout phase-3-dashboards-billing`
+     again when the date has passed.
    - Any other error that repeats: `docker compose stop api` and report the error.
    - Never use `docker compose down -v`: it deletes the database volume.
 5. **Verify.**
