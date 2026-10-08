@@ -77,6 +77,29 @@ describe("WidgetView", () => {
     expect(screen.getAllByText("~ estimated")).toHaveLength(1);
   });
 
+  it("says in the frame what the dash means when a cost chart has buckets without a rate, even if no bucket has a figure", async () => {
+    const hours = ["2026-10-08T00:00:00+00:00", "2026-10-08T01:00:00+00:00"];
+    const cost = (points: ReturnType<typeof seriesPoint>[]) => seriesData({
+      type: "timeseries", source: "cost", metric: null, unit: "QAR", bucket: "hour", tier: null,
+      series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points }],
+    });
+    mockFetch({ "POST /api/widget-data": { body: cost(hours.map((ts) => seriesPoint({ ts, value: null }))) } });
+    const { unmount } = show({ type: "timeseries", config: config({ source: "cost", metric: null }) });
+    expect(await screen.findByText("— no rate")).toBeInTheDocument();
+    unmount();
+    // a bar chart of costs per asset, one of them without a rate
+    mockFetch({ "POST /api/widget-data": { body: valuesData({ type: "bar", source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: 4 }), valueRow({ asset_id: 6, value: null })] }) } });
+    const bars = show({ type: "bar", config: config({ source: "cost", metric: null }) });
+    expect(await screen.findByText("— no rate")).toBeInTheDocument();
+    bars.unmount();
+    // fully priced: nothing to explain
+    client.clear(); // the first answer is cached under the same key
+    mockFetch({ "POST /api/widget-data": { body: cost(hours.map((ts) => seriesPoint({ ts, value: 1.5 }))) } });
+    show({ type: "timeseries", config: config({ source: "cost", metric: null }) });
+    expect((await screen.findByTestId("chart")).textContent).toContain("1.5"); // the priced figures are what is drawn
+    expect(screen.queryByText(/no rate/)).not.toBeInTheDocument();
+  });
+
   it("offers the CSV download unless told not to", async () => {
     mockFetch({ "POST /api/widget-data": { body: valuesData({ type: "table" }) } });
     const { unmount } = show();

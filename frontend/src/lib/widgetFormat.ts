@@ -12,18 +12,32 @@ export function figureText(value: number | null | undefined, flags: Flags): stri
   return `${flags.estimated ? "~" : ""}${value.toFixed(2)}${flags.partial ? "*" : ""}`;
 }
 
-/** Explains the markers that appear in a figure; empty when there are none. */
-export function markerHint(flags: Flags): string {
+/** The markers of `Flags`, and whether a dash stands in for a cost that has no rate (see `flagsOf`). */
+export interface HintFlags extends Flags { noRate?: boolean }
+
+/** Explains the markers that appear in a figure, and the dash of a missing rate; empty when there are none. */
+export function markerHint(flags: HintFlags): string {
   const parts: string[] = [];
   if (flags.estimated) parts.push("~ estimated");
   if (flags.partial) parts.push("* partial, some hours have no rate");
+  if (flags.noRate) parts.push("— no rate");
   return parts.join(", ");
 }
 
-/** Which markers a response uses anywhere: the series-level flags of a series response, the per-asset flags of a values one. */
-export function flagsOf(data: Pick<WidgetData, "series" | "values">): Flags {
+/**
+ * Which markers a response uses anywhere: the series-level flags of a series response, the per-asset flags of a values
+ * one. `noRate` is a cost bucket or asset that is null although something was recorded (`value === null && !no_data`):
+ * it is drawn as a dash, or, in a line, not drawn at all, so a chart whose every bucket lacks a rate would otherwise
+ * look like one with no data.
+ */
+export function flagsOf(data: Pick<WidgetData, "series" | "values" | "source">): Required<HintFlags> {
   const rows = [...data.series, ...data.values];
-  return { estimated: rows.some((r) => r.estimated), partial: rows.some((r) => r.partial) };
+  const cells = [...data.series.flatMap((s) => s.points), ...data.values];
+  return {
+    estimated: rows.some((r) => r.estimated),
+    partial: rows.some((r) => r.partial),
+    noRate: data.source === "cost" && cells.some((c) => c.value === null && !c.no_data),
+  };
 }
 
 const plural = (count: number): string => (count === 1 ? "" : "s");

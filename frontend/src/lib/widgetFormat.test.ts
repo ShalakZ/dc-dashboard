@@ -27,6 +27,11 @@ describe("markers and labels", () => {
     expect(markerHint({ estimated: true, partial: false })).toBe("~ estimated");
     expect(markerHint({ estimated: true, partial: true })).toBe("~ estimated, * partial, some hours have no rate");
   });
+  it("explains the dash of a figure that has no rate, last and only when there is one", () => {
+    expect(markerHint({ ...none, noRate: false })).toBe("");
+    expect(markerHint({ ...none, noRate: true })).toBe("— no rate");
+    expect(markerHint({ estimated: true, partial: true, noRate: true })).toBe("~ estimated, * partial, some hours have no rate, — no rate");
+  });
   it("words the removed-assets and the no-metric chips with correct plurals", () => {
     expect(removedText(1)).toBe("1 asset removed");
     expect(removedText(2)).toBe("2 assets removed");
@@ -54,10 +59,35 @@ describe("markers and labels", () => {
 
 describe("flagsOf", () => {
   it("is true for a marker when any series or any value carries it", () => {
-    expect(flagsOf(seriesData())).toEqual({ estimated: false, partial: false });
+    expect(flagsOf(seriesData())).toEqual({ estimated: false, partial: false, noRate: false });
     const series = seriesData().series;
-    expect(flagsOf(seriesData({ series: [{ ...series[0], estimated: true }, { ...series[0], asset_id: 6, partial: true }] }))).toEqual({ estimated: true, partial: true });
-    expect(flagsOf(valuesData({ values: [valueRow(), valueRow({ asset_id: 6, estimated: true })] }))).toEqual({ estimated: true, partial: false });
+    expect(flagsOf(seriesData({ series: [{ ...series[0], estimated: true }, { ...series[0], asset_id: 6, partial: true }] }))).toEqual({ estimated: true, partial: true, noRate: false });
+    expect(flagsOf(valuesData({ values: [valueRow(), valueRow({ asset_id: 6, estimated: true })] }))).toEqual({ estimated: true, partial: false, noRate: false });
+  });
+
+  describe("noRate: a cost figure that is null although something was recorded", () => {
+    const cost = (points: ReturnType<typeof seriesPoint>[]) => seriesData({
+      source: "cost", metric: null, unit: "QAR", bucket: "hour", tier: null,
+      series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points }],
+    });
+    const at = (hour: number) => `2026-10-08T0${hour}:00:00+00:00`;
+
+    it("is set when any bucket of a cost series is null and not silent, even if every other bucket has a figure", () => {
+      expect(flagsOf(cost([seriesPoint({ ts: at(0), value: null }), seriesPoint({ ts: at(1), value: null })])).noRate).toBe(true);
+      expect(flagsOf(cost([seriesPoint({ ts: at(0), value: 2 }), seriesPoint({ ts: at(1), value: null })])).noRate).toBe(true);
+    });
+
+    it("is not set when every cost bucket has a figure, or when the null buckets recorded nothing (no_data)", () => {
+      expect(flagsOf(cost([seriesPoint({ ts: at(0), value: 2 }), seriesPoint({ ts: at(1), value: 0 })])).noRate).toBe(false);
+      expect(flagsOf(cost([seriesPoint({ ts: at(0), value: 2 }), seriesPoint({ ts: at(1), value: null, no_data: true })])).noRate).toBe(false);
+    });
+
+    it("is set by a cost value row without a rate, and by none of a metric's or energy's missing figures", () => {
+      expect(flagsOf(valuesData({ source: "cost", metric: null, values: [valueRow({ value: 3 }), valueRow({ asset_id: 6, value: null })] })).noRate).toBe(true);
+      expect(flagsOf(valuesData({ source: "cost", metric: null, values: [valueRow({ value: null, no_data: true })] })).noRate).toBe(false);
+      expect(flagsOf(valuesData({ source: "metric", values: [valueRow({ value: null })] })).noRate).toBe(false);
+      expect(flagsOf(valuesData({ source: "energy", metric: null, values: [valueRow({ value: null })] })).noRate).toBe(false);
+    });
   });
 });
 
