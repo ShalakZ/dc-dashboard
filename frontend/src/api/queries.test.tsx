@@ -6,7 +6,7 @@ import {
   useAudit, useBillingCosts, useCreateTariff, useDashboard, useDashboards, useGraph, usePatchUser, usePutGeneralSettings,
   useSaveDashboard, useScan, useSite, useTariffs, useUsers, useWidgetData,
 } from "./queries";
-import type { RangePreset } from "./types";
+import type { RangePreset, WidgetConfig } from "./types";
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -132,6 +132,35 @@ describe("phase 3 queries", () => {
     expect(result.current.data?.range.preset).toBe("24h");
     await waitFor(() => expect(result.current.data?.range.preset).toBe("7d"));
     expect(calls.map((c) => c.body)).toEqual([{ type: "stat", config, range: "24h" }, { type: "stat", config, range: "7d" }]);
+  });
+
+  it("keeps the old figures only for the same widget: a changed type or config shows nothing until its own answer arrives (an editor preview must not draw the old widget's data)", async () => {
+    const stat: WidgetConfig = { assets: [5], source: "metric", metric: "active_power_kw", aggregation: "last", range: null, bars: "asset", min: 0, max: null };
+    mockFetch({
+      "POST /api/widget-data": ({ body }) => {
+        const { type, config } = body as { type: string; config: { source: string } };
+        return {
+          body: {
+            type, mode: type === "timeseries" ? "series" : "values", source: config.source, metric: "active_power_kw", unit: "kW",
+            range: { preset: "24h", start: "s", end: "e" }, tier: null, bucket: null, series: [], values: [], missing: [], no_metric: [],
+          },
+        };
+      },
+    });
+    const { result, rerender } = renderHook(
+      ({ type, config }: { type: "timeseries" | "gauge"; config: WidgetConfig }) => useWidgetData(type, config, "24h"),
+      { wrapper: stableWrapper(), initialProps: { type: "timeseries" as "timeseries" | "gauge", config: stat } },
+    );
+    await waitFor(() => expect(result.current.data?.type).toBe("timeseries"));
+    rerender({ type: "gauge", config: stat }); // another type
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isPlaceholderData).toBe(false);
+    await waitFor(() => expect(result.current.data?.type).toBe("gauge"));
+    rerender({ type: "gauge", config: { ...stat, source: "energy", aggregation: "sum" } }); // same type, another source
+    expect(result.current.data).toBeUndefined();
+    await waitFor(() => expect(result.current.data?.source).toBe("energy"));
+    rerender({ type: "gauge", config: { ...stat, source: "energy", aggregation: "sum" } }); // an equal config (new object) is the same widget
+    expect(result.current.data?.source).toBe("energy");
   });
 
   it("saves a dashboard with one PUT, updates the cached dashboard and refreshes only the list", async () => {

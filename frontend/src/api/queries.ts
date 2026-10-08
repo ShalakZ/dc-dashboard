@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { api } from "./client";
 import type {
@@ -247,12 +247,19 @@ export function useDeleteDashboard() {
   });
 }
 
-/** `preset` is the effective range (the caller resolves inheritance). Refetches every 30 s and keeps the old figures while a new range loads. */
+/**
+ * `preset` is the effective range (the caller resolves inheritance). Refetches every 30 s. While a new range loads the old
+ * figures stay, but only for the same widget: after a change of type or config (the editor's preview) the old answer
+ * belongs to another kind of widget, so nothing is shown until the new one arrives.
+ */
 export const useWidgetData = (type: WidgetType, config: WidgetConfig, preset: RangePreset, enabled = true) =>
   useQuery({
     queryKey: [...keys.widgetData, type, config, preset] as const,
     enabled,
     refetchInterval: 30_000,
-    placeholderData: keepPreviousData,
+    placeholderData: (previous, previousQuery) => {
+      const before = previousQuery?.queryKey; // [..keys.widgetData, type, config, preset]
+      return before && before[1] === type && hashKey([before[2]]) === hashKey([config]) ? previous : undefined;
+    },
     queryFn: () => api.post<WidgetData>("/api/widget-data", { type, config, range: preset }),
   });
