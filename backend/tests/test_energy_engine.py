@@ -222,6 +222,111 @@ async def test_the_range_must_be_timezone_aware(db):
         await energy(datetime(2026, 6, 10), T0 + HOUR)
 
 
+# ---- an own meter counts only from its first reading ----------------------------------------------
+
+
+async def parent_with_children_and_a_late_meter(db, source, own_first_hour):
+    """MV2 with two counter children that read in every hour from T0 - 1h (LV1 +2 kWh an hour, LV2 +3), and a
+    counter of its own that first reads in hour `own_first_hour` of the day: two readings 40 minutes apart in
+    that hour (+4 kWh), then one an hour (+10 kWh each)."""
+    mv2, own = await meter(db, source, "MV2")
+    lv1, p1 = await meter(db, source, "LV1", mv2)
+    lv2, p2 = await meter(db, source, "LV2", mv2)
+    for point, step in ((p1, 2.0), (p2, 3.0)):
+        await insert_readings(db, point, T0 - HOUR + 30 * MINUTE, 3600, [step * i for i in range(8)])
+    first = T0 + own_first_hour * HOUR
+    await insert_readings(db, own, first + 10 * MINUTE, 40 * 60, [500.0, 504.0])
+    await insert_readings(db, own, first + HOUR + 30 * MINUTE, 3600, [514.0, 524.0, 534.0])
+    await settle_rollups(db)
+    return mv2, lv1, lv2
+
+
+async def test_a_parent_given_a_counter_later_keeps_its_earlier_hours_as_the_sum_of_its_children(db):
+    # The owner's case: an own meter mapped on 20 October must not zero the parent's September.
+    source = await make_source(db)
+    mv2, lv1, lv2 = await parent_with_children_and_a_late_meter(db, source, own_first_hour=3)
+
+    result = await energy(T0, T0 + 7 * HOUR)
+
+    children = {b: result.hours[lv1][b].kwh + result.hours[lv2][b].kwh for b in (T0, T0 + HOUR, T0 + 2 * HOUR)}
+    assert children == {T0: 5.0, T0 + HOUR: 5.0, T0 + 2 * HOUR: 5.0}  # the first hour counts from the baseline
+    assert result.hours[mv2] == {
+        T0: HourEnergy(5.0, False), T0 + HOUR: HourEnergy(5.0, False), T0 + 2 * HOUR: HourEnergy(5.0, False),
+        T0 + 3 * HOUR: HourEnergy(4.0, False),  # the meter, not the children's 5
+        T0 + 4 * HOUR: HourEnergy(10.0, False), T0 + 5 * HOUR: HourEnergy(10.0, False),
+        T0 + 6 * HOUR: HourEnergy(10.0, False),
+    }
+    assert result.own_from[mv2] == T0 + 3 * HOUR
+    assert mv2 in result.own
+
+
+async def test_hours_before_a_parents_first_reading_have_no_entry_when_its_children_have_none_either(db):
+    source = await make_source(db)
+    mv2, own = await meter(db, source, "MV2")
+    await insert_readings(db, own, T0 + 2 * HOUR + 10 * MINUTE, 40 * 60, [500.0, 504.0])
+    await settle_rollups(db)
+
+    result = await energy(T0, T0 + 4 * HOUR)
+
+    assert result.hours[mv2] == {T0 + 2 * HOUR: HourEnergy(4.0, False)}  # nothing for the two hours before
+    assert result.own_from[mv2] == T0 + 2 * HOUR
+
+
+async def test_a_first_bucket_before_the_range_start_changes_nothing(db):
+    source = await make_source(db)
+    mv2, own = await meter(db, source, "MV2")
+    lv1, child = await meter(db, source, "LV1", mv2)
+    await insert_readings(db, own, T0 - 5 * HOUR + 30 * MINUTE, 3600, [500.0 + 10 * i for i in range(11)])  # hours -5..5
+    await insert_readings(db, child, T0 - HOUR + 30 * MINUTE, 3600, [5.0 * i for i in range(7)])  # 5 kWh an hour
+    await settle_rollups(db)
+
+    result = await energy(T0 + 2 * HOUR, T0 + 5 * HOUR)
+
+    assert result.hours[mv2] == {T0 + n * HOUR: HourEnergy(10.0, False) for n in (2, 3, 4)}  # the meter, not 5
+    assert result.own_from[mv2] == T0 + 2 * HOUR  # the range start, since the first bucket is earlier
+
+
+async def test_a_meter_that_first_reads_after_the_range_is_its_children_for_the_whole_range(db):
+    source = await make_source(db)
+    mv2, lv1, lv2 = await parent_with_children_and_a_late_meter(db, source, own_first_hour=5)
+
+    result = await energy(T0, T0 + 3 * HOUR)
+
+    assert result.hours[mv2] == {b: HourEnergy(5.0, False) for b in (T0, T0 + HOUR, T0 + 2 * HOUR)}
+    assert result.own_from[mv2] == T0 + 5 * HOUR
+
+
+async def test_a_power_only_meter_that_first_reads_after_the_range_is_its_children_not_estimated_zeros(db):
+    source = await make_source(db)
+    mv2, own = await meter(db, source, "MV2", metric="active_power_kw", interval=10)
+    lv1, counter = await meter(db, source, "LV1", mv2)
+    await insert_readings(db, counter, T0 - HOUR + 30 * MINUTE, 3600, [100.0, 107.0])
+    await insert_readings(db, own, T0 + 5 * HOUR, 10, [6.0] * 60)  # first reads in hour 5
+    await settle_rollups(db)
+
+    result = await energy(T0, T0 + 3 * HOUR)
+
+    assert result.hours[mv2] == {T0: HourEnergy(7.0, False)}
+    # while a range that includes its first hour has it as a real, estimated hour
+    assert (await energy(T0, T0 + 6 * HOUR)).hours[mv2][T0 + 5 * HOUR] == HourEnergy(pytest.approx(1.0), True)
+
+
+async def test_a_first_bucket_months_before_the_range_is_still_found_and_the_meter_wins(db):
+    # The first bucket is looked up over the whole history, not only the requested range.
+    source = await make_source(db)
+    mv2, own = await meter(db, source, "MV2")
+    lv1, child = await meter(db, source, "LV1", mv2)
+    await insert_readings(db, own, T0 - timedelta(days=90), 3600, [500.0, 501.0])
+    await insert_readings(db, own, T0 + 30 * MINUTE, 1, [600.0])
+    await insert_readings(db, child, T0 - HOUR + 30 * MINUTE, 3600, [100.0, 105.0])
+    await settle_rollups(db)
+
+    result = await energy(T0, T0 + 2 * HOUR)
+
+    assert result.hours[mv2] == {T0: HourEnergy(99.0, False)}  # the meter's 501 -> 600, not the child's 5
+    assert result.own_from[mv2] == T0
+
+
 # ---- daylight saving (Review Focus 2) and size ------------------------------------------------
 
 

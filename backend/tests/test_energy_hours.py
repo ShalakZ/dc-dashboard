@@ -328,3 +328,106 @@ def test_a_parent_of_a_counter_and_a_silent_power_meter_is_estimated():
     assert result.hours[2] == {hour(0): HourEnergy(7.0, True), hour(1): HourEnergy(0.0, True)}
     assert total(result.hours[2]) == Energy(7.0, True)
     assert total(result.hours[1]) == Energy(7.0, True)  # and so is the site
+
+
+# ---- an own meter counts only from its first reading ----------------------------------------------
+
+MV2_COUNTER = Meter(point_id=20, scale=1.0, interval_seconds=60, counter=True)
+MV2_POWER = Meter(point_id=20, scale=1.0, interval_seconds=10, counter=False)
+
+
+def children_rows() -> dict[int, list[HourRow]]:
+    """LV1 (counter, baseline 100): 1, 2, 3, 4 kWh in hours 0-3. LV2 (power): 1 kWh in hour 0, 6 kWh in hour 1."""
+    return {
+        30: [counter_row(0, 100, 101, 101), counter_row(1, 102, 103, 103), counter_row(2, 104, 106, 106),
+             counter_row(3, 107, 110, 110)],
+        40: [power_row(0, 6.0, 60, 10), power_row(1, 6.0, 360, 60)],
+    }
+
+
+def test_a_parent_whose_own_meter_starts_later_takes_the_earlier_hours_from_its_children():
+    # MV2 was given a counter whose first reading is in hour 2. Before it, MV2 is what its children add up to
+    # (not the empty history of its new meter); from it on, MV2 is the meter and not the children any more.
+    meters = {2: MV2_COUNTER, 3: COUNTER_30, 4: POWER_40}
+    rows = {**children_rows(), 20: [counter_row(2, 1000, 1030, 1030), counter_row(3, 1031, 1045, 1045)]}
+    first = {20: hour(2), 30: hour(0), 40: hour(0)}
+
+    result = assemble(TREE, meters, rows, {30: 100.0}, start=hour(0), end=hour(4), first_buckets=first)
+
+    assert result.hours[2] == {
+        hour(0): HourEnergy(2.0, True),  # LV1 1 + LV2 1
+        hour(1): HourEnergy(8.0, True),  # LV1 2 + LV2 6
+        hour(2): HourEnergy(30.0, False),  # the meter, not LV1's 3
+        hour(3): HourEnergy(15.0, False),  # the meter, not LV1's 4
+    }
+    assert result.hours[1] == result.hours[2]
+    assert result.own == frozenset({2, 3, 4})
+    # the first own hour: its first bucket where that is inside the range, the range start where it is earlier
+    assert result.own_from == {2: hour(2), 3: hour(0), 4: hour(0)}
+
+
+def test_an_own_meter_whose_first_bucket_is_before_the_range_changes_nothing():
+    meters = {2: MV2_COUNTER, 3: COUNTER_30, 4: POWER_40}
+    rows = {**children_rows(), 20: [counter_row(0, 1000, 1030, 1030), counter_row(1, 1031, 1045, 1045)]}
+    first = {20: hour(-7), 30: hour(-7), 40: hour(-7)}
+
+    result = assemble(TREE, meters, rows, {20: 990.0, 30: 100.0}, start=hour(0), end=hour(4), first_buckets=first)
+
+    assert result.hours[2] == {hour(0): HourEnergy(40.0, False), hour(1): HourEnergy(15.0, False)}
+    assert result.own_from == {2: hour(0), 3: hour(0), 4: hour(0)}
+
+
+def test_a_first_bucket_exactly_at_the_range_start_is_the_range_start():
+    result = assemble(
+        TREE, {2: MV2_COUNTER}, {20: [counter_row(0, 1000, 1030, 1030)]}, {}, start=hour(0), end=hour(2),
+        first_buckets={20: hour(0)},
+    )
+    assert result.hours[2] == {hour(0): HourEnergy(30.0, False)}
+    assert result.own_from == {2: hour(0)}
+
+
+def test_hours_before_the_first_reading_have_no_entry_when_no_child_has_a_figure():
+    result = assemble(
+        TREE, {2: MV2_COUNTER}, {20: [counter_row(2, 1000, 1030, 1030)]}, {}, start=hour(0), end=hour(4),
+        first_buckets={20: hour(2)},
+    )
+    assert result.hours[2] == {hour(2): HourEnergy(30.0, False)}  # nothing for hours 0 and 1
+    assert result.hours[1] == result.hours[2]
+
+
+def test_an_own_power_meter_that_first_reads_after_the_range_is_its_children_not_estimated_zeros():
+    # Looking at a month before the meter was mapped: the new, still empty meter must not win with zeros.
+    meters = {2: MV2_POWER, 3: COUNTER_30}
+    result = assemble(
+        TREE, meters, {30: [counter_row(0, 100, 107, 107)]}, {30: 100.0}, start=hour(0), end=hour(3),
+        first_buckets={20: hour(5), 30: hour(0)},
+    )
+    assert result.hours[2] == {hour(0): HourEnergy(7.0, False)}
+    assert total(result.hours[2]) == Energy(7.0, False)
+    assert result.own_from[2] == hour(5)  # after the range: none of its hours is the meter's
+
+
+def test_an_own_meter_that_first_reads_after_the_range_with_no_child_figures_is_an_empty_figure():
+    for meter in (MV2_COUNTER, MV2_POWER):
+        result = assemble(TREE, {2: meter}, {}, {}, start=hour(0), end=hour(3), first_buckets={20: hour(5)})
+        assert result.hours[2] == {} and result.hours[1] == {}  # a figure of zero, not None (it is mapped)
+        assert total(result.hours[2]) == Energy(0.0, False)
+
+
+def test_a_meter_with_no_rows_ever_has_no_first_bucket_and_behaves_as_before():
+    # Amendment 7 and the silent counter: no entry in first_buckets means the meter never recorded anything.
+    meters = {2: MV2_POWER, 3: COUNTER_30}
+    rows = {30: [counter_row(0, 100, 107, 107)]}
+    result = assemble(TREE, meters, rows, {30: 100.0}, start=hour(0), end=hour(2), first_buckets={30: hour(0)})
+    assert result.hours[2] == {hour(0): HourEnergy(0.0, True), hour(1): HourEnergy(0.0, True)}
+    assert result.own_from == {3: hour(0)}  # MV2 has no first bucket, so no entry
+    silent = assemble(TREE, {2: MV2_COUNTER, 3: COUNTER_30}, rows, {30: 100.0}, start=hour(0), end=hour(2),
+                      first_buckets={30: hour(0)})
+    assert silent.hours[2] == {} and 2 not in silent.own_from
+
+
+def test_after_its_first_reading_a_silent_hour_of_an_own_meter_is_not_filled_from_its_children():
+    meters = {2: MV2_COUNTER, 3: COUNTER_30}
+    rows = {20: [counter_row(1, 1000, 1030, 1030)], 30: children_rows()[30]}
+    result = assemble(TREE, meters, rows, {30: 100.0}, start=hour(0), end=hour(4), first_buckets={20: hour(1), 30: hour(0)})
+    assert result.hours[2] == {hour(0): HourEnergy(1.0, False), hour(1): HourEnergy(30.0, False)}  # not LV1's 3 and 4

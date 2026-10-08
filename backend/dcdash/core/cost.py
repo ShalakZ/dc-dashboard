@@ -93,9 +93,10 @@ def _sum_children(parts: Iterable[dict[datetime, HourCost] | None]) -> dict[date
 def cost_by_hour(
     energy: EnergyResult, tariffs: Sequence[TariffRow], tree: AssetTree, tz_name: str
 ) -> dict[int, dict[datetime, HourCost] | None]:
-    """Assets with their own meter: kwh * the rate on that hour's local date. Other assets: the sum of
-    their children's hours (cost None only where every child's is None; unpriced if any child's is).
-    None wherever the engine has no figure."""
+    """Assets with their own meter: kwh * the rate on that hour's local date, from the hour its meter starts
+    (`energy.own_from`; every hour when it has no entry). Other assets, and an own-metered asset before its meter
+    starts: the sum of their children's hours (cost None only where every child's is None; unpriced if any child's
+    is). None wherever the engine has no figure."""
     zone = ZoneInfo(tz_name)
     rates: dict[tuple[int, date], float | None] = {}
     done: dict[int, dict[datetime, HourCost] | None] = {}
@@ -112,7 +113,17 @@ def cost_by_hour(
             if hours is None:
                 done[asset_id] = None
             elif asset_id in energy.own:
-                done[asset_id] = {bucket: _price(hour, rate(asset_id, bucket)) for bucket, hour in hours.items()}
+                first = energy.own_from.get(asset_id)
+                mine = {
+                    bucket: _price(hour, rate(asset_id, bucket))
+                    for bucket, hour in hours.items()
+                    if first is None or bucket >= first
+                }
+                if first is None:
+                    done[asset_id] = mine
+                else:  # before its meter started, the asset is what its children add up to
+                    before = _sum_children(priced(child) for child in tree.children(asset_id))
+                    done[asset_id] = dict(sorted({**{b: h for b, h in before.items() if b < first}, **mine}.items()))
             else:
                 done[asset_id] = _sum_children(priced(child) for child in tree.children(asset_id))
         return done[asset_id]

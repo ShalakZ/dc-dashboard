@@ -196,6 +196,47 @@ def test_a_parent_with_its_own_meter_is_priced_from_that_meter_not_its_children(
     assert costs[ROOT][hour(3, 9)].cost == pytest.approx(0.7)  # the root sums its only child, MV2
 
 
+def late_meter_energy() -> EnergyResult:
+    """MV2 got its own meter whose first hour is 11:00. Before it, MV2 is what its panels add up to (here only
+    LV Panel 1, 10 kWh an hour); from it on MV2 is the meter (4 kWh an hour) although LV Panel 1 keeps reading."""
+    children = metered(
+        (hour(3, 9), 10.0), (hour(3, 10), 10.0), (hour(3, 11), 10.0), (hour(3, 12), 10.0), (hour(3, 13), 10.0)
+    )  # at 13:00 the meter recorded nothing: that hour has no entry for MV2, and is not filled from its panel
+    mv2 = metered((hour(3, 9), 10.0), (hour(3, 10), 10.0), (hour(3, 11), 4.0), (hour(3, 12), 4.0))
+    return EnergyResult(
+        hours={ROOT: mv2, MV2: mv2, PANEL1: children, PANEL2: None},
+        own=frozenset({MV2, PANEL1}),
+        own_from={MV2: hour(3, 11)},
+    )
+
+
+def test_a_parent_whose_own_meter_starts_later_is_priced_from_its_children_before_that():
+    # LV Panel 1 has its own, dearer rate: the parent's early hours must carry it (the children's cost), not the
+    # parent's own rate, and the children's later hours must not leak into the meter's hours.
+    tariffs = [TariffRow(None, 0.10, date(2026, 1, 1)), TariffRow(PANEL1, 0.50, date(2026, 10, 1))]
+    costs = cost_by_hour(late_meter_energy(), tariffs, TREE, "UTC")
+    mv2 = costs[MV2]
+    assert list(mv2) == [hour(3, 9), hour(3, 10), hour(3, 11), hour(3, 12)]
+    assert mv2[hour(3, 9)] == HourCost(kwh=10.0, cost=5.0, estimated=False, unpriced=False)  # 10 x LV Panel 1's 0.50
+    assert mv2[hour(3, 10)].cost == pytest.approx(5.0)
+    assert mv2[hour(3, 11)] == HourCost(kwh=4.0, cost=pytest.approx(0.4), estimated=False, unpriced=False)  # 4 x 0.10
+    assert mv2[hour(3, 12)].cost == pytest.approx(0.4)
+    assert costs[ROOT] == mv2  # the site sums MV2 only
+
+
+def test_an_own_from_that_is_the_first_hour_prices_everything_from_the_meter():
+    energy = EnergyResult(
+        hours={ROOT: metered((hour(3, 9), 4.0)), MV2: metered((hour(3, 9), 4.0)),
+               PANEL1: metered((hour(3, 9), 10.0)), PANEL2: None},
+        own=frozenset({MV2, PANEL1}),
+        own_from={MV2: hour(3, 9), PANEL1: hour(3, 9)},
+    )
+    tariffs = [TariffRow(None, 0.10, date(2026, 1, 1)), TariffRow(PANEL1, 0.50, date(2026, 10, 1))]
+    costs = cost_by_hour(energy, tariffs, TREE, "UTC")
+    assert costs[MV2][hour(3, 9)].cost == pytest.approx(0.4)
+    assert costs[PANEL1][hour(3, 9)].cost == pytest.approx(5.0)
+
+
 def test_estimated_hours_make_the_figure_estimated():
     tariffs = [TariffRow(None, 0.10, date(2026, 1, 1))]
     energy = engine({PANEL1: metered((hour(3, 9), 4.0), estimated=True)})

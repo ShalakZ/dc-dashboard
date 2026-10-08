@@ -1,11 +1,11 @@
 import csv
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from billing_helpers import add_counter, add_power, add_tariff, at, set_currency, set_zone
-from helpers import login_as, make_asset, settle_rollups
+from helpers import insert_readings, login_as, make_asset, make_mapping, make_point, settle_rollups
 
 NOW = datetime(2026, 4, 15, 10, 20, tzinfo=timezone.utc)
 URLS = ("/api/billing/costs", "/api/billing/costs.csv")
@@ -214,6 +214,32 @@ async def test_a_parent_without_a_meter_sums_its_children_including_a_child_over
         "Site", "Site / MV2", "Site / MV2 / LV Panel 1", "Site / MV2 / LV Panel 2",
     }
     assert ["Site / MV2 / LV Panel 1", "2026-03-10", "6", "0.6", "", "false", "false"] in csv_rows
+
+
+async def test_a_meter_added_to_a_parent_later_does_not_zero_the_parents_earlier_days(client, db):
+    # The owner's case: an energy_kwh point mapped to MV2 on 20 March. March 1-19 stay what its panels add up to,
+    # at the panels' own rates; from the 20th MV2 is its meter (and the panels no longer count towards it).
+    mv2 = await make_asset(db, "MV2")
+    await add_counter(db, "LV Panel 1", at(2026, 2, 28, 23), 745, per_hour=1.0, parent_id=mv2)  # 1 kWh an hour
+    panel2 = await add_counter(db, "LV Panel 2", at(2026, 2, 28, 23), 745, per_hour=2.0, parent_id=mv2)
+    point = await make_point(db, await db.fetchval("SELECT id FROM sources LIMIT 1"), "MV2_kWh")
+    await make_mapping(db, point, mv2, "energy_kwh", 60)
+    first = at(2026, 3, 20)
+    await insert_readings(db, point, first + timedelta(minutes=10), 40 * 60, [5000.0, 5010.0])  # +10 in its first hour
+    await insert_readings(db, point, first + timedelta(minutes=90), 3600, [5020.0 + 10 * i for i in range(287)])
+    await add_tariff(db, 0.10, "2026-01-01")
+    await add_tariff(db, 0.50, "2026-03-01", asset_id=panel2)  # the dearer panel makes the early cost distinguishable
+    await settle_rollups(db)
+    await login_as(client, db, "viewer")
+
+    rows = by_name(await get_costs(client))
+    mv2_days = rows["MV2"]["days"]
+    for day in mv2_days[:19]:
+        check(day, 72.0, 26.4)  # 24 x (1 kWh at 0.10 + 2 kWh at 0.50): the panels' sum, with the override
+    for day in mv2_days[19:]:
+        check(day, 240.0, 24.0)  # the meter: 24 x 10 kWh at 0.10, not the panels' 72
+    check(rows["MV2"]["total"], 19 * 72.0 + 12 * 240.0, 19 * 26.4 + 12 * 24.0)
+    check(rows["LV Panel 1"]["total"], 744.0, 74.4)  # the panels themselves are untouched
 
 
 async def test_a_parent_is_partial_when_only_one_child_has_a_rate(client, db):  # Review Focus 3

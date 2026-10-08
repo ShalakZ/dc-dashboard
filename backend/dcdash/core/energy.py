@@ -6,7 +6,7 @@ touches one, and it reads the rollup with a single batched query.
 """
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, text
@@ -47,8 +47,12 @@ class HourEnergy:
 class EnergyResult:
     # One key per asset in the tree. None = no energy_kwh or active_power_kw mapping anywhere in its subtree.
     hours: dict[int, dict[datetime, HourEnergy] | None]
-    # Assets whose figure comes from their own mapping (not from summing their children).
+    # Assets whose figure comes from their own mapping (not from summing their children), from `own_from` on.
     own: frozenset[int]
+    # For an asset in `own` that has any reading: the first hour that comes from its own meter (UTC bucket start;
+    # the start of the range where its first reading is earlier). Its earlier hours are the sum of its children,
+    # exactly as for an asset without a meter. An asset missing here is its own meter for every hour.
+    own_from: dict[int, datetime] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -162,25 +166,42 @@ def assemble(
     baselines: dict[int, float],
     start: datetime | None = None,
     end: datetime | None = None,
+    first_buckets: dict[int, datetime] | None = None,
 ) -> EnergyResult:
-    """Roll hourly energy up the tree. `meters` maps asset id -> its own Meter; `rows` and `baselines` are keyed
-    by point id. An asset with a Meter uses it even if it was silent, never its children: a silent counter is an
-    empty dict (exact zero), a silent power-only meter is an estimated zero for every hour that begins in
-    [start, end) (so pass the range the rows were read for; without it the latter is also an empty dict).
+    """Roll hourly energy up the tree. `meters` maps asset id -> its own Meter; `rows`, `baselines` and
+    `first_buckets` (the first rollup bucket each point ever had, whenever it was) are keyed by point id.
+
+    An asset with a Meter uses it even if it was silent, never its children: a silent counter is an empty dict
+    (exact zero), a silent power-only meter is an estimated zero for every hour that begins in [start, end) (so
+    pass the range the rows were read for; without it the latter is also an empty dict). Only a meter that has
+    never recorded anything is silent in that sense. One that first read at F counts from F on, and before F the
+    asset is what its children add up to, so mapping a meter to a parent later does not erase its history.
     Otherwise an asset sums its children, skipping those with no figure; if none has one it has no figure (None)."""
+    first_buckets = first_buckets or {}
     hours: dict[int, dict[datetime, HourEnergy] | None] = {}
     own: set[int] = set()
+    own_from: dict[int, datetime] = {}
+
+    def children_sum(asset_id: int) -> dict[datetime, HourEnergy] | None:
+        parts = [part for child in tree.children(asset_id) if (part := hours.get(child)) is not None]
+        return _sum_hours(parts) if parts else None
+
     for asset_id in reversed(tree.preorder()):  # children before parents
         meter = meters.get(asset_id)
-        if meter is not None:
-            own.add(asset_id)
-            hours[asset_id] = _own_hours(
-                meter, rows.get(meter.point_id, ()), baselines.get(meter.point_id), start, end
-            )
+        if meter is None:
+            hours[asset_id] = children_sum(asset_id)
             continue
-        parts = [part for child in tree.children(asset_id) if (part := hours.get(child)) is not None]
-        hours[asset_id] = _sum_hours(parts) if parts else None
-    return EnergyResult({asset_id: hours[asset_id] for asset_id in tree.preorder()}, frozenset(own))
+        own.add(asset_id)
+        point_rows, baseline = rows.get(meter.point_id, ()), baselines.get(meter.point_id)
+        first = first_buckets.get(meter.point_id)
+        if first is None:  # it never recorded anything, so there is no earlier history to keep
+            hours[asset_id] = _own_hours(meter, point_rows, baseline, start, end)
+            continue
+        own_from[asset_id] = first if start is None else max(first, start)
+        mine = _own_hours(meter, point_rows, baseline, None if start is None else own_from[asset_id], end)
+        before = {} if start is not None and first <= start else children_sum(asset_id) or {}
+        hours[asset_id] = dict(sorted({**{b: h for b, h in before.items() if b < first}, **mine}.items()))
+    return EnergyResult({asset_id: hours[asset_id] for asset_id in tree.preorder()}, frozenset(own), own_from)
 
 
 def total(hours: dict[datetime, HourEnergy] | None) -> Energy | None:
@@ -190,16 +211,17 @@ def total(hours: dict[datetime, HourEnergy] | None) -> Energy | None:
     return Energy(sum((h.kwh for h in hours.values()), 0.0), any(h.estimated for h in hours.values()))
 
 
-# One statement for every metered point: the rows of [start, end), plus the last bucket before `start` of each
-# counter point (its baseline). Bad-quality readings are already excluded by the rollup views, which are
+# One statement for every metered point, three kinds of row: the rows of [start, end); the last bucket before
+# `start` of each counter point (its baseline); and the very first bucket the point ever had, whenever that was
+# (to know from when an own meter counts). Bad-quality readings are already excluded by the rollup views, which are
 # real-time, so the hours not yet materialized are included.
 _ROWS = text(
     """
-    SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes, FALSE AS baseline
+    SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes, 'row' AS kind
     FROM readings_1h
     WHERE point_id = ANY(:ids) AND bucket >= :start AND bucket < :end
     UNION ALL
-    SELECT b.point_id, b.bucket, b.min_value, b.max_value, b.sum_value, b.n, b.last_value, b.minutes, TRUE
+    SELECT b.point_id, b.bucket, b.min_value, b.max_value, b.sum_value, b.n, b.last_value, b.minutes, 'baseline'
     FROM unnest(CAST(:counter_ids AS integer[])) AS c(point_id)
     CROSS JOIN LATERAL (
         SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes
@@ -208,6 +230,16 @@ _ROWS = text(
         ORDER BY bucket DESC
         LIMIT 1
     ) b
+    UNION ALL
+    SELECT f.point_id, f.bucket, f.min_value, f.max_value, f.sum_value, f.n, f.last_value, f.minutes, 'first'
+    FROM unnest(CAST(:ids AS integer[])) AS p(point_id)
+    CROSS JOIN LATERAL (
+        SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes
+        FROM readings_1h
+        WHERE point_id = p.point_id
+        ORDER BY bucket
+        LIMIT 1
+    ) f
     ORDER BY point_id, bucket
     """
 )
@@ -234,13 +266,15 @@ async def hourly_energy(db: AsyncSession, tree: AssetTree, start: datetime, end:
     """Hourly energy for every asset in `tree`, for the UTC hours that begin in [start, end).
 
     `start` must be a whole UTC hour (and `end` too, to cut a period exactly); both must be timezone-aware.
-    Two statements run however many assets there are: the meters, and the rollup rows.
+    Two statements run however many assets there are: the meters, and the rollup rows (with each point's baseline
+    and first bucket).
     """
     if start.tzinfo is None or end.tzinfo is None:
         raise ValueError("start and end must include a timezone offset")
     meters = await load_meters(db, tree)
     rows: dict[int, list[HourRow]] = defaultdict(list)
     baselines: dict[int, float] = {}
+    first_buckets: dict[int, datetime] = {}
     if meters:
         params = {
             "ids": sorted({m.point_id for m in meters.values()}),
@@ -249,8 +283,10 @@ async def hourly_energy(db: AsyncSession, tree: AssetTree, start: datetime, end:
             "end": end,
         }
         for row in await db.execute(_ROWS, params):
-            if row.baseline:
+            if row.kind == "baseline":
                 baselines[row.point_id] = row.last_value
+            elif row.kind == "first":
+                first_buckets[row.point_id] = row.bucket
             else:
                 # sum(n) in the rollup is numeric, which asyncpg returns as Decimal.
                 rows[row.point_id].append(
@@ -259,4 +295,4 @@ async def hourly_energy(db: AsyncSession, tree: AssetTree, start: datetime, end:
                         int(row.minutes),
                     )
                 )
-    return assemble(tree, meters, rows, baselines, start, end)
+    return assemble(tree, meters, rows, baselines, start, end, first_buckets)
