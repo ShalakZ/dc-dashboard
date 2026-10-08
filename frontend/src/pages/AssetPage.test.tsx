@@ -110,6 +110,10 @@ describe("AssetPage", () => {
     renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
     expect(await screen.findByText("no cost data")).toBeInTheDocument();
     expect(screen.getByText("no energy data")).toBeInTheDocument();
+    // the same words for the same situation, and no dash: a dash means "no rate" only
+    const tile = screen.getByText("Cost today").closest(".tile")!;
+    expect(tile.querySelector(".big")).toHaveTextContent(/^no cost data$/);
+    expect(tile).not.toHaveTextContent("—");
   });
 
   it("mutes the energy and cost tiles when nothing was recorded today", async () => {

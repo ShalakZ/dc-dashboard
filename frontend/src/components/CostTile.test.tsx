@@ -27,10 +27,11 @@ describe("CostTile", () => {
     expect(screen.queryByText(/0\.00/)).not.toBeInTheDocument();
   });
 
-  it("shows a dash when the asset has no energy figure at all", () => {
+  it("says so in words, with no dash, when the asset has no energy figure at all (a dash means no rate)", () => {
     render(<CostTile cost={null} currency="QAR" />);
-    expect(screen.getByText("—")).toBeInTheDocument();
-    expect(screen.getByText("no cost data")).toBeInTheDocument();
+    const tile = screen.getByText("Cost today").closest(".tile")!;
+    expect(tile.querySelector(".big")).toHaveTextContent(/^no cost data$/);
+    expect(tile).not.toHaveTextContent("—");
   });
 
   it("says the currency is not set instead of guessing one", () => {
