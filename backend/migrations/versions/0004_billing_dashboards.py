@@ -1,4 +1,4 @@
-"""billing and dashboards: tariffs, dashboards, widgets, settings.billing, 7-day rollup refresh windows
+"""billing and dashboards: tariffs, dashboards, widgets, settings.billing, 7-day rollup refresh windows, minutes in readings_1h
 
 Revision ID: 0004
 Revises: 0003
@@ -22,17 +22,53 @@ def _refresh_policy(view: str, start: str, end: str, every: str) -> list[str]:
     ]
 
 
-# 0002 created these with start offsets of 3 hours (readings_1m) and 2 days (readings_1h). Both are widened to 7 days
-# so readings the collector writes late after an outage still reach the rollups (spec section 6); readings_1h is
-# built on readings_1m, so widening only one would not help.
-WIDEN = [
-    *_refresh_policy("readings_1m", "7 days", "1 minute", "1 minute"),
-    *_refresh_policy("readings_1h", "7 days", "1 hour", "10 minutes"),
-]
-RESTORE = [
-    *_refresh_policy("readings_1m", "3 hours", "1 minute", "1 minute"),
-    *_refresh_policy("readings_1h", "2 days", "1 hour", "10 minutes"),
-]
+def _rebuild_hourly_rollup(extra_column: str, start: str) -> list[str]:
+    """Drop and re-create the hourly rollup (and its refresh policy) from `readings_1m`, keeping its history.
+
+    A continuous aggregate's columns cannot be altered, so adding `minutes` means re-creating it. The definition is
+    that of 0002 plus `extra_column`; WITH DATA rebuilds every hour that `readings_1m` still holds (the 1-minute tier
+    is kept for `rollup_1m_retention_days`, 730 by default), so up and down are both lossless for hourly history
+    younger than that. Dropping the view drops its refresh policy, so the policy is added again here, with 0002's
+    end offset and schedule. The hourly tier still has no retention policy.
+
+    The policy's first run is put one schedule interval away instead of "now": WITH DATA has just refreshed the whole
+    view, and a job that starts at once can still be running when the next statement or migration drops the view
+    (a downgrade through 0002 does), which fails with "tuple concurrently deleted".
+    """
+    return [
+        "DROP MATERIALIZED VIEW IF EXISTS readings_1h",
+        f"""
+        CREATE MATERIALIZED VIEW readings_1h
+        WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
+        SELECT point_id,
+               time_bucket(INTERVAL '1 hour', bucket) AS bucket,
+               min(min_value) AS min_value, max(max_value) AS max_value,
+               sum(sum_value) AS sum_value, sum(n) AS n,
+               last(last_value, bucket) AS last_value{extra_column}
+        FROM readings_1m
+        GROUP BY point_id, time_bucket(INTERVAL '1 hour', bucket)
+        WITH DATA
+        """,
+        f"""
+        SELECT alter_job(
+            add_continuous_aggregate_policy('readings_1h',
+                start_offset => INTERVAL '{start}', end_offset => INTERVAL '1 hour',
+                schedule_interval => INTERVAL '10 minutes'),
+            next_start => now() + INTERVAL '10 minutes')
+        """,
+    ]
+
+
+# `minutes` is the number of readings_1m rows (1-minute buckets holding at least one good sample) in the hour. The
+# energy engine takes the coverage of a power-only meter polled at most once a minute from it.
+HOURLY_UP = _rebuild_hourly_rollup(",\n               count(*) AS minutes", "7 days")
+HOURLY_DOWN = _rebuild_hourly_rollup("", "2 days")
+
+# 0002 created readings_1m with a start offset of 3 hours, widened here to 7 days so readings the collector writes late
+# after an outage still reach the rollups (spec section 6). readings_1h gets the same 7 days when it is re-created
+# above (HOURLY_UP); it is built on readings_1m, so widening only one would not help.
+WIDEN = _refresh_policy("readings_1m", "7 days", "1 minute", "1 minute")
+RESTORE = _refresh_policy("readings_1m", "3 hours", "1 minute", "1 minute")
 
 UP = [
     # numeric(13,6), not (12,6): the contract allows a rate of exactly 1000000, which (12,6) cannot hold.
@@ -123,11 +159,20 @@ def _raise_short_raw_retention() -> None:
 
 
 def upgrade() -> None:
+    # Continuous aggregates cannot be created inside a transaction block. The rebuild goes first: it is the only
+    # step that can fail half way, and every statement in it can be run again (DROP ... IF EXISTS), whereas the
+    # transaction that follows creates the tables and either completes or leaves nothing behind.
+    with op.get_context().autocommit_block():
+        for statement in HOURLY_UP:
+            op.execute(statement)
     for statement in UP:
         op.execute(statement)
     _raise_short_raw_retention()
 
 
 def downgrade() -> None:
+    with op.get_context().autocommit_block():
+        for statement in HOURLY_DOWN:
+            op.execute(statement)
     for statement in DOWN:
         op.execute(statement)

@@ -27,13 +27,13 @@ def hour(n: int) -> datetime:
 
 
 def counter_row(n: int, low: float, high: float, last: float) -> HourRow:
-    """A counter's rollup row for hour `n` (the sum and count are not read by the counter maths)."""
-    return HourRow(hour(n), low, high, 0.0, 1, last)
+    """A counter's rollup row for hour `n` (the sum, count and minutes are not read by the counter maths)."""
+    return HourRow(hour(n), low, high, 0.0, 1, last, 1)
 
 
-def power_row(n: int, kw: float, samples: int) -> HourRow:
-    """Hour `n` of a point that held `kw` for `samples` samples."""
-    return HourRow(hour(n), kw, kw, kw * samples, samples, kw)
+def power_row(n: int, kw: float, samples: int, minutes: int) -> HourRow:
+    """Hour `n` of a point that held `kw` for `samples` samples, spread over `minutes` distinct minutes."""
+    return HourRow(hour(n), kw, kw, kw * samples, samples, kw, minutes)
 
 
 # ---- counter_hours -------------------------------------------------------------------------
@@ -109,28 +109,67 @@ def test_counter_hours_are_never_negative():
 
 
 def test_a_full_hour_of_samples_is_the_average_power():
-    # 360 samples at a 10 s interval cover the hour: 12 kW for 1 h.
-    assert power_hours([power_row(0, 12.0, 360)], 10) == {hour(0): pytest.approx(12.0)}
+    # 360 samples at a 10 s interval, one or more in each of the 60 minutes: 12 kW for 1 h.
+    assert power_hours([power_row(0, 12.0, 360, 60)], 10) == {hour(0): pytest.approx(12.0)}
 
 
 def test_an_outage_counts_only_the_time_the_samples_cover():
-    # Review Focus 1. 12 kW sampled every 10 s for 40 minutes (n = 240), then 20 minutes of nothing.
-    # Averaging over the whole hour would give 12 kWh; the samples cover 2400 s, so 8 kWh.
-    assert power_hours([power_row(0, 12.0, 240)], 10) == {hour(0): pytest.approx(8.0)}
+    # Review Focus 1. 12 kW sampled every 10 s for 40 minutes (n = 240, 40 minutes), then 20 minutes of nothing.
+    # Averaging over the whole hour would give 12 kWh; the samples cover 40 of 60 minutes, so 8 kWh.
+    assert power_hours([power_row(0, 12.0, 240, 40)], 10) == {hour(0): pytest.approx(8.0)}
 
 
-def test_sampling_faster_than_the_interval_cannot_exceed_one_hour():
-    # Review Focus 1. 720 samples at a 10 s interval would be 2 h of coverage; it is capped at 1 h.
-    assert power_hours([power_row(0, 12.0, 720)], 10) == {hour(0): pytest.approx(12.0)}
+def test_a_5_second_poll_with_a_slow_read_still_covers_the_whole_hour():
+    # The collector sleeps the interval AFTER each read, so a 5 s poll whose read takes 250 ms yields
+    # 3600 / 5.25 = 685 samples an hour, not 720. Coverage comes from the minutes, not from n x interval
+    # (that would be 685 x 5 / 3600 = 0.95).
+    row = power_row(0, 12.0, 685, 60)
+    assert power_hours([row], 5) == {hour(0): pytest.approx(12.0)}
+
+
+@pytest.mark.parametrize("interval", [1, 5, 10, 30, 60])
+def test_the_estimate_of_a_stored_hour_does_not_depend_on_the_mapping_interval(interval):
+    # Changing the polling interval later must not rescale history: the same stored row, the same kWh.
+    row = power_row(0, 12.0, 685, 60)
+    assert power_hours([row], interval) == {hour(0): pytest.approx(12.0)}
+
+
+@pytest.mark.parametrize("interval", [1, 5, 10, 60])
+def test_a_30_minute_outage_is_half_coverage_for_any_interval_up_to_a_minute(interval):
+    # Samples in 30 of the hour's 60 minutes, however many there are in each: half the hour is covered.
+    assert power_hours([power_row(0, 12.0, 300, 30)], interval) == {hour(0): pytest.approx(6.0)}
+
+
+def test_a_minute_with_a_single_sample_counts_as_covered():
+    # One sample in each of 60 minutes: a 60 s poll (n = 60) and a 5 s poll that mostly failed (n = 60) agree.
+    assert power_hours([power_row(0, 12.0, 60, 60)], 5) == {hour(0): pytest.approx(12.0)}
+
+
+def test_a_slower_poll_than_a_minute_covers_n_times_the_interval():
+    # A 120 s poll leaves most minutes without a sample on purpose, so minutes say nothing: 15 samples x 120 s
+    # = 30 minutes, although the 15 samples touch only 15 minutes (and a stray row says 60).
+    assert power_hours([power_row(0, 12.0, 15, 15)], 120) == {hour(0): pytest.approx(6.0)}
+    assert power_hours([power_row(0, 12.0, 15, 60)], 120) == {hour(0): pytest.approx(6.0)}
+
+
+def test_the_boundary_between_minute_and_sample_coverage_is_60_seconds():
+    row = power_row(0, 12.0, 60, 30)  # 60 samples in 30 distinct minutes
+    assert power_hours([row], 60) == {hour(0): pytest.approx(6.0)}  # minutes: 30 / 60
+    assert power_hours([row], 61) == {hour(0): pytest.approx(12.0)}  # n x interval: 60 x 61 / 3600, capped at 1
+
+
+def test_sampling_faster_than_a_slow_interval_cannot_exceed_one_hour():
+    # Review Focus 1. 720 samples at a 120 s interval would be 24 h of coverage; it is capped at 1 h.
+    assert power_hours([power_row(0, 12.0, 720, 60)], 120) == {hour(0): pytest.approx(12.0)}
 
 
 def test_the_average_is_the_rollup_sum_over_its_count():
-    row = HourRow(hour(0), 0.0, 20.0, 3600.0, 360, 4.0)  # mean 10 kW
+    row = HourRow(hour(0), 0.0, 20.0, 3600.0, 360, 4.0, 60)  # mean 10 kW
     assert power_hours([row], 10) == {hour(0): pytest.approx(10.0)}
 
 
 def test_a_row_without_samples_adds_nothing():
-    assert power_hours([HourRow(hour(0), 0.0, 0.0, 0.0, 0, 0.0)], 10) == {}
+    assert power_hours([HourRow(hour(0), 0.0, 0.0, 0.0, 0, 0.0, 0)], 10) == {}
 
 
 # ---- total ---------------------------------------------------------------------------------
@@ -172,7 +211,7 @@ def test_every_asset_in_the_tree_gets_a_key_and_unmapped_ones_are_none():
 
 def test_a_parent_without_a_meter_sums_its_children_and_skips_those_without_a_figure():
     meters = {3: COUNTER_30, 4: POWER_40}
-    rows = {30: [counter_row(0, 100, 110, 110)], 40: [power_row(0, 6.0, 60)]}  # LV2: 6 kW for 10 min = 1 kWh
+    rows = {30: [counter_row(0, 100, 110, 110)], 40: [power_row(0, 6.0, 60, 10)]}  # LV2: 6 kW for 10 min = 1 kWh
     result = assemble(TREE, meters, rows, {30: 100.0})
     assert result.hours[3] == {hour(0): HourEnergy(10.0, False)}
     assert result.hours[4] == {hour(0): HourEnergy(1.0, True)}
@@ -210,7 +249,7 @@ def test_the_scale_multiplies_the_kwh_after_the_counter_maths():
 
 def test_a_power_estimate_is_scaled_and_flagged_estimated():
     meters = {4: Meter(40, 0.001, 10, False)}  # watts to kW
-    result = assemble(TREE, meters, {40: [power_row(0, 12_000.0, 360)]}, {})
+    result = assemble(TREE, meters, {40: [power_row(0, 12_000.0, 360, 60)]}, {})
     assert result.hours[4] == {hour(0): HourEnergy(pytest.approx(12.0), True)}
 
 
@@ -218,7 +257,7 @@ def test_hours_are_summed_per_bucket_and_flagged_per_bucket():
     meters = {3: COUNTER_30, 4: POWER_40}
     rows = {
         30: [counter_row(0, 100, 110, 110)],  # hour 0 only
-        40: [power_row(1, 6.0, 360)],  # hour 1 only, estimated
+        40: [power_row(1, 6.0, 360, 60)],  # hour 1 only, estimated
     }
     result = assemble(TREE, meters, rows, {30: 100.0})
     assert result.hours[2] == {hour(0): HourEnergy(10.0, False), hour(1): HourEnergy(6.0, True)}
@@ -248,7 +287,7 @@ def test_the_hours_of_a_silent_power_meter_are_the_buckets_that_begin_in_the_ran
 
 
 def test_a_power_meter_with_some_rows_still_only_has_the_hours_it_recorded():
-    result = assemble(TREE, {4: POWER_40}, {40: [power_row(1, 6.0, 360)]}, {}, start=hour(0), end=END)
+    result = assemble(TREE, {4: POWER_40}, {40: [power_row(1, 6.0, 360, 60)]}, {}, start=hour(0), end=END)
     assert result.hours[4] == {hour(1): HourEnergy(6.0, True)}
 
 

@@ -157,7 +157,7 @@ async def silent_server():
         await server.wait_closed()
 
 
-async def insert_readings(db, point_id: int, start, step_seconds: int, values: list[float]) -> None:
+async def insert_readings(db, point_id: int, start, step_seconds: float, values: list[float]) -> None:
     rows = [(point_id, start + timedelta(seconds=i * step_seconds), v, 0) for i, v in enumerate(values)]
     await db.executemany("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", rows)
 

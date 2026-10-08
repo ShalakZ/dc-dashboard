@@ -129,6 +129,23 @@ async def test_a_power_only_meter_with_a_20_minute_outage_counts_the_covered_tim
     assert hours[T0].kwh == pytest.approx(8.0) and hours[T0].estimated is True
 
 
+async def test_a_one_second_poll_with_a_slow_read_is_covered_by_its_minutes_with_a_gap(db):
+    # A 1 s mapping whose read takes 250 ms is sampled every 1.25 s (2880 samples an hour), so n x interval would
+    # see 80% coverage in a perfect hour. Hour 0 has no gap; hour 1 loses minutes 20-29 (a 10-minute outage).
+    source = await make_source(db)
+    asset, point = await meter(db, source, "Panel", metric="active_power_kw", interval=1)
+    await insert_readings(db, point, T0, 1.25, [12.0] * 2880)
+    await insert_readings(db, point, T0 + HOUR, 1.25, [12.0] * (20 * 48))  # minutes 0-19
+    await insert_readings(db, point, T0 + HOUR + 30 * MINUTE, 1.25, [12.0] * (30 * 48))  # minutes 30-59
+    await settle_rollups(db)
+
+    hours = (await energy(T0, T0 + 2 * HOUR)).hours[asset]
+
+    assert list(hours) == [T0, T0 + HOUR]
+    assert hours[T0].kwh == pytest.approx(12.0) and hours[T0].estimated is True
+    assert hours[T0 + HOUR].kwh == pytest.approx(12.0 * 50 / 60)  # 50 of 60 minutes have samples
+
+
 # ---- roll-up ----------------------------------------------------------------------------------
 
 

@@ -25,7 +25,8 @@ class Energy:
 
 @dataclass(frozen=True)
 class HourRow:
-    """One `readings_1h` row: the good samples of one point in one UTC hour."""
+    """One `readings_1h` row: the good samples of one point in one UTC hour. `minutes` is how many of the hour's
+    1-minute rollup buckets hold at least one good sample (0 to 60)."""
 
     bucket: datetime
     min_value: float
@@ -33,6 +34,7 @@ class HourRow:
     sum_value: float
     n: int
     last_value: float
+    minutes: int
 
 
 @dataclass(frozen=True)
@@ -82,14 +84,29 @@ def counter_hours(rows: Sequence[HourRow], baseline_last: float | None) -> dict[
     return hours
 
 
+# Up to this polling interval a minute that holds a sample counts as covered (see power_hours).
+MINUTE_COVERAGE_MAX_INTERVAL = 60
+
+
 def power_hours(rows: Sequence[HourRow], interval_seconds: int) -> dict[datetime, float]:
-    """Estimated kWh per hour from active power in kW: the hour's average power times the time its samples
-    cover (n x the polling interval, at most one hour), so an outage adds nothing."""
+    """Estimated kWh per hour from active power in kW: the hour's average power (sum / n) times the share of the
+    hour its samples cover, so an outage adds nothing.
+
+    For polling intervals up to a minute the coverage is taken from the data: the minutes of the hour that
+    contain a sample (`minutes` / 60). Counting samples times the interval would be wrong twice over: the
+    collector sleeps the interval after each read finishes, so a full hour holds fewer than 3600 / interval
+    samples (a 1 s poll with a 250 ms read gives 2880, a 20% under-count), and changing a mapping's interval
+    later would rescale every past hour. A slower poll leaves most minutes without a sample by design, so there
+    the coverage is n x interval / 3600. Either way it is at most one hour.
+    """
     hours: dict[datetime, float] = {}
     for row in rows:
         if row.n <= 0:
             continue
-        coverage = min(1.0, row.n * interval_seconds / 3600)
+        if interval_seconds <= MINUTE_COVERAGE_MAX_INTERVAL:
+            coverage = min(1.0, row.minutes / 60)
+        else:
+            coverage = min(1.0, row.n * interval_seconds / 3600)
         hours[row.bucket] = (row.sum_value / row.n) * coverage
     return hours
 
@@ -174,14 +191,14 @@ def total(hours: dict[datetime, HourEnergy] | None) -> Energy | None:
 # real-time, so the hours not yet materialized are included.
 _ROWS = text(
     """
-    SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value, FALSE AS baseline
+    SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes, FALSE AS baseline
     FROM readings_1h
     WHERE point_id = ANY(:ids) AND bucket >= :start AND bucket < :end
     UNION ALL
-    SELECT b.point_id, b.bucket, b.min_value, b.max_value, b.sum_value, b.n, b.last_value, TRUE
+    SELECT b.point_id, b.bucket, b.min_value, b.max_value, b.sum_value, b.n, b.last_value, b.minutes, TRUE
     FROM unnest(CAST(:counter_ids AS integer[])) AS c(point_id)
     CROSS JOIN LATERAL (
-        SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value
+        SELECT point_id, bucket, min_value, max_value, sum_value, n, last_value, minutes
         FROM readings_1h
         WHERE point_id = c.point_id AND bucket < :start
         ORDER BY bucket DESC
@@ -233,6 +250,9 @@ async def hourly_energy(db: AsyncSession, tree: AssetTree, start: datetime, end:
             else:
                 # sum(n) in the rollup is numeric, which asyncpg returns as Decimal.
                 rows[row.point_id].append(
-                    HourRow(row.bucket, row.min_value, row.max_value, row.sum_value, int(row.n), row.last_value)
+                    HourRow(
+                        row.bucket, row.min_value, row.max_value, row.sum_value, int(row.n), row.last_value,
+                        int(row.minutes),
+                    )
                 )
     return assemble(tree, meters, rows, baselines, start, end)

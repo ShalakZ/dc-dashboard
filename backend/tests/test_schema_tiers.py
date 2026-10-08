@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from tests.helpers import insert_readings, make_point, make_source, refresh_policies
+from tests.helpers import insert_readings, make_point, make_source, refresh_policies, settle_rollups
 
 
 async def test_readings_is_compressed_and_retained(db):
@@ -29,7 +29,11 @@ async def test_rollup_views_exist_with_policies(db):
     # (not the internal _materialized_hypertable_N). readings_1h must never be retained.
     assert "readings_1m" in retained
     assert "readings_1h" not in retained
-    assert "_materialized_hypertable_2" not in retained and "_materialized_hypertable_3" not in retained
+    internal = {
+        r["materialization_hypertable_name"]
+        for r in await db.fetch("SELECT materialization_hypertable_name FROM timescaledb_information.continuous_aggregates")
+    }
+    assert not internal & retained  # nor under the internal names, which change when a rollup is re-created
 
 
 async def test_rollups_include_unmaterialized_rows(db):
@@ -123,11 +127,16 @@ async def test_downgrade_to_0003_restores_the_old_windows_and_drops_the_billing_
         policies = await refresh_policies(db)
         assert policies["readings_1m"] == (timedelta(hours=3), timedelta(minutes=1), timedelta(minutes=1))
         assert policies["readings_1h"] == (timedelta(days=2), timedelta(hours=1), timedelta(minutes=10))
+        assert await _refresh_job_count(db) == 2  # the re-created view has exactly one refresh job
+        assert await _hourly_columns(db) == HOURLY_COLUMNS_0002  # the 0002 definition: no minutes
+        assert await _hourly_view_is_realtime(db)
     finally:
         _alembic("upgrade", "head")
     assert await db.fetchval("SELECT version_num FROM alembic_version") == _head()
     assert await db.fetchval("SELECT value FROM settings WHERE key = 'billing'") == {"currency": None}
     assert (await refresh_policies(db))["readings_1h"][0] == timedelta(days=7)
+    assert await _refresh_job_count(db) == 2
+    assert await _hourly_columns(db) == HOURLY_COLUMNS_0002 | {"minutes"}
 
 
 async def _raw_policies(db) -> dict[str, tuple[int, dict]]:
@@ -178,3 +187,94 @@ async def test_upgrade_leaves_a_long_enough_raw_retention_and_its_policy_alone(d
     assert await db.fetchval("SELECT value->>'raw_retention_days' FROM settings WHERE key = 'storage'") == "30"
     assert after["policy_retention"] == before["policy_retention"]  # same job id and config: it was not re-created
     assert after["policy_retention"][1]["drop_after"] == "30 days"
+
+
+# ---- the hourly rollup counts the minutes that hold samples (migration 0004) ------------------------------------
+
+HOURLY_COLUMNS_0002 = {"point_id", "bucket", "min_value", "max_value", "sum_value", "n", "last_value"}
+
+
+async def _hourly_columns(db) -> set[str]:
+    return {
+        r["column_name"]
+        for r in await db.fetch("SELECT column_name FROM information_schema.columns WHERE table_name = 'readings_1h'")
+    }
+
+
+async def _hourly_view_is_realtime(db) -> bool:
+    return not await db.fetchval(
+        "SELECT materialized_only FROM timescaledb_information.continuous_aggregates WHERE view_name = 'readings_1h'"
+    )
+
+
+async def _refresh_job_count(db) -> int:
+    return await db.fetchval(
+        "SELECT count(*) FROM timescaledb_information.jobs WHERE proc_name = 'policy_refresh_continuous_aggregate'"
+    )
+
+
+async def _materialized_hours(db, point_id: int) -> list:
+    """The rows `readings_1h` has actually stored (its materialization hypertable), not the real-time view of it."""
+    mat = await db.fetchrow(
+        "SELECT materialization_hypertable_schema AS schema, materialization_hypertable_name AS name "
+        "FROM timescaledb_information.continuous_aggregates WHERE view_name = 'readings_1h'"
+    )
+    return await db.fetch(
+        f'SELECT * FROM "{mat["schema"]}"."{mat["name"]}" WHERE point_id = $1 ORDER BY bucket', point_id
+    )
+
+
+async def _old_hour_with_samples_in_three_minutes(db) -> tuple[datetime, int]:
+    """Ten days ago (past the 7-day refresh window, inside the 30-day raw retention): four good samples in three
+    distinct minutes of one hour, and a bad-quality one in a fourth minute that must not count."""
+    pid = await make_point(db, await make_source(db), "LVP01_kW")
+    hour = (datetime.now(timezone.utc) - timedelta(days=10)).replace(minute=0, second=0, microsecond=0)
+    await db.executemany(
+        "INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)",
+        [
+            (pid, hour + timedelta(seconds=5), 1.0, 0),
+            (pid, hour + timedelta(seconds=20), 3.0, 0),  # the same minute as the first
+            (pid, hour + timedelta(minutes=7, seconds=1), 5.0, 0),
+            (pid, hour + timedelta(minutes=31), 7.0, 0),
+            (pid, hour + timedelta(minutes=45), 99.0, 1),
+        ],
+    )
+    return hour, pid
+
+
+async def test_the_hourly_rollup_has_a_minutes_column_and_keeps_the_others(db):
+    assert await _hourly_columns(db) == HOURLY_COLUMNS_0002 | {"minutes"}
+    assert await _hourly_view_is_realtime(db)
+    assert await db.fetchval(
+        "SELECT data_type FROM information_schema.columns WHERE table_name = 'readings_1h' AND column_name = 'minutes'"
+    ) == "bigint"
+
+
+async def test_the_hourly_rollup_counts_the_distinct_minutes_with_good_samples(db):
+    hour, pid = await _old_hour_with_samples_in_three_minutes(db)
+    query = "SELECT bucket, min_value, max_value, sum_value, n, last_value, minutes FROM readings_1h WHERE point_id = $1"
+
+    (live,) = await db.fetch(query, pid)  # nothing is materialized yet: the real-time part of the view
+    assert (live["bucket"], live["minutes"], live["n"]) == (hour, 3, 4)
+    assert (live["min_value"], live["max_value"], live["sum_value"], live["last_value"]) == (1.0, 7.0, 16.0, 7.0)
+
+    await settle_rollups(db)
+    (stored,) = await _materialized_hours(db, pid)  # and the stored rows
+    assert (stored["bucket"], stored["minutes"], stored["n"]) == (hour, 3, 4)
+    assert dict(await db.fetchrow(query, pid)) == dict(live)
+
+
+async def test_the_rebuild_keeps_the_hourly_history_down_and_up(db):
+    hour, pid = await _old_hour_with_samples_in_three_minutes(db)
+    await settle_rollups(db)
+    try:
+        _alembic("downgrade", "0003")
+        (stored,) = await _materialized_hours(db, pid)  # rebuilt from readings_1m, not left to the real-time part
+        assert stored["bucket"] == hour and stored["n"] == 4 and "minutes" not in stored.keys()
+    finally:
+        _alembic("upgrade", "head")
+    (stored,) = await _materialized_hours(db, pid)
+    assert (stored["bucket"], stored["n"], stored["minutes"]) == (hour, 4, 3)
+    assert await _hourly_view_is_realtime(db)
+    assert (await refresh_policies(db))["readings_1h"] == (timedelta(days=7), timedelta(hours=1), timedelta(minutes=10))
+    assert await _refresh_job_count(db) == 2
