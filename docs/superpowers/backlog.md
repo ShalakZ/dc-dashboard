@@ -6,7 +6,9 @@ Recommended order: (1) Phase 3 brainstorm, spec update and plan, with **Task 0 =
 
 Working rules that still apply: implementers on `sonnet`, reviewers on `opus`, never Fable (weekly budget); one fresh subagent per task; never run `scripts/e2e.sh` or `docker compose down -v` on the default project (it deletes the owner's `dcdash_dbdata` volume) — use `docker compose -p dcdash_e2e ...` as documented in the README and project memory.
 
-## A. Phase 3 Task 0 (cheap, and Phase 3 touches these areas)
+## A. Phase 3 Task 0 (cheap, and Phase 3 touches these areas) — DONE
+
+Done in Phase 3 Task 0 (branch `phase-3-dashboards-billing`, merged with Phase 3). All six items below were fixed test-first; they are kept as the record of what Task 0 covered. Sections B and C are still open.
 
 - **Custom-unit input in the review dialog.** A row switched to the `custom` metric posts `custom_unit: null`; Phase 3 charts custom metrics, so they would show without a unit. Add a unit field per row (prefilled from the point's unit hint) and send it. (`frontend/src/components/graph/ReviewDialog.tsx`, `lib/drop.ts`.)
 - **Hidden discovered-source name clash.** `POST /api/sources` can 409 on a name used by a discovered source that `GET /api/sources` hides; the message should say so (or the clash should be avoided). (`api/sources.py`, `collector/scan.py` " (2)" retry.)
