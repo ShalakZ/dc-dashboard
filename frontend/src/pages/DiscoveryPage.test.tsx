@@ -445,6 +445,8 @@ describe("DiscoveryPage mapping", () => {
     let mapped = false;
     const model = () => {
       const m = graph();
+      // These points map as `custom`; the dialog needs a unit for them and prefills it from the point's hint.
+      m.sources[0].clusters[0].points = m.sources[0].clusters[0].points.map((p) => ({ ...p, unit_hint: "degC" }));
       if (mapped) m.sources[0].clusters[0].points = m.sources[0].clusters[0].points.map((p) => ({ ...p, asset_id: 11, mapping_id: p.id + 100, mapped_metric: "voltage_v" as const }));
       return m;
     };

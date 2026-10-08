@@ -1,4 +1,4 @@
-import { acceptBody, assetChoices, dropPayload, metricConflicts, pickDropTarget, reviewRows, takenMetrics } from "./drop";
+import { MAX_UNIT_LENGTH, acceptBody, assetChoices, dropPayload, metricConflicts, missingUnits, pickDropTarget, reviewRows, takenMetrics, withMetric, type ReviewRow } from "./drop";
 import { nodeId, UNGROUPED } from "./graph";
 import { model, point } from "../test/graphFixtures";
 
@@ -138,5 +138,41 @@ describe("assetChoices", () => {
       { id: 4, parent_id: 3, name: "D", kind: "generic" },
     ];
     expect(assetChoices(assets).map((a) => a.id).sort()).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("custom units", () => {
+  const custom = (over: Partial<ReviewRow> = {}): ReviewRow => ({
+    pointId: 1, name: "T", checked: true, metric: "custom", scale: 1, intervalSeconds: 5, customUnit: "degC", unitHint: "degC", note: null, ...over,
+  });
+  const kwPoint = (hint: string | null) =>
+    point(1, "P kW", { unit_hint: hint, suggestion: { metric: "active_power_kw", scale: 1, interval_seconds: 5, custom_unit: null } });
+
+  it("a row remembers its point's unit hint; a custom suggestion without a unit falls back to it", () => {
+    const hinted = point(2, "T c", { unit_hint: "bar", suggestion: { metric: "custom", scale: 1, interval_seconds: 5, custom_unit: null } });
+    expect(reviewRows([hinted], new Set())[0]).toMatchObject({ metric: "custom", unitHint: "bar", customUnit: "bar" });
+    expect(reviewRows([kwPoint("kW")], new Set())[0]).toMatchObject({ unitHint: "kW", customUnit: null });
+  });
+  it("withMetric(custom) prefills the unit from the hint; an edited unit survives; any other metric drops it and the note", () => {
+    const fromKw = reviewRows([kwPoint("kW")], new Set())[0];
+    expect(withMetric(fromKw, "custom")).toMatchObject({ metric: "custom", customUnit: "kW", note: null });
+    expect(withMetric(custom({ customUnit: "MWh" }), "custom").customUnit).toBe("MWh");
+    expect(withMetric(withMetric(fromKw, "custom"), "voltage_v")).toMatchObject({ metric: "voltage_v", customUnit: null });
+    expect(withMetric(reviewRows([kwPoint(null)], new Set())[0], "custom").customUnit).toBeNull();
+    expect(withMetric(custom({ note: "This asset already has voltage_v." }), "frequency_hz").note).toBeNull();
+  });
+  it("missingUnits lists checked custom rows whose unit is empty or only spaces", () => {
+    const rows = [
+      custom({ pointId: 1, customUnit: null }), custom({ pointId: 2, customUnit: "   " }), custom({ pointId: 3, customUnit: "bar" }),
+      custom({ pointId: 4, customUnit: "", checked: false }), custom({ pointId: 5, metric: "voltage_v", customUnit: null }),
+    ];
+    expect(missingUnits(rows)).toEqual([1, 2]);
+  });
+  it("acceptBody trims the unit and sends null for a non-custom metric", () => {
+    const rows = [custom({ pointId: 1, customUnit: "  degC " }), custom({ pointId: 2, metric: "voltage_v", customUnit: "stale" })];
+    expect(acceptBody(1, { kind: "existing", assetId: 2 }, rows).points.map((p) => p.custom_unit)).toEqual(["degC", null]);
+  });
+  it("the unit limit matches the server's", () => {
+    expect(MAX_UNIT_LENGTH).toBe(20);
   });
 });

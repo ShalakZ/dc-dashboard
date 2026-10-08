@@ -4,7 +4,7 @@ import { keys, useInvalidate } from "../../api/queries";
 import { METRICS, type AcceptResult, type GraphModel, type Metric } from "../../api/types";
 import { useAction } from "../../hooks/useAction";
 import {
-  acceptBody, assetChoices, metricConflicts, reviewRows, takenMetrics,
+  MAX_UNIT_LENGTH, acceptBody, assetChoices, metricConflicts, missingUnits, reviewRows, takenMetrics, withMetric,
   type AcceptTarget, type DropPayload, type ReviewRow,
 } from "../../lib/drop";
 
@@ -89,6 +89,7 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
     : (name.trim() === "" ? null : { kind: "new", name: name.trim(), parentId });
   const conflictIds = metricConflicts(rows, taken);
   const conflicting = new Set(conflictIds);
+  const unitlessIds = new Set(missingUnits(rows));
   const unusable = rows.filter((r) => {
     const d = drafts[r.pointId];
     return r.checked && ((d?.scale !== undefined && parseScale(d.scale) === null) || (d?.interval !== undefined && parseInterval(d.interval) === undefined));
@@ -102,6 +103,8 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
     reason = `Each metric can be mapped to an asset only once. Fix the conflict: ${named}.`;
   } else if (unusable.length > 0) {
     reason = `Enter a scale above 0 and a whole interval of at least 1 second (or leave the interval blank): ${unusable.map((r) => r.name).join(", ")}.`;
+  } else if (unitlessIds.size > 0) {
+    reason = `Enter a unit for each custom metric: ${rows.filter((r) => unitlessIds.has(r.pointId)).map((r) => r.name).join(", ")}.`;
   }
 
   const commit = () => {
@@ -186,7 +189,7 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
         <div className="dialog-rows">
           <table>
             <thead>
-              <tr><th>Map</th><th>Point</th><th>Metric</th><th>Scale</th><th>Interval (s)</th><th>Note</th></tr>
+              <tr><th>Map</th><th>Point</th><th>Metric</th><th>Unit</th><th>Scale</th><th>Interval (s)</th><th>Note</th></tr>
             </thead>
             <tbody>
               {rows.map((r) => (
@@ -200,12 +203,21 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
                       value={r.metric}
                       onChange={(e) => {
                         const metric = e.target.value as Metric;
-                        // The note explained the old metric, and a unit only means something for custom.
-                        patchRow(r.pointId, { metric, note: null, customUnit: metric === "custom" ? r.customUnit : null });
+                        // withMetric drops the old note and the unit unless the metric is custom (prefilled from the point's hint).
+                        setRows((current) => current.map((row) => (row.pointId === r.pointId ? withMetric(row, metric) : row)));
                       }}
                     >
                       {METRICS.map((m) => <option key={m} value={m}>{m}</option>)}
                     </select>
+                  </td>
+                  <td>
+                    {r.metric === "custom" && (
+                      <input
+                        aria-label={`Unit for ${r.name}`} maxLength={MAX_UNIT_LENGTH} value={r.customUnit ?? ""}
+                        aria-invalid={r.checked && unitlessIds.has(r.pointId) ? true : undefined}
+                        onChange={(e) => patchRow(r.pointId, { customUnit: e.target.value })}
+                      />
+                    )}
                   </td>
                   <td>
                     <input

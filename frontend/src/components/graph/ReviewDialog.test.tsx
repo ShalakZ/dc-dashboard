@@ -20,7 +20,7 @@ const graph = (): GraphModel => model({
     source(1, {
       clusters: [{ key: "LVP01", points: [
         point(1, "LVP01 kW", { suggestion: suggest("active_power_kw") }),
-        point(2, "LVP01 kWh", { suggestion: suggest("energy_kwh", { scale: 0.001, interval_seconds: 60 }) }),
+        point(2, "LVP01 kWh", { unit_hint: "kWh", suggestion: suggest("energy_kwh", { scale: 0.001, interval_seconds: 60 }) }),
         point(3, "LVP01 V", { suggestion: suggest("voltage_v") }),
       ] }, { key: "TEMPS", points: [
         point(4, "T a", { suggestion: suggest("custom", { custom_unit: "degC" }) }),
@@ -310,6 +310,7 @@ describe("ReviewDialog", () => {
     expect(box("T a")).toBeChecked();
     expect(box("T b")).toBeChecked();
     await userEvent.selectOptions(screen.getByLabelText("Metric for T b"), "voltage_v");
+    expect(screen.queryByLabelText("Unit for T b")).not.toBeInTheDocument(); // only custom rows have a unit field
     await userEvent.click(create());
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(posts(calls)[0].body).toMatchObject({
@@ -318,6 +319,51 @@ describe("ReviewDialog", () => {
         { point_id: 5, metric: "voltage_v", custom_unit: null },
       ],
     });
+  });
+
+  it("a custom row has a unit field prefilled from its suggestion; other rows have none", async () => {
+    await open(existing(11), undefined, "TEMPS");
+    expect(screen.getByLabelText("Unit for T a")).toHaveValue("degC");
+    expect(screen.getByLabelText("Unit for T b")).toHaveValue("degC");
+    cleanup();
+    await open(existing(11));
+    expect(screen.queryByLabelText(/^Unit for/)).not.toBeInTheDocument();
+  });
+
+  it("switching a row to custom prefills the unit from the point's hint; the edited unit is posted trimmed", async () => {
+    const { calls, onClose } = await open(existing(11));
+    await userEvent.selectOptions(screen.getByLabelText("Metric for LVP01 kWh"), "custom");
+    const unit = screen.getByLabelText("Unit for LVP01 kWh");
+    expect(unit).toHaveValue("kWh");
+    await userEvent.clear(unit);
+    await userEvent.type(unit, "  MWh ");
+    await userEvent.click(create());
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(posts(calls)[0].body).toMatchObject({
+      points: [
+        { point_id: 1, metric: "active_power_kw", custom_unit: null },
+        { point_id: 2, metric: "custom", custom_unit: "MWh" },
+        { point_id: 3, metric: "voltage_v", custom_unit: null },
+      ],
+    });
+  });
+
+  it("a checked custom row without a unit keeps the button disabled and names the row; a unit or unchecking clears it", async () => {
+    await open(existing(11));
+    await userEvent.selectOptions(screen.getByLabelText("Metric for LVP01 kW"), "custom"); // this point has no unit hint
+    const unit = screen.getByLabelText("Unit for LVP01 kW");
+    expect(unit).toHaveValue("");
+    expect(create()).toBeDisabled();
+    expect(screen.getByText(/Enter a unit for each custom metric/)).toHaveTextContent("LVP01 kW");
+    await userEvent.type(unit, "   ");
+    expect(create()).toBeDisabled(); // spaces are not a unit
+    await userEvent.type(unit, "bar");
+    expect(create()).toBeEnabled();
+    await userEvent.clear(unit);
+    expect(create()).toBeDisabled();
+    await userEvent.click(box("LVP01 kW")); // an unchecked row needs no unit
+    expect(create()).toBeEnabled();
+    expect(screen.queryByText(/Enter a unit/)).not.toBeInTheDocument();
   });
 
   it("moves focus into the dialog, closes on Escape without posting, and gives focus back", async () => {

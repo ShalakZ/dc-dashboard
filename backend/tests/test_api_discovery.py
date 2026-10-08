@@ -360,3 +360,43 @@ async def test_accept_rejects_bad_scale_and_metric(client, db):
     asset = await make_asset(db, "A")
     assert (await client.post("/api/discovery/accept", json=body(source, asset, [pt(ids["LVP01_kW"], scale=0)]))).status_code == 422
     assert (await client.post("/api/discovery/accept", json=body(source, asset, [pt(ids["LVP01_kW"], "bogus")]))).status_code == 422
+
+
+async def test_accept_stores_a_trimmed_custom_unit_and_drops_a_stray_one(client, db):
+    await login_as(client, db, "admin")
+    source, ids = await seed_source(db)
+    asset = await make_asset(db, "Site")
+    response = await client.post("/api/discovery/accept", json=body(source, asset, [
+        pt(ids["LVP01_kW"], "custom", custom_unit="  degC "),
+        pt(ids["LVP01_V"], "voltage_v", custom_unit="stray"),
+    ]))
+    assert response.status_code == 201, response.text
+    rows = await db.fetch("SELECT metric, custom_unit FROM mappings ORDER BY metric")
+    assert [(r["metric"], r["custom_unit"]) for r in rows] == [("custom", "degC"), ("voltage_v", None)]
+
+
+@pytest.mark.parametrize("extra", [{}, {"custom_unit": None}, {"custom_unit": ""}, {"custom_unit": "   "}])
+async def test_accept_rejects_a_custom_metric_without_a_unit(client, db, extra):
+    await login_as(client, db, "admin")
+    source, ids = await seed_source(db)
+    asset = await make_asset(db, "Site")
+    response = await client.post(
+        "/api/discovery/accept", json=body(source, asset, [pt(ids["LVP01_kW"], "custom", **extra)])
+    )
+    assert response.status_code == 422
+    assert "needs a unit" in response.text
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 0
+
+
+async def test_accept_limits_the_custom_unit_to_twenty_characters(client, db):
+    await login_as(client, db, "admin")
+    source, ids = await seed_source(db)
+    asset = await make_asset(db, "Site")
+    too_long = await client.post(
+        "/api/discovery/accept", json=body(source, asset, [pt(ids["LVP01_kW"], "custom", custom_unit="x" * 21)])
+    )
+    assert too_long.status_code == 422
+    fits = await client.post(
+        "/api/discovery/accept", json=body(source, asset, [pt(ids["LVP01_kW"], "custom", custom_unit="x" * 20)])
+    )
+    assert fits.status_code == 201
