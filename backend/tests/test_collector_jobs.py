@@ -66,6 +66,25 @@ async def test_browse_failure_fails_the_job_with_the_reason(db):
     assert row["status"] == "failed" and row["result"] == {"error": "credentials rejected"}
 
 
+async def test_a_successful_browse_clears_a_stale_offline_status_and_error(db):
+    source = await make_source(db, secret="k")
+    await db.execute("UPDATE sources SET status = 'offline', last_error = 'credentials rejected' WHERE id = $1", source)
+    job_id = await add_job(db, "browse_source", source)
+    await run_pending_jobs(db, factory())
+    assert (await job(db, job_id))["status"] == "done"
+    row = await db.fetchrow("SELECT status, last_error, last_seen FROM sources WHERE id = $1", source)
+    assert row["status"] == "online" and row["last_error"] is None and row["last_seen"] is not None
+
+
+async def test_a_failed_browse_leaves_the_source_status_and_error_alone(db):
+    source = await make_source(db, secret="wrong")
+    await db.execute("UPDATE sources SET status = 'offline', last_error = 'earlier problem' WHERE id = $1", source)
+    await add_job(db, "browse_source", source)
+    await run_pending_jobs(db, factory())
+    row = await db.fetchrow("SELECT status, last_error FROM sources WHERE id = $1", source)
+    assert row["status"] == "offline" and row["last_error"] == "earlier problem"
+
+
 async def test_unknown_kind_and_missing_source_fail(db):
     unknown = await db.fetchval("INSERT INTO jobs (kind) VALUES ('nope') RETURNING id")
     missing = await add_job(db, "test_source", 999)

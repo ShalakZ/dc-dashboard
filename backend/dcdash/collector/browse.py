@@ -1,5 +1,6 @@
 import asyncpg
 
+from dcdash.collector.scheduler import mark_source
 from dcdash.connectors.base import Connector, ConnectorFactory
 from dcdash.core.crypto import decrypt
 
@@ -20,7 +21,11 @@ async def connector_for(pool: asyncpg.Pool, source_id: int, factory: ConnectorFa
 
 
 async def browse_source(pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory) -> int:
-    """Browse a source's points and upsert them. Returns the count; raises what the connector raises."""
+    """Browse a source's points and upsert them. Returns the count; raises what the connector raises.
+
+    A successful browse proves the source is reachable with its current credentials, so it is marked
+    online and a stale "credentials rejected" error is cleared (a failed browse changes nothing here).
+    """
     connector = await connector_for(pool, source_id, factory)
     try:
         descriptors = await connector.browse()
@@ -29,4 +34,5 @@ async def browse_source(pool: asyncpg.Pool, source_id: int, factory: ConnectorFa
     await pool.executemany(
         _UPSERT_POINT, [(source_id, d.address, d.name, d.data_type, d.unit_hint) for d in descriptors]
     )
+    await mark_source(pool, source_id, True)
     return len(descriptors)

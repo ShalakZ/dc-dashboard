@@ -10,6 +10,7 @@ from dcdash.collector import scan as scan_module
 from dcdash.collector.jobs import run_pending_jobs
 from dcdash.collector.scan import run_scan
 from dcdash.connectors.base import connector_types
+from dcdash.core.crypto import encrypt
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.model import Simulator
 from helpers import free_port, http_server, make_source, modbus_server, opcua_server, silent_server
@@ -181,6 +182,20 @@ async def test_rescan_keeps_a_credential_less_discovered_source_flagged_as_needi
     assert finding["outcome"] == "needs_credentials" and finding["detail"] == "credentials rejected"
     source = await db.fetchrow("SELECT status, last_error FROM sources")
     assert source["status"] == "offline" and source["last_error"] == "credentials rejected"
+
+
+async def test_a_rescan_clears_the_stale_error_once_the_credentials_were_fixed(db, simulator_network):
+    ports = [simulator_network["http"]]
+    await run_scan(db, await make_scan(db, ["127.0.0.1"], ports))
+    source = await db.fetchrow("SELECT id, status, last_error FROM sources")
+    assert source["status"] == "offline" and source["last_error"] == "credentials rejected"
+    await db.execute("UPDATE sources SET secret = $2 WHERE id = $1", source["id"], encrypt("k"))  # the admin enters it
+    scan = await make_scan(db, ["127.0.0.1"], ports)
+    await run_scan(db, scan)
+    finding = await db.fetchrow("SELECT outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
+    assert finding["outcome"] == "claimed" and finding["detail"] == "60 points"
+    row = await db.fetchrow("SELECT status, last_error, last_seen FROM sources WHERE id = $1", source["id"])
+    assert row["status"] == "online" and row["last_error"] is None and row["last_seen"] is not None
 
 
 async def test_an_unusable_stored_secret_is_a_browse_failure_not_a_failed_scan(db, simulator_network):
