@@ -35,6 +35,11 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): voi
   onUnauthorized = handler;
 }
 
+/** Tell the app the session is gone (a 401 from anything but the sign-in endpoints). Shared by `request` and raw fetches such as CSV downloads. */
+export function notifyUnauthorized(path: string): void {
+  if (!AUTH_PATHS.has(path.split("?")[0])) onUnauthorized?.();
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method, credentials: "same-origin", headers: {} };
   if (body !== undefined) {
@@ -51,7 +56,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     data = text;
   }
   if (!response.ok) {
-    if (response.status === 401 && !AUTH_PATHS.has(path.split("?")[0])) onUnauthorized?.();
+    if (response.status === 401) notifyUnauthorized(path);
     const detail = data && typeof data === "object" && "detail" in data ? (data as { detail: unknown }).detail : data;
     throw new ApiError(response.status, detail, data);
   }

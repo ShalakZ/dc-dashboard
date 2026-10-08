@@ -1,4 +1,4 @@
-import { ApiError } from "../api/client";
+import { ApiError, setUnauthorizedHandler } from "../api/client";
 import { downloadCsv } from "./download";
 
 let clicks: { href: string; download: string }[];
@@ -51,6 +51,8 @@ describe("downloadCsv", () => {
     ["attachment; filename=plain.csv", "plain.csv"],
     ["attachment; filename*=UTF-8''kosten%20okt.csv", "kosten okt.csv"],
     ['attachment; filename="../evil.csv"', ".._evil.csv"],
+    ["attachment; filename*=UTF-8''..%2Fevil.csv", ".._evil.csv"],
+    ["attachment; filename*=UTF-8''..%5Cevil.csv", ".._evil.csv"],
   ])("reads %j as %j", async (disposition, expected) => {
     stubFetch(csvResponse(disposition));
     await downloadCsv("/x.csv");
@@ -76,6 +78,35 @@ describe("downloadCsv", () => {
     expect((failure as ApiError).message).toBe("site timezone must have whole-hour UTC offsets");
     expect(clicks).toEqual([]);
     expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("tells the app the session is gone on a 401, so it goes to the login page, and still throws", async () => {
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+    try {
+      stubFetch(new Response(JSON.stringify({ detail: "not authenticated" }), {
+        status: 401, headers: { "content-type": "application/json" },
+      }));
+      await expect(downloadCsv("/api/billing/costs.csv?month=2026-10")).rejects.toMatchObject({ status: 401 });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(clicks).toEqual([]);
+    } finally {
+      setUnauthorizedHandler(null);
+    }
+  });
+
+  it("does not treat other failures as a lost session", async () => {
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+    try {
+      stubFetch(new Response(JSON.stringify({ detail: "insufficient role" }), {
+        status: 403, headers: { "content-type": "application/json" },
+      }));
+      await expect(downloadCsv("/api/billing/costs.csv?month=2026-10")).rejects.toMatchObject({ status: 403 });
+      expect(handler).not.toHaveBeenCalled();
+    } finally {
+      setUnauthorizedHandler(null);
+    }
   });
 
   it("reports a plain-text error body as its message", async () => {

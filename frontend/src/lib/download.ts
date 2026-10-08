@@ -1,18 +1,21 @@
-import { ApiError } from "../api/client";
+import { ApiError, notifyUnauthorized } from "../api/client";
+
+/** A filename must stay a plain name: path separators from either spelling of the header become underscores. */
+const safeName = (name: string) => name.replace(/[\\/]/g, "_");
 
 function filenameOf(disposition: string | null): string {
   if (disposition) {
     const encoded = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(disposition);
     if (encoded) {
       try {
-        return decodeURIComponent(encoded[1].trim());
+        return safeName(decodeURIComponent(encoded[1].trim()));
       } catch {
         // malformed percent-encoding: fall through to the plain filename
       }
     }
     const plain = /filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)/i.exec(disposition);
     const name = (plain?.[1] ?? plain?.[2])?.trim();
-    if (name) return name.replace(/[\\/]/g, "_");
+    if (name) return safeName(name);
   }
   return "export.csv";
 }
@@ -27,6 +30,7 @@ export async function downloadCsv(path: string, init: { method?: "GET" | "POST";
   }
   const response = await fetch(path, request);
   if (!response.ok) {
+    if (response.status === 401) notifyUnauthorized(path);
     const text = await response.text();
     let detail: unknown = text || null;
     try {
