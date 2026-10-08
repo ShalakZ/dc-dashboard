@@ -405,8 +405,8 @@ interval are not collected.
    start only the database: `docker compose up -d db` (`db` has no dependencies and uses the TimescaleDB
    image, so `api` is not created and nothing is migrated). Do not use a plain `docker compose up -d`
    yet. Then run `scripts/backup.sh`. Keep both files it writes, the `.dump` and the `.version` file
-   (it says `0003`). Restoring with `scripts/restore.sh` is the only way back to hourly history that the
-   rebuild dropped (see "Going back" at the end of this section).
+   (it says `0003`). Restoring with `scripts/restore.sh` is the only way back to the database as it was
+   before the upgrade (see "Going back" at the end of this section).
 2. **Pre-check.** In `docker compose exec db psql -U dcdash -d dcdash` run:
 
    ```sql
@@ -420,18 +420,20 @@ interval are not collected.
    `SELECT value FROM settings WHERE key = 'storage';`: a `raw_retention_days` below 8 is raised to 8
    by the migration, and the retention policy is applied again.
 3. **Apply.** Only when you mean to upgrade: `docker compose --profile dev up -d --build` (without
-   `--profile dev` on a stack that has no simulator). Watch `docker compose logs -f api` until
-   `Running upgrade 0003 -> 0004` is followed by Uvicorn's start-up line. If Compose reports the `api`
-   unhealthy or a dependency failed while the rollup was rebuilding, wait for Uvicorn to start and run the
-   same `up -d` again; `web` and `collector` start once `api` is healthy.
+   `--profile dev` on a stack that has no simulator). Alembic prints nothing while it migrates, so watch
+   `docker compose logs -f api` until Uvicorn's start-up lines appear (`Application startup complete`);
+   a migration that fails prints an error instead. Then `docker compose exec api alembic current` must
+   print `0004 (head)`. If Compose reports the `api` unhealthy or a dependency failed while the rollup
+   was rebuilding, wait for Uvicorn to start and run the same `up -d` again; `web` and `collector` start
+   once `api` is healthy.
 4. **If something goes wrong.**
    - `tuple concurrently deleted` in the log: a refresh job raced the drop of the view. The container
      restarts and the migration runs again by itself.
    - The log shows `migration 0004 was stopped before it changed anything, because rebuilding the
      hourly rollup (readings_1h) from the 1-minute rollup (readings_1m) would permanently lose hourly
-     history`: this is the case from step 2 (`h` earlier than `m`). Nothing was changed, but Compose
-     restarts the `api` in a loop and it stops at the same place every time. Run
-     `docker compose stop api`, take a backup (step 1) and report the message.
+     history`: this is the case from step 2 (`h` earlier than `m`, or `m` empty while `h` is not). Nothing
+     was changed, but Compose restarts the `api` in a loop and it stops at the same place every time.
+     Run `docker compose stop api`, take a backup (step 1) and report the message.
    - Any other error that repeats: `docker compose stop api` and report the error.
    - Never use `docker compose down -v`: it deletes the database volume.
 5. **Verify.**
@@ -445,14 +447,22 @@ interval are not collected.
      whole-hour UTC offsets, or Billing answers 409.
 6. **Going back.** Restoring the step 1 dump on the Phase 3 image does not undo the upgrade: its
    `.version` says `0003` while the running schema is `0004`, so `scripts/restore.sh` refuses without
-   `--force`, and with `--force` the script restarts `api`, which runs migration 0004 again. To really
-   return to Phase 2, restore with the Phase 2 code and images: check out the Phase 2 code (`main` as it
-   was before Phase 3 was merged), run `docker compose build`, start only the database with
-   `docker compose up -d db`, then run
-   `scripts/restore.sh backups/<dump file> --force` (`--force` is needed when the database was already
-   migrated to `0004`; it is not when the migration never ran). `restore.sh` can only restart `api` and
-   `collector` if they already exist, so finish with `docker compose up -d`: on the Phase 2 image the
-   restored `0003` database needs no migration.
+   `--force`, and with `--force` the script restarts the existing `api` and `collector` containers,
+   which run migration 0004 again. To really return to Phase 2, restore with the Phase 2 code and images
+   and with no Phase 3 container left to be restarted:
+   1. `git checkout 855cbf8` (`main` before Phase 3). Afterwards `git checkout phase-3-dashboards-billing`
+      returns to the branch; `.env` and `backups/` are not in git, so they stay. This README changes with
+      the checkout, so keep these steps at hand.
+   2. `docker compose build` builds the Phase 2 images.
+   3. `docker compose --profile dev rm --stop --force api collector web simulator` removes the Phase 3
+      containers (containers only: never the `dbdata` volume, and `db` is left alone).
+   4. `docker compose up -d db` (a no-op when `db` is already running).
+   5. `scripts/restore.sh backups/<dump file> --force`. `--force` is needed when the database was
+      already migrated to `0004`; it is not when the migration never ran. The script's last step,
+      `docker compose start api collector`, finds no containers and prints `collector is missing
+      dependency api`, which the script ignores by design.
+   6. `docker compose --profile dev up -d` creates fresh Phase 2 containers; on the restored `0003`
+      database Alembic has nothing to do.
 
 ## Add a connector
 
