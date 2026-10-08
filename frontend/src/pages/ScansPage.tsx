@@ -6,6 +6,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { ScanProgress } from "../components/ScanProgress";
 import { ScopeForm } from "../components/ScopeForm";
 import { useAction } from "../hooks/useAction";
+import { claimedCount } from "../lib/scanText";
 
 type FormState = "new" | Scope | null;
 
@@ -83,28 +84,35 @@ export function ScansPage() {
           </div>
         </div>
       )}
-      <table>
-        <thead><tr><th>Name</th><th>Targets</th><th>Ports</th>{isAdmin && <th></th>}</tr></thead>
-        <tbody>
-          {scopes.map((s) => (
-            <tr key={s.id}>
-              <td>{s.name}</td><td>{s.targets.join(", ")}</td><td>{s.ports.join(", ")}</td>
-              {isAdmin && (
-                <td className="row">
-                  <button onClick={() => requestPreview(s)} disabled={busy}>Scan</button>
-                  <button onClick={() => edit(s)}>Edit</button>
-                  <button onClick={() => remove(s)} disabled={busy}>Delete</button>
-                </td>
-              )}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {scopes.length === 0 ? (
+        <p className="muted">
+          {isAdmin ? "No scopes yet. Use New scope to define what to scan." : "No scopes have been defined yet."}
+        </p>
+      ) : (
+        <table>
+          <thead><tr><th>Name</th><th>Targets</th><th>Ports</th>{isAdmin && <th></th>}</tr></thead>
+          <tbody>
+            {scopes.map((s) => (
+              <tr key={s.id}>
+                <td>{s.name}</td><td>{s.targets.join(", ")}</td><td>{s.ports.join(", ")}</td>
+                {isAdmin && (
+                  <td className="row">
+                    <button onClick={() => requestPreview(s)} disabled={busy}>Scan</button>
+                    <button onClick={() => edit(s)}>Edit</button>
+                    <button onClick={() => remove(s)} disabled={busy}>Delete</button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       {activeScan !== null && <ScanProgress scanId={activeScan} />}
       <h2>Recent scans</h2>
       {scansLoading && <p className="muted">loading…</p>}
       {scansError && <p className="error" role="alert">{scansError.message}</p>}
-      {!scansLoading && !scansError && (
+      {!scansLoading && !scansError && scans.length === 0 && <p className="muted">No scans yet.</p>}
+      {!scansLoading && !scansError && scans.length > 0 && (
         <table>
           <thead><tr><th>Scope</th><th>Status</th><th>Started</th><th>Claimed / points</th><th></th></tr></thead>
           <tbody>
@@ -113,7 +121,7 @@ export function ScansPage() {
                 <td>{scan.scope_name}</td>
                 <td>{scan.status}</td>
                 <td>{new Date(scan.created_at).toLocaleString()}</td>
-                <td>{scan.progress.claimed ?? 0} / {scan.progress.points ?? 0}</td>
+                <td>{claimedCount(scan.progress)} / {scan.progress.points ?? 0}</td>
                 <td><button onClick={() => setActiveScan(scan.id)}>Details</button></td>
               </tr>
             ))}

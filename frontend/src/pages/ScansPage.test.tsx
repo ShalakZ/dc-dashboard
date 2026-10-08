@@ -72,7 +72,7 @@ describe("ScansPage", () => {
     expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({ confirm_host_count: 2, digest: "d1g3st" });
     expect(await screen.findByText(/running/i)).toBeInTheDocument();
     const row = await screen.findByRole("row", { name: /^simulator 9000 / }, { timeout: 5000 });
-    expect(within(row).getByText("needs_credentials")).toBeInTheDocument();
+    expect(within(row).getByText("needs credentials")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open the discovery graph" })).toHaveAttribute("href", "/discovery");
   });
 
@@ -142,6 +142,55 @@ describe("ScansPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Details" }));
     expect(await screen.findByRole("heading", { name: "Scan #7 — done" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open the discovery graph" })).toBeInTheDocument();
+  });
+
+  it("counts only sources that were read as claimed, in the progress line and in the history", async () => {
+    mockFetch({ ...base("operator"), "GET /api/scans/7": { body: done } }); // claimed 2, of which 1 needs credentials
+    open();
+    const history = await screen.findByRole("row", { name: /^lab done/ });
+    expect(within(history).getByText("1 / 120")).toBeInTheDocument();
+    await userEvent.click(within(history).getByRole("button", { name: "Details" }));
+    expect(await screen.findByText("1 claimed")).toBeInTheDocument();
+    expect(screen.queryByText("2 claimed")).not.toBeInTheDocument();
+  });
+
+  it("writes the finding outcomes as words, never as needs_credentials", async () => {
+    const findings = [
+      ...done.findings,
+      { host: "simulator", port: 8080, source_id: null, connector_type: null, outcome: "unclaimed", detail: "" },
+    ];
+    mockFetch({ ...base("operator"), "GET /api/scans/7": { body: { ...done, findings } } });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Details" }));
+    const locked = await screen.findByRole("row", { name: /^simulator 9000 / });
+    expect(within(locked).getByText("needs credentials")).toBeInTheDocument();
+    expect(within(await screen.findByRole("row", { name: /^simulator 4840 / })).getByText("claimed")).toBeInTheDocument();
+    expect(within(await screen.findByRole("row", { name: /^simulator 8080 / })).getByText("unidentified")).toBeInTheDocument();
+    expect(screen.queryByText(/needs_credentials|unclaimed/)).not.toBeInTheDocument();
+  });
+
+  it("labels the sweep counter as ports checked, not probed", async () => {
+    const sweeping = { ...done, status: "running", stage: "sweep", findings: [], progress: { hosts: 1, pairs: 3, checked: 2, open: 1 } };
+    mockFetch({ ...base("operator"), "GET /api/scans/7": { body: sweeping } });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Details" }));
+    expect(await screen.findByText("2/3 ports checked")).toBeInTheDocument();
+    expect(screen.queryByText(/probed/)).not.toBeInTheDocument();
+  });
+
+  it("says so when there are no scopes and no scans yet, instead of showing empty tables", async () => {
+    mockFetch({ ...base("admin"), "GET /api/scopes": { body: [] }, "GET /api/scans": { body: [] } });
+    open();
+    expect(await screen.findByText(/No scopes yet/)).toHaveTextContent("New scope");
+    expect(await screen.findByText("No scans yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("does not tell an operator with no scopes to use a button they do not have", async () => {
+    mockFetch({ ...base("operator"), "GET /api/scopes": { body: [] }, "GET /api/scans": { body: [] } });
+    open();
+    expect(await screen.findByText("No scopes have been defined yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/New scope/)).not.toBeInTheDocument();
   });
 
   describe("confirmation panel never outlives the scope it was previewed for", () => {
