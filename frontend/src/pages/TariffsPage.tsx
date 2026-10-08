@@ -62,7 +62,9 @@ function CurrencyForm() {
 }
 
 /** `assets === null` adds a site default rate; otherwise an override for an asset picked from the list. */
-function AddTariff({ assets, labels }: { assets: Asset[] | null; labels: ReadonlyMap<number, string> }) {
+function AddTariff({ assets, labels, assetsError = null }: {
+  assets: Asset[] | null; labels: ReadonlyMap<number, string>; assetsError?: string | null;
+}) {
   const create = useCreateTariff();
   const [assetId, setAssetId] = useState("");
   const [from, setFrom] = useState("");
@@ -99,6 +101,7 @@ function AddTariff({ assets, labels }: { assets: Asset[] | null; labels: Readonl
         <input type="number" min="0" step="any" value={rate} onChange={(e) => setRate(e.target.value)} />
       </label>
       <button type="submit" disabled={create.isPending}>Add rate</button>
+      {assetsError !== null && <p className="error" role="alert">Could not load the assets: {assetsError}</p>}
       {problem && <p className="error" role="alert">{problem}</p>}
       {create.isError && <p className="error" role="alert">{errorText(create.error)}</p>}
     </form>
@@ -167,7 +170,9 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
   );
 }
 
-function TariffTables({ tariffs, assets, currencyUnset }: { tariffs: Tariff[]; assets: Asset[]; currencyUnset: boolean }) {
+function TariffTables({ tariffs, assets, assetsError, currencyUnset }: {
+  tariffs: Tariff[]; assets: Asset[]; assetsError: string | null; currencyUnset: boolean;
+}) {
   const labels = useMemo(() => assetLabels(assets), [assets]);
   const defaults = tariffs.filter((t) => t.asset_id === null);
   const perAsset = tariffs.filter((t) => t.asset_id !== null);
@@ -201,7 +206,7 @@ function TariffTables({ tariffs, assets, currencyUnset }: { tariffs: Tariff[]; a
           ))}</tbody>
         </table>
       )}
-      <AddTariff assets={assets} labels={labels} />
+      <AddTariff assets={assets} labels={labels} assetsError={assetsError} />
     </>
   );
 }
@@ -219,7 +224,12 @@ export function TariffsPage() {
       {tariffs.isPending && <p className="muted">loading…</p>}
       {tariffs.isError && <p className="error" role="alert">{errorText(tariffs.error)}</p>}
       {tariffs.data && (
-        <TariffTables tariffs={tariffs.data} assets={assets.data ?? []} currencyUnset={settings.data?.currency === null} />
+        <TariffTables
+          tariffs={tariffs.data}
+          assets={assets.data ?? []}
+          assetsError={assets.isError ? errorText(assets.error) : null}
+          currencyUnset={settings.data?.currency === null}
+        />
       )}
     </section>
   );

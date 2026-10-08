@@ -329,6 +329,17 @@ describe("TariffsPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("insufficient role");
   });
 
+  it("says why the asset list is empty when it cannot be read, next to the override form", async () => {
+    overrides = { "GET /api/assets": { status: 500, body: { detail: "assets unavailable" } } };
+    open();
+    const form = await screen.findByRole("form", { name: "Add asset override" });
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Could not load the assets: assets unavailable");
+    expect(form.contains(alert)).toBe(true);
+    expect(screen.getAllByRole("alert")).toHaveLength(1); // the tariffs themselves loaded fine
+    expect(within(form).getAllByRole("option")).toHaveLength(1); // only "Choose an asset…"
+  });
+
   it("never asks for tariffs or the currency when a non-admin opens the route", async () => {
     const calls = mockFetch(routes("operator"));
     renderWithProviders(<App />, { route: "/tariffs", path: "*" });
