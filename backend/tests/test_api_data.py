@@ -4,7 +4,7 @@ import pytest
 
 from dcdash.api.data import day_start
 from dcdash.core.config import get_settings
-from helpers import login_as, make_asset, make_mapping, make_point, make_source
+from helpers import login_as, make_asset, make_mapping, make_point, make_source, settle_rollups
 
 MINUTE = timedelta(minutes=1)
 
@@ -19,11 +19,33 @@ def today() -> datetime:
     return day_start(datetime.now(timezone.utc), get_settings().timezone)
 
 
+NOW = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+
+
+class FrozenDatetime(datetime):
+    """`datetime` whose now() is NOW; patched over dcdash.api.data.datetime so the summary's clock is fixed."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return NOW if tz is None else NOW.astimezone(tz)
+
+
+async def freeze_clock(db, monkeypatch, zone):
+    """The summary sees NOW (15:00 on 10 June in Qatar, 12:00 in UTC) and `zone` as the site timezone."""
+    monkeypatch.setattr("dcdash.api.data.datetime", FrozenDatetime)
+    await db.execute(
+        "INSERT INTO settings (key, value) VALUES ('general', $1) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        {"timezone": zone},
+    )
+
+
 async def add_readings(db, point_id, start, values, step=10 * MINUTE, quality=0):
     await db.executemany(
         "INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)",
         [(point_id, start + i * step, value, quality) for i, value in enumerate(values)],
     )
+    await settle_rollups(db)  # energy reads the hourly rollup; do not depend on where its watermark is
 
 
 async def panel(db, name="LV Panel 1", parent_id=None, prefix="LVP01", power=True, energy=True):
@@ -77,6 +99,19 @@ async def test_energy_today_from_counter_handles_reset(client, db):
     await login_as(client, db, "viewer")
     asset, _, kwh = await panel(db)
     await add_readings(db, kwh, today(), [100.0, 110.0, 5.0, 8.0])
+    # Spec section 6: with no bucket before today the first hour counts last - min = 8 - 5. The old query, which
+    # saw the raw samples, counted 13; the hourly rollup cannot see the 100 -> 110 step inside the hour.
+    assert await energy_today(client, asset) == {"kwh": pytest.approx(3.0), "estimated": False}
+
+
+async def test_energy_today_counter_reset_inside_the_hour_with_an_earlier_bucket(client, db, monkeypatch):
+    await freeze_clock(db, monkeypatch, "UTC")
+    await login_as(client, db, "viewer")
+    asset, _, kwh = await panel(db)
+    midnight = datetime(2026, 6, 10, tzinfo=timezone.utc)
+    await add_readings(db, kwh, midnight - 10 * MINUTE, [100.0])  # 23:50 on the 9th, the baseline bucket
+    await add_readings(db, kwh, midnight, [100.0, 110.0, 5.0, 8.0])
+    # min 5 < previous last 100, so the hour counts max(0, 110 - 100) + (8 - 5) = 13: the old figure, now exact
     assert await energy_today(client, asset) == {"kwh": pytest.approx(13.0), "estimated": False}
 
 
@@ -102,18 +137,20 @@ async def test_power_estimate_does_not_reach_before_midnight(client, db):
     source = await make_source(db)
     asset = await make_asset(db, "LV Panel 1")
     kw = await make_point(db, source, "LVP01_kW")
-    await make_mapping(db, kw, asset, "active_power_kw", interval=600)  # max gap 1800 s
+    await make_mapping(db, kw, asset, "active_power_kw", interval=600)  # each sample covers 10 minutes
     await add_readings(db, kw, today() - 10 * MINUTE, [10.0])  # 23:50 yesterday
     await add_readings(db, kw, today() + 10 * MINUTE, [10.0, 10.0])  # 00:10 and 00:20
-    # 23:50 -> 00:10 is within the gap limit but belongs to yesterday; only 00:10 -> 00:20 counts
-    assert (await energy_today(client, asset))["kwh"] == pytest.approx(10 / 6)
+    # The 23:50 sample belongs to yesterday's hour and does not count. Spec section 6: today's hour is its
+    # average power times the time its samples cover, n x interval = 2 x 600 s = 20 minutes: 10 kW x 1/3 h.
+    # (The old trapezoid between the two samples gave 10/6.)
+    assert (await energy_today(client, asset))["kwh"] == pytest.approx(10 / 3)
 
 
 async def test_energy_today_is_estimated_from_power_when_there_is_no_counter(client, db):
     await login_as(client, db, "viewer")
     asset, kw, _ = await panel(db, energy=False)
-    # 12 kW held for 30 minutes, sampled every 10 seconds
-    await add_readings(db, kw, today(), [12.0] * 181, step=timedelta(seconds=10))
+    # 12 kW held for 30 minutes, sampled at the mapping's own 5 second interval (360 samples cover 1800 s)
+    await add_readings(db, kw, today(), [12.0] * 360, step=timedelta(seconds=5))
     assert await energy_today(client, asset) == {"kwh": pytest.approx(6.0), "estimated": True}
 
 
@@ -146,7 +183,7 @@ async def test_parent_energy_is_the_sum_of_its_children(client, db):
     _, _, kwh1 = await panel(db, "LV Panel 1", mv2, "LVP01")
     _, kw2, _ = await panel(db, "LV Panel 2", mv2, "LVP02", energy=False)
     await add_readings(db, kwh1, today(), [100.0, 107.0])
-    await add_readings(db, kw2, today(), [6.0] * 61, step=timedelta(seconds=10))  # 6 kW for 10 min = 1 kWh
+    await add_readings(db, kw2, today(), [6.0] * 120, step=timedelta(seconds=5))  # 6 kW for 10 min = 1 kWh
     assert await energy_today(client, mv2) == {"kwh": pytest.approx(8.0), "estimated": True}
 
 
@@ -157,6 +194,17 @@ async def test_parent_with_its_own_meter_uses_it(client, db):
     await add_readings(db, parent_kwh, today(), [1000.0, 1020.0])
     await add_readings(db, child_kwh, today(), [100.0, 107.0])
     assert await energy_today(client, mv2) == {"kwh": pytest.approx(20.0), "estimated": False}
+
+
+async def test_energy_today_is_the_site_timezone_day(client, db, monkeypatch):
+    await freeze_clock(db, monkeypatch, "Asia/Qatar")  # the site day began at 21:00Z on the 9th
+    await login_as(client, db, "viewer")
+    asset, _, kwh = await panel(db)
+    await add_readings(db, kwh, datetime(2026, 6, 9, 19, 30, tzinfo=timezone.utc), [100.0])  # 22:30 Qatar, the baseline
+    await add_readings(db, kwh, datetime(2026, 6, 9, 21, 20, tzinfo=timezone.utc), [104.0, 106.0], step=30 * MINUTE)
+    await add_readings(db, kwh, datetime(2026, 6, 10, 9, 10, tzinfo=timezone.utc), [110.0])
+    # 100 -> 106 in the first hour of the Qatar day, 106 -> 110 later. A UTC day would start at 00:00Z and give 4.
+    assert await energy_today(client, asset) == {"kwh": pytest.approx(10.0), "estimated": False}
 
 
 async def test_series_buckets_and_scales(client, db):

@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, text
@@ -8,44 +7,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.settings import current_timezone
-from dcdash.core.energy import Energy
+from dcdash.core.energy import hourly_energy, total
 from dcdash.core.metrics import Metric, unit_for
 from dcdash.core.models import Asset, Mapping, PointLatest
+from dcdash.core.timeutil import day_bounds, day_start  # noqa: F401  (day_start: existing importers use this path)
+from dcdash.core.tree import AssetTree
 
 router = APIRouter(prefix="/api", tags=["data"], dependencies=[Depends(require_role("viewer"))])
 
+
+def _now() -> datetime:
+    """The clock `summary()` reads; tests monkeypatch `dcdash.api.data._now`."""
+    return datetime.now(timezone.utc)
+
+
 _GOOD = "quality = 0 AND value IS NOT NULL"
-# Counter consumption: sum of increases between consecutive good samples; a
-# decrease is a reset and contributes nothing. The window starts at the last
-# good sample before :start so that what the meter accumulated between that
-# sample and the first one of today is counted toward today.
-_COUNTER_KWH = text(
-    f"""
-    SELECT coalesce(sum(CASE WHEN value >= prev THEN value - prev ELSE 0 END), 0)
-    FROM (
-        SELECT value, lag(value) OVER (ORDER BY ts) AS prev
-        FROM readings
-        WHERE point_id = :point AND {_GOOD}
-          AND ts >= coalesce(
-              (SELECT max(ts) FROM readings WHERE point_id = :point AND ts < :start AND {_GOOD}),
-              :start)
-          AND ts < :end
-    ) steps
-    """
-)
-# Power estimate: trapezoidal integral of kW over consecutive good samples, in
-# kWh. Steps longer than :max_gap seconds are outages and contribute nothing.
-_POWER_KWH = text(
-    f"""
-    SELECT coalesce(sum((value + prev) / 2 * extract(epoch FROM ts - prev_ts) / 3600), 0)
-    FROM (
-        SELECT ts, value, lag(ts) OVER (ORDER BY ts) AS prev_ts, lag(value) OVER (ORDER BY ts) AS prev
-        FROM readings
-        WHERE point_id = :point AND ts >= :start AND ts < :end AND {_GOOD}
-    ) steps
-    WHERE ts - prev_ts <= make_interval(secs => :max_gap)
-    """
-)
 _SERIES_RAW = text(
     f"""
     SELECT time_bucket(make_interval(secs => :width), ts) AS bucket,
@@ -81,48 +57,6 @@ def pick_tier(width_seconds: float) -> str:
     return "1h"
 
 
-def day_start(now: datetime, tz_name: str) -> datetime:
-    """Midnight at the start of `now`'s day in the given timezone."""
-    local = now.astimezone(ZoneInfo(tz_name))
-    return local.replace(hour=0, minute=0, second=0, microsecond=0)
-
-
-async def _own_energy(db: AsyncSession, asset_id: int, start: datetime, end: datetime) -> Energy | None:
-    wanted = [Metric.ENERGY_KWH.value, Metric.ACTIVE_POWER_KW.value]
-    rows = await db.scalars(
-        select(Mapping).where(Mapping.asset_id == asset_id, Mapping.metric.in_(wanted))
-    )
-    by_metric = {mapping.metric: mapping for mapping in rows}
-    counter = by_metric.get(Metric.ENERGY_KWH.value)
-    if counter is not None:
-        params = {"point": counter.point_id, "start": start, "end": end}
-        kwh = await db.scalar(_COUNTER_KWH, params)
-        return Energy(float(kwh) * counter.scale, estimated=False)
-    power = by_metric.get(Metric.ACTIVE_POWER_KW.value)
-    if power is not None:
-        max_gap = max(3 * power.interval_seconds, 30)
-        params = {"point": power.point_id, "start": start, "end": end, "max_gap": max_gap}
-        kwh = await db.scalar(_POWER_KWH, params)
-        return Energy(float(kwh) * power.scale, estimated=True)
-    return None
-
-
-async def asset_energy(db: AsyncSession, asset_id: int, start: datetime, end: datetime) -> Energy | None:
-    """An asset's own meter if it has one, otherwise the sum of its children."""
-    own = await _own_energy(db, asset_id, start, end)
-    if own is not None:
-        return own
-    children = (await db.scalars(select(Asset.id).where(Asset.parent_id == asset_id))).all()
-    parts = [
-        energy
-        for child in children
-        if (energy := await asset_energy(db, child, start, end)) is not None
-    ]
-    if not parts:
-        return None
-    return Energy(sum(part.kwh for part in parts), any(part.estimated for part in parts))
-
-
 @router.get("/assets/{asset_id}/summary")
 async def summary(asset_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     asset = await db.get(Asset, asset_id)
@@ -146,8 +80,11 @@ async def summary(asset_id: int, db: AsyncSession = Depends(get_db)) -> dict[str
         }
         for mapping, latest in rows
     ]
-    start = day_start(datetime.now(timezone.utc), await current_timezone(db))
-    energy = await asset_energy(db, asset_id, start, start + timedelta(days=1))
+    # Today = the site's local day. Settings refuses a zone whose day edges are not whole UTC hours; one stored
+    # before that rule shifts these edges to the next rollup bucket instead of failing the page.
+    start, end = day_bounds(_now(), await current_timezone(db))
+    result = await hourly_energy(db, await AssetTree.load(db), start, end)
+    energy = total(result.hours.get(asset_id))
     return {
         "asset": {"id": asset.id, "name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind},
         "metrics": metrics,

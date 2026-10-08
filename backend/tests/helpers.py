@@ -162,6 +162,12 @@ async def insert_readings(db, point_id: int, start, step_seconds: int, values: l
     await db.executemany("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", rows)
 
 
+async def settle_rollups(db) -> None:
+    """Materialize both rollups now, so a test never depends on where the policy jobs left the real-time watermark."""
+    await db.execute("CALL refresh_continuous_aggregate('readings_1m', NULL, NULL)")
+    await db.execute("CALL refresh_continuous_aggregate('readings_1h', NULL, NULL)")
+
+
 _REFRESH_POLICIES = """
     SELECT ca.view_name,
            (j.config->>'start_offset')::interval AS start_offset,

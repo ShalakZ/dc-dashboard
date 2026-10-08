@@ -85,6 +85,11 @@ async def db(pool):
     # asyncpg's autocommitting pool.execute satisfies.
     await _full_refresh(pool, "readings_1m")
     await _full_refresh(pool, "readings_1h")
+    # A refresh only ever raises a rollup's real-time watermark (the point below which the view trusts the
+    # materialized rows and ignores new raw ones), and settle_rollups raises it to about now. Put it back to its
+    # initial value, after the refreshes above have emptied the materialized rows, so that a test which relies on
+    # the unmaterialized tail does not depend on which test ran before it. (Needs a superuser: the container's is.)
+    await pool.execute("UPDATE _timescaledb_catalog.continuous_aggs_watermark SET watermark = -210866803200000000")
     await pool.execute(
         """INSERT INTO settings (key, value) VALUES ('storage', '{"raw_retention_days": 30,
            "compress_after_days": 7, "rollup_1m_retention_days": 730, "disk_capacity_gb": 100,
