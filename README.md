@@ -365,10 +365,10 @@ separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal s
 or, with a fresh stack already running: `cd frontend && npx playwright test -c e2e/playwright.config.ts`.
 First time only: `npx playwright install chromium`. Reports: `npx playwright show-report`.
 
-`scripts/e2e.sh` runs those four steps in one go, always in the project `dcdash_e2e` (so its `down -v`
-removes only `dcdash_e2e_dbdata`). It refuses to start while the normal stack is running, because both
-hold ports 80 and 443, and it refuses a project name that does not start with `dcdash_e2e`
-(`E2E_COMPOSE_PROJECT` can pick another throwaway name). When it ends it removes the containers but
+`scripts/e2e.sh` runs the same steps in one go, always in the project `dcdash_e2e` (so its `down -v`
+removes only `dcdash_e2e_dbdata`); only its final `down` has no `-v`. It refuses to start while the
+normal stack is running, because both hold ports 80 and 443, and it refuses a project name that does
+not start with `dcdash_e2e` (`E2E_COMPOSE_PROJECT` can pick another throwaway name). When it ends it removes the containers but
 keeps the volume until the next run, which starts with `down -v`;
 `docker compose -p dcdash_e2e --profile dev down -v` removes it right away.
 
@@ -429,8 +429,10 @@ interval are not collected.
    step 4) rather than lose those hours (the 1-minute tier is kept for `rollup_1m_retention_days`, 730
    by default, while the hourly tier is kept forever). Stop and decide before going on. Also run
    `SELECT value FROM settings WHERE key = 'storage';`: a `raw_retention_days` below 8 is raised to 8
-   by the migration, and the retention policy is applied again. **`raw_retention_days` below 8: stop**
-   and run this as well:
+   by the migration, and the retention policy is applied again. **Always run the next query as well,
+   whatever `raw_retention_days` says** (it is cheap). The hazard depends on the history, not on today's
+   setting: an install that raised its retention within the last 8 days shows 8 or more and can still
+   hold minutes whose raw data was already dropped.
 
    ```sql
    SELECT min(bucket) AS oldest, max(bucket) AS newest, (SELECT min(ts) FROM readings) AS oldest_raw
@@ -439,12 +441,13 @@ interval are not collected.
      AND bucket < coalesce((SELECT time_bucket(INTERVAL '1 minute', min(ts)) FROM readings), 'infinity');
    ```
 
-   If `oldest` is not empty, the raw retention has already dropped raw data that the rollups still hold
-   from the last 8 days. Phase 3 refreshes the rollups over their last 7 days, which would delete those
-   minutes and then the hours built from them (`readings_1h` is the only copy of those). Migration 0004
-   refuses to run in that state (see step 4). Raise the raw retention first (step 4 has the SQL), wait
-   until the day after `newest` + 8 days, run the query again (it must return an empty `oldest`), and
-   only then go on with step 3.
+   If it returns rows (`oldest` is not empty), **stop**: the raw retention has already dropped raw data
+   that the rollups still hold from the last 8 days. Phase 3 refreshes the rollups over their last 7
+   days, which would delete those minutes and then the hours built from them (`readings_1h` is the only
+   copy of those). Migration 0004 refuses to run in that state (see step 4). Raise the raw retention
+   first (step 4 has the SQL), wait until `newest` + 8 days + 1 minute (the migration's message prints
+   that time as well), run the query again (it must return an empty `oldest`), and only then go on with
+   step 3.
 3. **Apply.** Only when you mean to upgrade: `docker compose --profile dev up -d --build` (without
    `--profile dev` on a stack that has no simulator). Alembic prints nothing while it migrates, so watch
    `docker compose logs -f api` until Uvicorn's start-up lines appear (`Application startup complete`);
@@ -473,13 +476,15 @@ interval are not collected.
      ```
 
      (`docker compose exec db psql -U dcdash -d dcdash`; the Storage page of the Phase 2 app does the same
-     when that app is running.) Start the upgrade again (step 3) after the date and time that the message
-     prints: the newest of the affected minutes is then more than 8 days old. The rollup rows that lost
-     their raw data stay as they are until then. Until then there is no collection and no UI on the
-     Phase 3 images. The database is still at `0003`, so you can run Phase 2 meanwhile: do step 6 without
-     its sub-step 5 (nothing was migrated, so no restore: sub-steps 1 to 4, then 6), raise the retention on
-     Phase 2's Storage page instead of with the SQL above, and `git checkout phase-3-dashboards-billing`
-     again when the date has passed.
+     when that app is running.) The rollup rows that lost their raw data stay as they are until the date and
+     time that the message prints, when the newest of the affected minutes is more than 8 days old. Until
+     then there is no collection and no UI on the Phase 3 images. The database is still at `0003`, so you
+     can run Phase 2 meanwhile: do step 6 without its sub-step 5 (nothing was migrated, so no restore:
+     sub-steps 1 to 4, then 6), raise the retention on Phase 2's Storage page instead of with the SQL
+     above, and `git checkout phase-3-dashboards-billing` again when the date has passed. Then start again
+     at step 1 and take a fresh backup: the one from before the wait lacks everything collected since
+     (Phase 2 may have run for days), and a restore of it would lose that data. Go on with steps 2 and 3
+     after it.
    - Any other error that repeats: `docker compose stop api` and report the error.
    - Never use `docker compose down -v`: it deletes the database volume.
 5. **Verify.**
