@@ -1,4 +1,5 @@
 import { act, screen } from "@testing-library/react";
+import { PARTIAL_TIP } from "../components/Figure";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { AssetPage } from "./AssetPage";
@@ -14,21 +15,24 @@ class FakeEventSource {
   emit(data: unknown) { this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent); }
 }
 
-const summary = (energy: unknown) => ({
+/** `cost` defaults to what the API sends for the energy figure: both are null together and share `no_data` (API reference section 5). */
+const summary = (energy: unknown, cost?: unknown) => ({
   asset: { id: 4, name: "Panel 1", parent_id: 1, kind: "panel" },
   metrics: [
     { mapping_id: 1, point_id: 7, metric: "active_power_kw", unit: "kW", value: 10.5, ts: "2026-10-07T10:00:00+00:00", quality: 0 },
     { mapping_id: 2, point_id: 8, metric: "voltage_v", unit: "V", value: null, ts: null, quality: null },
   ],
   energy_today: energy,
-  cost_today: null,
-  currency: null,
+  cost_today: cost !== undefined ? cost : energy === null
+    ? null
+    : { cost: null, estimated: false, partial: false, no_data: (energy as { no_data: boolean }).no_data },
+  currency: "QAR",
 });
-const routes = (energy: unknown) => ({
+const routes = (energy: unknown, cost?: unknown) => ({
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
-  "GET /api/assets/4/summary": { body: summary(energy) },
+  "GET /api/assets/4/summary": { body: summary(energy, cost) },
   "GET /api/assets/4/series": { body: { metric: "active_power_kw", unit: "kW", points: [] } },
 });
 
@@ -80,5 +84,55 @@ describe("AssetPage", () => {
     mockFetch(routes(null));
     renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
     expect(await screen.findByText("no energy data")).toBeInTheDocument();
+  });
+
+  it("shows today's cost next to the energy tile, with the currency and the partial mark", async () => {
+    mockFetch(routes(
+      { kwh: 3.25, estimated: false, no_data: false },
+      { cost: 0.39, estimated: false, partial: true, no_data: false },
+    ));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    expect(await screen.findByText("Cost today")).toBeInTheDocument();
+    expect(screen.getByText("0.39")).toBeInTheDocument();
+    expect(screen.getByText("QAR")).toBeInTheDocument();
+    expect(screen.getByTitle(PARTIAL_TIP)).toBeInTheDocument();
+    expect(screen.getByText("Energy today")).toBeInTheDocument();
+  });
+
+  it("shows a dash for the cost when no rate is set", async () => {
+    mockFetch(routes({ kwh: 3.25, estimated: false, no_data: false }, { cost: null, estimated: false, partial: false, no_data: false }));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    expect(await screen.findByText("no rate set")).toBeInTheDocument();
+  });
+
+  it("shows no cost data for an asset without an energy figure", async () => {
+    mockFetch(routes(null));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    expect(await screen.findByText("no cost data")).toBeInTheDocument();
+    expect(screen.getByText("no energy data")).toBeInTheDocument();
+  });
+
+  it("mutes the energy and cost tiles when nothing was recorded today", async () => {
+    mockFetch(routes(
+      { kwh: 0, estimated: false, no_data: true },
+      { cost: 0, estimated: false, partial: false, no_data: true },
+    ));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    await screen.findByText("Cost today");
+    for (const label of ["Energy today", "Cost today"]) {
+      const figure = screen.getByText(label).closest(".tile")!.querySelector(".big")!;
+      expect(figure).toHaveClass("muted");
+      expect(figure).toHaveAttribute("title", "no data");
+    }
+    expect(screen.getByText("0.00 kWh")).toBeInTheDocument();
+  });
+
+  it("leaves the tiles unmuted when today has data", async () => {
+    mockFetch(routes({ kwh: 3.25, estimated: false, no_data: false }, { cost: 0.39, estimated: false, partial: false, no_data: false }));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    await screen.findByText("Cost today");
+    for (const label of ["Energy today", "Cost today"]) {
+      expect(screen.getByText(label).closest(".tile")!.querySelector(".big")).not.toHaveClass("muted");
+    }
   });
 });

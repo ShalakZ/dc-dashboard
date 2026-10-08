@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo } from "react";
 import { Link, useParams } from "react-router";
 import { useSummary } from "../api/queries";
+import { CostTile } from "../components/CostTile";
 import { EnergyTile } from "../components/EnergyTile";
 import { fmt, MetricsTable } from "../components/MetricsTable";
 import { useStream } from "../hooks/useStream";
@@ -24,6 +25,7 @@ export function AssetPage() {
       <div className="row"><h1>{data.asset.name}</h1><span className="muted">{connected ? "live" : "reconnecting…"}</span></div>
       <div className="tile"><div className="muted">Live power</div><div className="big">{power ? `${fmt(livePower)} kW` : "—"}</div></div>
       <EnergyTile energy={data.energy_today} />
+      <CostTile cost={data.cost_today ?? null} currency={data.currency ?? null} />
       <h2>Trend</h2>
       <Suspense fallback={<p className="muted">loading chart…</p>}>
         <TrendChart assetId={id} metrics={data.metrics} />
