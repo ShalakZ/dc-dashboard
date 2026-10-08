@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router";
 import { AuthProvider } from "../auth/AuthProvider";
 
 export function renderWithProviders(ui: ReactElement, { route = "/", path = "*" } = {}) {
@@ -19,4 +19,29 @@ export function renderWithProviders(ui: ReactElement, { route = "/", path = "*" 
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+/**
+ * Like renderWithProviders, but under a data router (createMemoryRouter) as in production; `useBlocker` needs one.
+ * `route` may carry router state ({ pathname, state }). The router is returned so a test can navigate and read the location.
+ * /login, /setup, /assets and /dashboards render plain stubs ("login page", "assets page", ...) unless `path` is one of them.
+ */
+export function renderWithDataRouter(
+  ui: ReactElement,
+  { route = "/", path = "*" }: { route?: string | { pathname: string; state?: unknown }; path?: string } = {},
+) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const stubs = [["/login", "login page"], ["/setup", "setup page"], ["/assets", "assets page"], ["/dashboards", "dashboards page"]] as const;
+  const router = createMemoryRouter(
+    [{ path, element: ui }, ...stubs.filter(([stubPath]) => stubPath !== path).map(([stubPath, text]) => ({ path: stubPath, element: <p>{text}</p> }))],
+    { initialEntries: [route] },
+  );
+  const result = render(
+    <QueryClientProvider client={client}>
+      <AuthProvider>
+        <RouterProvider router={router} />
+      </AuthProvider>
+    </QueryClientProvider>,
+  );
+  return { ...result, router };
 }
