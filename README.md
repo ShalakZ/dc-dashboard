@@ -423,7 +423,22 @@ interval are not collected.
    step 4) rather than lose those hours (the 1-minute tier is kept for `rollup_1m_retention_days`, 730
    by default, while the hourly tier is kept forever). Stop and decide before going on. Also run
    `SELECT value FROM settings WHERE key = 'storage';`: a `raw_retention_days` below 8 is raised to 8
-   by the migration, and the retention policy is applied again.
+   by the migration, and the retention policy is applied again. **`raw_retention_days` below 8: stop**
+   and run this as well:
+
+   ```sql
+   SELECT min(bucket) AS oldest, max(bucket) AS newest, (SELECT min(ts) FROM readings) AS oldest_raw
+   FROM readings_1m
+   WHERE bucket >= now() - INTERVAL '8 days'
+     AND bucket < coalesce((SELECT time_bucket(INTERVAL '1 minute', min(ts)) FROM readings), 'infinity');
+   ```
+
+   If `oldest` is not empty, the raw retention has already dropped raw data that the rollups still hold
+   from the last 8 days. Phase 3 refreshes the rollups over their last 7 days, which would delete those
+   minutes and then the hours built from them (`readings_1h` is the only copy of those). Migration 0004
+   refuses to run in that state (see step 4). Raise the raw retention first (step 4 has the SQL), wait
+   until the day after `newest` + 8 days, run the query again (it must return an empty `oldest`), and
+   only then go on with step 3.
 3. **Apply.** Only when you mean to upgrade: `docker compose --profile dev up -d --build` (without
    `--profile dev` on a stack that has no simulator). Alembic prints nothing while it migrates, so watch
    `docker compose logs -f api` until Uvicorn's start-up lines appear (`Application startup complete`);
@@ -439,6 +454,22 @@ interval are not collected.
      history`: this is the case from step 2 (`h` earlier than `m`, or `m` empty while `h` is not). Nothing
      was changed, but Compose restarts the `api` in a loop and it stops at the same place every time.
      Run `docker compose stop api`, take a backup (step 1) and report the message.
+   - The log shows `migration 0004 was stopped before it changed anything, because it widens the refresh
+     window of the rollups to 7 days`: this is the second query of step 2 returning a row. Nothing was
+     changed (the database is still at `0003`), but Compose restarts the `api` in a loop and it stops at
+     the same place every time. Run `docker compose stop api`, then raise the raw retention to at least 8
+     days (or to `compress_after_days` + 1 when that is larger) so that no more raw data is dropped:
+
+     ```sql
+     UPDATE settings SET value = jsonb_set(value, '{raw_retention_days}', '8') WHERE key = 'storage';
+     SELECT remove_retention_policy('readings', if_exists => true);
+     SELECT add_retention_policy('readings', INTERVAL '8 days');
+     ```
+
+     (`docker compose exec db psql -U dcdash -d dcdash`; the Storage page of the Phase 2 app does the same
+     when that app is running.) Start the upgrade again (step 3) after the date and time that the message
+     prints: the newest of the affected minutes is then more than 8 days old. The rollup rows that lost
+     their raw data stay as they are until then.
    - Any other error that repeats: `docker compose stop api` and report the error.
    - Never use `docker compose down -v`: it deletes the database volume.
 5. **Verify.**
@@ -450,7 +481,9 @@ interval are not collected.
      until you set it) and the storage settings.
    - In the UI, set the currency and the rates on Tariffs. Check that Settings has a timezone with
      whole-hour UTC offsets, or Billing answers 409.
-6. **Going back.** Restoring the step 1 dump on the Phase 3 image does not undo the upgrade: its
+6. **Going back.** Do not run `alembic downgrade`: it rebuilds the hourly rollup from the minutes again and
+   refuses (leaving the database as it is) when that would lose hourly history older than the 1-minute
+   tier. Restoring the step 1 dump on the Phase 3 image does not undo the upgrade: its
    `.version` says `0003` while the running schema is `0004`, so `scripts/restore.sh` refuses without
    `--force`, and with `--force` the script restarts the existing `api` and `collector` containers,
    which run migration 0004 again. To really return to Phase 2, restore with the Phase 2 code and images

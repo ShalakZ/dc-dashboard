@@ -3,7 +3,7 @@
 Revision ID: 0004
 Revises: 0003
 """
-from datetime import timezone
+from datetime import timedelta, timezone
 
 import sqlalchemy as sa
 from alembic import op
@@ -117,9 +117,9 @@ UP = [
 
 DOWN = [
     *RESTORE,
-    "DROP TABLE widgets",
-    "DROP TABLE dashboards",
-    "DROP TABLE tariffs",
+    "DROP TABLE IF EXISTS widgets",
+    "DROP TABLE IF EXISTS dashboards",
+    "DROP TABLE IF EXISTS tariffs",
     "DELETE FROM settings WHERE key = 'billing'",
 ]
 
@@ -174,13 +174,20 @@ SELECT (SELECT min(bucket) FROM readings_1h) AS oldest_hour,
 """
 
 
-def _refuse_to_lose_hourly_history(bind) -> None:
+def _stamp(moment) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _refuse_to_lose_hourly_history(bind, direction: str = "upgrade") -> None:
     """Raise, before anything is changed, if rebuilding readings_1h from readings_1m would lose hourly history.
 
     Skipped when the view does not exist: that is a run after an earlier attempt dropped it and died before
     CREATE ... WITH DATA finished (compose restarts the api, which runs this again). A run from 0001 is not that case:
     0002 has just created the view, empty, and the check runs on it and passes. After a successful rebuild the view
     holds only hours of readings_1m, so the check passes then too and the migration can be run again.
+
+    `direction` is "upgrade" or "downgrade": both rebuild the view from readings_1m, so both need the check, but the
+    operator reads a different message (an upgrade runs when the api starts; a downgrade is run by hand).
     """
     if not bind.execute(sa.text("SELECT to_regclass('readings_1h') IS NOT NULL")).scalar():
         return
@@ -188,25 +195,76 @@ def _refuse_to_lose_hourly_history(bind) -> None:
         return
     oldest, rebuild_from = bind.execute(sa.text(_HOURLY_HISTORY_RANGE)).one()
 
-    def stamp(moment) -> str:
-        return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
     if rebuild_from is None:
         starts, lost = "readings_1m is empty and the rebuilt view would hold no hours at all", "every hour of readings_1h"
     else:
-        starts, lost = f"the rebuild would start from {stamp(rebuild_from)}", "every hour before that"
+        starts, lost = f"the rebuild would start from {_stamp(rebuild_from)}", "every hour before that"
+    if direction == "downgrade":
+        raise RuntimeError(
+            "the downgrade of migration 0004 was stopped before it changed anything, because rebuilding the hourly "
+            "rollup (readings_1h) in its Phase 2 form from the 1-minute rollup (readings_1m) would permanently lose "
+            f"hourly history. The oldest hour in readings_1h is {_stamp(oldest)}, but {starts}, so {lost} would be "
+            "lost. The database is still at revision 0004. Do not downgrade it: to get back to Phase 2, restore a "
+            "backup that was taken before the upgrade (README, 'Upgrading an existing database to Phase 3', step 6)."
+        )
     raise RuntimeError(
         "migration 0004 was stopped before it changed anything, because rebuilding the hourly rollup (readings_1h) from "
         "the 1-minute rollup (readings_1m) would permanently lose hourly history. "
-        f"The oldest hour in readings_1h is {stamp(oldest)}, but {starts}, so {lost} would be lost. "
+        f"The oldest hour in readings_1h is {_stamp(oldest)}, but {starts}, so {lost} would be lost. "
         "Stop the api now (docker compose stop api; compose otherwise restarts it in a loop and it stops here every "
         "time), take a backup with scripts/backup.sh and keep both the .dump and the .version file it writes, then "
         "report this message or restore the backup with scripts/restore.sh."
     )
 
 
+# The refresh windows above reach back 7 days. A refresh recomputes every invalidated bucket in its window from raw,
+# and drop_chunks (so the raw retention policy) logs an invalidation over each chunk it drops. Phase 2 refreshed
+# readings_1m over the last 3 hours only, so those invalidations stayed pending; the first run of the wider window
+# processes them, finds no raw data, deletes the minutes, and the hourly refresh then deletes the same hours (the only
+# copy of them). Raw data can only be missing after a drop or a delete, so the hazard is present exactly when
+# readings_1m holds a bucket inside the window (with a day to spare: the retention floor of 8 days) that lies before
+# the minute of the oldest raw reading. The reading itself is not compared: its own bucket starts before it. Raw
+# retention of 8 days or more never drops anything that young, and an empty readings table (before 'infinity') with
+# minutes in the window is the same case, all of it dropped.
+_MINUTES_WITHOUT_RAW = """
+SELECT min(bucket) AS oldest, max(bucket) AS newest, (SELECT min(ts) FROM readings) AS oldest_raw
+FROM readings_1m
+WHERE bucket >= coalesce(CAST(:now AS timestamptz), now()) - make_interval(days => :days)
+  AND bucket < coalesce((SELECT time_bucket(INTERVAL '1 minute', min(ts)) FROM readings), 'infinity')
+"""
+
+
+def _refuse_to_widen_over_dropped_raw(bind, now=None) -> None:
+    """Raise, before anything is changed, if the rollups hold recent minutes whose raw data retention already dropped.
+
+    `now` is for tests; the database's clock is used otherwise, like the refresh policies do. The message names the
+    first date on which the check passes: the newest such minute has then left the 8-day window (the minute after it,
+    because the window includes its own start), and the older ones left it before.
+    """
+    oldest, newest, oldest_raw = bind.execute(
+        sa.text(_MINUTES_WITHOUT_RAW), {"now": now, "days": MIN_RAW_RETENTION_DAYS}
+    ).one()
+    if oldest is None:
+        return
+    raw = f"the oldest raw reading is {_stamp(oldest_raw)}" if oldest_raw is not None else "readings holds no raw data"
+    retry_after = newest + timedelta(days=MIN_RAW_RETENTION_DAYS, minutes=1)
+    raise RuntimeError(
+        "migration 0004 was stopped before it changed anything, because it widens the refresh window of the rollups to "
+        "7 days, and a refresh that reaches minutes whose raw data is already gone deletes them, and then the hours "
+        "built from them (readings_1h is the only copy of those). The raw retention has dropped raw data that the "
+        f"rollups still hold: the oldest minute bucket is {_stamp(oldest)} and the newest is {_stamp(newest)}, while "
+        f"{raw}. "
+        "Stop the api now (docker compose stop api; compose otherwise restarts it in a loop and it stops here every "
+        "time). Then set the raw retention to at least 8 days (raw_retention_days, Settings > Storage in the Phase 2 "
+        "app, or the SQL in the README under 'Upgrading an existing database to Phase 3', step 4), so that no more raw "
+        f"data is dropped, and start the upgrade again after {_stamp(retry_after)}, when the newest of these minutes "
+        "is more than 8 days old. Nothing has been changed until then."
+    )
+
+
 def upgrade() -> None:
     _refuse_to_lose_hourly_history(op.get_bind())
+    _refuse_to_widen_over_dropped_raw(op.get_bind())
     # Continuous aggregates cannot be created inside a transaction block. The rebuild goes first: it is the only
     # step that can fail half way, and every statement in it can be run again (DROP ... IF EXISTS), whereas the
     # transaction that follows creates the tables and either completes or leaves nothing behind.
@@ -219,6 +277,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The rebuild below is as lossy as the one of upgrade(): hours older than the 1-minute tier keeps do not survive it.
+    _refuse_to_lose_hourly_history(op.get_bind(), direction="downgrade")
     with op.get_context().autocommit_block():
         for statement in HOURLY_DOWN:
             op.execute(statement)
