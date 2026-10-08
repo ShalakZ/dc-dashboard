@@ -66,7 +66,7 @@ td code { overflow-wrap: anywhere; white-space: pre-wrap; }
 .table-scroll { overflow-x: auto; }
 table.billing th, table.billing td { white-space: nowrap; }
 table.billing tbody th[scope="row"] { position: sticky; left: 0; background: #fff; font-weight: normal; }
-table.billing td.muted, table.billing td.muted .muted { color: #999; }
+table.billing td.muted, table.billing td.muted .muted { color: #666; }
 table.billing td.muted { background: #f4f4f4; }
 td.num { text-align: right; }
 abbr[title] { text-decoration: none; cursor: help; }
@@ -88,7 +88,7 @@ ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; pad
 .chip-warn { border-color: #b00; color: #b00; }
 .stat .big { font-size: 32px; }
 .stat .big small { font-size: 14px; margin-left: 4px; }
-.stat .big.muted { color: #999; }
+.stat .big.muted { color: #6e6e6e; }
 .gauge { height: 100%; display: flex; flex-direction: column; }
 .dialog.narrow { width: min(440px, 100%); }
 @media (max-width: 700px) {

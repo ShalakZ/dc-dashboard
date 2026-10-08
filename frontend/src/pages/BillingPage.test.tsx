@@ -103,11 +103,12 @@ describe("BillingPage", () => {
     expect(screen.getByText(/partial: some consumption had no rate/i)).toBeInTheDocument();
   });
 
-  it("explains every symbol in the legend: the dash means no rate, grey means no data, an empty cell means no figure", async () => {
+  it("explains every symbol in the legend: the dash means no rate, a shaded cell means no data, an empty cell means no figure", async () => {
     open();
     await screen.findByRole("rowheader", { name: "Site" });
     expect(screen.getByText("— no rate")).toBeInTheDocument();
-    expect(screen.getByText(/grey: no data was recorded/i)).toBeInTheDocument();
+    expect(screen.getByText("shaded cell: no data was recorded, so the 0 is not a measurement")).toBeInTheDocument();
+    expect(screen.queryByText(/grey/i)).not.toBeInTheDocument(); // the cell is told apart by its shading, not by a colour name
     expect(screen.getByText(/empty cell: no meter, or the day has not been reached yet/i)).toBeInTheDocument();
   });
 
@@ -117,12 +118,16 @@ describe("BillingPage", () => {
     expect(cellsOf("Annex")).toEqual(["—", "7.0|—", "4.0|—", "3.0|—", "0.0|—"]); // no rate in effect: the kWh show, the cost is a dash
     expect(cellsOf("LV Panel 1")[2]).toBe("5.0|—"); // the day before its rate starts
     expect(screen.getByRole("link", { name: /Set a rate on the Tariffs page/ })).toHaveAttribute("href", "/tariffs");
+    // a partial total shows `*` and a missing one a dash: the banner names both
+    expect(screen.getByRole("status")).toHaveTextContent("Some consumption has no rate (shown as — or *).");
+    expect(screen.getByRole("status")).not.toHaveTextContent("shows a dash");
   });
 
   it("tells a viewer to ask an administrator instead of linking to Tariffs", async () => {
     open("viewer");
     await screen.findByRole("rowheader", { name: "LV Panel 1" });
     expect(screen.getByText(/ask an administrator/i)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Some consumption has no rate (shown as — or *). Ask an administrator to set one.");
     expect(screen.queryByRole("link", { name: /Tariffs/ })).not.toBeInTheDocument();
   });
 

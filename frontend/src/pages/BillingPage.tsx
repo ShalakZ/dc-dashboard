@@ -32,7 +32,7 @@ function Legend() {
       <li><abbr title={ESTIMATED_TIP}>~</abbr> estimated from average power (no energy counter)</li>
       <li><abbr title={PARTIAL_TIP}>*</abbr> partial: some consumption had no rate</li>
       <li>— no rate</li>
-      <li>grey: no data was recorded, so the 0 is not a measurement</li>
+      <li>shaded cell: no data was recorded, so the 0 is not a measurement</li>
       <li>empty cell: no meter, or the day has not been reached yet</li>
     </ul>
   );
@@ -47,10 +47,10 @@ function BillingTable({ costs, isAdmin }: { costs: BillingCosts; isAdmin: boolea
     <>
       {missingRate && (isAdmin ? (
         <p role="status">
-          Some consumption has no rate, so its cost shows a dash. <Link to="/tariffs">Set a rate on the Tariffs page</Link>.
+          Some consumption has no rate (shown as — or *). <Link to="/tariffs">Set a rate on the Tariffs page</Link>.
         </p>
       ) : (
-        <p role="status" className="muted">Some consumption has no rate, so its cost shows a dash. Ask an administrator to set one.</p>
+        <p role="status" className="muted">Some consumption has no rate (shown as — or *). Ask an administrator to set one.</p>
       ))}
       <div className="table-scroll">
         <table className="billing">
