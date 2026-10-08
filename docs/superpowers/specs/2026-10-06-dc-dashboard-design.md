@@ -561,7 +561,7 @@ for each type.
 - `POST /api/widget-data/csv` exports the same query: UTF-8 with a byte-order
   mark so Excel opens it cleanly; columns asset (full path), source or metric,
   unit or currency, bucket start (site timezone, ISO with offset), value,
-  `estimated`, `partial`. Cell text starting with `=`, `+`, `-`, `@`, tab or
+  `estimated`, `partial`, `no_data`. Cell text starting with `=`, `+`, `-`, `@`, tab or
   carriage return is prefixed with an apostrophe, because asset names are typed
   by users and spreadsheets would run them as formulas.
 
