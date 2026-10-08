@@ -571,7 +571,8 @@ Admin: tariffs and currency (the Tariffs screen is admin-only; operators read
 tariffs through the API). Operator: create, edit and delete dashboards. Everyone: read dashboards, billing, widget data and CSV. Audited
 actions: `tariff.created`, `tariff.updated`, `tariff.deleted`,
 `billing.currency_changed`, `dashboard.created`, `dashboard.updated`,
-`dashboard.deleted`. Reads and exports are not audited.
+`dashboard.deleted`, and (spec section 6) `asset.deleted` and `source.deleted`.
+Reads and exports are not audited.
 
 ### 10.8 Screens
 
