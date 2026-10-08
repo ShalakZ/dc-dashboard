@@ -93,3 +93,97 @@ describe("legend selection, kept by the real chart library", () => {
     chart.dispose();
   });
 });
+
+describe("the time axis of an energy or cost series, drawn by the real chart library", () => {
+  // The chart is 600 wide with the grid at left 60 and right 20 (timeSeriesOption), so the plot spans x = 60 to 580.
+  const PLOT_LEFT = 60;
+  const PLOT_RIGHT = 580;
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+  type XAxis = { min?: number; max?: number; axisLabel: { hideOverlap?: boolean } };
+  const xAxisOf = (option: unknown) => (option as { xAxis: XAxis }).xAxis;
+
+  /** The text of the x axis tick labels the chart drew: the texts below the plot (its bottom edge is y = 300 - 30). */
+  function tickLabels(option: unknown): string[] {
+    const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: 600, height: 300 });
+    chart.setOption(option as echarts.EChartsOption);
+    const svg = chart.renderToSVGString();
+    chart.dispose();
+    return [...svg.matchAll(/<text\b[^>]*transform="translate\([\d.]+ ([\d.]+)\)"[^>]*>([^<]*)<\/text>/g)]
+      .filter((m) => Number(m[1]) > 270)
+      .map((m) => m[2]);
+  }
+  /** x of every dot (a filled arc, drawn as a matrix scaled by its radius) in the SVG. */
+  function dotXs(option: unknown, color: string): number[] {
+    const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: 600, height: 300 });
+    chart.setOption(option as echarts.EChartsOption);
+    const svg = chart.renderToSVGString();
+    chart.dispose();
+    return (svg.match(/<path\b[^>]*>/g) ?? [])
+      .filter((tag) => attr(tag, "fill") === color && (attr(tag, "d") ?? "").includes("A"))
+      .map((tag) => Number(/matrix\([^,]+,[^,]+,[^,]+,[^,]+,([\d.]+),/.exec(attr(tag, "transform") ?? "")?.[1]));
+  }
+
+  const oneHour = seriesData({
+    source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null,
+    range: { preset: "1h", start: "2026-10-08T10:00:00+03:00", end: "2026-10-08T10:30:00+03:00" },
+    series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T10:00:00+03:00", value: 1.5 })] }],
+  });
+
+  it("bounds the axis of a one-bucket 1h energy series to its hour, so it is not stretched over about 42 hours", () => {
+    const option = timeSeriesOption(oneHour, "Asia/Qatar");
+    const { min, max } = xAxisOf(option);
+    const start = Date.parse("2026-10-08T10:00:00+03:00");
+    expect(min).toBeLessThanOrEqual(start);
+    expect(max).toBeGreaterThanOrEqual(start + HOUR); // the bucket's whole hour is on the axis
+    expect(max! - min!).toBeLessThanOrEqual(1.2 * HOUR); // the hour, plus room for the dot
+    const labels = tickLabels(option);
+    expect(labels.length).toBeGreaterThanOrEqual(2); // there are ticks to look at
+    for (const label of labels) expect(label).toMatch(/^10-08 (10:\d\d|11:00)$/); // all inside 10:00 to 11:00, none a day away
+  });
+
+  it("keeps the only dot of that series inside the plot, not half-clipped on its edge", () => {
+    const option = timeSeriesOption(oneHour, "Asia/Qatar");
+    const xs = dotXs(option, (option as { series: { color?: string }[] }).series[0].color!);
+    expect(xs).toHaveLength(1);
+    expect(xs[0] - PLOT_LEFT).toBeGreaterThanOrEqual(3); // the symbol's radius is 3
+    expect(PLOT_RIGHT - xs[0]).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps the first day bucket of a rolling 7d series, which is labelled before range.start, and the last bucket's whole day, on the axis", () => {
+    const days = Array.from({ length: 8 }, (_, i) => `2026-10-0${i + 1}T00:00:00+03:00`);
+    const week = seriesData({
+      source: "energy", metric: null, unit: "kWh", bucket: "day", tier: null,
+      range: { preset: "7d", start: "2026-10-01T10:00:00+03:00", end: "2026-10-08T10:30:00+03:00" },
+      series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: days.map((ts, i) => seriesPoint({ ts, value: 10 + i })) }],
+    });
+    const option = timeSeriesOption(week, "Asia/Qatar");
+    const { min, max } = xAxisOf(option);
+    expect(Date.parse(days[0])).toBeLessThan(Date.parse("2026-10-01T10:00:00+03:00")); // the premise: the first bucket is before the range
+    expect(min).toBeLessThanOrEqual(Date.parse(days[0]));
+    expect(max).toBeGreaterThanOrEqual(Date.parse(days[7]) + DAY);
+    // and the first and last points are drawn inside the plot
+    const color = (option as { series: { id?: string; color?: string }[] }).series.find((s) => s.id === "avg-5")!.color!;
+    const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: 600, height: 300 });
+    chart.setOption(option as echarts.EChartsOption);
+    const [line] = (chart.renderToSVGString().match(/<path\b[^>]*>/g) ?? []).filter((tag) => attr(tag, "stroke") === color && (attr(tag, "d") ?? "").includes("L"));
+    chart.dispose();
+    const coords = [...attr(line, "d")!.matchAll(/[ML]([\d.]+) /g)].map((m) => Number(m[1]));
+    expect(coords).toHaveLength(8);
+    expect(coords[0]).toBeGreaterThan(PLOT_LEFT);
+    expect(coords[7]).toBeLessThan(PLOT_RIGHT);
+    const labels = tickLabels(option);
+    expect(labels.length).toBeGreaterThanOrEqual(2);
+    for (const label of labels) expect(label).toMatch(/^\d\d-\d\d$/); // day labels
+  });
+
+  it("leaves the axis of a metric series to the chart (no min or max), and never lets labels overlap on any time series", () => {
+    const start = Date.UTC(2026, 9, 1);
+    const points = Array.from({ length: 300 }, (_, i) => seriesPoint({ ts: new Date(start + i * 288_000).toISOString(), value: 10 + (i % 9), min: 9, max: 12 }));
+    const metric = timeSeriesOption(seriesData({ tier: "1m", series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points }] }), "Asia/Qatar");
+    expect(xAxisOf(metric)).not.toHaveProperty("min");
+    expect(xAxisOf(metric)).not.toHaveProperty("max");
+    expect(xAxisOf(metric).axisLabel.hideOverlap).toBe(true);
+    expect(xAxisOf(timeSeriesOption(oneHour, "Asia/Qatar")).axisLabel.hideOverlap).toBe(true);
+  });
+});
