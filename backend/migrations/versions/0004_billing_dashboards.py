@@ -3,6 +3,8 @@
 Revision ID: 0004
 Revises: 0003
 """
+from datetime import timezone
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -158,7 +160,53 @@ def _raise_short_raw_retention() -> None:
     bind.execute(sa.text("SELECT add_retention_policy('readings', make_interval(days => :days))"), {"days": floor})
 
 
+# The hourly rollup is rebuilt from readings_1m, which keeps minutes for `rollup_1m_retention_days` (730 by default),
+# while readings_1h has no retention policy. An install older than that holds hours that only readings_1h still has,
+# and rebuilding would silently drop them. This statement is true exactly then: some hour of readings_1h lies before
+# the hour that the oldest readings_1m bucket belongs to (before 'infinity' when readings_1m is empty).
+_HOURLY_HISTORY_WOULD_BE_LOST = """
+SELECT EXISTS (SELECT 1 FROM readings_1h WHERE bucket < coalesce(
+    (SELECT time_bucket(INTERVAL '1 hour', min(bucket)) FROM readings_1m), 'infinity'))
+"""
+_HOURLY_HISTORY_RANGE = """
+SELECT (SELECT min(bucket) FROM readings_1h) AS oldest_hour,
+       (SELECT time_bucket(INTERVAL '1 hour', min(bucket)) FROM readings_1m) AS rebuild_from
+"""
+
+
+def _refuse_to_lose_hourly_history(bind) -> None:
+    """Raise, before anything is changed, if rebuilding readings_1h from readings_1m would lose hourly history.
+
+    Skipped when the view does not exist: that is a run after an earlier attempt dropped it and died before
+    CREATE ... WITH DATA finished (compose restarts the api, which runs this again). A run from 0001 is not that case:
+    0002 has just created the view, empty, and the check runs on it and passes. After a successful rebuild the view
+    holds only hours of readings_1m, so the check passes then too and the migration can be run again.
+    """
+    if not bind.execute(sa.text("SELECT to_regclass('readings_1h') IS NOT NULL")).scalar():
+        return
+    if not bind.execute(sa.text(_HOURLY_HISTORY_WOULD_BE_LOST)).scalar():
+        return
+    oldest, rebuild_from = bind.execute(sa.text(_HOURLY_HISTORY_RANGE)).one()
+
+    def stamp(moment) -> str:
+        return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    if rebuild_from is None:
+        starts, lost = "readings_1m is empty and the rebuilt view would hold no hours at all", "every hour of readings_1h"
+    else:
+        starts, lost = f"the rebuild would start from {stamp(rebuild_from)}", "every hour before that"
+    raise RuntimeError(
+        "migration 0004 was stopped before it changed anything, because rebuilding the hourly rollup (readings_1h) from "
+        "the 1-minute rollup (readings_1m) would permanently lose hourly history. "
+        f"The oldest hour in readings_1h is {stamp(oldest)}, but {starts}, so {lost} would be lost. "
+        "Stop the api now (docker compose stop api; compose otherwise restarts it in a loop and it stops here every "
+        "time), take a backup with scripts/backup.sh and keep both the .dump and the .version file it writes, then "
+        "report this message or restore the backup with scripts/restore.sh."
+    )
+
+
 def upgrade() -> None:
+    _refuse_to_lose_hourly_history(op.get_bind())
     # Continuous aggregates cannot be created inside a transaction block. The rebuild goes first: it is the only
     # step that can fail half way, and every statement in it can be run again (DROP ... IF EXISTS), whereas the
     # transaction that follows creates the tables and either completes or leaves nothing behind.

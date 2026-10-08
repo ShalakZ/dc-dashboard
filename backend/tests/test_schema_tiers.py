@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
+from dcdash.core.db import get_sessionmaker
 from tests.helpers import insert_readings, make_point, make_source, refresh_policies, settle_rollups
 
 
@@ -82,16 +85,20 @@ def _head() -> str:
     return ScriptDirectory.from_config(config).get_current_head()
 
 
-def _alembic(*args: str) -> None:
+def _alembic_result(*args: str):
     import os
     import subprocess
     import sys
 
     from tests.conftest import BACKEND
 
-    result = subprocess.run(
+    return subprocess.run(
         [sys.executable, "-m", "alembic", *args], cwd=BACKEND, env=os.environ.copy(), capture_output=True, text=True
     )
+
+
+def _alembic(*args: str) -> None:
+    result = _alembic_result(*args)
     assert result.returncode == 0, result.stderr
 
 
@@ -278,3 +285,114 @@ async def test_the_rebuild_keeps_the_hourly_history_down_and_up(db):
     assert await _hourly_view_is_realtime(db)
     assert (await refresh_policies(db))["readings_1h"] == (timedelta(days=7), timedelta(hours=1), timedelta(minutes=10))
     assert await _refresh_job_count(db) == 2
+
+
+# ---- migration 0004 refuses to rebuild the hourly rollup when that would lose hours ------------------------------
+
+def _migration_0004():
+    import importlib.util
+
+    from tests.conftest import BACKEND
+
+    path = BACKEND / "migrations" / "versions" / "0004_billing_dashboards.py"
+    spec = importlib.util.spec_from_file_location("migration_0004", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def _run_guard() -> None:
+    """The migration's pre-flight check, run on a connection to the throwaway database (no alembic involved)."""
+    guard = _migration_0004()._refuse_to_lose_hourly_history
+    async with get_sessionmaker()() as session:
+        await session.run_sync(lambda sync_session: guard(sync_session.connection()))
+
+
+async def _materialization_table(db, view: str) -> str:
+    mat = await db.fetchrow(
+        "SELECT materialization_hypertable_schema AS schema, materialization_hypertable_name AS name "
+        "FROM timescaledb_information.continuous_aggregates WHERE view_name = $1", view
+    )
+    return f'"{mat["schema"]}"."{mat["name"]}"'
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+async def test_the_hourly_history_guard_passes_where_the_rebuild_loses_nothing(db):
+    await _run_guard()  # an empty database: the view is there and holds nothing
+    await _old_hour_with_samples_in_three_minutes(db)
+    await _run_guard()  # hours that readings_1m still covers, live (not yet materialized)
+    await settle_rollups(db)
+    await _run_guard()  # and materialized
+
+
+async def test_a_fresh_database_and_an_up_down_up_round_trip_pass_the_guard(db):
+    hour, pid = await _old_hour_with_samples_in_three_minutes(db)
+    await settle_rollups(db)
+    try:
+        _alembic("downgrade", "0001")  # 0002 re-creates the hourly view on the way up: an empty one for the guard
+        _alembic("upgrade", "head")
+        assert await db.fetchval("SELECT version_num FROM alembic_version") == _head()
+        _alembic("downgrade", "0003")
+        _alembic("upgrade", "head")  # the guard sees the view as 0003 rebuilt it, with its history
+    finally:
+        _alembic("upgrade", "head")
+    assert await _hourly_columns(db) == HOURLY_COLUMNS_0002 | {"minutes"}
+    assert await _refresh_job_count(db) == 2
+
+
+@pytest.mark.parametrize("newer_minutes", [False, True], ids=["minute-tier-empty", "minute-tier-starts-later"])
+async def test_the_rebuild_refuses_to_drop_hourly_history_the_minute_tier_no_longer_has(db, newer_minutes):
+    hour, pid = await _old_hour_with_samples_in_three_minutes(db)
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
+    if newer_minutes:  # the minute tier still holds another point's last two days
+        other = await make_point(db, await db.fetchval("SELECT id FROM sources LIMIT 1"), "LVP02_kW")
+        await insert_readings(db, other, recent + timedelta(minutes=5), 60, [1.0, 2.0])
+    await settle_rollups(db)
+    try:
+        _alembic("downgrade", "0003")
+        # What the 730-day retention policy does to readings_1m: the old minutes go, the hourly rows stay.
+        minute_rows = await _materialization_table(db, "readings_1m")
+        await db.execute(f"DELETE FROM {minute_rows} WHERE point_id = $1", pid)
+        assert await db.fetchval("SELECT count(*) FROM readings_1h WHERE point_id = $1", pid) == 1
+        assert await db.fetchval("SELECT count(*) FROM readings_1m WHERE point_id = $1", pid) == 0
+
+        result = _alembic_result("upgrade", "head")
+
+        assert result.returncode != 0
+        message = result.stderr
+        assert "scripts/backup.sh" in message and ".dump" in message and ".version" in message
+        assert "docker compose stop api" in message and "restarts it in a loop" in message
+        assert f"oldest hour in readings_1h is {_stamp(hour)}" in message
+        if newer_minutes:
+            assert f"would start from {_stamp(recent)}" in message
+        else:
+            assert "readings_1m is empty" in message
+        # nothing was changed: still 0003, the old hour is still there, and the view was not rebuilt
+        assert await db.fetchval("SELECT version_num FROM alembic_version") == "0003"
+        assert await db.fetchval("SELECT count(*) FROM readings_1h WHERE point_id = $1", pid) == 1
+        assert await _hourly_columns(db) == HOURLY_COLUMNS_0002
+    finally:
+        # accept the loss, which is what the operator's other choice amounts to, so the next tests start from head
+        hour_rows = await _materialization_table(db, "readings_1h")
+        await db.execute(f"DELETE FROM {hour_rows} WHERE point_id = $1", pid)
+        _alembic("upgrade", "head")
+    assert await db.fetchval("SELECT count(*) FROM readings_1h WHERE point_id = $1", pid) == 0
+
+
+async def test_a_rerun_after_an_attempt_that_died_without_the_hourly_view_succeeds(db):
+    # The first attempt dropped readings_1h and died before CREATE ... WITH DATA finished (compose then restarts the
+    # api, which runs the migration again): the guard must not read the missing view and fail with UndefinedTable.
+    try:
+        _alembic("downgrade", "0003")
+        await db.execute("DROP MATERIALIZED VIEW readings_1h")
+        assert await db.fetchval("SELECT to_regclass('readings_1h') IS NULL")
+        _alembic("upgrade", "head")
+        assert await db.fetchval("SELECT version_num FROM alembic_version") == _head()
+        assert await _hourly_columns(db) == HOURLY_COLUMNS_0002 | {"minutes"}
+        assert await _hourly_view_is_realtime(db)
+        assert await _refresh_job_count(db) == 2
+    finally:
+        _alembic("upgrade", "head")
