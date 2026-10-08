@@ -66,6 +66,14 @@ async def test_rollups_ignore_bad_quality(db):
     assert row["max_value"] == 1.0 and row["n"] == 1
 
 
+async def test_the_test_database_runs_no_timescaledb_background_jobs(db):
+    # conftest starts the container with -c timescaledb.max_background_workers=0; a policy job that ran would lock a
+    # rollup mid-test, move its watermark, or compress a chunk. Jobs are still defined (the tests above list them).
+    assert await db.fetchval("SHOW timescaledb.max_background_workers") == "0"
+    assert await db.fetchval("SELECT count(*) FROM timescaledb_information.jobs WHERE proc_name LIKE 'policy_%'") >= 4
+    assert await db.fetchval("SELECT count(*) FROM timescaledb_information.job_stats WHERE total_runs > 0") == 0
+
+
 async def test_storage_settings_default_row(db):
     row = await db.fetchrow("SELECT value FROM settings WHERE key = 'storage'")
     assert row is not None
@@ -177,6 +185,7 @@ async def test_upgrade_raises_a_raw_retention_shorter_than_the_refresh_window(db
         policies = await _raw_policies(db)
     finally:
         await _store_raw_policies(db, raw=30, compress=7)  # the fixture's policies, for the tests that follow
+        _alembic("upgrade", "head")  # a no-op at head; from 0003, when a step above failed, it puts the schema back
     assert stored["raw_retention_days"] == 8
     assert stored["compress_after_days"] == 1 and stored["rollup_1m_retention_days"] == 730  # nothing else moved
     assert policies["policy_retention"][1]["drop_after"] == "8 days"

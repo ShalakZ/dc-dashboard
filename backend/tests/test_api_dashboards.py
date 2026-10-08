@@ -42,6 +42,22 @@ def detail_text(response) -> str:
     return detail
 
 
+async def wait_until_blocked(db, request: asyncio.Task, timeout: float = 5.0, interval: float = 0.02) -> bool:
+    """Poll pg_stat_activity until another backend is waiting on a lock, i.e. `request` has reached the rival's lock.
+
+    Stops early, False, when `request` is already done (it did not wait) and after `timeout` seconds (there is no
+    pytest-timeout here, so a loop without a bound would hang the suite when a mutation removes the lock)."""
+    clock = asyncio.get_running_loop().time
+    deadline = clock() + timeout
+    while not request.done() and clock() < deadline:
+        if await db.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock')"
+        ):
+            return True
+        await asyncio.sleep(interval)
+    return False
+
+
 async def send(client, method: str, url: str, payload=None):
     return await getattr(client, method)(url, **({"json": payload} if payload is not None else {}))
 
@@ -432,8 +448,8 @@ async def test_creating_a_dashboard_waits_for_the_cap_lock(client, db):
     async with db.acquire() as holder, holder.transaction():
         await holder.execute("SELECT pg_advisory_xact_lock($1)", DASHBOARD_CAP_LOCK)
         pending = asyncio.create_task(client.post("/api/dashboards", json={"name": "Waits"}))
-        await asyncio.sleep(0.5)
-        assert not pending.done()
+        waiting = await wait_until_blocked(db, pending)
+        assert not pending.done() and waiting
     assert (await asyncio.wait_for(pending, timeout=5)).status_code == 201
 
 
@@ -498,8 +514,8 @@ async def test_a_save_waits_for_a_writer_in_progress_and_then_sees_its_stamp(cli
             dash["id"],
         )
         late = asyncio.create_task(save(client, dash, [widget("Late")], name="Late board"))
-        await asyncio.sleep(0.5)
-        assert not late.done()
+        waiting = await wait_until_blocked(db, late)
+        assert not late.done() and waiting
     assert (await asyncio.wait_for(late, timeout=5)).status_code == 409
     assert await db.fetchval("SELECT name FROM dashboards WHERE id = $1", dash["id"]) == "Rival"
     assert await db.fetchval("SELECT count(*) FROM widgets") == 0
@@ -529,8 +545,8 @@ async def test_a_name_taken_by_a_transaction_in_progress_is_409(client, db, oper
         else:
             attempt = save(client, mine, [], name="Taken")
         pending = asyncio.create_task(attempt)
-        await asyncio.sleep(0.5)
-        assert not pending.done()
+        waiting = await wait_until_blocked(db, pending)
+        assert not pending.done() and waiting
     response = await asyncio.wait_for(pending, timeout=5)
     assert response.status_code == 409 and "already exists" in response.json()["detail"]
     assert await db.fetchval("SELECT count(*) FROM dashboards") == 2

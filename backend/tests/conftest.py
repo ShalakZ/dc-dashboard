@@ -1,17 +1,17 @@
-import asyncio
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-import asyncpg
 import httpx
 import pytest
 from cryptography.fernet import Fernet
 from testcontainers.postgres import PostgresContainer
 
 os.environ.setdefault("DCDASH_SECRET_KEY", Fernet.generate_key().decode())
+
+from helpers import refresh_rollup  # noqa: E402  (imports dcdash, which needs the key above)
 
 BACKEND = Path(__file__).resolve().parents[1]
 TABLES = (
@@ -29,6 +29,11 @@ def database_url():
         dbname="dcdash",
         driver=None,
     )
+    # No TimescaleDB background workers: the policy jobs (refresh, compression, retention) never run, so no test can
+    # find a rollup locked by a job, or watch a job move the real-time watermark or compress a chunk behind its back.
+    # Foreground calls (refresh_continuous_aggregate, compress_chunk, add_*_policy) are unaffected, and no test
+    # relies on a job actually running (test_schema_tiers.py checks that the setting took effect).
+    container.with_command("postgres -c timescaledb.max_background_workers=0")
     with container as pg:
         url = pg.get_connection_url()
         os.environ["DCDASH_DATABASE_URL"] = url
@@ -61,30 +66,14 @@ async def pool(database_url):
     await pool.close()
 
 
-async def _full_refresh(pool, view: str) -> None:
-    """Refresh a rollup over all time, waiting out a policy job that is refreshing it right now.
-
-    A migration round-trip test re-creates the refresh policies, and a new policy job starts at once, so the next
-    test's fixture can find the view locked ("concurrent refresh"); the lock clears when the job finishes.
-    """
-    for attempt in range(50):
-        try:
-            await pool.execute(f"CALL refresh_continuous_aggregate('{view}', NULL, NULL)")
-            return
-        except asyncpg.LockNotAvailableError:
-            if attempt == 49:
-                raise
-            await asyncio.sleep(0.2)
-
-
 @pytest.fixture
 async def db(pool):
     await pool.execute(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE")
     # TRUNCATE leaves already-materialized rollup rows behind; a full refresh over an empty
     # source drops them. refresh_continuous_aggregate must run outside a transaction, which
     # asyncpg's autocommitting pool.execute satisfies.
-    await _full_refresh(pool, "readings_1m")
-    await _full_refresh(pool, "readings_1h")
+    await refresh_rollup(pool, "readings_1m")
+    await refresh_rollup(pool, "readings_1h")
     # A refresh only ever raises a rollup's real-time watermark (the point below which the view trusts the
     # materialized rows and ignores new raw ones), and settle_rollups raises it to about now. Put it back to its
     # initial value, after the refreshes above have emptied the materialized rows, so that a test which relies on

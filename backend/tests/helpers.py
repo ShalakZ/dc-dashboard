@@ -96,6 +96,17 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def free_ports(count: int) -> list[int]:
+    """`count` different free ports: free_port() can return the same number twice in a row, and a scan counts a
+    repeated port once."""
+    ports: list[int] = []
+    while len(ports) < count:
+        port = free_port()
+        if port not in ports:
+            ports.append(port)
+    return ports
+
+
 @contextlib.asynccontextmanager
 async def opcua_server(sim: Simulator | None = None, password: str | None = None):
     """Run an in-process OPC UA simulator server on a free port."""
@@ -162,10 +173,27 @@ async def insert_readings(db, point_id: int, start, step_seconds: float, values:
     await db.executemany("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", rows)
 
 
+async def refresh_rollup(db, view: str) -> None:
+    """Refresh a rollup over all time, waiting out a policy job that is refreshing it right now.
+
+    A migration round-trip test re-creates the refresh policies, and a new policy job can start at once, so the view
+    may be locked ("concurrent refresh"); the lock clears when the job finishes. refresh_continuous_aggregate must run
+    outside a transaction, which asyncpg's autocommitting pool.execute satisfies.
+    """
+    for attempt in range(50):
+        try:
+            await db.execute(f"CALL refresh_continuous_aggregate('{view}', NULL, NULL)")
+            return
+        except asyncpg.LockNotAvailableError:
+            if attempt == 49:
+                raise
+            await asyncio.sleep(0.2)
+
+
 async def settle_rollups(db) -> None:
     """Materialize both rollups now, so a test never depends on where the policy jobs left the real-time watermark."""
-    await db.execute("CALL refresh_continuous_aggregate('readings_1m', NULL, NULL)")
-    await db.execute("CALL refresh_continuous_aggregate('readings_1h', NULL, NULL)")
+    await refresh_rollup(db, "readings_1m")
+    await refresh_rollup(db, "readings_1h")  # built on readings_1m: refresh in this order
 
 
 _REFRESH_POLICIES = """
