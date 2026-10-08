@@ -66,16 +66,20 @@ def counter_hours(rows: Sequence[HourRow], baseline_last: float | None) -> dict[
     of the bucket before the first row (None if there is none).
 
     An hour counts its last value minus the previous bucket's last value, so a gap in the data lands in the
-    hour in which the next value arrives. A decrease is a reset or rollover: if the hour's minimum is below
-    the previous last value the hour counts max(0, max - previous_last) + (last - min), so the step across
-    the reset adds nothing and the result is never negative. With no earlier bucket it counts last - min.
+    hour in which the next value arrives. A decrease is a reset or rollover, and it is recognised by the hour
+    ENDING below the previous last value: then the hour counts max(0, max - previous_last) + (last - min), so the
+    step across the reset adds nothing and the result is never negative. An hour whose minimum dipped below the
+    previous last value but whose last value recovered is not a reset but a glitch sample (a start-up or torn
+    32-bit read of 0): taking the reset branch would add the whole counter, so it counts last - previous_last.
+    The cost is that a reset that climbs back past the previous last value within the hour is read as a plain
+    rise, which is the safe error. With no earlier bucket it counts last - min.
     """
     hours: dict[datetime, float] = {}
     previous = baseline_last
     for row in rows:
         if previous is None:
             kwh = row.last_value - row.min_value
-        elif row.min_value < previous:
+        elif row.last_value < previous:
             kwh = max(0.0, row.max_value - previous) + (row.last_value - row.min_value)
         else:
             kwh = row.last_value - previous

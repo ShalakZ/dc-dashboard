@@ -67,8 +67,31 @@ def test_a_reset_exactly_between_two_hours_counts_only_the_rise_after_it():
 
 
 def test_a_first_sample_equal_to_the_previous_last_value_is_a_plain_difference_not_a_reset():
-    # The boundary of the reset rule: min == previous_last is NOT below it, so no reset is assumed.
+    # The counter did not go backwards (last 105 is above the previous last 100), so no reset is assumed.
     assert counter_hours([counter_row(0, 100, 105, 105)], 100.0) == {hour(0): 5.0}
+
+
+def test_a_reset_inside_an_hour_that_rises_above_the_previous_last_value_first_is_still_recovered():
+    # Ruling M3. The hour ended below the previous last value (8 < 100), so the counter did reset:
+    # 100 -> 105 counts (+5), the step across the reset adds nothing, 3 -> 8 counts (+5).
+    assert counter_hours([counter_row(0, 3, 105, 8)], 100.0) == {hour(0): 10.0}
+
+
+def test_a_reset_exactly_between_two_hours_with_fractional_values():
+    # The hour ended below the previous last value (3 < 5000): max(0, 3 - 5000) + (3 - 0.1).
+    assert counter_hours([counter_row(0, 0.1, 3, 3)], 5000.0) == {hour(0): pytest.approx(2.9)}
+
+
+def test_a_single_zero_reading_inside_an_hour_is_a_glitch_not_a_reset():
+    # Ruling M3. Previous last 250 000; the hour read 250 010, 0 (a Modbus start-up or torn 32-bit read), 250 020.
+    # The hour ended above the previous last value, so it counts 250 020 - 250 000, not the whole counter.
+    assert counter_hours([counter_row(0, 0, 250_020, 250_020)], 250_000.0) == {hour(0): 20.0}
+
+
+def test_a_dip_that_recovers_past_the_previous_last_value_counts_the_plain_difference():
+    # The old known limit: prev 2, then 0 .. 50 .. 50. An hour that ends above where the last one did cannot be told
+    # from a glitch, and a glitch must not add the whole counter, so it is a plain rise: 50 - 2.
+    assert counter_hours([counter_row(0, 0, 50, 50)], 2.0) == {hour(0): 48.0}
 
 
 def test_a_reset_that_never_climbs_back_to_the_old_value_is_not_negative():
@@ -83,7 +106,7 @@ def test_a_register_rollover_is_recovered_like_any_reset():
 
 def test_a_reset_in_each_of_two_consecutive_hours():
     rows = [counter_row(0, 5, 110, 8), counter_row(1, 2, 8, 6)]
-    # hour 0: 13 as above. hour 1: min 2 < previous last 8, so max(0, 8 - 8) + (6 - 2) = 4.
+    # hour 0: 13 as above. hour 1: last 6 < previous last 8, so max(0, 8 - 8) + (6 - 2) = 4.
     assert counter_hours(rows, 100.0) == {hour(0): 13.0, hour(1): 4.0}
 
 
