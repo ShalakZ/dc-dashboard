@@ -154,6 +154,12 @@ async def test_energy_today_is_estimated_from_power_when_there_is_no_counter(cli
     assert await energy_today(client, asset) == {"kwh": pytest.approx(6.0), "estimated": True}
 
 
+async def test_energy_today_of_a_power_only_asset_with_no_readings_is_an_estimated_zero(client, db):
+    await login_as(client, db, "viewer")
+    asset, _, _ = await panel(db, energy=False)
+    assert await energy_today(client, asset) == {"kwh": 0.0, "estimated": True}
+
+
 async def test_energy_today_is_null_without_power_or_energy(client, db):
     await login_as(client, db, "viewer")
     asset = await make_asset(db, "empty")

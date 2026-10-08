@@ -7,7 +7,7 @@ touches one, and it reads the rollup with a single batched query.
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,7 +94,29 @@ def power_hours(rows: Sequence[HourRow], interval_seconds: int) -> dict[datetime
     return hours
 
 
-def _own_hours(meter: Meter, rows: Sequence[HourRow], baseline_last: float | None) -> dict[datetime, HourEnergy]:
+def _hours_between(start: datetime, end: datetime) -> list[datetime]:
+    """The UTC hour buckets that begin in [start, end): the keys a rollup row would have for that range."""
+    bucket = start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    if bucket < start:
+        bucket += timedelta(hours=1)
+    buckets = []
+    while bucket < end:
+        buckets.append(bucket)
+        bucket += timedelta(hours=1)
+    return buckets
+
+
+def _own_hours(
+    meter: Meter,
+    rows: Sequence[HourRow],
+    baseline_last: float | None,
+    start: datetime | None,
+    end: datetime | None,
+) -> dict[datetime, HourEnergy]:
+    if not meter.counter and not rows and start is not None and end is not None:
+        # A power-only meter that recorded nothing is still an estimate (spec section 6: labeled as estimated
+        # wherever it is shown), so every hour of the range says so. A silent counter stays {}: an exact zero.
+        return {bucket: HourEnergy(0.0, True) for bucket in _hours_between(start, end)}
     if meter.counter:
         raw = counter_hours(rows, baseline_last)
     else:
@@ -117,17 +139,23 @@ def assemble(
     meters: dict[int, Meter],
     rows: dict[int, list[HourRow]],
     baselines: dict[int, float],
+    start: datetime | None = None,
+    end: datetime | None = None,
 ) -> EnergyResult:
     """Roll hourly energy up the tree. `meters` maps asset id -> its own Meter; `rows` and `baselines` are keyed
-    by point id. An asset with a Meter uses it even if it was silent (an empty dict, zero), never its children;
-    otherwise it sums its children, skipping those with no figure; if none has one it has no figure (None)."""
+    by point id. An asset with a Meter uses it even if it was silent, never its children: a silent counter is an
+    empty dict (exact zero), a silent power-only meter is an estimated zero for every hour that begins in
+    [start, end) (so pass the range the rows were read for; without it the latter is also an empty dict).
+    Otherwise an asset sums its children, skipping those with no figure; if none has one it has no figure (None)."""
     hours: dict[int, dict[datetime, HourEnergy] | None] = {}
     own: set[int] = set()
     for asset_id in reversed(tree.preorder()):  # children before parents
         meter = meters.get(asset_id)
         if meter is not None:
             own.add(asset_id)
-            hours[asset_id] = _own_hours(meter, rows.get(meter.point_id, ()), baselines.get(meter.point_id))
+            hours[asset_id] = _own_hours(
+                meter, rows.get(meter.point_id, ()), baselines.get(meter.point_id), start, end
+            )
             continue
         parts = [part for child in tree.children(asset_id) if (part := hours.get(child)) is not None]
         hours[asset_id] = _sum_hours(parts) if parts else None
@@ -207,4 +235,4 @@ async def hourly_energy(db: AsyncSession, tree: AssetTree, start: datetime, end:
                 rows[row.point_id].append(
                     HourRow(row.bucket, row.min_value, row.max_value, row.sum_value, int(row.n), row.last_value)
                 )
-    return assemble(tree, meters, rows, baselines)
+    return assemble(tree, meters, rows, baselines, start, end)

@@ -169,6 +169,31 @@ async def test_a_parent_sums_its_children_and_an_unmapped_asset_has_no_figure(db
     assert result.own == frozenset({lv1, lv2})
 
 
+async def test_a_power_only_meter_with_no_readings_is_an_estimated_zero_for_every_hour(db):
+    # Spec section 6: power-only consumption is labeled estimated wherever it is shown, even when it is zero.
+    source = await make_source(db)
+    asset, _ = await meter(db, source, "Panel", metric="active_power_kw", interval=10)
+    counter_asset, _ = await meter(db, source, "Metered")  # a counter that recorded nothing is an exact zero
+
+    result = await energy()
+
+    assert result.hours[asset] == {T0 + n * HOUR: HourEnergy(0.0, True) for n in range(3)}
+    assert total(result.hours[asset]) == Energy(0.0, True)
+    assert result.hours[counter_asset] == {} and total(result.hours[counter_asset]) == Energy(0.0, False)
+
+
+async def test_a_parent_of_a_counter_and_a_silent_power_meter_is_estimated(db):
+    source = await make_source(db)
+    parent = await make_asset(db, "MV2")
+    _, counter = await meter(db, source, "LV Panel 1", parent)
+    await meter(db, source, "LV Panel 2", parent, metric="active_power_kw", interval=10)  # no readings
+    await insert_readings(db, counter, T0 - HOUR + 30 * MINUTE, 1, [100.0])
+    await insert_readings(db, counter, T0 + 10 * MINUTE, 1, [107.0])
+    await settle_rollups(db)
+
+    assert total((await energy()).hours[parent]) == Energy(7.0, True)
+
+
 async def test_assets_with_nothing_mapped_have_no_figure(db):
     asset = await make_asset(db, "Empty")
     result = await energy()
@@ -190,7 +215,9 @@ async def test_a_dst_month_splits_into_local_days_that_add_up_to_the_month(db):
     start, end = month_bounds("2026-03", "Europe/Berlin")
     hours = (end - start) // HOUR
     assert hours == 743
-    await insert_readings(db, point, start - HOUR, 3600, [float(i) for i in range(hours + 1)])
+    # One reading an hour from the hour before the month; the last (hours + 1) lands in the bucket that begins
+    # exactly at `end`, which the exclusive upper bound must leave out.
+    await insert_readings(db, point, start - HOUR, 3600, [float(i) for i in range(hours + 2)])
     await settle_rollups(db)
 
     month = (await energy(start, end)).hours[asset]
