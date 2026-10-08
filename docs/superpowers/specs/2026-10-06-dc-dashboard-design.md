@@ -505,6 +505,9 @@ for each type.
 | Gauge | One asset, source `metric`, aggregation `last` only; `min` (default 0) and `max` are set in the config. Live. |
 | Table | One row per asset with the aggregation over the range. |
 
+- Widgets cannot use the `custom` metric (an asset can have several `custom`
+  mappings and a widget names none of them); custom metrics stay on the asset
+  page.
 - Aggregations: `avg`, `min`, `max`, `last` for metrics; `sum` for energy and
   cost. `last` on a rolling range is the latest reading and updates live over
   the stream; on a finished calendar range it is the last value in it.
