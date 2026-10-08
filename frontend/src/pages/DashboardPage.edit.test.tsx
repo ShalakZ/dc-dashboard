@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Role } from "../api/types";
 import { defaultSize, nextPosition, toDrafts } from "../lib/layout";
@@ -71,6 +71,11 @@ function open(role: Role, entry: string | { pathname: string; state?: unknown } 
 }
 const add = () => screen.getByRole("button", { name: "Add widget" });
 const saveButton = () => screen.getByRole("button", { name: "Save" });
+/** The browser coming back online: React Query refetches the stale queries (refetchOnReconnect), the dashboard among them. */
+const reconnect = () => act(() => {
+  window.dispatchEvent(new Event("offline"));
+  window.dispatchEvent(new Event("online"));
+});
 async function startEditing() {
   await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
   await screen.findByLabelText("Dashboard name");
@@ -314,6 +319,45 @@ describe("saving that fails", () => {
 
 /** Click the "Dashboards" breadcrumb: an in-app link, as a user would leave the editor. */
 const leaveByLink = () => userEvent.click(screen.getByRole("link", { name: "Dashboards" }));
+
+describe("when the page cannot refresh its data", () => {
+  it("keeps the editor and the unsaved edits when a background refetch of the dashboard fails, and says so", async () => {
+    let reads = 0;
+    open("operator", "/dashboards/3", {
+      "GET /api/dashboards/3": () => (reads++ === 0 ? { body: base } : { status: 500, body: { detail: "dashboard unavailable" } }),
+    });
+    await startEditing();
+    await userEvent.type(screen.getByLabelText("Dashboard name"), " edited");
+    await reconnect();
+    expect(await screen.findByText("Could not refresh this page: dashboard unavailable")).toBeInTheDocument();
+    expect(reads).toBeGreaterThan(1); // the refetch really happened and failed
+    expect(screen.getByLabelText("Dashboard name")).toHaveValue("Hall A edited");
+    expect(screen.getByRole("region", { name: "Current power" })).toBeInTheDocument();
+    expect(saveButton()).toBeEnabled();
+  });
+
+  it("keeps the editor when Reload fails, and a second Reload can still succeed", async () => {
+    let reads = 0;
+    const newer = dashboard({ name: "Hall A (Sam)", updated_at: "2026-10-08T06:30:00+00:00", widgets: [now] });
+    open("operator", "/dashboards/3", {
+      "GET /api/dashboards/3": () => {
+        const n = reads++;
+        return n === 0 ? { body: base } : n === 1 ? { status: 500, body: { detail: "api restarting" } } : { body: newer };
+      },
+      "PUT /api/dashboards/3": { status: 409, body: { detail: "dashboard changed since you loaded it" } },
+    });
+    await startEditing();
+    await userEvent.type(screen.getByLabelText("Dashboard name"), " mine");
+    await userEvent.click(saveButton());
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    expect((await screen.findAllByText(/api restarting/)).length).toBeGreaterThan(0);
+    expect(screen.getByText("This dashboard was changed by someone else")).toBeInTheDocument();
+    expect(screen.getByLabelText("Dashboard name")).toHaveValue("Hall A mine"); // the draft is still there
+    await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(screen.getByLabelText("Dashboard name")).toHaveValue("Hall A (Sam)"));
+    expect(screen.queryByText(/Could not refresh this page/)).not.toBeInTheDocument();
+  });
+});
 
 describe("leaving with unsaved changes", () => {
   it("asks before in-app navigation: Keep editing stays with the edits, Leave discards them", async () => {

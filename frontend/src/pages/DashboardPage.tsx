@@ -32,8 +32,12 @@ function DashboardScreen({ id }: { id: number }) {
 
   if (query.isLoading || site.isLoading) return <p className="muted">loading…</p>;
   const failure = query.error ?? site.error;
-  if (failure || !dashboard || !site.data) return <p className="error" role="alert">{failure?.message ?? "not found"}</p>;
+  // Block the page only when there is nothing to show. React Query keeps the last data when a refetch fails and still sets
+  // `error`; replacing the screen then would unmount the editor and silently throw away unsaved edits (and a failed Reload
+  // would leave a dead end), so a failure with data on screen is a notice above it.
+  if (!dashboard || !site.data) return <p className="error" role="alert">{failure?.message ?? "not found"}</p>;
   const timezone = site.data.timezone;
+  const notice = failure ? <p className="error" role="alert">Could not refresh this page: {failure.message}</p> : null;
   const crumbs = <p><Link to="/dashboards">Dashboards</Link> / {dashboard.name}</p>;
 
   const leaveEdit = () => {
@@ -45,6 +49,7 @@ function DashboardScreen({ id }: { id: number }) {
   if (canEdit && wantsEdit) {
     return (
       <>
+        {notice}
         {crumbs}
         <Suspense fallback={<p className="muted">loading editor…</p>}>
           <DashboardEditor
@@ -66,6 +71,7 @@ function DashboardScreen({ id }: { id: number }) {
   }
   return (
     <>
+      {notice}
       {crumbs}
       <LiveValuesProvider>
         <DashboardViewer dashboard={dashboard} timezone={timezone} onEdit={canEdit ? () => setWantsEdit(true) : undefined} />

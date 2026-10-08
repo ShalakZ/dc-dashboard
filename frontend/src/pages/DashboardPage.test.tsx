@@ -223,6 +223,21 @@ describe("DashboardPage (view)", () => {
     expect(FakeEventSource.instances).toHaveLength(0);
   });
 
+  it("keeps showing the dashboard, with a notice, when a background refetch fails", async () => {
+    let reads = 0;
+    open("viewer", {
+      "GET /api/dashboards/3": () => (reads++ === 0 ? { body: dashboard({ widgets }) } : { status: 500, body: { detail: "dashboard unavailable" } }),
+    });
+    await region("Power trend");
+    await act(async () => {
+      window.dispatchEvent(new Event("offline")); // the browser coming back online refetches the stale dashboard
+      window.dispatchEvent(new Event("online"));
+    });
+    expect(await screen.findByText("Could not refresh this page: dashboard unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Hall A" })).toBeInTheDocument();
+    expect(screen.getAllByRole("region")).toHaveLength(5);
+  });
+
   it("shows the API error when the dashboard cannot be loaded", async () => {
     open("viewer", { "GET /api/dashboards/3": { status: 404, body: { detail: "dashboard not found" } } });
     expect(await screen.findByRole("alert")).toHaveTextContent("dashboard not found");
