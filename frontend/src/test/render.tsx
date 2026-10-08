@@ -3,6 +3,7 @@ import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router";
 import { AuthProvider } from "../auth/AuthProvider";
+import "./routerRequestShim";
 
 export function renderWithProviders(ui: ReactElement, { route = "/", path = "*" } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });

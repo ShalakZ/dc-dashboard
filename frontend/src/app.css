@@ -95,3 +95,22 @@ ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; pad
   .dash-grid { display: block; }
   .dash-cell { grid-column: auto !important; grid-row: auto !important; height: 280px; margin-bottom: 10px; }
 }
+
+/* Dashboard editor */
+.dash-grid-edit { margin-top: 8px; }
+.dash-grid-edit .widget-drag-handle { cursor: grab; }
+.dash-grid-edit .react-grid-item > .react-resizable-handle { opacity: 1; }
+.dash-grid-edit .react-grid-item.react-grid-placeholder { background: #000; }
+.widget-actions { display: inline-flex; gap: 4px; }
+.widget-actions button { padding: 0 6px; font-size: 12px; }
+.editor-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.editor-cols > div { display: grid; gap: 8px; align-content: start; }
+.editor-cols h3 { margin: 0; font-size: 14px; }
+.widget-preview { height: 260px; }
+.asset-picker { max-width: none; }
+.picker-list { max-height: 220px; overflow: auto; border: 1px solid #000; padding: 4px; }
+.picker-row { display: flex; gap: 6px; align-items: center; }
+.issues { margin: 0; padding-left: 18px; }
+@media (max-width: 700px) {
+  .editor-cols { grid-template-columns: minmax(0, 1fr); }
+}
