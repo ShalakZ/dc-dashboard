@@ -35,7 +35,9 @@ describe("time series, drawn by the real chart library", () => {
     const option = timeSeriesOption(hour, "Asia/Qatar");
     const paths = draw(option);
     expect(dotsOf(paths, colorOf(option))).toHaveLength(1);
-    expect(lineOf(paths, colorOf(option)).every((p) => segments(p) === 0)).toBe(true); // the line itself is a bare move-to
+    const line = lineOf(paths, colorOf(option));
+    expect(line).toHaveLength(1); // `every` over an empty list would pass whatever was drawn
+    expect(line.every((p) => segments(p) === 0)).toBe(true); // the line itself is a bare move-to
   });
 
   it.each<[string, "1m" | "1h", number]>([["24h", "1m", 288], ["30d", "1h", 8640]])(

@@ -275,6 +275,8 @@ describe("saving that fails", () => {
     expect(await screen.findByText("This dashboard was changed by someone else")).toBeInTheDocument();
     expect(saveButton()).toBeDisabled();
     expect(puts(calls)).toHaveLength(1);
+    // until the user chooses Reload, their edit is still on screen (neither theirs nor Sam's version is lost silently)
+    expect(screen.getByLabelText("Dashboard name")).toHaveValue("Hall A mine");
     await userEvent.click(screen.getByRole("button", { name: "Reload" }));
     await waitFor(() => expect(screen.getByLabelText("Dashboard name")).toHaveValue("Hall A (Sam)"));
     expect(screen.queryByText("This dashboard was changed by someone else")).not.toBeInTheDocument();
@@ -290,6 +292,7 @@ describe("saving that fails", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("already exists");
     expect(screen.queryByRole("button", { name: "Reload" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Dashboard name")).toHaveValue("Hall A2");
+    expect(saveButton()).toBeEnabled(); // not a conflict: the user can pick another name and save again
   });
 
   it("keeps the edits and shows the message when the API refuses the dashboard", async () => {

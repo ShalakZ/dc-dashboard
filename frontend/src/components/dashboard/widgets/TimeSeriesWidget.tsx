@@ -17,10 +17,13 @@ const PALETTE = ["#1f6feb", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989
  * Spacing between buckets, which decides what counts as a hole in the data. Energy and cost series name their bucket
  * (hour or day), and that is checked first. A metric series does not: the backend cuts every window into at most 300
  * buckets whatever the tier (24 h gives 288 s, 30 d gives 8640 s), and the tier only names the table that served them
- * (raw below 60 s, 1m below an hour, 1h above), so it says nothing about the width. The width is read from the data as
- * the MEDIAN positive step: every normal step is one bucket (or a whole number of them, for a meter that reports less
- * often than the buckets are wide), while the smallest step would be thrown off by one close pair of samples or a mapping
- * interval changed inside the window, and would turn every normal step into a "gap". Null when no two points are apart.
+ * (raw below 60 s, 1m below an hour, 1h above), so it says nothing about the width. The width is therefore an estimate
+ * read from the data: the MEDIAN positive step. For a meter that reports at least once per bucket that is the bucket
+ * width, and the median is not thrown off by one close pair of samples or a mapping interval changed inside the window
+ * (the smallest step would be, and would turn every normal step into a "gap"). The median is never the meter's polling
+ * interval, only the step most often seen in this window. A meter that reports less often than the buckets are wide is
+ * drawn right only when the median lands on its common step and its other step is at most 1.5 times that median; with
+ * steps further apart it is drawn as dots or flips between a line and dots (see withGaps). Null when no two points are apart.
  */
 export function bucketMs(bucket: WidgetData["bucket"], points: readonly Point[]): number | null {
   if (bucket === "hour") return 3_600_000;
