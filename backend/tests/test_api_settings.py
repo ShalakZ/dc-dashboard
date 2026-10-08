@@ -55,3 +55,75 @@ async def test_get_falls_back_when_stored_timezone_is_unknown(client, db):
     response = await client.get("/api/settings/general")
     assert response.status_code == 200, response.text
     assert response.json() == {"timezone": "UTC"}
+
+
+async def test_billing_settings_are_admin_only(client, db):
+    assert (await client.get("/api/settings/billing")).status_code == 401
+    assert (await client.put("/api/settings/billing", json={"currency": "QAR"})).status_code == 401
+    for role in ("viewer", "operator"):
+        await login_as(client, db, role)
+        assert (await client.get("/api/settings/billing")).status_code == 403
+        assert (await client.put("/api/settings/billing", json={"currency": "QAR"})).status_code == 403
+    await login_as(client, db)
+    assert (await client.get("/api/settings/billing")).json() == {"currency": None}
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'billing.currency_changed'") == 0
+
+
+async def test_currency_round_trips_and_can_be_cleared(client, db):
+    await login_as(client, db)
+    assert (await client.put("/api/settings/billing", json={"currency": "QAR"})).json() == {"currency": "QAR"}
+    assert (await client.get("/api/settings/billing")).json() == {"currency": "QAR"}
+    assert (await client.put("/api/settings/billing", json={"currency": None})).json() == {"currency": None}
+    assert (await client.get("/api/settings/billing")).json() == {"currency": None}
+
+
+@pytest.mark.parametrize("bad", ["qar", "QA", "QARR", "Q1R", "", " QAR", "QAR\n", "ÄÖÜ", 123])
+async def test_bad_currency_codes_are_rejected(client, db, bad):
+    await login_as(client, db)
+    assert (await client.put("/api/settings/billing", json={"currency": "USD"})).status_code == 200
+    assert (await client.put("/api/settings/billing", json={"currency": bad})).status_code == 422
+    assert (await client.put("/api/settings/billing", json={})).status_code == 422  # the key is required
+    assert (await client.get("/api/settings/billing")).json() == {"currency": "USD"}
+
+
+async def test_currency_changes_are_audited_once_per_actual_change(client, db):
+    await login_as(client, db)
+    admin_id = await db.fetchval("SELECT id FROM users WHERE username = 'admin'")
+    for code in ("QAR", "QAR", "USD", None, None):
+        assert (await client.put("/api/settings/billing", json={"currency": code})).status_code == 200
+    rows = await db.fetch(
+        "SELECT user_id, detail FROM audit_log WHERE action = 'billing.currency_changed' ORDER BY id"
+    )
+    assert [r["detail"] for r in rows] == [
+        {"from": None, "to": "QAR"}, {"from": "QAR", "to": "USD"}, {"from": "USD", "to": None},
+    ]
+    assert all(r["user_id"] == admin_id for r in rows)
+
+
+@pytest.mark.parametrize("zone", ["Asia/Kolkata", "Asia/Kathmandu", "Australia/Lord_Howe", "America/St_Johns"])
+async def test_put_refuses_a_zone_without_whole_hour_offsets(client, db, zone):
+    await login_as(client, db)
+    response = await client.put("/api/settings/general", json={"timezone": zone})
+    assert response.status_code == 422 and "timezone" in response.text
+    assert (await client.get("/api/settings/general")).json() == {"timezone": "UTC"}
+    assert await db.fetchval("SELECT count(*) FROM settings WHERE key = 'general'") == 0
+
+
+@pytest.mark.parametrize("zone", ["UTC", "Asia/Qatar", "Europe/Berlin"])
+async def test_put_accepts_zones_with_whole_hour_offsets(client, db, zone):
+    await login_as(client, db)
+    response = await client.put("/api/settings/general", json={"timezone": zone})
+    assert response.status_code == 200 and response.json() == {"timezone": zone}
+
+
+async def test_get_still_answers_for_a_stored_zone_that_breaks_the_whole_hour_rule(client, db):
+    """Billing answers 409 for such a zone, but Settings must still load so the admin can fix it."""
+    await login_as(client, db)
+    await db.execute(
+        "INSERT INTO settings (key, value) VALUES ('general', $1) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        {"timezone": "Asia/Kolkata"},
+    )
+    response = await client.get("/api/settings/general")
+    assert response.status_code == 200 and response.json() == {"timezone": "Asia/Kolkata"}
+    assert (await client.put("/api/settings/general", json={"timezone": "Asia/Qatar"})).status_code == 200
