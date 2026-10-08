@@ -328,10 +328,11 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 
 ### End-to-end test
 
-> **Data safety.** `scripts/e2e.sh` and `docker compose down -v` on the normal project delete the
-> `dcdash_dbdata` volume: every reading, user, source, tariff and dashboard you have. Never run them
-> where that data matters. Run the end-to-end tests only in the isolated Compose project described
-> below, which has its own volume.
+> **Data safety.** `docker compose down -v` on the normal project deletes the `dcdash_dbdata` volume:
+> every reading, user, source, tariff and dashboard you have. Never run it where that data matters. Run
+> the end-to-end tests only in the isolated Compose project described below, which has its own volume;
+> `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
+> and cannot reach `dcdash_dbdata`).
 
 Three specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
@@ -364,7 +365,12 @@ separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal s
 or, with a fresh stack already running: `cd frontend && npx playwright test -c e2e/playwright.config.ts`.
 First time only: `npx playwright install chromium`. Reports: `npx playwright show-report`.
 
-`scripts/e2e.sh` is for a throwaway machine only; it deletes `dcdash_dbdata`.
+`scripts/e2e.sh` runs those four steps in one go, always in the project `dcdash_e2e` (so its `down -v`
+removes only `dcdash_e2e_dbdata`). It refuses to start while the normal stack is running, because both
+hold ports 80 and 443, and it refuses a project name that does not start with `dcdash_e2e`
+(`E2E_COMPOSE_PROJECT` can pick another throwaway name). When it ends it removes the containers but
+keeps the volume until the next run, which starts with `down -v`;
+`docker compose -p dcdash_e2e --profile dev down -v` removes it right away.
 
 The isolated `-p dcdash_e2e` run builds the same `dcdash-backend:local` and `dcdash-web:local` images
 as the normal stack, so it re-tags them. If your database is still at an older schema, read "Upgrading

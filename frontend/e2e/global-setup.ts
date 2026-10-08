@@ -11,11 +11,11 @@ export default async function globalSetup(config: FullConfig) {
         const body = (await res.json()) as { needed: boolean };
         if (!body.needed) {
           throw new Error(
-            "the stack already has users, so this is not a fresh end-to-end database. Do NOT run scripts/e2e.sh or " +
-              "`docker compose down -v` on the normal project: they delete the dcdash_dbdata volume. Use the isolated project " +
+            "the stack already has users, so this is not a fresh end-to-end database. Do NOT run " +
+              "`docker compose down -v` on the normal project: it deletes the dcdash_dbdata volume. Use the isolated project " +
               "(stop the normal stack with `docker compose --profile dev stop`, then `docker compose -p dcdash_e2e --profile dev " +
-              "down -v --remove-orphans` and `docker compose -p dcdash_e2e --profile dev up -d --build`, then `npm run e2e`); " +
-              "see the README, section End-to-end test.",
+              "down -v --remove-orphans` and `docker compose -p dcdash_e2e --profile dev up -d --build`, then `npm run e2e`), " +
+              "or run scripts/e2e.sh, which does that in the dcdash_e2e project; see the README, section End-to-end test.",
           );
         }
         return;
