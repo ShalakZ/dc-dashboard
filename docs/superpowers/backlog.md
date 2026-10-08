@@ -56,3 +56,13 @@ Frontend
 - Audit page: loses its pager while loading/error (add `placeholderData: keepPreviousData` to `useAudit`); audit counts in the e2e come from the first UI page only; detail is raw JSON (ids only) — consider human-readable summaries; the viewer half of the Layout audit-link test passes trivially (wait for the "(viewer)" text first).
 - Shared UI: Discovery empty state has no heading; tab title is "DC Dashboard" on every page; Setup/Create-user forms lack `autocomplete` attributes (browser autofills a saved login into "Create user"); Points page sorts addresses as text (`ns=2;i=101` before `ns=2;i=11`) and `SourcePointsPage` shows "source N" for hidden discovered sources; the HTTP source can only be managed from the graph until something on it is mapped.
 - Phase 1 actions (users, sources, assets) are not audited (documented in the README; spec 7.7).
+
+## D. Offline deployment to the SCADA workstation (added 2026-10-08)
+
+Constraint from the owner: the workstation is reached over RDP, has no internet access, and cannot run Claude. Code and fixes must arrive as files, and the install must be self-contained and self-diagnosing.
+- Runtime needs no internet (checked: no external URLs in the shipped frontend or Caddy config). Build time does (base images `node:22-alpine`, `caddy:2-alpine`, `python:3.12-slim`, `timescale/timescaledb:2.30.2-pg16` plus pip/npm), so build on a connected machine.
+- Offline bundle: a script that builds the images, runs `docker save` into one archive together with the compose file, Caddyfile, `.env` template, PowerShell scripts (`setup.ps1`, `backup.ps1`, `restore.ps1` exist) and a README runbook; a matching load-and-start path with `image:` references and no `build:`; a SHA-256 manifest; transfer as ONE file over RDP drive redirection, never pasted source text.
+- On-site tooling: a `doctor` script (Docker/WSL2 present, free disk, ports, time zone, reachability of the scan targets from inside the collector container), an offline smoke test, a log-collection script that zips logs to send back.
+- Workstation facts needed first: Windows edition, Docker/WSL2/Hyper-V availability, admin rights and software policy (Docker Desktop licensing), free disk, RDP file-transfer limits. Fallback if Docker is impossible: ship a ready Linux VM image (VHDX/OVA) with everything inside.
+- Raises the priority of section B (stuck-scan watchdog, conservative scan mode, reachability checks): there is nobody to debug on site.
+- Before 0004 reaches ANY real database (the owner's `dcdash_dbdata` or the workstation): take a backup first (`scripts/backup.sh`); the hourly rollup is rebuilt from the minute tier.
