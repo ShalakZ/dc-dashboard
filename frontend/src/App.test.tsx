@@ -1,5 +1,6 @@
 import { screen } from "@testing-library/react";
 import { App } from "./App";
+import { config, dashboard, widget, widgetDataRoute } from "./test/dashboardFixtures";
 import { mockFetch } from "./test/fetchMock";
 import { renderWithProviders } from "./test/render";
 
@@ -13,6 +14,8 @@ const routes = (role: string) => ({
   "GET /api/assets": { body: [] },
   "GET /api/billing/costs": { body: { month: "2026-10", timezone: "Asia/Qatar", currency: "QAR", days: [], assets: [] } },
   "GET /api/dashboards": { body: [] },
+  "GET /api/dashboards/3": { body: dashboard({ widgets: [widget(5, "table", { title: "Assets", config: config({ assets: [5, 6] }) })] }) },
+  "POST /api/widget-data": widgetDataRoute,
 });
 const visit = (role: string, route: string) => {
   const calls = mockFetch(routes(role));
@@ -41,5 +44,13 @@ describe("App routes", () => {
   it("opens the lazily loaded Dashboards page for a viewer", async () => {
     visit("viewer", "/dashboards");
     expect(await screen.findByRole("heading", { name: "Dashboards" })).toBeInTheDocument();
+  });
+
+  it("opens a dashboard, with its widgets, for a viewer", async () => {
+    const calls = visit("viewer", "/dashboards/3");
+    expect(await screen.findByRole("heading", { name: "Hall A" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Assets" })).toBeInTheDocument();
+    expect(await screen.findByText("LV Panel 2")).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
   });
 });

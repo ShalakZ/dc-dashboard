@@ -71,3 +71,27 @@ table.billing td.muted { background: #f4f4f4; }
 td.num { text-align: right; }
 abbr[title] { text-decoration: none; cursor: help; }
 ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; margin: 8px 0; }
+
+/* Dashboards */
+.dash-head { margin-bottom: 8px; }
+.dash-head h1 { margin: 0; font-size: 20px; }
+.row .spacer, .widget-head .spacer { flex: 1; }
+.dash-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+.dash-cell { min-width: 0; min-height: 0; }
+.widget-frame { height: 100%; display: flex; flex-direction: column; border: 1px solid #000; background: #fff; }
+.widget-head { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid #000; }
+.widget-head h3 { margin: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.widget-notes { display: flex; flex-wrap: wrap; gap: 0 12px; margin: 0; padding: 2px 8px; border-bottom: 1px solid #ddd; }
+.widget-body { flex: 1; min-height: 0; padding: 8px; overflow: auto; }
+.widget-body table { margin: 0; }
+.chip { display: inline-block; padding: 0 6px; border: 1px solid #000; font-size: 12px; white-space: nowrap; }
+.chip-warn { border-color: #b00; color: #b00; }
+.stat .big { font-size: 32px; }
+.stat .big small { font-size: 14px; margin-left: 4px; }
+.stat .big.muted { color: #999; }
+.gauge { height: 100%; display: flex; flex-direction: column; }
+.dialog.narrow { width: min(440px, 100%); }
+@media (max-width: 700px) {
+  .dash-grid { display: block; }
+  .dash-cell { grid-column: auto !important; grid-row: auto !important; height: 280px; margin-bottom: 10px; }
+}
