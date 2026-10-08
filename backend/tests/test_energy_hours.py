@@ -483,3 +483,37 @@ def test_the_children_hours_before_a_late_meter_keep_their_has_data():
         hour(1): HourEnergy(0.0, True, False),
         hour(2): HourEnergy(30.0, False, True),
     }
+
+
+def test_nested_late_meters_each_fall_back_to_their_own_children():
+    # Site(1) > MV2(2) > Panel(3) > Circuit(4). The circuit has read since hour 0, the panel got its meter in hour 1 and
+    # MV2 in hour 3: MV2 is the circuit's figure, then the panel's, then its own.
+    tree = AssetTree([
+        AssetNode(1, None, "Site", 0), AssetNode(2, 1, "MV2", 0), AssetNode(3, 2, "Panel", 0),
+        AssetNode(4, 3, "Circuit", 0),
+    ])
+    meters = {
+        2: Meter(20, 1.0, 60, True), 3: Meter(30, 1.0, 60, True), 4: Meter(40, 1.0, 60, True),
+    }
+    rows = {
+        40: [counter_row(0, 100, 102, 102), counter_row(1, 103, 105, 105), counter_row(2, 106, 109, 109),
+             counter_row(3, 110, 114, 114)],  # 2, 3, 4, 5 kWh
+        30: [counter_row(1, 1000, 1010, 1010), counter_row(2, 1011, 1031, 1031), counter_row(3, 1032, 1050, 1050)],
+        20: [counter_row(3, 5000, 5030, 5030)],  # no baseline: 30 kWh
+    }
+    first = {40: hour(0), 30: hour(1), 20: hour(3)}
+
+    result = assemble(tree, meters, rows, {40: 100.0}, start=hour(0), end=hour(4), first_buckets=first)
+
+    assert result.hours[4] == {hour(n): HourEnergy(kwh, False) for n, kwh in enumerate((2.0, 3.0, 4.0, 5.0))}
+    assert result.hours[3] == {
+        hour(0): HourEnergy(2.0, False),  # the circuit: the panel's meter has not started
+        hour(1): HourEnergy(10.0, False), hour(2): HourEnergy(21.0, False), hour(3): HourEnergy(19.0, False),
+    }
+    assert result.hours[2] == {
+        hour(0): HourEnergy(2.0, False),  # the circuit, through the panel
+        hour(1): HourEnergy(10.0, False), hour(2): HourEnergy(21.0, False),  # the panel's meter
+        hour(3): HourEnergy(30.0, False),  # MV2's own meter, not the panel's 19
+    }
+    assert result.hours[1] == result.hours[2]
+    assert result.own_from == {4: hour(0), 3: hour(1), 2: hour(3)}

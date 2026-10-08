@@ -276,6 +276,30 @@ async def test_a_day_with_no_hours_between_two_days_with_readings_is_no_data(cli
     check(gap["total"], 50.0, 5.0)
 
 
+async def test_a_local_day_can_mix_the_childrens_hours_with_a_late_meters_own(client, db):
+    # Qatar is UTC+3. MV2's meter first reads at 12:00Z on 10 March, 15:00 local, so the local day of the 10th
+    # (21:00Z on the 9th to 21:00Z on the 10th) holds 15 hours of its panel and 9 of its own meter.
+    await set_zone(db, "Asia/Qatar")
+    mv2 = await make_asset(db, "MV2")
+    panel = await add_counter(db, "LV Panel", at(2026, 3, 8, 20), 60, per_hour=1.0, parent_id=mv2)  # 1 kWh an hour
+    point = await make_point(db, await db.fetchval("SELECT id FROM sources LIMIT 1"), "MV2_kWh")
+    await make_mapping(db, point, mv2, "energy_kwh", 60)
+    first = at(2026, 3, 10, 12)
+    await insert_readings(db, point, first + timedelta(minutes=10), 40 * 60, [5000.0, 5004.0])  # +4 in its first hour
+    meter_readings = [5008.0 + 4 * i for i in range(35)]  # then +4 an hour, to 23:30Z on the 11th
+    await insert_readings(db, point, first + timedelta(minutes=90), 3600, meter_readings)
+    await add_tariff(db, 0.10, "2026-01-01")
+    await add_tariff(db, 0.50, "2026-03-01", asset_id=panel)  # so the panel's hours and the meter's cost differently
+    await settle_rollups(db)
+    await login_as(client, db, "viewer")
+
+    days = by_name(await get_costs(client))["MV2"]["days"]
+
+    check(days[8], 24.0, 12.0)  # 9 March: all panel, 24 x 1 kWh at 0.50
+    check(days[9], 15 * 1.0 + 9 * 4.0, 15 * 1.0 * 0.50 + 9 * 4.0 * 0.10)  # 10 March: 51 kWh, 7.5 + 3.6 = 11.1
+    check(days[10], 24 * 4.0, 24 * 4.0 * 0.10)  # 11 March: all meter, 96 kWh at 0.10
+
+
 async def test_a_parent_is_partial_when_only_one_child_has_a_rate(client, db):  # Review Focus 3
     await build_hierarchy(db, default_rate=None)  # only LV Panel 2 has a rate
     await login_as(client, db, "viewer")

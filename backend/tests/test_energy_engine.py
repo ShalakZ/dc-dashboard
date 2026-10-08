@@ -312,20 +312,24 @@ async def test_a_power_only_meter_that_first_reads_after_the_range_is_its_childr
     assert (await energy(T0, T0 + 6 * HOUR)).hours[mv2][T0 + 5 * HOUR] == HourEnergy(pytest.approx(1.0), True)
 
 
-async def test_a_first_bucket_months_before_the_range_is_still_found_and_the_meter_wins(db):
-    # The first bucket is looked up over the whole history, not only the requested range.
+async def test_a_meter_silent_at_the_range_start_whose_first_bucket_is_months_earlier_is_not_filled_from_children(db):
+    # The first bucket is looked up over the WHOLE history. MV2's meter first read 90 days ago, was silent at the
+    # start of the range, and reads again in hour 1. Its silent hour 0 is an exact zero (no entry), not its child's
+    # 5 kWh; and hour 1 counts the catch-up from its old reading (99), so nothing is counted twice. A first-bucket
+    # lookup bounded to the range would find hour 1, fill hour 0 from the child, and count the catch-up as well.
     source = await make_source(db)
     mv2, own = await meter(db, source, "MV2")
     lv1, child = await meter(db, source, "LV1", mv2)
-    await insert_readings(db, own, T0 - timedelta(days=90), 3600, [500.0, 501.0])
-    await insert_readings(db, own, T0 + 30 * MINUTE, 1, [600.0])
+    await insert_readings(db, own, T0 - timedelta(days=90), 1, [500.0])
+    await insert_readings(db, own, T0 + HOUR + 30 * MINUTE, 1, [599.0])
     await insert_readings(db, child, T0 - HOUR + 30 * MINUTE, 3600, [100.0, 105.0])
     await settle_rollups(db)
 
-    result = await energy(T0, T0 + 2 * HOUR)
+    result = await energy(T0, T0 + 3 * HOUR)
 
-    assert result.hours[mv2] == {T0: HourEnergy(99.0, False)}  # the meter's 501 -> 600, not the child's 5
-    assert result.own_from[mv2] == T0
+    assert result.hours[lv1] == {T0: HourEnergy(5.0, False)}
+    assert result.hours[mv2] == {T0 + HOUR: HourEnergy(99.0, False, True)}  # no entry at T0
+    assert result.own_from[mv2] == T0  # the range start, because the first bucket is earlier
 
 
 # ---- daylight saving (Review Focus 2) and size ------------------------------------------------

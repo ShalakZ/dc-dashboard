@@ -237,6 +237,37 @@ def test_an_own_from_that_is_the_first_hour_prices_everything_from_the_meter():
     assert costs[PANEL1][hour(3, 9)].cost == pytest.approx(5.0)
 
 
+def test_nested_late_meters_are_priced_layer_by_layer():
+    # Site > MV2 > Panel > Circuit. The circuit has always been metered; the panel's meter starts at 10:00 and MV2's
+    # at 12:00. Each layer has its own rate, so the rate that prices an hour shows which layer supplied it.
+    nested = AssetTree([
+        AssetNode(ROOT, None, "Site", 0), AssetNode(MV2, ROOT, "MV2", 0), AssetNode(PANEL1, MV2, "Panel", 0),
+        AssetNode(5, PANEL1, "Circuit", 0),
+    ])
+    tariffs = [
+        TariffRow(None, 0.10, date(2026, 1, 1)),
+        TariffRow(PANEL1, 0.20, date(2026, 10, 1)),
+        TariffRow(5, 0.50, date(2026, 10, 1)),
+    ]
+    circuit = metered((hour(3, 9), 10.0), (hour(3, 10), 10.0), (hour(3, 11), 10.0), (hour(3, 12), 10.0))
+    panel = metered((hour(3, 9), 10.0), (hour(3, 10), 6.0), (hour(3, 11), 6.0), (hour(3, 12), 6.0))
+    mv2 = metered((hour(3, 9), 10.0), (hour(3, 10), 6.0), (hour(3, 11), 6.0), (hour(3, 12), 3.0))
+    energy = EnergyResult(
+        hours={ROOT: mv2, MV2: mv2, PANEL1: panel, 5: circuit},
+        own=frozenset({MV2, PANEL1, 5}),
+        own_from={MV2: hour(3, 12), PANEL1: hour(3, 10)},
+    )
+
+    costs = cost_by_hour(energy, tariffs, nested, "UTC")
+
+    assert [h.cost for h in costs[5].values()] == pytest.approx([5.0] * 4)
+    assert [h.cost for h in costs[PANEL1].values()] == pytest.approx([5.0, 1.2, 1.2, 1.2])  # circuit's 0.50, then 0.20
+    # MV2: the circuit's rate through the panel, then the panel's own rate, then MV2's (the site default 0.10)
+    assert [h.cost for h in costs[MV2].values()] == pytest.approx([5.0, 1.2, 1.2, 0.3])
+    assert list(costs[MV2]) == [hour(3, 9), hour(3, 10), hour(3, 11), hour(3, 12)]
+    assert [h.cost for h in costs[ROOT].values()] == pytest.approx([5.0, 1.2, 1.2, 0.3])
+
+
 def test_estimated_hours_make_the_figure_estimated():
     tariffs = [TariffRow(None, 0.10, date(2026, 1, 1))]
     energy = engine({PANEL1: metered((hour(3, 9), 4.0), estimated=True)})

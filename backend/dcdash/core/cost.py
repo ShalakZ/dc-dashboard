@@ -121,6 +121,7 @@ def cost_by_hour(
                     for bucket, hour in hours.items()
                     if first is None or bucket >= first
                 }
+                # Same splice as energy.assemble (children before `own_from`, the meter from it on): keep in agreement.
                 if first is not None:  # before its meter started, the asset is what its children add up to
                     before = _sum_children(priced(child) for child in tree.children(asset_id))
                     mine = dict(sorted({**{b: h for b, h in before.items() if b < first}, **mine}.items()))

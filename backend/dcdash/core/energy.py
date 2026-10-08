@@ -205,6 +205,8 @@ def assemble(
         own_from[asset_id] = first if start is None else max(first, start)
         mine = _own_hours(meter, point_rows, baseline, None if start is None else own_from[asset_id], end)
         before: dict[datetime, HourEnergy] = {}
+        # The splice rule (children's hours before `first`, the meter's from `first` on) must stay in agreement with
+        # cost.cost_by_hour, which splits the pricing at the same `own_from`.
         if start is None or first > start:  # some hours of the range precede its first reading
             before = {b: h for b, h in (children_sum(asset_id) or {}).items() if b < first}
         hours[asset_id] = dict(sorted({**before, **mine}.items()))
