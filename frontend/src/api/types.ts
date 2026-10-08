@@ -94,7 +94,7 @@ export type ScanStatus = "queued" | "running" | "done" | "failed";
 export interface ScanCounters { hosts?: number; pairs?: number; checked?: number; open?: number; claimed?: number; points?: number; unidentified?: number; needs_credentials?: number }
 export interface Scope { id: number; name: string; targets: string[]; ports: number[]; created_at: string }
 export interface ScopeIn { name: string; targets: string[]; ports: number[] }
-export interface ScopePreview { hosts: number; ports: number; pairs: number }
+export interface ScopePreview { hosts: number; ports: number; pairs: number; digest: string }
 export interface ScopeSuggestions { targets: string[]; ports: number[] }
 export interface Finding { host: string; port: number; source_id: number | null; connector_type: string | null; outcome: "claimed" | "needs_credentials" | "unclaimed"; detail: string }
 export interface ScanSummary { id: number; scope_id: number | null; scope_name: string; status: ScanStatus; stage: "sweep" | "probe" | "browse" | null; progress: ScanCounters; created_at: string; finished_at: string | null; error: string | null }

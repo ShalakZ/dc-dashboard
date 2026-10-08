@@ -11,7 +11,7 @@ from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
 from dcdash.core.audit import audit
 from dcdash.core.config import get_settings
-from dcdash.core.discovery import Expansion, TargetError, expand_targets
+from dcdash.core.discovery import Expansion, TargetError, expand_targets, scan_digest
 from dcdash.core.models import Scan, ScanFinding, ScanScope, User
 from dcdash.core.settings_store import get_setting
 
@@ -46,6 +46,7 @@ class ScopeOut(BaseModel):
 
 class ScanStart(BaseModel):
     confirm_host_count: int
+    digest: str  # from the preview: binds the confirmation to the scope that was previewed, not just its size
 
 
 def expansion_of(targets: list[str], ports: list[int]) -> Expansion:
@@ -140,10 +141,13 @@ async def delete_scope(scope_id: int, user: User = Admin, db: AsyncSession = Dep
 
 
 @router.get("/scopes/{scope_id}/preview", dependencies=[Admin])
-async def preview_scope(scope_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, int]:
+async def preview_scope(scope_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     scope = await get_scope(db, scope_id)
     expansion = expansion_of(scope.targets, scope.ports)
-    return {"hosts": len(expansion.hosts), "ports": len(expansion.ports), "pairs": len(expansion.pairs)}
+    return {
+        "hosts": len(expansion.hosts), "ports": len(expansion.ports), "pairs": len(expansion.pairs),
+        "digest": scan_digest(scope.targets, scope.ports),
+    }
 
 
 @router.post("/scopes/{scope_id}/scan", status_code=202)
@@ -152,6 +156,9 @@ async def start_scan(
 ) -> dict[str, int]:
     scope = await get_scope(db, scope_id)
     expansion = expansion_of(scope.targets, scope.ports)
+    digest = scan_digest(scope.targets, scope.ports)
+    if body.digest != digest:
+        raise HTTPException(409, "scope changed since it was previewed; confirm again")
     if body.confirm_host_count != len(expansion.hosts):
         raise HTTPException(409, f"scope now covers {len(expansion.hosts)} hosts; confirm again")
     # Held until the commit below, so two simultaneous requests cannot both see "no scan active".
@@ -161,7 +168,7 @@ async def start_scan(
         raise HTTPException(409, "a scan is already in progress")
     snapshot = {
         "scope_name": scope.name, "targets": scope.targets, "ports": scope.ports,
-        "hosts": len(expansion.hosts), "pairs": len(expansion.pairs),
+        "hosts": len(expansion.hosts), "pairs": len(expansion.pairs), "digest": digest,
     }
     scan = Scan(scope_id=scope.id, scope_snapshot=snapshot, started_by=user.id)
     db.add(scan)

@@ -1,7 +1,8 @@
 import pytest
 
 from dcdash.core.discovery import (
-    MAX_PORTS, PointInfo, TargetError, expand_targets, guess_mapping, networks_from_addresses, suggest_groups,
+    MAX_PORTS, PointInfo, TargetError, expand_targets, guess_mapping, networks_from_addresses, scan_digest,
+    suggest_groups,
 )
 from dcdash.core.metrics import Metric
 
@@ -177,3 +178,48 @@ def test_interval_is_the_metric_default():
 def test_networks_are_the_24_around_each_address():
     assert networks_from_addresses(["172.18.0.7", "172.18.0.9", "192.168.1.20"]) == ["172.18.0.0/24", "192.168.1.0/24"]
     assert networks_from_addresses(["127.0.0.1", "169.254.1.1", "::1", "garbage"]) == []
+
+
+def test_scan_digest_is_a_stable_hash_of_targets_and_ports():
+    digest = scan_digest(["10.0.0.0/24", "plc.local"], [502, 4840])
+    assert digest == scan_digest(["10.0.0.0/24", "plc.local"], [502, 4840])
+    assert len(digest) == 64 and int(digest, 16) >= 0  # a sha256 hex digest
+    import hashlib
+
+    expected = hashlib.sha256(b'{"ports":[502,4840],"targets":["10.0.0.0/24","plc.local"]}').hexdigest()
+    assert digest == expected
+
+
+@pytest.mark.parametrize(
+    "targets,ports",
+    [
+        (["10.0.1.0/24", "plc.local"], [502, 4840]),    # a different target
+        (["plc.local", "10.0.0.0/24"], [502, 4840]),    # targets reordered
+        (["10.0.0.0/24"], [502, 4840]),                 # a target removed
+        (["10.0.0.0/24", "plc.local"], [4840, 502]),    # ports reordered
+        (["10.0.0.0/24", "plc.local"], [502, 4841]),    # a different port
+        (["10.0.0.0/24", "plc.local"], [502]),          # a port removed
+    ],
+)
+def test_scan_digest_changes_when_the_scope_changes(targets, ports):
+    assert scan_digest(targets, ports) != scan_digest(["10.0.0.0/24", "plc.local"], [502, 4840])
+
+
+def test_scan_digest_ignores_whitespace_around_targets():
+    assert scan_digest(["  10.0.0.0/24 ", "\tplc.local"], [502]) == scan_digest(["10.0.0.0/24", "plc.local"], [502])
+
+
+@pytest.mark.parametrize(
+    "target", ["http://admin:hunter2@10.0.0.1", "http://admin@10.0.0.1:8080/x", "opc.tcp://:hunter2@10.0.0.1", "http://@10.0.0.1"]
+)
+def test_url_targets_with_credentials_are_rejected_without_echoing_them(target):
+    with pytest.raises(TargetError, match="URL targets must not contain credentials") as caught:
+        expand_targets([target], [502], 10)
+    assert "hunter2" not in str(caught.value) and "admin" not in str(caught.value)
+
+
+@pytest.mark.parametrize("target", ["ftp://admin:hunter2@a.example", "tcp://admin:hunter2@a.example", "http://admin:hunter2@[::1"])
+def test_a_bad_url_with_credentials_does_not_echo_them_either(target):
+    with pytest.raises(TargetError) as caught:
+        expand_targets([target], [502], 10)
+    assert "hunter2" not in str(caught.value)

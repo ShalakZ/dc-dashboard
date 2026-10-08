@@ -60,7 +60,7 @@ describe("ScansPage", () => {
     let polls = 0;
     const calls = mockFetch({
       ...base("admin"),
-      "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6 } },
+      "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } },
       "POST /api/scopes/3/scan": { status: 202, body: { scan_id: 7, job_id: 1 } },
       "GET /api/scans/7": () => ({ body: ++polls < 2 ? { ...done, status: "running", stage: "probe", findings: [] } : done }),
     });
@@ -69,15 +69,34 @@ describe("ScansPage", () => {
     expect(await screen.findByText("2 hosts × 3 ports (6 probes)")).toBeInTheDocument();
     expect(calls.some((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")).toBe(false); // nothing runs before confirming
     await userEvent.click(screen.getByRole("button", { name: "Start scan" }));
-    expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({ confirm_host_count: 2 });
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({ confirm_host_count: 2, digest: "d1g3st" });
     expect(await screen.findByText(/running/i)).toBeInTheDocument();
     const row = await screen.findByRole("row", { name: /^simulator 9000 / }, { timeout: 5000 });
     expect(within(row).getByText("needs_credentials")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open the discovery graph" })).toHaveAttribute("href", "/discovery");
   });
 
+  it("starts the scan with the digest of the latest preview, not an earlier one", async () => {
+    let previews = 0;
+    const calls = mockFetch({
+      ...base("admin"),
+      "GET /api/scopes/3/preview": () => ({ body: { hosts: 2, ports: 3, pairs: 6, digest: `digest-${++previews}` } }),
+      "POST /api/scopes/3/scan": { status: 202, body: { scan_id: 7, job_id: 1 } },
+      "GET /api/scans/7": { body: done },
+    });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+    await screen.findByRole("button", { name: "Start scan" });
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Scan" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start scan" }));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({
+      confirm_host_count: 2, digest: "digest-2",
+    });
+  });
+
   it("cancelling the confirmation runs nothing", async () => {
-    const calls = mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6 } } });
+    const calls = mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } } });
     open();
     await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
     await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
@@ -87,7 +106,7 @@ describe("ScansPage", () => {
   it("shows the server's reason when the count is stale or a scan is running", async () => {
     mockFetch({
       ...base("admin"),
-      "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6 } },
+      "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } },
       "POST /api/scopes/3/scan": { status: 409, body: { detail: "a scan is already in progress" } },
     });
     open();
@@ -129,7 +148,7 @@ describe("ScansPage", () => {
     const confirmation = "2 hosts × 3 ports (6 probes)";
 
     it("closes when the scope is edited", async () => {
-      const calls = mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6 } } });
+      const calls = mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } } });
       open();
       await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
       expect(await screen.findByText(confirmation)).toBeInTheDocument();
@@ -142,7 +161,7 @@ describe("ScansPage", () => {
     it("closes when the scope is deleted", async () => {
       const calls = mockFetch({
         ...base("admin"),
-        "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6 } },
+        "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } },
         "DELETE /api/scopes/3": { status: 204 },
       });
       vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -159,7 +178,7 @@ describe("ScansPage", () => {
       let ports = 3;
       const calls = mockFetch({
         ...base("admin"),
-        "GET /api/scopes/3/preview": () => ({ body: { hosts: 2, ports, pairs: 2 * ports } }),
+        "GET /api/scopes/3/preview": () => ({ body: { hosts: 2, ports, pairs: 2 * ports, digest: "d1g3st" } }),
         "PATCH /api/scopes/3": ({ body }) => { ports = (body as { ports: number[] }).ports.length; return { body: scope }; },
       });
       open();

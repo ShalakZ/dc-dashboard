@@ -21,7 +21,7 @@ export function ScansPage() {
   const [pending, setPending] = useState<{ scope: Scope; preview: ScopePreview } | null>(null);
   const [activeScan, setActiveScan] = useState<number | null>(null);
 
-  // Nothing runs before the operator has seen the size of the scan: preview first, then confirm with that host count.
+  // Nothing runs before the operator has seen the size of the scan: preview first, then confirm with that host count and the digest of the scope that was previewed.
   const requestPreview = (scope: Scope) => run(async () => {
     setPending({ scope, preview: await api.get<ScopePreview>(`/api/scopes/${scope.id}/preview`) });
   });
@@ -30,7 +30,7 @@ export function ScansPage() {
     let scanId: number;
     try {
       ({ scan_id: scanId } = await api.post<{ scan_id: number; job_id: number }>(
-        `/api/scopes/${pending.scope.id}/scan`, { confirm_host_count: pending.preview.hosts },
+        `/api/scopes/${pending.scope.id}/scan`, { confirm_host_count: pending.preview.hosts, digest: pending.preview.digest },
       ));
     } finally {
       setPending(null); // a stale count or a running scan needs a fresh preview, so never leave the old one up

@@ -4,7 +4,9 @@ Nothing here opens a connection; `local_addresses` only asks the OS for this mac
 """
 from __future__ import annotations
 
+import hashlib
 import ipaddress
+import json
 import re
 import socket
 from dataclasses import dataclass
@@ -37,6 +39,12 @@ class Expansion:
                 seen.add(pair)
                 pairs.append(pair)
         return pairs
+
+
+def scan_digest(targets: list[str], ports: list[int]) -> str:
+    """A hash of what a scope scans; the scan start request must repeat the one its preview returned."""
+    scope = {"targets": [target.strip() for target in targets], "ports": ports}
+    return hashlib.sha256(json.dumps(scope, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def _validated_ports(ports: list[int]) -> tuple[int, ...]:
@@ -79,7 +87,13 @@ def _cidr_hosts(target: str, max_hosts: int) -> list[str]:
 
 
 def _url_host_port(target: str) -> tuple[str, int]:
-    parsed = urlparse(target)
+    # Checked before anything else so no message below can echo a password back or store it in a scope.
+    try:
+        parsed = urlparse(target)
+    except ValueError:
+        raise TargetError("not a valid URL") from None
+    if "@" in parsed.netloc:
+        raise TargetError("URL targets must not contain credentials")
     scheme = parsed.scheme.lower()
     if scheme not in (*_URL_DEFAULT_PORTS, "tcp"):
         raise TargetError(f"unsupported URL scheme: {target}")
