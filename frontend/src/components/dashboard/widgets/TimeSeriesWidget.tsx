@@ -94,6 +94,31 @@ export function tooltipFormatter(data: WidgetData, timezone: string) {
   };
 }
 
+/** Room left either side of the bounded axis, as a share of its span, so a symbol on an edge is not half-clipped. */
+const AXIS_PAD = 0.03;
+
+/**
+ * The bounds of the time axis of an energy or cost series (`bucket` hour or day); null for a metric series, whose many
+ * points let the chart choose. Left alone, one bucket (the `1h` preset) is stretched by the chart over about 42 hours,
+ * whose labels run together while the dot floats in the middle. The axis covers the response's range, widened to the
+ * first bucket (a day bucket is labelled by the local midnight, which can come before `range.start`) and to the whole
+ * of the last bucket, then padded a little on both sides.
+ */
+export function timeAxisBounds(data: WidgetData): { min: number; max: number } | null {
+  const step = data.bucket === "hour" ? 3_600_000 : data.bucket === "day" ? 86_400_000 : null;
+  if (step === null) return null;
+  const stamps = data.series.flatMap((s) => s.points.map((p) => Date.parse(p.ts))).filter(Number.isFinite);
+  const start = Date.parse(data.range.start);
+  const end = Date.parse(data.range.end);
+  const from = [start, ...stamps].filter(Number.isFinite);
+  const to = [end, ...stamps.map((t) => t + step)].filter(Number.isFinite);
+  if (from.length === 0 || to.length === 0) return null;
+  const min = Math.min(...from);
+  const max = Math.max(...to);
+  const pad = (max - min) * AXIS_PAD;
+  return { min: min - pad, max: max + pad };
+}
+
 export function timeSeriesOption(data: WidgetData, timezone: string): EChartsOption {
   const labels = chartLabels(data.series);
   const bucket = labelBucket(data);
@@ -117,7 +142,12 @@ export function timeSeriesOption(data: WidgetData, timezone: string): EChartsOpt
     tooltip: { trigger: "axis", formatter: tooltipFormatter(data, timezone) },
     legend: { show: data.series.length > 1, bottom: 0, type: "scroll", data: labels },
     grid: { left: 60, right: 20, top: 30, bottom: data.series.length > 1 ? 50 : 30 },
-    xAxis: { type: "time", axisLabel: { formatter: (value: number | string) => formatSiteTick(new Date(Number(value)).toISOString(), timezone, bucket) } },
+    xAxis: {
+      type: "time",
+      ...timeAxisBounds(data),
+      // hideOverlap: labels that would run together are dropped, whatever the width of the widget or the span of the axis
+      axisLabel: { hideOverlap: true, formatter: (value: number | string) => formatSiteTick(new Date(Number(value)).toISOString(), timezone, bucket) },
+    },
     yAxis: { type: "value", name: data.unit ?? undefined, scale: band },
     series,
   } as EChartsOption;
