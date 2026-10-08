@@ -3,7 +3,7 @@ import ReactECharts from "echarts-for-react";
 import { memo } from "react";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { chartLabels, escapeHtml, figureText, labelBucket, unitSuffix } from "../../../lib/widgetFormat";
+import { chartLabels, escapeHtml, figureText, labelBucket, NO_DATA, unitSuffix } from "../../../lib/widgetFormat";
 import { useLegendSelection } from "./legendSelection";
 
 const DASH = "—";
@@ -47,7 +47,8 @@ export function barOption(data: WidgetData, timezone: string): EChartsOption {
   const unit = unitSuffix(data.unit);
   if (data.mode === "values") {
     const labels = chartLabels(data.values);
-    const lines = data.values.map((v) => (v.value === null ? DASH : `${figureText(v.value, v)}${unit}${v.no_data ? " (no data)" : ""}`));
+    // A bar that recorded nothing is "no data" (no dash mark); the dash is kept for a figure that exists but has no rate.
+    const lines = data.values.map((v) => (v.value === null ? (v.no_data ? NO_DATA : DASH) : `${figureText(v.value, v)}${unit}${v.no_data ? ` (${NO_DATA})` : ""}`));
     return {
       animation: false,
       tooltip: { trigger: "axis", formatter: tooltipFor([lines], labels, false) },
@@ -56,7 +57,7 @@ export function barOption(data: WidgetData, timezone: string): EChartsOption {
       yAxis: { type: "value", name: data.unit ?? undefined },
       series: [{
         type: "bar", data: data.values.map((v) => v.value),
-        ...dashMarks(data.values.flatMap((v, i) => (v.value === null ? [i] : []))),
+        ...dashMarks(data.values.flatMap((v, i) => (v.value === null && !v.no_data ? [i] : []))),
       }],
     } as EChartsOption;
   }

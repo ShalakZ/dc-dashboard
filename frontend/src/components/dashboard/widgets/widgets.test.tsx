@@ -318,7 +318,7 @@ describe("bar", () => {
   it("builds a tooltip with the figure, its markers and unit, a dash for a missing one, and escaped names", () => {
     const data = byAsset([
       valueRow({ name: "<b>A</b>", value: 10, point_id: null, estimated: true }),
-      valueRow({ asset_id: 6, name: "B", value: null, point_id: null, no_data: true }),
+      valueRow({ asset_id: 6, name: "B", value: null, point_id: null }),
     ]);
     const tip = asBar(barOption(data, TZ)).tooltip.formatter;
     const first = tip([{ name: "<b>A</b> ~", dataIndex: 0, seriesIndex: 0, marker: "" }]);
@@ -327,6 +327,37 @@ describe("bar", () => {
     expect(first).toContain("~10.00 kWh");
     expect(tip([{ name: "B", dataIndex: 1, seriesIndex: 0, marker: "" }])).toContain("—");
     expect(tip([])).toBe("");
+  });
+
+  it("words a metric with no reading 'no data' and gives it no dash mark: the dash means a missing rate and nothing else", () => {
+    const data = valuesData({ type: "bar", source: "metric", metric: "active_power_kw", unit: "kW", values: [
+      valueRow({ name: "Live", value: 3, point_id: null }),
+      valueRow({ asset_id: 6, name: "Silent", value: null, no_data: true, point_id: null }),
+      valueRow({ asset_id: 7, name: "Odd", value: null, point_id: null }), // null without no_data: the dash, as before
+    ] });
+    const option = asBar(barOption(data, TZ));
+    expect(option.series[0].data).toEqual([3, null, null]);
+    expect(option.series[0].markPoint?.data).toEqual([expect.objectContaining({ coord: [2, 0] })]); // only the third slot
+    const tip = option.tooltip.formatter;
+    const line = (dataIndex: number) => tip([{ name: "x", dataIndex, seriesIndex: 0, marker: "" }]);
+    expect(line(1)).toContain("no data");
+    expect(line(1)).not.toContain("—");
+    expect(line(2)).toContain("—");
+    expect(line(2)).not.toContain("no data");
+  });
+
+  it("marks no dash at all when the only missing figures recorded nothing", () => {
+    const silent = valuesData({ type: "bar", source: "cost", metric: null, unit: "QAR", values: [
+      valueRow({ name: "Live", value: 3, point_id: null }),
+      valueRow({ asset_id: 6, name: "Quiet", value: null, no_data: true, point_id: null }),
+    ] });
+    expect(barSeries(barOption(silent, TZ))[0].markPoint).toBeUndefined();
+  });
+
+  it("still notes '(no data)' beside a zero that recorded nothing", () => {
+    const data = byAsset([valueRow({ name: "Quiet", value: 0, no_data: true, point_id: null })]);
+    const tip = asBar(barOption(data, TZ)).tooltip.formatter;
+    expect(tip([{ name: "Quiet", dataIndex: 0, seriesIndex: 0, marker: "" }])).toContain("0.00 kWh (no data)");
   });
 
   const point = (ts: string, over: Parameters<typeof seriesPoint>[0] extends infer P ? Partial<P> : never = {}) => seriesPoint({ ts, ...over });
@@ -475,9 +506,30 @@ describe("stat", () => {
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
-  it("mutes a figure that recorded nothing", () => {
+  it("mutes a figure that recorded nothing, and says so in its title", () => {
     render(<StatWidget data={valuesData({ source: "energy", metric: null, unit: "kWh", values: [valueRow({ value: 0, no_data: true, point_id: null })] })} live={false} />);
     expect(screen.getByText("0.00")).toHaveClass("muted");
+    expect(screen.getByText("0.00")).toHaveAttribute("title", "no data");
+  });
+
+  it("says 'no data' for a metric with no reading, not the dash that means a missing rate", () => {
+    render(<StatWidget data={valuesData({ values: [valueRow({ value: null, no_data: true, point_id: null })] })} live={false} />);
+    const big = screen.getByTitle("no data");
+    expect(big).toHaveClass("muted");
+    expect(big).toHaveTextContent(/^no data$/);
+    expect(screen.queryByText("—")).not.toBeInTheDocument();
+  });
+
+  it("keeps the muted dash for a cost without a rate that also recorded nothing, as Billing does, and titles it", () => {
+    render(<StatWidget data={valuesData({ source: "cost", metric: null, unit: "QAR", values: [valueRow({ value: null, no_data: true, point_id: null })] })} live={false} />);
+    const big = screen.getByTitle("no data");
+    expect(big).toHaveClass("muted");
+    expect(big).toHaveTextContent("—");
+  });
+
+  it("gives a measured figure no title", () => {
+    render(<StatWidget data={valuesData()} live={false} />);
+    expect(screen.getByText("10.50")).not.toHaveAttribute("title");
   });
 
   it("dims a stale reading and says how old it is", () => {
@@ -550,6 +602,32 @@ describe("table", () => {
     expect(screen.getByRole("row", { name: /Old/ }).lastElementChild).toHaveClass("muted");
     expect(screen.getByRole("row", { name: /Old/ })).toHaveTextContent("12 min ago");
     expect(screen.getByRole("row", { name: /Fresh/ }).lastElementChild).not.toHaveClass("muted");
+  });
+
+  it("says 'no data' with a title for a metric with no reading, keeps the dash for a cost without a rate, and titles a muted zero", () => {
+    const rows = [
+      valueRow({ name: "Silent", value: null, no_data: true, point_id: null }),
+      valueRow({ asset_id: 6, name: "Zero", value: 0, no_data: true, point_id: null }),
+      valueRow({ asset_id: 7, name: "Fine", value: 4, point_id: null }),
+    ];
+    render(<TableWidget data={valuesData({ type: "table", values: rows })} />);
+    const cell = (name: RegExp) => screen.getByRole("row", { name }).lastElementChild!;
+    expect(cell(/Silent/)).toHaveTextContent(/^no data$/);
+    expect(cell(/Silent/)).toHaveClass("muted");
+    expect(cell(/Silent/)).toHaveAttribute("title", "no data");
+    expect(cell(/Zero/)).toHaveTextContent("0.00");
+    expect(cell(/Zero/)).toHaveAttribute("title", "no data");
+    expect(cell(/Fine/)).not.toHaveAttribute("title");
+    expect(screen.queryByText("—")).not.toBeInTheDocument();
+  });
+
+  it("keeps the muted dash, titled, for a cost without a rate that also recorded nothing", () => {
+    const rows = [valueRow({ name: "Unpriced", value: null, no_data: true, point_id: null })];
+    render(<TableWidget data={valuesData({ type: "table", source: "cost", metric: null, unit: "QAR", values: rows })} />);
+    const cell = screen.getByRole("row", { name: /Unpriced/ }).lastElementChild!;
+    expect(cell).toHaveTextContent("—");
+    expect(cell).toHaveClass("muted");
+    expect(cell).toHaveAttribute("title", "no data");
   });
 
   it("says so when there are no assets", () => {

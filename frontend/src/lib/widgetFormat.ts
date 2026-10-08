@@ -12,6 +12,17 @@ export function figureText(value: number | null | undefined, flags: Flags): stri
   return `${flags.estimated ? "~" : ""}${value.toFixed(2)}${flags.partial ? "*" : ""}`;
 }
 
+/** The title and wording of a figure that recorded nothing. */
+export const NO_DATA = "no data";
+
+/**
+ * A stat or table figure. A metric with no reading in the range (null and `no_data`) says "no data": the dash means a
+ * missing rate and nothing else. A cost keeps its dash whether or not anything was recorded, as Billing does.
+ */
+export function figureOrNoData(value: number | null | undefined, flags: Flags, noData: boolean, source: WidgetData["source"]): string {
+  return value == null && noData && source !== "cost" ? NO_DATA : figureText(value, flags);
+}
+
 /** The markers of `Flags`, and whether a dash stands in for a cost that has no rate (see `flagsOf`). */
 export interface HintFlags extends Flags { noRate?: boolean }
 

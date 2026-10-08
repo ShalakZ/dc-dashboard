@@ -1,6 +1,6 @@
 import { seriesData, seriesPoint, valueRow, valuesData } from "../test/dashboardFixtures";
 import {
-  ageText, chartLabels, escapeHtml, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, sinceText,
+  ageText, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, sinceText,
   uniqueLabels, unitSuffix,
 } from "./widgetFormat";
 
@@ -18,6 +18,20 @@ describe("figureText", () => {
     expect(figureText(undefined, none)).toBe("—");
     expect(formatValue(null)).toBe("—");
     expect(formatValue(3)).toBe("3.00");
+  });
+});
+
+describe("figureOrNoData", () => {
+  it("says 'no data' for a metric that recorded nothing, and keeps the dash for everything else that is missing", () => {
+    expect(figureOrNoData(null, none, true, "metric")).toBe("no data");
+    expect(figureOrNoData(null, none, true, "energy")).toBe("no data");
+    expect(figureOrNoData(null, none, false, "metric")).toBe("—");
+    expect(figureOrNoData(null, none, true, "cost")).toBe("—"); // a cost without a rate is a dash, recorded or not
+    expect(figureOrNoData(null, none, false, "cost")).toBe("—");
+  });
+  it("shows a figure as figureText does, even when it recorded nothing (a muted zero)", () => {
+    expect(figureOrNoData(0, none, true, "energy")).toBe("0.00");
+    expect(figureOrNoData(2.5, { estimated: true, partial: true }, false, "cost")).toBe("~2.50*");
   });
 });
 
