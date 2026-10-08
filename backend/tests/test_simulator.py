@@ -92,8 +92,8 @@ async def test_reset_counter_endpoint():
 
 async def test_main_serves_all_three_protocols():
     from dcdash.simulator.main import serve
-    from tests.helpers import free_port
-    http, ua_port, mb_port = free_port(), free_port(), free_port()
+    from tests.helpers import free_ports
+    http, ua_port, mb_port = free_ports(3)  # three different ports: free_port() can return the same one twice
     task = asyncio.create_task(serve(http_port=http, opcua_port=ua_port, modbus_port=mb_port, host="127.0.0.1",
                                      api_key="sim-key"))
     try:

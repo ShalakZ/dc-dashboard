@@ -22,16 +22,22 @@ async def test_put_rejects_unknown_timezone(client, db):
     assert await db.fetchval("SELECT value->>'timezone' FROM settings WHERE key = 'general'") == "Europe/Amsterdam"
 
 
-@pytest.mark.skipif(datetime.now(timezone.utc).hour >= 20, reason="day-boundary test")
-async def test_summary_uses_stored_timezone(client, db):
-    """A reading at 23:30 UTC yesterday is 'today' in Asia/Dubai (UTC+4) but not in UTC."""
+@pytest.mark.parametrize("hour", [0, 12, 22], ids=["00:00Z", "noon", "22:00Z"])
+async def test_summary_uses_stored_timezone(client, db, monkeypatch, hour):
+    """A reading at 23:30 UTC the day before is 'today' in Asia/Dubai (UTC+4) but not in UTC.
+
+    The clock is fixed, so the test passes at any hour it is run. It is tried at three times of the day: from 20:00Z
+    the Dubai day has already moved on (22:00Z is 02:00 the next morning there), and the readings of the evening
+    before are no longer 'today' in either zone.
+    """
+    now = datetime(2026, 3, 10, hour, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("dcdash.api.data._now", lambda: now)
     await login_as(client, db)
     source = await make_source(db)
     point = await make_point(db, source, "sim.energy")
     asset = await make_asset(db, "MV2")
     await make_mapping(db, point, asset, metric="energy_kwh")
-    now = datetime.now(timezone.utc)
-    yesterday_late = now.replace(hour=23, minute=30, second=0, microsecond=0) - timedelta(days=1)
+    yesterday_late = datetime(2026, 3, 9, 23, 30, tzinfo=timezone.utc)
     for ts, value in ((yesterday_late, 100.0), (yesterday_late + timedelta(minutes=10), 110.0)):
         await db.execute(
             "INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", point, ts, value, 0
@@ -41,7 +47,10 @@ async def test_summary_uses_stored_timezone(client, db):
     after = (await client.get(f"/api/assets/{asset}/summary")).json()["energy_today"]
     # In UTC those readings belong to yesterday: no energy today. In Dubai 03:30-03:40 is today.
     assert before is None or before["kwh"] == 0
-    assert after is not None and after["kwh"] == 10.0
+    if hour < 20:  # Dubai's day started at 20:00Z yesterday and is still on
+        assert after is not None and after["kwh"] == 10.0
+    else:  # from 20:00Z the Dubai day has moved on, and so have those readings
+        assert after is None or after["kwh"] == 0
 
 
 async def test_get_falls_back_when_stored_timezone_is_unknown(client, db):
