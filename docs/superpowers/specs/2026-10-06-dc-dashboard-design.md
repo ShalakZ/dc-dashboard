@@ -260,7 +260,9 @@ are the unit; days and months are sums of hours in the site timezone.
   `max(0, max - previous_last) + (last - min)`: the step across the reset adds
   nothing and one reset per hour is recovered. A dip that recovers inside the
   hour (a glitch reading of 0) is not a reset: the hour counts
-  `last - previous_last`, so a single bad sample cannot add the whole counter.
+  `last - previous_last`. A glitch that is the last sample of an hour is not
+  detected and inflates the following hour; a plausibility ceiling per meter
+  is backlog.
 - If an asset has only `active_power_kw`, the consumption of an hour is its
   average power times the time covered by samples, so outages add nothing: for
   polling intervals up to 60 seconds the covered time is the minutes of the
