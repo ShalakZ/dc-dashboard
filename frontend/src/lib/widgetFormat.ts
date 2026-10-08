@@ -37,17 +37,19 @@ export function markerHint(flags: HintFlags): string {
 
 /**
  * Which markers a response uses anywhere: the series-level flags of a series response, the per-asset flags of a values
- * one. `noRate` is a cost bucket or asset that is null although something was recorded (`value === null && !no_data`):
- * it is drawn as a dash, or, in a line, not drawn at all, so a chart whose every bucket lacks a rate would otherwise
- * look like one with no data.
+ * one. `noRate` is a cost without a rate: a value row with `value === null` (a bar per asset, stat or table draws the dash
+ * whether or not the asset also recorded nothing), or a series bucket with `value === null && !no_data` (a silent bucket is
+ * a gap, not a missing rate). A line with no rate is not drawn at all, so a chart whose every bucket lacks one would
+ * otherwise look like one with no data.
  */
 export function flagsOf(data: Pick<WidgetData, "series" | "values" | "source">): Required<HintFlags> {
   const rows = [...data.series, ...data.values];
-  const cells = [...data.series.flatMap((s) => s.points), ...data.values];
+  const noRate = data.source === "cost"
+    && (data.values.some((v) => v.value === null) || data.series.some((s) => s.points.some((p) => p.value === null && !p.no_data)));
   return {
     estimated: rows.some((r) => r.estimated),
     partial: rows.some((r) => r.partial),
-    noRate: data.source === "cost" && cells.some((c) => c.value === null && !c.no_data),
+    noRate,
   };
 }
 

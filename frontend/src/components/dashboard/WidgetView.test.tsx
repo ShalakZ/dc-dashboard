@@ -100,6 +100,15 @@ describe("WidgetView", () => {
     expect(screen.queryByText(/no rate/)).not.toBeInTheDocument();
   });
 
+  it("explains the dash of a cost bar per asset whose only unpriced asset also recorded nothing", async () => {
+    mockFetch({ "POST /api/widget-data": { body: valuesData({
+      type: "bar", source: "cost", metric: null, unit: "QAR",
+      values: [valueRow({ value: 4 }), valueRow({ asset_id: 6, name: "Quiet", value: null, no_data: true })],
+    }) } });
+    show({ type: "bar", config: config({ source: "cost", metric: null }) });
+    expect(await screen.findByText("— no rate")).toBeInTheDocument();
+  });
+
   it("offers the CSV download unless told not to", async () => {
     mockFetch({ "POST /api/widget-data": { body: valuesData({ type: "table" }) } });
     const { unmount } = show();

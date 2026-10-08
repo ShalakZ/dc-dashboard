@@ -96,9 +96,11 @@ describe("flagsOf", () => {
       expect(flagsOf(cost([seriesPoint({ ts: at(0), value: 2 }), seriesPoint({ ts: at(1), value: null, no_data: true })])).noRate).toBe(false);
     });
 
-    it("is set by a cost value row without a rate, and by none of a metric's or energy's missing figures", () => {
+    it("is set by a cost value row without a rate, whether or not it also recorded nothing, and by none of a metric's or energy's missing figures", () => {
       expect(flagsOf(valuesData({ source: "cost", metric: null, values: [valueRow({ value: 3 }), valueRow({ asset_id: 6, value: null })] })).noRate).toBe(true);
-      expect(flagsOf(valuesData({ source: "cost", metric: null, values: [valueRow({ value: null, no_data: true })] })).noRate).toBe(false);
+      // a value row is drawn as a dash whenever its cost is null (bar per asset, stat, table), so null alone means "no rate"
+      expect(flagsOf(valuesData({ source: "cost", metric: null, values: [valueRow({ value: null, no_data: true })] })).noRate).toBe(true);
+      expect(flagsOf(valuesData({ source: "cost", metric: null, values: [valueRow({ value: 0, no_data: true })] })).noRate).toBe(false);
       expect(flagsOf(valuesData({ source: "metric", values: [valueRow({ value: null })] })).noRate).toBe(false);
       expect(flagsOf(valuesData({ source: "energy", metric: null, values: [valueRow({ value: null })] })).noRate).toBe(false);
     });
