@@ -36,7 +36,9 @@ credentials cannot be decrypted. Set `DCDASH_TIMEZONE` in `.env` (for example
 both January and July (`Asia/Qatar` and `Europe/London` do, `Asia/Kolkata` does not); see
 "Dashboards and billing".
 
-Later starts need only `docker compose up -d`.
+Later starts need only `docker compose up -d`. The exception is a start after you pulled a new
+version: starting `api` migrates the database, so read "Upgrading an existing database to Phase 3"
+before the first start on a database that already holds data.
 
 ### Optional HTTPS
 
@@ -228,12 +230,15 @@ Roles are enforced by the API; the screens only hide what you cannot use.
 | Set tariffs and the currency (Tariffs screen) | no | no | yes |
 
 **Dashboards** are shared by everyone. A dashboard holds up to 24 widgets (the site up to 50
-dashboards) of five types: time series, bar, stat, gauge and table. A widget shows a metric, energy or
+dashboards) of five types: time series, bar, stat, gauge and table. A dashboard name is 1 to 100
+characters (spaces at the ends are trimmed) and unique: a name already in use is refused with a 409. A
+widget title is at most 100 characters. A widget shows a metric, energy or
 cost for up to 20 assets (a stat or a gauge shows one). A dashboard has one time range and a widget may
 override it. The ranges are the rolling `1h`, `6h`, `24h`, `7d`, `30d` and the calendar `today`,
 `yesterday`, `this_month`, `last_month` (in the site timezone); there are no custom date ranges, and
 changing the range on the page affects that visit only. Stat and gauge widgets that show the latest value
-follow the live stream; the other widgets refresh every 30 seconds. **Edit** (operators and admins)
+follow the live stream while their range ends now (the rolling ranges, `today` and `this_month`; not
+`yesterday` or `last_month`); every widget also refreshes every 30 seconds. **Edit** (operators and admins)
 opens the grid editor: drag a widget by its title bar, resize it from the corner or the edges, **Add
 widget**, then **Save**, which stores the whole dashboard in one step. If someone else saved first you are
 told, nothing is overwritten, and you can reload their version. A widget whose asset was deleted shows
@@ -342,13 +347,9 @@ Three specs run in one `playwright test` run against the dev-profile stack on `h
   with no edit controls, no Tariffs link and `403` from the write API; the admin finds the tariff,
   currency and dashboard entries in the Audit log.
 
-It needs a fresh database (setup must still be pending), so the run starts the stack from scratch.
-
-    E2E_I_UNDERSTAND_DATA_LOSS=yes scripts/e2e.sh     # deletes the local dbdata volume, then runs it
-
-`scripts/e2e.sh` deletes the database volume of the normal stack. To leave your own data alone, run
-the same steps in a separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal
-stack first with `docker compose --profile dev stop`, never with `-v`, because both use ports 80 and 443):
+It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
+separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
+`docker compose --profile dev stop`, never with `-v`, because both use ports 80 and 443):
 
     docker compose -p dcdash_e2e --profile dev down -v --remove-orphans
     docker compose -p dcdash_e2e --profile dev up -d --build
@@ -358,12 +359,15 @@ stack first with `docker compose --profile dev stop`, never with `-v`, because b
 or, with a fresh stack already running: `cd frontend && npx playwright test -c e2e/playwright.config.ts`.
 First time only: `npx playwright install chromium`. Reports: `npx playwright show-report`.
 
+`scripts/e2e.sh` is for a throwaway machine only; it deletes `dcdash_dbdata`.
+
 The isolated `-p dcdash_e2e` run builds the same `dcdash-backend:local` and `dcdash-web:local` images
-as the normal stack, so it re-tags them: rebuild your normal stack afterwards (`docker compose
---profile dev up -d --build`) to be sure it runs your own code, and check with `docker volume ls` that
-`dcdash_dbdata` is still listed. Because the image tag was replaced, any later `docker compose up -d` on
-the normal project (with or without `--build`) recreates `api`, which then runs the database migrations:
-if your database is still at an older schema, read "Upgrading an existing database to Phase 3" first.
+as the normal stack, so it re-tags them. If your database is still at an older schema, read "Upgrading
+an existing database to Phase 3" before you start the normal stack again: because the image tag was
+replaced, any later `docker compose up -d` on the normal project (with or without `--build`) creates or
+recreates `api`, which then runs the database migrations. Otherwise rebuild your normal stack afterwards
+(`docker compose --profile dev up -d --build`) to be sure it runs your own code. Either way, check with
+`docker volume ls` that `dcdash_dbdata` is still listed.
 
 ### Housekeeping
 
@@ -397,9 +401,12 @@ and can be run again after an interruption, but it rebuilds `readings_1h` from `
 why the steps below start with a backup. Collection pauses while the migration runs, so readings for that
 interval are not collected.
 
-1. **Back up first.** With the `db` container running: `scripts/backup.sh`. Keep both files it writes,
-   the `.dump` and the `.version` file (it says `0003`). Restoring with `scripts/restore.sh` is the only
-   way back to hourly history that the rebuild dropped.
+1. **Back up first.** `scripts/backup.sh` needs the `db` container running. If the stack is not running,
+   start only the database: `docker compose up -d db` (`db` has no dependencies and uses the TimescaleDB
+   image, so `api` is not created and nothing is migrated). Do not use a plain `docker compose up -d`
+   yet. Then run `scripts/backup.sh`. Keep both files it writes, the `.dump` and the `.version` file
+   (it says `0003`). Restoring with `scripts/restore.sh` is the only way back to hourly history that the
+   rebuild dropped (see "Going back" at the end of this section).
 2. **Pre-check.** In `docker compose exec db psql -U dcdash -d dcdash` run:
 
    ```sql
@@ -407,10 +414,11 @@ interval are not collected.
           (SELECT time_bucket(INTERVAL '1 hour', min(bucket)) FROM readings_1m) AS m;
    ```
 
-   If `h` is earlier than `m`, those hours are lost by the upgrade (the 1-minute tier is kept for
-   `rollup_1m_retention_days`, 730 by default, while the hourly tier is kept forever). Stop and decide
-   before going on. Also run `SELECT value FROM settings WHERE key = 'storage';`: a `raw_retention_days`
-   below 8 is raised to 8 by the migration, and the retention policy is applied again.
+   If `h` is earlier than `m` (or `m` is empty while `h` is not), migration 0004 refuses to run (see
+   step 4) rather than lose those hours (the 1-minute tier is kept for `rollup_1m_retention_days`, 730
+   by default, while the hourly tier is kept forever). Stop and decide before going on. Also run
+   `SELECT value FROM settings WHERE key = 'storage';`: a `raw_retention_days` below 8 is raised to 8
+   by the migration, and the retention policy is applied again.
 3. **Apply.** Only when you mean to upgrade: `docker compose --profile dev up -d --build` (without
    `--profile dev` on a stack that has no simulator). Watch `docker compose logs -f api` until
    `Running upgrade 0003 -> 0004` is followed by Uvicorn's start-up line. If Compose reports the `api`
@@ -435,6 +443,16 @@ interval are not collected.
      until you set it) and the storage settings.
    - In the UI, set the currency and the rates on Tariffs. Check that Settings has a timezone with
      whole-hour UTC offsets, or Billing answers 409.
+6. **Going back.** Restoring the step 1 dump on the Phase 3 image does not undo the upgrade: its
+   `.version` says `0003` while the running schema is `0004`, so `scripts/restore.sh` refuses without
+   `--force`, and with `--force` the script restarts `api`, which runs migration 0004 again. To really
+   return to Phase 2, restore with the Phase 2 code and images: check out the Phase 2 code (`main` as it
+   was before Phase 3 was merged), run `docker compose build`, start only the database with
+   `docker compose up -d db`, then run
+   `scripts/restore.sh backups/<dump file> --force` (`--force` is needed when the database was already
+   migrated to `0004`; it is not when the migration never ran). `restore.sh` can only restart `api` and
+   `collector` if they already exist, so finish with `docker compose up -d`: on the Phase 2 image the
+   restored `0003` database needs no migration.
 
 ## Add a connector
 
