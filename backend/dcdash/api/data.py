@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, text
@@ -7,9 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.settings import current_timezone
+from dcdash.core.cost import cost_by_hour, load_tariffs, rate_at, summarize
 from dcdash.core.energy import hourly_energy, total
 from dcdash.core.metrics import Metric, unit_for
 from dcdash.core.models import Asset, Mapping, PointLatest
+from dcdash.core.settings_store import get_currency
 from dcdash.core.timeutil import day_bounds, day_start  # noqa: F401  (day_start: existing importers use this path)
 from dcdash.core.tree import AssetTree
 
@@ -82,13 +85,25 @@ async def summary(asset_id: int, db: AsyncSession = Depends(get_db)) -> dict[str
     ]
     # Today = the site's local day. Settings refuses a zone whose day edges are not whole UTC hours; one stored
     # before that rule shifts these edges to the next rollup bucket instead of failing the page.
-    start, end = day_bounds(_now(), await current_timezone(db))
-    result = await hourly_energy(db, await AssetTree.load(db), start, end)
+    tz = await current_timezone(db)
+    tree = await AssetTree.load(db)
+    now = _now()
+    start, end = day_bounds(now, tz)
+    result = await hourly_energy(db, tree, start, end)
     energy = total(result.hours.get(asset_id))
+    tariffs = await load_tariffs(db)
+    priced = cost_by_hour(result, tariffs, tree, tz).get(asset_id)
+    # No energy hours today (an exact zero) costs 0 where a rate is in effect today, and shows no cost otherwise.
+    rate_today = rate_at(tariffs, tree, asset_id, now.astimezone(ZoneInfo(tz)).date())
+    cost = None if priced is None else summarize(priced.values(), rate_in_effect=rate_today is not None)
     return {
         "asset": {"id": asset.id, "name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind},
         "metrics": metrics,
         "energy_today": None if energy is None else {"kwh": energy.kwh, "estimated": energy.estimated},
+        "cost_today": None if cost is None else {
+            "cost": cost.cost, "estimated": cost.estimated, "partial": cost.partial,
+        },
+        "currency": await get_currency(db),
     }
 
 
