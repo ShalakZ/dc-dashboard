@@ -3,7 +3,7 @@
  * Every navigation of a React Router data router builds a `new Request(url, { signal })`, so under jsdom it throws
  * "Expected signal to be an instance of AbortSignal" and the navigation never happens. When that exact refusal occurs the
  * Request is built again without the signal; nothing in these tests loads data, so there is nothing it would have cancelled.
- * Imported by render.tsx, so it applies to the tests that mount a router and to no others.
+ * Imported by render.tsx, so it applies to every test that uses the render helpers; it changes nothing unless that one refusal happens.
  */
 const NodeRequest = globalThis.Request;
 

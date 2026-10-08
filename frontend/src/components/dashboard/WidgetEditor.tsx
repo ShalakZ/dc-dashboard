@@ -79,7 +79,15 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
           <div>
             <div className="field">
               <label htmlFor={field("type")}>Type</label>
-              <select id={field("type")} value={form.type} onChange={(e) => setForm((f) => withType(f, e.target.value as WidgetType))}>
+              <select
+                id={field("type")}
+                value={form.type}
+                onChange={(e) => setForm((f) => {
+                  // A gauge forces the metric source; assets that lack the metric go then, but not on a type change that keeps the source.
+                  const next = withType(f, e.target.value as WidgetType);
+                  return next.source !== f.source ? keepAssetsWithMetric(next, metricAssets) : next;
+                })}
+              >
                 {WIDGET_TYPES.map((t) => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
               </select>
             </div>

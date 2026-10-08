@@ -221,6 +221,24 @@ describe("which assets a metric widget may list", () => {
     expect(screen.getByRole("checkbox", { name: "LV Panel 1" })).toBeChecked();
   });
 
+  it("drops them too when picking a type that forces the metric source (a gauge cannot show energy)", async () => {
+    open(null, MAPPED);
+    await userEvent.selectOptions(screen.getByLabelText("Source"), "energy");
+    await userEvent.click(screen.getByRole("checkbox", { name: "MV2" }));
+    await userEvent.selectOptions(screen.getByLabelText("Type"), "gauge");
+    expect(optionTexts("Source")).toEqual(["Metric"]);
+    expect(screen.queryByRole("radio", { name: /MV2/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Choose an asset.")).toBeInTheDocument();
+  });
+
+  it("does not drop an unmapped asset of a saved widget when only the type changes", async () => {
+    const [draft] = toDrafts([widget(1, "table", { title: "Volts", config: config({ assets: [5, 6], metric: "voltage_v" }) })]);
+    open(draft, MAPPED);
+    await userEvent.selectOptions(screen.getByLabelText("Type"), "bar");
+    expect(screen.getByRole("checkbox", { name: "LV Panel 1 (no voltage_v)" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "LV Panel 2" })).toBeChecked();
+  });
+
   it("keeps energy_kwh to the latest value, which the hidden time-series control still sends", async () => {
     const { onSave } = open(null, MAPPED);
     expect(screen.queryByLabelText("Aggregation")).not.toBeInTheDocument(); // a time series draws the average whatever it is told
