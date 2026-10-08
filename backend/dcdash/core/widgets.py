@@ -160,11 +160,12 @@ class SiteZoneError(Exception):
 @dataclass
 class _Point:
     ts: datetime
-    value: float | None  # None is a gap: nothing was recorded
+    value: float | None  # None: nothing was recorded (no_data), or consumption was recorded but no rate applies
     min: float | None = None
     max: float | None = None
     estimated: bool = False
     partial: bool = False
+    no_data: bool = False  # nothing was recorded in the bucket; value None with no_data False is a cost with no rate
 
 
 @dataclass
@@ -214,7 +215,13 @@ class WidgetResult:
             "series": [
                 {
                     "asset_id": s.asset_id, "name": s.name,
-                    "points": [{"ts": p.ts.isoformat(), "value": p.value, "min": p.min, "max": p.max} for p in s.points],
+                    "points": [
+                        {
+                            "ts": p.ts.isoformat(), "value": p.value, "min": p.min, "max": p.max,
+                            "estimated": p.estimated, "partial": p.partial, "no_data": p.no_data,
+                        }
+                        for p in s.points
+                    ],
                     "estimated": any(p.estimated for p in s.points), "partial": any(p.partial for p in s.points),
                 }
                 for s in self.series
@@ -293,15 +300,15 @@ def _by_span[T](items: Iterable[tuple[datetime, T]], spans: list[Span]) -> list[
 def _energy_point(label: datetime, hours: list[HourEnergy]) -> _Point:
     measured = [h for h in hours if h.has_data]
     if not measured:  # nothing was recorded in this bucket: a gap, never a zero
-        return _Point(label, None)
+        return _Point(label, None, no_data=True)
     return _Point(label, sum(h.kwh for h in measured), estimated=any(h.estimated for h in measured))
 
 
 def _cost_point(label: datetime, hours: list[HourCost]) -> _Point:
     measured = [h for h in hours if h.has_data]
     if not measured:
-        return _Point(label, None)
-    cost = summarize(measured)
+        return _Point(label, None, no_data=True)
+    cost = summarize(measured)  # value None here means hours were recorded but none has a rate: no_data stays False
     return _Point(label, cost.cost, estimated=cost.estimated, partial=cost.partial)
 
 
@@ -324,7 +331,8 @@ async def _fill_metric(
         for asset_id in asset_ids:
             found = await metric_series(db, mappings[asset_id], start, end, DEFAULT_BUCKETS)
             points = [  # a negative scale swaps the band's edges
-                _Point(p.ts.astimezone(zone), p.avg, min(p.min, p.max), max(p.min, p.max)) for p in found.points
+                _Point(p.ts.astimezone(zone), p.avg, min(p.min, p.max), max(p.min, p.max), no_data=p.avg is None)
+                for p in found.points
             ]
             result.series.append(_Series(asset_id, tree.nodes[asset_id].name, tree.path(asset_id), points))
         return
@@ -338,7 +346,7 @@ async def _fill_metric(
             for (label, _, _), rows in zip(spans, groups):
                 bucket = combine_hours(rows, mapping.scale)
                 points.append(
-                    _Point(label, None) if bucket.avg is None
+                    _Point(label, None, no_data=True) if bucket.avg is None
                     else _Point(label, getattr(bucket, aggregation), bucket.min, bucket.max)
                 )
             result.series.append(_Series(asset_id, tree.nodes[asset_id].name, tree.path(asset_id), points))

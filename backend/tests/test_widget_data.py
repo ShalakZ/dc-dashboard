@@ -25,7 +25,7 @@ TOP_KEYS = {
     "type", "mode", "source", "metric", "unit", "range", "tier", "bucket", "series", "values", "missing", "no_metric",
 }
 SERIES_KEYS = {"asset_id", "name", "points", "estimated", "partial"}
-POINT_KEYS = {"ts", "value", "min", "max"}
+POINT_KEYS = {"ts", "value", "min", "max", "estimated", "partial", "no_data"}
 VALUE_KEYS = {"asset_id", "name", "value", "estimated", "partial", "point_id", "no_data", "ts", "stale"}
 PATHS = ("/api/widget-data", "/api/widget-data/csv")
 
@@ -496,6 +496,74 @@ async def test_a_counters_hours_before_its_first_reading_are_gaps_and_its_first_
     assert len(points) == 24
     assert [p["value"] for p in points] == [None] * 9 + [0.0] + [pytest.approx(10.0)] * 14  # 11:00Z-19:00Z, 20:00Z, then 21:00Z-10:00Z
     assert points[0]["ts"] == "2026-03-09T14:00:00+03:00" and points[-1]["ts"] == "2026-03-10T13:00:00+03:00"
+
+
+def flags(point):
+    return {key: point[key] for key in ("value", "estimated", "partial", "no_data")}
+
+
+SILENT = {"value": None, "estimated": False, "partial": False, "no_data": True}  # nothing recorded in the bucket
+NO_RATE_ZERO = {"value": None, "estimated": False, "partial": False, "no_data": False}  # recorded 0 kWh, no rate
+NO_RATE = {"value": None, "estimated": False, "partial": True, "no_data": False}  # recorded consumption, no rate
+MEASURED_ZERO = {"value": 0.0, "estimated": False, "partial": False, "no_data": False}
+
+
+@pytest.mark.parametrize("preset,bucket,silent,quiet_days", [("24h", "hour", 9, 1), ("7d", "day", 6, 1)])
+async def test_a_cost_point_tells_a_bucket_without_a_rate_from_a_bucket_without_data(
+    client, db, preset, bucket, silent, quiet_days
+):
+    asset = await seed_standard(db, tariff=False)  # the counter is silent before 20:30Z yesterday and has no tariff
+    await login_as(client, db, "viewer")
+    body = widget_body("timeseries", [asset], "cost", "sum", preset)
+    data = (await client.post("/api/widget-data", json=body)).json()
+    series = data["series"][0]
+    assert data["bucket"] == bucket and series["partial"] is True
+    consuming = len(series["points"]) - silent - quiet_days  # 14 hours, or today's day
+    assert [flags(p) for p in series["points"]] == [SILENT] * silent + [NO_RATE_ZERO] * quiet_days + [NO_RATE] * consuming
+    # the same series with a rate: priced buckets are values, silent ones are still gaps
+    await add_tariff(db, 0.5, "2026-03-01")
+    priced = (await client.post("/api/widget-data", json=body)).json()["series"][0]
+    assert [flags(p) for p in priced["points"][:silent]] == [SILENT] * silent
+    assert flags(priced["points"][silent]) == MEASURED_ZERO
+    assert all(p["no_data"] is False and p["partial"] is False and p["value"] > 0 for p in priced["points"][silent + 1:])
+
+
+@pytest.mark.parametrize("preset,bucket,silent", [("24h", "hour", 9), ("7d", "day", 6)])
+async def test_an_energy_point_is_null_exactly_when_it_has_no_data(client, db, preset, bucket, silent):
+    asset = await seed_standard(db)
+    await login_as(client, db, "viewer")
+    body = widget_body("bar", [asset], "energy", "sum", preset, bars="time")
+    data = (await client.post("/api/widget-data", json=body)).json()
+    points = data["series"][0]["points"]
+    assert data["bucket"] == bucket
+    assert [flags(p) for p in points[:silent]] == [SILENT] * silent
+    assert flags(points[silent]) == MEASURED_ZERO  # the counter's first hour has no baseline: a measured zero
+    assert all(p["no_data"] is False and p["partial"] is False and p["estimated"] is False for p in points[silent + 1:])
+    assert all((p["value"] is None) == p["no_data"] for p in points)
+
+
+async def test_an_estimated_energy_point_says_so(client, db):
+    await put_setting(db, "general", {"timezone": "Asia/Qatar"})
+    start = datetime(2026, 3, 10, 9, 0, tzinfo=UTC)
+    asset, _, _ = await seed_asset(db, "Pump", prefix="PMP", kw=[6.0] * 60, kw_start=start)  # 6 kW for 09:00-09:59Z
+    await refresh_rollups(db)
+    await login_as(client, db, "viewer")
+    points = (await client.post("/api/widget-data", json=widget_body("timeseries", [asset], "energy", "sum"))).json()[
+        "series"][0]["points"]
+    assert flags(points[12]) == {"value": pytest.approx(6.0), "estimated": True, "partial": False, "no_data": False}
+    assert [flags(p) for p in points[:12] + points[13:]] == [SILENT] * 13  # the other hours of today recorded nothing
+
+
+@pytest.mark.parametrize("widget_type,extra,preset", [("timeseries", {}, "1h"), ("bar", {"bars": "time"}, "24h")])
+async def test_a_metric_point_is_null_exactly_when_it_has_no_data(client, db, widget_type, extra, preset):
+    asset = await seed_standard(db)
+    await login_as(client, db, "viewer")
+    body = widget_body(widget_type, [asset], "metric", "avg", preset, **extra)
+    points = (await client.post("/api/widget-data", json=body)).json()["series"][0]["points"]
+    assert all(p["estimated"] is False and p["partial"] is False for p in points)
+    assert all((p["value"] is None) == p["no_data"] for p in points)
+    assert any(p["no_data"] for p in points) == (widget_type == "bar")  # a bar's silent hours are gaps; a line has none
+    assert any(not p["no_data"] for p in points)
 
 
 async def test_a_day_label_is_the_local_day_even_where_midnight_does_not_exist(db, session):
