@@ -11,7 +11,13 @@ const FIELDS: [keyof StorageSettings, string][] = [
   ["warn_threshold_pct", "Warn at (% used)"],
 ];
 
+/** The rollups refresh over this trailing window; the server (storage.py REFRESH_WINDOW_DAYS) refuses a raw retention shorter than one more day. */
+export const REFRESH_WINDOW_DAYS = 7;
+
 export function validate(s: StorageSettings): string | null {
+  if (s.raw_retention_days < REFRESH_WINDOW_DAYS + 1) {
+    return `raw retention must be at least ${REFRESH_WINDOW_DAYS + 1} days, one more than the ${REFRESH_WINDOW_DAYS}-day rollup refresh window`;
+  }
   if (s.raw_retention_days < s.compress_after_days + 1) return "raw retention must be at least one day longer than compression delay";
   if (s.rollup_1m_retention_days < s.raw_retention_days) return "1-minute rollup retention must not be shorter than raw retention";
   if (s.disk_capacity_gb <= 0) return "disk capacity must be positive";
