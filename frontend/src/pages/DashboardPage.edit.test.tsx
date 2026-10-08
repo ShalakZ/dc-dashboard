@@ -398,8 +398,8 @@ describe("leaving with unsaved changes", () => {
     const titleInput = within(widgetDialog).getByLabelText("Title");
     await userEvent.type(titleInput, "Draft");
     expect(titleInput).toHaveFocus();
-    // the mouse Back button: a navigation the blocker catches while the widget dialog is open
-    act(() => { void router.navigate("/dashboards"); });
+    // an in-app navigation (here the breadcrumb link) that the blocker catches while the widget dialog is open
+    await leaveByLink();
     const prompt = await screen.findByRole("alertdialog", { name: "Unsaved changes" });
     expect(router.state.location.pathname).toBe("/dashboards/3");
     // both backdrops share a z-index, so the one later in the document paints on top: it must be the prompt's
@@ -420,7 +420,7 @@ describe("leaving with unsaved changes", () => {
     await userEvent.type(titleInput, "!");
     expect(titleInput).toHaveValue("Draft!"); // typing works again
     // a second attempt: Leave drops the edits and goes
-    act(() => { void router.navigate("/dashboards"); });
+    await leaveByLink();
     await userEvent.click(await screen.findByRole("button", { name: "Leave and discard changes" }));
     expect(await screen.findByText("dashboards page")).toBeInTheDocument();
   });
