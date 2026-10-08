@@ -21,5 +21,11 @@ export default defineConfig({
       dependencies: ["journey"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
     },
+    {
+      name: "phase3",
+      testMatch: "phase3.spec.ts",
+      dependencies: ["discovery"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
+    },
   ],
 });
