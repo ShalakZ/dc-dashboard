@@ -1,8 +1,8 @@
 import math
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
@@ -31,7 +31,7 @@ class AcceptPoint(BaseModel):
 
 
 class NewAsset(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
     parent_id: int | None = None
 
 
@@ -49,7 +49,7 @@ class AcceptIn(BaseModel):
 
 
 class LayoutNode(BaseModel):
-    node_id: str = Field(min_length=1, max_length=200)
+    node_id: str = Field(min_length=1, max_length=512)  # cluster ids embed device-reported name tokens
     x: float
     y: float
 

@@ -1,3 +1,5 @@
+import threading
+
 from dcdash.collector import networks
 from dcdash.collector.networks import publish_networks
 
@@ -24,3 +26,17 @@ async def test_failures_never_propagate(db, monkeypatch):
 
     monkeypatch.setattr(networks, "local_addresses", boom)
     assert await publish_networks(db) == []
+
+
+async def test_the_blocking_address_lookup_runs_off_the_event_loop(db, monkeypatch):
+    """getaddrinfo(gethostname()) can block for seconds; it must not stall the collector's loop."""
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    def lookup() -> list[str]:
+        seen.append(threading.get_ident())
+        return ["10.0.0.5"]
+
+    monkeypatch.setattr(networks, "local_addresses", lookup)
+    assert await publish_networks(db) == ["10.0.0.0/24"]
+    assert seen and seen[0] != loop_thread

@@ -180,6 +180,18 @@ async def test_layout_upserts_and_validates(client, db):
     assert (await client.put("/api/discovery/layout", json={"nodes": too_many})).status_code == 422
 
 
+async def test_layout_accepts_long_cluster_ids_up_to_512_characters(client, db):
+    """Cluster ids embed device-reported name tokens, so they can be long; one must not sink the whole save."""
+    await login_as(client, db, "admin")
+    long_id = "cluster:1:" + "x" * 502
+    assert len(long_id) == 512
+    nodes = [{"node_id": "src:1", "x": 1, "y": 2}, {"node_id": long_id, "x": 3, "y": 4}]
+    assert (await client.put("/api/discovery/layout", json={"nodes": nodes})).status_code == 204
+    assert (await client.get("/api/discovery/graph")).json()["layout"][long_id] == {"x": 3.0, "y": 4.0}
+    too_long = [{"node_id": "y" * 513, "x": 0, "y": 0}]
+    assert (await client.put("/api/discovery/layout", json={"nodes": too_long})).status_code == 422
+
+
 async def test_layout_keeps_the_last_position_when_a_node_repeats_and_rejects_non_finite_numbers(client, db):
     await login_as(client, db, "admin")
     repeated = [{"node_id": "src:1", "x": 1, "y": 1}, {"node_id": "src:1", "x": 7, "y": 8}]
@@ -295,6 +307,31 @@ async def test_accept_rejects_an_already_mapped_point_without_leaving_a_new_asse
     )
     assert response.status_code == 409
     assert await db.fetchval("SELECT count(*) FROM assets") == 1 and await db.fetchval("SELECT count(*) FROM mappings") == 1
+    assert await db.fetchval("SELECT enabled FROM sources WHERE id = $1", source) is False  # not enabled by a refused accept
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'discovery.accepted'") == 0
+
+
+@pytest.mark.parametrize("name", ["", "   ", "\t\n", "x" * 101])
+async def test_accept_rejects_a_blank_or_overlong_new_asset_name(client, db, name):
+    await login_as(client, db, "admin")
+    source, ids = await seed_source(db)
+    response = await client.post(
+        "/api/discovery/accept", json={"source_id": source, "new_asset": {"name": name}, "points": [pt(ids["LVP01_kW"])]}
+    )
+    assert response.status_code == 422
+    assert await db.fetchval("SELECT count(*) FROM assets") == 0 and await db.fetchval("SELECT count(*) FROM mappings") == 0
+    assert await db.fetchval("SELECT enabled FROM sources WHERE id = $1", source) is False
+
+
+async def test_accept_trims_the_new_asset_name(client, db):
+    await login_as(client, db, "admin")
+    source, ids = await seed_source(db)
+    response = await client.post(
+        "/api/discovery/accept",
+        json={"source_id": source, "new_asset": {"name": "  LV Panel 1 "}, "points": [pt(ids["LVP01_kW"])]},
+    )
+    assert response.status_code == 201, response.text
+    assert await db.fetchval("SELECT name FROM assets") == "LV Panel 1"
 
 
 async def test_accept_rejects_foreign_missing_and_duplicate_points(client, db):
