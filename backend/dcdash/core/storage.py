@@ -100,7 +100,7 @@ _STATS_SQL = text(
 _ROWS_SQL = text(
     """
     SELECT d::date AS day, coalesce(sum(r.n), 0)::bigint AS rows
-    FROM generate_series(:first, :today, INTERVAL '1 day') AS d
+    FROM generate_series(CAST(:first AS date), CAST(:today AS date), INTERVAL '1 day') AS d
     LEFT JOIN readings_1h r ON r.bucket >= d AND r.bucket < d + INTERVAL '1 day'
     GROUP BY d ORDER BY d
     """
