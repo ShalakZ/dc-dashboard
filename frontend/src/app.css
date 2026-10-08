@@ -61,3 +61,13 @@ button.danger { color: #fff; background: #b00020; border-color: #b00020; }
 
 /* Audit log: the detail is JSON with no spaces, so it must wrap or the page scrolls sideways */
 td code { overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* Billing and cost figures */
+.table-scroll { overflow-x: auto; }
+table.billing th, table.billing td { white-space: nowrap; }
+table.billing tbody th[scope="row"] { position: sticky; left: 0; background: #fff; font-weight: normal; }
+table.billing td.muted, table.billing td.muted .muted { color: #999; }
+table.billing td.muted { background: #f4f4f4; }
+td.num { text-align: right; }
+abbr[title] { text-decoration: none; cursor: help; }
+ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; margin: 8px 0; }
