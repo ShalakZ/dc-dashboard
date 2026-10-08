@@ -5,8 +5,22 @@ from tests.helpers import login_as
 
 
 def test_raw_must_exceed_compression():
-    with pytest.raises(ValueError):
-        StorageSettings(raw_retention_days=7, compress_after_days=7)
+    with pytest.raises(ValueError, match="longer than compression delay"):
+        StorageSettings(raw_retention_days=10, compress_after_days=10)
+
+
+def test_raw_retention_must_outlast_the_rollup_refresh_window():
+    # The rollups refresh over the last 7 days (migration 0004), so raw data must be kept at least 8.
+    with pytest.raises(ValueError, match="at least 8 days"):
+        StorageSettings(raw_retention_days=7, compress_after_days=1)
+    assert StorageSettings(raw_retention_days=8, compress_after_days=1).raw_retention_days == 8
+
+
+def test_the_stricter_of_the_raw_retention_rules_wins():
+    with pytest.raises(ValueError, match="at least 8 days"):  # 5 breaks both rules; the 8-day floor is reported first
+        StorageSettings(raw_retention_days=5, compress_after_days=7)
+    with pytest.raises(ValueError, match="longer than compression delay"):  # 12 clears the floor but not compression
+        StorageSettings(raw_retention_days=12, compress_after_days=12)
 
 
 async def test_get_requires_admin(client, db):
@@ -39,9 +53,17 @@ async def test_put_updates_policies(client, db):
 
 async def test_put_rejects_raw_shorter_than_compression(client, db):
     await login_as(client, db)
-    r = await client.put("/api/settings/storage", json={"raw_retention_days": 5, "compress_after_days": 7,
+    r = await client.put("/api/settings/storage", json={"raw_retention_days": 10, "compress_after_days": 15,
         "rollup_1m_retention_days": 730, "disk_capacity_gb": 100, "warn_threshold_pct": 80})
     assert r.status_code == 422
+
+
+async def test_put_rejects_raw_shorter_than_the_refresh_window(client, db):
+    await login_as(client, db)
+    r = await client.put("/api/settings/storage", json={"raw_retention_days": 7, "compress_after_days": 1,
+        "rollup_1m_retention_days": 730, "disk_capacity_gb": 100, "warn_threshold_pct": 80})
+    assert r.status_code == 422 and "at least 8 days" in r.text
+    assert (await db.fetchval("SELECT value->>'raw_retention_days' FROM settings WHERE key='storage'")) == "30"
 
 
 async def test_put_rejects_rollup_shorter_than_raw(client, db):

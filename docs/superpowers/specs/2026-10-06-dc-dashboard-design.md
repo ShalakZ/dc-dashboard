@@ -233,6 +233,7 @@ Both rollups are refreshed over a trailing 7-day window (phase 3; `readings_1h`
 is built on `readings_1m`, so both are widened), so readings the collector
 writes late after an outage still reach them. Data that arrives later than
 that stays in raw until it expires and is never rolled up.
+Raw retention must therefore be at least 8 days (one more than the refresh window); Settings refuses a shorter value.
 
 Sizing estimate: 200 points at 1 second is about 17 million readings per day,
 on the order of 1–2 GB/day before compression and roughly a tenth of that

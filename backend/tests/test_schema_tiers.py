@@ -128,3 +128,53 @@ async def test_downgrade_to_0003_restores_the_old_windows_and_drops_the_billing_
     assert await db.fetchval("SELECT version_num FROM alembic_version") == _head()
     assert await db.fetchval("SELECT value FROM settings WHERE key = 'billing'") == {"currency": None}
     assert (await refresh_policies(db))["readings_1h"][0] == timedelta(days=7)
+
+
+async def _raw_policies(db) -> dict[str, tuple[int, dict]]:
+    """The raw table's compression and retention policies: proc_name -> (job_id, config)."""
+    rows = await db.fetch(
+        "SELECT job_id, proc_name, config FROM timescaledb_information.jobs "
+        "WHERE hypertable_name = 'readings' AND proc_name IN ('policy_compression', 'policy_retention')"
+    )
+    return {r["proc_name"]: (r["job_id"], r["config"]) for r in rows}
+
+
+async def _store_raw_policies(db, raw: int, compress: int) -> None:
+    """Set the storage setting and the raw-table policies together, the way Settings > Storage keeps them in step."""
+    await db.execute(
+        "UPDATE settings SET value = value || jsonb_build_object('raw_retention_days', $1::int, "
+        "'compress_after_days', $2::int) WHERE key = 'storage'",
+        raw, compress,
+    )
+    await db.execute("SELECT remove_retention_policy('readings', if_exists => true)")
+    await db.execute("SELECT remove_compression_policy('readings', if_exists => true)")
+    await db.execute("SELECT add_compression_policy('readings', make_interval(days => $1))", compress)
+    await db.execute("SELECT add_retention_policy('readings', make_interval(days => $1))", raw)
+
+
+async def test_upgrade_raises_a_raw_retention_shorter_than_the_refresh_window(db):
+    try:
+        _alembic("downgrade", "0003")
+        await _store_raw_policies(db, raw=3, compress=1)  # allowed before 0004 (the floor was 2 days)
+        _alembic("upgrade", "head")
+        stored = await db.fetchval("SELECT value FROM settings WHERE key = 'storage'")
+        policies = await _raw_policies(db)
+    finally:
+        await _store_raw_policies(db, raw=30, compress=7)  # the fixture's policies, for the tests that follow
+    assert stored["raw_retention_days"] == 8
+    assert stored["compress_after_days"] == 1 and stored["rollup_1m_retention_days"] == 730  # nothing else moved
+    assert policies["policy_retention"][1]["drop_after"] == "8 days"
+    assert policies["policy_compression"][1]["compress_after"] == "1 day"
+
+
+async def test_upgrade_leaves_a_long_enough_raw_retention_and_its_policy_alone(db):
+    try:
+        _alembic("downgrade", "0003")
+        before = await _raw_policies(db)
+        _alembic("upgrade", "head")
+        after = await _raw_policies(db)
+    finally:
+        _alembic("upgrade", "head")
+    assert await db.fetchval("SELECT value->>'raw_retention_days' FROM settings WHERE key = 'storage'") == "30"
+    assert after["policy_retention"] == before["policy_retention"]  # same job id and config: it was not re-created
+    assert after["policy_retention"][1]["drop_after"] == "30 days"
