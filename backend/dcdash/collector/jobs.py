@@ -13,6 +13,9 @@ from dcdash.core.audit import audit_pool
 
 log = logging.getLogger(__name__)
 
+JOB_WORKERS = 4
+JOB_POLL_SECONDS = 5
+
 _CLAIM = """
     UPDATE jobs SET status = 'running'
     WHERE id = (
@@ -81,6 +84,53 @@ async def run_pending_jobs(
 
     await asyncio.gather(*(worker() for _ in range(concurrency)))
     return processed
+
+
+async def _wait_for_work(wake: asyncio.Event, stop: asyncio.Event | None, poll_seconds: float) -> None:
+    """Sleep until `wake` is set, `stop` is set, or `poll_seconds` pass (a NOTIFY can be missed)."""
+    waiting = {asyncio.ensure_future(wake.wait())}
+    if stop is not None:
+        waiting.add(asyncio.ensure_future(stop.wait()))
+    try:
+        await asyncio.wait(waiting, timeout=poll_seconds, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for future in waiting:
+            future.cancel()
+        await asyncio.gather(*waiting, return_exceptions=True)
+    # Cleared after waking and before the next claim: a job queued from now on sets it again, and a
+    # job queued before is already visible to that claim. Every idle worker is woken by one set().
+    wake.clear()
+
+
+async def run_job_loop(
+    pool: asyncpg.Pool,
+    factory: ConnectorFactory = create_connector,
+    wake: asyncio.Event | None = None,
+    stop: asyncio.Event | None = None,
+    workers: int = JOB_WORKERS,
+    poll_seconds: float = JOB_POLL_SECONDS,
+) -> None:
+    """Run jobs with `workers` long-lived workers until `stop` is set (or this task is cancelled).
+
+    Each worker claims a job, runs it, and when the queue is empty sleeps until `wake` is set or
+    `poll_seconds` pass. A worker busy with a long scan therefore never holds up the others, and a
+    job queued while the scan runs is picked up at once. On `stop`, idle workers return and busy
+    ones finish their job first.
+    """
+    wake = wake if wake is not None else asyncio.Event()
+
+    async def worker() -> None:
+        while stop is None or not stop.is_set():
+            try:
+                job = await pool.fetchrow(_CLAIM)
+                if job is not None:
+                    await _run_one(pool, job, factory)
+                    continue
+            except Exception:
+                log.exception("job worker failed, retrying")
+            await _wait_for_work(wake, stop, poll_seconds)
+
+    await asyncio.gather(*(worker() for _ in range(workers)))
 
 
 # A running scan died with the old collector. So did a queued scan whose job is gone, finished or

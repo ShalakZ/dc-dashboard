@@ -1,9 +1,13 @@
+import asyncio
+import warnings
+
 import pytest
 
-from dcdash.collector.jobs import fail_stale_jobs, run_pending_jobs
+from dcdash.collector import jobs as jobs_module
+from dcdash.collector.jobs import fail_stale_jobs, run_job_loop, run_pending_jobs
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.model import Simulator
-from helpers import make_source, sim_factory
+from helpers import make_source, sim_factory, wait_for
 
 
 def factory():
@@ -141,6 +145,185 @@ async def test_jobs_are_not_claimed_before_a_worker_is_free(db):
     release.set()
     assert await task == 6
     assert await db.fetchval("SELECT count(*) FROM jobs WHERE status = 'done'") == 6
+
+
+async def status_of(db, job_id: int) -> str:
+    return await db.fetchval("SELECT status FROM jobs WHERE id = $1", job_id)
+
+
+def status_check(db, job_id: int):
+    async def check() -> str:
+        return await status_of(db, job_id)
+
+    return check
+
+
+async def stop_loop(task: asyncio.Task, stop: asyncio.Event) -> None:
+    stop.set()
+    await asyncio.wait_for(task, timeout=5)
+
+
+async def test_a_running_scan_does_not_hold_up_other_jobs(db, monkeypatch):
+    """The persistent workers keep serving the queue while one of them is busy with a long scan."""
+    release = asyncio.Event()
+
+    async def blocking_scan(pool, scan_id, factory) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(jobs_module, "run_scan", blocking_scan)
+    await add_scan(db, "queued", "pending")
+    scan_job = await db.fetchval("SELECT id FROM jobs WHERE kind = 'scan'")
+    source = await make_source(db, secret="k")
+    first = await add_job(db, "test_source", source)
+    wake, stop = asyncio.Event(), asyncio.Event()
+    task = asyncio.create_task(run_job_loop(db, factory(), wake, stop, poll_seconds=0.05))
+    try:
+        await wait_for(status_check(db, first), "done")
+        assert await status_of(db, scan_job) == "running"
+        # Jobs queued after the other workers went idle are still served while the scan runs.
+        later = await add_job(db, "browse_source", source)
+        wake.set()
+        await wait_for(status_check(db, later), "done")
+        assert await status_of(db, scan_job) == "running"
+        release.set()
+        await wait_for(status_check(db, scan_job), "done")
+    finally:
+        release.set()
+        await stop_loop(task, stop)
+
+
+async def test_idle_workers_pick_up_a_job_when_woken(db):
+    source = await make_source(db, secret="k")
+    wake, stop = asyncio.Event(), asyncio.Event()
+    task = asyncio.create_task(run_job_loop(db, factory(), wake, stop, poll_seconds=30))
+    try:
+        await asyncio.sleep(0.2)  # every worker found the queue empty and is waiting
+        job_id = await add_job(db, "test_source", source)
+        wake.set()
+        await wait_for(status_check(db, job_id), "done", timeout=3)
+        assert not wake.is_set()  # consumed by the worker that woke
+    finally:
+        await stop_loop(task, stop)
+
+
+async def test_idle_workers_poll_when_no_wake_arrives(db):
+    source = await make_source(db, secret="k")
+    wake, stop = asyncio.Event(), asyncio.Event()
+    task = asyncio.create_task(run_job_loop(db, factory(), wake, stop, poll_seconds=0.1))
+    try:
+        await asyncio.sleep(0.2)
+        job_id = await add_job(db, "test_source", source)  # no NOTIFY reaches the collector
+        await wait_for(status_check(db, job_id), "done", timeout=3)
+    finally:
+        await stop_loop(task, stop)
+
+
+async def test_a_wake_while_all_workers_are_busy_is_not_lost(db):
+    """A job queued while every worker is busy is claimed as soon as one frees up, without a poll."""
+    from dcdash.connectors.base import ConnectionCheck
+
+    release = asyncio.Event()
+
+    class BlockingConnector:
+        async def test(self) -> ConnectionCheck:
+            await release.wait()
+            return ConnectionCheck(True, "ok", 1.0, "ok")
+
+        async def close(self) -> None:
+            return None
+
+    source = await make_source(db)
+    first = await add_job(db, "test_source", source)
+    wake, stop = asyncio.Event(), asyncio.Event()
+    task = asyncio.create_task(run_job_loop(db, lambda *_: BlockingConnector(), wake, stop, workers=1, poll_seconds=30))
+    try:
+        await wait_for(status_check(db, first), "running")
+        second = await add_job(db, "test_source", source)
+        wake.set()
+        await asyncio.sleep(0.1)
+        assert await status_of(db, second) == "pending"
+        release.set()
+        await wait_for(status_check(db, second), "done", timeout=3)
+    finally:
+        release.set()
+        await stop_loop(task, stop)
+
+
+async def test_stopping_ends_idle_workers_cleanly(db):
+    wake, stop = asyncio.Event(), asyncio.Event()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        task = asyncio.create_task(run_job_loop(db, factory(), wake, stop, poll_seconds=30))
+        await asyncio.sleep(0.1)
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)  # well before the 30 s poll
+    assert task.done() and task.exception() is None
+    leftovers = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
+    assert not [t for t in leftovers if "jobs" in repr(t.get_coro())]
+
+
+async def test_stopping_lets_a_running_job_finish_first(db):
+    from dcdash.connectors.base import ConnectionCheck
+
+    release = asyncio.Event()
+
+    class BlockingConnector:
+        async def test(self) -> ConnectionCheck:
+            await release.wait()
+            return ConnectionCheck(True, "ok", 1.0, "ok")
+
+        async def close(self) -> None:
+            return None
+
+    source = await make_source(db)
+    job_id = await add_job(db, "test_source", source)
+    wake, stop = asyncio.Event(), asyncio.Event()
+    task = asyncio.create_task(run_job_loop(db, lambda *_: BlockingConnector(), wake, stop, workers=2, poll_seconds=30))
+    await wait_for(status_check(db, job_id), "running")
+    stop.set()
+    await asyncio.sleep(0.1)
+    assert not task.done()  # the busy worker is finishing its job
+    release.set()
+    await asyncio.wait_for(task, timeout=2)
+    assert await status_of(db, job_id) == "done"
+
+
+async def test_a_failing_job_does_not_kill_its_worker(db):
+    unknown = await db.fetchval("INSERT INTO jobs (kind) VALUES ('nope') RETURNING id")
+    source = await make_source(db, secret="k")
+    good = await add_job(db, "test_source", source)
+    wake, stop = asyncio.Event(), asyncio.Event()
+    task = asyncio.create_task(run_job_loop(db, factory(), wake, stop, workers=1, poll_seconds=0.05))
+    try:
+        await wait_for(status_check(db, good), "done")
+        assert await status_of(db, unknown) == "failed"
+        assert not task.done()
+    finally:
+        await stop_loop(task, stop)
+
+
+async def test_a_worker_survives_an_unexpected_error_in_the_runner(db, monkeypatch):
+    real = jobs_module._run_one
+    calls = 0
+
+    async def flaky(pool, job, factory) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("database went away")
+        await real(pool, job, factory)
+
+    monkeypatch.setattr(jobs_module, "_run_one", flaky)
+    source = await make_source(db, secret="k")
+    await add_job(db, "test_source", source)
+    good = await add_job(db, "test_source", source)
+    wake, stop = asyncio.Event(), asyncio.Event()
+    task = asyncio.create_task(run_job_loop(db, factory(), wake, stop, workers=1, poll_seconds=0.05))
+    try:
+        await wait_for(status_check(db, good), "done")
+        assert not task.done()
+    finally:
+        await stop_loop(task, stop)
 
 
 async def add_user(db) -> int:
