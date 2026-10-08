@@ -129,6 +129,10 @@ def expand_targets(targets: list[str], ports: list[int], max_hosts: int) -> Expa
             host, port = _url_host_port(target)
             add(host)
             extra.append((host, port))
+        elif "@" in target:
+            # Before any branch below builds a message from the target: "not a valid host name: user:password@…"
+            # would echo the password back in the 422 body.
+            raise TargetError("targets must not contain credentials")
         elif "/" in target:
             for host in _cidr_hosts(target, max_hosts):
                 add(host)

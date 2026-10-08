@@ -87,6 +87,20 @@ async def test_url_targets_with_credentials_are_rejected_without_echoing_them(cl
     assert (await client.get("/api/scopes")).json()[0]["targets"] == ["127.0.0.1/30"]
 
 
+@pytest.mark.parametrize("target", ["admin:hunter2@10.0.0.1", "admin:hunter2@plc.local", "admin:hunter2@10.0.0.0/24"])
+async def test_bare_targets_with_credentials_are_rejected_without_echoing_them(client, db, target):
+    await login_as(client, db, "admin")
+    response = await client.post("/api/scopes", json={"name": "x", "targets": [target], "ports": [502]})
+    assert response.status_code == 422
+    assert "credentials" in response.json()["detail"]
+    assert "hunter2" not in response.text and "admin:" not in response.text
+    assert await db.fetchval("SELECT count(*) FROM scan_scopes") == 0
+    scope = await create_scope(client)
+    patched = await client.patch(f"/api/scopes/{scope['id']}", json={"targets": [target]})
+    assert patched.status_code == 422 and "hunter2" not in patched.text and "admin:" not in patched.text
+    assert (await client.get("/api/scopes")).json()[0]["targets"] == ["127.0.0.1/30"]
+
+
 async def test_patch_that_makes_a_scope_invalid_is_rejected_and_changes_nothing(client, db):
     await login_as(client, db, "admin")
     scope = await create_scope(client)

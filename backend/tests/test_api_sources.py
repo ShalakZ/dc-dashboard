@@ -2,7 +2,7 @@ import asyncio
 
 from dcdash.core.crypto import decrypt
 from dcdash.core.pg import CONFIG_CHANNEL
-from helpers import listening, login_as, make_asset, make_mapping, make_point
+from helpers import listening, login_as, make_asset, make_mapping, make_point, make_source
 
 SIM = {
     "name": "sim",
@@ -132,3 +132,50 @@ async def test_points_listing_shows_mappings(client, db):
         "id": mapping, "asset_id": asset, "metric": "active_power_kw",
         "scale": 1.0, "interval_seconds": 5, "custom_unit": None,
     }
+
+
+async def hidden_discovered(db, name: str) -> int:
+    """A discovered source with no mapped point: GET /api/sources does not list it."""
+    source = await make_source(db, name, "opcua", {"endpoint": "opc.tcp://10.0.0.5:4840/"}, enabled=False)
+    await db.execute("UPDATE sources SET origin = 'discovered' WHERE id = $1", source)
+    return source
+
+
+async def test_a_name_clash_with_a_hidden_discovered_source_says_so(client, db):
+    await login_as(client, db)
+    await hidden_discovered(db, "plc-1")
+    assert (await client.get("/api/sources")).json() == []  # the admin cannot see it
+    response = await client.post("/api/sources", json={**SIM, "name": "plc-1"})
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "discovered source" in detail and "hidden" in detail and "plc-1" in detail
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+
+
+async def test_renaming_onto_a_hidden_discovered_source_gets_the_same_message(client, db):
+    await login_as(client, db)
+    await hidden_discovered(db, "plc-1")
+    mine = await create_sim(client)
+    response = await client.patch(f"/api/sources/{mine['id']}", json={"name": "plc-1"})
+    assert response.status_code == 409
+    assert "discovered source" in response.json()["detail"] and "hidden" in response.json()["detail"]
+    assert (await client.get("/api/sources")).json()[0]["name"] == "sim"  # the failed rename changed nothing
+
+
+async def test_a_clash_with_a_listed_source_keeps_the_generic_message(client, db):
+    await login_as(client, db)
+    await create_sim(client)
+    response = await client.post("/api/sources", json=SIM)
+    assert response.status_code == 409
+    assert response.json()["detail"] == "a source with this name already exists"
+
+
+async def test_a_clash_with_a_discovered_source_that_is_listed_is_generic_too(client, db):
+    await login_as(client, db)
+    source = await hidden_discovered(db, "plc-1")
+    point = await make_point(db, source, "a1")
+    await make_mapping(db, point, await make_asset(db, "Panel"))  # mapped: now it is listed
+    assert [s["name"] for s in (await client.get("/api/sources")).json()] == ["plc-1"]
+    response = await client.post("/api/sources", json={**SIM, "name": "plc-1"})
+    assert response.status_code == 409
+    assert response.json()["detail"] == "a source with this name already exists"
