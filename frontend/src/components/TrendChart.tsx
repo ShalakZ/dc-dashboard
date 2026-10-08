@@ -31,13 +31,18 @@ export function withGaps(points: SeriesPoint[], query: Query, pick: (p: SeriesPo
 
 type TooltipItem = { axisValue?: number; marker?: string; seriesName?: string; value?: [string | number, number | null] };
 
-/** Axis tooltip: the header time in the site zone (ECharts would print the browser's), then one row per series as before. */
+/**
+ * Axis tooltip: the header time in the site zone (ECharts would print the browser's), then one row per series. The "max"
+ * series is stacked on "min" and holds the width of the band (max - min), so its row adds the min back to print the max.
+ */
 export function tooltipHtml(raw: unknown, timezone: string): string {
   const items = (Array.isArray(raw) ? raw : [raw]) as TooltipItem[];
   const at = items[0]?.axisValue;
   const header = typeof at === "number" && Number.isFinite(at) ? formatSiteDateTime(new Date(at).toISOString(), timezone) : "";
+  const min = items.find((item) => item.seriesName === "min")?.value?.[1];
   const rows = items.map((item) => {
-    const v = item.value?.[1];
+    const stored = item.value?.[1];
+    const v = item.seriesName === "max" && stored != null ? (min == null ? null : Number(stored) + Number(min)) : stored;
     return `${item.marker ?? ""}${item.seriesName ?? ""}: ${v == null ? "—" : Number(v.toFixed(3))}`;
   });
   return [header, ...rows].join("<br/>");
@@ -64,7 +69,7 @@ export function seriesToOption(series: Series, range: Range, query: Query = rang
 }
 
 export function TrendChart({ assetId, metrics }: { assetId: number; metrics: SummaryMetric[] }) {
-  const available = metrics.map((m) => m.metric);
+  const available = [...new Set(metrics.map((m) => m.metric))]; // two mappings of one metric are one entry in the picker
   const [metric, setMetric] = useState<Metric | null>(
     available.includes("active_power_kw") ? "active_power_kw" : (available[0] ?? null),
   );
@@ -96,7 +101,13 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
         {isFetching && <span className="muted">updating…</span>}
       </div>
       {error && <p className="error" role="alert">{error.message}</p>}
-      {data && (data.points.length === 0 ? <p className="muted">No data in this range.</p> : <ReactECharts option={seriesToOption(data, range, undefined, site.data?.timezone ?? "UTC")} style={{ height: 320 }} notMerge />)}
+      {site.error && <p className="error" role="alert">Could not load the site time zone: {site.error.message}</p>}
+      {data && data.points.length === 0 && <p className="muted">No data in this range.</p>}
+      {/* The axis is drawn in the site's zone: wait for it rather than showing UTC for a moment, or for good. */}
+      {data && data.points.length > 0 && !site.data && !site.error && <p className="muted">loading…</p>}
+      {data && data.points.length > 0 && site.data && (
+        <ReactECharts option={seriesToOption(data, range, undefined, site.data.timezone)} style={{ height: 320 }} notMerge />
+      )}
     </section>
   );
 }
