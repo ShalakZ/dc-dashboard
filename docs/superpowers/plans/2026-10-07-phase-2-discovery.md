@@ -3266,8 +3266,16 @@ Selector note: if the 1600×1000 viewport cannot show a cluster and the asset it
 
 - [x] **Step 3: Run it**
 
-Run: `E2E_I_UNDERSTAND_DATA_LOSS=yes scripts/e2e.sh`
-Expected: both specs pass. This deletes the local `dbdata` volume (the script's documented behaviour); the user has accepted that for e2e runs.
+Run, in an isolated Compose project (this is the procedure that was actually used):
+
+```bash
+docker compose -p dcdash_e2e --profile dev down -v --remove-orphans
+docker compose -p dcdash_e2e --profile dev up -d --build
+(cd frontend && npm run e2e)
+docker compose -p dcdash_e2e --profile dev down -v
+```
+
+Expected: both specs pass. `scripts/e2e.sh` runs `down -v` on the **default** project and so deletes the owner's `dcdash_dbdata` volume: it must not be run without the owner's say-so. The isolated project has its own `dcdash_e2e_dbdata` volume; it shares ports 80/443 with the normal stack (stop that first) and re-tags the shared `dcdash-backend:local` / `dcdash-web:local` images.
 
 - [x] **Step 4: README**
 
@@ -3287,9 +3295,28 @@ git push
 
 ## Phase review and merge (orchestrator; no product code)
 
+Docker rule for every step below: use only isolated Compose project names (`dcdash_review` for the walkthrough, `dcdash_e2e` for the e2e), always with `-p`, and never run `down -v` on the default project (that deletes the owner's `dcdash_dbdata` volume). Never run `scripts/e2e.sh`. Check `docker volume ls` still lists `dcdash_dbdata` afterwards.
+
 1. **Whole-branch review.** Dispatch two fresh subagents on model `opus` over `git diff main...phase-2-discovery`, in parallel:
    - **Code review** against the spec section 7, the Global Constraints and the five Review Focus items: read-only toward the network (grep for any non-read request in `probe` and the scan), role enforcement on every new endpoint, atomicity of accept, scan limits actually applied, no secrets in any response or log, migration down/up.
-   - **Browser walkthrough** with the Playwright MCP tools against a freshly started dev stack (`E2E_I_UNDERSTAND_DATA_LOSS=yes` is **not** needed: start with `docker compose down -v`, then `scripts/setup.sh --profile dev`). Cover: first-run setup, scope creation with the prefilled form, the confirmation text and Cancel, a scan to completion, the HTTP simulator **as a discovered source needing credentials** (enter `sim-key`, browse, see points), expanding sources and clusters, one real drag onto an asset and one onto empty canvas, the review dialog's conflict handling, the buttons path, reloading the page to confirm node positions persisted, the Audit page, then sign in as an operator and as a viewer to confirm what each can and cannot see or do. Save screenshots and the browser console log to the scratchpad directory and list any console errors.
-2. **Fix the Important findings.** One fresh `sonnet` subagent per fix group, each with only the finding and the relevant plan section; re-run `cd backend && uv run pytest -q`, `cd frontend && npm test && npm run typecheck`, and the e2e script after the last fix.
+   - **Browser walkthrough** with the Playwright MCP tools against a freshly started isolated dev stack: `docker compose -p dcdash_review --profile dev down -v --remove-orphans`, then `docker compose -p dcdash_review --profile dev up -d --build` (stop the normal stack first: both use ports 80 and 443), and `docker compose -p dcdash_review --profile dev down -v` when done. Cover: first-run setup, scope creation with the prefilled form, the confirmation text and Cancel, a scan to completion, the HTTP simulator **as a discovered source needing credentials** (enter `sim-key`, browse, see points), expanding sources and clusters, one real drag onto an asset and one onto empty canvas, the review dialog's conflict handling, the buttons path, reloading the page to confirm node positions persisted, the Audit page, then sign in as an operator and as a viewer to confirm what each can and cannot see or do. Save screenshots and the browser console log to the scratchpad directory and list any console errors.
+2. **Fix the Important findings.** One fresh `sonnet` subagent per fix group, each with only the finding and the relevant plan section; re-run `cd backend && uv run pytest -q`, `cd frontend && npm test && npm run typecheck`, and the isolated e2e (the four commands in Task 12 step 3) after the last fix.
+   **Final fix wave** (one wave from the whole-branch code review and the browser walkthrough; done on this branch):
+   - F1 persistent collector job workers (`run_job_loop`), so a running scan no longer starves test/browse jobs.
+   - F2 scan start binds a scope digest (hash of targets and ports) returned by the preview, not only a host count.
+   - F3 a successful browse marks the source online and clears its stale "credentials rejected" error.
+   - F4 e2e: per-test budget of 240 s and fit-view waits for the node to stop moving instead of a fixed sleep.
+   - F5 keyboard path to the source panel: a Details button on source nodes, focus into the panel and back.
+   - F6 URL targets carrying credentials (`http://user:pass@host`) are rejected without echoing them.
+   - F7 `publish_networks` looks up local addresses off the event loop.
+   - F8 layout node ids may be 512 characters; the page does not send longer ones.
+   - F9 the already-mapped-point accept test also checks the source stays disabled and nothing is audited.
+   - F10 a new asset name is trimmed and must be 1..100 characters after trimming.
+   - F11 the create-asset offer no longer auto-dismisses (WCAG 2.2.1).
+   - F12 the Discovery page fits the window (no page scroll) and the offer bar sits top-centre of the canvas.
+   - F13 the review dialog starts on the Asset select or the new-asset name input, matching its mode.
+   - F14 audit detail JSON wraps, so the Audit page does not scroll sideways at 900 px.
+   - F15 `.playwright-mcp/` is git-ignored.
+   Deferred (reported to the owner, not fixed here): stuck scan with no escape hatch after a DB error, failed scans leaving sources without findings, hidden name clashes with discovered sources, lazy-loading `@xyflow`, `useScan` polling after persistent errors, scan summary wording, graph overlap polish, duplicate-name warning, drop cue, custom-unit input, Points page address sort, autocomplete attributes.
 3. **Close out.** Tick the spec section 14 phase 2 "Done when" only if the e2e assertion in Task 12 step 2.7 passed; update the README status; commit.
 4. **Merge.** `git checkout main && git merge --no-ff phase-2-discovery -m "Merge phase-2-discovery: scan scopes, scan job, graph, drag-and-drop mapping, audit (Phase 2)"` with the trailer lines, `git push origin main`.

@@ -162,16 +162,19 @@ data-retrieval requests the connectors already use, nothing else.
    interfaces, clamped to the /24 around its address, and from the ports the connectors know.
 2. **Confirmation.** Pressing Scan shows "N hosts × M ports (P probes)" and asks for confirmation on
    every run. The API enforces it: the start request must carry the host count the API computed
-   itself, or nothing runs.
+   itself, or nothing runs. It must also carry the digest the preview returned (a hash of the scope's
+   targets and ports), so a scope edited after it was previewed cannot be started unconfirmed: the
+   page asks you to confirm again.
 3. **What a scan does.** The collector tries a TCP connect to every host and port, then offers each
    open endpoint to every connector's read-only probe (first claim wins; an endpoint nobody claims is
    listed as an unidentified service), then browses the claimed sources to find their points. The page
    shows progress and, when done, one finding per open endpoint.
 4. **Discovered sources are disabled.** A discovered source is created disabled and is not polled,
    tested or listed under Sources until at least one of its points is mapped; mapping enables it. A
-   source you added by hand at the same address is reused, never duplicated, and a re-scan updates
-   rows instead of adding new ones. A source that answers "authentication failed" is marked as needing
-   credentials and the scan carries on.
+   source you added by hand at the same address is reused, never duplicated. A re-scan reuses existing
+   source rows untouched (name, config, secret, enabled, origin) and only refreshes their points and
+   findings. A source that answers "authentication failed" is marked as needing credentials and the scan
+   carries on.
 5. **The graph** (Discovery). Discovered sources, clusters and points are on the left with dashed
    borders; your assets are on the right with solid ones; mapped points are joined to their asset by a
    solid edge. Sources and clusters start collapsed: use the + / − button on a node to expand or
@@ -182,9 +185,11 @@ data-retrieval requests the connectors already use, nothing else.
    editable; rows whose metric the asset already has start unchecked, and a conflicting selection
    cannot be committed. "Create mappings" commits every checked row in one transaction. Drop a cluster
    on empty canvas and a bar offers "Create asset from this cluster", which opens the same dialog with
-   a new asset named after the cluster and a parent of your choice. The same dialog opens from the
-   keyboard-reachable **Map…** and **New asset…** buttons on every cluster and unmapped point.
-7. **Credentials.** Click a source that shows "needs credentials" to open its side panel, enter the
+   a new asset named after the cluster and a parent of your choice; the bar stays until you use or
+   dismiss it. The same dialog opens from keyboard-reachable buttons, for admins only: **Map…** on
+   unmapped clusters and unmapped points, **New asset…** on clusters only. The Ungrouped bag and fully
+   mapped clusters get neither.
+7. **Credentials.** Click a source that shows "needs credentials" (or press its **Details** button) to open its side panel, enter the
    secret (and the user name for OPC UA) and save: the source is browsed again. Secrets are stored
    encrypted and never returned by the API.
 8. **Audit log** (Audit, admin). Scope changes, scan start and finish and every accepted mapping are
@@ -255,6 +260,10 @@ stack first, because both use ports 80 and 443):
 
 or, with a fresh stack already running: `cd frontend && npx playwright test -c e2e/playwright.config.ts`.
 First time only: `npx playwright install chromium`. Reports: `npx playwright show-report`.
+
+The isolated `-p dcdash_e2e` run builds the same `dcdash-backend:local` and `dcdash-web:local` images
+as the normal stack, so it re-tags them: rebuild your normal stack afterwards (`docker compose
+--profile dev up -d --build`) to be sure it runs your own code.
 
 ### Housekeeping
 

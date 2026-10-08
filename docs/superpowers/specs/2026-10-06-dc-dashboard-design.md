@@ -266,8 +266,11 @@ data-retrieval requests connectors already use, nothing else.
 2. Pressing Scan shows "N hosts × M ports" and asks for confirmation on every
    run. The confirmation is enforced by the API: the start request must carry
    `confirm_host_count`, which must equal the API's own expansion of the
-   scope's targets, or it is rejected and nothing runs. A scan never exceeds
-   `DCDASH_SCAN_MAX_HOSTS` hosts (default 1024).
+   scope's targets, or it is rejected and nothing runs. The start request must
+   also carry the digest returned by the preview (a hash of the scope's targets
+   and ports), so a scope edited after it was previewed cannot be started
+   unconfirmed. A scan never exceeds `DCDASH_SCAN_MAX_HOSTS` hosts (default
+   1024).
 3. The collector runs one `scan` job:
    1. **Sweep**: a TCP connect to every (host, port) pair, at most 64 at a
       time and 200 attempts per second, 1 second timeout. Only pairs that
@@ -279,7 +282,9 @@ data-retrieval requests connectors already use, nothing else.
       `origin = 'discovered'` and `enabled = false`. Claims are matched to
       existing sources by an endpoint key computed by the connector, so a
       source the admin added by hand at the same address is reused, never
-      duplicated, and a re-scan updates rows instead of adding new ones.
+      duplicated. A re-scan reuses existing source rows untouched (name,
+      config, secret, enabled, origin) and only refreshes their points and
+      findings.
    4. **Browse**: claimed sources are browsed (4 at a time) with the existing
       browse logic, which writes `points`. A source that answers
       `auth_failed` is flagged as needing credentials and the scan continues.
@@ -296,7 +301,7 @@ network team has opened to the host.
 | Table / column | Contents |
 |---|---|
 | `scan_scopes` | id, name, targets (JSON list), ports (JSON list), created_by, created_at. |
-| `scans` | id, scope_id (null if the scope was deleted), scope_snapshot (JSON: exact targets, ports, host count), status (queued, running, done, failed), stage (sweep, probe, browse), progress (JSON counters), started_by, created_at, finished_at, error. A `jobs` row of kind `scan` only triggers execution; scan history does not depend on job housekeeping. |
+| `scans` | id, scope_id (null if the scope was deleted), scope_snapshot (JSON: exact targets, ports, host count, digest), status (queued, running, done, failed), stage (sweep, probe, browse), progress (JSON counters), started_by, created_at, finished_at, error. A `jobs` row of kind `scan` only triggers execution; scan history does not depend on job housekeeping. |
 | `scan_findings` | scan_id, host, port, source_id (null if unclaimed), connector_type, outcome (claimed, needs_credentials, unclaimed), detail. |
 | `graph_layout` | node_id (stable text such as `src:12`, `cluster:12:LVP01`, `asset:5`), x, y. Shared by all users. |
 | `sources.origin` | `manual` (default) or `discovered`. Discovered, not yet adopted sources are hidden from the Sources screen until they have a mapping. |
