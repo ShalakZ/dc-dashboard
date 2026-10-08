@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
+import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { renderWithProviders } from "../test/render";
 import { SourcesPage } from "./SourcesPage";
 
@@ -65,11 +66,12 @@ describe("SourcesPage", () => {
   describe("deleting", () => {
     const impact = { detail: "needs confirmation", points: 3, mappings: 3 };
     /** DELETE answers 409 with the counts until the request carries confirm=true. `needsConfirm` false = nothing mapped. */
-    function setup(needsConfirm: boolean, confirmed: { status: number; body?: object } = { status: 204 }) {
+    function setup(needsConfirm: boolean, confirmed: { status: number; body?: object } = { status: 204 }, probes = false) {
       const urls: string[] = [];
       let removed = false;
       const calls = mockFetch({
         ...routes("admin"),
+        ...(probes ? probeRoutes : {}),
         "GET /api/sources": () => ({ body: removed ? [] : [source] }),
         "DELETE /api/sources/2": ({ url }) => {
           urls.push(url);
@@ -78,7 +80,7 @@ describe("SourcesPage", () => {
           return confirmed;
         },
       });
-      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      renderWithProviders(<><SourcesPage />{probes && <CacheProbes />}</>, { route: "/sources", path: "/sources" });
       return { calls, urls };
     }
     const deletes = (calls: { method: string }[]) => calls.filter((c) => c.method === "DELETE").length;
@@ -94,6 +96,17 @@ describe("SourcesPage", () => {
       expect(deletes(calls)).toBe(1);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+
+    it.each([["a source with nothing mapped", false], ["a source with mapped points, after Delete anyway", true]])(
+      "refreshes billing, the dashboards' widget data and the tariff list too, because they depend on its points: %s",
+      async (_case, needsConfirm) => {
+        const { calls } = setup(needsConfirm, undefined, true);
+        await waitFor(() => expect(probeFetches(calls)).toEqual({ billing: 1, widgetData: 1, tariffs: 1 }));
+        await click("Delete");
+        if (needsConfirm) await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
+        await waitFor(() => expect(probeFetches(calls)).toEqual({ billing: 2, widgetData: 2, tariffs: 2 }));
+      },
+    );
 
     it("sends nothing when the first confirmation is declined", async () => {
       vi.spyOn(window, "confirm").mockReturnValue(false);

@@ -30,7 +30,8 @@ export function AssetsPage() {
     await api.del(`/api/assets/${asset.id}${confirm ? "?confirm=true" : ""}`);
     setConfirming(null);
     setParams({});
-    await finish();
+    // Its sums, its widgets' figures and its rate overrides (deleted with it) are on other pages' caches too.
+    await Promise.all([finish(), invalidate(keys.billing, keys.widgetData, keys.tariffs)]);
   };
   const remove = () => run(async () => {
     if (!selected || !window.confirm(`Delete "${selected.name}" and its mappings?`)) return;

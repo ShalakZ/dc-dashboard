@@ -32,7 +32,8 @@ export function SourcesPage() {
   const removed = async (id: number, confirm: boolean) => {
     await api.del(`/api/sources/${id}${confirm ? "?confirm=true" : ""}`);
     setConfirming(null);
-    await invalidate(keys.sources);
+    // Its points and mappings go with it, so what Billing, the dashboards' widgets and the tariff list show can change too.
+    await invalidate(keys.sources, keys.billing, keys.widgetData, keys.tariffs);
   };
   const remove = (id: number, name: string) => run(async () => {
     if (!window.confirm(`Delete source "${name}", its points and mappings?`)) return;
