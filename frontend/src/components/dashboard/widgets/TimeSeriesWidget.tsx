@@ -13,15 +13,17 @@ type ChartRow = Row | { value: Row; symbol: string; symbolSize: number };
 const PALETTE = ["#1f6feb", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989", "#0a7d8c", "#57606a"];
 
 /**
- * Spacing between buckets, which decides what counts as a hole in the data. Fixed for hour and day buckets and for the
- * 1m/1h rollup tiers (the series holds one row per rollup bucket that has samples). Raw samples have no fixed spacing:
- * take the median step, so that one close pair of samples, or a mapping interval changed inside the window, does not
- * turn every normal step into a "gap". Null with fewer than two points.
+ * Spacing between buckets, which decides what counts as a hole in the data. Energy and cost series name their bucket
+ * (hour or day), and that is checked first. A metric series does not: the backend cuts every window into at most 300
+ * buckets whatever the tier (24 h gives 288 s, 30 d gives 8640 s), and the tier only names the table that served them
+ * (raw below 60 s, 1m below an hour, 1h above), so it says nothing about the width. The width is read from the data as
+ * the MEDIAN positive step: every normal step is one bucket (or a whole number of them, for a meter that reports less
+ * often than the buckets are wide), while the smallest step would be thrown off by one close pair of samples or a mapping
+ * interval changed inside the window, and would turn every normal step into a "gap". Null when no two points are apart.
  */
-export function bucketMs(bucket: WidgetData["bucket"], points: readonly Point[], tier: WidgetData["tier"] = null): number | null {
-  if (bucket === "hour" || tier === "1h") return 3_600_000;
+export function bucketMs(bucket: WidgetData["bucket"], points: readonly Point[]): number | null {
+  if (bucket === "hour") return 3_600_000;
   if (bucket === "day") return 86_400_000;
-  if (tier === "1m") return 60_000;
   const steps: number[] = [];
   for (let i = 1; i < points.length; i++) {
     const step = Date.parse(points[i].ts) - Date.parse(points[i - 1].ts);
@@ -94,7 +96,7 @@ export function timeSeriesOption(data: WidgetData, timezone: string): EChartsOpt
   const band = data.source === "metric";
   const series = data.series.flatMap((s, i): object[] => {
     const color = PALETTE[i % PALETTE.length];
-    const width = bucketMs(data.bucket, s.points, data.tier);
+    const width = bucketMs(data.bucket, s.points);
     const line = { id: `avg-${s.asset_id}`, name: labels[i], type: "line" as const, color, symbol: "none", connectNulls: false, data: markIsolated(withGaps(s.points, width, (p) => p.value)) };
     if (!band) return [line];
     // The band is two stacked invisible-line series: min, then max - min with a filled area.

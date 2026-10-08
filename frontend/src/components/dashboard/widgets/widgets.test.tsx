@@ -45,37 +45,56 @@ describe("time series", () => {
   ];
   const data = seriesData({ series: [{ asset_id: 5, name: "LV Panel 1", points, estimated: false, partial: false }] });
 
-  it("estimates the bucket width from the bucket size, else the rollup tier, else the typical step of the data", () => {
+  it("estimates the bucket width from the bucket size, else from the typical step of the data", () => {
     expect(bucketMs("hour", points)).toBe(3_600_000);
     expect(bucketMs("day", points)).toBe(86_400_000);
-    expect(bucketMs(null, points, "1m")).toBe(60_000);
-    expect(bucketMs(null, points, "1h")).toBe(3_600_000);
-    // The tier decides even when the data suggests another width (a series whose buckets are all far apart).
-    expect(bucketMs(null, [points[0], points[3]], "1m")).toBe(60_000);
     expect(bucketMs(null, points)).toBe(60_000); // steps 60 s, 60 s, 480 s: the typical one
-    expect(bucketMs(null, points, "raw")).toBe(60_000);
+    expect(bucketMs(null, [points[0], points[3]])).toBe(600_000); // a single step is the typical step
     expect(bucketMs(null, points.slice(0, 1))).toBeNull();
+    expect(bucketMs(null, [])).toBeNull();
+    expect(bucketMs(null, [points[0], points[0]])).toBeNull(); // duplicate timestamps have no step
   });
 
-  it("takes the median step on the raw tier, so one close pair of samples does not turn every normal step into a gap", () => {
+  // The backend cuts a window into at most 300 buckets whatever the tier (24 h / 300 = 288 s, 30 d / 300 = 8640 s...):
+  // the tier only names the table that served them. Every normal step of a series is therefore one bucket width.
+  const shaped = (count: number, stepSeconds: number, start = Date.UTC(2026, 9, 1)) =>
+    Array.from({ length: count }, (_, i) => seriesPoint({ ts: new Date(start + i * stepSeconds * 1000).toISOString(), value: 1 + (i % 7), min: i % 7, max: 2 + (i % 7) }));
+  it.each<[string, "raw" | "1m" | "1h", number]>([
+    ["1h", "raw", 12], ["6h", "1m", 72], ["24h", "1m", 288], ["7d", "1m", 2016], ["30d", "1h", 8640],
+  ])("draws a full %s metric series (tier %s, %i s buckets) as one joined line, with no filler rows and no dots", (preset, tier, step) => {
+    const full = shaped(300, step);
+    const range = { preset: preset as "1h", start: full[0].ts, end: new Date(Date.parse(full[299].ts) + step * 1000).toISOString() };
+    const option = asOption(timeSeriesOption(seriesData({ tier, range, series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: full }] }), TZ));
+    expect(bucketMs(null, full)).toBe(step * 1000);
+    for (const id of ["band-min-5", "band-span-5", "avg-5"]) {
+      const rows = option.series.find((s) => s.id === id)!.data;
+      expect(rows).toHaveLength(300); // a filler row would make it 599
+      expect(rows.every((c) => Array.isArray(c))).toBe(true); // an isolated point would be an object
+    }
+  });
+
+  it("takes the median step, so one close pair of samples does not turn every normal step into a gap", () => {
     const at = (seconds: number[]) => seconds.map((t) => seriesPoint({ ts: new Date(Date.UTC(2026, 9, 8, 0, 0, t)).toISOString(), value: 1, min: 1, max: 1 }));
     const raw = at([0, 10, 20, 21, 31, 41, 51]); // steps 10 10 1 10 10 10
-    expect(bucketMs(null, raw, "raw")).toBe(10_000);
+    expect(bucketMs(null, raw)).toBe(10_000);
     const option = asOption(timeSeriesOption(seriesData({ tier: "raw", series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: raw }] }), TZ));
     const avg = option.series.find((s) => s.id === "avg-5")!;
     expect(avg.data).toHaveLength(7); // no filler rows: the line is not broken anywhere
     expect(avg.data.every((c) => Array.isArray(c))).toBe(true); // and no point is isolated
   });
 
-  it("uses the rollup tier's width for a metric series with sparse buckets", () => {
+  it("still breaks the line over a hole that is much longer than the usual step, whatever the tier", () => {
     const sparse = [
       seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1, min: 1, max: 1 }),
-      seriesPoint({ ts: "2026-10-08T00:01:00+00:00", value: 1, min: 1, max: 1 }),
-      seriesPoint({ ts: "2026-10-08T00:30:00+00:00", value: 1, min: 1, max: 1 }),
+      seriesPoint({ ts: "2026-10-08T00:04:48+00:00", value: 1, min: 1, max: 1 }),
+      seriesPoint({ ts: "2026-10-08T00:09:36+00:00", value: 1, min: 1, max: 1 }),
+      seriesPoint({ ts: "2026-10-08T03:00:00+00:00", value: 1, min: 1, max: 1 }), // a meter that was offline
+      seriesPoint({ ts: "2026-10-08T03:04:48+00:00", value: 1, min: 1, max: 1 }),
     ];
     const option = asOption(timeSeriesOption(seriesData({ tier: "1m", series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: sparse }] }), TZ));
     const avg = option.series.find((s) => s.id === "avg-5")!;
-    expect(avg.data.map((c) => plain(c)[1])).toEqual([1, 1, null, 1]); // the 29-minute hole is a gap
+    expect(avg.data.map((c) => plain(c)[1])).toEqual([1, 1, 1, null, 1, 1]);
+    expect(avg.data.map((c) => (Array.isArray(c) ? "line" : "dot"))).toEqual(["line", "line", "line", "line", "line", "line"]); // each side keeps its line
   });
 
   it("marks a point that has no neighbour to draw a line to, because a lone point is otherwise invisible", () => {
@@ -197,8 +216,8 @@ describe("time series", () => {
     const option = asOption(timeSeriesOption(week, TZ));
     const ms = Date.parse("2026-10-07T10:00:00Z");
     expect(option.xAxis.axisLabel!.formatter(ms)).toBe("10-07 13:00");
-    const html = tooltipFormatter(week, TZ)([{ seriesId: "avg-5", seriesName: "LV Panel 1", value: ["2026-10-08T00:01:00+00:00", 2], marker: "" }]);
-    expect(html).toContain("2026-10-08 03:01:00");
+    const html = tooltipFormatter(week, TZ)([{ seriesId: "avg-5", seriesName: "LV Panel 1", value: ["2026-10-08T00:04:48+00:00", 2], marker: "" }]);
+    expect(html).toContain("2026-10-08 03:04:48");
     // A day or less stays a bare time of day.
     expect(asOption(timeSeriesOption(data, TZ)).xAxis.axisLabel!.formatter(Date.parse("2026-10-08T00:01:00Z"))).toBe("03:01");
   });

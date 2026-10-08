@@ -38,7 +38,11 @@ export const valueRow = (over: Partial<WidgetValue> = {}): WidgetValue => ({
   asset_id: 5, name: "LV Panel 1", value: 10.5, estimated: false, partial: false, point_id: 7, no_data: false, ts: null, stale: false, ...over,
 });
 
-/** A metric time series for asset 5 (two one-minute buckets). */
+/**
+ * A metric time series for asset 5: two buckets of the default 24h range. The backend cuts every window into at most 300
+ * buckets (24 h / 300 = 288 s, served from the 1m tier), so consecutive buckets are 288 s apart, not 60 s. A tier says which
+ * table served the series, never the bucket width; tests that depend on the spacing build their own points.
+ */
 export const seriesData = (over: Partial<WidgetData> = {}): WidgetData => ({
   type: "timeseries", mode: "series", source: "metric", metric: "active_power_kw", unit: "kW",
   range: { ...RANGE }, tier: "1m", bucket: null,
@@ -46,7 +50,7 @@ export const seriesData = (over: Partial<WidgetData> = {}): WidgetData => ({
     asset_id: 5, name: "LV Panel 1", estimated: false, partial: false,
     points: [
       seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1, min: 0.5, max: 1.5 }),
-      seriesPoint({ ts: "2026-10-08T00:01:00+00:00", value: 2, min: 1, max: 3 }),
+      seriesPoint({ ts: "2026-10-08T00:04:48+00:00", value: 2, min: 1, max: 3 }),
     ],
   }],
   values: [], missing: [], no_metric: [], ...over,
