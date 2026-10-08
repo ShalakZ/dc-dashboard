@@ -151,21 +151,26 @@ async def http_server(app):
 @contextlib.asynccontextmanager
 async def silent_server():
     """A TCP server that accepts connections and never answers; yields its port."""
-    held = []
+    held: list[asyncio.Transport] = []
 
-    async def handle(reader, writer):
-        held.append((writer, asyncio.current_task()))
-        await asyncio.sleep(3600)
+    class Hold(asyncio.Protocol):  # takes the connection and never reads or answers
+        def connection_made(self, transport):
+            held.append(transport)
 
-    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    server = await asyncio.get_running_loop().create_server(Hold, "127.0.0.1", 0)
     try:
         yield server.sockets[0].getsockname()[1]
     finally:
-        for writer, task in held:
-            writer.close()
-            task.cancel()
         server.close()
-        await server.wait_closed()
+        # A client that connected an instant ago may still be on its way from accept() to connection_made(). Let the
+        # loop run so that it arrives and is closed below; one that is missed would keep wait_closed() waiting forever
+        # (the old handler-based version did that now and then, and there is no pytest-timeout), so wait a bounded time.
+        for _ in range(3):
+            await asyncio.sleep(0)
+        for transport in held:
+            transport.close()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(server.wait_closed(), 2.0)
 
 
 async def insert_readings(db, point_id: int, start, step_seconds: float, values: list[float]) -> None:
