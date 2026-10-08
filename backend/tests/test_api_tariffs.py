@@ -231,5 +231,6 @@ async def test_deleting_an_asset_deletes_its_tariffs(client, db):
     panel = await make_asset(db, "LV Panel 1")
     await create(client)
     await create(client, asset_id=panel)
-    assert (await client.delete(f"/api/assets/{panel}")).status_code == 204
+    assert (await client.delete(f"/api/assets/{panel}")).status_code == 409  # it has a tariff: needs confirmation
+    assert (await client.delete(f"/api/assets/{panel}?confirm=true")).status_code == 204
     assert [r["asset_id"] for r in (await client.get("/api/tariffs")).json()] == [None]

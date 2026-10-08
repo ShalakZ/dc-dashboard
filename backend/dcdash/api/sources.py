@@ -3,14 +3,16 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import exists, or_, select
+from sqlalchemy import distinct, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, notify, require_role
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
+from dcdash.core.audit import audit
 from dcdash.core.crypto import encrypt
 from dcdash.core.models import Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
@@ -141,9 +143,41 @@ async def update_source(source_id: int, body: SourcePatch, db: AsyncSession = De
     return source
 
 
-@router.delete("/sources/{source_id}", status_code=204, dependencies=[Admin])
-async def delete_source(source_id: int, db: AsyncSession = Depends(get_db)) -> None:
-    await db.delete(await get_source(db, source_id))
+@router.delete("/sources/{source_id}", status_code=204, response_model=None)
+async def delete_source(
+    source_id: int,
+    confirm: bool = False,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Admin,
+) -> JSONResponse | None:
+    source = await get_source(db, source_id)
+    mapped_points, mappings = (
+        await db.execute(
+            select(func.count(distinct(Mapping.point_id)), func.count(Mapping.id))
+            .join(Point, Point.id == Mapping.point_id)
+            .where(Point.source_id == source_id)
+        )
+    ).one()
+    if not confirm and mapped_points:
+        # Past energy and cost are recomputed from today's mappings (spec 6), so this changes billing history.
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": (
+                    f'Source "{source.name}" has {mapped_points} mapped point{"" if mapped_points == 1 else "s"}; '
+                    "deleting it deletes them and their mappings, and the past energy and cost figures that "
+                    "depend on them disappear from billing and dashboards. "
+                    "Repeat the request with confirm=true to go ahead."
+                ),
+                "points": mapped_points,
+                "mappings": mappings,
+            },
+        )
+    await db.delete(source)
+    await audit(
+        db, admin.id, "source.deleted",
+        {"source_id": source_id, "name": source.name, "points": mapped_points, "mappings": mappings},
+    )
     await notify(db, CONFIG_CHANNEL)
     await db.commit()
 

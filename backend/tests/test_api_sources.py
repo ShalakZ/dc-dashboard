@@ -79,6 +79,101 @@ async def test_patch_and_delete_source(client, db):
     assert (await client.delete(f"/api/sources/{source['id']}")).status_code == 404
 
 
+async def source_deleted_audit(db) -> list[dict]:
+    rows = await db.fetch("SELECT user_id, detail FROM audit_log WHERE action = 'source.deleted' ORDER BY id")
+    return [{"user_id": r["user_id"], **r["detail"]} for r in rows]
+
+
+async def test_a_source_without_mapped_points_deletes_without_confirmation_and_is_audited(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    await make_point(db, source["id"], "unmapped")  # points nobody mapped do not need confirming
+    assert (await client.delete(f"/api/sources/{source['id']}")).status_code == 204
+    assert await db.fetchval("SELECT count(*) FROM sources") == 0
+    assert await db.fetchval("SELECT count(*) FROM points") == 0
+    admin_id = await db.fetchval("SELECT id FROM users WHERE username = 'admin'")
+    assert await source_deleted_audit(db) == [
+        {"user_id": admin_id, "source_id": source["id"], "name": "sim", "points": 0, "mappings": 0}
+    ]
+
+
+async def test_a_source_with_mapped_points_needs_confirmation(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    asset = await make_asset(db, "Panel")
+    for address, metric in (("a", "active_power_kw"), ("b", "energy_kwh")):
+        await make_mapping(db, await make_point(db, source["id"], address), asset, metric=metric)
+    await make_point(db, source["id"], "unmapped")
+
+    response = await client.delete(f"/api/sources/{source['id']}")
+    assert response.status_code == 409
+    body = response.json()
+    assert body["points"] == 2 and body["mappings"] == 2  # mapped points only: the unmapped one is not counted
+    assert "2 mapped points" in body["detail"] and "confirm" in body["detail"]
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+    assert await db.fetchval("SELECT count(*) FROM points") == 3
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 2
+    assert await source_deleted_audit(db) == []
+
+
+async def test_only_confirm_true_confirms_a_source_delete(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    await make_mapping(db, await make_point(db, source["id"], "a"), await make_asset(db, "Panel"))
+    for query in ("?confirm=false", "?confirm=0", ""):
+        assert (await client.delete(f"/api/sources/{source['id']}{query}")).status_code == 409
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+
+
+async def test_a_confirmed_source_delete_removes_points_and_mappings_and_is_audited(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    keeper = await make_source(db, "other")
+    asset = await make_asset(db, "Panel")
+    await make_mapping(db, await make_point(db, source["id"], "a"), asset)
+    await make_mapping(db, await make_point(db, keeper, "b"), asset, metric="energy_kwh")
+
+    assert (await client.delete(f"/api/sources/{source['id']}?confirm=true")).status_code == 204
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+    assert await db.fetchval("SELECT count(*) FROM points") == 1
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 1
+    assert await db.fetchval("SELECT count(*) FROM assets") == 1  # the asset stays; only its mapping goes
+    admin_id = await db.fetchval("SELECT id FROM users WHERE username = 'admin'")
+    assert await source_deleted_audit(db) == [
+        {"user_id": admin_id, "source_id": source["id"], "name": "sim", "points": 1, "mappings": 1}
+    ]
+
+
+async def test_deleting_an_unknown_source_is_404_with_or_without_confirm(client, db):
+    await login_as(client, db)
+    assert (await client.delete("/api/sources/999")).status_code == 404
+    assert (await client.delete("/api/sources/999?confirm=true")).status_code == 404
+
+
+async def test_deleting_a_source_is_admin_only(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    await make_mapping(db, await make_point(db, source["id"], "a"), await make_asset(db, "Panel"))
+    await client.post("/api/logout")
+    assert (await client.delete(f"/api/sources/{source['id']}")).status_code == 401
+    for role in ("viewer", "operator"):
+        await login_as(client, db, role)
+        assert (await client.delete(f"/api/sources/{source['id']}")).status_code == 403
+        assert (await client.delete(f"/api/sources/{source['id']}?confirm=true")).status_code == 403
+        await client.post("/api/logout")
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+
+
+async def test_a_refused_source_delete_does_not_wake_the_collector(client, db, database_url):
+    await login_as(client, db)
+    source = await create_sim(client)
+    await make_mapping(db, await make_point(db, source["id"], "a"), await make_asset(db, "Panel"))
+    async with listening(database_url, CONFIG_CHANNEL) as received:
+        assert (await client.delete(f"/api/sources/{source['id']}")).status_code == 409
+        await db.execute("SELECT pg_notify($1, 'sentinel')", CONFIG_CHANNEL)
+        assert await asyncio.wait_for(received.get(), timeout=5) == "sentinel"  # nothing came before it
+
+
 async def test_source_changes_notify_the_collector(client, db, database_url):
     await login_as(client, db)
     async with listening(database_url, CONFIG_CHANNEL) as received:
