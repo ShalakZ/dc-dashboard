@@ -241,8 +241,12 @@ follow the live stream while their range ends now (the rolling ranges, `today` a
 `yesterday` or `last_month`); every widget also refreshes every 30 seconds. **Edit** (operators and admins)
 opens the grid editor: drag a widget by its title bar, resize it from the corner or the edges, **Add
 widget**, then **Save**, which stores the whole dashboard in one step. If someone else saved first you are
-told, nothing is overwritten, and you can reload their version. A widget whose asset was deleted shows
-"N assets removed" and draws the rest. Every widget has a CSV button (UTF-8 with a byte-order mark,
+told, nothing is overwritten, and you can reload their version. Leaving the editor from inside the app,
+or closing the page, asks first when something is unsaved; a session that expires while you edit does
+not: the app signs you out and the unsaved edits are dropped without a prompt. A widget whose asset
+was deleted shows "N assets removed" and draws the rest. A metric with no reading in the range says "no
+data" (the dash is only for a missing rate), and a cost chart with unpriced buckets says "— no rate" under
+its title. Every widget has a CSV button (UTF-8 with a byte-order mark,
 times in the site timezone with their offset, columns `asset,source,unit,timestamp,value,estimated,partial,no_data`;
 text starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading apostrophe so that
 spreadsheets do not run it as a formula). Custom metrics are not available in widgets; they stay on the
@@ -252,9 +256,9 @@ asset page. A metric widget offers only assets that have a mapping for that metr
 asset tree by day: kWh above, cost below, then the month total and the rate in effect. `~` marks a
 figure estimated from power and `*` a partial cost (some energy in the period had no rate). A dash means
 one thing: there is no rate for that cost, and a missing rate is never shown as zero. An empty cell is an
-asset without a meter, or a day that has not been reached yet. A muted `0.00` is a day with no data: its
-zero is not a measurement. The CSV button exports one row per asset per day
-(`asset,date,kwh,cost,currency,estimated,partial,no_data`). The asset page shows today's cost next to
+asset without a meter, or a day that has not been reached yet. A shaded cell with `0.0` kWh and a `0.00`
+cost, titled "no data", is a day with no data: its zero is not a measurement. The CSV button exports one
+row per asset per day (`asset,date,kwh,cost,currency,estimated,partial,no_data`). The asset page shows today's cost next to
 today's energy.
 
 **Tariffs** (admin) hold the site currency (one three-letter code for the whole site; when it is unset,
@@ -283,9 +287,9 @@ changes past figures. Deleting an asset that has children, mappings or tariffs, 
 points, asks for confirmation and is audited. A parent's own meter counts from its first reading (the
 hours before it are the sum of its children, so adding a meter later does not zero the past), and the
 estimate for an asset with only a power reading covers the minutes in which it has samples. A day with
-no data shows `0.00` muted with the title "no data" (a rate in effect makes its cost `0.00`, otherwise
-the cost is a dash). The hourly rollup is the only permanent copy of this data, so back it up (see
-"Backup and restore").
+no data shows its energy as zero (`0.0` kWh in Billing cells, `0.00` in a widget), muted and titled
+"no data" (a rate in effect makes its cost `0.00`, otherwise the cost is a dash). The hourly rollup is
+the only permanent copy of this data, so back it up (see "Backup and restore").
 
 Limits: the site timezone must have a whole-hour UTC offset in both January and July (so that day and
 month edges fall on hourly buckets); Settings refuses other zones, and Billing and widget data answer 409

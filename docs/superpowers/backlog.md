@@ -8,7 +8,7 @@ Working rules that still apply: implementers on `sonnet`, reviewers on `opus`, n
 
 ## A. Phase 3 Task 0 (cheap, and Phase 3 touches these areas) — DONE
 
-Done in Phase 3 Task 0 (branch `phase-3-dashboards-billing`, merged with Phase 3). All six items below were fixed test-first; they are kept as the record of what Task 0 covered. Sections B and C are still open.
+Done in Phase 3 Task 0 (branch `phase-3-dashboards-billing`, built in Phase 3). All six items below were fixed test-first; they are kept as the record of what Task 0 covered. Sections B, C, D and E are still open.
 
 - **Custom-unit input in the review dialog.** A row switched to the `custom` metric posts `custom_unit: null`; Phase 3 charts custom metrics, so they would show without a unit. Add a unit field per row (prefilled from the point's unit hint) and send it. (`frontend/src/components/graph/ReviewDialog.tsx`, `lib/drop.ts`.)
 - **Hidden discovered-source name clash.** `POST /api/sources` can 409 on a name used by a discovered source that `GET /api/sources` hides; the message should say so (or the clash should be avoided). (`api/sources.py`, `collector/scan.py` " (2)" retry.)
@@ -67,5 +67,28 @@ Constraint from the owner: the workstation is reached over RDP, has no internet 
 - On-site tooling: a `doctor` script (Docker/WSL2 present, free disk, ports, time zone, reachability of the scan targets from inside the collector container), an offline smoke test, a log-collection script that zips logs to send back.
 - Workstation facts known (owner, 2026-10-08): Windows, NO Docker and NO WSL, admin rights, no internet; whether CPU virtualization/Hyper-V is available is unknown. Two routes: (A) native Windows install (PostgreSQL 16 + the TimescaleDB Windows build, Python from a pre-downloaded wheelhouse, prebuilt frontend served by caddy.exe, services via NSSM; must first verify the Windows build offers compression, continuous aggregates and policies for the pinned version; `tzdata` is already a backend dependency and no Linux-only calls were found) or (B) a prebuilt Linux VM image (Hyper-V/VirtualBox) with our Docker images preloaded — B needs virtualization enabled and a bridged adapter to the scan network. Check on the workstation: `systeminfo` (OS Name, Hyper-V Requirements block) and `wmic cpu get VirtualizationFirmwareEnabled`; a workstation that is itself a VM usually rules out B.
 - Workstation facts still needed: Windows edition, Docker/WSL2/Hyper-V availability, admin rights and software policy (Docker Desktop licensing), free disk, RDP file-transfer limits. Fallback if Docker is impossible: ship a ready Linux VM image (VHDX/OVA) with everything inside.
+- Network path (told by the owner 2026-10-08, unconfirmed): the Windows SCADA workstation can reach a Kubernetes cluster that has access to the real SCADA, probably through OPC UA. The collector would connect to an endpoint exposed by the cluster. Ask: endpoint URL and port as seen from the workstation; direct OPC UA server or gateway/aggregator; security mode and login (read-only account); firewall rules; cluster-internal host names may not resolve from Docker on Windows. Risk: the OPC UA username/password path was never exercised against a real server.
 - Raises the priority of section B (stuck-scan watchdog, conservative scan mode, reachability checks): there is nobody to debug on site.
 - Before 0004 reaches ANY real database (the owner's `dcdash_dbdata` or the workstation): take a backup first (`scripts/backup.sh`); the hourly rollup is rebuilt from the minute tier.
+
+## E. Phase 3 deferred (final review, 2026-10-09; none of these blocks the merge)
+
+Charts
+- Time-series gap rule: a gap is a step above 1.5 x the median step, so a slow meter's dots appear at 1 to 1.5 bucket widths and flip at 2 to 2.5; a window where half or more of the buckets are holes is drawn joined. The proper fix needs the backend to send the expected step (bucket width) per series. Cosmetic: `markIsolated` keeps every point visible. (`TimeSeriesWidget.tsx` `bucketMs`, `withGaps`.)
+- Grouped bars: the no-rate dash sits at the category centre, not in the asset's slot (`BarWidget.tsx` `dashMarks`). Charts have no text alternative and a widget title is an `h3` under the page `h1` (`WidgetFrame.tsx`).
+- Real-browser walkthrough of Task 9 (items 2, 7, 8) is still to do: the dash position in grouped bars; day-bucket labels with `useUTC: true` in Asia/Qatar (buckets start at 21:00 UTC, labels may sit off the bars); the `1h` preset with 30 s polling (12 s buckets, steps of 24 and 36 s break into dots or flip).
+- Asset-page chart: the axis formatter has no finite guard (`TrendChart.tsx`); `WidgetConfig.metric` still admits `"custom"` at type level (`api/types.ts`; `WIDGET_METRICS` filters it out).
+
+Editor and dashboards
+- Drag and resize are pointer-only (no keyboard reorder), and the editor is not usable on a narrow screen.
+- Cosmetic error UX: wording and guidance when a dashboard was deleted by someone else while open (`DashboardPage.tsx`, `DashboardEditor.tsx`).
+
+Billing, tariffs and dialogs
+- Billing/Tariffs: an export error survives a month change; an old server error can sit next to a new local one in the Add rate form; the "Set a rate" pointer is hidden when an asset has no rate and zero kWh, so its dashes have no pointer; Edit, Delete and Save buttons in tariff rows lack row context for screen readers (`BillingPage.tsx`, `TariffsPage.tsx`).
+- `ConfirmDeleteDialog`: add `role` / `aria-describedby`, and put the focus back on Cancel after an error.
+- Three screens still format times in the browser's zone, not the site's: `MetricsTable.tsx`, `ScansPage.tsx`, `SourcesPage.tsx`.
+
+Tests and tooling
+- Weak or missing assertions: Billing (`BillingPage.test.tsx`), the asset page (`AssetPage.test.tsx`), the dashboard editor tests (Task 10 M1, M3, M4, M6, M8), hook coverage and test hygiene in the asset-chart tests (Task 7 m8-m10); widget tests for the 50-dashboard cap, 100-character names, the debounce, and `FakeEventSource` copies (Task 9 M5-M7).
+- End-to-end: gaps for a currency change, an override and the Billing cell states (`frontend/e2e/phase3.spec.ts`); the e2e folder is outside `tsc` (`tsconfig.json` includes only `src`).
+- `LoginPage.test.tsx` prints "No routes matched location" (known, harmless).
