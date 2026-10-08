@@ -1,8 +1,9 @@
 import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
 import { useState } from "react";
-import { useSeries } from "../api/queries";
+import { useSeries, useSite } from "../api/queries";
 import type { Metric, Series, SeriesTier, SummaryMetric } from "../api/types";
+import { formatSiteDateTime, formatSiteTick } from "../lib/siteTime";
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { RangePicker } from "./RangePicker";
 
@@ -28,12 +29,31 @@ export function withGaps(points: SeriesPoint[], query: Query, pick: (p: SeriesPo
   return rows;
 }
 
-export function seriesToOption(series: Series, range: Range, query: Query = rangeToQuery(range)): EChartsOption {
+type TooltipItem = { axisValue?: number; marker?: string; seriesName?: string; value?: [string | number, number | null] };
+
+/** Axis tooltip: the header time in the site zone (ECharts would print the browser's), then one row per series as before. */
+export function tooltipHtml(raw: unknown, timezone: string): string {
+  const items = (Array.isArray(raw) ? raw : [raw]) as TooltipItem[];
+  const at = items[0]?.axisValue;
+  const header = typeof at === "number" && Number.isFinite(at) ? formatSiteDateTime(new Date(at).toISOString(), timezone) : "";
+  const rows = items.map((item) => {
+    const v = item.value?.[1];
+    return `${item.marker ?? ""}${item.seriesName ?? ""}: ${v == null ? "—" : Number(v.toFixed(3))}`;
+  });
+  return [header, ...rows].join("<br/>");
+}
+
+export function seriesToOption(series: Series, range: Range, query: Query = rangeToQuery(range), timezone = "UTC"): EChartsOption {
+  const bucket = range === "7d" ? "hour" : null; // a week needs dates on the ticks, a day does not
   return {
     animation: false,
-    tooltip: { trigger: "axis" },
+    useUTC: true, // tick positions on whole UTC hours; labels below are formatted in the site zone, not the browser's
+    tooltip: { trigger: "axis", formatter: (raw: unknown) => tooltipHtml(raw, timezone) },
     grid: { left: 60, right: 20, top: 30, bottom: 40 },
-    xAxis: { type: "time" },
+    xAxis: {
+      type: "time",
+      axisLabel: { formatter: (value: number) => formatSiteTick(new Date(value).toISOString(), timezone, bucket) },
+    },
     yAxis: { type: "value", name: series.unit, scale: true },
     series: [
       { name: "min", type: "line", data: withGaps(series.points, query, (p) => p.min), lineStyle: { opacity: 0 }, symbol: "none", stack: "band", connectNulls: false },
@@ -53,6 +73,7 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
   const mappings = metrics.filter((m) => m.metric === metric);
   const chosenMapping = mappings.some((m) => m.mapping_id === mappingId) ? mappingId : undefined;
   const { data, error, isFetching } = useSeries(assetId, metric, range, mappings.length > 1 ? chosenMapping : undefined);
+  const site = useSite();
   if (metric === null) return <p className="muted">No metric to chart.</p>;
   return (
     <section>
@@ -75,7 +96,7 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
         {isFetching && <span className="muted">updating…</span>}
       </div>
       {error && <p className="error" role="alert">{error.message}</p>}
-      {data && (data.points.length === 0 ? <p className="muted">No data in this range.</p> : <ReactECharts option={seriesToOption(data, range)} style={{ height: 320 }} notMerge />)}
+      {data && (data.points.length === 0 ? <p className="muted">No data in this range.</p> : <ReactECharts option={seriesToOption(data, range, undefined, site.data?.timezone ?? "UTC")} style={{ height: 320 }} notMerge />)}
     </section>
   );
 }

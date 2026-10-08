@@ -21,10 +21,13 @@ const summary = (energy: unknown) => ({
     { mapping_id: 2, point_id: 8, metric: "voltage_v", unit: "V", value: null, ts: null, quality: null },
   ],
   energy_today: energy,
+  cost_today: null,
+  currency: null,
 });
 const routes = (energy: unknown) => ({
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+  "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
   "GET /api/assets/4/summary": { body: summary(energy) },
   "GET /api/assets/4/series": { body: { metric: "active_power_kw", unit: "kW", points: [] } },
 });
@@ -33,7 +36,7 @@ beforeEach(() => vi.stubGlobal("EventSource", FakeEventSource));
 
 describe("AssetPage", () => {
   it("renders live value from stream and dash for null", async () => {
-    mockFetch(routes({ kwh: 3.25, estimated: false }));
+    mockFetch(routes({ kwh: 3.25, estimated: false, no_data: false }));
     renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
     expect(await screen.findByRole("heading", { name: "Panel 1" })).toBeInTheDocument();
     expect(screen.getByText("10.50")).toBeInTheDocument();
@@ -69,7 +72,7 @@ describe("AssetPage", () => {
   });
 
   it("labels estimated energy and handles missing energy", async () => {
-    mockFetch(routes({ kwh: 3.25, estimated: true }));
+    mockFetch(routes({ kwh: 3.25, estimated: true, no_data: false }));
     const { unmount } = renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
     expect(await screen.findByText(/3\.25 kWh/)).toHaveTextContent("estimated");
     unmount();
