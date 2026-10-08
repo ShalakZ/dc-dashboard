@@ -33,15 +33,16 @@ def by_name(body: dict) -> dict[str, dict]:
     return {asset["name"]: asset for asset in body["assets"]}
 
 
-def check(entry, kwh, cost, estimated=False, partial=False):
-    """One day or month figure. A missing cost must be None, never 0; 0.0 is a real cost."""
+def check(entry, kwh, cost, estimated=False, partial=False, no_data=False):
+    """One day or month figure. A missing cost must be None, never 0; 0.0 is a real cost. `no_data` is True for a
+    period in which not one hour was recorded (its kWh and cost are then the 0 of a period that consumed nothing)."""
     assert entry is not None
     assert entry["kwh"] == pytest.approx(kwh)
     if cost is None:
         assert entry["cost"] is None
     else:
         assert entry["cost"] == pytest.approx(cost)
-    assert (entry["estimated"], entry["partial"]) == (estimated, partial)
+    assert (entry["estimated"], entry["partial"], entry["no_data"]) == (estimated, partial, no_data)
 
 
 async def test_anonymous_is_refused_and_a_viewer_can_read(client, db):
@@ -213,7 +214,7 @@ async def test_a_parent_without_a_meter_sums_its_children_including_a_child_over
     assert {row[0] for row in csv_rows[1:]} == {
         "Site", "Site / MV2", "Site / MV2 / LV Panel 1", "Site / MV2 / LV Panel 2",
     }
-    assert ["Site / MV2 / LV Panel 1", "2026-03-10", "6", "0.6", "", "false", "false"] in csv_rows
+    assert ["Site / MV2 / LV Panel 1", "2026-03-10", "6", "0.6", "", "false", "false", "false"] in csv_rows
 
 
 async def test_a_meter_added_to_a_parent_later_does_not_zero_the_parents_earlier_days(client, db):
@@ -242,6 +243,39 @@ async def test_a_meter_added_to_a_parent_later_does_not_zero_the_parents_earlier
     check(rows["LV Panel 1"]["total"], 744.0, 74.4)  # the panels themselves are untouched
 
 
+async def test_days_before_a_meters_first_reading_and_after_its_last_have_no_data(client, db):
+    # A counter read on 10 and 11 March only. The days around them are zeros that were not measured.
+    await add_counter(db, "Meter", at(2026, 3, 10, 0), 48)
+    await add_tariff(db, 0.20, "2026-03-01")
+    await settle_rollups(db)
+    await login_as(client, db, "viewer")
+
+    meter = by_name(await get_costs(client))["Meter"]
+    for day in meter["days"][:9]:
+        check(day, 0.0, 0.0, no_data=True)  # 1-9 March: before the first reading
+    check(meter["days"][9], 23.0, 4.6)  # the first hour is the baseline and counts 0
+    check(meter["days"][10], 24.0, 4.8)
+    for day in meter["days"][11:]:
+        check(day, 0.0, 0.0, no_data=True)
+    check(meter["total"], 47.0, 9.4)  # the month has data
+
+
+async def test_a_day_with_no_hours_between_two_days_with_readings_is_no_data(client, db):
+    # A comms outage: readings on 10 and 12 March, none on the 11th (the gap lands in the hour the next value arrives).
+    await add_counter(db, "Gap", at(2026, 3, 10, 0), 2)
+    point = await db.fetchval("SELECT id FROM points WHERE address = 'Gap_kWh'")
+    await insert_readings(db, point, at(2026, 3, 12, 0) + timedelta(minutes=30), 1, [1050.0])
+    await add_tariff(db, 0.10, "2026-03-01")
+    await settle_rollups(db)
+    await login_as(client, db, "viewer")
+
+    gap = by_name(await get_costs(client))["Gap"]
+    check(gap["days"][9], 1.0, 0.1)  # 10 March
+    check(gap["days"][10], 0.0, 0.0, no_data=True)  # 11 March: the outage
+    check(gap["days"][11], 49.0, 4.9)  # 12 March: the stretch since the 10th, counted where the next value arrives
+    check(gap["total"], 50.0, 5.0)
+
+
 async def test_a_parent_is_partial_when_only_one_child_has_a_rate(client, db):  # Review Focus 3
     await build_hierarchy(db, default_rate=None)  # only LV Panel 2 has a rate
     await login_as(client, db, "viewer")
@@ -267,7 +301,7 @@ async def test_a_rate_that_starts_mid_month_marks_the_earlier_days_partial(clien
     check(panel["days"][1], 10.0, 2.0, estimated=True)
     check(panel["days"][2], 10.0, 2.0, estimated=True)
     check(panel["total"], 30.0, 4.0, estimated=True, partial=True)
-    check(panel["days"][3], 0.0, 0.0)  # 4 March: no readings at all, the rate is in effect: costs 0, not partial
+    check(panel["days"][3], 0.0, 0.0, no_data=True)  # 4 March: no readings, a rate in effect: costs 0, not partial
     assert panel["rate_per_kwh"] == 0.20
     # An hour that used no energy never makes a figure partial; with a rate in effect it costs 0, not "no rate".
     check(idle["days"][0], 0.0, None, estimated=True)
@@ -285,23 +319,23 @@ async def test_a_silent_day_costs_zero_only_where_a_rate_is_in_effect(client, db
     await login_as(client, db, "viewer")
 
     panel = by_name(await get_costs(client))["Panel"]
-    check(panel["days"][1], 0.0, None)  # 2 March: silent and no rate yet: a dash, and not partial
-    check(panel["days"][3], 0.0, None)  # 4 March: the day before the rate starts
-    check(panel["days"][4], 0.0, 0.0)  # 5 March: silent, the rate has started: a real zero
-    check(panel["days"][6], 0.0, 0.0)  # 7 March
-    check(panel["days"][9], 10.0, 2.0, estimated=True)  # 10 March, the one hour with readings
-    check(panel["days"][10], 0.0, 0.0)  # 11 March
+    check(panel["days"][1], 0.0, None, no_data=True)  # 2 March: silent and no rate yet: a dash, and not partial
+    check(panel["days"][3], 0.0, None, no_data=True)  # 4 March: the day before the rate starts
+    check(panel["days"][4], 0.0, 0.0, no_data=True)  # 5 March: silent, the rate has started: a real zero
+    check(panel["days"][6], 0.0, 0.0, no_data=True)  # 7 March
+    check(panel["days"][9], 10.0, 2.0, estimated=True)  # 10 March, the one hour with readings: it has data
+    check(panel["days"][10], 0.0, 0.0, no_data=True)  # 11 March
     assert all(day["cost"] is None for day in panel["days"][:4])
     assert all(day["cost"] is not None for day in panel["days"][4:])
     # The month total is the sum of the priced hours (the silent days add 0 kWh and 0 cost); it is not partial
-    # because no hour that consumed energy lacked a rate.
+    # because no hour that consumed energy lacked a rate. It has data: one of its days does.
     check(panel["total"], 10.0, 2.0, estimated=True)
     assert panel["total"]["cost"] == pytest.approx(sum(day["cost"] for day in panel["days"] if day["cost"] is not None))
 
     rows = await get_csv(client)
-    assert rows[2] == ["Panel", "2026-03-02", "0", "", "QAR", "false", "false"]  # no rate: an empty cell
-    assert rows[5] == ["Panel", "2026-03-05", "0", "0", "QAR", "false", "false"]  # silent under a rate: 0
-    assert rows[10] == ["Panel", "2026-03-10", "10", "2", "QAR", "true", "false"]
+    assert rows[2] == ["Panel", "2026-03-02", "0", "", "QAR", "false", "false", "true"]  # no rate: an empty cell
+    assert rows[5] == ["Panel", "2026-03-05", "0", "0", "QAR", "false", "false", "true"]  # silent under a rate: 0
+    assert rows[10] == ["Panel", "2026-03-10", "10", "2", "QAR", "true", "false", "false"]
 
 
 async def test_a_counter_silent_all_month_costs_zero_under_a_rate_and_nothing_without_one(client, db):  # Review Focus 3
@@ -315,13 +349,13 @@ async def test_a_counter_silent_all_month_costs_zero_under_a_rate_and_nothing_wi
 
     rows = by_name(await get_costs(client))
     for entry in [*rows["Priced"]["days"], rows["Priced"]["total"]]:
-        check(entry, 0.0, 0.0)
+        check(entry, 0.0, 0.0, no_data=True)  # not one hour in the month, so the total has no data either
     for entry in [*rows["Unpriced"]["days"], rows["Unpriced"]["total"]]:
-        check(entry, 0.0, None)
+        check(entry, 0.0, None, no_data=True)
     assert rows["Priced"]["rate_per_kwh"] == 0.20 and rows["Unpriced"]["rate_per_kwh"] is None
     csv_rows = await get_csv(client)
-    assert {tuple(row[3:]) for row in csv_rows[1:] if row[0] == "Priced"} == {("0", "QAR", "false", "false")}
-    assert {tuple(row[3:]) for row in csv_rows[1:] if row[0] == "Unpriced"} == {("", "QAR", "false", "false")}
+    assert {tuple(row[3:]) for row in csv_rows[1:] if row[0] == "Priced"} == {("0", "QAR", "false", "false", "true")}
+    assert {tuple(row[3:]) for row in csv_rows[1:] if row[0] == "Unpriced"} == {("", "QAR", "false", "false", "true")}
 
 
 async def test_the_current_month_total_leaves_out_future_days(client, db):  # Review Focus 3
@@ -336,8 +370,9 @@ async def test_the_current_month_total_leaves_out_future_days(client, db):  # Re
     assert panel["rate_per_kwh"] is None
     assert panel["days"][15:] == [None] * 15
     for day in panel["days"][:15]:
-        check(day, 0.0, None, estimated=True)
-    check(panel["total"], 0.0, None, estimated=True)  # not 0.0: the priced hours of 20-30 April are not shown
+        check(day, 0.0, None, estimated=True, no_data=True)  # the whole range of a silent power-only meter
+    # not 0.0: the priced hours of 20-30 April are not shown; and every day shown has no data, so neither has the month
+    check(panel["total"], 0.0, None, estimated=True, no_data=True)
 
 
 async def test_the_month_total_is_built_from_the_days_it_shows(client, db):  # Review Focus 3
@@ -353,10 +388,10 @@ async def test_the_month_total_is_built_from_the_days_it_shows(client, db):  # R
     for day in meter["days"][1:10]:
         check(day, 24.0, None, partial=True)
     for day in meter["days"][10:14]:
-        check(day, 0.0, None)
+        check(day, 0.0, None, no_data=True)
     for day in meter["days"][14:]:
-        check(day, 0.0, 0.0)
-    check(meter["total"], 239.0, 0.0, partial=True)
+        check(day, 0.0, 0.0, no_data=True)
+    check(meter["total"], 239.0, 0.0, partial=True)  # ten days with data: the month has data
     assert meter["total"]["kwh"] == pytest.approx(sum(day["kwh"] for day in meter["days"]))
 
 
@@ -372,10 +407,10 @@ async def test_no_tariff_means_no_cost_anywhere_and_an_empty_csv_cell(client, db
     check(panel["days"][0], 10.0, None, estimated=True, partial=True)
     check(panel["days"][1], 10.0, None, estimated=True, partial=True)
     check(panel["total"], 20.0, None, estimated=True, partial=True)
-    check(panel["days"][2], 0.0, None)  # a silent day with no rate at all stays a dash
+    check(panel["days"][2], 0.0, None, no_data=True)  # a silent day with no rate at all stays a dash
     rows = await get_csv(client)
-    assert rows[0] == ["asset", "date", "kwh", "cost", "currency", "estimated", "partial"]
-    assert rows[1] == ["Panel", "2026-03-01", "10", "", "QAR", "true", "true"]
+    assert rows[0] == ["asset", "date", "kwh", "cost", "currency", "estimated", "partial", "no_data"]
+    assert rows[1] == ["Panel", "2026-03-01", "10", "", "QAR", "true", "true", "false"]
     assert len(rows) == 1 + 31 and all(row[3] == "" for row in rows[1:])
 
 
@@ -405,8 +440,8 @@ async def test_csv_has_one_row_per_asset_per_day_up_to_today(client, db):
     assert response.content.startswith(b"\xef\xbb\xbf") and b"\r\n" in response.content
     rows = list(csv.reader(io.StringIO(response.content.decode("utf-8-sig"), newline="")))
     assert len(rows) == 1 + 15  # 1-15 April; the 16th onwards is in the future
-    assert rows[14] == ["Panel", "2026-04-14", "10", "1", "QAR", "true", "false"]
-    assert rows[1] == ["Panel", "2026-04-01", "0", "0", "QAR", "false", "false"]  # silent, the rate is in effect
+    assert rows[14] == ["Panel", "2026-04-14", "10", "1", "QAR", "true", "false", "false"]
+    assert rows[1] == ["Panel", "2026-04-01", "0", "0", "QAR", "false", "false", "true"]  # silent, a rate in effect
 
 
 async def test_an_asset_named_like_a_formula_is_neutralised_in_the_csv(client, db):  # Review Focus 5

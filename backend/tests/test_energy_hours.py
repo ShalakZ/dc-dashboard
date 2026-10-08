@@ -295,7 +295,7 @@ END = hour(3)
 def test_a_silent_power_meter_counts_an_estimated_zero_for_every_hour_of_the_range():
     # Spec section 6: power-only consumption is labeled estimated wherever it is shown, even when it is zero.
     result = assemble(TREE, {4: POWER_40}, {}, {}, start=hour(0), end=END)
-    assert result.hours[4] == {hour(n): HourEnergy(0.0, True) for n in range(3)}
+    assert result.hours[4] == {hour(n): HourEnergy(0.0, True, False) for n in range(3)}
     assert total(result.hours[4]) == Energy(0.0, True)
     assert result.own == frozenset({4})
 
@@ -325,7 +325,7 @@ def test_a_parent_of_a_counter_and_a_silent_power_meter_is_estimated():
     rows = {30: [counter_row(0, 100, 107, 107)]}  # LV1 measured 7 kWh; LV2's power meter recorded nothing
     result = assemble(TREE, meters, rows, {30: 100.0}, start=hour(0), end=hour(2))
     assert result.hours[3] == {hour(0): HourEnergy(7.0, False)}
-    assert result.hours[2] == {hour(0): HourEnergy(7.0, True), hour(1): HourEnergy(0.0, True)}
+    assert result.hours[2] == {hour(0): HourEnergy(7.0, True), hour(1): HourEnergy(0.0, True, False)}
     assert total(result.hours[2]) == Energy(7.0, True)
     assert total(result.hours[1]) == Energy(7.0, True)  # and so is the site
 
@@ -419,7 +419,7 @@ def test_a_meter_with_no_rows_ever_has_no_first_bucket_and_behaves_as_before():
     meters = {2: MV2_POWER, 3: COUNTER_30}
     rows = {30: [counter_row(0, 100, 107, 107)]}
     result = assemble(TREE, meters, rows, {30: 100.0}, start=hour(0), end=hour(2), first_buckets={30: hour(0)})
-    assert result.hours[2] == {hour(0): HourEnergy(0.0, True), hour(1): HourEnergy(0.0, True)}
+    assert result.hours[2] == {hour(0): HourEnergy(0.0, True, False), hour(1): HourEnergy(0.0, True, False)}
     assert result.own_from == {3: hour(0)}  # MV2 has no first bucket, so no entry
     silent = assemble(TREE, {2: MV2_COUNTER, 3: COUNTER_30}, rows, {30: 100.0}, start=hour(0), end=hour(2),
                       first_buckets={30: hour(0)})
@@ -429,5 +429,57 @@ def test_a_meter_with_no_rows_ever_has_no_first_bucket_and_behaves_as_before():
 def test_after_its_first_reading_a_silent_hour_of_an_own_meter_is_not_filled_from_its_children():
     meters = {2: MV2_COUNTER, 3: COUNTER_30}
     rows = {20: [counter_row(1, 1000, 1030, 1030)], 30: children_rows()[30]}
-    result = assemble(TREE, meters, rows, {30: 100.0}, start=hour(0), end=hour(4), first_buckets={20: hour(1), 30: hour(0)})
+    first = {20: hour(1), 30: hour(0)}
+    result = assemble(TREE, meters, rows, {30: 100.0}, start=hour(0), end=hour(4), first_buckets=first)
     assert result.hours[2] == {hour(0): HourEnergy(1.0, False), hour(1): HourEnergy(30.0, False)}  # not LV1's 3 and 4
+
+
+# ---- has_data: real rollup rows versus the estimated zeros of a silent power-only meter -----------
+
+
+def test_an_hour_has_data_unless_it_says_otherwise():
+    assert HourEnergy(1.0, False).has_data is True
+    assert HourEnergy(0.0, True, False).has_data is False
+    assert [f for f in HourEnergy.__dataclass_fields__] == ["kwh", "estimated", "has_data"]
+
+
+def test_hours_that_come_from_rollup_rows_have_data_even_when_they_are_zero():
+    meters = {3: COUNTER_30, 4: POWER_40}
+    rows = {30: [counter_row(0, 100, 100, 100)], 40: [power_row(0, 0.0, 360, 60)]}  # a still counter, a 0 kW hour
+    result = assemble(TREE, meters, rows, {30: 100.0}, start=hour(0), end=hour(1))
+    assert result.hours[3] == {hour(0): HourEnergy(0.0, False, True)}
+    assert result.hours[4] == {hour(0): HourEnergy(0.0, True, True)}
+
+
+def test_the_estimated_zeros_of_a_silent_power_meter_have_no_data():
+    result = assemble(TREE, {4: POWER_40}, {}, {}, start=hour(0), end=hour(2))
+    assert [h.has_data for h in result.hours[4].values()] == [False, False]
+    assert [h.estimated for h in result.hours[4].values()] == [True, True]  # still labeled as an estimate
+
+
+def test_a_parent_hour_has_data_if_any_child_hour_has():
+    meters = {3: COUNTER_30, 4: POWER_40}
+    rows = {30: [counter_row(0, 100, 107, 107)]}  # LV1 measured in hour 0 only; LV2's power meter recorded nothing
+    result = assemble(TREE, meters, rows, {30: 100.0}, start=hour(0), end=hour(2))
+    assert result.hours[2] == {hour(0): HourEnergy(7.0, True, True), hour(1): HourEnergy(0.0, True, False)}
+    assert result.hours[1] == result.hours[2]
+
+
+def test_a_parent_of_silent_power_meters_only_has_no_data_anywhere():
+    meters = {3: Meter(30, 1.0, 10, False), 4: POWER_40}
+    result = assemble(TREE, meters, {}, {}, start=hour(0), end=hour(2))
+    assert all(not h.has_data for h in result.hours[2].values()) and len(result.hours[2]) == 2
+    assert all(not h.has_data for h in result.hours[1].values())
+
+
+def test_the_children_hours_before_a_late_meter_keep_their_has_data():
+    meters = {2: MV2_COUNTER, 3: Meter(30, 1.0, 10, False)}  # LV1 is a power meter that recorded nothing
+    result = assemble(
+        TREE, meters, {20: [counter_row(2, 1000, 1030, 1030)]}, {}, start=hour(0), end=hour(3),
+        first_buckets={20: hour(2)},
+    )
+    assert result.hours[2] == {
+        hour(0): HourEnergy(0.0, True, False),
+        hour(1): HourEnergy(0.0, True, False),
+        hour(2): HourEnergy(30.0, False, True),
+    }

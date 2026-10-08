@@ -30,6 +30,7 @@ class HourCost:
     cost: float | None  # None when no rate applied in that hour
     estimated: bool
     unpriced: bool  # kwh > 0 and cost is None
+    has_data: bool = True  # False for the placeholder zero of a silent power-only meter (see HourEnergy)
 
 
 @dataclass(frozen=True)
@@ -64,8 +65,8 @@ def rate_at(tariffs: Sequence[TariffRow], tree: AssetTree, asset_id: int, local_
 
 def _price(hour: HourEnergy, rate: float | None) -> HourCost:
     if rate is None:
-        return HourCost(hour.kwh, None, hour.estimated, unpriced=hour.kwh > 0)
-    return HourCost(hour.kwh, hour.kwh * rate, hour.estimated, unpriced=False)
+        return HourCost(hour.kwh, None, hour.estimated, unpriced=hour.kwh > 0, has_data=hour.has_data)
+    return HourCost(hour.kwh, hour.kwh * rate, hour.estimated, unpriced=False, has_data=hour.has_data)
 
 
 def _add(a: float | None, b: float | None) -> float | None:
@@ -86,6 +87,7 @@ def _sum_children(parts: Iterable[dict[datetime, HourCost] | None]) -> dict[date
                 cost=_add(known.cost, hour.cost),
                 estimated=known.estimated or hour.estimated,
                 unpriced=known.unpriced or hour.unpriced,
+                has_data=known.has_data or hour.has_data,
             )
     return merged
 
@@ -119,16 +121,21 @@ def cost_by_hour(
                     for bucket, hour in hours.items()
                     if first is None or bucket >= first
                 }
-                if first is None:
-                    done[asset_id] = mine
-                else:  # before its meter started, the asset is what its children add up to
+                if first is not None:  # before its meter started, the asset is what its children add up to
                     before = _sum_children(priced(child) for child in tree.children(asset_id))
-                    done[asset_id] = dict(sorted({**{b: h for b, h in before.items() if b < first}, **mine}.items()))
+                    mine = dict(sorted({**{b: h for b, h in before.items() if b < first}, **mine}.items()))
+                done[asset_id] = mine
             else:
                 done[asset_id] = _sum_children(priced(child) for child in tree.children(asset_id))
         return done[asset_id]
 
     return {asset_id: priced(asset_id) for asset_id in energy.hours}
+
+
+def no_data(hours: Iterable[HourCost]) -> bool:
+    """True when not one of `hours` has data: the period was not measured (it is empty, or every hour is the
+    placeholder zero of a silent power-only meter), so its 0 kWh is an absence of figures, not a measured zero."""
+    return not any(hour.has_data for hour in hours)
 
 
 def summarize(hours: Iterable[HourCost], *, rate_in_effect: bool = False) -> Cost:

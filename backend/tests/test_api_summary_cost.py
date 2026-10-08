@@ -38,8 +38,8 @@ async def test_cost_today_prices_the_engines_energy_with_the_rate_in_effect(clie
     await login_as(client, db, "viewer")
 
     body = await summary(client, panel)
-    assert body["energy_today"] == {"kwh": pytest.approx(4.0), "estimated": False}
-    assert body["cost_today"] == {"cost": pytest.approx(1.0), "estimated": False, "partial": False}
+    assert body["energy_today"] == {"kwh": pytest.approx(4.0), "estimated": False, "no_data": False}
+    assert body["cost_today"] == {"cost": pytest.approx(1.0), "estimated": False, "partial": False, "no_data": False}
     assert body["currency"] == "QAR"
     assert {"asset", "metrics", "energy_today", "cost_today", "currency"} <= set(body)  # existing keys stay
 
@@ -49,7 +49,7 @@ async def test_without_a_tariff_the_cost_is_null_and_partial_never_zero(client, 
     await settle_rollups(db)
     await login_as(client, db, "viewer")
     body = await summary(client, panel)
-    assert body["cost_today"] == {"cost": None, "estimated": False, "partial": True}
+    assert body["cost_today"] == {"cost": None, "estimated": False, "partial": True, "no_data": False}
     assert body["currency"] is None
 
 
@@ -58,7 +58,9 @@ async def test_a_tariff_that_starts_tomorrow_does_not_price_today(client, db):  
     await add_tariff(db, 0.25, "2026-03-11")
     await settle_rollups(db)
     await login_as(client, db, "viewer")
-    assert (await summary(client, panel))["cost_today"] == {"cost": None, "estimated": False, "partial": True}
+    assert (await summary(client, panel))["cost_today"] == {
+        "cost": None, "estimated": False, "partial": True, "no_data": False,
+    }
 
 
 async def test_a_parent_without_a_meter_sums_its_children_including_an_override(client, db):  # Review Focus 3
@@ -69,8 +71,10 @@ async def test_a_parent_without_a_meter_sums_its_children_including_an_override(
     await settle_rollups(db)
     await login_as(client, db, "viewer")
     body = await summary(client, site)
-    assert body["energy_today"] == {"kwh": pytest.approx(4.0), "estimated": False}
-    assert body["cost_today"] == {"cost": pytest.approx(2.0), "estimated": False, "partial": False}  # 4 kWh x 0.50
+    assert body["energy_today"] == {"kwh": pytest.approx(4.0), "estimated": False, "no_data": False}
+    assert body["cost_today"] == {  # 4 kWh x 0.50
+        "cost": pytest.approx(2.0), "estimated": False, "partial": False, "no_data": False,
+    }
 
 
 async def test_a_silent_meter_costs_zero_today_under_a_rate_and_nothing_without_one(client, db):  # Review Focus 3
@@ -82,11 +86,11 @@ async def test_a_silent_meter_costs_zero_today_under_a_rate_and_nothing_without_
     await login_as(client, db, "viewer")
 
     body = await summary(client, priced)
-    assert body["energy_today"] == {"kwh": 0.0, "estimated": False}
-    assert body["cost_today"] == {"cost": 0.0, "estimated": False, "partial": False}
+    assert body["energy_today"] == {"kwh": 0.0, "estimated": False, "no_data": True}
+    assert body["cost_today"] == {"cost": 0.0, "estimated": False, "partial": False, "no_data": True}
     body = await summary(client, unpriced)
-    assert body["energy_today"] == {"kwh": 0.0, "estimated": False}
-    assert body["cost_today"] == {"cost": None, "estimated": False, "partial": False}
+    assert body["energy_today"] == {"kwh": 0.0, "estimated": False, "no_data": True}
+    assert body["cost_today"] == {"cost": None, "estimated": False, "partial": False, "no_data": True}
 
 
 async def test_a_tariff_that_starts_tomorrow_does_not_price_a_silent_today(client, db):  # Review Focus 3
@@ -94,7 +98,9 @@ async def test_a_tariff_that_starts_tomorrow_does_not_price_a_silent_today(clien
     await add_tariff(db, 0.25, "2026-03-11")
     await settle_rollups(db)
     await login_as(client, db, "viewer")
-    assert (await summary(client, panel))["cost_today"] == {"cost": None, "estimated": False, "partial": False}
+    assert (await summary(client, panel))["cost_today"] == {
+        "cost": None, "estimated": False, "partial": False, "no_data": True,
+    }
 
 
 async def test_an_asset_without_energy_has_no_cost_but_still_reports_the_currency(client, db):

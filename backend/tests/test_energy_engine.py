@@ -194,7 +194,7 @@ async def test_a_power_only_meter_with_no_readings_is_an_estimated_zero_for_ever
 
     result = await energy()
 
-    assert result.hours[asset] == {T0 + n * HOUR: HourEnergy(0.0, True) for n in range(3)}
+    assert result.hours[asset] == {T0 + n * HOUR: HourEnergy(0.0, True, False) for n in range(3)}
     assert total(result.hours[asset]) == Energy(0.0, True)
     assert result.hours[counter_asset] == {} and total(result.hours[counter_asset]) == Energy(0.0, False)
 
@@ -276,7 +276,8 @@ async def test_a_first_bucket_before_the_range_start_changes_nothing(db):
     source = await make_source(db)
     mv2, own = await meter(db, source, "MV2")
     lv1, child = await meter(db, source, "LV1", mv2)
-    await insert_readings(db, own, T0 - 5 * HOUR + 30 * MINUTE, 3600, [500.0 + 10 * i for i in range(11)])  # hours -5..5
+    # hours -5 to 5, +10 kWh each
+    await insert_readings(db, own, T0 - 5 * HOUR + 30 * MINUTE, 3600, [500.0 + 10 * i for i in range(11)])
     await insert_readings(db, child, T0 - HOUR + 30 * MINUTE, 3600, [5.0 * i for i in range(7)])  # 5 kWh an hour
     await settle_rollups(db)
 

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.settings import current_timezone
-from dcdash.core.cost import Cost, HourCost, cost_by_hour, load_tariffs, rate_at, summarize
+from dcdash.core.cost import Cost, HourCost, cost_by_hour, load_tariffs, no_data, rate_at, summarize
 from dcdash.core.csvout import write_csv
 from dcdash.core.energy import hourly_energy
 from dcdash.core.settings_store import get_currency
@@ -22,7 +22,7 @@ from dcdash.core.tree import AssetTree
 router = APIRouter(prefix="/api", tags=["billing"], dependencies=[Depends(require_role("viewer"))])
 
 MONTH_PATTERN = r"^\d{4}-(0[1-9]|1[0-2])$"
-CSV_HEADER = ("asset", "date", "kwh", "cost", "currency", "estimated", "partial")
+CSV_HEADER = ("asset", "date", "kwh", "cost", "currency", "estimated", "partial", "no_data")
 
 
 def _now() -> datetime:
@@ -30,14 +30,23 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _figure(cost: Cost) -> dict[str, Any]:
-    return {"kwh": cost.kwh, "cost": cost.cost, "estimated": cost.estimated, "partial": cost.partial}
+def _figure(cost: Cost, day_hours: list[HourCost]) -> dict[str, Any]:
+    """One day entry. `no_data` is True when not one hour of the day was recorded, so its 0 kWh (and, under a
+    rate, 0.00 cost) is the absence of figures rather than a measured zero."""
+    return {
+        "kwh": cost.kwh,
+        "cost": cost.cost,
+        "estimated": cost.estimated,
+        "partial": cost.partial,
+        "no_data": no_data(day_hours),
+    }
 
 
 def _month_total(entries: list[dict[str, Any] | None]) -> dict[str, Any] | None:
     """The month figure, built from the day entries that are returned, so it always equals what the days show:
-    kwh = their sum, cost = the sum of the costs they have (None if none has one), estimated and partial = any.
-    None when no day has an entry (an asset with no energy figure, or a month that has not begun)."""
+    kwh = their sum, cost = the sum of the costs they have (None if none has one), estimated and partial = any,
+    no_data = every one of them has no data. None when no day has an entry (an asset with no energy figure, or a
+    month that has not begun)."""
     shown = [entry for entry in entries if entry is not None]
     if not shown:
         return None
@@ -47,6 +56,7 @@ def _month_total(entries: list[dict[str, Any] | None]) -> dict[str, Any] | None:
         "cost": sum(costs) if costs else None,
         "estimated": any(entry["estimated"] for entry in shown),
         "partial": any(entry["partial"] for entry in shown),
+        "no_data": all(entry["no_data"] for entry in shown),
     }
 
 
@@ -101,7 +111,7 @@ async def month_costs(db: AsyncSession, month: str | None) -> dict[str, Any]:
                 if day_starts[index] <= now:  # local days after today stay null
                     # A day with no energy hours used nothing: it costs 0 where a rate is in effect that day.
                     on_day = rate_at(tariffs, tree, asset_id, days[index][0]) is not None
-                    entries[index] = _figure(summarize(day_hours, rate_in_effect=on_day))
+                    entries[index] = _figure(summarize(day_hours, rate_in_effect=on_day), day_hours)
         assets.append({
             "asset_id": asset_id,
             "parent_id": tree.nodes[asset_id].parent_id,
@@ -133,7 +143,10 @@ async def costs_csv(
 ) -> Response:
     body = await month_costs(db, month)
     rows = [
-        [asset["path"], day, entry["kwh"], entry["cost"], body["currency"], entry["estimated"], entry["partial"]]
+        [
+            asset["path"], day, entry["kwh"], entry["cost"], body["currency"],
+            entry["estimated"], entry["partial"], entry["no_data"],
+        ]
         for asset in body["assets"]
         for day, entry in zip(body["days"], asset["days"])
         if entry is not None

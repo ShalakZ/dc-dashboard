@@ -323,3 +323,42 @@ async def test_load_tariffs_returns_every_row_as_plain_values(db):
         TariffRow(None, 0.125, date(2026, 1, 1)),
         TariffRow(asset, 0.2, date(2026, 10, 3)),
     ]
+
+
+# ---- has_data is carried through the pricing ------------------------------------------------------
+
+
+def test_an_hour_cost_has_data_unless_it_says_otherwise():
+    assert HourCost(1.0, 0.5, False, False).has_data is True
+    assert list(HourCost.__dataclass_fields__) == ["kwh", "cost", "estimated", "unpriced", "has_data"]
+
+
+def test_cost_by_hour_carries_has_data_for_an_own_meter_and_for_a_sum_of_children():
+    silent = {hour(3, 9): HourEnergy(0.0, True, False), hour(3, 10): HourEnergy(0.0, True, False)}
+    real = {hour(3, 10): HourEnergy(4.0, False, True)}
+    energy = EnergyResult(
+        hours={
+            ROOT: {hour(3, 9): silent[hour(3, 9)], hour(3, 10): HourEnergy(4.0, True, True)},
+            MV2: {hour(3, 9): silent[hour(3, 9)], hour(3, 10): HourEnergy(4.0, True, True)},
+            PANEL1: silent, PANEL2: real,
+        },
+        own=frozenset({PANEL1, PANEL2}),
+    )
+    costs = cost_by_hour(energy, [TariffRow(None, 0.10, date(2026, 1, 1))], TREE, "UTC")
+    assert costs[PANEL1][hour(3, 9)].has_data is False and costs[PANEL1][hour(3, 10)].has_data is False
+    assert costs[PANEL2][hour(3, 10)].has_data is True
+    assert costs[MV2][hour(3, 9)].has_data is False  # only the silent panel contributed
+    assert costs[MV2][hour(3, 10)].has_data is True  # one panel with data is enough
+    assert costs[ROOT][hour(3, 10)].has_data is True
+
+
+def test_the_earlier_hours_of_a_parent_with_a_late_meter_carry_their_childrens_has_data():
+    children = {hour(3, 9): HourEnergy(0.0, True, False), hour(3, 11): HourEnergy(2.0, False, True)}
+    mv2 = {hour(3, 9): HourEnergy(0.0, True, False), hour(3, 11): HourEnergy(5.0, False, True)}
+    energy = EnergyResult(
+        hours={ROOT: mv2, MV2: mv2, PANEL1: children, PANEL2: None},
+        own=frozenset({MV2, PANEL1}),
+        own_from={MV2: hour(3, 11)},
+    )
+    costs = cost_by_hour(energy, [TariffRow(None, 0.10, date(2026, 1, 1))], TREE, "UTC")
+    assert costs[MV2][hour(3, 9)].has_data is False and costs[MV2][hour(3, 11)].has_data is True

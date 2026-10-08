@@ -41,6 +41,9 @@ class HourRow:
 class HourEnergy:
     kwh: float
     estimated: bool
+    # False only for the estimated zero of an hour in which a power-only meter recorded nothing: that 0 is a
+    # placeholder, not a measurement. A parent's hour has data if any child hour contributing to it has.
+    has_data: bool = True
 
 
 @dataclass(frozen=True)
@@ -141,7 +144,7 @@ def _own_hours(
     if not meter.counter and not rows and start is not None and end is not None:
         # A power-only meter that recorded nothing is still an estimate (spec section 6: labeled as estimated
         # wherever it is shown), so every hour of the range says so. A silent counter stays {}: an exact zero.
-        return {bucket: HourEnergy(0.0, True) for bucket in _hours_between(start, end)}
+        return {bucket: HourEnergy(0.0, True, has_data=False) for bucket in _hours_between(start, end)}
     if meter.counter:
         raw = counter_hours(rows, baseline_last)
     else:
@@ -155,7 +158,9 @@ def _sum_hours(parts: Sequence[dict[datetime, HourEnergy]]) -> dict[datetime, Ho
     for part in parts:
         for bucket, hour in part.items():
             seen = merged.get(bucket)
-            merged[bucket] = hour if seen is None else HourEnergy(seen.kwh + hour.kwh, seen.estimated or hour.estimated)
+            merged[bucket] = hour if seen is None else HourEnergy(
+                seen.kwh + hour.kwh, seen.estimated or hour.estimated, seen.has_data or hour.has_data
+            )
     return dict(sorted(merged.items()))
 
 
@@ -199,8 +204,10 @@ def assemble(
             continue
         own_from[asset_id] = first if start is None else max(first, start)
         mine = _own_hours(meter, point_rows, baseline, None if start is None else own_from[asset_id], end)
-        before = {} if start is not None and first <= start else children_sum(asset_id) or {}
-        hours[asset_id] = dict(sorted({**{b: h for b, h in before.items() if b < first}, **mine}.items()))
+        before: dict[datetime, HourEnergy] = {}
+        if start is None or first > start:  # some hours of the range precede its first reading
+            before = {b: h for b, h in (children_sum(asset_id) or {}).items() if b < first}
+        hours[asset_id] = dict(sorted({**before, **mine}.items()))
     return EnergyResult({asset_id: hours[asset_id] for asset_id in tree.preorder()}, frozenset(own), own_from)
 
 

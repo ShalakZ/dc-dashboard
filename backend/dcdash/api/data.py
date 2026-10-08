@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.settings import current_timezone
-from dcdash.core.cost import cost_by_hour, load_tariffs, rate_at, summarize
+from dcdash.core.cost import cost_by_hour, load_tariffs, no_data, rate_at, summarize
 from dcdash.core.energy import hourly_energy, total
 from dcdash.core.metrics import Metric, unit_for
 from dcdash.core.models import Asset, Mapping, PointLatest
@@ -96,12 +96,16 @@ async def summary(asset_id: int, db: AsyncSession = Depends(get_db)) -> dict[str
     # No energy hours today (an exact zero) costs 0 where a rate is in effect today, and shows no cost otherwise.
     rate_today = rate_at(tariffs, tree, asset_id, now.astimezone(ZoneInfo(tz)).date())
     cost = None if priced is None else summarize(priced.values(), rate_in_effect=rate_today is not None)
+    # True when not one hour of today was recorded: the 0 is then the absence of figures, not a measured zero.
+    nothing_recorded = priced is not None and no_data(priced.values())
     return {
         "asset": {"id": asset.id, "name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind},
         "metrics": metrics,
-        "energy_today": None if energy is None else {"kwh": energy.kwh, "estimated": energy.estimated},
+        "energy_today": None if energy is None else {
+            "kwh": energy.kwh, "estimated": energy.estimated, "no_data": nothing_recorded,
+        },
         "cost_today": None if cost is None else {
-            "cost": cost.cost, "estimated": cost.estimated, "partial": cost.partial,
+            "cost": cost.cost, "estimated": cost.estimated, "partial": cost.partial, "no_data": nothing_recorded,
         },
         "currency": await get_currency(db),
     }
