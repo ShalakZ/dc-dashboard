@@ -8,8 +8,8 @@ import io
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from billing_helpers import add_counter, add_tariff, at
-from helpers import insert_readings, login_as, make_asset, make_mapping, make_point, make_source
+from billing_helpers import add_counter, add_tariff, at, set_currency, set_zone
+from helpers import insert_readings, login_as, make_asset, make_mapping, make_point, make_source, settle_rollups
 
 from dcdash.api import widget_data as widget_data_api
 from dcdash.core.db import get_sessionmaker
@@ -34,6 +34,7 @@ PATHS = ("/api/widget-data", "/api/widget-data/csv")
 def clock(monkeypatch):
     monkeypatch.setattr(widget_data_api, "_now", lambda: NOW)
     monkeypatch.setattr("dcdash.api.data._now", lambda: NOW)  # the asset summary the widgets must agree with
+    monkeypatch.setattr("dcdash.api.billing._now", lambda: NOW)  # and the Billing month they must agree with
 
 
 @pytest.fixture
@@ -490,6 +491,55 @@ async def test_energy_series_is_hourly_up_to_48_hours_then_daily(db, session):
     assert costs["points"][0]["value"] is None and costs["points"][-2]["value"] == 0.0
 
 
+@pytest.mark.parametrize("source", ["energy", "cost"])
+@pytest.mark.parametrize(
+    "preset,days,first_day,start",
+    [  # a rolling range covers every local day it touches: the first is partial and labelled by its day
+        ("7d", 8, "2026-03-03T00:00:00+03:00", "2026-03-03T14:00:00+03:00"),
+        ("30d", 31, "2026-02-08T00:00:00+03:00", "2026-02-08T14:00:00+03:00"),
+    ],
+)
+async def test_a_rolling_series_has_one_bucket_per_local_day_it_touches(
+    db, session, source, preset, days, first_day, start
+):
+    asset = await seed_standard(db)
+    data = await run(session, "timeseries", [asset], source, "sum", preset=preset)
+    points = data["series"][0]["points"]
+    assert data["bucket"] == "day" and data["range"]["start"] == start and data["range"]["end"] == TODAY[1]
+    assert len(points) == days and points[0]["ts"] == first_day and points[-1]["ts"] == "2026-03-10T00:00:00+03:00"
+    today = 140.0 if source == "energy" else 70.0  # 14 hours of 10 kWh, at 0.5 a kWh for the cost
+    assert [p["value"] for p in points] == [None] * (days - 2) + [0.0, pytest.approx(today)]
+
+
+async def test_this_month_series_is_one_bucket_per_local_day_so_far(db, session):
+    asset = await seed_standard(db)
+    for source, today in (("energy", 140.0), ("cost", 70.0)):
+        data = await run(session, "timeseries", [asset], source, "sum", preset="this_month")
+        points = data["series"][0]["points"]
+        assert data["bucket"] == "day" and data["range"]["start"] == "2026-03-01T00:00:00+03:00"
+        assert data["range"]["end"] == TODAY[1]
+        assert [p["ts"] for p in points] == [f"2026-03-{d:02d}T00:00:00+03:00" for d in range(1, 11)]
+        assert [p["value"] for p in points] == [None] * 8 + [0.0, pytest.approx(today)]  # Mar 1-8 recorded nothing
+        assert [p["no_data"] for p in points] == [True] * 8 + [False, False]
+
+
+async def test_last_month_series_is_one_bucket_per_local_day_of_the_month(db, session):
+    await set_zone(db, "Asia/Qatar")
+    await set_currency(db, "QAR")
+    # readings at 20:30Z on the 27th (a first hour with no baseline) to 01:30Z on the 28th: 5 hours of 3 kWh on the 28th
+    asset = await add_counter(db, "Meter", at(2026, 2, 27, 20), 6, per_hour=3.0)
+    await add_tariff(db, 2.0, "2026-02-01")
+    await settle_rollups(db)
+    for source, last_day in (("energy", 15.0), ("cost", 30.0)):
+        data = await run(session, "timeseries", [asset], source, "sum", preset="last_month")
+        points = data["series"][0]["points"]
+        assert data["bucket"] == "day" and data["range"]["start"] == "2026-02-01T00:00:00+03:00"
+        assert data["range"]["end"] == "2026-03-01T00:00:00+03:00"
+        assert [p["ts"] for p in points] == [f"2026-02-{d:02d}T00:00:00+03:00" for d in range(1, 29)]
+        assert [p["value"] for p in points] == [None] * 26 + [0.0, pytest.approx(last_day)]
+        assert [p["no_data"] for p in points] == [True] * 26 + [False, False]
+
+
 async def test_a_counters_hours_before_its_first_reading_are_gaps_and_its_first_hour_is_a_measured_zero(db, session):
     asset = await seed_standard(db)
     points = (await run(session, "timeseries", [asset], "energy", "sum", preset="24h"))["series"][0]["points"]
@@ -623,6 +673,66 @@ async def test_a_cost_stat_equals_the_asset_summary_for_a_metered_asset(client, 
     assert (value["estimated"], value["partial"], value["no_data"]) == (
         summary["estimated"], summary["partial"], summary["no_data"]
     )
+
+
+async def billing_total(client, asset, month):
+    response = await client.get("/api/billing/costs", params={"month": month})
+    assert response.status_code == 200, response.text
+    return next(entry for entry in response.json()["assets"] if entry["asset_id"] == asset)["total"]
+
+
+@pytest.mark.parametrize(
+    "per_hour,partial",
+    [(2.0, True), (0.0, False)],
+    ids=["consumption-before-the-rate", "zero-kwh-before-the-rate"],
+)
+async def test_a_last_month_cost_widget_equals_billings_month_total_when_the_rate_starts_after_the_data(
+    client, db, per_hour, partial
+):
+    # February in Asia/Qatar. The meter reports on days 1-14 and is silent from the 15th, on which a site tariff
+    # starts: Billing prices every later (empty) day at 0.00, so its month total is 0.00 and the widget must agree.
+    await set_zone(db, "Asia/Qatar")
+    await set_currency(db, "QAR")
+    asset = await add_counter(db, "Meter", at(2026, 1, 31, 21), 14 * 24, per_hour=per_hour)
+    await add_tariff(db, 0.5, "2026-02-15")
+    await settle_rollups(db)
+    await login_as(client, db, "viewer")
+    total = await billing_total(client, asset, "2026-02")
+    assert (total["cost"], total["partial"], total["no_data"]) == (0.0, partial, False)
+    assert total["kwh"] == pytest.approx(per_hour * (14 * 24 - 1))
+    for source, billed, billed_partial in (("cost", total["cost"], total["partial"]), ("energy", total["kwh"], False)):
+        body = widget_body("stat", [asset], source, "sum", "last_month")  # an energy figure is never partial
+        data = (await client.post("/api/widget-data", json=body)).json()
+        value = data["values"][0]
+        assert (data["range"]["start"], data["range"]["end"]) == (
+            "2026-02-01T00:00:00+03:00", "2026-03-01T00:00:00+03:00"
+        )
+        assert (value["value"], value["estimated"], value["partial"], value["no_data"]) == (
+            pytest.approx(billed), total["estimated"], billed_partial, total["no_data"]
+        )
+        if source == "cost":
+            assert value["value"] == 0.0 and value["value"] is not None  # a priced zero, not a dash
+
+
+async def test_a_last_month_cost_widget_stays_a_dash_where_no_rate_is_ever_in_effect(client, db):
+    await set_zone(db, "Asia/Qatar")
+    asset = await add_counter(db, "Meter", at(2026, 1, 31, 21), 14 * 24, per_hour=2.0)
+    await add_tariff(db, 0.5, "2026-03-05")  # starts after the month: no rate applies on any day of it
+    await settle_rollups(db)
+    await login_as(client, db, "viewer")
+    total = await billing_total(client, asset, "2026-02")
+    assert (total["cost"], total["partial"]) == (None, True)
+    body = widget_body("stat", [asset], "cost", "sum", "last_month")
+    value = (await client.post("/api/widget-data", json=body)).json()["values"][0]
+    assert (value["value"], value["partial"]) == (None, True)
+
+
+async def test_an_empty_window_sums_to_a_float_zero(db, session):
+    await put_setting(db, "general", {"timezone": "Asia/Qatar"})
+    asset = await add_counter(db, "Meter", at(2026, 3, 9, 21), 3, per_hour=2.0)  # read in March, not in February
+    await settle_rollups(db)
+    value = (await run(session, "stat", [asset], "energy", "sum", preset="last_month"))["values"][0]
+    assert value["value"] == 0.0 and isinstance(value["value"], float) and value["no_data"] is True
 
 
 async def test_a_half_hour_zone_is_refused(db, session):

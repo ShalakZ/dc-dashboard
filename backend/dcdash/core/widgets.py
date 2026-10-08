@@ -401,13 +401,19 @@ async def _fill_billing(
             result.values.append(_Value(asset_id, name, path, None, no_data=True))
         elif cost:
             # A period with no hours under a rate in effect costs 0.0, exactly as on Billing and the asset page.
-            total = summarize(hours.values(), rate_in_effect=rate_at(tariffs, tree, asset_id, last_day) is not None)
+            rated = rate_at(tariffs, tree, asset_id, last_day) is not None
+            total = summarize(hours.values(), rate_in_effect=rated)
+            # Billing prices each day on its own and adds the days up. A multi-day window whose recorded hours are all
+            # unpriced (they fall before the rate starts) still ends under a rate, and Billing's later empty days
+            # cost 0.0: so the window costs 0.0 there too, and `partial` keeps saying that some hours had no rate.
+            cost_total = 0.0 if total.cost is None and rated else total.cost
             result.values.append(_Value(
-                asset_id, name, path, total.cost, total.estimated, total.partial, no_data=no_data(hours.values())
+                asset_id, name, path, cost_total, total.estimated, total.partial, no_data=no_data(hours.values())
             ))
         else:
+            kwh = sum((h.kwh for h in hours.values()), 0.0)  # 0.0, not int 0, for an empty window
             result.values.append(_Value(
-                asset_id, name, path, sum(h.kwh for h in hours.values()), any(h.estimated for h in hours.values()),
+                asset_id, name, path, kwh, any(h.estimated for h in hours.values()),
                 no_data=not any(h.has_data for h in hours.values()),
             ))
 
