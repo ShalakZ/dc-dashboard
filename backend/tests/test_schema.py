@@ -9,6 +9,7 @@ EXPECTED_TABLES = {
     "users", "sessions", "sources", "points", "assets", "mappings",
     "readings", "point_latest", "jobs", "audit_log", "settings",
     "scan_scopes", "scans", "scan_findings", "graph_layout",
+    "tariffs", "dashboards", "widgets",
 }
 
 

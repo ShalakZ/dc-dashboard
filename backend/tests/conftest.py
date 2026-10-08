@@ -1,9 +1,11 @@
+import asyncio
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+import asyncpg
 import httpx
 import pytest
 from cryptography.fernet import Fernet
@@ -13,8 +15,8 @@ os.environ.setdefault("DCDASH_SECRET_KEY", Fernet.generate_key().decode())
 
 BACKEND = Path(__file__).resolve().parents[1]
 TABLES = (
-    "audit_log, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, readings, mappings, "
-    "points, assets, sources, sessions, users, settings"
+    "audit_log, widgets, dashboards, tariffs, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, "
+    "readings, mappings, points, assets, sources, sessions, users, settings"
 )
 
 
@@ -59,18 +61,38 @@ async def pool(database_url):
     await pool.close()
 
 
+async def _full_refresh(pool, view: str) -> None:
+    """Refresh a rollup over all time, waiting out a policy job that is refreshing it right now.
+
+    A migration round-trip test re-creates the refresh policies, and a new policy job starts at once, so the next
+    test's fixture can find the view locked ("concurrent refresh"); the lock clears when the job finishes.
+    """
+    for attempt in range(50):
+        try:
+            await pool.execute(f"CALL refresh_continuous_aggregate('{view}', NULL, NULL)")
+            return
+        except asyncpg.LockNotAvailableError:
+            if attempt == 49:
+                raise
+            await asyncio.sleep(0.2)
+
+
 @pytest.fixture
 async def db(pool):
     await pool.execute(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE")
     # TRUNCATE leaves already-materialized rollup rows behind; a full refresh over an empty
     # source drops them. refresh_continuous_aggregate must run outside a transaction, which
     # asyncpg's autocommitting pool.execute satisfies.
-    await pool.execute("CALL refresh_continuous_aggregate('readings_1m', NULL, NULL)")
-    await pool.execute("CALL refresh_continuous_aggregate('readings_1h', NULL, NULL)")
+    await _full_refresh(pool, "readings_1m")
+    await _full_refresh(pool, "readings_1h")
     await pool.execute(
         """INSERT INTO settings (key, value) VALUES ('storage', '{"raw_retention_days": 30,
            "compress_after_days": 7, "rollup_1m_retention_days": 730, "disk_capacity_gb": 100,
            "warn_threshold_pct": 80}'::jsonb) ON CONFLICT (key) DO NOTHING"""
+    )
+    await pool.execute(
+        """INSERT INTO settings (key, value) VALUES ('billing', '{"currency": null}'::jsonb)
+           ON CONFLICT (key) DO NOTHING"""
     )
     return pool
 

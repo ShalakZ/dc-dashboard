@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from tests.helpers import insert_readings, make_point, make_source
+from tests.helpers import insert_readings, make_point, make_source, refresh_policies
 
 
 async def test_readings_is_compressed_and_retained(db):
@@ -66,6 +66,18 @@ async def test_storage_settings_default_row(db):
     assert row["value"]["compress_after_days"] == 7
 
 
+def _head() -> str:
+    """The newest Alembic revision on disk, so adding a migration does not break this file."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    from tests.conftest import BACKEND
+
+    config = Config(str(BACKEND / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND / "migrations"))  # the ini's path is relative to the cwd
+    return ScriptDirectory.from_config(config).get_current_head()
+
+
 def _alembic(*args: str) -> None:
     import os
     import subprocess
@@ -93,5 +105,26 @@ async def test_downgrade_with_compressed_chunks_then_upgrade(db):
         assert await db.fetchval("SELECT count(*) FROM readings WHERE point_id = $1", pid) == 5
     finally:
         _alembic("upgrade", "head")
-    assert await db.fetchval("SELECT version_num FROM alembic_version") == "0003"
+    assert await db.fetchval("SELECT version_num FROM alembic_version") == _head()
     assert await db.fetchval("SELECT count(*) FROM timescaledb_information.continuous_aggregates") == 2
+    assert (await refresh_policies(db))["readings_1m"][0] == timedelta(days=7)  # 0002 was re-run, then 0004 widened it
+
+
+async def test_downgrade_to_0003_restores_the_old_windows_and_drops_the_billing_schema(db):
+    try:
+        _alembic("downgrade", "0003")
+        assert await db.fetchval("SELECT version_num FROM alembic_version") == "0003"
+        left = await db.fetch(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY($1::text[])",
+            ["tariffs", "dashboards", "widgets"],
+        )
+        assert left == []
+        assert await db.fetchval("SELECT count(*) FROM settings WHERE key = 'billing'") == 0
+        policies = await refresh_policies(db)
+        assert policies["readings_1m"] == (timedelta(hours=3), timedelta(minutes=1), timedelta(minutes=1))
+        assert policies["readings_1h"] == (timedelta(days=2), timedelta(hours=1), timedelta(minutes=10))
+    finally:
+        _alembic("upgrade", "head")
+    assert await db.fetchval("SELECT version_num FROM alembic_version") == _head()
+    assert await db.fetchval("SELECT value FROM settings WHERE key = 'billing'") == {"currency": None}
+    assert (await refresh_policies(db))["readings_1h"][0] == timedelta(days=7)

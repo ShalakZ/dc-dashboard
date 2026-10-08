@@ -160,3 +160,26 @@ async def silent_server():
 async def insert_readings(db, point_id: int, start, step_seconds: int, values: list[float]) -> None:
     rows = [(point_id, start + timedelta(seconds=i * step_seconds), v, 0) for i, v in enumerate(values)]
     await db.executemany("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", rows)
+
+
+_REFRESH_POLICIES = """
+    SELECT ca.view_name,
+           (j.config->>'start_offset')::interval AS start_offset,
+           (j.config->>'end_offset')::interval AS end_offset,
+           j.schedule_interval
+    FROM timescaledb_information.jobs j
+    JOIN timescaledb_information.continuous_aggregates ca
+      ON j.hypertable_name IN (ca.view_name, ca.materialization_hypertable_name)
+    WHERE j.proc_name = 'policy_refresh_continuous_aggregate'
+"""
+
+
+async def refresh_policies(db) -> dict[str, tuple[timedelta, timedelta, timedelta]]:
+    """Each continuous aggregate's refresh policy: view name -> (start_offset, end_offset, schedule_interval).
+
+    The offsets are cast to `interval` in SQL, so the test does not depend on how the config JSON spells them.
+    """
+    return {
+        r["view_name"]: (r["start_offset"], r["end_offset"], r["schedule_interval"])
+        for r in await db.fetch(_REFRESH_POLICIES)
+    }
