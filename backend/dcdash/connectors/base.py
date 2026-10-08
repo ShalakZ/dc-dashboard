@@ -3,6 +3,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, ClassVar
+from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
@@ -34,6 +35,32 @@ class ConnectionCheck:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class Claim:
+    """What a probe recognised at an address: a ready-to-store source configuration."""
+
+    connector_type: str
+    config: dict[str, Any]
+    label: str
+
+
+def url_host_port(url: object) -> tuple[str, int | None, str] | None:
+    """(host lowercased, explicit port or None, scheme) of a URL string; None if it is not a usable URL.
+
+    Never raises: junk values, malformed ports and bracketed hosts all give None.
+    """
+    if not isinstance(url, str):
+        return None
+    try:
+        parsed = urlparse(url)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:  # bad port, out of range, malformed [bracketed] host
+        return None
+    if not host or port == 0:
+        return None
+    return host.lower(), port, parsed.scheme
+
+
 class ConnectorError(Exception):
     def __init__(self, status: str, message: str) -> None:
         super().__init__(message)
@@ -46,6 +73,21 @@ class Connector(ABC):
 
     type: ClassVar[str]
     config_schema: ClassVar[type[BaseModel]]
+    default_ports: ClassVar[tuple[int, ...]] = ()
+
+    @classmethod
+    async def probe(cls, host: str, port: int, timeout: float = 3.0) -> Claim | None:
+        """Return a Claim if this connector understands the service at host:port, else None.
+
+        Must only issue requests the connector may already issue (read-only), and must give up
+        after `timeout` seconds. Never raises for an unreachable or unrecognised service.
+        """
+        return None
+
+    @classmethod
+    def endpoint_key(cls, config: dict[str, Any]) -> tuple[str, int, str] | None:
+        """(host lowercased, port, qualifier) identifying the endpoint a configuration points at."""
+        return None
 
     def __init__(self, config: BaseModel, secret: str | None = None) -> None:
         self.config = config

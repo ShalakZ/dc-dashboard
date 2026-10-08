@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,6 +46,7 @@ class SourceOut(BaseModel):
     last_seen: datetime | None
     last_error: str | None
     has_secret: bool
+    origin: str
 
 
 def validated_config(connector_type: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -84,7 +85,12 @@ async def list_connectors() -> list[dict[str, Any]]:
 
 @router.get("/sources", response_model=list[SourceOut], dependencies=[Operator])
 async def list_sources(db: AsyncSession = Depends(get_db)) -> list[Source]:
-    return list((await db.scalars(select(Source).order_by(Source.name))).all())
+    # Discovered sources stay out of the list until at least one of their points is mapped.
+    mapped = exists(
+        select(Point.id).join(Mapping, Mapping.point_id == Point.id).where(Point.source_id == Source.id)
+    )
+    query = select(Source).where(or_(Source.origin == "manual", mapped)).order_by(Source.name)
+    return list((await db.scalars(query)).all())
 
 
 @router.post("/sources", response_model=SourceOut, status_code=201, dependencies=[Admin])

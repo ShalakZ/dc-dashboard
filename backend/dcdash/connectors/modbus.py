@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timezone
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.exceptions import ModbusException, ModbusIOException
 from pymodbus.pdu.mei_message import ReadDeviceInformationRequest
@@ -13,6 +14,7 @@ from pymodbus.pdu.mei_message import ReadDeviceInformationRequest
 from dcdash.connectors.base import (
     BAD,
     GOOD,
+    Claim,
     ConnectionCheck,
     Connector,
     ConnectorError,
@@ -36,6 +38,63 @@ class ModbusConfig(BaseModel):
 class ModbusConnector(Connector):
     type = "modbus"
     config_schema = ModbusConfig
+    default_ports = (502,)
+
+    @classmethod
+    async def probe(cls, host: str, port: int, timeout: float = 3.0) -> Claim | None:
+        """Claim a Modbus TCP device: it answers function code 43/14, or at least a FC 3 read.
+
+        The whole probe, connect included, is bounded by `timeout`. A TCP service that accepts the
+        connection and never answers is therefore dropped after `timeout`, not 2x or 3x of it.
+        """
+        try:
+            config = ModbusConfig(host=host, port=port)  # the stored config keeps the default timeout
+        except ValidationError:
+            return None
+        # retries=0: a probe asks once; the whole scan is repeatable, a dead host must stay cheap.
+        client = AsyncModbusTcpClient(host, port=port, timeout=min(max(timeout, 0.5), 30), retries=0)
+        try:
+            return await asyncio.wait_for(cls._claim(client, config, timeout), timeout)
+        except (asyncio.TimeoutError, ConnectorError, ModbusException, OSError):
+            return None
+        finally:
+            client.close()
+
+    @classmethod
+    async def _claim(cls, client: AsyncModbusTcpClient, config: ModbusConfig, timeout: float) -> Claim | None:
+        if not await client.connect():
+            return None
+        try:
+            # Half the budget: a device that drops function code 43 silently still gets its FC 3 try.
+            vendor, product = await asyncio.wait_for(cls(config)._identify(client), timeout / 2)
+        except (ConnectorError, asyncio.TimeoutError, ModbusException, OSError):
+            vendor = product = None
+        label = f"Modbus device at {config.host}:{config.port}"
+        if vendor or product:
+            label = f"Modbus {vendor or '?'} {product or ''} at {config.host}:{config.port}".replace("  ", " ")
+        elif not await cls._answers_fc3(client, config.unit_id):
+            return None
+        return Claim("modbus", config.model_dump(mode="json"), label)
+
+    @staticmethod
+    async def _answers_fc3(client: AsyncModbusTcpClient, unit_id: int) -> bool:
+        """True if the device sends any Modbus reply (data or an exception) to a one-register read."""
+        try:
+            rr = await client.read_holding_registers(0, count=1, slave=unit_id)
+        except (ModbusException, OSError):
+            return False
+        return not isinstance(rr, ModbusIOException)
+
+    @classmethod
+    def endpoint_key(cls, config: dict[str, Any]) -> tuple[str, int, str] | None:
+        if not isinstance(config, dict):
+            return None
+        host = config.get("host")
+        port = _bounded_int(config.get("port", 502), 1, 65535)
+        unit_id = _bounded_int(config.get("unit_id", 1), 0, 247)
+        if not isinstance(host, str) or not host or port is None or unit_id is None:
+            return None
+        return host.lower(), port, f"unit{unit_id}"
 
     def __init__(self, config: ModbusConfig, secret: str | None = None) -> None:
         super().__init__(config, secret)
@@ -167,6 +226,15 @@ class ModbusConnector(Connector):
             else PointValue(address=a, ts=ts, value=None, quality=BAD)
             for a in addresses
         ]
+
+
+def _bounded_int(value: object, low: int, high: int) -> int | None:
+    """An int (or ASCII digit string) within [low, high]; None for anything else. Never raises."""
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        return None
+    return value
 
 
 def _is_no_response(exc: BaseException) -> bool:

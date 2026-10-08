@@ -3,7 +3,8 @@ import logging
 
 from dcdash import connectors  # noqa: F401  (registers built-in connectors)
 from dcdash.collector.housekeeping import housekeeping_loop
-from dcdash.collector.jobs import fail_stale_jobs, run_pending_jobs
+from dcdash.collector.jobs import fail_stale_jobs, run_job_loop
+from dcdash.collector.networks import publish_networks
 from dcdash.collector.scheduler import Scheduler
 from dcdash.collector.writer import Writer
 from dcdash.connectors.base import ConnectorFactory, create_connector
@@ -12,7 +13,6 @@ from dcdash.core.pg import CONFIG_CHANNEL, JOBS_CHANNEL, create_pool, listen_for
 
 log = logging.getLogger(__name__)
 
-JOB_POLL_SECONDS = 5
 RETRY_SECONDS = 2
 
 
@@ -24,6 +24,7 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
     reload_needed = asyncio.Event()
     jobs_ready = asyncio.Event()
     await fail_stale_jobs(pool)
+    await publish_networks(pool)
 
     def catch_up() -> None:
         reload_needed.set()
@@ -40,20 +41,6 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
                 await asyncio.sleep(RETRY_SECONDS)
                 reload_needed.set()
 
-    async def jobs_loop() -> None:
-        while True:
-            try:
-                # The timeout also picks up jobs whose notification was missed.
-                await asyncio.wait_for(jobs_ready.wait(), timeout=JOB_POLL_SECONDS)
-            except TimeoutError:
-                pass
-            jobs_ready.clear()
-            try:
-                await run_pending_jobs(pool, factory)
-            except Exception:
-                log.exception("job runner failed, retrying")
-                await asyncio.sleep(RETRY_SECONDS)
-
     handlers = {
         CONFIG_CHANNEL: lambda _payload: reload_needed.set(),
         JOBS_CHANNEL: lambda _payload: jobs_ready.set(),
@@ -62,7 +49,7 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
         asyncio.create_task(listen_forever(get_settings().database_url, handlers, catch_up)),
         asyncio.create_task(writer.run()),
         asyncio.create_task(reload_loop()),
-        asyncio.create_task(jobs_loop()),
+        asyncio.create_task(run_job_loop(pool, factory, jobs_ready, stop)),
         asyncio.create_task(housekeeping_loop(pool, stop=stop)),
     ]
     try:

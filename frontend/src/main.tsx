@@ -8,8 +8,11 @@ import { RequireAuth, RequireRole } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
+import { AuditPage } from "./pages/AuditPage";
+import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PasswordPage } from "./pages/PasswordPage";
+import { ScansPage } from "./pages/ScansPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { SourcePointsPage } from "./pages/SourcePointsPage";
@@ -30,9 +33,12 @@ export function App() {
         <Route path="/assets/:id" element={<AssetPage />} />
         <Route path="/sources" element={<SourcesPage />} />
         <Route path="/sources/:id/points" element={<SourcePointsPage />} />
+        <Route path="/scans" element={<RequireRole min="operator"><ScansPage /></RequireRole>} />
+        <Route path="/discovery" element={<RequireRole min="operator"><DiscoveryPage /></RequireRole>} />
         <Route path="/users" element={<RequireRole min="admin"><UsersPage /></RequireRole>} />
         <Route path="/settings" element={<RequireRole min="admin"><SettingsPage /></RequireRole>} />
         <Route path="/storage" element={<RequireRole min="admin"><StoragePage /></RequireRole>} />
+        <Route path="/audit" element={<RequireRole min="admin"><AuditPage /></RequireRole>} />
         <Route path="/password" element={<PasswordPage />} />
       </Route>
     </Routes>

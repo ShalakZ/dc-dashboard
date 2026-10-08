@@ -13,8 +13,8 @@ os.environ.setdefault("DCDASH_SECRET_KEY", Fernet.generate_key().decode())
 
 BACKEND = Path(__file__).resolve().parents[1]
 TABLES = (
-    "audit_log, jobs, point_latest, readings, mappings, points, assets, "
-    "sources, sessions, users, settings"
+    "audit_log, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, readings, mappings, "
+    "points, assets, sources, sessions, users, settings"
 )
 
 

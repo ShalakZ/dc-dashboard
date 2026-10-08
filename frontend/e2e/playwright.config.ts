@@ -13,5 +13,13 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "journey", testMatch: "journey.spec.ts", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "discovery",
+      testMatch: "discovery.spec.ts",
+      dependencies: ["journey"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
+    },
+  ],
 });

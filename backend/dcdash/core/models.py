@@ -39,6 +39,7 @@ class Source(Base):
     status: Mapped[str] = mapped_column(default="unknown")
     last_seen: Mapped[datetime | None] = mapped_column(TZ)
     last_error: Mapped[str | None]
+    origin: Mapped[str] = mapped_column(default="manual", server_default="manual")
 
     @property
     def has_secret(self) -> bool:
@@ -93,3 +94,55 @@ class Job(Base):
     requested_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(TZ)
+
+
+class ScanScope(Base):
+    __tablename__ = "scan_scopes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    targets: Mapped[list[str]] = mapped_column(JSONB)
+    ports: Mapped[list[int]] = mapped_column(JSONB)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+
+
+class Scan(Base):
+    __tablename__ = "scans"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope_id: Mapped[int | None] = mapped_column(ForeignKey("scan_scopes.id", ondelete="SET NULL"))
+    scope_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(default="queued", server_default="queued")
+    stage: Mapped[str | None]
+    progress: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    started_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(TZ)
+    error: Mapped[str | None]
+
+
+class ScanFinding(Base):
+    __tablename__ = "scan_findings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"))
+    host: Mapped[str]
+    port: Mapped[int]
+    source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id", ondelete="SET NULL"))
+    connector_type: Mapped[str | None]
+    outcome: Mapped[str]
+    detail: Mapped[str] = mapped_column(default="", server_default="")
+
+
+class GraphLayout(Base):
+    __tablename__ = "graph_layout"
+    node_id: Mapped[str] = mapped_column(primary_key=True)
+    x: Mapped[float]
+    y: Mapped[float]
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    action: Mapped[str]
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    ts: Mapped[datetime] = mapped_column(TZ, server_default=func.now())

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     secret_key: str
     session_hours: int = 12
     timezone: str = "UTC"
+    scan_max_hosts: int = Field(1024, ge=1, le=65536)
+    scan_extra_ports: str = ""
 
     @field_validator("timezone")
     @classmethod

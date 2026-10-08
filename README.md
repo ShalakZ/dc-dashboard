@@ -5,10 +5,12 @@ hierarchy you define, and serves live values, history and energy use.
 
 Design: `docs/superpowers/specs/2026-10-06-dc-dashboard-design.md`
 
-Status: Phase 1C. The web UI is served at `http://localhost/`; the API is
+Status: Phase 2 (discovery). The web UI is served at `http://localhost/`; the API is
 proxied at `http://localhost/api` (interactive docs at `/api/docs`). Sources
 can be the simulator, OPC UA servers or Modbus TCP devices; readings are kept
-in raw, 1-minute and 1-hour tiers (see "Storage tiers").
+in raw, 1-minute and 1-hour tiers (see "Storage tiers"). An admin can scan a
+network for sources and map what is found to assets by drag and drop (see
+"Discovery").
 
 ## Run it
 
@@ -81,6 +83,8 @@ UI screens, besides Assets, Sources and Points:
   capacity is a setting: set it to the size of the volume holding the database. The page also edits
   raw retention, compression delay, 1-minute rollup retention and the warning threshold.
 - **Password** (everyone): change your own password; your other sessions are signed out.
+- **Scans** and **Discovery** (operators and admins; only admins can change anything): see "Discovery".
+- **Audit** (admin): the read-only audit log, newest first, 50 entries per page.
 
 ### Protocols
 
@@ -147,6 +151,63 @@ one hour, `1h` beyond; the `series` response carries the chosen `tier` and the c
 continuous aggregates and policies configured from the Storage settings; no application code ever
 deletes readings.
 
+## Discovery
+
+Discovery finds sources on the network and lets an admin map their points to assets without typing
+addresses. Everything it does toward the network is read-only: a TCP connect, then the same
+data-retrieval requests the connectors already use, nothing else.
+
+1. **Scan scopes** (Scans, admin): a named list of targets (CIDR ranges, host names or addresses,
+   URLs) and TCP ports (at most 20). A new scope is pre-filled from the collector's own network
+   interfaces, clamped to the /24 around its address, and from the ports the connectors know.
+2. **Confirmation.** Pressing Scan shows "N hosts × M ports (P probes)" and asks for confirmation on
+   every run. The API enforces it: the start request must carry the host count the API computed
+   itself, or nothing runs. It must also carry the digest the preview returned (a hash of the scope's
+   targets and ports), so a scope edited after it was previewed cannot be started unconfirmed: the
+   page asks you to confirm again.
+3. **What a scan does.** The collector tries a TCP connect to every host and port, then offers each
+   open endpoint to every connector's read-only probe (first claim wins; an endpoint nobody claims is
+   listed as an unidentified service), then browses the claimed sources to find their points. The page
+   shows progress and, when done, one finding per open endpoint.
+4. **Discovered sources are disabled.** A discovered source is created disabled and is not polled,
+   tested or listed under Sources until at least one of its points is mapped; mapping enables it. A
+   source you added by hand at the same address is reused, never duplicated. A re-scan reuses existing
+   source rows untouched (name, config, secret, enabled, origin) and only refreshes their points and
+   findings. A source that answers "authentication failed" is marked as needing credentials and the scan
+   carries on.
+5. **The graph** (Discovery). Discovered sources, clusters and points are on the left with dashed
+   borders; your assets are on the right with solid ones; mapped points are joined to their asset by a
+   solid edge. Sources and clusters start collapsed: use the + / − button on a node to expand or
+   collapse it. Points are grouped into suggested clusters (for example one per panel). Dragging nodes
+   saves their positions for everyone (admin); an operator's arrangement lasts for the session.
+6. **Mapping by drag and drop** (admin). Drop a cluster or a point on an asset to open the **Review
+   mappings** dialog: one row per unmapped point with a guessed metric, scale and interval, all
+   editable; rows whose metric the asset already has start unchecked, and a conflicting selection
+   cannot be committed. "Create mappings" commits every checked row in one transaction. Drop a cluster
+   on empty canvas and a bar offers "Create asset from this cluster", which opens the same dialog with
+   a new asset named after the cluster and a parent of your choice; the bar stays until you use or
+   dismiss it. The same dialog opens from keyboard-reachable buttons, for admins only: **Map…** on
+   unmapped clusters and unmapped points, **New asset…** on clusters only. The Ungrouped bag and fully
+   mapped clusters get neither.
+7. **Credentials.** Click a source that shows "needs credentials" (or press its **Details** button) to open its side panel, enter the
+   secret (and the user name for OPC UA) and save: the source is browsed again. Secrets are stored
+   encrypted and never returned by the API.
+8. **Audit log** (Audit, admin). Scope changes, scan start and finish and every accepted mapping are
+   recorded with the user and time. Phase 1 actions (user management, source edits and so on) are not
+   audited.
+
+Environment variables (set them in `.env`; both are optional):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DCDASH_SCAN_MAX_HOSTS` | `1024` | Most hosts a single scan may cover; a larger scope is rejected |
+| `DCDASH_SCAN_EXTRA_PORTS` | empty | Comma-separated ports offered, besides the connectors' own, when a new scope is pre-filled. For the dev simulator set it to `5020` (its Modbus port), or type `5020` into the scope form |
+
+Scan limits: at most 64 TCP connects at a time and 200 attempts per second, a 1 second connect
+timeout, a 3 second timeout per connector probe, 4 sources browsed at a time. Targets are IPv4 only.
+In the dev stack, a scope with targets `simulator` and ports `9000, 4840, 5020` finds all three
+simulator protocols.
+
 ## Develop
 
 ```bash
@@ -173,14 +234,36 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 
 ### End-to-end test
 
-`frontend/e2e/journey.spec.ts` drives a real browser through first-run setup, adding the simulator,
-mapping two points and watching live values, against the dev-profile stack on `http://localhost/`.
-It needs a fresh database (setup must still be pending).
+Two specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+(`frontend/e2e/playwright.config.ts` runs them in this order):
+
+- `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
+  points and watching live values.
+- `discovery.spec.ts` (after it, at 1600×1000) scans the simulator's network, expands the OPC UA
+  source into its ten panel clusters, maps `LVP01` onto an existing asset and `LVP02` onto a new one
+  by real mouse drags, creates `LVP03`...`LVP10` through the buttons, then checks through the API that
+  all 60 points are mapped (six distinct metrics per asset), that a live value arrives, and that the
+  Audit page shows the scope, the scan and ten accepted mappings.
+
+It needs a fresh database (setup must still be pending), so the run starts the stack from scratch.
 
     E2E_I_UNDERSTAND_DATA_LOSS=yes scripts/e2e.sh     # deletes the local dbdata volume, then runs it
 
+`scripts/e2e.sh` deletes the database volume of the normal stack. To leave your own data alone, run
+the same steps in a separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal
+stack first, because both use ports 80 and 443):
+
+    docker compose -p dcdash_e2e --profile dev down -v --remove-orphans
+    docker compose -p dcdash_e2e --profile dev up -d --build
+    (cd frontend && npm run e2e)
+    docker compose -p dcdash_e2e --profile dev down -v
+
 or, with a fresh stack already running: `cd frontend && npx playwright test -c e2e/playwright.config.ts`.
 First time only: `npx playwright install chromium`. Reports: `npx playwright show-report`.
+
+The isolated `-p dcdash_e2e` run builds the same `dcdash-backend:local` and `dcdash-web:local` images
+as the normal stack, so it re-tags them: rebuild your normal stack afterwards (`docker compose
+--profile dev up -d --build`) to be sure it runs your own code.
 
 ### Housekeeping
 

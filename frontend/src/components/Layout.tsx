@@ -10,9 +10,12 @@ export function Layout() {
         <strong>DC Dashboard</strong>
         <NavLink to="/assets">Assets</NavLink>
         {hasRole("operator") && <NavLink to="/sources">Sources</NavLink>}
+        {hasRole("operator") && <NavLink to="/scans">Scans</NavLink>}
+        {hasRole("operator") && <NavLink to="/discovery">Discovery</NavLink>}
         {hasRole("admin") && <NavLink to="/users">Users</NavLink>}
         {hasRole("admin") && <NavLink to="/settings">Settings</NavLink>}
         {hasRole("admin") && <NavLink to="/storage">Storage</NavLink>}
+        {hasRole("admin") && <NavLink to="/audit">Audit</NavLink>}
         <span className="spacer" />
         <span className="muted">{user?.username} ({user?.role})</span>
         <NavLink to="/password">Password</NavLink>

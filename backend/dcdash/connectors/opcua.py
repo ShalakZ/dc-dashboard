@@ -8,7 +8,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+from urllib.parse import urlparse
 
 from asyncua import Client, Node, ua
 from pydantic import BaseModel, Field
@@ -16,12 +17,14 @@ from pydantic import BaseModel, Field
 from dcdash.connectors.base import (
     BAD,
     GOOD,
+    Claim,
     ConnectionCheck,
     Connector,
     ConnectorError,
     PointDescriptor,
     PointValue,
     register,
+    url_host_port,
 )
 
 _AUTH_CODES = {
@@ -43,6 +46,16 @@ class OpcUaConfig(BaseModel):
     client_key: str = "/certs/opcua-client-key.pem"
 
 
+def _reported_path(endpoint_url: object) -> str:
+    """The path of the EndpointUrl a server reports; empty if it is null or malformed."""
+    if not isinstance(endpoint_url, str):
+        return ""
+    try:
+        return urlparse(endpoint_url).path
+    except ValueError:
+        return ""
+
+
 def _translate(exc: BaseException) -> ConnectorError:
     if isinstance(exc, ua.UaStatusCodeError) and exc.code in _AUTH_CODES:
         return ConnectorError("auth_failed", str(exc))
@@ -57,6 +70,30 @@ def _translate(exc: BaseException) -> ConnectorError:
 class OpcUaConnector(Connector):
     type = "opcua"
     config_schema = OpcUaConfig
+    default_ports = (4840,)
+
+    @classmethod
+    async def probe(cls, host: str, port: int, timeout: float = 3.0) -> Claim | None:
+        client = Client(f"opc.tcp://{host}:{port}", timeout=timeout)
+        try:
+            endpoints = await asyncio.wait_for(client.connect_and_get_server_endpoints(), timeout)
+        except Exception:  # noqa: BLE001 - not an OPC UA server, or unreachable
+            return None
+        if not endpoints:
+            return None
+        path = _reported_path(getattr(endpoints[0], "EndpointUrl", None))
+        config = OpcUaConfig(endpoint=f"opc.tcp://{host}:{port}{path}").model_dump(mode="json")
+        return Claim("opcua", config, f"OPC UA server at {host}:{port}")
+
+    @classmethod
+    def endpoint_key(cls, config: dict[str, Any]) -> tuple[str, int, str] | None:
+        if not isinstance(config, dict):
+            return None
+        found = url_host_port(config.get("endpoint"))
+        if found is None:
+            return None
+        host, port, _scheme = found
+        return host, port if port is not None else 4840, ""
 
     def __init__(self, config: OpcUaConfig, secret: str | None = None) -> None:
         super().__init__(config, secret)

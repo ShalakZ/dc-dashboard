@@ -5,11 +5,16 @@ from typing import Any
 
 import asyncpg
 
+from dcdash.collector.browse import browse_source, connector_for
+from dcdash.collector.scan import run_scan
 from dcdash.collector.scheduler import mark_source
-from dcdash.connectors.base import Connector, ConnectorFactory, create_connector
-from dcdash.core.crypto import decrypt
+from dcdash.connectors.base import ConnectorFactory, create_connector
+from dcdash.core.audit import audit_pool
 
 log = logging.getLogger(__name__)
+
+JOB_WORKERS = 4
+JOB_POLL_SECONDS = 5
 
 _CLAIM = """
     UPDATE jobs SET status = 'running'
@@ -19,25 +24,11 @@ _CLAIM = """
     )
     RETURNING id, kind, params
 """
-_UPSERT_POINT = """
-    INSERT INTO points (source_id, address, name, data_type, unit_hint)
-    VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT (source_id, address) DO UPDATE
-        SET name = EXCLUDED.name, data_type = EXCLUDED.data_type, unit_hint = EXCLUDED.unit_hint
-"""
-
-
-async def _connector_for(pool: asyncpg.Pool, source_id: int, factory: ConnectorFactory) -> Connector:
-    row = await pool.fetchrow("SELECT connector_type, config, secret FROM sources WHERE id = $1", source_id)
-    if row is None:
-        raise LookupError(f"source {source_id} not found")
-    secret = decrypt(row["secret"]) if row["secret"] else None
-    return factory(row["connector_type"], row["config"], secret)
 
 
 async def _test_source(pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFactory) -> dict[str, Any]:
     source_id = params["source_id"]
-    connector = await _connector_for(pool, source_id, factory)
+    connector = await connector_for(pool, source_id, factory)
     try:
         check = await connector.test()
     finally:
@@ -47,20 +38,15 @@ async def _test_source(pool: asyncpg.Pool, params: dict[str, Any], factory: Conn
 
 
 async def _browse_source(pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFactory) -> dict[str, Any]:
-    source_id = params["source_id"]
-    connector = await _connector_for(pool, source_id, factory)
-    try:
-        descriptors = await connector.browse()
-    finally:
-        await connector.close()
-    await pool.executemany(
-        _UPSERT_POINT,
-        [(source_id, d.address, d.name, d.data_type, d.unit_hint) for d in descriptors],
-    )
-    return {"count": len(descriptors)}
+    return {"count": await browse_source(pool, params["source_id"], factory)}
 
 
-_HANDLERS = {"test_source": _test_source, "browse_source": _browse_source}
+async def _scan(pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFactory) -> dict[str, Any]:
+    await run_scan(pool, params["scan_id"], factory)
+    return {"scan_id": params["scan_id"]}
+
+
+_HANDLERS = {"test_source": _test_source, "browse_source": _browse_source, "scan": _scan}
 
 
 async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFactory) -> None:
@@ -100,10 +86,73 @@ async def run_pending_jobs(
     return processed
 
 
+async def _wait_for_work(wake: asyncio.Event, stop: asyncio.Event | None, poll_seconds: float) -> None:
+    """Sleep until `wake` is set, `stop` is set, or `poll_seconds` pass (a NOTIFY can be missed)."""
+    waiting = {asyncio.ensure_future(wake.wait())}
+    if stop is not None:
+        waiting.add(asyncio.ensure_future(stop.wait()))
+    try:
+        await asyncio.wait(waiting, timeout=poll_seconds, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for future in waiting:
+            future.cancel()
+        await asyncio.gather(*waiting, return_exceptions=True)
+    # Cleared after waking and before the next claim: a job queued from now on sets it again, and a
+    # job queued before is already visible to that claim. Every idle worker is woken by one set().
+    wake.clear()
+
+
+async def run_job_loop(
+    pool: asyncpg.Pool,
+    factory: ConnectorFactory = create_connector,
+    wake: asyncio.Event | None = None,
+    stop: asyncio.Event | None = None,
+    workers: int = JOB_WORKERS,
+    poll_seconds: float = JOB_POLL_SECONDS,
+) -> None:
+    """Run jobs with `workers` long-lived workers until `stop` is set (or this task is cancelled).
+
+    Each worker claims a job, runs it, and when the queue is empty sleeps until `wake` is set or
+    `poll_seconds` pass. A worker busy with a long scan therefore never holds up the others, and a
+    job queued while the scan runs is picked up at once. On `stop`, idle workers return and busy
+    ones finish their job first.
+    """
+    wake = wake if wake is not None else asyncio.Event()
+
+    async def worker() -> None:
+        while stop is None or not stop.is_set():
+            try:
+                job = await pool.fetchrow(_CLAIM)
+                if job is not None:
+                    await _run_one(pool, job, factory)
+                    continue
+            except Exception:
+                log.exception("job worker failed, retrying")
+            await _wait_for_work(wake, stop, poll_seconds)
+
+    await asyncio.gather(*(worker() for _ in range(workers)))
+
+
+# A running scan died with the old collector. So did a queued scan whose job is gone, finished or
+# failed (including a job that was claimed and then failed just above): nothing will ever run it.
+# A queued scan whose job is still pending stays queued and will run.
+_FAIL_STALE_SCANS = """
+    UPDATE scans SET status = 'failed', error = 'collector restarted', finished_at = now()
+    WHERE status = 'running'
+       OR (status = 'queued' AND NOT EXISTS (
+            SELECT 1 FROM jobs
+            WHERE kind = 'scan' AND status IN ('pending', 'running') AND params->>'scan_id' = scans.id::text))
+    RETURNING id, started_by, progress
+"""
+
+
 async def fail_stale_jobs(pool: asyncpg.Pool) -> int:
-    """Fail jobs a previous collector process left in the running state."""
+    """Fail jobs, and the scans that depend on them, which a previous collector process left unfinished."""
     tag = await pool.execute(
         "UPDATE jobs SET status = 'failed', result = $1, finished_at = now() WHERE status = 'running'",
         {"error": "collector restarted"},
     )
+    for scan in await pool.fetch(_FAIL_STALE_SCANS):  # after the jobs update: it orphans claimed scan jobs
+        detail = {"scan_id": scan["id"], "status": "failed", **(scan["progress"] or {}), "error": "collector restarted"}
+        await audit_pool(pool, scan["started_by"], "scan.finished", detail)
     return int(tag.split()[-1])

@@ -7,7 +7,7 @@ export interface Asset { id: number; parent_id: number | null; name: string; kin
 export interface AssetIn { name: string; parent_id: number | null; kind: string; sort_order: number }
 
 export interface Source {
-  id: number; name: string; connector_type: string; config: Record<string, unknown>;
+  id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";
   enabled: boolean; status: string; last_seen: string | null; last_error: string | null; has_secret: boolean;
 }
 export interface SourceIn {
@@ -89,3 +89,36 @@ export interface StorageStats {
   warn: boolean;
   settings: StorageSettings;
 }
+
+export type ScanStatus = "queued" | "running" | "done" | "failed";
+export interface ScanCounters { hosts?: number; pairs?: number; checked?: number; open?: number; claimed?: number; points?: number; unidentified?: number; needs_credentials?: number }
+export interface Scope { id: number; name: string; targets: string[]; ports: number[]; created_at: string }
+export interface ScopeIn { name: string; targets: string[]; ports: number[] }
+export interface ScopePreview { hosts: number; ports: number; pairs: number; digest: string }
+export interface ScopeSuggestions { targets: string[]; ports: number[] }
+export interface Finding { host: string; port: number; source_id: number | null; connector_type: string | null; outcome: "claimed" | "needs_credentials" | "unclaimed"; detail: string }
+export interface ScanSummary { id: number; scope_id: number | null; scope_name: string; status: ScanStatus; stage: "sweep" | "probe" | "browse" | null; progress: ScanCounters; created_at: string; finished_at: string | null; error: string | null }
+export interface ScanDetail extends ScanSummary { scope_snapshot: Record<string, unknown>; findings: Finding[] }
+export interface Suggestion { metric: Metric; scale: number; interval_seconds: number; custom_unit: string | null }
+export interface GraphPoint { id: number; address: string; name: string; unit_hint: string | null; mapping_id: number | null; asset_id: number | null; mapped_metric: Metric | null; suggestion: Suggestion }
+export interface GraphCluster { key: string; points: GraphPoint[] }
+export interface GraphSource {
+  id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";
+  enabled: boolean; status: string; last_error: string | null; has_secret: boolean; needs_credentials: boolean;
+  point_count: number; clusters: GraphCluster[]; ungrouped: GraphPoint[];
+}
+export interface GraphModel {
+  sources: GraphSource[];
+  unidentified: { host: string; port: number; scan_id: number }[];
+  assets: Pick<Asset, "id" | "parent_id" | "name" | "kind">[];
+  layout: Record<string, { x: number; y: number }>;
+}
+export interface AcceptPointIn { point_id: number; metric: Metric; scale: number; interval_seconds: number | null; custom_unit: string | null }
+/** Exactly one target: an existing asset or a new one. The `never` keeps a body that names both from compiling. */
+export type AcceptIn = { source_id: number; points: AcceptPointIn[] } & (
+  | { asset_id: number; new_asset?: never }
+  | { new_asset: { name: string; parent_id: number | null }; asset_id?: never }
+);
+export interface AcceptResult { asset_id: number; mapping_ids: number[] }
+export interface AuditEntry { id: number; user_id: number | null; username: string | null; action: string; detail: Record<string, unknown>; ts: string }
+export interface AuditPage { total: number; items: AuditEntry[] }

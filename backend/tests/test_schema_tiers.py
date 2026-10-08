@@ -93,5 +93,5 @@ async def test_downgrade_with_compressed_chunks_then_upgrade(db):
         assert await db.fetchval("SELECT count(*) FROM readings WHERE point_id = $1", pid) == 5
     finally:
         _alembic("upgrade", "head")
-    assert await db.fetchval("SELECT version_num FROM alembic_version") == "0002"
+    assert await db.fetchval("SELECT version_num FROM alembic_version") == "0003"
     assert await db.fetchval("SELECT count(*) FROM timescaledb_information.continuous_aggregates") == 2

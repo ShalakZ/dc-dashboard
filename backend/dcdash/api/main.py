@@ -7,7 +7,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 
-from dcdash.api import assets, auth, data, jobs, mappings, settings, sources, storage, stream, users
+from dcdash.api import (
+    assets, audit, auth, data, discovery, jobs, mappings, scans, settings, sources, storage, stream, users,
+)
 from dcdash.api.settings import seed_general
 from dcdash.api.stream import Broadcaster
 from dcdash.core.config import get_settings
@@ -80,6 +82,7 @@ def create_app() -> FastAPI:
     for router in (
         auth.router, jobs.router, sources.router, assets.router,
         mappings.router, data.router, stream.router, users.router, settings.router, storage.router,
+        scans.router, discovery.router, audit.router,
     ):
         app.include_router(router)
     return app
