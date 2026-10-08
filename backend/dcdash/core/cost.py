@@ -120,13 +120,23 @@ def cost_by_hour(
     return {asset_id: priced(asset_id) for asset_id in energy.hours}
 
 
-def summarize(hours: Iterable[HourCost]) -> Cost:
+def summarize(hours: Iterable[HourCost], *, rate_in_effect: bool = False) -> Cost:
     """kwh = sum; cost = sum of the priced hours (None if there are none); estimated = any hour; partial =
-    any hour that consumed energy without a rate."""
-    kwh, cost, estimated, partial = 0.0, None, False, False
+    any hour that consumed energy without a rate.
+
+    A period with no hours at all (a day lost to a comms outage, the days before collection started, a silent
+    counter meter) consumed nothing: spec 6 counts it as 0, and spec 10.2 makes cost null only when no hour of
+    the period has a rate. So when `hours` is empty and `rate_in_effect` is True the figure is a priced zero,
+    Cost(0.0, 0.0, False, False), not a dash. Callers pass
+    rate_in_effect = rate_at(tariffs, tree, asset_id, <last local day of the period>) is not None.
+    Any non-empty `hours` ignores the flag."""
+    kwh, cost, estimated, partial, empty = 0.0, None, False, False, True
     for hour in hours:
+        empty = False
         kwh += hour.kwh
         cost = _add(cost, hour.cost)
         estimated = estimated or hour.estimated
         partial = partial or hour.unpriced
+    if empty and rate_in_effect:
+        return Cost(0.0, 0.0, False, False)
     return Cost(kwh, cost, estimated, partial)

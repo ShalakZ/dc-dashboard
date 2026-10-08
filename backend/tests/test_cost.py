@@ -1,4 +1,5 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -174,7 +175,8 @@ def test_a_parent_skips_children_that_have_no_figure():
 def test_a_meter_with_no_readings_is_an_empty_figure_not_none():
     costs = cost_by_hour(engine({PANEL1: {}}), [TariffRow(None, 0.10, date(2026, 1, 1))], TREE, "UTC")
     assert costs[PANEL1] == {} and costs[MV2] == {}
-    assert summarize(costs[PANEL1].values()) == Cost(kwh=0.0, cost=None, estimated=False, partial=False)
+    # the caller says no rate is in effect, so there is nothing to price: a dash
+    assert summarize(costs[PANEL1].values(), rate_in_effect=False) == Cost(0.0, None, False, False)
 
 
 def test_a_parent_with_its_own_meter_is_priced_from_that_meter_not_its_children():
@@ -210,8 +212,61 @@ def test_summarize_adds_priced_hours_and_flags_estimates_and_gaps():
     assert figure == Cost(kwh=3.0, cost=0.5, estimated=True, partial=True)
 
 
-def test_summarize_of_nothing_is_a_dash_not_zero():
-    assert summarize([]) == Cost(kwh=0.0, cost=None, estimated=False, partial=False)
+def test_summarize_of_nothing_without_a_rate_in_effect_is_a_dash_not_zero():
+    assert summarize([]) == Cost(kwh=0.0, cost=None, estimated=False, partial=False)  # the default
+    assert summarize([], rate_in_effect=False) == Cost(kwh=0.0, cost=None, estimated=False, partial=False)
+
+
+def test_summarize_of_nothing_with_a_rate_in_effect_is_a_zero_not_a_dash():  # Review Focus 3
+    assert summarize([], rate_in_effect=True) == Cost(kwh=0.0, cost=0.0, estimated=False, partial=False)
+    assert summarize(iter(()), rate_in_effect=True) == Cost(kwh=0.0, cost=0.0, estimated=False, partial=False)
+
+
+def test_summarize_of_some_hours_ignores_rate_in_effect():
+    unpriced = [HourCost(2.0, None, True, True), HourCost(0.0, None, False, False)]
+    priced = [HourCost(1.0, 0.5, False, False)]
+    for flag in (False, True):
+        assert summarize(unpriced, rate_in_effect=flag) == Cost(kwh=2.0, cost=None, estimated=True, partial=True)
+        assert summarize(priced, rate_in_effect=flag) == Cost(kwh=1.0, cost=0.5, estimated=False, partial=False)
+        assert summarize([HourCost(0.0, None, False, False)], rate_in_effect=flag) == Cost(0.0, None, False, False)
+
+
+def test_a_silent_counter_under_a_site_default_costs_zero_when_the_caller_knows_a_rate_is_in_effect():
+    """An hour-less period (a comms outage, days before collection started, a silent counter meter) still has
+    a rate: the caller asks rate_at for the period's last local day and passes the answer as rate_in_effect."""
+    tariffs = [TariffRow(None, 0.10, date(2026, 1, 1))]
+    costs = cost_by_hour(engine({PANEL1: {}}), tariffs, TREE, "UTC")
+    assert costs[PANEL1] == {}
+    for asset in (PANEL1, MV2):
+        in_effect = rate_at(tariffs, TREE, asset, date(2026, 10, 3)) is not None
+        assert summarize(costs[asset].values(), rate_in_effect=in_effect) == Cost(0.0, 0.0, False, False)
+    not_yet = rate_at(tariffs, TREE, PANEL1, date(2025, 12, 31)) is not None  # the rate starts after the period
+    assert summarize(costs[PANEL1].values(), rate_in_effect=not_yet) == Cost(0.0, None, False, False)
+    nothing = rate_at([], TREE, PANEL1, date(2026, 10, 3)) is not None  # no tariff at all
+    assert summarize(costs[PANEL1].values(), rate_in_effect=nothing) == Cost(0.0, None, False, False)
+
+
+def test_the_fall_back_day_is_priced_by_local_date_across_its_25_hours():
+    """Europe/Amsterdam leaves summer time on 2026-10-25 (local 03:00 -> 02:00): that day has 25 UTC buckets.
+    A rate effective on the local 25th starts at 22:00Z on the 24th, not at UTC midnight."""
+    amsterdam = ZoneInfo("Europe/Amsterdam")
+    tariffs = [TariffRow(None, 0.30, date(2026, 10, 25))]
+    first = datetime(2026, 10, 24, 21, tzinfo=UTC)  # 23:00 on the 24th, local summer time: before the rate
+    buckets = [first + timedelta(hours=i) for i in range(27)]  # 21:00Z on the 24th through 23:00Z on the 25th
+    leaf = cost_by_hour(engine({PANEL1: {b: HourEnergy(2.0, False) for b in buckets}}), tariffs, TREE, "Europe/Amsterdam")[PANEL1]
+
+    assert leaf[first] == HourCost(kwh=2.0, cost=None, estimated=False, unpriced=True)  # the 24th: not priced
+    midnight = datetime(2026, 10, 24, 22, tzinfo=UTC)  # 00:00 on the 25th, summer time (UTC+2)
+    assert midnight.astimezone(amsterdam).hour == 0 and midnight.astimezone(amsterdam).day == 25
+    assert leaf[midnight].cost == pytest.approx(0.6)
+    for twice in (datetime(2026, 10, 25, 0, tzinfo=UTC), datetime(2026, 10, 25, 1, tzinfo=UTC)):  # both 02:00s
+        assert twice.astimezone(amsterdam).hour == 2
+        assert leaf[twice].cost == pytest.approx(0.6)
+    local_25th = [b for b in buckets if b.astimezone(amsterdam).date() == date(2026, 10, 25)]
+    assert len(local_25th) == 25
+    assert summarize(leaf[b] for b in local_25th) == Cost(
+        kwh=50.0, cost=pytest.approx(25 * 2.0 * 0.30), estimated=False, partial=False
+    )
 
 
 async def test_load_tariffs_returns_every_row_as_plain_values(db):
