@@ -4,7 +4,7 @@ Handover for the next session. Source: the per-task reviews, the final code revi
 
 Recommended order: (1) Phase 3 brainstorm, spec update and plan, with **Task 0 = section A below**; (2) execute Phase 3 the same way as Phase 2; (3) section B just before the first real scan, on the SCADA workstation. Phase 3 does not depend on the real network and can be built against the simulator.
 
-Working rules that still apply: implementers on `sonnet`, reviewers on `opus`, never Fable (weekly budget); one fresh subagent per task; never run `scripts/e2e.sh` or `docker compose down -v` on the default project (it deletes the owner's `dcdash_dbdata` volume) — use `docker compose -p dcdash_e2e ...` as documented in the README and project memory.
+Working rules that still apply: implementers on `sonnet`, reviewers on `opus`, never Fable (weekly budget); one fresh subagent per task; never run `docker compose down -v` on the default project (it deletes the owner's `dcdash_dbdata` volume) — use `docker compose -p dcdash_e2e ...` as documented in the README and project memory. `scripts/e2e.sh` now always runs in the `dcdash_e2e` project and refuses any other name, so it is safe to run (with the normal stack stopped).
 
 ## A. Phase 3 Task 0 (cheap, and Phase 3 touches these areas) — DONE
 
@@ -69,7 +69,7 @@ Constraint from the owner: the workstation is reached over RDP, has no internet 
 - Workstation facts still needed: Windows edition, Docker/WSL2/Hyper-V availability, admin rights and software policy (Docker Desktop licensing), free disk, RDP file-transfer limits. Fallback if Docker is impossible: ship a ready Linux VM image (VHDX/OVA) with everything inside.
 - Network path (told by the owner 2026-10-08, unconfirmed): the Windows SCADA workstation can reach a Kubernetes cluster that has access to the real SCADA, probably through OPC UA. The collector would connect to an endpoint exposed by the cluster. Ask: endpoint URL and port as seen from the workstation; direct OPC UA server or gateway/aggregator; security mode and login (read-only account); firewall rules; cluster-internal host names may not resolve from Docker on Windows. Risk: the OPC UA username/password path was never exercised against a real server.
 - Raises the priority of section B (stuck-scan watchdog, conservative scan mode, reachability checks): there is nobody to debug on site.
-- Before 0004 reaches ANY real database (the owner's `dcdash_dbdata` or the workstation): take a backup first (`scripts/backup.sh`); the hourly rollup is rebuilt from the minute tier.
+- Before 0004 reaches ANY real database (the owner's `dcdash_dbdata` or the workstation): take a backup first (`scripts/backup.sh`); the hourly rollup is rebuilt from the minute tier. Run the two pre-check queries of README step 2 as well: 0004 refuses to start when the 1-minute tier is older than the hourly one, or when raw retention (`raw_retention_days` below 8) already dropped raw data that the rollups still hold from the last 8 days.
 
 ## E. Phase 3 deferred (final review, 2026-10-09; none of these blocks the merge)
 
@@ -93,3 +93,22 @@ Tests and tooling
 - Weak or missing assertions: Billing (`BillingPage.test.tsx`), the asset page (`AssetPage.test.tsx`), the dashboard editor tests (Task 10 M1, M3, M4, M6, M8), hook coverage and test hygiene in the asset-chart tests (Task 7 m8-m10); widget tests for the 50-dashboard cap, 100-character names, the debounce, and `FakeEventSource` copies (Task 9 M5-M7).
 - End-to-end: gaps for a currency change, an override and the Billing cell states (`frontend/e2e/phase3.spec.ts`); the e2e folder is outside `tsc` (`tsconfig.json` includes only `src`).
 - `LoginPage.test.tsx` prints "No routes matched location" (known, harmless).
+
+## F. Phase 3 backend deferred (final review A, 2026-10-09; none of these blocks the merge)
+
+Non-finite numbers
+- **F3, `NaN`/`Infinity` literals answer 500, not 422**, on the bodies that are not defused: `POST /api/dashboards` name, `PUT /api/settings/billing` currency, `PUT /api/settings/general` timezone, `POST /api/widget-data` range or type. FastAPI's default handler echoes the input into a `JSONResponse` (`allow_nan=False`). Only a crafted request does it, and nothing is written. Fix: one `RequestValidationError` handler in `api/main.py` that replaces non-finite floats with `repr()`; the ad-hoc defusers (`tariffs.py:42`, `dashboards.py:64`) can then go, which also stops `PUT /api/dashboards/{id}` with `"name": NaN` from saving a dashboard named "nan".
+- **F4, a non-finite scale or reading reaches billing as `null`.** `scale: float = Field(gt=0)` (`api/mappings.py:18,26`, `api/discovery.py:29`) admits `+Infinity` and `1e309`, and a Modbus float32 NaN is stored with quality GOOD (`connectors/modbus.py:216-224`, `core/registers.py:26`). The rollups carry it, and billing, the summary and widget data write it as `null`, which the UI reads as "no rate". Fix: `allow_inf_nan=False` on the scale fields, and mark non-finite decoded values BAD in the connectors.
+
+Engines and API
+- **F5, widgets compute energy for the whole tree on every request** (`core/widgets.py:389`, `api/data.py:57`, `core/energy.py:283`): about 720 rows per metered point per `this_month`/`30d` widget per refetch per viewer. Fine at the owner's scale; the cheap fix is to build the `AssetTree` from the union of the requested assets' subtrees (their ancestors are not needed). Caching is spec 10.9.
+- **F6, the `tariff.updated` audit carries only the new values** (`tariffs.py:196`, `_detail` at `:106`), and editing a past rate recalculates history. Add `"before": {"rate_per_kwh": ..., "effective_from": ...}`, and skip the audit when nothing changed (an unchanged PATCH is audited today; the 404 detail and the NaN PATCH paths are untested).
+- **F7, metric series should return `step_seconds` and `interval_seconds`** (`core/widgets.py:331-340`, `_fill_metric` has both), so the frontend can set the gap threshold to 1.5 x max(width, interval). This is the backend half of the time-series gap rule in section E and the root of the Task 9 accepted residual.
+- **F8, semantic seams to settle or document.** `estimated` counts measured hours only in the series (`widgets.py:302-314`) but also the placeholder hours of a silent power-only meter in values mode, Billing and the summary, so a parent with a silent power child is `~` in a total but not in its bars. A silent day of a partly silent power meter is `estimated: false`; a wholly silent power meter is `true`. `last` on a finished range carries the hour start, not the reading time (`series.py:214-217`; spec 10.5 says the reading's time).
+- `rate_at` walks ancestors only: a meterless parent shows a dash while its child shows 0.00 (`cost.py:59-63`); it is consistent across Billing, widgets and the summary.
+- `source.deleted` audits `points` as the mapped points only: rename to `mapped_points` (`sources.py:177-180`).
+- Asset delete: `confirm` accepts `1`/`yes`/`on`, and the 409 is not in the OpenAPI schema (`assets.py:134-152`); the race between the count and the delete is milliseconds and admin-only.
+- The database session time zone is not pinned: set `server_settings={"timezone": "UTC"}` when `db.py` is next touched (Phase 3 binds aware datetimes and DATEs only).
+- `core/widgets.py:18` imports `api.settings`: move `current_timezone` to `core/settings_store` (layering only).
+- A tariff `asset_path` option for the picker: asset names are bare and not unique, so add `asset_path` (via `AssetTree.path`) to `TariffOut` (`tariffs.py:84-103`).
+- Test hygiene: the `finally` blocks in `test_schema_tiers.py` run a statement before the upgrade (`:187-188` and the later refusal tests).
