@@ -28,6 +28,7 @@ SERIES_KEYS = {"asset_id", "name", "points", "estimated", "partial"}
 POINT_KEYS = {"ts", "value", "min", "max", "estimated", "partial", "no_data"}
 VALUE_KEYS = {"asset_id", "name", "value", "estimated", "partial", "point_id", "no_data", "ts", "stale"}
 PATHS = ("/api/widget-data", "/api/widget-data/csv")
+CSV_HEADER = ["asset", "source", "unit", "timestamp", "value", "estimated", "partial", "no_data"]
 
 
 @pytest.fixture(autouse=True)
@@ -836,9 +837,9 @@ async def test_csv_values_mode_has_one_row_per_asset_stamped_with_the_range_star
     await login_as(client, db, "viewer")
     response, rows = await post_csv(client, widget_body("stat", [asset]))
     path = (await AssetTree.load(session)).path(asset)
-    assert rows[0] == ["asset", "source", "unit", "timestamp", "value", "estimated", "partial"]
+    assert rows[0] == CSV_HEADER
     assert len(rows) == 2 and rows[1][:4] == [path, "active_power_kw", "kW", TODAY[0]]
-    assert float(rows[1][4]) == pytest.approx(11.0) and rows[1][5:] == ["false", "false"]
+    assert float(rows[1][4]) == pytest.approx(11.0) and rows[1][5:] == ["false", "false", "false"]
     assert response.headers["content-disposition"] == 'attachment; filename="stat-today.csv"'
 
 
@@ -849,7 +850,7 @@ async def test_csv_series_mode_has_one_row_per_point_in_the_site_zone(client, db
     assert len(rows) == 15  # header and 14 hours
     assert rows[1][1:4] == ["cost", "QAR", TODAY[0]] and rows[-1][3] == "2026-03-10T13:00:00+03:00"
     assert [float(r[4]) for r in rows[1:]] == pytest.approx([5.0] * 14)
-    assert {tuple(r[5:]) for r in rows[1:]} == {("false", "false")}
+    assert rows[0] == CSV_HEADER and {tuple(r[5:]) for r in rows[1:]} == {("false", "false", "false")}
     assert response.headers["content-disposition"] == 'attachment; filename="timeseries-today.csv"'
 
 
@@ -857,7 +858,7 @@ async def test_csv_leaves_an_unpriced_cost_cell_empty(client, db):
     asset = await seed_standard(db, tariff=False)
     await login_as(client, db, "viewer")
     _, rows = await post_csv(client, widget_body("stat", [asset], "cost", "sum"))
-    assert rows[1][2] == "QAR" and rows[1][4] == "" and rows[1][6] == "true"
+    assert rows[1][2] == "QAR" and rows[1][4] == "" and rows[1][5:] == ["false", "true", "false"]  # a rate is missing
 
 
 async def test_csv_leaves_a_gap_cell_empty(client, db):
@@ -865,6 +866,34 @@ async def test_csv_leaves_a_gap_cell_empty(client, db):
     await login_as(client, db, "viewer")
     _, rows = await post_csv(client, widget_body("timeseries", [asset], "energy", "sum", range_="24h"))
     assert len(rows) == 25 and [r[4] for r in rows[1:10]] == [""] * 9 and rows[10][4] == "0"
+    assert [r[7] for r in rows[1:]] == ["true"] * 9 + ["false"] * 15  # a gap is no data; the measured 0 is not
+
+
+async def test_csv_no_data_column_tells_a_measured_zero_from_an_empty_window(client, db):
+    await put_setting(db, "general", {"timezone": "Asia/Qatar"})
+    await put_setting(db, "billing", {"currency": "QAR"})
+    start = datetime(2026, 3, 8, 9, 0, tzinfo=UTC)
+    silent, _, _ = await seed_asset(db, "Pump", prefix="PMP", kw=[6.0] * 60, kw_start=start)
+    metered = await seed_standard(db)  # reports today; the pump reported two days ago and not since
+    await login_as(client, db, "viewer")
+    for source in ("energy", "cost"):
+        _, rows = await post_csv(client, widget_body("table", [silent, metered], source, "sum"))
+        by_name = {r[0]: r for r in rows[1:]}  # both are root assets: their path is their name
+        assert by_name["Pump"][4] == "0" and by_name["Pump"][7] == "true"  # exports 0, but nothing was recorded
+        assert by_name["LV Panel 1"][4] != "0" and by_name["LV Panel 1"][7] == "false"
+    _, rows = await post_csv(client, widget_body("table", [silent, metered], "metric", "avg"))
+    assert (rows[1][0], rows[1][4], rows[1][7]) == ("Pump", "", "true")  # no value at all: an empty cell
+    assert (rows[2][0], float(rows[2][4]), rows[2][7]) == ("LV Panel 1", pytest.approx(11.0), "false")
+
+
+async def test_csv_series_rows_say_no_data_for_a_silent_bucket_but_not_for_a_missing_rate(client, db):
+    asset = await seed_standard(db, tariff=False)
+    await login_as(client, db, "viewer")
+    _, rows = await post_csv(client, widget_body("timeseries", [asset], "cost", "sum", range_="24h"))
+    assert len(rows) == 25
+    assert [(r[4], r[6], r[7]) for r in rows[1:]] == (  # value, partial, no_data
+        [("", "false", "true")] * 9 + [("", "false", "false")] + [("", "true", "false")] * 14
+    )
 
 
 async def test_csv_neutralises_a_formula_asset_name(client, db, session):  # Review Focus 5

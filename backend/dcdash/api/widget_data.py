@@ -12,7 +12,7 @@ from dcdash.core.timeutil import RANGE_PRESETS
 from dcdash.core.widgets import WIDGET_TYPES, SiteZoneError, WidgetResult, compute_widget, validate_config
 
 router = APIRouter(prefix="/api", tags=["widget-data"], dependencies=[Depends(require_role("viewer"))])
-CSV_HEADER = ("asset", "source", "unit", "timestamp", "value", "estimated", "partial")
+CSV_HEADER = ("asset", "source", "unit", "timestamp", "value", "estimated", "partial", "no_data")
 
 
 def _now() -> datetime:

@@ -242,12 +242,14 @@ class WidgetResult:
         """Rows for core/csvout.write_csv: numbers stay numbers, a null value is an empty cell, flags are true/false."""
         source, unit = self.metric or self.source, self.unit or ""
 
-        def row(path: str, ts: datetime, value: float | None, estimated: bool, partial: bool) -> list[object]:
+        def row(
+            path: str, ts: datetime, value: float | None, estimated: bool, partial: bool, no_data: bool
+        ) -> list[object]:
             return [path, source, unit, ts.isoformat(), "" if value is None else value,
-                    "true" if estimated else "false", "true" if partial else "false"]
+                    "true" if estimated else "false", "true" if partial else "false", "true" if no_data else "false"]
 
-        rows = [row(s.path, p.ts, p.value, p.estimated, p.partial) for s in self.series for p in s.points]
-        rows += [row(v.path, self.start, v.value, v.estimated, v.partial) for v in self.values]
+        rows = [row(s.path, p.ts, p.value, p.estimated, p.partial, p.no_data) for s in self.series for p in s.points]
+        rows += [row(v.path, self.start, v.value, v.estimated, v.partial, v.no_data) for v in self.values]
         return rows
 
 
