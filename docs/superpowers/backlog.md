@@ -77,10 +77,13 @@ Charts
 - Time-series gap rule: a gap is a step above 1.5 x the median step, so a slow meter's dots appear at 1 to 1.5 bucket widths and flip at 2 to 2.5; a window where half or more of the buckets are holes is drawn joined. The proper fix needs the backend to send the expected step (bucket width) per series. Cosmetic: `markIsolated` keeps every point visible. (`TimeSeriesWidget.tsx` `bucketMs`, `withGaps`.)
 - Grouped bars: the no-rate dash sits at the category centre, not in the asset's slot (`BarWidget.tsx` `dashMarks`). Charts have no text alternative and a widget title is an `h3` under the page `h1` (`WidgetFrame.tsx`).
 - Real-browser walkthrough of Task 9 (items 2, 7, 8) is still to do: the dash position in grouped bars; day-bucket labels with `useUTC: true` in Asia/Qatar (buckets start at 21:00 UTC, labels may sit off the bars); the `1h` preset with 30 s polling (12 s buckets, steps of 24 and 36 s break into dots or flip).
-- No-data wording is not yet the same everywhere: `GaugeWidget` still draws a metric with no reading as a dimmed dash, and a stat or table whose cost has no rate shows the dash without a "— no rate" hint in its body (the frame hint covers charts and gauges only).
+- A stat or table whose cost has no rate shows the dash without a "— no rate" hint in its body (the frame hint covers charts and gauges only). `StatWidget.tsx` also shows a dash when there is no row at all (nothing to show, not "no rate").
+- Legend: the band series of a metric time series ("X min", "X range") are not in `legend.data`, so switching an asset off hides its line but leaves its min-max band drawn (`TimeSeriesWidget.tsx` `timeSeriesOption`; Task 9, more visible now that the selection persists). Put them in the legend's `data` with the asset, or hide them with `legend.selected` entries of their own.
 - Asset-page chart: the axis formatter has no finite guard (`TrendChart.tsx`); `WidgetConfig.metric` still admits `"custom"` at type level (`api/types.ts`; `WIDGET_METRICS` filters it out).
 
 Editor and dashboards
+- The dashboard `AssetPicker` does not add `#id` for sibling assets with the same name and parent, while `assetLabels` (Tariffs) does, so two sibling "Meter"s read alike in the widget dialog (`AssetPicker.tsx` `pickerLabel`).
+- Deleting a source refreshes neither `keys.assets` (summaries and trend series, which poll every 60 s and 30 s) nor `keys.graph` (`SourcesPage.tsx`).
 - Drag and resize are pointer-only (no keyboard reorder), and the editor is not usable on a narrow screen.
 - Cosmetic error UX: wording and guidance when a dashboard was deleted by someone else while open (`DashboardPage.tsx`, `DashboardEditor.tsx`).
 
@@ -90,6 +93,8 @@ Billing, tariffs and dialogs
 - Three screens still format times in the browser's zone, not the site's: `MetricsTable.tsx`, `ScansPage.tsx`, `SourcesPage.tsx`.
 
 Tests and tooling
+- `app.css.test.ts` reads `src/app.css` relative to the working directory, so it breaks when vitest is started from another folder; `new URL("./app.css", import.meta.url)` fails under jsdom ("must be of scheme file"), so use `// @vitest-environment node` with the URL form. `src/test/nodeFs.d.ts` is a global declaration of `node:fs`, which lets application code import it and still typecheck; scope it with `@types/node` in a tests-only tsconfig instead.
+- `TrendChart.tsx` shows the "Could not load the site time zone" alert above a chart that still works when a background `/api/site` refetch fails while the zone is cached (cosmetic).
 - Weak or missing assertions: Billing (`BillingPage.test.tsx`), the asset page (`AssetPage.test.tsx`), the dashboard editor tests (Task 10 M1, M3, M4, M6, M8), hook coverage and test hygiene in the asset-chart tests (Task 7 m8-m10); widget tests for the 50-dashboard cap, 100-character names, the debounce, and `FakeEventSource` copies (Task 9 M5-M7).
 - End-to-end: gaps for a currency change, an override and the Billing cell states (`frontend/e2e/phase3.spec.ts`); the e2e folder is outside `tsc` (`tsconfig.json` includes only `src`).
 - `LoginPage.test.tsx` prints "No routes matched location" (known, harmless).
