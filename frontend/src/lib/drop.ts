@@ -65,6 +65,9 @@ export function takenMetrics(model: GraphModel, assetId: number): Set<Metric> {
   return taken;
 }
 
+/** The longest custom unit the server accepts (`MAX_UNIT_LENGTH` in api/discovery.py). */
+export const MAX_UNIT_LENGTH = 20;
+
 export interface ReviewRow {
   pointId: number;
   name: string;
@@ -74,6 +77,8 @@ export interface ReviewRow {
   /** null = let the server pick the metric's default interval */
   intervalSeconds: number | null;
   customUnit: string | null;
+  /** The point's own unit text, used to prefill the unit when the row is switched to `custom` */
+  unitHint: string | null;
   /** Why the row starts unchecked, if it does */
   note: string | null;
 }
@@ -91,7 +96,8 @@ export function reviewRows(points: readonly GraphPoint[], taken: ReadonlySet<Met
     }
     return {
       pointId: p.id, name: p.name, checked: note === null, metric, scale,
-      intervalSeconds: interval_seconds, customUnit: custom_unit, note,
+      intervalSeconds: interval_seconds, customUnit: metric === "custom" ? (custom_unit ?? p.unit_hint) : null,
+      unitHint: p.unit_hint, note,
     };
   });
 }
@@ -104,6 +110,16 @@ export function metricConflicts(rows: readonly ReviewRow[], taken: ReadonlySet<M
   return checked.filter((r) => taken.has(r.metric) || (counts.get(r.metric) ?? 0) > 1).map((r) => r.pointId);
 }
 
+/** The row after its metric changes: the old note no longer applies, and a unit only means something for `custom` (prefilled from the point's hint). */
+export function withMetric(row: ReviewRow, metric: Metric): ReviewRow {
+  return { ...row, metric, note: null, customUnit: metric === "custom" ? (row.customUnit ?? row.unitHint) : null };
+}
+
+/** Ids of checked custom rows whose unit is empty or only spaces: the server refuses them, so the dialog does too. */
+export function missingUnits(rows: readonly ReviewRow[]): number[] {
+  return rows.filter((r) => r.checked && r.metric === "custom" && (r.customUnit ?? "").trim() === "").map((r) => r.pointId);
+}
+
 export type AcceptTarget =
   | { kind: "existing"; assetId: number }
   | { kind: "new"; name: string; parentId: number | null };
@@ -113,7 +129,7 @@ export function acceptBody(sourceId: number, target: AcceptTarget, rows: readonl
   const points = rows
     .filter((r) => r.checked)
     .map((r) => ({
-      point_id: r.pointId, metric: r.metric, scale: r.scale, interval_seconds: r.intervalSeconds, custom_unit: r.customUnit,
+      point_id: r.pointId, metric: r.metric, scale: r.scale, interval_seconds: r.intervalSeconds, custom_unit: r.metric === "custom" ? ((r.customUnit ?? "").trim() || null) : null,
     }));
   return target.kind === "existing"
     ? { source_id: sourceId, asset_id: target.assetId, points }

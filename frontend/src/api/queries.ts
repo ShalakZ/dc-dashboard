@@ -1,9 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { api } from "./client";
 import type {
-  Asset, AuditPage, Connector, GeneralSettings, GraphModel, Metric, PointRow, Role, ScanDetail, ScanSummary, Scope,
-  ScopeSuggestions, Series, Source, StorageSettings, StorageStats, Summary, UserRow,
+  Asset, AuditPage, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
+  GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
+  Series, Site, Source, StorageSettings, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
+  WidgetData, WidgetType,
 } from "./types";
 
 export const keys = {
@@ -24,7 +26,18 @@ export const keys = {
   scan: (id: number) => ["scans", id] as const,
   graph: ["graph"] as const,
   audit: (limit: number, offset: number) => ["audit", limit, offset] as const,
+  site: ["site"] as const,
+  billingSettings: ["settings", "billing"] as const,
+  tariffs: ["tariffs"] as const,
+  billing: ["billing"] as const,
+  billingCosts: (month: string | null) => ["billing", "costs", month] as const,
+  dashboardList: ["dashboards", "list"] as const,
+  dashboard: (id: number) => ["dashboards", "detail", id] as const,
+  widgetData: ["widget-data"] as const,
 };
+
+/** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today). */
+const COST_DEPENDENT = [keys.billing, keys.widgetData, keys.assets] as const;
 
 export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets") });
 
@@ -90,7 +103,7 @@ export function usePutGeneralSettings() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (body: GeneralSettings) => api.put<GeneralSettings>("/api/settings/general", body),
-    onSuccess: () => invalidate(keys.general),
+    onSuccess: () => invalidate(keys.general, keys.site, ...COST_DEPENDENT),
   });
 }
 
@@ -143,4 +156,110 @@ export const useAudit = (limit: number, offset: number) =>
   useQuery({
     queryKey: keys.audit(limit, offset),
     queryFn: () => api.get<AuditPage>(`/api/audit?${new URLSearchParams({ limit: String(limit), offset: String(offset) })}`),
+  });
+
+export const useSite = () =>
+  useQuery({ queryKey: keys.site, queryFn: () => api.get<Site>("/api/site"), staleTime: 60_000 });
+
+export const useBillingSettings = () =>
+  useQuery({ queryKey: keys.billingSettings, queryFn: () => api.get<BillingSettings>("/api/settings/billing") });
+
+export function usePutBillingSettings() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: BillingSettings) => api.put<BillingSettings>("/api/settings/billing", body),
+    onSuccess: () => invalidate(keys.billingSettings, keys.site, ...COST_DEPENDENT),
+  });
+}
+
+export const useTariffs = () => useQuery({ queryKey: keys.tariffs, queryFn: () => api.get<Tariff[]>("/api/tariffs") });
+
+export function useCreateTariff() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: TariffIn) => api.post<Tariff>("/api/tariffs", body),
+    onSuccess: () => invalidate(keys.tariffs, ...COST_DEPENDENT),
+  });
+}
+
+export function useUpdateTariff() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: TariffPatch }) => api.patch<Tariff>(`/api/tariffs/${id}`, body),
+    onSuccess: () => invalidate(keys.tariffs, ...COST_DEPENDENT),
+  });
+}
+
+export function useDeleteTariff() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (id: number) => api.del(`/api/tariffs/${id}`),
+    onSuccess: () => invalidate(keys.tariffs, ...COST_DEPENDENT),
+  });
+}
+
+/** One call returns the whole asset tree for the month. Idle while `month` is null (the site timezone has not loaded yet). */
+export const useBillingCosts = (month: string | null) =>
+  useQuery({
+    queryKey: keys.billingCosts(month),
+    enabled: month !== null,
+    refetchInterval: 60_000,
+    queryFn: () => api.get<BillingCosts>(`/api/billing/costs?${new URLSearchParams({ month: month! })}`),
+  });
+
+export const useDashboards = () =>
+  useQuery({ queryKey: keys.dashboardList, queryFn: () => api.get<DashboardListItem[]>("/api/dashboards") });
+
+export const useDashboard = (id: number) =>
+  useQuery({ queryKey: keys.dashboard(id), queryFn: () => api.get<Dashboard>(`/api/dashboards/${id}`) });
+
+export function useCreateDashboard() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: DashboardIn) => api.post<Dashboard>("/api/dashboards", body),
+    onSuccess: (created) => {
+      client.setQueryData(keys.dashboard(created.id), created);
+      return client.invalidateQueries({ queryKey: keys.dashboardList });
+    },
+  });
+}
+
+/** The editor's single PUT. The saved dashboard (with its new updated_at) replaces the cached one, so no refetch is needed. */
+export function useSaveDashboard() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: DashboardSave }) => api.put<Dashboard>(`/api/dashboards/${id}`, body),
+    onSuccess: (saved) => {
+      client.setQueryData(keys.dashboard(saved.id), saved);
+      return client.invalidateQueries({ queryKey: keys.dashboardList });
+    },
+  });
+}
+
+export function useDeleteDashboard() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.del(`/api/dashboards/${id}`),
+    onSuccess: (_data, id) => {
+      client.removeQueries({ queryKey: keys.dashboard(id) });
+      return client.invalidateQueries({ queryKey: keys.dashboardList });
+    },
+  });
+}
+
+/**
+ * `preset` is the effective range (the caller resolves inheritance). Refetches every 30 s. While a new range loads the old
+ * figures stay, but only for the same widget: after a change of type or config (the editor's preview) the old answer
+ * belongs to another kind of widget, so nothing is shown until the new one arrives.
+ */
+export const useWidgetData = (type: WidgetType, config: WidgetConfig, preset: RangePreset, enabled = true) =>
+  useQuery({
+    queryKey: [...keys.widgetData, type, config, preset] as const,
+    enabled,
+    refetchInterval: 30_000,
+    placeholderData: (previous, previousQuery) => {
+      const before = previousQuery?.queryKey; // [..keys.widgetData, type, config, preset]
+      return before && before[1] === type && hashKey([before[2]]) === hashKey([config]) ? previous : undefined;
+    },
+    queryFn: () => api.post<WidgetData>("/api/widget-data", { type, config, range: preset }),
   });

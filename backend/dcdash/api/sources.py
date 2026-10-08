@@ -3,14 +3,16 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import exists, or_, select
+from sqlalchemy import distinct, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, notify, require_role
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
+from dcdash.core.audit import audit
 from dcdash.core.crypto import encrypt
 from dcdash.core.models import Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
@@ -66,11 +68,33 @@ async def get_source(db: AsyncSession, source_id: int) -> Source:
     return source
 
 
-async def _save(db: AsyncSession) -> None:
+def _has_mapped_point():
+    """True for a source with at least one mapped point: only those discovered sources appear in the sources list."""
+    return exists(select(Point.id).join(Mapping, Mapping.point_id == Point.id).where(Point.source_id == Source.id))
+
+
+async def _name_clash_message(db: AsyncSession, name: str | None) -> str:
+    # A discovered source nobody has mapped yet is hidden from GET /api/sources, so without this the admin is told a
+    # name is taken by something they cannot see.
+    if name is not None:
+        hidden = await db.scalar(
+            select(Source.id).where(Source.name == name, Source.origin == "discovered", ~_has_mapped_point()).limit(1)
+        )
+        if hidden is not None:
+            return (
+                f'the name "{name}" is already used by a discovered source that is hidden from this list '
+                "until one of its points is mapped; choose another name"
+            )
+    return "a source with this name already exists"
+
+
+async def _save(db: AsyncSession, name: str | None = None) -> None:
+    """Flush and commit; `name` is the name this request tried to set, used to explain a unique-name clash."""
     try:
         await db.flush()
     except IntegrityError:
-        raise HTTPException(409, "a source with this name already exists") from None
+        await db.rollback()  # the failed flush leaves the session unusable until it is rolled back
+        raise HTTPException(409, await _name_clash_message(db, name)) from None
     await notify(db, CONFIG_CHANNEL)
     await db.commit()
 
@@ -86,10 +110,7 @@ async def list_connectors() -> list[dict[str, Any]]:
 @router.get("/sources", response_model=list[SourceOut], dependencies=[Operator])
 async def list_sources(db: AsyncSession = Depends(get_db)) -> list[Source]:
     # Discovered sources stay out of the list until at least one of their points is mapped.
-    mapped = exists(
-        select(Point.id).join(Mapping, Mapping.point_id == Point.id).where(Point.source_id == Source.id)
-    )
-    query = select(Source).where(or_(Source.origin == "manual", mapped)).order_by(Source.name)
+    query = select(Source).where(or_(Source.origin == "manual", _has_mapped_point())).order_by(Source.name)
     return list((await db.scalars(query)).all())
 
 
@@ -103,7 +124,7 @@ async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db)) -> S
         enabled=body.enabled,
     )
     db.add(source)
-    await _save(db)
+    await _save(db, body.name)
     return source
 
 
@@ -118,13 +139,45 @@ async def update_source(source_id: int, body: SourcePatch, db: AsyncSession = De
         source.secret = encrypt(body.secret) if body.secret else None
     if body.enabled is not None:
         source.enabled = body.enabled
-    await _save(db)
+    await _save(db, body.name)
     return source
 
 
-@router.delete("/sources/{source_id}", status_code=204, dependencies=[Admin])
-async def delete_source(source_id: int, db: AsyncSession = Depends(get_db)) -> None:
-    await db.delete(await get_source(db, source_id))
+@router.delete("/sources/{source_id}", status_code=204, response_model=None)
+async def delete_source(
+    source_id: int,
+    confirm: bool = False,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Admin,
+) -> JSONResponse | None:
+    source = await get_source(db, source_id)
+    mapped_points, mappings = (
+        await db.execute(
+            select(func.count(distinct(Mapping.point_id)), func.count(Mapping.id))
+            .join(Point, Point.id == Mapping.point_id)
+            .where(Point.source_id == source_id)
+        )
+    ).one()
+    if not confirm and mapped_points:
+        # Past energy and cost are recomputed from today's mappings (spec 6), so this changes billing history.
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": (
+                    f'Source "{source.name}" has {mapped_points} mapped point{"" if mapped_points == 1 else "s"}; '
+                    "deleting it deletes them and their mappings, and the past energy and cost figures that "
+                    "depend on them disappear from billing and dashboards. "
+                    "Repeat the request with confirm=true to go ahead."
+                ),
+                "points": mapped_points,
+                "mappings": mappings,
+            },
+        )
+    await db.delete(source)
+    await audit(
+        db, admin.id, "source.deleted",
+        {"source_id": source_id, "name": source.name, "points": mapped_points, "mappings": mappings},
+    )
     await notify(db, CONFIG_CHANNEL)
     await db.commit()
 

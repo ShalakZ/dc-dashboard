@@ -52,6 +52,13 @@ describe("api client", () => {
     await expect(api.del("/api/assets/3")).resolves.toBeUndefined();
   });
 
+  it("keeps the whole reply body on the ApiError, not only its detail", async () => {
+    mockFetch({ "DELETE /api/assets/3": { status: 409, body: { detail: "needs confirm", assets: 2, mappings: 1, tariffs: 0 } } });
+    await expect(api.del("/api/assets/3")).rejects.toMatchObject({
+      status: 409, detail: "needs confirm", body: { detail: "needs confirm", assets: 2, mappings: 1, tariffs: 0 },
+    });
+  });
+
   it("formats a pydantic validation list into one message", () => {
     const err = new ApiError(422, [{ loc: ["body", "config", "url"], msg: "Input should be a valid URL" }]);
     expect(err.message).toBe("config.url: Input should be a valid URL");

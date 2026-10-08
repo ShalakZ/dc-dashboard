@@ -20,6 +20,7 @@ from dcdash.core.pg import CONFIG_CHANNEL
 router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 Admin = Depends(require_role("admin"))
 Operator = Depends(require_role("operator"))
+MAX_UNIT_LENGTH = 20  # keep in step with MAX_UNIT_LENGTH in frontend/src/lib/drop.ts
 
 
 class AcceptPoint(BaseModel):
@@ -27,7 +28,16 @@ class AcceptPoint(BaseModel):
     metric: Metric
     scale: float = Field(default=1.0, gt=0)
     interval_seconds: int | None = Field(default=None, ge=1)
-    custom_unit: str | None = None
+    custom_unit: Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_UNIT_LENGTH)] | None = None
+
+    @model_validator(mode="after")
+    def _unit_belongs_to_custom(self) -> "AcceptPoint":
+        if self.metric is Metric.CUSTOM:
+            if not self.custom_unit:
+                raise ValueError("a custom metric needs a unit")
+        else:
+            self.custom_unit = None  # a unit means something only for custom; never store a stray one
+        return self
 
 
 class NewAsset(BaseModel):

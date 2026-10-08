@@ -223,3 +223,20 @@ def test_a_bad_url_with_credentials_does_not_echo_them_either(target):
     with pytest.raises(TargetError) as caught:
         expand_targets([target], [502], 10)
     assert "hunter2" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["admin:hunter2@10.0.0.1", "admin:hunter2@plc.local", "hunter2@10.0.0.1", "admin:hunter2@10.0.0.0/24", "@10.0.0.1"],
+)
+def test_bare_targets_with_credentials_are_rejected_without_echoing_them(target):
+    with pytest.raises(TargetError, match="targets must not contain credentials") as caught:
+        expand_targets([target], [502], 10)
+    message = str(caught.value)
+    assert "hunter2" not in message and "admin" not in message and "@" not in message
+
+
+def test_a_credentials_target_is_rejected_even_after_valid_ones():
+    with pytest.raises(TargetError, match="credentials") as caught:
+        expand_targets(["10.0.0.1", "plc.local", "admin:hunter2@10.0.0.2"], [502], 10)
+    assert "hunter2" not in str(caught.value)

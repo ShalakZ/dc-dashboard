@@ -1,10 +1,19 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { seriesToOption, TrendChart } from "./TrendChart";
 
-vi.mock("echarts-for-react", () => ({ default: (props: { option: unknown }) => <pre data-testid="chart">{JSON.stringify(props.option)}</pre> }));
+// The mock records every option the chart is given; JSON.stringify in the DOM would drop the formatter functions.
+const captured = vi.hoisted(() => ({ options: [] as unknown[] }));
+vi.mock("echarts-for-react", () => ({
+  default: (props: { option: unknown }) => {
+    captured.options.push(props.option);
+    return <pre data-testid="chart">{JSON.stringify(props.option)}</pre>;
+  },
+}));
+
+const siteRoute = { "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } } };
 
 const series = {
   metric: "active_power_kw", unit: "kW",
@@ -60,6 +69,7 @@ describe("seriesToOption gaps", () => {
 describe("TrendChart", () => {
   it("requests the series for the chosen range", async () => {
     const calls = mockFetch({
+      ...siteRoute,
       "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
       "GET /api/assets/4/series": { body: series },
     });
@@ -74,6 +84,7 @@ describe("TrendChart", () => {
 
   it("labels the storage tier the series came from", async () => {
     mockFetch({
+      ...siteRoute,
       "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
       "GET /api/assets/4/series": { body: { ...series, tier: "1h" } },
     });
@@ -84,12 +95,15 @@ describe("TrendChart", () => {
 
   it("offers a mapping picker when a metric has several mappings and requests the chosen one", async () => {
     const calls = mockFetch({
+      ...siteRoute,
       "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
       "GET /api/assets/4/series": { body: series },
     });
     const two = [...metrics, { ...metrics[0], mapping_id: 7, point_id: 8 }];
     renderWithProviders(<TrendChart assetId={4} metrics={two} />);
     await screen.findByTestId("chart");
+    // two mappings of one metric are one entry in the metric picker (a duplicate would also repeat a React key)
+    expect(within(screen.getByLabelText("Metric")).getAllByRole("option").map((o) => o.textContent)).toEqual(["active_power_kw"]);
     // the empty option means "whatever the backend picks" (its lowest-id mapping), not every mapping
     expect(screen.getByRole("option", { name: "default" })).toHaveValue("");
     expect(screen.queryByRole("option", { name: "all" })).not.toBeInTheDocument();
@@ -97,5 +111,105 @@ describe("TrendChart", () => {
     const urls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.includes("mapping_id=7"))).toBe(true);
     expect(calls.filter((c) => c.path === "/api/assets/4/series").length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("seriesToOption in the site timezone", () => {
+  type Opt = {
+    useUTC: boolean;
+    xAxis: { axisLabel: { formatter: (ms: number) => string } };
+    tooltip: { formatter: (params: unknown) => string };
+  };
+  const midnightQatar = Date.parse("2026-10-06T21:00:00Z"); // 2026-10-07 00:00 in Asia/Qatar, the 6th at 21:00 in UTC
+
+  it("labels ticks with the site's time of day, and with the date on a 7d range", () => {
+    const day = seriesToOption(series as never, "24h", undefined, "Asia/Qatar") as unknown as Opt;
+    const week = seriesToOption(series as never, "7d", undefined, "Asia/Qatar") as unknown as Opt;
+    expect(day.xAxis.axisLabel.formatter(midnightQatar)).toBe("00:00");
+    expect(week.xAxis.axisLabel.formatter(midnightQatar)).toBe("10-07 00:00");
+    expect(day.useUTC).toBe(true); // tick positions must not depend on the browser's zone
+  });
+
+  it("prints the tooltip header in the site zone and a dash for a gap", () => {
+    const option = seriesToOption(series as never, "24h", undefined, "Asia/Qatar") as unknown as Opt;
+    const html = option.tooltip.formatter([
+      { axisValue: midnightQatar, marker: "", seriesName: "avg", value: [midnightQatar, 2] },
+      { axisValue: midnightQatar, marker: "", seriesName: "min", value: [midnightQatar, null] },
+    ]);
+    expect(html).toBe("2026-10-07 00:00:00<br/>avg: 2<br/>min: —");
+  });
+});
+
+describe("the tooltip of the band", () => {
+  type Opt = { tooltip: { formatter: (params: unknown) => string } };
+  const at = Date.parse("2026-10-06T21:00:00Z");
+  const item = (seriesName: string, value: number | null) => ({ axisValue: at, marker: "", seriesName, value: [at, value] });
+
+  it("prints the real max, not the width of the band that is stacked on the min", () => {
+    // the chart stacks "max" as max - min on top of "min" (here 2 - 0.5 = 1.5 on 0.5), so the raw item value is the width
+    const option = seriesToOption(series as never, "24h", undefined, "Asia/Qatar") as unknown as Opt;
+    const html = option.tooltip.formatter([item("min", 0.5), item("max", 1.5), item("avg", 1)]);
+    expect(html).toBe("2026-10-07 00:00:00<br/>min: 0.5<br/>max: 2<br/>avg: 1");
+  });
+
+  it("shows a dash for the max of a gap, and adds nothing when the min is missing", () => {
+    const option = seriesToOption(series as never, "24h", undefined, "Asia/Qatar") as unknown as Opt;
+    expect(option.tooltip.formatter([item("min", null), item("max", null), item("avg", null)])).toBe("2026-10-07 00:00:00<br/>min: —<br/>max: —<br/>avg: —");
+  });
+});
+
+describe("TrendChart site timezone", () => {
+  beforeEach(() => { captured.options.length = 0; });
+
+  /** Hold back GET /api/site until `release()` is called; everything else answers at once. */
+  function holdSite(routes: Parameters<typeof mockFetch>[0]) {
+    mockFetch(routes);
+    const answer = fetch;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => (String(input).includes("/api/site") ? gate.then(() => answer(input, init)) : answer(input, init)));
+    return release;
+  }
+  const routes = {
+    "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+    "GET /api/assets/4/series": { body: series },
+  };
+
+  it("does not draw the axis in UTC while the site's zone is still loading", async () => {
+    const release = holdSite({ ...siteRoute, ...routes });
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    expect(await screen.findByText("raw samples")).toBeInTheDocument(); // the series has arrived
+    expect(screen.getByText("loading…")).toBeInTheDocument();
+    expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
+    expect(captured.options).toHaveLength(0); // no chart was ever given an option, so none had the UTC axis
+    release();
+    await screen.findByTestId("chart");
+    expect(captured.options.length).toBeGreaterThan(0);
+    for (const option of captured.options as { xAxis: { axisLabel: { formatter: (ms: number) => string } } }[]) {
+      expect(option.xAxis.axisLabel.formatter(Date.parse("2026-10-06T21:00:00Z"))).toBe("00:00"); // Asia/Qatar, never UTC's 21:00
+    }
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+  });
+
+  it("says so, and draws no chart, when the site's zone cannot be read", async () => {
+    mockFetch({ ...routes, "GET /api/site": { status: 500, body: { detail: "site unavailable" } } });
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    expect(await screen.findByText("Could not load the site time zone: site unavailable")).toBeInTheDocument();
+    expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
+    expect(captured.options).toHaveLength(0);
+  });
+
+
+  it("draws the axis in the zone GET /api/site reports", async () => {
+    mockFetch({
+      ...siteRoute,
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/assets/4/series": { body: series },
+    });
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    await waitFor(() => {
+      const option = captured.options.at(-1) as { xAxis: { axisLabel: { formatter: (ms: number) => string } } };
+      expect(option.xAxis.axisLabel.formatter(Date.parse("2026-10-06T21:00:00Z"))).toBe("00:00");
+    });
   });
 });

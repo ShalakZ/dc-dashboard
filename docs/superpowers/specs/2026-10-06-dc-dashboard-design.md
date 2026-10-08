@@ -1,7 +1,7 @@
 # DC Dashboard — Design Spec
 
 Date: 2026-10-06
-Status: awaiting review
+Status: approved 2026-10-06; section 7 updated 2026-10-07 (phase 2); sections 4, 6, 8, 9, 10 and 14 updated 2026-10-08 (phase 3, awaiting review)
 
 ## 1. Purpose
 
@@ -136,7 +136,7 @@ docs/
 | Asset | A node in the admin's hierarchy (Site → MV2 → LV Panel 1). Has a parent, a name, and a kind. |
 | Mapping | Links a point to an asset as a specific metric, with a scale factor and a polling interval. |
 | Reading | A timestamped value for a point, with a quality flag. |
-| Tariff | Cost per kWh with a currency and an effective-from date (phase 3). |
+| Tariff | A rate per kWh for an asset, or for the whole site, from an effective date (phase 3). The currency is one site setting. |
 | Dashboard / Widget | A saved grid of charts bound to assets and metrics (phase 3). |
 
 Discovery and browsing produce sources and points. Mapping a point to an asset
@@ -175,7 +175,7 @@ points are not collected.
 
 Phase 2 adds `scan_scopes`, `scans`, `scan_findings`, `graph_layout`, and
 `sources.origin` (section 7.2). Phase 3 adds `tariffs`, `dashboards`, and
-`widgets`.
+`widgets` (sections 10.2 and 10.4) and a `billing` row in `settings`.
 
 ## 5. Connectors
 
@@ -229,6 +229,12 @@ configured timezone. Retention periods are admin
 settings that update the database policies. Chart queries choose the tier from
 the requested time range so that long ranges stay fast.
 
+Both rollups are refreshed over a trailing 7-day window (phase 3; `readings_1h`
+is built on `readings_1m`, so both are widened), so readings the collector
+writes late after an outage still reach them. Data that arrives later than
+that stays in raw until it expires and is never rolled up.
+Raw retention must therefore be at least 8 days (one more than the refresh window); Settings refuses a shorter value.
+
 Sizing estimate: 200 points at 1 second is about 17 million readings per day,
 on the order of 1–2 GB/day before compression and roughly a tenth of that
 after. At the default intervals it is far less. The admin Storage panel shows
@@ -237,19 +243,58 @@ full, and warns past a configurable threshold.
 
 ### Energy
 
-- If an asset has an `energy_kwh` mapping, consumption over a period is the
-  difference in the counter. A decrease is treated as a counter reset or
-  rollover: the period is split at the reset and no negative or inflated
-  consumption is recorded.
-- If an asset has only `active_power_kw`, consumption is the time integral of
-  power and is labeled as estimated wherever it is shown.
+One engine produces every energy figure (asset page, billing, dashboards). It
+reads the hourly rollup, so figures agree everywhere and stay available after
+raw data expires (phase 3; before that the asset page read raw readings). Hours
+are the unit; days and months are sums of hours in the site timezone.
+
+- If an asset has an `energy_kwh` mapping, the consumption of an hour is the
+  hour's last counter value minus the previous bucket's last value. The first
+  hour of a period uses the last bucket before the period as its baseline, so
+  consumption accumulated across the boundary counts toward the period, and a
+  gap in the data attributes what the meter counted to the hour in which the
+  next value arrives. With no earlier bucket, the first hour counts
+  `last - min`.
+- A decrease is a counter reset or rollover. If an hour's last value is below
+  the previous bucket's last value, the hour counts
+  `max(0, max - previous_last) + (last - min)`: the step across the reset adds
+  nothing and one reset per hour is recovered. A dip that recovers inside the
+  hour (a glitch reading of 0) is not a reset: the hour counts
+  `last - previous_last`. A glitch that is the last sample of an hour is not
+  detected and inflates the following hour; a plausibility ceiling per meter
+  is backlog.
+- If an asset has only `active_power_kw`, the consumption of an hour is its
+  average power times the time covered by samples, so outages add nothing: for
+  polling intervals up to 60 seconds the covered time is the minutes of the
+  hour that contain a sample (taken from the data, so changing the interval
+  later does not rescale history), for slower polling `n` times the interval;
+  at most one hour. It is labeled as estimated wherever it is shown.
 - A parent asset's consumption is its own meter if it has one, otherwise the
-  sum of its children.
+  sum of its children. An own meter counts only from its first reading: hours
+  before it are the sum of the children (so adding a parent meter later does
+  not zero the past). If an energy counter is mapped to an asset that already
+  had a power meter, hours before the counter's first reading also use the
+  children's sum, not the asset's own power estimate (backlog). A meter with
+  no readings at all counts 0 and does not
+  fall back to its children; an asset with no energy or power mapping anywhere
+  in its subtree has no figure.
+
+Billing follows the current configuration. Past months are recomputed from
+today's mappings, scale factors, asset tree, tariffs and site timezone, so
+re-pointing a panel to another source, changing a scale or the timezone, moving
+an asset or deleting one changes past figures. Deleting an asset that has
+children, mappings or tariffs, or a source with mapped points, therefore asks
+for explicit confirmation and is audited. Keeping a history of which point fed
+which asset (effective-dated mappings) is not part of phase 3. The hourly
+rollup is the only permanent copy of this data: back it up (section 12).
 
 ### Time
 
 Stored in UTC. Displayed in the timezone configured in settings, which also
-defines where a "day" and a "month" begin for energy and cost.
+defines where a "day" and a "month" begin for energy and cost. From phase 3 the
+zone must have a whole-hour UTC offset in both January and July, so that day
+and month edges fall on hourly rollup buckets; Settings refuses any other zone
+and daylight saving time is supported.
 
 ## 7. Discovery (phase 2)
 
@@ -371,9 +416,9 @@ management, source edits and so on) are not audited yet.
 
 | Role | Can do |
 |---|---|
-| Admin | Everything: sources, assets, mappings, settings, users, scans, tariffs. |
-| Operator | View everything, view source health, run Test connections. From phase 3: create and edit dashboards. |
-| Viewer | View asset pages and dashboards. |
+| Admin | Everything: sources, assets, mappings, settings, users, scans, tariffs and currency. |
+| Operator | View everything (including tariffs), view source health, run Test connections. From phase 3: create, edit and delete dashboards. |
+| Viewer | View asset pages, dashboards, billing and costs, and export their data as CSV. |
 
 - On first start, with no users in the database, the UI shows a one-time
   setup screen to create the admin.
@@ -391,7 +436,7 @@ management, source edits and so on) are not audited yet.
 |---|---|
 | Setup / Login | First-run admin creation; sign in. |
 | Assets | The hierarchy as a tree. Admin can add, rename, move, and delete nodes. |
-| Asset page | Generated automatically from the asset's mappings: live power, today's energy, a trend chart with a time range picker, and a table of all mapped metrics. A cost tile is added in phase 3. |
+| Asset page | Generated automatically from the asset's mappings: live power, today's energy, a trend chart with a time range picker, and a table of all mapped metrics. Phase 3 adds a cost tile (section 10.3). |
 | Sources | List with status. Add a source through a form generated from the connector's schema. Test one or all connections. Browse a source's points and map them to assets. |
 | Storage | Database size, growth, projection, retention settings. |
 | Users | Create users, set roles, deactivate. |
@@ -400,16 +445,151 @@ Live values arrive over Server-Sent Events. Gaps in data are drawn as gaps.
 
 ## 10. Dashboards and billing (phase 3)
 
-- A dashboard is a grid of widgets that can be dragged and resized: time
-  series, bar, stat, gauge, table.
-- Each widget selects assets, a metric, an aggregation, and a time range, or
-  inherits the dashboard's time range.
-- Any widget's data can be exported as CSV.
-- A tariff is a rate per kWh, a currency, and an effective-from date. There is
-  a global default, overridable per asset. Cost for a period uses the rate in
-  effect during each part of it.
-- Cost is shown per asset by day and month and rolls up the hierarchy the same
-  way energy does.
+Updated 2026-10-08 after the phase 3 design review. This phase only reads the
+database; it never contacts a source.
+
+### 10.1 Site info and time ranges
+
+- `GET /api/site` (any signed-in user) returns the site timezone and currency.
+  The new screens, the asset-page chart and the audit page show times in the
+  site timezone.
+- Range presets: rolling `1h`, `6h`, `24h`, `7d`, `30d` (ending now) and
+  calendar `today`, `yesterday`, `this_month`, `last_month` (site timezone).
+  The client sends the preset's name and the API resolves it to a start and
+  end, so the browser and the server never disagree about where a day begins.
+  There are no custom date ranges.
+- A stored timezone that breaks the whole-hour rule (section 6) makes billing
+  and widget-data requests fail with 409 and an explanation.
+
+### 10.2 Tariffs and cost
+
+| Table / setting | Contents |
+|---|---|
+| `tariffs` | id, asset_id (null = the site default; cascades when the asset is deleted), rate_per_kwh (non-negative, up to 6 decimals), effective_from (site-local date), created_by, created_at. At most one row per asset (or site default) and effective_from. |
+| `settings.billing` | `{currency}`: a three-letter uppercase code, one for the whole site. |
+
+- The rate for an asset in an hour is the latest row with `effective_from` on
+  or before that hour's local date, taken from the nearest ancestor-or-self
+  that has such a row, else from the site default. An override therefore takes
+  over from its own effective date, and earlier hours keep the inherited rate.
+- Cost of an hour is its kWh times that rate; day and month cost are sums of
+  hours, so a mid-month rate change is exact. A parent without its own meter
+  sums its children's costs, so their overrides count.
+- Every cost figure carries `estimated` (any part is estimated, section 6) and
+  `partial` (some hour of the period with consumption had no rate). The cost is
+  null when no hour of the period has a rate; the UI shows a dash, never zero.
+  An hour with no consumption never makes a figure partial. A period with no
+  data at all (an outage, or before the first reading) under a rate costs 0.00
+  and carries `no_data`; the dash always means "no rate".
+- Viewers see the rate in effect on Billing; the tariff history (the list of
+  rows) is read by operators and admins.
+- Admins add, edit and delete tariffs and set the currency. Editing a past
+  rate recalculates history; cost is for visibility, not invoicing.
+
+### 10.3 Billing
+
+- A Billing screen (everyone) shows one month at a time (previous/next, default
+  the current month): the asset tree by day with kWh, cost, month totals and
+  the rate in effect, `~` marking estimated and `*` partial figures; figures
+  for days without data are shown muted (`no_data`). A missing rate shows a
+  dash, with a pointer to Tariffs for admins. A CSV button
+  exports the month.
+- `GET /api/billing/costs?month=YYYY-MM` returns the whole tree in one call;
+  `GET /api/billing/costs.csv?month=YYYY-MM` is the same data in long form: one
+  row per asset per day with kWh, cost, currency, estimated, partial and
+  no_data.
+- The asset summary gains today's cost and its energy figure comes from the
+  engine; the asset page shows a cost tile.
+
+### 10.4 Dashboards
+
+| Table | Contents |
+|---|---|
+| `dashboards` | id, name (unique, at most 100 characters), range (default preset), created_by, created_at, updated_at. |
+| `widgets` | id, dashboard_id (cascades), type, title (at most 100 characters), config (JSON), x, y, w, h (grid cells). |
+
+- Dashboards are shared by everyone: viewers read; operators and admins create,
+  edit and delete. A dashboard has at most 24 widgets, the site at most 50
+  dashboards.
+- The editor saves a whole dashboard with one `PUT /api/dashboards/{id}` in one
+  transaction. The request carries the `updated_at` it loaded; if someone else
+  saved since, the API answers 409 and the editor offers to reload.
+- A dashboard has one range, which a widget may override.
+
+### 10.5 Widgets
+
+A widget config has: `assets` (at most 20), `source` (`metric`, `energy` or
+`cost`), `metric` (when the source is `metric`), `aggregation` and `range`
+(a preset, or null to inherit the dashboard's). The API validates the config
+for each type.
+
+| Type | Behavior |
+|---|---|
+| Time series | One line per asset. Metrics use the tier rules of section 6 and always show the average with a min–max band (the aggregation setting is ignored here); energy and cost are bucketed by hour (ranges up to 48 hours) or by day (longer ranges); buckets without data are gaps. |
+| Bar | `bars: asset` is one bar per asset (the aggregation over the range); `bars: time` is one bar per bucket (hour buckets up to 48 hours, local-day buckets beyond) for every source, each bar being the configured aggregation inside its bucket, grouped by asset. |
+| Stat | One asset: the aggregation over the range, with its unit or currency. |
+| Gauge | One asset, source `metric`, aggregation `last` only; `min` (default 0) and `max` are set in the config. Live. |
+| Table | One row per asset with the aggregation over the range. |
+
+- Widgets cannot use the `custom` metric (an asset can have several `custom`
+  mappings and a widget names none of them); custom metrics stay on the asset
+  page.
+- Aggregations: `avg`, `min`, `max`, `last` for metrics; `sum` for energy and
+  cost. The cumulative `energy_kwh` metric is allowed only with `last` (the
+  meter reading). `last` on a preset that ends now is the latest reading and
+  updates live over the stream; it carries the reading's time, is empty when
+  that time is before the range start, and is marked stale when older than
+  three polling intervals (at least 60 seconds); on a finished calendar range
+  it is the last value in it.
+- Energy and cost over a rolling preset cover the N most recent whole hours
+  including the current partial hour (1h is the current hour so far, 24h is 24
+  hour buckets); the widget shows the window it used.
+- A metric widget uses an asset's own mapping for that metric. An asset that
+  has none is skipped and reported (`no_metric`); the editor lists only assets
+  that have the metric. Energy and cost roll up the tree as in section 6.
+- A saved widget that names an asset deleted since is shown without it, with a
+  notice; the editor lets the user remove the stale entry.
+- Live widgets (stat and gauge with `last`) share one stream subscription per
+  dashboard; the others refetch every 30 to 60 seconds. Gaps are drawn as gaps.
+- Parent and child assets are not netted against each other: a widget showing
+  both shows both totals.
+
+### 10.6 Widget data and CSV
+
+- `POST /api/widget-data` takes `{type, config, range}`, so the editor can
+  preview an unsaved widget, and returns the figures the widget draws.
+- `POST /api/widget-data/csv` exports the same query: UTF-8 with a byte-order
+  mark so Excel opens it cleanly; columns asset (full path), source or metric,
+  unit or currency, bucket start (site timezone, ISO with offset), value,
+  `estimated`, `partial`, `no_data`. Cell text starting with `=`, `+`, `-`, `@`, tab or
+  carriage return is prefixed with an apostrophe, because asset names are typed
+  by users and spreadsheets would run them as formulas.
+
+### 10.7 Access and audit
+
+Admin: tariffs and currency (the Tariffs screen is admin-only; operators read
+tariffs through the API). Operator: create, edit and delete dashboards. Everyone: read dashboards, billing, widget data and CSV. Audited
+actions: `tariff.created`, `tariff.updated`, `tariff.deleted`,
+`billing.currency_changed`, `dashboard.created`, `dashboard.updated`,
+`dashboard.deleted`, and (spec section 6) `asset.deleted` and `source.deleted`.
+Reads and exports are not audited.
+
+### 10.8 Screens
+
+Dashboards (list, view, and an edit mode with a drag-and-resize grid and a
+widget editor; unsaved changes prompt before leaving), Billing (10.3) and
+Tariffs (admin; also the currency). The grid library and the widget charts
+load only on the pages that use them.
+
+### 10.9 Not in phase 3
+
+Custom date ranges, per-user or default dashboards, time-of-use tariffs
+(section 15), image export, and the real-network items in the backlog.
+Also deferred (backlog): effective-dated mappings, spreading a counter gap
+over the hours it spans, ending a tariff override without deleting it, a
+this-year view, sessions for wall-screen displays, a plausibility ceiling on
+meters, summing children for metric widgets on parents, caching energy at
+larger scale.
 
 ## 11. Error handling
 
@@ -462,7 +642,7 @@ update before their plans are written.
 |---|---|---|
 | 1. Foundation | Compose stack; schema and migrations; setup, login, roles; connector framework; simulator, OPC UA, and Modbus connectors; sources screen with test and browse; asset hierarchy; mapping; collection with tiered storage; live stream; automatic asset pages; storage panel; user management; setup, backup, and restore scripts | From a fresh clone, one command starts the tool, and an admin can add the simulator as a source, map a panel, and see live and historical data on its asset page |
 | 2. Discovery | Scan scopes, port sweep, connector probing, graph view, suggested groupings, drag-and-drop mapping | Scanning the simulator's network finds its sources, and all 10 panels can be arranged by drag and drop |
-| 3. Dashboards and billing | Widget builder, tariffs, cost views, CSV export | An operator can build and save a dashboard, and cost per panel per day and month is visible |
+| 3. Dashboards and billing | Rollup energy engine, tariffs and currency, billing screen with CSV, dashboards with five widget types over metrics, energy and cost, widget editor, widget CSV export (section 10) | An operator can build and save a dashboard, and cost per panel per day and month is visible |
 
 The SCADA vendor API connector is written when the vendor is known and does
 not block any phase.

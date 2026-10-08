@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import { useScan } from "../api/queries";
+import { claimedCount, outcomeLabel } from "../lib/scanText";
 
 export function ScanProgress({ scanId }: { scanId: number }) {
   const { data: scan, error } = useScan(scanId);
@@ -12,9 +13,9 @@ export function ScanProgress({ scanId }: { scanId: number }) {
       <h2>Scan #{scan.id} — {scan.status}</h2>
       {inProgress && scan.stage && <p className="muted">stage: {scan.stage}</p>}
       <p className="row">
-        <span>{progress.checked ?? 0}/{progress.pairs ?? 0} probed</span>
+        <span>{progress.checked ?? 0}/{progress.pairs ?? 0} ports checked</span>
         <span>{progress.open ?? 0} open</span>
-        <span>{progress.claimed ?? 0} claimed</span>
+        <span>{claimedCount(progress)} claimed</span>
         <span>{progress.points ?? 0} points</span>
         <span>{progress.needs_credentials ?? 0} needs credentials</span>
         <span>{progress.unidentified ?? 0} unidentified</span>
@@ -30,7 +31,7 @@ export function ScanProgress({ scanId }: { scanId: number }) {
               <tbody>
                 {scan.findings.map((f) => (
                   <tr key={`${f.host}:${f.port}`}>
-                    <td>{f.host}</td><td>{f.port}</td><td>{f.connector_type ?? "—"}</td><td>{f.outcome}</td><td>{f.detail}</td>
+                    <td>{f.host}</td><td>{f.port}</td><td>{f.connector_type ?? "—"}</td><td>{outcomeLabel(f.outcome)}</td><td>{f.detail}</td>
                   </tr>
                 ))}
               </tbody>

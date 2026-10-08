@@ -1,8 +1,9 @@
 import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
 import { useState } from "react";
-import { useSeries } from "../api/queries";
+import { useSeries, useSite } from "../api/queries";
 import type { Metric, Series, SeriesTier, SummaryMetric } from "../api/types";
+import { formatSiteDateTime, formatSiteTick } from "../lib/siteTime";
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { RangePicker } from "./RangePicker";
 
@@ -28,12 +29,36 @@ export function withGaps(points: SeriesPoint[], query: Query, pick: (p: SeriesPo
   return rows;
 }
 
-export function seriesToOption(series: Series, range: Range, query: Query = rangeToQuery(range)): EChartsOption {
+type TooltipItem = { axisValue?: number; marker?: string; seriesName?: string; value?: [string | number, number | null] };
+
+/**
+ * Axis tooltip: the header time in the site zone (ECharts would print the browser's), then one row per series. The "max"
+ * series is stacked on "min" and holds the width of the band (max - min), so its row adds the min back to print the max.
+ */
+export function tooltipHtml(raw: unknown, timezone: string): string {
+  const items = (Array.isArray(raw) ? raw : [raw]) as TooltipItem[];
+  const at = items[0]?.axisValue;
+  const header = typeof at === "number" && Number.isFinite(at) ? formatSiteDateTime(new Date(at).toISOString(), timezone) : "";
+  const min = items.find((item) => item.seriesName === "min")?.value?.[1];
+  const rows = items.map((item) => {
+    const stored = item.value?.[1];
+    const v = item.seriesName === "max" && stored != null ? (min == null ? null : Number(stored) + Number(min)) : stored;
+    return `${item.marker ?? ""}${item.seriesName ?? ""}: ${v == null ? "—" : Number(v.toFixed(3))}`;
+  });
+  return [header, ...rows].join("<br/>");
+}
+
+export function seriesToOption(series: Series, range: Range, query: Query = rangeToQuery(range), timezone = "UTC"): EChartsOption {
+  const bucket = range === "7d" ? "hour" : null; // a week needs dates on the ticks, a day does not
   return {
     animation: false,
-    tooltip: { trigger: "axis" },
+    useUTC: true, // tick positions on whole UTC hours; labels below are formatted in the site zone, not the browser's
+    tooltip: { trigger: "axis", formatter: (raw: unknown) => tooltipHtml(raw, timezone) },
     grid: { left: 60, right: 20, top: 30, bottom: 40 },
-    xAxis: { type: "time" },
+    xAxis: {
+      type: "time",
+      axisLabel: { formatter: (value: number) => formatSiteTick(new Date(value).toISOString(), timezone, bucket) },
+    },
     yAxis: { type: "value", name: series.unit, scale: true },
     series: [
       { name: "min", type: "line", data: withGaps(series.points, query, (p) => p.min), lineStyle: { opacity: 0 }, symbol: "none", stack: "band", connectNulls: false },
@@ -44,7 +69,7 @@ export function seriesToOption(series: Series, range: Range, query: Query = rang
 }
 
 export function TrendChart({ assetId, metrics }: { assetId: number; metrics: SummaryMetric[] }) {
-  const available = metrics.map((m) => m.metric);
+  const available = [...new Set(metrics.map((m) => m.metric))]; // two mappings of one metric are one entry in the picker
   const [metric, setMetric] = useState<Metric | null>(
     available.includes("active_power_kw") ? "active_power_kw" : (available[0] ?? null),
   );
@@ -53,6 +78,7 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
   const mappings = metrics.filter((m) => m.metric === metric);
   const chosenMapping = mappings.some((m) => m.mapping_id === mappingId) ? mappingId : undefined;
   const { data, error, isFetching } = useSeries(assetId, metric, range, mappings.length > 1 ? chosenMapping : undefined);
+  const site = useSite();
   if (metric === null) return <p className="muted">No metric to chart.</p>;
   return (
     <section>
@@ -75,7 +101,13 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
         {isFetching && <span className="muted">updating…</span>}
       </div>
       {error && <p className="error" role="alert">{error.message}</p>}
-      {data && (data.points.length === 0 ? <p className="muted">No data in this range.</p> : <ReactECharts option={seriesToOption(data, range)} style={{ height: 320 }} notMerge />)}
+      {site.error && <p className="error" role="alert">Could not load the site time zone: {site.error.message}</p>}
+      {data && data.points.length === 0 && <p className="muted">No data in this range.</p>}
+      {/* The axis is drawn in the site's zone: wait for it rather than showing UTC for a moment, or for good. */}
+      {data && data.points.length > 0 && !site.data && !site.error && <p className="muted">loading…</p>}
+      {data && data.points.length > 0 && site.data && (
+        <ReactECharts option={seriesToOption(data, range, undefined, site.data.timezone)} style={{ height: 320 }} notMerge />
+      )}
     </section>
   );
 }

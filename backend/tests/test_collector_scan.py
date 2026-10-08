@@ -13,7 +13,7 @@ from dcdash.connectors.base import connector_types
 from dcdash.core.crypto import encrypt
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.model import Simulator
-from helpers import free_port, http_server, make_source, modbus_server, opcua_server, silent_server
+from helpers import free_port, free_ports, http_server, make_source, modbus_server, opcua_server, silent_server
 
 STAGES = ["sweep", "probe", "browse"]
 
@@ -125,7 +125,7 @@ async def test_a_slow_progress_write_never_overwrites_a_later_stage_or_the_final
     monkeypatch.setattr(scan_module, "_set_stage", slow_sweep_writes)
     monkeypatch.setattr(scan_module, "PROBE_TIMEOUT", 0.15)  # the silent port keeps the scan going past the slow write
     async with silent_server() as open_port:
-        ports = [free_port() for _ in range(6)] + [open_port]
+        ports = free_ports(6) + [open_port]  # six different closed ports: the scan counts a repeated port once
         scan = await make_scan(db, ["127.0.0.1"], ports)
         await run_scan(db, scan)
     await asyncio.sleep(0.25)  # a stray late write would land now
@@ -144,7 +144,7 @@ async def test_progress_counts_are_written_while_the_sweep_runs(db, monkeypatch)
         await real(pool, scan_id, stage, progress)
 
     monkeypatch.setattr(scan_module, "_set_stage", spy)
-    await run_scan(db, await make_scan(db, ["127.0.0.1"], [free_port() for _ in range(4)]))
+    await run_scan(db, await make_scan(db, ["127.0.0.1"], free_ports(4)))
     assert any(stage == "sweep" and p["checked"] >= 1 for stage, p in seen)  # not only the 0-count first write
     assert seen[0][1]["pairs"] == 4 and seen[0][1]["hosts"] == 1
 

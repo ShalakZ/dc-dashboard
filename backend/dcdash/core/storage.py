@@ -15,9 +15,13 @@ from dcdash.core.settings_store import get_setting, set_setting
 
 STORAGE_KEY = "storage"
 
+# The rollups refresh over this trailing window; it must match the start_offset set in migration 0004. Raw data older
+# than the window may be dropped by retention without the refresh ever reaching into it, so raw retention must exceed it.
+REFRESH_WINDOW_DAYS = 7
+
 
 class StorageSettings(BaseModel):
-    raw_retention_days: int = Field(30, ge=2, le=3650)
+    raw_retention_days: int = Field(30, le=3650)
     compress_after_days: int = Field(7, ge=1, le=365)
     rollup_1m_retention_days: int = Field(730, ge=30, le=36500)
     disk_capacity_gb: float = Field(100, gt=0)
@@ -25,6 +29,11 @@ class StorageSettings(BaseModel):
 
     @model_validator(mode="after")
     def _ordered(self) -> StorageSettings:
+        if self.raw_retention_days < REFRESH_WINDOW_DAYS + 1:
+            raise ValueError(
+                f"raw retention must be at least {REFRESH_WINDOW_DAYS + 1} days, "
+                f"one more than the {REFRESH_WINDOW_DAYS}-day rollup refresh window"
+            )
         if self.raw_retention_days < self.compress_after_days + 1:
             raise ValueError("raw retention must be at least one day longer than compression delay")
         if self.rollup_1m_retention_days < self.raw_retention_days:
@@ -100,7 +109,7 @@ _STATS_SQL = text(
 _ROWS_SQL = text(
     """
     SELECT d::date AS day, coalesce(sum(r.n), 0)::bigint AS rows
-    FROM generate_series(:first, :today, INTERVAL '1 day') AS d
+    FROM generate_series(CAST(:first AS date), CAST(:today AS date), INTERVAL '1 day') AS d
     LEFT JOIN readings_1h r ON r.bucket >= d AND r.bucket < d + INTERVAL '1 day'
     GROUP BY d ORDER BY d
     """

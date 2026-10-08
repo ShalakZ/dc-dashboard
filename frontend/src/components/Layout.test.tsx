@@ -114,3 +114,15 @@ describe("RequireRole", () => {
     expect(await screen.findByText("users page")).toBeInTheDocument();
   });
 });
+
+describe("Layout phase 3 links", () => {
+  it.each(["viewer", "operator", "admin"] as const)("%s sees Dashboards and Billing, and Tariffs only as admin", async (role) => {
+    mockFetch(routes(role));
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await screen.findByText(`u (${role})`); // the user has loaded, so role-gated links are decided
+    expect(screen.getByRole("link", { name: "Dashboards" })).toHaveAttribute("href", "/dashboards");
+    expect(screen.getByRole("link", { name: "Billing" })).toHaveAttribute("href", "/billing");
+    if (role === "admin") expect(screen.getByRole("link", { name: "Tariffs" })).toHaveAttribute("href", "/tariffs");
+    else expect(screen.queryByRole("link", { name: "Tariffs" })).not.toBeInTheDocument();
+  });
+});

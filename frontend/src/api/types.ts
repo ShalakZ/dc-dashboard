@@ -5,6 +5,10 @@ export interface User { id: number; username: string; role: Role }
 
 export interface Asset { id: number; parent_id: number | null; name: string; kind: string; sort_order: number }
 export interface AssetIn { name: string; parent_id: number | null; kind: string; sort_order: number }
+/** What deleting an asset takes with it (the 409 body of DELETE /api/assets/{id} without confirm=true). */
+export interface AssetImpact { assets: number; mappings: number; tariffs: number }
+/** What deleting a source takes with it (the 409 body of DELETE /api/sources/{id} without confirm=true). */
+export interface SourceImpact { points: number; mappings: number }
 
 export interface Source {
   id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";
@@ -50,7 +54,9 @@ export interface SummaryMetric {
 export interface Summary {
   asset: { id: number; name: string; parent_id: number | null; kind: string };
   metrics: SummaryMetric[];
-  energy_today: { kwh: number; estimated: boolean } | null;
+  energy_today: { kwh: number; estimated: boolean; no_data: boolean } | null;
+  cost_today: CostToday | null;
+  currency: string | null;
 }
 export interface SeriesPoint { ts: string; avg: number; min: number; max: number }
 export type SeriesTier = "raw" | "1m" | "1h";
@@ -122,3 +128,65 @@ export type AcceptIn = { source_id: number; points: AcceptPointIn[] } & (
 export interface AcceptResult { asset_id: number; mapping_ids: number[] }
 export interface AuditEntry { id: number; user_id: number | null; username: string | null; action: string; detail: Record<string, unknown>; ts: string }
 export interface AuditPage { total: number; items: AuditEntry[] }
+
+// ---- Phase 3: site info, tariffs, billing, dashboards ----
+
+export type RangePreset = "1h" | "6h" | "24h" | "7d" | "30d" | "today" | "yesterday" | "this_month" | "last_month";
+
+export interface Site { timezone: string; currency: string | null }
+export interface BillingSettings { currency: string | null }
+
+export interface Tariff {
+  id: number; asset_id: number | null; asset_name: string | null; rate_per_kwh: number;
+  effective_from: string; created_by: number | null; created_at: string;
+}
+export interface TariffIn { asset_id: number | null; rate_per_kwh: number; effective_from: string }
+export interface TariffPatch { rate_per_kwh?: number; effective_from?: string }
+
+/**
+ * One asset on one day (or the whole month). `cost` is null when no rate applied; `no_data` means no hour of it was
+ * recorded, so its 0 kWh is not a measurement.
+ */
+export interface CostFigure { kwh: number; cost: number | null; estimated: boolean; partial: boolean; no_data: boolean }
+/** `cost_today` of the asset summary: no kWh, the energy tile already has it. */
+export interface CostToday { cost: number | null; estimated: boolean; partial: boolean; no_data: boolean }
+export interface BillingAssetRow {
+  asset_id: number; parent_id: number | null; name: string; path: string; rate_per_kwh: number | null;
+  days: (CostFigure | null)[]; total: CostFigure | null;
+}
+export interface BillingCosts { month: string; timezone: string; currency: string | null; days: string[]; assets: BillingAssetRow[] }
+
+export const WIDGET_TYPES = ["timeseries", "bar", "stat", "gauge", "table"] as const;
+export type WidgetType = (typeof WIDGET_TYPES)[number];
+export type WidgetSource = "metric" | "energy" | "cost";
+export type WidgetAggregation = "avg" | "min" | "max" | "last" | "sum";
+export interface WidgetConfig {
+  assets: number[]; source: WidgetSource; metric: Metric | null; aggregation: WidgetAggregation;
+  range: RangePreset | null; bars: "asset" | "time"; min: number; max: number | null;
+}
+export interface Widget { id: number; type: WidgetType; title: string; config: WidgetConfig; x: number; y: number; w: number; h: number }
+export type WidgetIn = Omit<Widget, "id">;
+export interface Dashboard { id: number; name: string; range: RangePreset; updated_at: string; widgets: Widget[] }
+export interface DashboardListItem { id: number; name: string; range: RangePreset; widget_count: number; updated_at: string }
+export interface DashboardIn { name: string; range?: RangePreset }
+export interface DashboardSave { name: string; range: RangePreset; updated_at: string; widgets: WidgetIn[] }
+
+/**
+ * One bucket of a widget series. `value === null && !no_data` is a bucket that was recorded but has no rate (draw a
+ * dash); `no_data` is a gap (draw nothing).
+ */
+export interface WidgetPoint {
+  ts: string; value: number | null; min: number | null; max: number | null;
+  estimated: boolean; partial: boolean; no_data: boolean;
+}
+export interface WidgetSeries { asset_id: number; name: string; points: WidgetPoint[]; estimated: boolean; partial: boolean }
+/** `ts`/`stale` describe a metric `last` reading (null/false for every other value); `no_data` is true when nothing was recorded. */
+export interface WidgetValue {
+  asset_id: number; name: string; value: number | null; estimated: boolean; partial: boolean; point_id: number | null;
+  no_data: boolean; ts: string | null; stale: boolean;
+}
+export interface WidgetData {
+  type: WidgetType; mode: "series" | "values"; source: WidgetSource; metric: Metric | null; unit: string | null;
+  range: { preset: RangePreset; start: string; end: string }; tier: SeriesTier | null; bucket: "hour" | "day" | null;
+  series: WidgetSeries[]; values: WidgetValue[]; missing: number[]; no_metric: number[];
+}

@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, func
+from sqlalchemy import DateTime, ForeignKey, Numeric, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -137,6 +138,39 @@ class GraphLayout(Base):
     node_id: Mapped[str] = mapped_column(primary_key=True)
     x: Mapped[float]
     y: Mapped[float]
+
+
+class Tariff(Base):
+    __tablename__ = "tariffs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"))  # None = the site default
+    rate_per_kwh: Mapped[Decimal] = mapped_column(Numeric(13, 6))
+    effective_from: Mapped[date]
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+
+
+class Dashboard(Base):
+    __tablename__ = "dashboards"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    range: Mapped[str] = mapped_column(default="24h", server_default="24h")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+
+
+class Widget(Base):
+    __tablename__ = "widgets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dashboard_id: Mapped[int] = mapped_column(ForeignKey("dashboards.id", ondelete="CASCADE"))
+    type: Mapped[str]
+    title: Mapped[str] = mapped_column(default="", server_default="")
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    x: Mapped[int]
+    y: Mapped[int]
+    w: Mapped[int]
+    h: Mapped[int]
 
 
 class AuditLog(Base):

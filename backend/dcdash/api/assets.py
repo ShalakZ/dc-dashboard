@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, notify, require_role
-from dcdash.core.models import Asset
+from dcdash.core.audit import audit
+from dcdash.core.models import Asset, Mapping, Tariff, User
 from dcdash.core.pg import CONFIG_CHANNEL
 
 router = APIRouter(prefix="/api", tags=["assets"])
@@ -52,6 +54,22 @@ async def _is_self_or_descendant(db: AsyncSession, candidate_id: int, asset_id: 
     return False
 
 
+async def _subtree_impact(db: AsyncSession, asset_id: int) -> dict[str, int]:
+    """What deleting the asset takes with it: its subtree's assets (itself included), their mappings and tariffs."""
+    subtree = select(Asset.id).where(Asset.id == asset_id).cte("subtree", recursive=True)
+    subtree = subtree.union(select(Asset.id).where(Asset.parent_id == subtree.c.id))  # UNION, so a bad cycle ends
+    ids = select(subtree.c.id)
+    return {
+        "assets": await db.scalar(select(func.count()).select_from(subtree)) or 0,
+        "mappings": await db.scalar(select(func.count()).select_from(Mapping).where(Mapping.asset_id.in_(ids))) or 0,
+        "tariffs": await db.scalar(select(func.count()).select_from(Tariff).where(Tariff.asset_id.in_(ids))) or 0,
+    }
+
+
+def _counted(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
 @router.get("/assets", response_model=list[AssetOut], dependencies=[Viewer])
 async def list_assets(db: AsyncSession = Depends(get_db)) -> list[Asset]:
     return list((await db.scalars(select(Asset).order_by(Asset.sort_order, Asset.name))).all())
@@ -85,8 +103,32 @@ async def update_asset(asset_id: int, body: AssetPatch, db: AsyncSession = Depen
     return asset
 
 
-@router.delete("/assets/{asset_id}", status_code=204, dependencies=[Admin])
-async def delete_asset(asset_id: int, db: AsyncSession = Depends(get_db)) -> None:
-    await db.delete(await get_asset(db, asset_id))
+@router.delete("/assets/{asset_id}", status_code=204, response_model=None)
+async def delete_asset(
+    asset_id: int,
+    confirm: bool = False,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Admin,
+) -> JSONResponse | None:
+    asset = await get_asset(db, asset_id)
+    impact = await _subtree_impact(db, asset_id)
+    if not confirm and (impact["assets"] > 1 or impact["mappings"] or impact["tariffs"]):
+        # Past energy and cost are recomputed from today's configuration (spec 6), so this changes billing history.
+        lost = (
+            f"{_counted(impact['assets'], 'asset')}, {_counted(impact['mappings'], 'mapping')} "
+            f"and {_counted(impact['tariffs'], 'tariff')}"
+        )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": (
+                    f'Deleting "{asset.name}" deletes {lost}, and their past energy and cost figures disappear '
+                    "from billing and dashboards. Repeat the request with confirm=true to go ahead."
+                ),
+                **impact,
+            },
+        )
+    await db.delete(asset)
+    await audit(db, admin.id, "asset.deleted", {"asset_id": asset_id, "name": asset.name, **impact})
     await notify(db, CONFIG_CHANNEL)  # its mappings are gone, so the collector must reload
     await db.commit()

@@ -1,58 +1,24 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router";
+import { createBrowserRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import "./app.css";
+import { App } from "./App";
 import { AuthProvider } from "./auth/AuthProvider";
-import { RequireAuth, RequireRole } from "./auth/RequireAuth";
-import { Layout } from "./components/Layout";
-import { AssetPage } from "./pages/AssetPage";
-import { AssetsPage } from "./pages/AssetsPage";
-import { AuditPage } from "./pages/AuditPage";
-import { DiscoveryPage } from "./pages/DiscoveryPage";
-import { LoginPage } from "./pages/LoginPage";
-import { PasswordPage } from "./pages/PasswordPage";
-import { ScansPage } from "./pages/ScansPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { SetupPage } from "./pages/SetupPage";
-import { SourcePointsPage } from "./pages/SourcePointsPage";
-import { SourcesPage } from "./pages/SourcesPage";
-import { StoragePage } from "./pages/StoragePage";
-import { UsersPage } from "./pages/UsersPage";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 
-export function App() {
-  return (
-    <Routes>
-      <Route path="/setup" element={<SetupPage />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route element={<RequireAuth><Layout /></RequireAuth>}>
-        <Route path="/" element={<Navigate to="/assets" replace />} />
-        <Route path="/assets" element={<AssetsPage />} />
-        <Route path="/assets/:id" element={<AssetPage />} />
-        <Route path="/sources" element={<SourcesPage />} />
-        <Route path="/sources/:id/points" element={<SourcePointsPage />} />
-        <Route path="/scans" element={<RequireRole min="operator"><ScansPage /></RequireRole>} />
-        <Route path="/discovery" element={<RequireRole min="operator"><DiscoveryPage /></RequireRole>} />
-        <Route path="/users" element={<RequireRole min="admin"><UsersPage /></RequireRole>} />
-        <Route path="/settings" element={<RequireRole min="admin"><SettingsPage /></RequireRole>} />
-        <Route path="/storage" element={<RequireRole min="admin"><StoragePage /></RequireRole>} />
-        <Route path="/audit" element={<RequireRole min="admin"><AuditPage /></RequireRole>} />
-        <Route path="/password" element={<PasswordPage />} />
-      </Route>
-    </Routes>
-  );
-}
+// A data router, because useBlocker (unsaved dashboard edits) only works under one. A single catch-all route keeps
+// App's own <Routes> tree (in App.tsx) exactly as it is.
+const router = createBrowserRouter([{ path: "*", element: <App /> }]);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
-      </BrowserRouter>
+      <AuthProvider>
+        <RouterProvider router={router} />
+      </AuthProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

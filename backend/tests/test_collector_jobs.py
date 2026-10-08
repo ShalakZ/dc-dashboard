@@ -237,8 +237,8 @@ async def test_idle_workers_poll_when_no_wake_arrives(db):
         await stop_loop(task, stop)
 
 
-async def test_a_wake_while_all_workers_are_busy_is_not_lost(db):
-    """A job queued while every worker is busy is claimed as soon as one frees up, without a poll."""
+async def test_a_job_queued_while_every_worker_is_busy_is_claimed_as_soon_as_one_frees_up(db):
+    """No NOTIFY and a 30 s poll: the worker that finishes looks for more work before it goes to sleep."""
     from dcdash.connectors.base import ConnectionCheck
 
     release = asyncio.Event()
@@ -257,8 +257,7 @@ async def test_a_wake_while_all_workers_are_busy_is_not_lost(db):
     task = asyncio.create_task(run_job_loop(db, lambda *_: BlockingConnector(), wake, stop, workers=1, poll_seconds=30))
     try:
         await wait_for(status_check(db, first), "running")
-        second = await add_job(db, "test_source", source)
-        wake.set()
+        second = await add_job(db, "test_source", source)  # queued behind the only worker; nothing wakes anyone
         await asyncio.sleep(0.1)
         assert await status_of(db, second) == "pending"
         release.set()
@@ -268,8 +267,17 @@ async def test_a_wake_while_all_workers_are_busy_is_not_lost(db):
         await stop_loop(task, stop)
 
 
+async def test_a_wake_that_arrived_before_the_wait_started_ends_it_at_once_and_is_consumed():
+    """A NOTIFY can land between a worker's empty claim and the start of its wait: it must not be lost or left set."""
+    wake = asyncio.Event()
+    wake.set()
+    await asyncio.wait_for(jobs_module._wait_for_work(wake, None, 30), timeout=1)
+    assert not wake.is_set()
+
+
 async def test_stopping_ends_idle_workers_cleanly(db):
     wake, stop = asyncio.Event(), asyncio.Event()
+    before = set(asyncio.all_tasks())  # the loop is shared by the whole session: only tasks created below count
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         task = asyncio.create_task(run_job_loop(db, factory(), wake, stop, poll_seconds=30))
@@ -277,8 +285,8 @@ async def test_stopping_ends_idle_workers_cleanly(db):
         stop.set()
         await asyncio.wait_for(task, timeout=2)  # well before the 30 s poll
     assert task.done() and task.exception() is None
-    leftovers = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
-    assert not [t for t in leftovers if "jobs" in repr(t.get_coro())]
+    leaked = [t for t in asyncio.all_tasks() if t not in before and not t.done()]
+    assert not leaked, [getattr(t.get_coro(), "__qualname__", repr(t)) for t in leaked]
 
 
 async def test_stopping_lets_a_running_job_finish_first(db):

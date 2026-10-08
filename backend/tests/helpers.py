@@ -96,6 +96,17 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def free_ports(count: int) -> list[int]:
+    """`count` different free ports: free_port() can return the same number twice in a row, and a scan counts a
+    repeated port once."""
+    ports: list[int] = []
+    while len(ports) < count:
+        port = free_port()
+        if port not in ports:
+            ports.append(port)
+    return ports
+
+
 @contextlib.asynccontextmanager
 async def opcua_server(sim: Simulator | None = None, password: str | None = None):
     """Run an in-process OPC UA simulator server on a free port."""
@@ -140,23 +151,74 @@ async def http_server(app):
 @contextlib.asynccontextmanager
 async def silent_server():
     """A TCP server that accepts connections and never answers; yields its port."""
-    held = []
+    held: list[asyncio.Transport] = []
 
-    async def handle(reader, writer):
-        held.append((writer, asyncio.current_task()))
-        await asyncio.sleep(3600)
+    class Hold(asyncio.Protocol):  # takes the connection and never reads or answers
+        def connection_made(self, transport):
+            held.append(transport)
 
-    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    server = await asyncio.get_running_loop().create_server(Hold, "127.0.0.1", 0)
     try:
         yield server.sockets[0].getsockname()[1]
     finally:
-        for writer, task in held:
-            writer.close()
-            task.cancel()
         server.close()
-        await server.wait_closed()
+        # A client that connected an instant ago may still be on its way from accept() to connection_made(). Let the
+        # loop run so that it arrives and is closed below; one that is missed would keep wait_closed() waiting forever
+        # (the old handler-based version did that now and then, and there is no pytest-timeout), so wait a bounded time.
+        for _ in range(3):
+            await asyncio.sleep(0)
+        for transport in held:
+            transport.close()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(server.wait_closed(), 2.0)
 
 
-async def insert_readings(db, point_id: int, start, step_seconds: int, values: list[float]) -> None:
+async def insert_readings(db, point_id: int, start, step_seconds: float, values: list[float]) -> None:
     rows = [(point_id, start + timedelta(seconds=i * step_seconds), v, 0) for i, v in enumerate(values)]
     await db.executemany("INSERT INTO readings (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)", rows)
+
+
+async def refresh_rollup(db, view: str) -> None:
+    """Refresh a rollup over all time, waiting out a policy job that is refreshing it right now.
+
+    A migration round-trip test re-creates the refresh policies, and a new policy job can start at once, so the view
+    may be locked ("concurrent refresh"); the lock clears when the job finishes. refresh_continuous_aggregate must run
+    outside a transaction, which asyncpg's autocommitting pool.execute satisfies.
+    """
+    for attempt in range(50):
+        try:
+            await db.execute(f"CALL refresh_continuous_aggregate('{view}', NULL, NULL)")
+            return
+        except asyncpg.LockNotAvailableError:
+            if attempt == 49:
+                raise
+            await asyncio.sleep(0.2)
+
+
+async def settle_rollups(db) -> None:
+    """Materialize both rollups now, so a test never depends on where the policy jobs left the real-time watermark."""
+    await refresh_rollup(db, "readings_1m")
+    await refresh_rollup(db, "readings_1h")  # built on readings_1m: refresh in this order
+
+
+_REFRESH_POLICIES = """
+    SELECT ca.view_name,
+           (j.config->>'start_offset')::interval AS start_offset,
+           (j.config->>'end_offset')::interval AS end_offset,
+           j.schedule_interval
+    FROM timescaledb_information.jobs j
+    JOIN timescaledb_information.continuous_aggregates ca
+      ON j.hypertable_name IN (ca.view_name, ca.materialization_hypertable_name)
+    WHERE j.proc_name = 'policy_refresh_continuous_aggregate'
+"""
+
+
+async def refresh_policies(db) -> dict[str, tuple[timedelta, timedelta, timedelta]]:
+    """Each continuous aggregate's refresh policy: view name -> (start_offset, end_offset, schedule_interval).
+
+    The offsets are cast to `interval` in SQL, so the test does not depend on how the config JSON spells them.
+    """
+    return {
+        r["view_name"]: (r["start_offset"], r["end_offset"], r["schedule_interval"])
+        for r in await db.fetch(_REFRESH_POLICIES)
+    }
