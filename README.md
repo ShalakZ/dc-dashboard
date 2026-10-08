@@ -257,8 +257,9 @@ asset tree by day: kWh above, cost below, then the month total and the rate in e
 figure estimated from power and `*` a partial cost (some energy in the period had no rate). A dash means
 one thing: there is no rate for that cost, and a missing rate is never shown as zero. An empty cell is an
 asset without a meter, or a day that has not been reached yet. A shaded cell with `0.0` kWh and a `0.00`
-cost, titled "no data", is a day with no data: its zero is not a measurement. The CSV button exports one
-row per asset per day (`asset,date,kwh,cost,currency,estimated,partial,no_data`). The asset page shows today's cost next to
+cost (a dash when no rate applies), titled "no data", is a day with no data: its zero is not a
+measurement. The CSV button exports one row per asset per day
+(`asset,date,kwh,cost,currency,estimated,partial,no_data`). The asset page shows today's cost next to
 today's energy.
 
 **Tariffs** (admin) hold the site currency (one three-letter code for the whole site; when it is unset,

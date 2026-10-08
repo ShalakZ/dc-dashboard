@@ -77,6 +77,7 @@ Charts
 - Time-series gap rule: a gap is a step above 1.5 x the median step, so a slow meter's dots appear at 1 to 1.5 bucket widths and flip at 2 to 2.5; a window where half or more of the buckets are holes is drawn joined. The proper fix needs the backend to send the expected step (bucket width) per series. Cosmetic: `markIsolated` keeps every point visible. (`TimeSeriesWidget.tsx` `bucketMs`, `withGaps`.)
 - Grouped bars: the no-rate dash sits at the category centre, not in the asset's slot (`BarWidget.tsx` `dashMarks`). Charts have no text alternative and a widget title is an `h3` under the page `h1` (`WidgetFrame.tsx`).
 - Real-browser walkthrough of Task 9 (items 2, 7, 8) is still to do: the dash position in grouped bars; day-bucket labels with `useUTC: true` in Asia/Qatar (buckets start at 21:00 UTC, labels may sit off the bars); the `1h` preset with 30 s polling (12 s buckets, steps of 24 and 36 s break into dots or flip).
+- No-data wording is not yet the same everywhere: `GaugeWidget` still draws a metric with no reading as a dimmed dash, and a stat or table whose cost has no rate shows the dash without a "— no rate" hint in its body (the frame hint covers charts and gauges only).
 - Asset-page chart: the axis formatter has no finite guard (`TrendChart.tsx`); `WidgetConfig.metric` still admits `"custom"` at type level (`api/types.ts`; `WIDGET_METRICS` filters it out).
 
 Editor and dashboards

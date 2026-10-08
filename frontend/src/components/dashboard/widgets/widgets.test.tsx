@@ -346,12 +346,24 @@ describe("bar", () => {
     expect(line(2)).not.toContain("no data");
   });
 
-  it("marks no dash at all when the only missing figures recorded nothing", () => {
-    const silent = valuesData({ type: "bar", source: "cost", metric: null, unit: "QAR", values: [
+  it("marks no dash at all when the only missing figures are metrics that recorded nothing", () => {
+    const silent = valuesData({ type: "bar", source: "metric", metric: "active_power_kw", unit: "kW", values: [
       valueRow({ name: "Live", value: 3, point_id: null }),
       valueRow({ asset_id: 6, name: "Quiet", value: null, no_data: true, point_id: null }),
     ] });
     expect(barSeries(barOption(silent, TZ))[0].markPoint).toBeUndefined();
+  });
+
+  it("keeps the dash for a cost without a rate even when it also recorded nothing, as stat, table and Billing do", () => {
+    const unpriced = valuesData({ type: "bar", source: "cost", metric: null, unit: "QAR", values: [
+      valueRow({ name: "Live", value: 3, point_id: null }),
+      valueRow({ asset_id: 6, name: "Quiet", value: null, no_data: true, point_id: null }),
+    ] });
+    const option = asBar(barOption(unpriced, TZ));
+    expect(option.series[0].markPoint?.data).toEqual([expect.objectContaining({ coord: [1, 0] })]);
+    const text = option.tooltip.formatter([{ name: "Quiet", dataIndex: 1, seriesIndex: 0, marker: "" }]);
+    expect(text).toContain("—");
+    expect(text).not.toContain("no data");
   });
 
   it("still notes '(no data)' beside a zero that recorded nothing", () => {
@@ -604,7 +616,7 @@ describe("table", () => {
     expect(screen.getByRole("row", { name: /Fresh/ }).lastElementChild).not.toHaveClass("muted");
   });
 
-  it("says 'no data' with a title for a metric with no reading, keeps the dash for a cost without a rate, and titles a muted zero", () => {
+  it("says 'no data' with a title for a metric with no reading, and titles a muted zero", () => {
     const rows = [
       valueRow({ name: "Silent", value: null, no_data: true, point_id: null }),
       valueRow({ asset_id: 6, name: "Zero", value: 0, no_data: true, point_id: null }),

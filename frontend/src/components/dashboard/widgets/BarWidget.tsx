@@ -47,8 +47,10 @@ export function barOption(data: WidgetData, timezone: string): EChartsOption {
   const unit = unitSuffix(data.unit);
   if (data.mode === "values") {
     const labels = chartLabels(data.values);
-    // A bar that recorded nothing is "no data" (no dash mark); the dash is kept for a figure that exists but has no rate.
-    const lines = data.values.map((v) => (v.value === null ? (v.no_data ? NO_DATA : DASH) : `${figureText(v.value, v)}${unit}${v.no_data ? ` (${NO_DATA})` : ""}`));
+    // A metric that recorded nothing is "no data", with no dash mark: the dash means a missing rate and nothing else. A cost
+    // without a rate keeps its dash whether or not anything was recorded, like the stat, the table and Billing.
+    const noReading = (v: WidgetData["values"][number]) => v.value === null && v.no_data && data.source !== "cost";
+    const lines = data.values.map((v) => (v.value === null ? (noReading(v) ? NO_DATA : DASH) : `${figureText(v.value, v)}${unit}${v.no_data ? ` (${NO_DATA})` : ""}`));
     return {
       animation: false,
       tooltip: { trigger: "axis", formatter: tooltipFor([lines], labels, false) },
@@ -57,7 +59,7 @@ export function barOption(data: WidgetData, timezone: string): EChartsOption {
       yAxis: { type: "value", name: data.unit ?? undefined },
       series: [{
         type: "bar", data: data.values.map((v) => v.value),
-        ...dashMarks(data.values.flatMap((v, i) => (v.value === null && !v.no_data ? [i] : []))),
+        ...dashMarks(data.values.flatMap((v, i) => (v.value === null && !noReading(v) ? [i] : []))),
       }],
     } as EChartsOption;
   }
