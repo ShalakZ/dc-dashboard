@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
+import { MUTED_FIGURE } from "../../../lib/widgetFormat";
 import { config, seriesData, seriesPoint, valueRow, valuesData } from "../../../test/dashboardFixtures";
 import { LiveValuesContext } from "../LiveValuesContext";
 import { BarWidget, barOption } from "./BarWidget";
@@ -479,12 +480,13 @@ describe("gauge", () => {
     expect(empty.series[0].pointer.show).toBe(false);
     expect(empty.series[0].progress.show).toBe(false);
     expect(empty.series[0].detail.formatter()).toBe("—");
+    expect(gauge({ value: null, noData: true }).series[0].detail.formatter()).toBe("no data");
     expect(empty.series[0].data[0].value).toBe(10); // parked at the scale's start so the dash still has a place to show
   });
 
   it("dims the figure when it is stale or recorded nothing", () => {
     expect(gauge().series[0].detail.color).toBeUndefined();
-    expect(gauge({ muted: true }).series[0].detail.color).toBe("#999");
+    expect(gauge({ muted: true }).series[0].detail.color).toBe(MUTED_FIGURE); // the stat's muted colour, which reads at 4.5:1
   });
 
   it("renders the fetched value, a live value for a live gauge, and ignores the stream when not live", () => {
@@ -586,9 +588,18 @@ describe("stat", () => {
     expect(screen.getByText("10.50")).toBeInTheDocument();
   });
 
-  it("shows a dash when the live reading is bad", () => {
+  it("says 'no data' when the live reading is bad, exactly as for a fetched row that recorded nothing", () => {
+    const silent = valuesData({ values: [valueRow({ value: null, no_data: true })] });
+    const fetched = render(<StatWidget data={silent} live={false} />);
+    const before = screen.getByTitle("no data");
+    const shown = { text: before.textContent, muted: before.classList.contains("muted") };
+    fetched.unmount();
+    // a good fetch, then a bad stream sample: the meter's reads are failing
     render(<LiveValuesContext.Provider value={stream(7, 1)}><StatWidget data={valuesData()} live /></LiveValuesContext.Provider>);
-    expect(screen.getByText("—")).toBeInTheDocument();
+    const after = screen.getByTitle("no data");
+    expect(after.textContent).toBe("no data");
+    expect({ text: after.textContent, muted: after.classList.contains("muted") }).toEqual(shown);
+    expect(screen.queryByText("—")).not.toBeInTheDocument();
   });
 
   it("goes back to the fetched figure when the stream has dropped", () => {

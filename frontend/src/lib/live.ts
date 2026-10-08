@@ -29,5 +29,7 @@ export function liveOrFetched(live: LiveValue | undefined, row: Pick<WidgetValue
   const fetched: Reading = { value: row.value, ts: row.ts, stale: row.stale, noData: row.no_data };
   if (!live) return fetched;
   if (row.ts !== null && !(Date.parse(live.ts) > Date.parse(row.ts))) return fetched;
-  return { value: live.quality === 0 ? live.value : null, ts: live.ts, stale: false, noData: false };
+  // A bad read is a reading that recorded nothing, as the fetched row of a failing meter says (`no_data`), so a widget
+  // reads the same whether the figure comes from the fetch or from the stream.
+  return { value: live.quality === 0 ? live.value : null, ts: live.ts, stale: false, noData: live.quality !== 0 || live.value === null };
 }

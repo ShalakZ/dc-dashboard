@@ -15,6 +15,9 @@ export function figureText(value: number | null | undefined, flags: Flags): stri
 /** The title and wording of a figure that recorded nothing. */
 export const NO_DATA = "no data";
 
+/** The colour of a dimmed figure (stale, or nothing recorded) where CSS cannot reach it, as in a gauge; `.stat .big.muted` in app.css is the same. */
+export const MUTED_FIGURE = "#6e6e6e";
+
 /**
  * A stat or table figure. A metric with no reading in the range (null and `no_data`) says "no data": the dash means a
  * missing rate and nothing else. A cost keeps its dash whether or not anything was recorded, as Billing does.

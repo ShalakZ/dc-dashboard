@@ -108,7 +108,8 @@ describe("DashboardPage (view)", () => {
     expect(await table.findByText("10.50")).toBeInTheDocument(); // a table is not live
     expect(table.queryByText("99.00")).not.toBeInTheDocument();
     act(() => FakeEventSource.open[0].emit([[7, 1_760_000_001, 5, 1]]));
-    expect(stat.getByText("—")).toBeInTheDocument(); // bad quality: a dash, not the old figure
+    expect(stat.getByText("no data")).toBeInTheDocument(); // bad quality: no data (muted), not the old figure
+    expect(stat.queryByText("—")).not.toBeInTheDocument();
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 

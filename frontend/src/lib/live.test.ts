@@ -37,6 +37,15 @@ describe("liveOrFetched", () => {
     expect(liveOrFetched(entry(null), fetched()).value).toBeNull();
     expect(liveOrFetched(entry(7, 1), fetched()).value).toBeNull();
   });
+  it("calls a bad live read 'no data' like a fetched one, so a failing meter reads the same before and after the stream speaks", () => {
+    const fetchedNothing = liveOrFetched(undefined, fetched({ value: null, no_data: true }));
+    for (const bad of [entry(null), entry(7, 1)]) {
+      const live = liveOrFetched(bad, fetched());
+      expect(live).toMatchObject({ value: null, stale: false, noData: true });
+      expect(live.noData).toBe(fetchedNothing.noData);
+    }
+    expect(liveOrFetched(entry(11.25), fetched()).noData).toBe(false); // a good read is a measurement
+  });
   it("compares instants, not strings: a newer stream entry beats a fetched row written with the site offset and microseconds", () => {
     // As strings "2026-10-08T07:30..." sorts before "2026-10-08T10:20...", yet 07:30Z is later than 10:20+03:00 (= 07:20Z).
     const row = fetched({ value: 10.5, ts: "2026-10-08T10:20:00.000000+03:00", stale: true });

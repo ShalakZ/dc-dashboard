@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { MUTED_FIGURE } from "./lib/widgetFormat";
 
 // vitest is configured with `css: false`, which empties a CSS import, so the stylesheet is read as text.
 const css = readFileSync("src/app.css", "utf8"); // vitest runs from the frontend directory
@@ -44,6 +45,11 @@ describe("contrast of the muted text", () => {
 
   it("a dimmed stat figure reads at 4.5:1 on the white widget", () => {
     expect(contrast(declared(".stat .big.muted", "color"), declared(".widget-frame", "background"))).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("the gauge's dimmed figure is the stat's, so it reads at 4.5:1 on the white widget too", () => {
+    expect(MUTED_FIGURE).toBe(declared(".stat .big.muted", "color"));
+    expect(contrast(MUTED_FIGURE, declared(".widget-frame", "background"))).toBeGreaterThanOrEqual(AA);
   });
 
   it("the plain muted text does too", () => {

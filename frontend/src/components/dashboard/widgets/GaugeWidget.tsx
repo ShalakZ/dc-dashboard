@@ -3,7 +3,7 @@ import ReactECharts from "echarts-for-react";
 import { useMemo } from "react";
 import type { WidgetConfig, WidgetData } from "../../../api/types";
 import { liveOrFetched } from "../../../lib/live";
-import { figureText, unitSuffix } from "../../../lib/widgetFormat";
+import { figureText, hasNoReading, MUTED_FIGURE, NO_DATA, unitSuffix } from "../../../lib/widgetFormat";
 import { Age } from "../Age";
 import { useLiveValue } from "../LiveValuesContext";
 
@@ -12,10 +12,12 @@ interface GaugeArgs {
   estimated?: boolean; partial?: boolean;
   /** Dim the figure (stale, or nothing recorded). */
   muted?: boolean;
+  /** A missing value says "no data" (a metric that recorded nothing) instead of the dash, which means a missing rate. */
+  noData?: boolean;
 }
 
-/** A missing value draws no needle and no progress, only a dash: a gauge parked at zero would read as a measured zero. */
-export function gaugeOption({ value, min, max, unit, name, estimated = false, partial = false, muted = false }: GaugeArgs): EChartsOption {
+/** A missing value draws no needle and no progress, only a dash (or "no data"): a gauge parked at zero would read as a measured zero. */
+export function gaugeOption({ value, min, max, unit, name, estimated = false, partial = false, muted = false, noData = false }: GaugeArgs): EChartsOption {
   const present = value !== null;
   return {
     animation: false,
@@ -26,8 +28,8 @@ export function gaugeOption({ value, min, max, unit, name, estimated = false, pa
       axisLine: { lineStyle: { width: 10 } },
       detail: {
         valueAnimation: false, fontSize: 22, offsetCenter: [0, "70%"],
-        ...(muted ? { color: "#999" } : {}),
-        formatter: () => (present ? `${figureText(value, { estimated, partial })}${unitSuffix(unit)}` : "—"),
+        ...(muted ? { color: MUTED_FIGURE } : {}),
+        formatter: () => (present ? `${figureText(value, { estimated, partial })}${unitSuffix(unit)}` : noData ? NO_DATA : "—"),
       },
       data: [{ value: value ?? min, name }],
     }],
@@ -42,6 +44,7 @@ export function GaugeWidget({ data, config, live }: { data: WidgetData; config: 
   const max = config.max ?? config.min + 100;
   const value = reading?.value ?? null;
   const muted = reading ? reading.stale || reading.noData : false;
+  const noData = hasNoReading(value, reading?.noData ?? false, data.source);
   const name = row?.name ?? "";
   const { min } = config;
   const { unit } = data;
@@ -50,8 +53,8 @@ export function GaugeWidget({ data, config, live }: { data: WidgetData; config: 
   // A gauge re-renders on every stream batch that moves any point of the dashboard; only a changed figure may reach
   // setOption (a new option object resets the chart), so the option is rebuilt from its primitive inputs only.
   const option = useMemo(
-    () => gaugeOption({ value, min, max, unit, name, estimated, partial, muted }),
-    [value, min, max, unit, name, estimated, partial, muted],
+    () => gaugeOption({ value, min, max, unit, name, estimated, partial, muted, noData }),
+    [value, min, max, unit, name, estimated, partial, muted, noData],
   );
   return (
     <div className="gauge">
