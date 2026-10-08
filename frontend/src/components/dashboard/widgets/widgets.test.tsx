@@ -439,6 +439,29 @@ describe("bar", () => {
   });
 });
 
+describe("bar per asset when no asset has a reading", () => {
+  const rows = (...over: Parameters<typeof valueRow>[0][]) => over.map((o, i) => valueRow({ asset_id: 5 + i, name: `Asset ${i}`, point_id: null, ...o }));
+  const metric = (values: ReturnType<typeof valueRow>[]) => valuesData({ type: "bar", source: "metric", metric: "active_power_kw", unit: "kW", values });
+
+  it("says there is nothing to draw when every asset is a metric with no reading, instead of empty axes", () => {
+    render(<BarWidget data={metric(rows({ value: null, no_data: true }, { value: null, no_data: true }))} timezone={TZ} />);
+    expect(screen.getByText("No data in this range.")).toBeInTheDocument();
+    expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
+  });
+
+  it("still draws when one asset has a reading, or when a null is a missing rate or a metric null that was not marked silent", () => {
+    const { unmount } = render(<BarWidget data={metric(rows({ value: null, no_data: true }, { value: 2 }))} timezone={TZ} />);
+    expect(screen.getByTestId("chart")).toBeInTheDocument();
+    unmount();
+    const cost = valuesData({ type: "bar", source: "cost", metric: null, unit: "QAR", values: rows({ value: null, no_data: true }, { value: null }) });
+    const second = render(<BarWidget data={cost} timezone={TZ} />); // dashes: a missing rate is something to show
+    expect(screen.getByTestId("chart")).toBeInTheDocument();
+    second.unmount();
+    render(<BarWidget data={metric(rows({ value: null }))} timezone={TZ} />); // not marked silent: the dash, as before
+    expect(screen.getByTestId("chart")).toBeInTheDocument();
+  });
+});
+
 describe("gauge", () => {
   type GaugeOpt = { series: { type: string; min: number; max: number; pointer: { show: boolean }; progress: { show: boolean }; data: { value: number }[]; detail: { formatter: () => string; color?: string } }[] };
   const gauge = (args: Partial<Parameters<typeof gaugeOption>[0]> = {}) =>

@@ -20,8 +20,12 @@ export const NO_DATA = "no data";
  * missing rate and nothing else. A cost keeps its dash whether or not anything was recorded, as Billing does.
  */
 export function figureOrNoData(value: number | null | undefined, flags: Flags, noData: boolean, source: WidgetData["source"]): string {
-  return value == null && noData && source !== "cost" ? NO_DATA : figureText(value, flags);
+  return hasNoReading(value, noData, source) ? NO_DATA : figureText(value, flags);
 }
+
+/** A null that recorded nothing. A cost is never one: its null is a missing rate, whatever else was or was not recorded. */
+export const hasNoReading = (value: number | null | undefined, noData: boolean, source: WidgetData["source"]): boolean =>
+  value == null && noData && source !== "cost";
 
 /** The markers of `Flags`, and whether a dash stands in for a cost that has no rate (see `flagsOf`). */
 export interface HintFlags extends Flags { noRate?: boolean }

@@ -3,7 +3,7 @@ import ReactECharts from "echarts-for-react";
 import { memo } from "react";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { chartLabels, escapeHtml, figureText, labelBucket, NO_DATA, unitSuffix } from "../../../lib/widgetFormat";
+import { chartLabels, escapeHtml, figureText, hasNoReading, labelBucket, NO_DATA, unitSuffix } from "../../../lib/widgetFormat";
 import { useLegendSelection } from "./legendSelection";
 
 const DASH = "—";
@@ -49,7 +49,7 @@ export function barOption(data: WidgetData, timezone: string): EChartsOption {
     const labels = chartLabels(data.values);
     // A metric that recorded nothing is "no data", with no dash mark: the dash means a missing rate and nothing else. A cost
     // without a rate keeps its dash whether or not anything was recorded, like the stat, the table and Billing.
-    const noReading = (v: WidgetData["values"][number]) => v.value === null && v.no_data && data.source !== "cost";
+    const noReading = (v: WidgetData["values"][number]) => hasNoReading(v.value, v.no_data, data.source);
     const lines = data.values.map((v) => (v.value === null ? (noReading(v) ? NO_DATA : DASH) : `${figureText(v.value, v)}${unit}${v.no_data ? ` (${NO_DATA})` : ""}`));
     return {
       animation: false,
@@ -96,7 +96,10 @@ export function barOption(data: WidgetData, timezone: string): EChartsOption {
 /** Bars per asset (the aggregation over the range) or per time bucket, grouped by asset. Memoised for the reason given at TimeSeriesWidget. */
 export const BarWidget = memo(function BarWidget({ data, timezone }: { data: WidgetData; timezone: string }) {
   const legend = useLegendSelection();
-  const empty = data.mode === "values" ? data.values.length === 0 : data.series.every((s) => s.points.every((p) => p.no_data));
+  // Nothing to draw: no assets, or (metric) every asset recorded nothing, which would be empty axes without even a dash.
+  const empty = data.mode === "values"
+    ? data.values.every((v) => hasNoReading(v.value, v.no_data, data.source))
+    : data.series.every((s) => s.points.every((p) => p.no_data));
   if (empty) return <p className="muted">No data in this range.</p>;
   return (
     <ReactECharts
