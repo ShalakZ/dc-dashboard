@@ -4,6 +4,8 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     public readonly detail: unknown,
+    /** The whole reply body (parsed JSON, else the raw text), for replies that carry more than `detail`. */
+    public readonly body?: unknown,
   ) {
     super(ApiError.describe(status, detail));
     this.name = "ApiError";
@@ -51,7 +53,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (!response.ok) {
     if (response.status === 401 && !AUTH_PATHS.has(path.split("?")[0])) onUnauthorized?.();
     const detail = data && typeof data === "object" && "detail" in data ? (data as { detail: unknown }).detail : data;
-    throw new ApiError(response.status, detail);
+    throw new ApiError(response.status, detail, data);
   }
   return data as T;
 }

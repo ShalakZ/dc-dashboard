@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
@@ -60,5 +60,92 @@ describe("SourcesPage", () => {
     expect(calls.some((c) => c.path === "/api/sources/test-all")).toBe(true);
     expect(screen.getByRole("button", { name: "Add source" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Points" })).toHaveAttribute("href", "/sources/2/points");
+  });
+
+  describe("deleting", () => {
+    const impact = { detail: "needs confirmation", points: 3, mappings: 3 };
+    /** DELETE answers 409 with the counts until the request carries confirm=true. `needsConfirm` false = nothing mapped. */
+    function setup(needsConfirm: boolean, confirmed: { status: number; body?: object } = { status: 204 }) {
+      const urls: string[] = [];
+      let removed = false;
+      const calls = mockFetch({
+        ...routes("admin"),
+        "GET /api/sources": () => ({ body: removed ? [] : [source] }),
+        "DELETE /api/sources/2": ({ url }) => {
+          urls.push(url);
+          if (needsConfirm && !url.includes("confirm=true")) return { status: 409, body: impact };
+          if (confirmed.status === 204) removed = true;
+          return confirmed;
+        },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      return { calls, urls };
+    }
+    const deletes = (calls: { method: string }[]) => calls.filter((c) => c.method === "DELETE").length;
+    const click = async (name: string) => userEvent.click(await screen.findByRole("button", { name }));
+
+    beforeEach(() => { vi.spyOn(window, "confirm").mockReturnValue(true); });
+
+    it("deletes a source with nothing mapped as before: one request, no dialog", async () => {
+      const { calls, urls } = setup(false);
+      await click("Delete");
+      await waitFor(() => expect(screen.queryByText("sim")).not.toBeInTheDocument());
+      expect(urls).toEqual(["/api/sources/2"]);
+      expect(deletes(calls)).toBe(1);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("sends nothing when the first confirmation is declined", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(false);
+      const { calls } = setup(true);
+      await click("Delete");
+      expect(deletes(calls)).toBe(0);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("shows what will be lost when the API asks for confirmation", async () => {
+      setup(true);
+      await click("Delete");
+      const dialog = await screen.findByRole("dialog", { name: 'Delete source "sim"?' });
+      expect(dialog).toHaveTextContent(
+        "3 mapped points and 3 mappings will be deleted; the past energy and cost figures that depend on them disappear from Billing and dashboards.",
+      );
+      expect(within(dialog).getByRole("button", { name: "Delete anyway" })).toBeInTheDocument();
+    });
+
+    it("Cancel closes the dialog and deletes nothing", async () => {
+      const { calls } = setup(true);
+      await click("Delete");
+      await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(deletes(calls)).toBe(1); // only the first, refused request
+      expect(screen.getByText("sim")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("Delete anyway repeats the request with confirm=true, then closes and refreshes the list", async () => {
+      const { urls } = setup(true);
+      await click("Delete");
+      await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(urls).toEqual(["/api/sources/2", "/api/sources/2?confirm=true"]);
+      await waitFor(() => expect(screen.queryByText("sim")).not.toBeInTheDocument());
+    });
+
+    it("keeps the dialog open and says why when the confirmed request fails", async () => {
+      setup(true, { status: 500, body: { detail: "database is down" } });
+      await click("Delete");
+      await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
+      const dialog = await screen.findByRole("dialog");
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("database is down");
+    });
+
+    it("shows any other 409 as a plain alert, not as a confirmation", async () => {
+      mockFetch({ ...routes("admin"), "DELETE /api/sources/2": { status: 409, body: { detail: "something else" } } });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await click("Delete");
+      expect(await screen.findByRole("alert")).toHaveTextContent("something else");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
   });
 });

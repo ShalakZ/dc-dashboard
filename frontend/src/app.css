@@ -56,6 +56,8 @@ main:has(.graph-page) { flex: 1; min-height: 0; display: flex; flex-direction: c
 .dialog-rows table { margin: 0; }
 .dialog input[type="number"] { width: 7em; }
 .dialog tr.conflict td { background: #fdd; }
+.dialog.confirm { width: min(480px, 100%); }
+button.danger { color: #fff; background: #b00020; border-color: #b00020; }
 
 /* Audit log: the detail is JSON with no spaces, so it must wrap or the page scrolls sideways */
 td code { overflow-wrap: anywhere; white-space: pre-wrap; }

@@ -2,10 +2,13 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
 import { keys, useInvalidate, useSources } from "../api/queries";
+import type { SourceImpact } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
+import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { JobStatus } from "../components/JobStatus";
 import { SourceForm } from "../components/SourceForm";
 import { useAction } from "../hooks/useAction";
+import { sourceImpact, sourceLoss } from "../lib/impact";
 
 export function SourcesPage() {
   const { hasRole } = useAuth();
@@ -13,6 +16,7 @@ export function SourcesPage() {
   const invalidate = useInvalidate();
   const [jobs, setJobs] = useState<Record<number, number>>({});
   const [showAdd, setShowAdd] = useState(false);
+  const [confirming, setConfirming] = useState<{ id: number; name: string; impact: SourceImpact } | null>(null);
   const { run, busy, error: actionError } = useAction();
 
   const testOne = (id: number) => run(async () => {
@@ -25,10 +29,21 @@ export function SourcesPage() {
     const enabled = sources.filter((s) => s.enabled).map((s) => s.id).sort((a, b) => a - b);
     setJobs(Object.fromEntries(enabled.map((id, i) => [id, job_ids[i]])));
   });
+  const removed = async (id: number, confirm: boolean) => {
+    await api.del(`/api/sources/${id}${confirm ? "?confirm=true" : ""}`);
+    setConfirming(null);
+    await invalidate(keys.sources);
+  };
   const remove = (id: number, name: string) => run(async () => {
     if (!window.confirm(`Delete source "${name}", its points and mappings?`)) return;
-    await api.del(`/api/sources/${id}`);
-    await invalidate(keys.sources);
+    try {
+      await removed(id, false);
+    } catch (e) {
+      // The API refuses to delete mapped points without being told to: ask, then repeat the request with confirm.
+      const impact = sourceImpact(e);
+      if (!impact) throw e;
+      setConfirming({ id, name, impact });
+    }
   });
 
   if (isLoading) return <p className="muted">loading…</p>;
@@ -42,6 +57,14 @@ export function SourcesPage() {
       </div>
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {showAdd && <SourceForm onDone={() => setShowAdd(false)} />}
+      {confirming && (
+        <ConfirmDeleteDialog
+          title={`Delete source "${confirming.name}"?`}
+          message={sourceLoss(confirming.impact)}
+          onConfirm={() => removed(confirming.id, true)}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
       <table>
         <thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th>Status</th><th>Last seen</th><th>Last error</th><th>Test result</th><th></th></tr></thead>
         <tbody>

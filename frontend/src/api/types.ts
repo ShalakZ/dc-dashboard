@@ -5,6 +5,10 @@ export interface User { id: number; username: string; role: Role }
 
 export interface Asset { id: number; parent_id: number | null; name: string; kind: string; sort_order: number }
 export interface AssetIn { name: string; parent_id: number | null; kind: string; sort_order: number }
+/** What deleting an asset takes with it (the 409 body of DELETE /api/assets/{id} without confirm=true). */
+export interface AssetImpact { assets: number; mappings: number; tariffs: number }
+/** What deleting a source takes with it (the 409 body of DELETE /api/sources/{id} without confirm=true). */
+export interface SourceImpact { points: number; mappings: number }
 
 export interface Source {
   id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";
