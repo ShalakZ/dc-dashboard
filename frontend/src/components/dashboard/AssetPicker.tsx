@@ -25,6 +25,23 @@ export function pickerRows(assets: Asset[], tree: Asset[] = assets): PickerRow[]
   return rows.map((row) => ({ ...row, duplicate: (count.get(row.name) ?? 0) > 1 }));
 }
 
+/** What names a row: its name, plus its parent path when more than one asset has that name. */
+export function pickerLabel(row: PickerRow): string {
+  return row.duplicate ? `${row.name} (${row.parentPath || "top level"})` : row.name;
+}
+
+/**
+ * One label per asset id, in tree order, that tells assets apart wherever a bare name would not: the parent path for a
+ * shared name, and `#id` too when two siblings share a name and so have the same path.
+ */
+export function assetLabels(assets: Asset[]): Map<number, string> {
+  const rows = pickerRows(assets);
+  const labels = rows.map(pickerLabel);
+  const uses = new Map<string, number>();
+  for (const label of labels) uses.set(label, (uses.get(label) ?? 0) + 1);
+  return new Map(rows.map((row, i) => [row.id, (uses.get(labels[i]) ?? 0) > 1 ? `${labels[i]} #${row.id}` : labels[i]]));
+}
+
 interface Props {
   assets: Asset[];
   selected: number[];
@@ -62,7 +79,7 @@ export function AssetPicker({ assets, selected, onChange, single, max, tree, not
               disabled={full && !chosen.has(row.id)}
               onChange={(e) => toggle(row.id, e.target.checked)}
             />
-            {row.name}{row.duplicate ? ` (${row.parentPath || "top level"})` : ""}{notes?.has(row.id) ? ` (${notes.get(row.id)})` : ""}
+            {pickerLabel(row)}{notes?.has(row.id) ? ` (${notes.get(row.id)})` : ""}
           </label>
         ))}
       </div>

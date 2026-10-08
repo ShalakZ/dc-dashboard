@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import type { Asset } from "../../api/types";
-import { AssetPicker, pickerRows } from "./AssetPicker";
+import { AssetPicker, assetLabels, pickerRows } from "./AssetPicker";
 
 const tree: Asset[] = [
   { id: 1, parent_id: null, name: "Site", kind: "site", sort_order: 0 },
@@ -46,6 +46,26 @@ describe("pickerRows", () => {
   it("indents only below the ancestors that are offered", () => {
     const some = tree.filter((a) => a.id === 1 || a.id === 3 || a.id === 6);
     expect(pickerRows(some, tree).map((r) => [r.id, r.depth])).toEqual([[1, 0], [3, 1], [6, 0]]);
+  });
+});
+
+describe("assetLabels", () => {
+  it("names an asset by its name alone, and by its parent path when the name is used twice", () => {
+    expect([...assetLabels(tree)]).toEqual([
+      [1, "Site"], [2, "Room A"], [3, "Panel (Site / Room A)"], [4, "Room B"], [5, "Panel (Site / Room B)"], [6, "Main"],
+    ]);
+  });
+
+  it("adds the id when two siblings share a name, because their paths are the same", () => {
+    const twins: Asset[] = [
+      { id: 1, parent_id: null, name: "Rack", kind: "rack", sort_order: 0 },
+      { id: 7, parent_id: 1, name: "Meter", kind: "meter", sort_order: 0 },
+      { id: 8, parent_id: 1, name: "Meter", kind: "meter", sort_order: 1 },
+      { id: 9, parent_id: null, name: "Meter", kind: "meter", sort_order: 1 },
+    ];
+    expect([...assetLabels(twins)]).toEqual([
+      [1, "Rack"], [7, "Meter (Rack) #7"], [8, "Meter (Rack) #8"], [9, "Meter (top level)"],
+    ]);
   });
 });
 

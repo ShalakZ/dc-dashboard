@@ -179,6 +179,53 @@ describe("TariffsPage", () => {
       .toEqual({ asset_id: 5, rate_per_kwh: 0.1, effective_from: "2026-11-01" }));
   });
 
+  describe("assets that share a name", () => {
+    // two rooms each have a child "PDU A"; asset 7 and 8 are twins under one parent
+    const twins = [
+      { id: 1, parent_id: null, name: "Site", kind: "site", sort_order: 0 },
+      { id: 2, parent_id: 1, name: "Room 1", kind: "room", sort_order: 0 },
+      { id: 3, parent_id: 2, name: "PDU A", kind: "pdu", sort_order: 0 },
+      { id: 4, parent_id: 1, name: "Room 2", kind: "room", sort_order: 1 },
+      { id: 5, parent_id: 4, name: "PDU A", kind: "pdu", sort_order: 0 },
+      { id: 6, parent_id: 4, name: "Rack", kind: "rack", sort_order: 1 },
+      { id: 7, parent_id: 6, name: "Meter", kind: "meter", sort_order: 0 },
+      { id: 8, parent_id: 6, name: "Meter", kind: "meter", sort_order: 1 },
+    ];
+    const override = (id: number, asset_id: number, rate: number) => ({
+      id, asset_id, asset_name: "PDU A", rate_per_kwh: rate, effective_from: "2026-10-15", created_by: 1, created_at: "2026-10-01T00:00:00Z",
+    });
+    beforeEach(() => {
+      rows = [override(20, 3, 0.31), override(21, 5, 0.32)];
+      overrides = { "GET /api/assets": { body: twins } };
+    });
+
+    it("tells the same-named assets apart in the picker and sends the id of the one chosen", async () => {
+      const calls = open();
+      const form = await screen.findByRole("form", { name: "Add asset override" });
+      const picker = within(form).getByLabelText("Asset");
+      await within(form).findByRole("option", { name: "PDU A (Site / Room 1)" });
+      expect(within(picker).getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "Choose an asset…", "Site", "Room 1", "PDU A (Site / Room 1)", "Room 2", "PDU A (Site / Room 2)",
+        "Rack", "Meter (Site / Room 2 / Rack) #7", "Meter (Site / Room 2 / Rack) #8",
+      ]);
+      await fillRate(form, "2026-11-01", "0.25");
+      await userEvent.selectOptions(picker, "PDU A (Site / Room 2)");
+      await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
+      await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body)
+        .toEqual({ asset_id: 5, rate_per_kwh: 0.25, effective_from: "2026-11-01" }));
+    });
+
+    it("names the right asset in the override table and in the delete question", async () => {
+      open();
+      const table = await screen.findByRole("table", { name: "Asset overrides" });
+      const body = within(table).getAllByRole("row").slice(1);
+      expect(body.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["PDU A (Site / Room 1)", "PDU A (Site / Room 2)"]);
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      await userEvent.click(within(body[1]).getByRole("button", { name: "Delete" }));
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining("for PDU A (Site / Room 2)?"));
+    });
+  });
+
   it("refuses a missing date and a negative rate without calling the API", async () => {
     const calls = open();
     const form = await screen.findByRole("form", { name: "Add site default rate" });

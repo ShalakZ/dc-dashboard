@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import {
   useAssets, useBillingSettings, useCreateTariff, useDeleteTariff, usePutBillingSettings, useTariffs, useUpdateTariff,
 } from "../api/queries";
 import type { Asset, Tariff, TariffPatch } from "../api/types";
+import { assetLabels } from "../components/dashboard/AssetPicker";
 import { fmtRate } from "../lib/billing";
 
 /** ApiError.message already carries the API's `detail` (a string for 404/409, a joined list for 422); drop pydantic's prefix. */
@@ -61,7 +62,7 @@ function CurrencyForm() {
 }
 
 /** `assets === null` adds a site default rate; otherwise an override for an asset picked from the list. */
-function AddTariff({ assets }: { assets: Asset[] | null }) {
+function AddTariff({ assets, labels }: { assets: Asset[] | null; labels: ReadonlyMap<number, string> }) {
   const create = useCreateTariff();
   const [assetId, setAssetId] = useState("");
   const [from, setFrom] = useState("");
@@ -85,7 +86,7 @@ function AddTariff({ assets }: { assets: Asset[] | null }) {
           Asset
           <select value={assetId} onChange={(e) => setAssetId(e.target.value)}>
             <option value="">Choose an asset…</option>
-            {assets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            {assets.map((a) => <option key={a.id} value={a.id}>{labels.get(a.id) ?? a.name}</option>)}
           </select>
         </label>
       )}
@@ -104,7 +105,8 @@ function AddTariff({ assets }: { assets: Asset[] | null }) {
   );
 }
 
-function TariffRow({ tariff }: { tariff: Tariff }) {
+/** `where` names the asset of an override (its path when the name alone is ambiguous); the API's `asset_name` is the fallback. */
+function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) {
   const update = useUpdateTariff();
   const remove = useDeleteTariff();
   const [editing, setEditing] = useState(false);
@@ -131,14 +133,14 @@ function TariffRow({ tariff }: { tariff: Tariff }) {
     update.mutate({ id: tariff.id, body }, { onSuccess: () => setEditing(false) });
   };
   const del = () => {
-    const where = tariff.asset_name ? ` for ${tariff.asset_name}` : "";
-    const question = `Delete the rate of ${fmtRate(tariff.rate_per_kwh)} from ${tariff.effective_from}${where}? Costs for those days will change.`;
+    const forAsset = where ? ` for ${where}` : "";
+    const question = `Delete the rate of ${fmtRate(tariff.rate_per_kwh)} from ${tariff.effective_from}${forAsset}? Costs for those days will change.`;
     if (window.confirm(question)) remove.mutate(tariff.id);
   };
 
   return (
     <tr>
-      {tariff.asset_id !== null && <td>{tariff.asset_name}</td>}
+      {tariff.asset_id !== null && <td>{where}</td>}
       <td>
         {editing ? <input type="date" aria-label="Effective from" value={from} onChange={(e) => setFrom(e.target.value)} /> : tariff.effective_from}
       </td>
@@ -166,6 +168,7 @@ function TariffRow({ tariff }: { tariff: Tariff }) {
 }
 
 function TariffTables({ tariffs, assets, currencyUnset }: { tariffs: Tariff[]; assets: Asset[]; currencyUnset: boolean }) {
+  const labels = useMemo(() => assetLabels(assets), [assets]);
   const defaults = tariffs.filter((t) => t.asset_id === null);
   const perAsset = tariffs.filter((t) => t.asset_id !== null);
   return (
@@ -183,20 +186,22 @@ function TariffTables({ tariffs, assets, currencyUnset }: { tariffs: Tariff[]; a
       ) : (
         <table aria-label="Site default rates">
           <thead><tr><th>Effective from</th><th>Rate per kWh</th><th>Actions</th></tr></thead>
-          <tbody>{defaults.map((t) => <TariffRow key={t.id} tariff={t} />)}</tbody>
+          <tbody>{defaults.map((t) => <TariffRow key={t.id} tariff={t} where={null} />)}</tbody>
         </table>
       )}
-      <AddTariff assets={null} />
+      <AddTariff assets={null} labels={labels} />
       <h2>Asset overrides</h2>
       {perAsset.length === 0 ? (
         <p className="muted">No overrides. Every asset uses the site default rate.</p>
       ) : (
         <table aria-label="Asset overrides">
           <thead><tr><th>Asset</th><th>Effective from</th><th>Rate per kWh</th><th>Actions</th></tr></thead>
-          <tbody>{perAsset.map((t) => <TariffRow key={t.id} tariff={t} />)}</tbody>
+          <tbody>{perAsset.map((t) => (
+            <TariffRow key={t.id} tariff={t} where={(t.asset_id !== null ? labels.get(t.asset_id) : undefined) ?? t.asset_name} />
+          ))}</tbody>
         </table>
       )}
-      <AddTariff assets={assets} />
+      <AddTariff assets={assets} labels={labels} />
     </>
   );
 }
