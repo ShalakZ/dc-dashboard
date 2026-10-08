@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -125,6 +126,8 @@ async def test_a_healthy_busy_stream_keeps_sending_across_many_intervals(app, db
                 frames += 1
             if time.monotonic() - started > 20 * INTERVAL:
                 break
+        else:
+            pytest.fail("the stream ended while its session was still valid")
     assert frames > 20
     assert checks >= 5  # one at connect, then the stream re-validated again and again and stayed open
 
@@ -158,16 +161,43 @@ async def test_a_busy_stream_is_revalidated_on_the_interval_not_on_every_message
     assert 2 <= checks <= 10  # about one per 0.1 s, nowhere near one per message
 
 
-async def test_nothing_is_sent_once_the_check_fails():
+async def test_a_message_that_arrives_after_the_deadline_is_not_sent_when_the_check_fails(monkeypatch):
+    # The stream is already waiting on its queue when the deadline passes and a message arrives: the message is
+    # taken off the queue with the check overdue, so the check must run first and, failing, must stop the frame.
+    # A fake clock for the stream module only (the event loop reads the real time.monotonic) moves the deadline
+    # without sleeping or blocking the loop; the real wait stays at 30 s, far above any scheduling jitter.
+    now = 0.0
+    monkeypatch.setattr(stream_module, "time", SimpleNamespace(monotonic=lambda: now))
+    checks = 0
+
     async def logged_out() -> bool:
+        nonlocal checks
+        checks += 1
         return False
 
     broadcaster = Broadcaster()
-    stream = event_stream(broadcaster, keepalive_seconds=30, is_still_authenticated=logged_out, revalidate_seconds=0.0)
+    stream = event_stream(
+        broadcaster, keepalive_seconds=1000, is_still_authenticated=logged_out, revalidate_seconds=30
+    )
     assert await anext(stream) == ": connected\n\n"
-    broadcaster.publish_raw(MESSAGE)  # waiting in the queue when the deadline passes: it must not go out
-    with pytest.raises(StopAsyncIteration):
-        await anext(stream)
+
+    def deadline_passes_and_a_message_arrives() -> None:
+        nonlocal now
+        now = 31.0
+        broadcaster.publish_raw(MESSAGE)
+
+    asyncio.get_running_loop().call_later(0.01, deadline_passes_and_a_message_arrives)
+    with pytest.raises(StopAsyncIteration):  # a data frame here means the message went out before the check
+        await asyncio.wait_for(anext(stream), 5)
+    assert checks == 1
+    assert broadcaster.subscriber_count == 0
+
+
+@pytest.mark.parametrize("seconds", [0, 0.0, -1])
+async def test_a_revalidation_interval_that_is_not_positive_is_refused(seconds):
+    broadcaster = Broadcaster()
+    with pytest.raises(ValueError):
+        await anext(event_stream(broadcaster, revalidate_seconds=seconds))
     assert broadcaster.subscriber_count == 0
 
 

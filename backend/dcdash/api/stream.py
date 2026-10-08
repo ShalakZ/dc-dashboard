@@ -71,8 +71,11 @@ async def event_stream(
     The session is re-checked on a deadline of wall-clock time: every ``revalidate_seconds`` (default
     ``REVALIDATE_SECONDS``) and no later than ``session_expires_at``, however busy the stream is, and also on every
     keepalive tick. A message is only sent after the check that was due before it has passed.
+    ``revalidate_seconds`` must be positive: a ValueError is raised, on the first iteration, otherwise.
     """
     interval = REVALIDATE_SECONDS if revalidate_seconds is None else revalidate_seconds
+    if interval <= 0:
+        raise ValueError(f"the revalidation interval must be positive, not {interval}")
     clock = time.monotonic
 
     def seconds_to_next_check() -> float:
