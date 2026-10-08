@@ -7,7 +7,7 @@ import { BarWidget, barOption } from "./BarWidget";
 import { GaugeWidget, gaugeOption } from "./GaugeWidget";
 import { StatWidget } from "./StatWidget";
 import { TableWidget } from "./TableWidget";
-import { bucketMs, timeSeriesOption, tooltipFormatter, TimeSeriesWidget, withGaps } from "./TimeSeriesWidget";
+import { bucketMs, markIsolated, timeSeriesOption, tooltipFormatter, TimeSeriesWidget, withGaps } from "./TimeSeriesWidget";
 
 vi.mock("echarts-for-react", () => ({
   default: (props: { option: { series?: { type?: string }[] } }) => (
@@ -16,7 +16,10 @@ vi.mock("echarts-for-react", () => ({
 }));
 
 type Row = [string, number | null];
-interface LineSeries { id?: string; name: string; type: string; data: Row[]; connectNulls?: boolean }
+/** A chart row: a plain [ts, value] pair, or an object carrying a per-item symbol (a point with no neighbour to draw a line to). */
+type Cell = Row | { value: Row; symbol: string; symbolSize: number };
+const plain = (cell: Cell): Row => (Array.isArray(cell) ? cell : cell.value);
+interface LineSeries { id?: string; name: string; type: string; data: Cell[]; connectNulls?: boolean }
 interface BarSeries { name: string; type: string; data: (number | null)[]; markPoint?: { data: { coord: [number, number] }[]; label: { show: boolean; formatter: string } } }
 interface Opt<S> {
   useUTC?: boolean;
@@ -42,11 +45,91 @@ describe("time series", () => {
   ];
   const data = seriesData({ series: [{ asset_id: 5, name: "LV Panel 1", points, estimated: false, partial: false }] });
 
-  it("estimates the bucket width from the data, or from the bucket size", () => {
-    expect(bucketMs(null, points)).toBe(60_000);
+  it("estimates the bucket width from the bucket size, else the rollup tier, else the typical step of the data", () => {
     expect(bucketMs("hour", points)).toBe(3_600_000);
     expect(bucketMs("day", points)).toBe(86_400_000);
+    expect(bucketMs(null, points, "1m")).toBe(60_000);
+    expect(bucketMs(null, points, "1h")).toBe(3_600_000);
+    // The tier decides even when the data suggests another width (a series whose buckets are all far apart).
+    expect(bucketMs(null, [points[0], points[3]], "1m")).toBe(60_000);
+    expect(bucketMs(null, points)).toBe(60_000); // steps 60 s, 60 s, 480 s: the typical one
+    expect(bucketMs(null, points, "raw")).toBe(60_000);
     expect(bucketMs(null, points.slice(0, 1))).toBeNull();
+  });
+
+  it("takes the median step on the raw tier, so one close pair of samples does not turn every normal step into a gap", () => {
+    const at = (seconds: number[]) => seconds.map((t) => seriesPoint({ ts: new Date(Date.UTC(2026, 9, 8, 0, 0, t)).toISOString(), value: 1, min: 1, max: 1 }));
+    const raw = at([0, 10, 20, 21, 31, 41, 51]); // steps 10 10 1 10 10 10
+    expect(bucketMs(null, raw, "raw")).toBe(10_000);
+    const option = asOption(timeSeriesOption(seriesData({ tier: "raw", series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: raw }] }), TZ));
+    const avg = option.series.find((s) => s.id === "avg-5")!;
+    expect(avg.data).toHaveLength(7); // no filler rows: the line is not broken anywhere
+    expect(avg.data.every((c) => Array.isArray(c))).toBe(true); // and no point is isolated
+  });
+
+  it("uses the rollup tier's width for a metric series with sparse buckets", () => {
+    const sparse = [
+      seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1, min: 1, max: 1 }),
+      seriesPoint({ ts: "2026-10-08T00:01:00+00:00", value: 1, min: 1, max: 1 }),
+      seriesPoint({ ts: "2026-10-08T00:30:00+00:00", value: 1, min: 1, max: 1 }),
+    ];
+    const option = asOption(timeSeriesOption(seriesData({ tier: "1m", series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: sparse }] }), TZ));
+    const avg = option.series.find((s) => s.id === "avg-5")!;
+    expect(avg.data.map((c) => plain(c)[1])).toEqual([1, 1, null, 1]); // the 29-minute hole is a gap
+  });
+
+  it("marks a point that has no neighbour to draw a line to, because a lone point is otherwise invisible", () => {
+    const row = (v: number | null): Row => ["2026-10-08T00:00:00.000Z", v];
+    const marked = markIsolated([row(1), row(2), row(null), row(3), row(null), row(null), row(4)]);
+    expect(marked.map((m) => (Array.isArray(m) ? "line" : "dot"))).toEqual(["line", "line", "line", "dot", "line", "line", "dot"]);
+    expect(marked[3]).toMatchObject({ value: row(3), symbol: "circle" });
+    expect((marked[3] as { symbolSize: number }).symbolSize).toBeGreaterThan(0);
+    expect(markIsolated([row(7)])).toMatchObject([{ value: row(7), symbol: "circle" }]); // the only row
+    expect(markIsolated([row(1), row(2)]).every((m) => Array.isArray(m))).toBe(true); // joined, drawn as a line
+    expect(markIsolated([])).toEqual([]);
+  });
+
+  it("draws a one-bucket energy series (the 1h preset) with a visible point", () => {
+    const hour = seriesData({
+      source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null,
+      range: { preset: "1h", start: "2026-10-08T10:00:00+03:00", end: "2026-10-08T10:30:00+03:00" },
+      series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T10:00:00+03:00", value: 1.5 })] }],
+    });
+    const [line] = asOption(timeSeriesOption(hour, TZ)).series;
+    expect(line.id).toBe("avg-5");
+    expect(line.data).toHaveLength(1);
+    expect(line.data[0]).toMatchObject({ value: ["2026-10-08T10:00:00+03:00", 1.5], symbol: "circle" });
+  });
+
+  it("draws a priced cost bucket between no-rate buckets with a visible point, and the neighbours without one", () => {
+    const cost = seriesData({
+      source: "cost", metric: null, unit: "QAR", bucket: "hour", tier: null,
+      series: [{ asset_id: 5, name: "A", estimated: false, partial: true, points: [
+        seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: null, partial: true }),
+        seriesPoint({ ts: "2026-10-08T01:00:00+00:00", value: 0.5 }),
+        seriesPoint({ ts: "2026-10-08T02:00:00+00:00", value: null, partial: true }),
+      ] }],
+    });
+    const [line] = asOption(timeSeriesOption(cost, TZ)).series;
+    expect(line.data.map((c) => (Array.isArray(c) ? "pair" : "dot"))).toEqual(["pair", "dot", "pair"]);
+    expect(line.data[1]).toMatchObject({ symbol: "circle" });
+  });
+
+  it("keeps the min/max band helpers free of symbols, so only the average line shows the dot", () => {
+    const lone = seriesData({ series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1, min: 0, max: 2 })] }] });
+    const option = asOption(timeSeriesOption(lone, TZ));
+    expect(option.series.map((s) => s.id)).toEqual(["band-min-5", "band-span-5", "avg-5"]);
+    expect(option.series.find((s) => s.id === "avg-5")!.data[0]).toMatchObject({ symbol: "circle" });
+    expect(option.series.find((s) => s.id === "band-min-5")!.data.every((c) => Array.isArray(c))).toBe(true);
+    expect(option.series.find((s) => s.id === "band-span-5")!.data.every((c) => Array.isArray(c))).toBe(true);
+  });
+
+  it("still reads the isolated point's value in the tooltip", () => {
+    const lone = seriesData({ source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null, series: [{ asset_id: 5, name: "A", estimated: false, partial: false, points: [seriesPoint({ ts: "2026-10-08T00:00:00+00:00", value: 1.5 })] }] });
+    const [line] = asOption(timeSeriesOption(lone, TZ)).series;
+    const cell = line.data[0] as { value: Row };
+    // ECharts hands the formatter the item's `value` pair as `params.value`.
+    expect(tooltipFormatter(lone, TZ)([{ seriesId: "avg-5", seriesName: "A", value: cell.value, marker: "" }])).toContain("A: 1.50 kWh");
   });
 
   it("breaks the line where buckets are missing and where the value is null", () => {
@@ -61,10 +144,10 @@ describe("time series", () => {
     const avg = option.series.find((s) => s.id === "avg-5")!;
     expect(avg.name).toBe("LV Panel 1");
     expect(avg.connectNulls).toBe(false);
-    expect(avg.data.map(([, v]) => v)).toEqual([1, 2, 3, null, 4]);
-    expect(avg.data[3][0]).toBe("2026-10-08T00:03:00.000Z");
-    expect(option.series.find((s) => s.id === "band-min-5")!.data.map(([, v]) => v)).toEqual([0.5, 1, 2, null, 3]);
-    expect(option.series.find((s) => s.id === "band-span-5")!.data.map(([, v]) => v)).toEqual([1, 2, 2, null, 2]);
+    expect(avg.data.map((c) => plain(c)[1])).toEqual([1, 2, 3, null, 4]);
+    expect(plain(avg.data[3])[0]).toBe("2026-10-08T00:03:00.000Z");
+    expect(option.series.find((s) => s.id === "band-min-5")!.data.map((c) => plain(c)[1])).toEqual([0.5, 1, 2, null, 3]);
+    expect(option.series.find((s) => s.id === "band-span-5")!.data.map((c) => plain(c)[1])).toEqual([1, 2, 2, null, 2]);
   });
 
   it("draws energy as plain hourly lines (no band) and breaks the line over a missing hour", () => {
@@ -79,8 +162,8 @@ describe("time series", () => {
     const option = asOption(timeSeriesOption(hourly, TZ));
     expect(option.series.map((s) => s.id)).toEqual(["avg-5"]);
     expect(option.series[0].name).toBe("LV Panel 1 ~");
-    expect(option.series[0].data.map(([, v]) => v)).toEqual([1, 2, null, 3]);
-    expect(option.series[0].data[2][0]).toBe("2026-10-08T02:00:00.000Z");
+    expect(option.series[0].data.map((c) => plain(c)[1])).toEqual([1, 2, null, 3]);
+    expect(plain(option.series[0].data[2])[0]).toBe("2026-10-08T02:00:00.000Z");
   });
 
   it("draws a silent bucket (no_data) and a bucket without a rate both as gaps in the line", () => {
@@ -93,7 +176,7 @@ describe("time series", () => {
         seriesPoint({ ts: "2026-10-08T03:00:00+00:00", value: 0.7 }),
       ] }],
     });
-    expect(asOption(timeSeriesOption(cost, TZ)).series[0].data.map(([, v]) => v)).toEqual([0.5, null, null, 0.7]);
+    expect(asOption(timeSeriesOption(cost, TZ)).series[0].data.map((c) => plain(c)[1])).toEqual([0.5, null, null, 0.7]);
   });
 
   it("tells apart two assets with the same name", () => {

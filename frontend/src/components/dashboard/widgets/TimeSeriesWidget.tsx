@@ -1,24 +1,34 @@
 import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
+import { memo } from "react";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
 import { chartLabels, escapeHtml, figureText, formatValue, labelBucket, unitSuffix } from "../../../lib/widgetFormat";
 
 type Point = WidgetData["series"][number]["points"][number];
 type Row = [string, number | null];
+/** A row, or a row with a symbol of its own (see markIsolated). */
+type ChartRow = Row | { value: Row; symbol: string; symbolSize: number };
 
 const PALETTE = ["#1f6feb", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989", "#0a7d8c", "#57606a"];
 
-/** Typical spacing between buckets: fixed for hour and day buckets, else the smallest step in the series (null with fewer than two points). */
-export function bucketMs(bucket: WidgetData["bucket"], points: readonly Point[]): number | null {
-  if (bucket === "hour") return 3_600_000;
+/**
+ * Spacing between buckets, which decides what counts as a hole in the data. Fixed for hour and day buckets and for the
+ * 1m/1h rollup tiers (the series holds one row per rollup bucket that has samples). Raw samples have no fixed spacing:
+ * take the median step, so that one close pair of samples, or a mapping interval changed inside the window, does not
+ * turn every normal step into a "gap". Null with fewer than two points.
+ */
+export function bucketMs(bucket: WidgetData["bucket"], points: readonly Point[], tier: WidgetData["tier"] = null): number | null {
+  if (bucket === "hour" || tier === "1h") return 3_600_000;
   if (bucket === "day") return 86_400_000;
-  let smallest: number | null = null;
+  if (tier === "1m") return 60_000;
+  const steps: number[] = [];
   for (let i = 1; i < points.length; i++) {
     const step = Date.parse(points[i].ts) - Date.parse(points[i - 1].ts);
-    if (step > 0 && (smallest === null || step < smallest)) smallest = step;
+    if (step > 0) steps.push(step);
   }
-  return smallest;
+  steps.sort((a, b) => a - b);
+  return steps.length === 0 ? null : steps[Math.floor(steps.length / 2)];
 }
 
 /**
@@ -35,6 +45,19 @@ export function withGaps(points: readonly Point[], width: number | null, pick: (
     previous = t;
   }
   return rows;
+}
+
+/**
+ * The line series draws no symbols (`symbol: "none"`), so a point whose neighbours are both null or absent (the only
+ * bucket of a `1h` energy window, a priced hour between hours without a rate, a sample cut off by gaps) would have no
+ * segment to be drawn as and the chart would look empty. Such a point gets a dot of its own.
+ */
+export function markIsolated(rows: readonly Row[]): ChartRow[] {
+  return rows.map((row, i) => {
+    if (row[1] === null) return row;
+    const alone = (rows[i - 1]?.[1] ?? null) === null && (rows[i + 1]?.[1] ?? null) === null;
+    return alone ? { value: row, symbol: "circle", symbolSize: 6 } : row;
+  });
 }
 
 interface TipItem { seriesId?: string; seriesName?: string; value?: unknown; marker?: string }
@@ -71,8 +94,8 @@ export function timeSeriesOption(data: WidgetData, timezone: string): EChartsOpt
   const band = data.source === "metric";
   const series = data.series.flatMap((s, i): object[] => {
     const color = PALETTE[i % PALETTE.length];
-    const width = bucketMs(data.bucket, s.points);
-    const line = { id: `avg-${s.asset_id}`, name: labels[i], type: "line" as const, color, symbol: "none", connectNulls: false, data: withGaps(s.points, width, (p) => p.value) };
+    const width = bucketMs(data.bucket, s.points, data.tier);
+    const line = { id: `avg-${s.asset_id}`, name: labels[i], type: "line" as const, color, symbol: "none", connectNulls: false, data: markIsolated(withGaps(s.points, width, (p) => p.value)) };
     if (!band) return [line];
     // The band is two stacked invisible-line series: min, then max - min with a filled area.
     const hidden = { type: "line" as const, symbol: "none", lineStyle: { opacity: 0 }, stack: `band-${s.asset_id}`, connectNulls: false };
@@ -94,8 +117,12 @@ export function timeSeriesOption(data: WidgetData, timezone: string): EChartsOpt
   } as EChartsOption;
 }
 
-/** One line per asset (average, with a min-max band for metrics); gaps are drawn as gaps. */
-export function TimeSeriesWidget({ data, timezone }: { data: WidgetData; timezone: string }) {
+/**
+ * One line per asset (average, with a min-max band for metrics); gaps are drawn as gaps. Memoised on its props: a
+ * stream batch re-renders every widget of the dashboard, and a new option object (its formatters are new closures)
+ * makes echarts-for-react call setOption with notMerge, which resets the legend and closes an open tooltip.
+ */
+export const TimeSeriesWidget = memo(function TimeSeriesWidget({ data, timezone }: { data: WidgetData; timezone: string }) {
   if (data.series.every((s) => s.points.every((p) => p.no_data))) return <p className="muted">No data in this range.</p>;
   return <ReactECharts option={timeSeriesOption(data, timezone)} style={{ height: "100%", width: "100%", minHeight: 140 }} notMerge />;
-}
+});

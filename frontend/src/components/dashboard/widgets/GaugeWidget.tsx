@@ -1,5 +1,6 @@
 import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
+import { useMemo } from "react";
 import type { WidgetConfig, WidgetData } from "../../../api/types";
 import { liveOrFetched } from "../../../lib/live";
 import { figureText, unitSuffix } from "../../../lib/widgetFormat";
@@ -39,16 +40,22 @@ export function GaugeWidget({ data, config, live }: { data: WidgetData; config: 
   const stream = useLiveValue(live && row ? row.point_id : null);
   const reading = row ? liveOrFetched(stream, row) : null;
   const max = config.max ?? config.min + 100;
+  const value = reading?.value ?? null;
+  const muted = reading ? reading.stale || reading.noData : false;
+  const name = row?.name ?? "";
+  const { min } = config;
+  const { unit } = data;
+  const estimated = row?.estimated;
+  const partial = row?.partial;
+  // A gauge re-renders on every stream batch that moves any point of the dashboard; only a changed figure may reach
+  // setOption (a new option object resets the chart), so the option is rebuilt from its primitive inputs only.
+  const option = useMemo(
+    () => gaugeOption({ value, min, max, unit, name, estimated, partial, muted }),
+    [value, min, max, unit, name, estimated, partial, muted],
+  );
   return (
     <div className="gauge">
-      <ReactECharts
-        option={gaugeOption({
-          value: reading?.value ?? null, min: config.min, max, unit: data.unit, name: row?.name ?? "",
-          estimated: row?.estimated, partial: row?.partial, muted: reading ? reading.stale || reading.noData : false,
-        })}
-        style={{ flex: 1, width: "100%", minHeight: 140 }}
-        notMerge
-      />
+      <ReactECharts option={option} style={{ flex: 1, width: "100%", minHeight: 140 }} notMerge />
       {reading?.stale && reading.ts && <div><Age ts={reading.ts} /></div>}
     </div>
   );
