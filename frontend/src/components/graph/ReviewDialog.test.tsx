@@ -326,13 +326,23 @@ describe("ReviewDialog", () => {
     opener.focus();
     try {
       const { calls, onClose } = await open(existing(11));
-      expect(screen.getByRole("radio", { name: "Existing asset" })).toHaveFocus();
+      expect(screen.getByLabelText("Asset")).toHaveFocus();
       await userEvent.keyboard("{Escape}");
       expect(onClose).toHaveBeenCalledTimes(1);
       expect(posts(calls)).toHaveLength(0);
     } finally {
       opener.remove();
     }
+  });
+
+  it("opened to choose an existing asset, focus starts on the Asset select", async () => {
+    await open(existing(null));
+    expect(screen.getByLabelText("Asset")).toHaveFocus();
+  });
+
+  it("opened to create a new asset, focus starts on the name input", async () => {
+    await open({ kind: "new", name: "LVP01", parentId: null });
+    expect(screen.getByLabelText("New asset name")).toHaveFocus();
   });
 
   it("restores focus to where it was when the dialog goes away", async () => {

@@ -23,6 +23,8 @@ export type NodeActions = {
   onToggle?: (nodeId: string) => void;
   onMap?: (nodeId: string) => void;
   onNewAsset?: (nodeId: string) => void;
+  /** Open the details panel of a source: the keyboard path, since React Flow's Enter/Space on a node is not a click. */
+  onSelect?: (nodeId: string) => void;
 };
 // These are `type`s, not interfaces: React Flow requires node data to be assignable to Record<string, unknown>.
 export type SourceNodeData = NodeActions & { source: GraphSource; expanded: boolean };

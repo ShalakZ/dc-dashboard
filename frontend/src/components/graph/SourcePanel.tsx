@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api } from "../../api/client";
 import { keys } from "../../api/queries";
 import type { GraphSource } from "../../api/types";
@@ -18,6 +18,7 @@ interface Props {
 export function SourcePanel({ source, canEdit, onClose }: Props) {
   const queryClient = useQueryClient();
   const { run, busy, error } = useAction();
+  const heading = useRef<HTMLHeadingElement>(null);
   const [secret, setSecret] = useState("");
   const [username, setUsername] = useState(typeof source.config.username === "string" ? source.config.username : "");
   const [jobId, setJobId] = useState<number | null>(null);
@@ -28,6 +29,9 @@ export function SourcePanel({ source, canEdit, onClose }: Props) {
     if (jobId === null || !finished) return;
     void Promise.all([keys.graph, keys.sources].map((queryKey) => queryClient.invalidateQueries({ queryKey })));
   }, [jobId, finished, queryClient]);
+
+  // Opening the panel (from a click or from a node's Details button) puts the keyboard where the new content is.
+  useEffect(() => { heading.current?.focus(); }, []);
 
   const browse = () => run(async () => {
     const { job_id } = await api.post<{ job_id: number }>(`/api/sources/${source.id}/browse`);
@@ -46,9 +50,13 @@ export function SourcePanel({ source, canEdit, onClose }: Props) {
   };
 
   return (
-    <aside className="panel gpanel" aria-label="Source details">
+    <aside
+      className="panel gpanel"
+      aria-label="Source details"
+      onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
+    >
       <div className="row">
-        <h2>{source.name}</h2>
+        <h2 ref={heading} tabIndex={-1}>{source.name}</h2>
         <span className="spacer" />
         <button onClick={onClose}>Close</button>
       </div>

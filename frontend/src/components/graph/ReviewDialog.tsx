@@ -52,6 +52,8 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
   const invalidate = useInvalidate();
   const { run, busy, error } = useAction();
   const dialog = useRef<HTMLDivElement>(null);
+  const assetSelect = useRef<HTMLSelectElement>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
   // The two asset selects are labelled from outside (htmlFor), not by wrapping: a label that wraps a select takes the
   // option texts as part of its own, so browser tooling that matches a label exactly would never find "Asset".
   const assetSelectId = useId();
@@ -118,7 +120,9 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
     if (!root) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const first = () => root.querySelector<HTMLElement>(FOCUSABLE);
-    first()?.focus();
+    // Start on the control the opener is asking about: the asset to pick, or the name of the asset to create.
+    const preferred = initialTarget.kind === "new" ? nameInput.current : assetSelect.current;
+    (preferred ?? first())?.focus();
     const keepFocus = (event: FocusEvent) => {
       if (event.target instanceof Node && !root.contains(event.target)) first()?.focus();
     };
@@ -158,7 +162,7 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
           {mode === "existing" ? (
             <div className="field">
               <label htmlFor={assetSelectId}>Asset</label>
-              <select id={assetSelectId} value={assetId ?? ""} onChange={(e) => retarget("existing", e.target.value === "" ? null : Number(e.target.value))}>
+              <select id={assetSelectId} ref={assetSelect} value={assetId ?? ""} onChange={(e) => retarget("existing", e.target.value === "" ? null : Number(e.target.value))}>
                 <option value="">(choose)</option>
                 {choices.map((a) => <option key={a.id} value={a.id}>{indent(a.depth) + a.name}</option>)}
               </select>
@@ -166,7 +170,7 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
           ) : (
             <>
               <label>New asset name
-                <input value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
+                <input ref={nameInput} value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
               </label>
               <div className="field">
                 <label htmlFor={parentSelectId}>Parent asset</label>

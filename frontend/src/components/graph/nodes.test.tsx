@@ -52,6 +52,28 @@ describe("graph nodes", () => {
     expect(screen.getByRole("button", { name: "Collapse Plant OPC" })).toBeInTheDocument();
   });
 
+  it("a source has a Details button only when onSelect is injected, and it reports the node id", async () => {
+    const view = renderNode("source", "src:1", { source, expanded: false, onToggle: vi.fn() });
+    expect(screen.queryByRole("button", { name: "Details for Plant OPC" })).not.toBeInTheDocument();
+    view.unmount();
+    const onSelect = vi.fn();
+    renderNode("source", "src:1", { source, expanded: false, onSelect });
+    const button = screen.getByRole("button", { name: "Details for Plant OPC" });
+    expect(button).toHaveClass("nodrag");
+    await userEvent.click(button);
+    expect(onSelect).toHaveBeenCalledWith("src:1");
+  });
+
+  it("the Details button is operable from the keyboard", async () => {
+    const onSelect = vi.fn();
+    renderNode("source", "src:1", { source, expanded: false, onSelect });
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Details for Plant OPC" })).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
+    expect(onSelect).toHaveBeenCalledTimes(2);
+  });
+
   it("a cluster shows label (count) and its mapped count, with a toggle only when injected", async () => {
     const onToggle = vi.fn();
     renderNode("cluster", "cluster:1:LVP01", { ...cluster, onToggle });

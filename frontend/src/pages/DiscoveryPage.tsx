@@ -18,8 +18,8 @@ import {
   buildGraph, type ClusterNodeData, type OpenState, type PointNodeData, type SourceNodeData,
 } from "../lib/graph";
 
-/** How long the "create an asset from this cluster?" offer stays up. */
-const OFFER_MS = 10_000;
+/** The server rejects a longer layout node id (a cluster id embeds device-reported names, so it can be long). */
+const MAX_LAYOUT_ID = 512;
 
 const toggled = <T,>(set: ReadonlySet<T>, value: T): Set<T> => {
   const next = new Set(set);
@@ -27,15 +27,18 @@ const toggled = <T,>(set: ReadonlySet<T>, value: T): Set<T> => {
   return next;
 };
 
-type Callbacks = { onToggle: (id: string) => void; onMap: (id: string) => void; onNewAsset: (id: string) => void };
+type Callbacks = {
+  onToggle: (id: string) => void; onSelect: (id: string) => void; onMap: (id: string) => void; onNewAsset: (id: string) => void;
+};
 
 /**
- * The callbacks a node gets in its data (it renders a button only for a callback it has). Sources and clusters toggle;
+ * The callbacks a node gets in its data (it renders a button only for a callback it has). Sources and clusters toggle and
+ * sources open their details;
  * for an admin, a cluster with something left to map offers both mapping buttons and an unmapped point offers "Map".
  * The conditions mirror what `dropPayload` accepts, so a button is never shown for something that could not be mapped.
  */
-function nodeData(node: Node, isAdmin: boolean, { onToggle, onMap, onNewAsset }: Callbacks): Node["data"] {
-  if (node.type === "source") return { ...node.data, onToggle };
+function nodeData(node: Node, isAdmin: boolean, { onToggle, onSelect, onMap, onNewAsset }: Callbacks): Node["data"] {
+  if (node.type === "source") return { ...node.data, onToggle, onSelect };
   if (node.type === "cluster") {
     const cluster = node.data as ClusterNodeData;
     const mappable = isAdmin && !cluster.ungrouped && cluster.mappedCount < cluster.count;
@@ -62,13 +65,7 @@ function Canvas({ model }: { model: GraphModel }) {
   const reviewCount = useRef(0);
   const [offer, setOffer] = useState<{ nodeId: string; label: string } | null>(null);
 
-  // A newer offer replaces the old one and gets the full time; leaving the page or dismissing clears the timer too.
-  useEffect(() => {
-    if (!offer) return;
-    const timer = setTimeout(() => setOffer(null), OFFER_MS);
-    return () => clearTimeout(timer);
-  }, [offer]);
-
+  // The offer has no timer (WCAG 2.2.1): it stays until it is dismissed, used, replaced by a newer one, or another drag starts.
   const openReview = useCallback((payload: DropPayload, initialTarget: InitialTarget) => {
     setOffer(null);
     setReview({ key: ++reviewCount.current, payload, initialTarget });
@@ -84,6 +81,15 @@ function Canvas({ model }: { model: GraphModel }) {
     if (payload) openReview(payload, { kind: "new", name: payload.label, parentId: null });
   }, [model, openReview]);
 
+  const canvas = useRef<HTMLDivElement>(null);
+  const onSelect = useCallback((id: string) => setSelectedId(Number(id.slice("src:".length))), []);
+  const closePanel = useCallback(() => {
+    const id = selectedId;
+    setSelectedId(null);
+    // Hand the keyboard back to the node's Details button, which stays in the canvas while the panel is open.
+    if (id !== null) canvas.current?.querySelector<HTMLElement>(`[data-id="src:${id}"] button[aria-label^="Details for"]`)?.focus();
+  }, [selectedId]);
+
   const onToggle = useCallback((id: string) => {
     setOpen((prev) => id.startsWith("src:")
       ? { ...prev, sources: toggled(prev.sources, Number(id.slice("src:".length))) }
@@ -95,10 +101,10 @@ function Canvas({ model }: { model: GraphModel }) {
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
       position: moved.current.get(n.id) ?? n.position,
-      data: nodeData(n, isAdmin, { onToggle, onMap, onNewAsset }),
+      data: nodeData(n, isAdmin, { onToggle, onSelect, onMap, onNewAsset }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, isAdmin, onToggle, onMap, onNewAsset]);
+  }, [model, open, isAdmin, onToggle, onSelect, onMap, onNewAsset]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
@@ -132,7 +138,11 @@ function Canvas({ model }: { model: GraphModel }) {
     }
     for (const n of dragged) moved.current.set(n.id, { x: n.position.x, y: n.position.y });
     if (!isAdmin) return;
-    void run(() => api.put("/api/discovery/layout", { nodes: dragged.map((n) => ({ node_id: n.id, x: n.position.x, y: n.position.y })) }));
+    // A node with an over-long id stays where it was dragged for this session but is not sent: the server would reject
+    // the whole request and take every other position down with it.
+    const saved = dragged.filter((n) => n.id.length <= MAX_LAYOUT_ID);
+    if (saved.length === 0) return;
+    void run(() => api.put("/api/discovery/layout", { nodes: saved.map((n) => ({ node_id: n.id, x: n.position.x, y: n.position.y })) }));
   }, [isAdmin, model, getIntersectingNodes, setNodes, openReview, run]);
 
   // The panel reads the source from the current model, so it follows a refresh instead of showing stale facts.
@@ -147,7 +157,7 @@ function Canvas({ model }: { model: GraphModel }) {
       </div>
       {saveError && <p className="error" role="alert">{saveError}</p>}
       <div className="graph-layout">
-        <div className="graph-canvas">
+        <div className="graph-canvas" ref={canvas}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -176,7 +186,7 @@ function Canvas({ model }: { model: GraphModel }) {
             </div>
           )}
         </div>
-        {selected && <SourcePanel key={selected.id} source={selected} canEdit={isAdmin} onClose={() => setSelectedId(null)} />}
+        {selected && <SourcePanel key={selected.id} source={selected} canEdit={isAdmin} onClose={closePanel} />}
       </div>
       {isAdmin && review && (
         <ReviewDialog key={review.key} model={model} payload={review.payload} initialTarget={review.initialTarget} onClose={closeReview} />

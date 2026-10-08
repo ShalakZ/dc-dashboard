@@ -40,7 +40,7 @@ function MapButtons({ id, name, onMap, onNewAsset }: { id: string; name: string 
 }
 
 function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
-  const { source, expanded, onToggle } = data;
+  const { source, expanded, onToggle, onSelect } = data;
   return (
     <div className={`gnode gnode-source ${source.origin}`}>
       <Handles>
@@ -48,6 +48,9 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
           <div className="node-title">{source.name}</div>
           <Toggle id={id} name={source.name} expanded={expanded} onToggle={onToggle} />
         </div>
+        {onSelect && (
+          <button className="nodrag" aria-label={`Details for ${source.name}`} onClick={press(() => onSelect(id))}>Details</button>
+        )}
         <div className="muted">{source.connector_type} · {source.origin} · {source.status} · {source.point_count} points</div>
         {source.needs_credentials && <span className="badge">needs credentials</span>}
       </Handles>

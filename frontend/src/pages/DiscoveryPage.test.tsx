@@ -127,6 +127,23 @@ describe("DiscoveryPage", () => {
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
   });
 
+  it("a source's Details button opens the panel with focus on its heading; Escape and Close hand focus back to the button", async () => {
+    mockFetch(routes("operator"));
+    open();
+    const details = await screen.findByRole("button", { name: "Details for Plant OPC" });
+    details.focus();
+    await userEvent.keyboard("{Enter}");
+    const panel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(panel).getByRole("heading", { name: "Plant OPC" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Details for Plant OPC" })).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Details for Plant OPC" }));
+    await userEvent.click(within(await screen.findByRole("complementary")).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Details for Plant OPC" })).toHaveFocus();
+  });
+
   it("clicking anything other than a source leaves the panel closed", async () => {
     mockFetch(routes("operator"));
     open();
@@ -186,6 +203,24 @@ describe("DiscoveryPage", () => {
     expect(calls.find((c) => c.method === "PUT")).toMatchObject({
       path: "/api/discovery/layout", body: { nodes: [{ node_id: "src:1", x: 7, y: 8 }] },
     });
+  });
+
+  it("never sends a node whose id is longer than the server accepts, so one long cluster name cannot sink a save", async () => {
+    const longKey = "K".repeat(600);
+    const model = graph();
+    model.sources[0].clusters.push({ key: longKey, points: [point(7, "K a"), point(8, "K b")] });
+    const calls = mockFetch(routes("admin", model));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Expand Plant OPC" }));
+    await userEvent.click(screen.getByTestId(`drag-cluster:1:${longKey}`));
+    expect(calls.some((c) => c.method === "PUT")).toBe(false); // nothing left to send
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(node(`cluster:1:${longKey}`)).toHaveAttribute("data-x", "7"); // it still moved on screen
+    await userEvent.click(screen.getByTestId(`dragwith-cluster:1:${longKey}`)); // together with another node
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+    const sent = (calls.find((c) => c.method === "PUT")!.body as { nodes: { node_id: string }[] }).nodes;
+    expect(sent).toHaveLength(1);
+    expect(sent.every((n) => n.node_id.length <= 512)).toBe(true);
   });
 
   it("shows the server's reason when saving the layout fails", async () => {
@@ -325,18 +360,17 @@ describe("DiscoveryPage mapping", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("the offer goes away by itself after ten seconds, and a newer offer gets its own ten", async () => {
+  it("the offer does not go away by itself (WCAG 2.2.1): it stays until dismissed, used, or another drag starts", async () => {
     await start("admin");
     vi.useFakeTimers();
     try {
       fireEvent.click(screen.getByTestId("drag-cluster:1:LVP01"));
       expect(screen.getByRole("status")).toBeInTheDocument();
-      await act(() => vi.advanceTimersByTimeAsync(6_000));
-      fireEvent.click(screen.getByTestId("drag-cluster:1:LVP02")); // replaces the offer: the old timer must not cut it short
-      await act(() => vi.advanceTimersByTimeAsync(6_000));
+      await act(() => vi.advanceTimersByTimeAsync(5 * 60_000));
+      expect(screen.getByRole("status")).toHaveTextContent('Create asset "LVP01"');
+      fireEvent.click(screen.getByTestId("drag-cluster:1:LVP02")); // a newer offer replaces it
+      await act(() => vi.advanceTimersByTimeAsync(5 * 60_000));
       expect(screen.getByRole("status")).toHaveTextContent('Create asset "LVP02"');
-      await act(() => vi.advanceTimersByTimeAsync(4_000));
-      expect(screen.queryByRole("status")).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

@@ -37,6 +37,24 @@ describe("SourcePanel", () => {
     expect(within(panel).getByText(/connection refused/)).toBeInTheDocument();
   });
 
+  it("moves focus to its heading when it opens", () => {
+    mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+    open(source(), false);
+    const heading = screen.getByRole("heading", { name: "Plant OPC" });
+    expect(heading).toHaveAttribute("tabindex", "-1");
+    expect(heading).toHaveFocus();
+  });
+
+  it("Escape closes the panel, and so does Close", async () => {
+    mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+    const onClose = vi.fn();
+    open(source(), false, onClose);
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
   it("a source that needs credentials takes a secret and username, saves them, browses and shows the result", async () => {
     const calls = mockFetch({
       ...base,
