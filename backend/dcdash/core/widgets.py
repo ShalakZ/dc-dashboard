@@ -1,7 +1,8 @@
-"""Widget configuration: the rules every saved or previewed widget must satisfy (spec 10.5).
+"""Widget configuration (spec 10.5) and the figures a widget draws (spec 10.6).
 
 `validate_config` is the only entry point for configs that come from a client. Messages are plain
 text that names the field ("assets: at most 20 assets per widget (got 21)") so the editor can show them.
+`compute_widget` answers POST /api/widget-data and its CSV export for a validated config.
 """
 import bisect
 import math
@@ -19,8 +20,8 @@ from dcdash.core.cost import HourCost, cost_by_hour, load_tariffs, no_data, rate
 from dcdash.core.energy import HourEnergy, hourly_energy
 from dcdash.core.metrics import Metric, unit_for
 from dcdash.core.series import (
-    DEFAULT_BUCKETS, HourStat, combine_hours, first_mappings, last_rollup_value, latest_values, metric_aggregate,
-    metric_hours, metric_series, series_tier,
+    DEFAULT_BUCKETS, combine_hours, first_mappings, last_rollup_value, latest_values, metric_aggregate, metric_hours,
+    metric_series, series_tier,
 )
 from dcdash.core.settings_store import get_currency
 from dcdash.core.timeutil import (

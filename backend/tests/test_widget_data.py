@@ -315,6 +315,7 @@ async def test_last_without_a_reading_is_empty_and_not_stale(db, session):
 async def test_last_on_a_finished_range_is_the_last_rollup_value(db, session):
     asset = await seed_standard(db)
     kw_point = await kw_point_of(db, asset)
+    await insert_readings(db, kw_point, datetime(2026, 3, 9, 6, 0, tzinfo=UTC), 60, [3.0])  # an earlier hour of the day
     await insert_readings(db, kw_point, datetime(2026, 3, 9, 12, 0, tzinfo=UTC), 60, [7.0, 8.0, 9.0])
     await refresh_rollups(db)
     value = (await run(session, "stat", [asset], aggregation="last", preset="yesterday"))["values"][0]
