@@ -70,6 +70,46 @@ describe("a legend selection survives a refetch", () => {
   });
 });
 
+describe("a remembered selection that no longer fits is forgotten", () => {
+  const only = (...ids: [number, string][]) => seriesData({ series: ids.map(([id, name]) => line(id, name, id)) });
+  const A: [number, string] = [5, "A"];
+  const B: [number, string] = [6, "B"];
+  const C: [number, string] = [7, "C"];
+
+  it("when the legend is no longer shown (one series left), so a hidden series can never become unreachable", () => {
+    const { rerender } = render(<TimeSeriesWidget data={only(A, B)} timezone={TZ} />);
+    toggle({ A: false, B: true });
+    rerender(<TimeSeriesWidget data={only(B)} timezone={TZ} />); // A was deleted: a single series has no legend to switch it back on
+    expect(props().option.legend?.selected).toBeUndefined();
+    rerender(<TimeSeriesWidget data={only(A, B)} timezone={TZ} />); // and the old choice does not come back with the legend
+    expect(props().option.legend?.selected).toBeUndefined();
+  });
+
+  it("when the names in the legend are not the ones that were chosen from (an asset replaced, renamed or flagged)", () => {
+    const { rerender } = render(<TimeSeriesWidget data={only(A, B)} timezone={TZ} />);
+    toggle({ A: true, B: false });
+    rerender(<TimeSeriesWidget data={only(A, C)} timezone={TZ} />);
+    expect(props().option.legend?.selected).toBeUndefined();
+    rerender(<TimeSeriesWidget data={only(A, B)} timezone={TZ} />); // B is not hidden again behind the viewer's back
+    expect(props().option.legend?.selected).toBeUndefined();
+  });
+
+  it("for bars too", () => {
+    const bars = (...ids: [number, string][]) => seriesData({ type: "bar", series: ids.map(([id, name]) => line(id, name, id)) });
+    const { rerender } = render(<BarWidget data={bars(A, B)} timezone={TZ} />);
+    toggle({ A: false, B: true });
+    rerender(<BarWidget data={bars(B)} timezone={TZ} />);
+    expect(props().option.legend?.selected).toBeUndefined();
+  });
+
+  it("but not while the same names are still there: the choice survives data that changed", () => {
+    const { rerender } = render(<TimeSeriesWidget data={only(A, B)} timezone={TZ} />);
+    toggle({ A: true, B: false });
+    rerender(<TimeSeriesWidget data={only(B, A)} timezone={TZ} />); // same two names, other order
+    expect(props().option.legend?.selected).toEqual({ A: true, B: false });
+  });
+});
+
 describe("two charts do not share a selection", () => {
   it("remembers per widget", () => {
     const first = render(<TimeSeriesWidget data={two(1)} timezone={TZ} />);
