@@ -125,6 +125,8 @@ describe("TariffsPage", () => {
     await userEvent.clear(input);
     await userEvent.click(save);
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ currency: null }));
+    expect(window.confirm).toHaveBeenCalledTimes(1); // removing an existing currency is a change too
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("Remove the currency QAR"));
   });
 
   it("asks before changing an existing currency, because it relabels every past figure", async () => {
