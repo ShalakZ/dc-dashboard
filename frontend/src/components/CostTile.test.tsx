@@ -46,6 +46,14 @@ describe("CostTile", () => {
     expect(figure).toHaveTextContent("0.00");
   });
 
+  it("mutes the dash too when nothing was recorded and no rate applies, and still says no rate is set", () => {
+    render(<CostTile cost={{ cost: null, estimated: false, partial: false, no_data: true }} currency="QAR" />);
+    const dash = screen.getByTitle("no data");
+    expect(dash).toHaveClass("muted");
+    expect(dash).toHaveTextContent("—");
+    expect(screen.getByText("no rate set")).toBeInTheDocument();
+  });
+
   it("does not mute a measured figure", () => {
     render(<CostTile cost={{ cost: 1, estimated: false, partial: false, no_data: false }} currency="QAR" />);
     expect(screen.getByText("1.00")).not.toHaveClass("muted");

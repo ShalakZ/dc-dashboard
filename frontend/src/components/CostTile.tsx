@@ -18,7 +18,7 @@ export function CostTile({ cost, currency }: { cost: CostToday | null; currency:
       )}
       {cost !== null && cost.cost === null && (
         <>
-          <div className="big">—</div>
+          <div className={cost.no_data ? "big muted" : "big"} title={cost.no_data ? "no data" : undefined}>—</div>
           <small className="muted">no rate set</small>
         </>
       )}
