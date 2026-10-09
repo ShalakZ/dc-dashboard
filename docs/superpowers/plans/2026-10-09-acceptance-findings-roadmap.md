@@ -1,0 +1,179 @@
+# Roadmap from the manual acceptance pass (2026-10-09)
+
+Status: DRAFT 2 for the owner's approval, revised after an Opus logic review (2 Blockers and 14 Majors, all accepted, see the
+review log at the end). Nothing here is built. Source of every item: `docs/superpowers/manual-test-notes.md` (finding ids
+`S<section>-<n>`, 68 entries from sections 1-13, plus the owner decisions at its top). Older deferred items live in
+`docs/superpowers/backlog.md` (`BL:<line>`); the ones that ride along with a finding are listed in the "rides along" table.
+
+## How to read this
+
+- **Effort** (agent work, not calendar time): S = one small task; M = two or three tasks; L = four or more tasks or a design step.
+- **Risk** for the product: Low = isolated, easy to undo; Med = touches data lifetime, containers, builds, auth, scripts that
+  can act on a live stack, or many routes; **High = a migration of stored data or billing arithmetic**. Two items are High
+  and are marked: the audit actor snapshot (W1a) and, only if chosen, a database constraint for duplicate names (W1b).
+- **Decision** marks an item that waits for the owner (list at the end).
+- **Safety rule for every drill:** anything that stops, kills, restores or recreates containers runs only in a throwaway
+  project whose name starts with `dcdash_e2e` with a prefix guard, never in `dcdash` (the method of section 12).
+- **Process for every wave:** one implementation plan per wave (writing-plans skill); an Opus logic review of that plan before
+  any implementer starts; one fresh Sonnet implementer per task; an Opus code review per task; the isolated e2e run; merge to
+  `main` with `--no-ff` after a whole-wave review; the dev stack is rebuilt only after a verified backup. Each wave below is
+  sized for one session; if a wave plan turns out larger it splits at the line marked in it.
+
+## Order and reasoning
+
+W0a and W0b first: cheap, independent, and they remove what the owner already hit. W1a and W1b next: they close the ways
+data or evidence is lost silently, and W1a (audit) comes first because W1b's storage, duplicate-name and restore work writes
+audit entries. W2 makes recovery and hardening routine. W3 is everyday usability. W4 waits for the workstation. W5 is ideas.
+Phone support is deferred by the owner; accessibility beyond the listed items is parked (the keyboard pass was fine).
+
+## W0a UI and docs quick wins (no decisions, Low risk)
+
+| Id | Item | Effort |
+|---|---|---|
+| S5-1 | `step="0.01"` on the two rate inputs ONLY. Mapping Scale and disk capacity stay `step="any"` (those forms are not `noValidate`; 0.001 must stay valid); integer day fields may use `step="1"` | S |
+| S2-1 (+BL:94) | Timezone hint: day and month boundaries, and shown times; make Metrics table, Scans and Sources follow the site zone, or word the hint narrowly | S |
+| S3-3 | README: the dev simulator's HTTP source needs Secret `sim-key` | S |
+| S4-6 (+BL:83) | Asset Trend chart: the widgets' isolated-point and gap rules, plus the finite-value guard | S |
+| S4-8 | Drop the permanent `reconnecting…` on assets with no points | S |
+| S4-3 (labels only) | Show the asset path in every asset list: mapping dialog (`MappingForm.tsx:36`), Assets parent list, Discovery ReviewDialog (BL:56), reuse `assetLabels`, fix its `#id` gap (BL:86) and `TariffOut.asset_path` (BL:120). No decision needed; removes the wrong-mapping risk now | S-M |
+| S7-1, S7-5, S7-2 | Gauge name below the value; confirm or Undo when deleting a widget; dashboards and Billing opt out of the 1200 px page width | S each |
+| S13-4, S13-5, S13-6 | `RequireRole` operator on `/sources` and admin on the points page; a not-found route that keeps the nav; style the current nav item and add a skip link | S each |
+| S13-12 | Storage `PUT` takes a separate input model with every field required (an empty or partial body gets 422); the factory values live in ONE constant that `GET` exposes (the frontend keeps no copy). The `0002`/`0004` migration seeds stay as history | S-M |
+| S12-4 | `setup.sh` and `setup.ps1` refuse (or ask) when the project's database volume exists and `.env` is missing (find the volume through the compose project, not a hard-coded name); `backup.sh` says `.env` is not in the dump; disaster-recovery steps name `.env` plus the dump. Closes a `down -v` data-loss trap | S |
+| S12-13 | Document that a restore makes the collector rewrite `collector_networks` | S |
+
+## W0b Container and health chain (ONE ordered task chain: S12-2, then S12-3, then S12-1; they edit the same `compose.yaml` and `collector/main.py`)
+
+Risk Med, effort L in total. Docker-route work; the route A counterpart is planned in W4 (NSSM stop, log rotation).
+
+| Id | Item |
+|---|---|
+| S12-2 | `logging: options` (max-size, max-file) in `compose.yaml`; asyncua and pymodbus loggers at WARNING in the collector (the scan code restores the saved level, so scans are unaffected) |
+| S12-3 | `exec uvicorn` plus `--timeout-graceful-shutdown` below the grace period (the SSE stream never ends by itself, so an open page would still force SIGKILL); set `stop_grace_period`; wire SIGTERM and SIGINT to the collector's existing stop and flush, guarded by platform (`add_signal_handler` raises on Windows). Verify with an SSE client attached: `docker stop -t 10` exits 0 and the reading count is continuous across the stop |
+| S12-1 | `/api/health` becomes a readiness check (database query with a timeout under the 3 s healthcheck timeout) plus `start_period`, so a long migration does not fail `setup.sh`. Compose never restarts an unhealthy container; the risk being removed is a false green and a blocked start. The collector writes a heartbeat to the database (route A has no Docker; the UI and the doctor script read it there); "last reading age" on the Sources page; web gets a healthcheck. Also an investigation task: the half-density raw data seen after the 42 s database outage (possible silent loss) |
+
+## W1a Audit foundation (needs D7a and D11 first)
+
+Risk Med, with one High item. Built first inside W1 because everything after it writes audit entries.
+
+| Id | Item | Effort |
+|---|---|---|
+| S10-1 (+S2-2, S3-5, BL:60) | Audit every data-changing route on the agreed list (user create/patch, own password, storage, timezone, mappings, assets, sources, source test/browse, first-run setup); the audit call is part of the route, and a test fails for any write route without one (explicit read allow-list) | L |
+| detail contract | Every update stores `{before, after}`; includes F6 (`tariff.updated` keeps only new values, BL:111), skips no-op updates (`PATCH {}` writing `scope.updated`, BL:48). S10-6 later renders older rows that have no `before` | M |
+| security events | Sign-in success, failure and lockout are written with a separately committed write (the request transaction is rolled back on a failed login, `api/auth.py:86-94`, and `audit()` only joins it). Do not store a typed username when no such user exists; limit the volume of failure rows | M |
+| actor snapshot (**High**) | A snapshot column of the actor's name on `audit_log` (migration with backfill), because deleting a user sets `user_id` to null (`ON DELETE SET NULL`) and erases the actor from every entry. Prerequisite for S1-2 | M |
+
+## W1b Storage, restore and duplicate-name safety (uses the W1a mechanism)
+
+Risk Med (High only if D4 picks a database constraint).
+
+| Id | Item | Effort |
+|---|---|---|
+| S9-1, S9-2, S9-3 | Storage form with Set as default, Reset to default, Reset to factory (owner semantics; factory = 30 / 7 / 730 / 100 GB / 80 %). The site default is a new `settings` key that is never seeded (absent means "not set"), validated by the same rules. The server, not only the UI, refuses a shorter raw or 1-minute retention without `confirm` (409 with an estimate in whole 7-day chunks, the asset-delete pattern); additive to the W0a contract. Audit per D14 | M-L |
+| S12-9 (revised) | `restore.sh` acts between `pg_restore` and `timescaledb_post_restore()`: it unschedules the retention jobs by default (or refuses without `--apply-retention`), prints the chunks that retention would drop for `readings` and `readings_1m`, and says that saving the Storage page re-arms retention (`core/storage.py` re-adds the policies). Same for `restore.ps1`; README advice rewritten (raising retention before a restore does not survive the restore). Verify with the large drill: the old chunks must survive | M |
+| S12-4 (part 2) | Store a fingerprint of `DCDASH_SECRET_KEY` in `settings`; warn at api start (and on the Sources page) when stored secrets cannot be decrypted (a wrong key fails silently per source today) | S |
+| S4-3 (refusal) | Refuse the same name under the same parent on `POST /api/assets`, rename, move, and Discovery's "new asset"; rule for case and whitespace (BL:50). D4 chooses API-only (racy) or a unique index `NULLS NOT DISTINCT` with a migration that refuses on existing duplicates (that variant is **High**) | M |
+| BL:F4 | A non-finite scale or a Modbus NaN stored as GOOD reaches Billing as "no rate": a silent wrong number | S-M |
+
+## W2 Operations, recovery and hardening
+
+Order inside the wave: S12-5 and S12-14 first (the PowerShell scripts depend on the guard), then the rest.
+
+| Id | Item | Effort | Risk |
+|---|---|---|---|
+| S12-5 | Isolate the ops scripts like `e2e.sh`: `check_tls.sh`, `backup_smoke.sh` (and the three `.ps1` scripts) take a scratch project name with a prefix guard that refuses `dcdash`, `check_tls.sh` gets its own certs directory and a throwaway container for the chown, no bare `down`, and a port override; test the guard against the name `dcdash`. `backup.sh` and `restore.sh` print the project they act on | M | Med |
+| S12-14 | Run `setup.ps1`, `backup.ps1`, `restore.ps1` for real on the Windows dev machine, in a scratch project (the engine is shared with WSL, so a copy on a Windows drive would otherwise act on `dcdash`), after a verified backup, port override for 80/443. Needs D10 | S | Med |
+| route A spike (D12) | On the same machine, prove whether the TimescaleDB Windows zip (2.30.2, PostgreSQL 16) offers compression, continuous aggregates and policies. It is a property of the build, so it can be settled now and decides whether route A is viable | S | Low |
+| S12-6 | Certificate: README rotation steps (a `web` restart), expiry shown (the api has no `./certs` mount, so the collector publishes the expiry to `settings`, or the doctor script reads it), warning 30 days ahead; nothing to show in HTTP mode | S-M | Low |
+| S12-8 | Pin base images by digest, including `timescale/timescaledb` and the uv image; stop rebuilds recreating containers when nothing changed (test `--provenance=false`); a re-pin step in the upgrade runbook so security fixes still arrive | M | Med |
+| S13-7 | The UI refetches `/api/me` on window focus and after a 403 and says "your role changed, reload" | S-M | Low |
+| S12-11 | Scheduled backups (Task Scheduler and cron examples), keep the last N, off-host copy, optional encryption of the dump (D13: target and key custody); the section 12 restore drill as a runbook. `backup.ps1` follows S12-14 | M | Low |
+| S12-12 | The README upgrade section becomes a general upgrade and go-back runbook | S | Low |
+| S12-7 | Security headers; the Content-Security-Policy ships as `Content-Security-Policy-Report-Only` first (ECharts tooltips use `style` attributes, expect `style-src 'unsafe-inline'`, keep `script-src 'self'`); the redirect that drops a non-443 port and `Server: Caddy` need the owner | M | Med |
+
+## W3 Everyday usability (four sub-waves, each its own plan)
+
+| Sub-wave | Items | Effort |
+|---|---|---|
+| W3a Assets, mapping, sources | S4-1 (`+` per branch), S4-2 (kind list, D5), S4-4 (mapping without scrolling), S4-5 (sort, "unmapped only", search), S3-2 (unit vs metric warning), S3-4 (Edit on Sources, plus the source-delete cache refresh BL:87), S3-1 ("not polled, no mapped points") | L |
+| W3b Charts and dashboards | S4-7 (Trend live or "updated hh:mm:ss"), S4-9 (parent roll-up of live power, display only: no `core/cost.py` change, D1 untouched; define the rule when a parent has its own meter or a child is stale), S7-3 (long names), S7-4 (dropped widget; D6) | L |
+| W3c Audit screen | S10-2 filters, S10-3 export, S10-4 jump and links, S10-5 UI pass (+ pager BL:58), S10-6 raw and friendly views (uses the W1a `before/after`) | L |
+| W3d Users and sign-in | S1-1 configurable block timer (bounded: a minimum of failures, a maximum block time, a recovery path, so one bad value cannot lock out every admin); S1-2 delete accounts (after the W1a snapshot; D11) | M |
+
+## W4 Real network and offline (blocked until the owner reaches the workstation)
+
+Entry gate: D9 and the SCADA's session limit and session-audit policy (in D2) are decided BEFORE the first real connection;
+until then OPC UA sources default to a longer interval (about 720 sessions an hour per source today). Docker-route work from
+W0b, W2 (S12-1/2/3/11/14) gets its route A counterpart here (NSSM stop, native `pg_dump`, log rotation). Route-independent
+parts (doctor and log-collection script design, the runbook, the 0004 backup and pre-checks BL:72) can be planned earlier.
+
+| Id | Item | Effort | Risk |
+|---|---|---|---|
+| Offline bundle, both routes | A first (native Windows: PostgreSQL 16 plus the TimescaleDB Windows zip if D12 says yes, Python wheelhouse, caddy.exe, NSSM), then B (`docker save` bundle, 0.73 GB compressed, image-only compose, no `--build`, SHA-256 manifest, doctor, log collector, offline smoke test) | L each | Med |
+| S12-10 | OPC UA: one long-lived session with a watchdog, or a longer interval (D9) | M | Med |
+| BL:B | Stuck-scan watchdog, conservative scan mode, reachability check, SCADA coordination | L | Med |
+
+## W5 Ideas for later (not planned in detail)
+
+S11-1 snap and tidy, S11-2 graph legend (cheap, may ride along with W3), S11-3 node types and icons, saved views and export,
+S11-4 "feeds" relation (ties to D1, D8), S9-4 outbound alerts and retention profiles, S9-5 factory values (D3), S10-7 audit
+retention and forwarding (D7b).
+
+## Parked
+
+- Phone support (owner): S13-1, S13-2, S13-3, the phone part of S13-8. S13-1 (the nav) is the one cheap fix that would help
+  every page; say if you want it pulled into W0a.
+- Accessibility beyond W0a: S13-9 (chart text alternatives, Gauge value), S13-10 (focus ring on Discovery nodes), S13-11 (row
+  context for row buttons), the keyboard part of S13-8. Revisit with phone. S13-13 is information only.
+
+## Open decisions
+
+| Id | Question | Needed by |
+|---|---|---|
+| D1 | **S6-1 A parent's cost: its own energy times its own rate (today), or the sum of its children's costs? The owner is asking the real administrators.** No change until answered; if it changes it is one rule in `core/cost.py` plus the sentence in spec 10.2 | open; nothing but S11-4 depends on it |
+| D2 | Workstation facts (Windows edition, virtualization, Docker allowed, RDP limits, the OPC UA endpoint, the SCADA's session limit and session-audit policy) | W4 |
+| D3 | Factory values: today's (30 / 7 / 730 / 100 GB / 80 %) are what W1b uses; adopt the S9-5 recommendation (rollups 365, warning 70 %, capacity asked at install) or not | W5 (S9-5) |
+| D4 | Duplicate asset names: refuse the same name under the same parent (proposed); rule for case and whitespace; API-only or a database unique index (High) | W1b |
+| D5 | Asset `Kind`: free text or a list | W3a |
+| D6 | Dashboard overlap: vertical compaction or swapping positions (editor and view identical) | W3b |
+| D7a | Which actions count as important to audit (proposal: the high-importance list in section 10) | W1a |
+| D7b | The audit log's own retention and forwarding | W5 |
+| D8 | "contains" versus "feeds", and which one Billing follows | W5, with D1 |
+| D9 | OPC UA session strategy | before the first real connection (W4 entry gate) |
+| D10 | May the Windows script test (S12-14) and the route A spike (D12) run on the dev machine, in a scratch project and with a copy of the repo on a Windows drive? | W2 |
+| D11 | After a user is deleted, keep the actor's name in old audit entries (proposed) or anonymise it | W1a |
+| D12 | Route A spike: allow proving the TimescaleDB Windows build now, on the dev machine | W2 |
+| D13 | Backups: off-host target, and who keeps the encryption key on an offline workstation | W2 |
+| D14 | What "audit all three storage actions" means: proposal, audit Set as default, and record the origin (factory, site default or manual) in the following Save's `storage.changed`, because the two Resets only fill the form | W1b |
+
+## Rides along (backlog items attached to a finding)
+
+| Backlog | Goes with |
+|---|---|
+| BL:F4 non-finite readings reaching Billing | W1b |
+| BL:F6, BL:60 (Phase 1 actions unaudited), BL:48 (`PATCH {}`) | S10-1 (W1a) |
+| BL:94 browser-zone screens | S2-1 (W0a) |
+| BL:56 ReviewDialog, BL:86 AssetPicker, BL:120 `TariffOut.asset_path` | S4-3 labels (W0a) |
+| BL:83 TrendChart finite guard | S4-6 (W0a) |
+| BL:87 source-delete cache refresh | S3-4 (W3a) |
+| BL:58 Audit pager and readable detail | S10-5, S10-6 (W3c) |
+| BL:72 the 0004 backup and pre-checks | W4 runbook |
+
+## Coverage check
+
+Every finding id is assigned exactly once (S4-3 once: labels in W0a, refusal in W1b; S12-4 once: scripts in W0a, key
+fingerprint in W1b). W0a: S5-1, S2-1, S3-3, S4-6, S4-8, S4-3, S7-1, S7-5, S7-2, S13-4, S13-5, S13-6, S13-12, S12-4, S12-13.
+W0b: S12-2, S12-3, S12-1. W1a: S10-1, S2-2, S3-5. W1b: S9-1, S9-2, S9-3, S12-9. W2: S12-5, S12-14, S12-6, S12-8, S13-7,
+S12-11, S12-12, S12-7. W3: S4-1, S4-2, S4-4, S4-5, S3-2, S3-4, S3-1, S4-7, S4-9, S7-3, S7-4, S10-2, S10-3, S10-4, S10-5,
+S10-6, S1-1, S1-2. W4: S12-10. W5: S11-1, S11-2, S11-3, S11-4, S9-4, S9-5, S10-7. Open: S6-1. Parked: S13-1, S13-2, S13-3,
+S13-8, S13-9, S13-10, S13-11, S13-13.
+
+## Review log (what the Opus review changed)
+
+Blockers: S12-14 acted on the live stack (now a scratch project, guarded scripts first, Med); S12-9's "raise retention first"
+could not work and its count came too late (now pauses retention between restore and `post_restore`). Majors accepted: SIGTERM
+and the open SSE stream, Windows signal handling, readiness versus liveness and `start_period`, the audit transaction and
+security events, the actor snapshot (deleting users erased audit evidence), the storage contract changing twice and the
+factory values in three places, S4-3 split and its extra write paths, honest risk labels, D9 timing, wave sizing, the route A
+spike, unassigned backlog items, S5-1's `step` trap, D3 timing, drills only in guarded projects. Minors folded in as the
+sub-items above.
