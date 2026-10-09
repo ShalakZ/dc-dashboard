@@ -67,10 +67,12 @@ uv run --project backend python scripts/smoke.py          # drives http://localh
 scripts/check_web.sh                                     # SPA, proxy and SSE route checks
 ```
 
-The simulator's three protocols are added as sources in the app like any other. Its HTTP source needs the Secret
-`sim-key` (the simulator's API key, `SIM_API_KEY` in `compose.yaml`); without it the source goes `offline` with
-`auth_failed` (credentials rejected). The OPC UA simulator accepts any login (or none) unless `SIM_OPCUA_PASSWORD` is set
-in `.env`; then it takes the user `sim` with that password. Modbus needs none.
+The simulator's three protocols are added as sources in the app like any other. Its HTTP source
+needs the Secret `sim-key` (the simulator's API key, `SIM_API_KEY` in `compose.yaml`); without it,
+Test shows `auth_failed` (credentials rejected) and Browse fails, so there is nothing to map, and an
+enabled source with mapped points and a wrong key goes `offline` with that error. The OPC UA
+simulator accepts any login (or none) unless `SIM_OPCUA_PASSWORD` is set in `.env`; then it takes
+the user `sim` with that password. Modbus needs none.
 
 ## Services
 
