@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.api.deps import get_db, require_role
 from dcdash.core.audit import audit
 from dcdash.core.models import Asset, Tariff, User
+from dcdash.core.tree import AssetTree
 
 router = APIRouter(prefix="/api", tags=["tariffs"])
 
@@ -85,17 +86,19 @@ class TariffOut(BaseModel):
     id: int
     asset_id: int | None
     asset_name: str | None
+    asset_path: str | None
     rate_per_kwh: float
     effective_from: date
     created_by: int | None
     created_at: datetime
 
 
-def _out(tariff: Tariff, asset_name: str | None) -> TariffOut:
+def _out(tariff: Tariff, asset_name: str | None, asset_path: str | None) -> TariffOut:
     return TariffOut(
         id=tariff.id,
         asset_id=tariff.asset_id,
         asset_name=asset_name,
+        asset_path=asset_path,
         rate_per_kwh=float(tariff.rate_per_kwh),
         effective_from=tariff.effective_from,
         created_by=tariff.created_by,
@@ -119,8 +122,14 @@ async def _get(db: AsyncSession, tariff_id: int) -> Tariff:
     return tariff
 
 
-async def _asset_name(db: AsyncSession, asset_id: int | None) -> str | None:
-    return None if asset_id is None else await db.scalar(select(Asset.name).where(Asset.id == asset_id))
+async def _asset_name_and_path(db: AsyncSession, asset_id: int | None) -> tuple[str | None, str | None]:
+    """The asset's name and its path from the root, both None for the site default (or an asset that is gone)."""
+    if asset_id is None:
+        return None, None
+    tree = await AssetTree.load(db)
+    if asset_id not in tree.nodes:
+        return None, None
+    return tree.nodes[asset_id].name, tree.path(asset_id)
 
 
 async def _taken(db: AsyncSession, asset_id: int | None, effective_from: date, ignore_id: int | None = None) -> bool:
@@ -147,7 +156,11 @@ async def list_tariffs(db: AsyncSession = Depends(get_db)) -> list[TariffOut]:
         .outerjoin(Asset, Asset.id == Tariff.asset_id)
         .order_by(Tariff.asset_id.is_(None).desc(), Asset.name, Tariff.asset_id, Tariff.effective_from.desc())
     )
-    return [_out(tariff, name) for tariff, name in rows]
+    tree = await AssetTree.load(db)
+    return [
+        _out(tariff, name, tree.path(tariff.asset_id) if tariff.asset_id in tree.nodes else None)
+        for tariff, name in rows
+    ]
 
 
 @router.post("/tariffs", response_model=TariffOut, status_code=201)
@@ -156,12 +169,8 @@ async def create_tariff(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role("admin")),
 ) -> TariffOut:
-    asset_name = None
-    if body.asset_id is not None:
-        asset = await db.get(Asset, body.asset_id)
-        if asset is None:
-            raise HTTPException(404, "asset not found")
-        asset_name = asset.name
+    if body.asset_id is not None and await db.get(Asset, body.asset_id) is None:
+        raise HTTPException(404, "asset not found")
     if await _taken(db, body.asset_id, body.effective_from):
         raise HTTPException(409, DUPLICATE)
     tariff = Tariff(
@@ -172,10 +181,11 @@ async def create_tariff(
     )
     db.add(tariff)
     await _flush(db)
+    asset_name, asset_path = await _asset_name_and_path(db, body.asset_id)
     await audit(db, admin.id, "tariff.created", _detail(tariff))
     await db.commit()
     await db.refresh(tariff)
-    return _out(tariff, asset_name)
+    return _out(tariff, asset_name, asset_path)
 
 
 @router.patch("/tariffs/{tariff_id}", response_model=TariffOut)
@@ -195,7 +205,7 @@ async def update_tariff(
         await _flush(db)
         await audit(db, admin.id, "tariff.updated", _detail(tariff))
         await db.commit()
-    return _out(tariff, await _asset_name(db, tariff.asset_id))
+    return _out(tariff, *await _asset_name_and_path(db, tariff.asset_id))
 
 
 @router.delete("/tariffs/{tariff_id}", status_code=204)

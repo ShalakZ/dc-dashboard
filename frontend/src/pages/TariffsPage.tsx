@@ -98,7 +98,7 @@ function AddTariff({ assets, labels, assetsError = null }: {
       </label>
       <label>
         Rate per kWh
-        <input type="number" min="0" step="any" value={rate} onChange={(e) => setRate(e.target.value)} />
+        <input type="number" min="0" step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} />
       </label>
       <button type="submit" disabled={create.isPending}>Add rate</button>
       {assetsError !== null && <p className="error" role="alert">Could not load the assets: {assetsError}</p>}
@@ -149,7 +149,7 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
       </td>
       <td className="num">
         {editing ? (
-          <input type="number" min="0" step="any" aria-label="Rate per kWh" value={rate} onChange={(e) => setRate(e.target.value)} />
+          <input type="number" min="0" step="0.01" aria-label="Rate per kWh" value={rate} onChange={(e) => setRate(e.target.value)} />
         ) : fmtRate(tariff.rate_per_kwh)}
       </td>
       <td>
@@ -202,7 +202,7 @@ function TariffTables({ tariffs, assets, assetsError, currencyUnset }: {
         <table aria-label="Asset overrides">
           <thead><tr><th>Asset</th><th>Effective from</th><th>Rate per kWh</th><th>Actions</th></tr></thead>
           <tbody>{perAsset.map((t) => (
-            <TariffRow key={t.id} tariff={t} where={(t.asset_id !== null ? labels.get(t.asset_id) : undefined) ?? t.asset_name} />
+            <TariffRow key={t.id} tariff={t} where={(t.asset_id !== null ? labels.get(t.asset_id) : undefined) ?? t.asset_path ?? t.asset_name} />
           ))}</tbody>
         </table>
       )}

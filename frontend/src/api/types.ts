@@ -137,7 +137,7 @@ export interface Site { timezone: string; currency: string | null }
 export interface BillingSettings { currency: string | null }
 
 export interface Tariff {
-  id: number; asset_id: number | null; asset_name: string | null; rate_per_kwh: number;
+  id: number; asset_id: number | null; asset_name: string | null; asset_path: string | null; rate_per_kwh: number;
   effective_from: string; created_by: number | null; created_at: string;
 }
 export interface TariffIn { asset_id: number | null; rate_per_kwh: number; effective_from: string }
