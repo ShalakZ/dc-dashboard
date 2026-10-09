@@ -32,6 +32,8 @@ Phone support is deferred by the owner; accessibility beyond the listed items is
 
 ## W0a UI and docs quick wins (no decisions, Low risk)
 
+**Status: DONE and merged 2026-10-09** (merge commit `ec1062b`; plan `2026-10-09-w0a-ui-docs-quick-wins.md`). Ten tasks, each Opus-reviewed, a whole-branch Opus review with no Critical or Important finding. Leftovers: backlog section G. Decisions taken inside it: Undo (not a confirm) for deleting a widget (S7-5); the Metrics table, Scans and Sources follow the site zone (S2-1); the source points page is admin-only in the UI (S13-4).
+
 | Id | Item | Effort |
 |---|---|---|
 | S5-1 | `step="0.01"` on the two rate inputs ONLY. Mapping Scale and disk capacity stay `step="any"` (those forms are not `noValidate`; 0.001 must stay valid); integer day fields may use `step="1"` | S |
@@ -122,6 +124,20 @@ parts (doctor and log-collection script design, the runbook, the 0004 backup and
 S11-1 snap and tidy, S11-2 graph legend (cheap, may ride along with W3), S11-3 node types and icons, saved views and export,
 S11-4 "feeds" relation (ties to D1, D8), S9-4 outbound alerts and retention profiles, S9-5 factory values (D3), S10-7 audit
 retention and forwarding (D7b).
+
+## W6 UI/UX overhaul (owner request 2026-10-09; future session, no plan yet)
+
+The owner wants a full UI/UX overhaul or improvement: still simple for the user to use and understand, and at the same time clean, slick and functional. The owner's inspiration is the way Sunbird (the data-center management product) builds its dashboards, menus and so on: inspiration only, not a copy.
+
+Design rules given by the owner (hard constraints for any design, mockup or CSS in this project):
+
+- no cream or off-white background;
+- no italic accent words in headlines;
+- no numbered "01 / 02 / 03" section labels;
+- no monospace labels;
+- no pill-shaped buttons.
+
+How to run it (proposal, for the owner to confirm in that session): its own session, started with the brainstorming skill, then a design spec and a plan, both Opus-reviewed before any implementer starts. Look at Sunbird's public material for the patterns (navigation and menus, dashboard layout, density, status colours), decide the design direction and the shared style tokens first (`app.css` today is plain black on white with no tokens), and only then restyle screen by screen. It belongs after W3a to W3c, so screens whose layout is about to change are not restyled twice. The parked items fit in naturally: phone support (S13-1 to S13-3, S13-8) and the accessibility items (S13-9 to S13-11), and the Discovery ideas S11-1 to S11-3.
 
 ## Parked
 
