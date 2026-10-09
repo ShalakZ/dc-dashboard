@@ -464,7 +464,7 @@ describe("bar per asset when no asset has a reading", () => {
 });
 
 describe("gauge", () => {
-  type GaugeOpt = { series: { type: string; min: number; max: number; pointer: { show: boolean }; progress: { show: boolean }; data: { value: number }[]; detail: { formatter: () => string; color?: string } }[] };
+  type GaugeOpt = { series: { type: string; min: number; max: number; pointer: { show: boolean }; progress: { show: boolean }; data: { value: number }[]; detail: { formatter: () => string; color?: string; offsetCenter: [number, string] }; title: { show: boolean; offsetCenter: [number, string] } }[] };
   const gauge = (args: Partial<Parameters<typeof gaugeOption>[0]> = {}) =>
     gaugeOption({ value: 12.5, min: 0, max: 100, unit: "kW", name: "LV Panel 1", ...args }) as unknown as GaugeOpt;
 
@@ -473,6 +473,13 @@ describe("gauge", () => {
     expect(option.series[0]).toMatchObject({ type: "gauge", min: 0, max: 100, data: [{ value: 12.5 }], pointer: { show: true }, progress: { show: true } });
     expect(option.series[0].detail.formatter()).toBe("12.50 kW");
     expect(gauge({ estimated: true, partial: true }).series[0].detail.formatter()).toBe("~12.50* kW");
+  });
+
+  it("positions the asset name (the series title) below the value, not at the default centre over the needle", () => {
+    const { title, detail } = gauge().series[0];
+    expect(title.show).toBe(true);
+    expect(Array.isArray(title.offsetCenter)).toBe(true);
+    expect(parseFloat(title.offsetCenter[1])).toBeGreaterThan(parseFloat(detail.offsetCenter[1])); // 70 % for the value
   });
 
   it("draws no needle and no progress for a missing figure, only a dash, never a zero", () => {

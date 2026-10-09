@@ -31,6 +31,8 @@ export function gaugeOption({ value, min, max, unit, name, estimated = false, pa
         ...(muted ? { color: MUTED_FIGURE } : {}),
         formatter: () => (present ? `${figureText(value, { estimated, partial })}${unitSuffix(unit)}` : noData ? NO_DATA : "—"),
       },
+      // The asset name: ECharts' default title sits at the centre (20 %), over the needle's pivot and the scale numbers.
+      title: { show: true, offsetCenter: [0, "98%"], fontSize: 13, color: muted ? MUTED_FIGURE : "#000" },
       data: [{ value: value ?? min, name }],
     }],
   };
