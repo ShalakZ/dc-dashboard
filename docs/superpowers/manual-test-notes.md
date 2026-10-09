@@ -23,10 +23,28 @@ Status legend: `todo`, `testing` (in progress), `done` (all items checked, findi
 | 10 | Audit: what is logged and who can see it | 1 and the others | done (log works; 7 findings S10-1..S10-7, plus S2-2 found by the inventory) |
 | 11 | Scans and Discovery: find sources on the network, map by drag and drop (moved late: it adds assets and sources on top of the clean data) | 3, 4 | done (owner: works great; rows not reported one by one; 4 ideas S11-1..S11-4) |
 | 12 | Operations: backup and restore, upgrade runbook, setup scripts, TLS, offline | - | done (Claude ran the checks in four throwaway Compose projects; 14 findings S12-1..S12-14; offline bundle facts below) |
-| 13 | Cross-cutting: roles on every screen, phone width, keyboard use | all | testing (Claude's measured pre-checks logged as S13-1..S13-13; the owner's pass by eye is pending) |
+| 13 | Cross-cutting: roles on every screen, phone width, keyboard use | all | done (Claude's measured pre-checks S13-1..S13-13 confirmed by the owner's pass; phone work deferred by the owner) |
 
 (Order changed on 2026-10-09: the original section 5, Scans and Discovery, became 11, and every later
 section moved up by one. Finding ids S1-S4 refer to the numbering at the time they were logged.)
+
+## Owner decisions for the planning phase (2026-10-09)
+
+- **S6-1, a parent's cost versus the sum of its children's costs: still OPEN.** The owner has no answer yet and will ask
+  the real administrators. Until then the rule stays as built (the parent's own energy times the parent's rate). The plan
+  must not include a change to `core/cost.py` for it; it lists the question as open.
+- **Offline deployment:** prepare both routes (A native Windows, B Linux VM or Docker), starting with A. The owner has no
+  facts about the workstation until they get access to it, so everything that depends on those facts waits; only the
+  parts that are the same for every route (pinned images, a doctor and log-collection script design, a runbook) can be
+  planned now.
+- **Phone support: deferred.** S13-1, S13-2, S13-3 and the phone part of S13-8 are parked, not dropped.
+- **Storage defaults (S9-1), three actions on the Storage form:** "Set as default" saves the values currently in the form as
+  this site's own default; "Reset to default" loads that site default if one has been set, otherwise the factory values;
+  "Reset to factory settings" loads the built-in factory values, which are what the code has today (raw 30 days,
+  compression after 7, 1-minute rollups 730, capacity 100 GB, warning 80 %). The S9-5 recommendations (rollups 365 days,
+  warning 70 %, capacity asked at install) are therefore not adopted yet; the plan lists them as a decision. The site
+  default needs a new `settings` key and an audit entry for all three actions (S9-3), and an empty `PUT` must be refused
+  (S13-12) instead of resetting.
 
 ## Findings log
 
@@ -46,7 +64,15 @@ behaviour), `ux` (works but confusing), `idea` (a wish), `question` (I do not un
   anonymise), refuse deleting yourself and the last active admin, remove the user's sessions, ask for
   confirmation like the asset and source deletes do, and write an audit entry (`user.deleted`).
 
-### Section 13: Cross-cutting: roles, phone width, keyboard (testing; Claude's pre-checks are below, the owner's pass is pending)
+### Section 13: Cross-cutting: roles, phone width, keyboard (done; Claude's measured pre-checks, then the owner's pass)
+
+Owner's pass: the rows were not reported one by one; the owner said the rest looks good. Confirmed: `/sources` as a
+viewer shows the red "insufficient role" line, unlike the other pages ("Operators only"), which is S13-4. Phone: the
+DevTools screenshot at 360x800 (Discovery as an operator) shows the page content stopping at about half of the width
+with the nav tiny above it, and the owner says every other page looks the same: "technically they all fit but it does not
+look good". That is S13-1 seen from the user's side: the nav forces a layout 786 px wide for an operator (559 for a
+viewer, 1081 for an admin), the content stays 360 px wide, so it fills only about 46 % (64 % and 33 %) of the screen.
+The owner deferred phone support (see the decisions above).
 
 Before writing the owner's script, Claude measured what can be measured, on a scratch copy (throwaway project, the dev
 data restored, three test users `t_admin`, `t_op`, `t_view` inserted with the app's own hasher; removed afterwards).
