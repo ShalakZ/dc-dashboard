@@ -4,7 +4,7 @@
 
 **Goal:** Close the fifteen small, decision-free findings of the manual acceptance pass that the roadmap groups as wave W0a (UI polish, one storage-API hardening, the `.env`-loss guard and two README facts) without touching data lifetime, billing arithmetic or containers.
 
-**Architecture:** Ten independent tasks on one branch (`w0a-quick-wins`), executed in order, one fresh implementer per task, one Opus review per task. Most are frontend (React 19, react-router 7, TanStack Query, ECharts, vitest); Tasks 3 and 8 also change the API (FastAPI, pydantic, SQLAlchemy async); Task 9 is shell and PowerShell scripts plus README; Task 10 is README only. Nothing here adds a migration, a dependency or a route.
+**Architecture:** Ten independent tasks on one branch (`w0a-quick-wins`), executed in order, one fresh implementer per task, one Opus review per task. Most are frontend (React 19, react-router 7, TanStack Query, ECharts, vitest); Tasks 3 and 8 also change the API (FastAPI, pydantic, SQLAlchemy async); Task 9 is shell and PowerShell scripts plus README; Task 10 is README only. Nothing here adds a migration, a dependency or an API route (Task 1 adds one UI catch-all route).
 
 **Tech Stack:** TypeScript/React in `frontend/` (tests: `npx vitest run`, `npm run typecheck`), Python 3.12 in `backend/` (tests: `uv run pytest`, which starts a TimescaleDB testcontainer, so Docker must be running), bash and PowerShell in `scripts/`.
 
@@ -41,7 +41,7 @@ The inputs and conditions the findings imply but the roadmap rows do not spell o
 2. **A metric sampled slower than the chart's bucket grid** (energy every 60 s on the 1-hour range), **a single point**, and **a real outage** in such a series: the line is drawn, the lone point gets a dot, the outage still breaks the line. [Task 4]
 3. **`PUT /api/settings/storage` with `{}`, with one field missing, with one field `null`, and with `Infinity` as the capacity**: 422 every time, and the stored values and the Timescale policies are untouched. [Task 8]
 4. **`scripts/setup.sh` with no `.env` while the project's database volume exists**, with Docker unreachable, and with a scratch project name: refuses before writing anything, fails closed, asks Docker about the right project. With `.env` present it must not interfere. [Task 9]
-5. **Deleting a widget in the dashboard editor and then Undo, then Add**: the widget returns where it was; adding a widget first retires the Undo offer; deleting the only widget works. [Task 6]
+5. **Deleting a widget in the dashboard editor and then Undo, then Add, then drag**: the widget returns where it was; adding a widget, or dragging or resizing another one into the gap, first retires the Undo offer (the grid does not resolve overlaps, and Save would store them); deleting the only widget works. [Task 6]
 
 Also pinned in their tasks: an unknown URL for every role and a viewer on `/sources` (Task 1); a site zone that has not loaded yet on the Metrics table (Task 7).
 
@@ -274,7 +274,7 @@ git push -u origin w0a-quick-wins
   - `pickerRows(assets, tree?) : PickerRow[]` unchanged signature; every row now carries `label`.
   - `pickerLabel(row: PickerRow): string` returns `row.label`.
   - `assetLabels(assets: Asset[]): Map<number, string>` unchanged signature, built from `row.label`.
-  - `assetOptions(assets: Asset[], exclude?: ReadonlySet<number>): { id: number; text: string }[]` new: tree order, each text is `"  ".repeat(depth) + label`; paths come from the whole `assets` list even when some ids are excluded.
+  - `assetOptions(assets: Asset[], exclude?: ReadonlySet<number>): { id: number; text: string }[]` new: tree order, each text is `"\u00a0\u00a0".repeat(depth) + label`; paths come from the whole `assets` list even when some ids are excluded.
 
 The finding (S4-3): with two `LV_Panel_01` in two rooms, the mapping dialog and the Assets Parent list showed both as `LV_Panel_01`, so a point could be mapped to the wrong one. The Tariffs and dashboard pickers were fixed earlier; `pickerLabel` still lacks the `#id` that `assetLabels` adds for two siblings with one name (BL:86).
 
@@ -307,7 +307,7 @@ describe("labels that tell equal names apart", () => {
     // Roots come in code-point name order ("Other room" before "Room"). With 5 excluded, the remaining "Panel" is no longer a
     // shared name among the offered rows, so it needs no path: the invariant is that no two offered options read alike.
     const options = assetOptions(tree, new Set([5]));
-    expect(options.map((o) => o.text.replace(/ /g, "_"))).toEqual([
+    expect(options.map((o) => o.text.replace(/\u00a0/g, "_"))).toEqual([
       "Other room", "__Panel", "Room", "__Meter (Room) #3", "__Meter (Room) #4",
     ]);
     expect(options.some((o) => o.id === 5)).toBe(false);
@@ -372,7 +372,7 @@ export function assetLabels(assets: Asset[]): Map<number, string> {
  */
 export function assetOptions(assets: Asset[], exclude: ReadonlySet<number> = new Set()): { id: number; text: string }[] {
   const offered = assets.filter((a) => !exclude.has(a.id));
-  return pickerRows(offered, assets).map((row) => ({ id: row.id, text: `${"  ".repeat(row.depth)}${row.label}` }));
+  return pickerRows(offered, assets).map((row) => ({ id: row.id, text: `${"\u00a0\u00a0".repeat(row.depth)}${row.label}` }));
 }
 ```
 
@@ -401,7 +401,7 @@ In `ReviewDialog.tsx` the graph model's assets lack `sort_order`, which `assetLa
   const labels = useMemo(() => assetLabels(model.assets.map((a) => ({ ...a, sort_order: 0 }))), [model.assets]);
 ```
 
-and in both `choices.map` option lines (existing asset select at line 169, parent select at line 181) show `indent(a.depth) + (labels.get(a.id) ?? a.name)`.
+and in both `choices.map` option lines (existing asset select at line 170, parent select at line 182) show `indent(a.depth) + (labels.get(a.id) ?? a.name)`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -450,6 +450,8 @@ async def test_a_tariff_names_its_asset_by_path(client, db):
     patched = (await client.patch(f"/api/tariffs/{created['id']}", json={"rate_per_kwh": 0.2})).json()
     assert patched["asset_path"] == "Room 1 / Panel"
 ```
+
+An existing test pins the exact key set of a listed tariff and would fail on the new key: in `test_list_orders_site_default_first_then_asset_name_then_newest_first` (around line 75) add `"asset_path"` to the expected set `{"id", "asset_id", "asset_name", ...}`.
 
 Frontend, in `TariffsPage.test.tsx`: one test that both rate inputs (the add form's and an edit row's `Rate per kWh`) have `step="0.01"`; one test that typing `0.123456` into the add form still submits `0.123456` (the form is `noValidate`; six decimals stay valid); and one test that a tariff whose asset is not in the asset list falls back to `asset_path` (render a tariff with `asset_id: 99`, `asset_name: "Panel"`, `asset_path: "Room 1 / Panel"` and no matching asset; expect the text `Room 1 / Panel`).
 
@@ -579,7 +581,7 @@ describe("seriesToOption on a grid finer than the data", () => {
 });
 ```
 
-The existing test `inserts a null point when consecutive buckets are more than one width apart` uses only three points at offsets 0, 1 and 4 widths; with the median rule two steps tie and the upper median swallows the gap. Replace its points by `[point(0, width), point(1, width), point(2, width), point(3, width), point(6, width)]` and its expectations by `[1, 1, 1, 1, null, 1]` with the null row at `T0 + 4 * width`; keep the min and max assertions (the null is at index 4 of both). Say in your report that you changed this test and why: a gap is judged against the series' normal step, which needs more than one step to know.
+The existing test `inserts a null point when consecutive buckets are more than one width apart` uses only three points at offsets 0, 1 and 4 widths; with the median rule two steps tie and the upper median swallows the gap. Replace its points by `[point(0, width), point(1, width), point(2, width), point(3, width), point(6, width), point(7, width)]` and its expectations by `[1, 1, 1, 1, null, 1, 1]` with the null row at index 4 and at `T0 + 4 * width` (the steps are `1, 1, 1, 3, 1` widths, median 1 width; the last two points are adjacent, so neither is alone: a point with a null before it and nothing after it would become a `{ value, symbol }` object and the test's `avg.map(([, v]) => v)` would throw); keep the min and max assertions (the null is at index 4 of both). Say in your report that you changed this test and why: a gap is judged against the series' normal step, which needs more than one step to know.
 
 In `AssetPage.test.tsx` add two tests using the file's existing mocks: an asset whose summary has no metrics shows neither "live" nor "reconnecting…" (`queryByText` both absent); an asset with a metric shows "reconnecting…" until the fake event source opens (follow the file's existing stream test for the helper).
 
@@ -746,15 +748,28 @@ Owner wording (roadmap S7-5): "confirm or Undo". This plan picks Undo: it needs 
 
 - [ ] **Step 1: Write the failing tests**
 
-In `DashboardPage.edit.test.tsx`, reuse the helpers of the nearest existing test that deletes a widget (find it with `grep -n "Delete " src/pages/DashboardPage.edit.test.tsx`) and add, with a dashboard of three widgets titled `A`, `B`, `C`:
+In `DashboardPage.edit.test.tsx` (it has no `user` instance: it calls `userEvent.click` directly; its `open(role, entry, routes)` loads one widget, "Current power", and `startEditing()` enters the editor; the grid is replaced by a stand-in whose `move-{key}` button plays a finished drag, line 14 of the file) add a block that opens the editor on three widgets:
 
 ```tsx
+describe("undo after a delete", () => {
+  const three = dashboard({
+    widgets: [
+      widget(1, "stat", { title: "A", config: config({ aggregation: "last" }), x: 0, y: 0, w: 3, h: 2 }),
+      widget(2, "stat", { title: "B", config: config({ aggregation: "last" }), x: 3, y: 0, w: 3, h: 2 }),
+      widget(3, "stat", { title: "C", config: config({ aggregation: "last" }), x: 6, y: 0, w: 3, h: 2 }),
+    ],
+  });
+  const openThree = async () => {
+    open("operator", "/dashboards/3", { "GET /api/dashboards/3": { body: three } });
+    await startEditing();
+  };
+
   it("offers Undo after a delete and puts the widget back where it was", async () => {
-    // open the editor on a dashboard with widgets A, B, C (as the neighbouring tests do)
-    await user.click(screen.getByRole("button", { name: "Delete B" }));
+    await openThree();
+    await userEvent.click(screen.getByRole("button", { name: "Delete B" }));
     expect(screen.queryByRole("button", { name: "Edit B" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Removed “B”");
-    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(screen.getByRole("button", { name: "Edit B" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
     // the editor is clean again: Save is disabled because nothing differs from what was loaded
@@ -762,33 +777,45 @@ In `DashboardPage.edit.test.tsx`, reuse the helpers of the nearest existing test
   });
 
   it("only the last delete can be undone", async () => {
-    await user.click(screen.getByRole("button", { name: "Delete A" }));
-    await user.click(screen.getByRole("button", { name: "Delete B" }));
-    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await openThree();
+    await userEvent.click(screen.getByRole("button", { name: "Delete A" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete B" }));
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(screen.getByRole("button", { name: "Edit B" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit A" })).not.toBeInTheDocument();
   });
 
   it("deleting the only widget works and can be undone", async () => {
-    // open the editor on a dashboard with a single widget A
-    await user.click(screen.getByRole("button", { name: "Delete A" }));
+    open("operator"); // the file's own dashboard: one widget, "Current power"
+    await startEditing();
+    await userEvent.click(screen.getByRole("button", { name: "Delete Current power" }));
     expect(screen.getByText("No widgets yet. Use Add widget.")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Undo" }));
-    expect(screen.getByRole("button", { name: "Edit A" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByRole("button", { name: "Edit Current power" })).toBeInTheDocument();
   });
 
   it("adding a widget retires the Undo offer", async () => {
-    await user.click(screen.getByRole("button", { name: "Delete C" }));
-    // add a widget through the dialog exactly as the existing "Add widget" test does
+    await openThree();
+    await userEvent.click(screen.getByRole("button", { name: "Delete C" }));
+    // add a widget through the dialog with the steps of the existing test 'adds a widget, saves the exact body' (around lines 156-160)
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
   });
+
+  it("dragging another widget (into the gap) retires the Undo offer, so Undo can never stack two widgets", async () => {
+    await openThree();
+    await userEvent.click(screen.getByRole("button", { name: "Delete B" }));
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("move-1")); // the stand-in plays a finished drag of widget A
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+});
 ```
 
-(`user` is the file's `userEvent.setup()` instance; adapt the opening steps to the file's own helpers. The single-widget case can reuse a dashboard fixture with one widget from `test/dashboardFixtures.ts`.)
+(Adapt the imports and the exact test ids to the file: `grep -n "move-" src/pages/DashboardPage.edit.test.tsx` shows how the stand-in names its buttons and which widget keys it uses. The widget keys come from the fixtures, so `move-1` may need to be whatever key widget A gets.)
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd frontend && npx vitest run src/pages/DashboardPage.edit.test.tsx -t Undo`
+Run: `cd frontend && npx vitest run src/pages/DashboardPage.edit.test.tsx -t "undo after a delete"`
 Expected: FAIL (no status line, no Undo button).
 
 - [ ] **Step 3: Implement**
@@ -817,7 +844,7 @@ Add the handlers after `accept`:
   };
 ```
 
-In `accept`, add `if (!target) setRemoved(null);` directly after the `const key = newKey();` line (a NEW widget may take the freed space, and an Undo into an occupied place would overlap; editing an existing widget changes no position and keeps the offer). Change the Delete button's handler to `onClick={() => removeWidget(d)}`. Render, directly above the `<p className="muted">Drag a widget ...` line, an always-mounted live region so the announcement is read:
+In `accept`, add `if (!target) setRemoved(null);` directly after the `const key = newKey();` line (a NEW widget may take the freed space, and an Undo into an occupied place would overlap; editing an existing widget changes no position and keeps the offer). Change the Delete button's handler to `onClick={() => removeWidget(d)}`. Retire the offer also when the grid changes a layout, because the grid uses `noCompactor` (nothing resolves an overlap, and Save would store two widgets in one place): pass `onChange={(next) => { if (next !== drafts) setRemoved(null); setDrafts(next); }}` to `DashboardGrid` instead of `onChange={setDrafts}` (`applyGrid` returns the same array when nothing moved, so a plain click on a widget does not retire it). Reload remounts the editor (`key={epoch}`), so a stale offer cannot survive it. Render, directly above the `<p className="muted">Drag a widget ...` line, an always-mounted live region so the announcement is read:
 
 ```tsx
       <div role="status" aria-live="polite">
@@ -875,9 +902,9 @@ describe("formatSiteClock", () => {
 });
 ```
 
-`AssetPage.test.tsx`: a metric with `ts: "2026-10-07T10:00:05+00:00"` and the site route returning `Asia/Qatar` shows `13:00:05` in the Updated column; and with the site route failing (status 500) the cell shows `—`, not a browser-zone time. `SourcesPage.test.tsx`: a source with `last_seen: "2026-10-09T11:05:00Z"` shows `2026-10-09 14:05:00`. `ScansPage.test.tsx`: a scan with `created_at: "2026-10-09T11:05:00Z"` shows `2026-10-09 14:05:00`. `SettingsPage.test.tsx`: the hint mentions both where a day and a month start and the times shown (assert the text contains `day`, `month` and `times`), and no longer says only "energy totals".
+`AssetPage.test.tsx`: a metric with `ts: "2026-10-07T10:00:05+00:00"` and the site route returning `Asia/Qatar` shows `13:00:05` in the Updated column; and with the site route failing (status 500) the cell shows `—`, not a browser-zone time. `SourcesPage.test.tsx`: a source with `last_seen: "2026-10-09T11:05:00Z"` shows `2026-10-09 14:05:00`. `ScansPage.test.tsx`: a scan with `created_at: "2026-10-09T11:05:00Z"` shows `2026-10-09 14:05:00`. `SettingsPage.test.tsx`: the hint mentions both where a day and a month start and the times shown (assert the text contains `day`, `month` and `times`), and the old wording is gone (`expect(hint).not.toHaveTextContent('Used for "today"')`; the new text still contains the words "energy totals", so do not assert their absence).
 
-Add `"GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } }` to the mocks of every existing test in those files that renders the table (an unmocked route answers 500 in `mockFetch`).
+An existing AssetPage test pins the browser-zone output and fails after this task on any machine: `AssetPage.test.tsx` lines 58 to 66 ("shows the stream's epoch timestamp as a current time, not 1970") expect `now.toLocaleTimeString()` in the Updated cell. Rewrite its two expectations to `formatSiteClock(now.toISOString(), "Asia/Qatar")` (present) and `formatSiteClock(new Date(0).toISOString(), "Asia/Qatar")` (absent) and import `formatSiteClock`. `AssetPage.test.tsx` already mocks `GET /api/site` (line 34); `SourcesPage.test.tsx` and `ScansPage.test.tsx` do not, so add `"GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } }` to the mocks of every existing test in those two files that renders the table (an unmocked route answers 500 in `mockFetch`).
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -905,9 +932,9 @@ export const when = (ts: string | null | undefined, timezone: string | undefined
 
 call `const site = useSite();` as the first line of `MetricsTable` (before the early return for an empty list, so hooks run unconditionally) and render `when(current ? current.ts : m.ts, site.data?.timezone)`. Until the zone has loaded (or if it failed) the cell shows `—`.
 
-`SourcesPage.tsx` line 76 and `ScansPage.tsx` line 123: call `useSite()` in the component, and render `site.data ? formatSiteDateTime(iso, site.data.timezone) : "—"` (Sources keeps its existing `s.last_seen ? ... : "—"` shape).
+`SourcesPage.tsx` line 76 and `ScansPage.tsx` line 123: call `useSite()` with the component's other hooks at the top, before its early returns (`SourcesPage.tsx:50-51`, `ScansPage.tsx:46-47`), and render `site.data ? formatSiteDateTime(iso, site.data.timezone) : "—"` (Sources keeps its existing `s.last_seen ? ... : "—"` shape).
 
-`SettingsPage.tsx` line 36, replace the hint with:
+`SettingsPage.tsx` line 46, replace the hint with:
 
 ```tsx
         <p className="muted">
@@ -942,12 +969,12 @@ git push
 **Interfaces:**
 - Consumes: `get_setting`, `set_setting`, `STORAGE_KEY`, `apply_policies`.
 - Produces (wave W1b builds the Set/Reset buttons on these):
-  - `StorageSettings` in `core/storage.py`: the five fields, ALL REQUIRED (no defaults), same ranges and the same `_ordered` validator as today, `disk_capacity_gb` additionally `allow_inf_nan=False`.
+  - `StorageSettings` in `core/storage.py`: the five fields, ALL REQUIRED (no defaults), same ranges and the same `_ordered` validator as today; `disk_capacity_gb` additionally gets an upper bound `le=1_000_000` (1 PB) and `allow_inf_nan=False`, and a `mode="before"` validator turns a non-finite number into its text first (see Step 3: without it the 422 itself cannot be encoded and the request answers 500).
   - `FACTORY_STORAGE_SETTINGS: StorageSettings` = raw 30, compress 7, rollup 730, capacity 100, warn 80: the one place the factory values live.
-  - `StorageSettingsOut(StorageSettings)` with `factory: StorageSettings`, the response of `GET /api/settings/storage` only. `PUT /api/settings/storage` still returns exactly the five saved values (`StorageSettings`), as today (the existing test `test_put_updates_policies` compares the whole body).
+  - `StorageSettingsOut(StorageSettings)` with `factory: StorageSettings`, the response of `GET /api/settings/storage` only. `PUT /api/settings/storage` still returns exactly the five saved values (`StorageSettings`), as today (the existing test `test_put_updates_policies` in `test_storage_settings.py` compares the whole body).
   - Frontend `StorageSettingsOut = StorageSettings & { factory: StorageSettings }`; `useStorageSettings` returns it; the page keeps no copy of the numbers.
 
-Design note for the reviewer: the roadmap says "a separate input model with every field required". Nothing else builds a partial `StorageSettings` once the loader merges explicitly, so the one model with required fields IS the input model; a second class would only duplicate the validator. The infinity guard is one keyword beyond the roadmap row: `Infinity` passes `gt=0` today and would make `/api/storage` raise `OverflowError` for good.
+Design note for the reviewer: the roadmap says "a separate input model with every field required". Nothing else builds a partial `StorageSettings` once the loader merges explicitly, so the one model with required fields IS the input model; a second class would only duplicate the validator. The capacity bound and the non-finite guard are small additions beyond the roadmap row, justified by Opus review B: a capacity of `1e300` (or `Infinity`, if it were ever stored) makes `storage_stats` compute `int(capacity * 1024**3)` and raise `OverflowError` on every later `GET /api/storage`; today `Infinity` is not even storable (JSON has no such token, so the save fails with a 500). The bound and the finite guard turn both into a 422.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -984,19 +1011,32 @@ async def test_put_refuses_an_empty_body_and_changes_nothing(client, db):
 
 
 @pytest.mark.parametrize("field", list(FULL))
-async def test_put_refuses_null(client, db, field):
+async def test_put_refuses_null_and_changes_nothing(client, db, field):
     await login_as(client, db)
+    await client.put("/api/settings/storage", json=FULL)
     assert (await client.put("/api/settings/storage", json={**FULL, field: None})).status_code == 422
+    assert (await client.get("/api/settings/storage")).json()["raw_retention_days"] == 45
+    assert await retention_days(db) == "45 days"
 
 
-@pytest.mark.parametrize("raw", ["Infinity", "-Infinity", "NaN"])
-async def test_put_refuses_a_non_finite_capacity(client, db, raw):
+# JSON has no such number, but Python's parser reads these literals; the string and 1e400 forms parse to infinity in pydantic
+@pytest.mark.parametrize("raw", ["Infinity", "-Infinity", "NaN", "1e400", '"Infinity"'])
+async def test_put_refuses_a_non_finite_capacity_and_changes_nothing(client, db, raw):
     await login_as(client, db)
+    await client.put("/api/settings/storage", json=FULL)
     body = ('{"raw_retention_days": 45, "compress_after_days": 10, "rollup_1m_retention_days": 800, '
             '"disk_capacity_gb": %s, "warn_threshold_pct": 85}' % raw)
     r = await client.put("/api/settings/storage", content=body, headers={"content-type": "application/json"})
-    assert r.status_code == 422
+    assert r.status_code == 422  # not a 500: the 422 body must be encodable
+    assert "finite" in r.text
+    assert await retention_days(db) == "45 days"
     assert (await client.get("/api/storage")).status_code == 200  # the page that would have broken still answers
+
+
+async def test_put_refuses_an_absurd_capacity_that_would_overflow_the_stats(client, db):
+    await login_as(client, db)
+    assert (await client.put("/api/settings/storage", json={**FULL, "disk_capacity_gb": 1e300})).status_code == 422
+    assert (await client.get("/api/storage")).status_code == 200
 
 
 async def test_get_exposes_the_factory_values_next_to_the_stored_ones(client, db):
@@ -1011,7 +1051,7 @@ async def test_get_exposes_the_factory_values_next_to_the_stored_ones(client, db
 
 async def test_a_stored_row_that_lacks_a_field_is_read_with_the_factory_value(client, db):
     await login_as(client, db)
-    # the test database starts with an empty settings table, so the row is written, not updated
+    # the db fixture seeds the full row (conftest.py:83); overwrite it with one that lacks two keys
     await db.execute(
         "INSERT INTO settings (key, value) VALUES ('storage', "
         "'{\"raw_retention_days\": 30, \"compress_after_days\": 7, \"rollup_1m_retention_days\": 730}'::jsonb) "
@@ -1027,14 +1067,25 @@ Frontend, `StoragePage.test.tsx`: the mocked `GET /api/settings/storage` body ge
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd backend && uv run pytest tests/test_api_storage.py tests/test_storage_settings.py -q`
-Expected: FAIL (an empty `PUT` answers 200 and resets; no `factory`; `Infinity` accepted).
+Run the two files as two commands (the rewritten `test_storage_settings.py` imports `FACTORY_STORAGE_SETTINGS`, so its collection fails before Step 3 and would stop a joint run before any API test ran):
+`cd backend && uv run pytest tests/test_api_storage.py -q` then `cd backend && uv run pytest tests/test_storage_settings.py -q`.
+Expected: the first FAILS (an empty or partial `PUT` answers 200 and resets; no `factory`; `Infinity`, `-Infinity` and `NaN` raise `ValueError: Out of range float values` inside the app or answer 500, `1e300` is accepted; the null and stored-row-lacking-a-key tests already pass: they are guards); the second fails with `ImportError` on `FACTORY_STORAGE_SETTINGS`.
 
 - [ ] **Step 3: Implement**
 
 `core/storage.py`: replace the class header and fields (keep the validator body and `REFRESH_WINDOW_DAYS`):
 
+Add `import math` to the imports and, above the class, the helper (it is a copy of the pattern in `api/tariffs.py:42-47`, because `core` must not import from `api`):
+
 ```python
+def _defuse_non_finite(data: object) -> object:
+    """JSON parsers read NaN and Infinity, but a 422 echoes the offending input back and cannot encode them (the request
+    would answer 500). Turn them into their text first; `allow_inf_nan=False` then refuses them by name."""
+    if isinstance(data, dict):
+        return {k: repr(v) if isinstance(v, float) and not math.isfinite(v) else v for k, v in data.items()}
+    return data
+
+
 class StorageSettings(BaseModel):
     """The five storage settings. Every field is required: a request that leaves one out is refused, because filling the
     gap with a default would silently reset retention. The factory values are FACTORY_STORAGE_SETTINGS below."""
@@ -1042,8 +1093,10 @@ class StorageSettings(BaseModel):
     raw_retention_days: int = Field(le=3650)
     compress_after_days: int = Field(ge=1, le=365)
     rollup_1m_retention_days: int = Field(ge=30, le=36500)
-    disk_capacity_gb: float = Field(gt=0, allow_inf_nan=False)
+    disk_capacity_gb: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)  # 1 PB; 1e300 would overflow storage_stats
     warn_threshold_pct: int = Field(ge=50, le=99)
+
+    _defuse = model_validator(mode="before")(_defuse_non_finite)
 
     @model_validator(mode="after")
     def _ordered(self) -> StorageSettings:
@@ -1079,7 +1132,7 @@ async def get_storage_settings(db: AsyncSession = Depends(get_db)) -> StorageSet
     return StorageSettingsOut(**stored.model_dump(), factory=FACTORY_STORAGE_SETTINGS)
 ```
 
-The PUT keeps `body: StorageSettings` and `response_model=StorageSettings`. Run `grep -rn "StorageSettings()" backend` to be sure no other caller relies on the removed defaults (the housekeeping and the stats path load through `load_storage_settings`).
+The PUT keeps `body: StorageSettings` and `response_model=StorageSettings`. Run `grep -rn "StorageSettings()" backend` to be sure no other caller relies on the removed defaults (nothing in `backend/dcdash/collector` reads the storage settings; only `storage_stats` and the two routes do, through `load_storage_settings`).
 
 Frontend: `types.ts` add `export type StorageSettingsOut = StorageSettings & { factory: StorageSettings };`; `queries.ts` `useStorageSettings` fetches `api.get<StorageSettingsOut>(...)`; in `StoragePage.tsx` initialise the form from the five fields only:
 
@@ -1094,7 +1147,7 @@ Frontend: `types.ts` add `export type StorageSettingsOut = StorageSettings & { f
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cd backend && uv run pytest tests/test_api_storage.py tests/test_storage_settings.py tests/test_schema_tiers.py tests/test_housekeeping.py -q` and `cd frontend && npx vitest run src/pages/StoragePage.test.tsx && npm run typecheck`
+Run: `cd backend && uv run pytest tests/test_api_storage.py tests/test_storage_settings.py tests/test_schema_tiers.py -q` and `cd frontend && npx vitest run src/pages/StoragePage.test.tsx && npm run typecheck`
 Expected: all PASS.
 
 - [ ] **Step 5: Commit**
@@ -1117,13 +1170,13 @@ git push
 
 **Interfaces:**
 - Consumes: the Compose project name as `docker compose config --no-interpolate` prints it (`name: dcdash`, or the value of `COMPOSE_PROJECT_NAME`); Docker labels `com.docker.compose.project` and `com.docker.compose.volume=dbdata` on the database volume.
-- Produces: `scripts/setup.sh` exits 1 (and creates nothing) when `.env` is missing and the project's `dbdata` volume exists, or when Docker cannot answer. Exit 0 paths are unchanged.
+- Produces: `scripts/setup.sh` exits 1 (and creates or changes nothing) when `.env` is missing and the `dbdata` volume of the selected project OR of the project `compose.yaml` names exists, when Docker cannot list volumes, or when an existing `.env` has no `DCDASH_DB_PASSWORD`. Exit 0 paths are unchanged.
 
 The finding (S12-4b, verified in section 12): a lost `.env` plus `scripts/setup.sh` writes new random values and says "Created .env" like a first run; the existing volume still has the old password, the api crash-loops, and someone who "fixes" it with `down -v` loses the database.
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `backend/tests/test_scripts_setup.py` (no Docker needed: a fake `docker` program records its calls, as `test_scripts_e2e.py` does; the script is COPIED into a temp directory so the real `.env` of the repository is never looked at or written):
+Create `backend/tests/test_scripts_setup.py` (no Docker needed: a fake `docker` program records its calls, as `test_scripts_e2e.py` does; the script is COPIED into a temp directory so the real `.env` of the repository is never looked at or written). The fake answers `compose ... config --no-interpolate` with the project name Compose would use (`COMPOSE_PROJECT_NAME` if set, else `dcdash`), answers `volume ls` with a volume only for the projects named in `FAKE_VOLUMES`, and, when `FAKE_DOCKER_DOWN` is set, fails every call except `config` (the real `docker compose config` never contacts the daemon; `docker volume ls` is where an absent daemon shows):
 
 ```python
 """scripts/setup.sh must not write a new .env over an existing database volume.
@@ -1140,17 +1193,24 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "setup.sh"
 
 FAKE_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$CALLS_LOG"
+case "$*" in
+  *"config --no-interpolate")
+    printf 'name: %s\nservices: {}\n' "${COMPOSE_PROJECT_NAME:-dcdash}"
+    exit 0 ;;
+esac
 if [ -n "$FAKE_DOCKER_DOWN" ]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi
 case "$*" in
-  "compose config --no-interpolate") printf 'name: %s\nservices: {}\n' "$FAKE_PROJECT" ;;
-  "volume ls"*) if [ -n "$FAKE_VOLUME" ]; then echo "${FAKE_PROJECT}_dbdata"; fi ;;
+  "volume ls"*)
+    proj="$(printf '%s' "$*" | sed -n 's/.*label=com.docker.compose.project=\([^ ]*\).*/\1/p')"
+    case " $FAKE_VOLUMES " in *" $proj "*) echo "${proj}_dbdata" ;; esac ;;
 esac
 exit 0
 """
 
 
-def run_setup(tmp_path: Path, *, env_file: str | None = None, volume: bool = False, docker_down: bool = False,
-              project: str = "dcdash", args: tuple[str, ...] = ()):
+def run_setup(tmp_path: Path, *, env_file: str | None = None, volumes: tuple[str, ...] = (),
+              docker_down: bool = False, project: str | None = None, args: tuple[str, ...] = ()):
+    """`volumes` are the Compose projects that have a database volume; `project` is COMPOSE_PROJECT_NAME, if any."""
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
     shutil.copy(SCRIPT, root / "scripts" / "setup.sh")
@@ -1164,8 +1224,10 @@ def run_setup(tmp_path: Path, *, env_file: str | None = None, volume: bool = Fal
     docker.write_text(FAKE_DOCKER)
     docker.chmod(0o755)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "DCDASH_"))}
-    env.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", CALLS_LOG=str(log), FAKE_PROJECT=project,
-               FAKE_VOLUME="1" if volume else "", FAKE_DOCKER_DOWN="1" if docker_down else "")
+    env.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", CALLS_LOG=str(log),
+               FAKE_VOLUMES=" ".join(volumes), FAKE_DOCKER_DOWN="1" if docker_down else "")
+    if project:
+        env["COMPOSE_PROJECT_NAME"] = project
     result = subprocess.run(["bash", str(root / "scripts" / "setup.sh"), *args], capture_output=True, text=True,
                             env=env, timeout=60, cwd=tmp_path)
     return result, root, log.read_text().splitlines()
@@ -1173,6 +1235,10 @@ def run_setup(tmp_path: Path, *, env_file: str | None = None, volume: bool = Fal
 
 def started(calls: list[str]) -> bool:
     return any(" up " in c for c in calls)
+
+
+def lookups(calls: list[str]) -> list[str]:
+    return [c for c in calls if c.startswith("docker volume ls")]
 
 
 def test_no_env_and_no_volume_is_a_first_run(tmp_path):
@@ -1184,50 +1250,69 @@ def test_no_env_and_no_volume_is_a_first_run(tmp_path):
 
 
 def test_no_env_but_the_database_volume_exists_refuses_before_writing_anything(tmp_path):
-    result, root, calls = run_setup(tmp_path, volume=True)
+    result, root, calls = run_setup(tmp_path, volumes=("dcdash",))
     assert result.returncode == 1
     assert not (root / ".env").exists()
     assert not started(calls)
     assert ".env" in result.stderr and "dcdash" in result.stderr and "volume" in result.stderr
+    assert "down -v" in result.stderr and "Never" in result.stderr  # says what not to do ...
+    assert "docker volume rm" not in result.stderr  # ... and offers no command that destroys the data
 
 
 def test_the_volume_is_looked_up_under_the_name_compose_reports(tmp_path):
-    result, _, calls = run_setup(tmp_path, volume=True, project="dcdash_e2e_x")
+    result, _, calls = run_setup(tmp_path, volumes=("dcdash_e2e_x",), project="dcdash_e2e_x")
     assert result.returncode == 1
-    lookups = [c for c in calls if c.startswith("docker volume ls")]
-    assert any("label=com.docker.compose.project=dcdash_e2e_x" in c for c in lookups)
-    assert any("label=com.docker.compose.volume=dbdata" in c for c in lookups)
+    assert any("label=com.docker.compose.project=dcdash_e2e_x" in c for c in lookups(calls))
+    assert any("label=com.docker.compose.volume=dbdata" in c for c in lookups(calls))
+
+
+def test_the_directorys_own_project_counts_even_when_another_project_is_selected(tmp_path):
+    # COMPOSE_PROJECT_NAME selects a scratch project, but .env belongs to the directory: the normal project's volume
+    # (named by compose.yaml) must stop a new .env as well
+    result, root, calls = run_setup(tmp_path, volumes=("dcdash",), project="dcdash_e2e_x")
+    assert result.returncode == 1
+    assert not (root / ".env").exists()
+    assert not started(calls)
+
+
+def test_extra_arguments_reach_config_and_up(tmp_path):
+    result, _, calls = run_setup(tmp_path, args=("--profile", "dev"))
+    assert result.returncode == 0, result.stderr
+    assert "docker compose --profile dev config --no-interpolate" in calls
+    assert "docker compose --profile dev up -d --build" in calls
 
 
 def test_an_existing_env_is_left_alone_even_with_a_volume(tmp_path):
-    result, root, calls = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\n", volume=True)
+    result, root, calls = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\n", volumes=("dcdash",))
     assert result.returncode == 0, result.stderr
     assert (root / ".env").read_text() == "DCDASH_DB_PASSWORD=keep\n"
     assert started(calls)
 
 
-def test_when_docker_cannot_answer_nothing_is_written(tmp_path):
+def test_an_env_without_a_database_password_is_refused_and_not_changed(tmp_path):
+    result, root, calls = run_setup(tmp_path, env_file="DCDASH_TIMEZONE=UTC\n")
+    assert result.returncode == 1
+    assert (root / ".env").read_text() == "DCDASH_TIMEZONE=UTC\n"
+    assert not started(calls)
+    assert "DCDASH_DB_PASSWORD" in result.stderr
+
+
+def test_when_docker_cannot_list_volumes_nothing_is_written(tmp_path):
     result, root, calls = run_setup(tmp_path, docker_down=True)
     assert result.returncode == 1
     assert not (root / ".env").exists()
     assert not started(calls)
-    assert "docker" in result.stderr.lower()
-
-
-def test_extra_arguments_still_reach_compose(tmp_path):
-    result, _, calls = run_setup(tmp_path, args=("--profile", "dev"))
-    assert result.returncode == 0, result.stderr
-    assert "docker compose --profile dev up -d --build" in calls
+    assert "cannot list Docker volumes" in result.stderr
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd backend && uv run pytest tests/test_scripts_setup.py -q`
-Expected: FAIL on the two refusal tests and the fail-closed test (today the script writes `.env` and starts).
+Expected: FAIL on the refusal tests, the fail-closed test and the keyless-`.env` test (today the script writes `.env` and starts, and never calls `config`).
 
 - [ ] **Step 3: Implement**
 
-First check the premise, read-only and harmless: `docker compose config --no-interpolate | head -3` in the repo root must print `name: dcdash` as its first line; if this Compose version prints the name differently, adapt the `sed` pattern and the fake in the test, and say so in your report.
+First check the premise, read-only and harmless: `docker compose config --no-interpolate | head -3` in the repo root must print `name: dcdash` as its first line (Opus review B verified this, with and without `COMPOSE_PROJECT_NAME`); if it differs on your machine, adapt the `sed` pattern and the fake, and say so in your report.
 
 `scripts/setup.sh`:
 
@@ -1237,20 +1322,37 @@ First check the premise, read-only and harmless: `docker compose config --no-int
 # docker compose, e.g. scripts/setup.sh --profile dev
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if [ ! -f .env ]; then
+
+# The Compose project name that the given `docker compose ...` command line acts on (nothing if it cannot say).
+project_name() {
+  local config
+  config="$("$@" config --no-interpolate)" || return 1
+  printf '%s\n' "$config" | sed -n 's/^name: *//p' | head -n 1
+}
+
+if [ -f .env ]; then
+  # An .env without a database password can start nothing and cannot open an existing volume: leave it as it is and stop.
+  grep -q '^DCDASH_DB_PASSWORD=.' .env || { echo ".env exists but has no DCDASH_DB_PASSWORD; it was not changed. Restore or fix it, then run this script again." >&2; exit 1; }
+else
   # No .env but the database volume already exists: the volume was created with the password of the .env that is gone, so a
   # new random password would never open it (the api would crash-loop) and the new key could not decrypt the stored source
-  # secrets. Stop before anything is written. Fail closed: when Docker cannot answer, the check cannot be made.
-  config="$(docker compose config --no-interpolate)" || { echo "cannot read the Compose configuration (is Docker running?); .env was not created" >&2; exit 1; }
-  project="$(printf '%s\n' "$config" | sed -n 's/^name: *//p' | head -n 1)"
-  [ -n "$project" ] || { echo "cannot tell the Compose project name; .env was not created" >&2; exit 1; }
-  volumes="$(docker volume ls -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.volume=dbdata)" || { echo "cannot list Docker volumes (is Docker running?); .env was not created" >&2; exit 1; }
-  if [ -n "$volumes" ]; then
-    echo "refusing to create .env: the database volume of Compose project '$project' already exists, and it belongs to the .env that is missing." >&2
-    echo "Put the original .env back (keep a copy with every backup), then run this script again." >&2
-    echo "Only if the data is not needed, remove the volume yourself and on purpose: docker volume rm $(printf '%s' "$volumes" | head -n 1)" >&2
-    exit 1
-  fi
+  # secrets. Stop before anything is written. .env belongs to the directory, not to one Compose project, so both the project
+  # this command line selects (COMPOSE_PROJECT_NAME, -p) and the one compose.yaml names are checked. Fail closed: `compose config`
+  # never contacts the daemon, `docker volume ls` does, and when it cannot answer the check cannot be made.
+  effective="$(project_name docker compose "$@")" || { echo "cannot read the Compose configuration; .env was not created" >&2; exit 1; }
+  own="$(project_name env -u COMPOSE_PROJECT_NAME docker compose "$@")" || { echo "cannot read the Compose configuration; .env was not created" >&2; exit 1; }
+  [ -n "$effective" ] && [ -n "$own" ] || { echo "cannot tell the Compose project name; .env was not created" >&2; exit 1; }
+  projects="$effective"
+  if [ "$own" != "$effective" ]; then projects="$effective $own"; fi
+  for project in $projects; do
+    volumes="$(docker volume ls -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.volume=dbdata)" || { echo "cannot list Docker volumes (is Docker running?); .env was not created" >&2; exit 1; }
+    if [ -n "$volumes" ]; then
+      echo "refusing to create .env: the database volume of Compose project '$project' already exists, and it belongs to the .env that is missing." >&2
+      echo "Put the original .env back (keep a copy with every backup), then run this script again." >&2
+      echo "No copy of it? The data is still in the volume: back it up first (README, Backup and restore, \"What the backup does not contain\"). Never use down -v." >&2
+      exit 1
+    fi
+  done
   db_password=$(openssl rand -hex 24)
   secret_key=$(openssl rand -base64 32 | tr '+/' '-_')
   printf 'DCDASH_DB_PASSWORD=%s\nDCDASH_SECRET_KEY=%s\nDCDASH_TIMEZONE=UTC\n' \
@@ -1260,31 +1362,51 @@ fi
 docker compose "$@" up -d --build
 ```
 
-`scripts/setup.ps1`: the same check inside `if (-not (Test-Path .env)) { ... }`, before the key generation. Do NOT redirect native stderr (`2>$null` turns stderr output into a terminating error under `$ErrorActionPreference = "Stop"` in Windows PowerShell 5.1); `--no-interpolate` is what keeps `compose config` quiet:
+`scripts/setup.ps1`: the same logic, with a helper for the project name. `Remove-Item Env:COMPOSE_PROJECT_NAME` stands in for `env -u`. Do NOT redirect native stderr (`2>$null` turns stderr output into a terminating error under `$ErrorActionPreference = "Stop"` in Windows PowerShell 5.1); `--no-interpolate` is what keeps `compose config` quiet:
 
 ```powershell
-    # No .env but the database volume exists: it belongs to the .env that is gone (see scripts/setup.sh). Fail closed.
-    $config = docker compose config --no-interpolate
-    if ($LASTEXITCODE -ne 0) { throw "Cannot read the Compose configuration (is Docker running?). .env was not created." }
+function Get-ComposeProject {
+    $config = docker compose @args config --no-interpolate
+    if ($LASTEXITCODE -ne 0) { throw "Cannot read the Compose configuration. .env was not created." }
     $nameLine = $config | Select-String -Pattern '^name:\s*(\S+)' | Select-Object -First 1
     if (-not $nameLine) { throw "Cannot tell the Compose project name. .env was not created." }
-    $project = $nameLine.Matches[0].Groups[1].Value
-    $volumes = docker volume ls -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.volume=dbdata"
-    if ($LASTEXITCODE -ne 0) { throw "Cannot list Docker volumes (is Docker running?). .env was not created." }
-    if ($volumes) {
-        throw "Refusing to create .env: the database volume of Compose project '$project' already exists, and it belongs to the .env that is missing. Put the original .env back (keep a copy with every backup), then run this script again. Only if the data is not needed, remove the volume yourself and on purpose: docker volume rm $($volumes | Select-Object -First 1)"
+    return $nameLine.Matches[0].Groups[1].Value
+}
+
+if (Test-Path .env) {
+    if (-not (Select-String -Path .env -Pattern '^DCDASH_DB_PASSWORD=.' -Quiet)) {
+        throw ".env exists but has no DCDASH_DB_PASSWORD; it was not changed. Restore or fix it, then run this script again."
     }
+} else {
+    # No .env but the database volume exists: it belongs to the .env that is gone (see scripts/setup.sh). .env belongs to the
+    # directory, so the project this command line selects and the one compose.yaml names are both checked. Fail closed.
+    $projects = @(Get-ComposeProject @args)
+    if ($env:COMPOSE_PROJECT_NAME) {
+        $saved = $env:COMPOSE_PROJECT_NAME
+        Remove-Item Env:COMPOSE_PROJECT_NAME
+        try { $projects += Get-ComposeProject @args } finally { $env:COMPOSE_PROJECT_NAME = $saved }
+    }
+    foreach ($project in ($projects | Select-Object -Unique)) {
+        $volumes = docker volume ls -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.volume=dbdata"
+        if ($LASTEXITCODE -ne 0) { throw "Cannot list Docker volumes (is Docker running?). .env was not created." }
+        if ($volumes) {
+            throw "Refusing to create .env: the database volume of Compose project '$project' already exists, and it belongs to the .env that is missing. Put the original .env back (keep a copy with every backup), then run this script again. No copy of it? The data is still in the volume: back it up first (README, Backup and restore, 'What the backup does not contain'). Never use down -v."
+        }
+    }
+    # ... the existing key generation and Set-Content of .env stay here, unchanged ...
+}
+docker compose @args up -d --build
 ```
 
-Parse-check it without running it, from WSL: `powershell.exe -NoProfile -Command "\$e=\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w scripts/setup.ps1)',[ref]\$null,[ref]\$e); \$e.Count"` must print `0` (do the same for `backup.ps1`). Say in your report that the PowerShell twins were parse-checked and not run.
+(Keep the existing generation code and its `Write-Host "Created .env"` inside the `else` branch.) Parse-check it without running it, from WSL: `powershell.exe -NoProfile -Command "\$e=\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w scripts/setup.ps1)',[ref]\$null,[ref]\$e); \$e.Count"` must print `0` (do the same for `backup.ps1`). Say in your report that the PowerShell twins were parse-checked and not run.
 
 `scripts/backup.sh`, after the existing final `echo`, add:
 
 ```bash
-echo "note: .env is NOT in this dump. It holds DCDASH_SECRET_KEY, the key that encrypts the stored source secrets: keep a copy of .env with the dump, or the secrets cannot be decrypted after a restore." >&2
+echo "note: .env and certs/ are NOT in this dump. .env holds DCDASH_SECRET_KEY, the key that encrypts the stored source secrets: keep a copy of both with the dump, or the secrets cannot be decrypted after a restore." >&2
 ```
 
-and the same as a `Write-Host` line at the end of `scripts/backup.ps1`. Check `scripts/backup_smoke.sh` and the README do not parse backup.sh's output (`grep -n "wrote" scripts/*`): the note goes to stderr so stdout is unchanged either way.
+and the same as a `Write-Host` line at the end of `scripts/backup.ps1`. Check `scripts/backup_smoke.sh` and the README do not parse backup.sh's output (`grep -n "wrote" scripts/*`; Opus review B found nothing that does): the note goes to stderr so stdout is unchanged either way.
 
 `README.md`: in "Backup and restore" add this subsection after the paragraph about `pg_dump` warnings, and change the "Keep `.env`" sentence in "Run it" to end with "Keep a copy of `.env` with every backup (see "What the backup does not contain")."
 
@@ -1292,14 +1414,22 @@ and the same as a `Write-Host` line at the end of `scripts/backup.ps1`. Check `s
 ### What the backup does not contain
 
 The dump is the database only. `.env` is not in it, and `.env` holds `DCDASH_SECRET_KEY`, the key that encrypts the
-passwords and keys stored for your sources. Keep a copy of `.env` with every backup, off the machine.
+passwords and keys stored for your sources. `certs/` (the HTTPS key and certificate, and an OPC UA client certificate if you
+use one) is not in it either. Keep a copy of `.env` and `certs/` with every backup, off the machine.
 
 - **Restoring on a new machine:** put that `.env` in place, run `scripts/setup.sh`, then `scripts/restore.sh <dump>`.
-- **`.env` lost, dump kept:** the data restores, but every source with a stored secret shows `offline`
-  ("stored secret cannot be decrypted") until its secret is typed in again (Discovery, the source's Details).
+- **`.env` lost, dump kept:** the data restores, but every enabled source that has mapped points and a stored secret goes
+  `offline` with `stored secret cannot be decrypted` until an admin types its secret in again (Discovery, the source's
+  Details, Secret).
 - **`.env` lost, database volume still there:** `scripts/setup.sh` refuses to create a new `.env`, because a new password
   cannot open the old volume. Put the original `.env` back. Do not "fix" it with `docker compose down -v`: that deletes the database.
+- **`.env` lost, no copy of it anywhere, database volume still there:** the data is still in the volume. Start only the
+  database (`docker compose up -d db`) and run `scripts/backup.sh`. Then remove the volume on purpose and start over from
+  the dump: `docker compose down` (without `-v`), `docker volume rm` of the project's `dbdata` volume (`dcdash_dbdata`
+  unless `COMPOSE_PROJECT_NAME` is set), `scripts/setup.sh`, `scripts/restore.sh <dump>`, then type each source's secret in again.
 ```
+
+The last bullet is a recovery procedure the orchestrator proves in a throwaway project at the wave close (see below); do not run it yourself.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1330,20 +1460,22 @@ In "Run it", after the `scripts/setup.sh --profile dev` code block (the "To incl
 
 ```markdown
 The simulator's three protocols are added as sources in the app like any other. Its HTTP source needs the Secret
-`sim-key` (the simulator's API key, `SIM_API_KEY` in `compose.yaml`); without it the test says `auth_failed:
-credentials rejected`. The OPC UA simulator takes the user `sim` with any password, and Modbus needs none.
+`sim-key` (the simulator's API key, `SIM_API_KEY` in `compose.yaml`); without it the source goes `offline` with
+`auth_failed` (credentials rejected). The OPC UA simulator accepts any login (or none) unless `SIM_OPCUA_PASSWORD` is set
+in `.env`; then it takes the user `sim` with that password. Modbus needs none.
 ```
 
 In "Backup and restore", after the "What the backup does not contain" subsection from Task 9, add:
 
 ```markdown
-After a restore the collector rewrites the stored scan network (`collector_networks`) with the networks of the machine
-it now runs on, so the range pre-filled in a new scan follows the machine, not the restored data. Check it before the first scan.
+Every collector start, including the one at the end of a restore, rewrites the stored scan network (`collector_networks`)
+with the /24 around the collector's own addresses, so the targets pre-filled in a new scope follow this installation, not
+the restored data. Check them before the first scan.
 ```
 
 - [ ] **Step 2: Check the facts against the code**
 
-Run: `grep -n "SIM_API_KEY" compose.yaml` (must show `sim-key`) and `grep -rn "collector_networks" backend/dcdash/collector/networks.py backend/dcdash/collector/main.py | head -5` (the collector must be the writer). If either differs from the sentence, fix the sentence, not the code.
+Run: `grep -n "SIM_API_KEY\|SIM_OPCUA_PASSWORD" compose.yaml` (must show `sim-key`, and the OPC UA password coming from `.env`), `grep -n "password" backend/dcdash/simulator/opcua.py` (anonymous when unset) and `grep -rn "collector_networks" backend/dcdash/collector/networks.py backend/dcdash/collector/main.py | head -5` (the collector writes it at every start). If any differs from a sentence, fix the sentence, not the code.
 
 - [ ] **Step 3: Commit**
 
@@ -1358,21 +1490,31 @@ git push
 
 ## Wave close (the orchestrator, not an implementer)
 
+Wave-close permissions (the owner's standing permission, and the only place in this plan where a changing compose command runs on the project `dcdash`): `docker compose --profile dev stop`, `start` and `up -d --build` on `dcdash`; never `down -v`, never `docker volume rm`, never removing images by id.
+
 Run after Task 10, in this order, and record the evidence in the progress ledger:
 
 - [ ] `cd frontend && npm test && npm run typecheck && npm run build` (the full suite and the production build).
-- [ ] `cd backend && uv run pytest -q` (the full backend suite, in the background: it takes minutes).
-- [ ] The isolated end-to-end run: `docker compose --profile dev stop` (stopping is allowed), `scripts/e2e.sh` (it works in the throwaway project `dcdash_e2e` with its own volume), `docker volume ls` must still list `dcdash_dbdata`, then `docker compose --profile dev start`.
+- [ ] `cd backend && uv run pytest -q` (the full backend suite, in the background: it takes minutes). WAIT until it has finished before the next step, so the end-to-end image build does not overlap it.
+- [ ] The README recovery procedure of Task 9 ("`.env` lost, no copy of it, database volume still there"), proved in a throwaway project with a prefix guard: `COMPOSE_PROJECT_NAME=dcdash_e2e_recover`, a scratch `.env` with its own values, `up -d db`, write a row, remove the `.env`, `down` (no `-v`), run `scripts/setup.sh` and confirm it refuses, `up -d db` without `.env`, `scripts/backup.sh` works, then `docker volume rm dcdash_e2e_recover_dbdata`, `scripts/setup.sh`, `scripts/restore.sh`, and the row is back. Clean the project up with `down -v` (the guard name only). If a step fails, amend the README bullet before the merge.
+- [ ] The isolated end-to-end run: `docker compose --profile dev stop`, `scripts/e2e.sh` (it works in the throwaway project `dcdash_e2e` with its own volume), and `docker compose --profile dev start` WHATEVER `scripts/e2e.sh` exits with. `docker volume ls` must still list `dcdash_dbdata`.
 - [ ] A whole-wave Opus review of `git diff main...w0a-quick-wins` (brief in a file, verified with `tail`, short dispatch prompt), a fix wave if it finds anything, a scoped re-review of the fixes.
-- [ ] Merge `--no-ff` into `main`, push `main`, update the roadmap's W0a status line and the project memory.
-- [ ] Rebuild the dev stack from the merged tree after `scripts/backup.sh` (standing permission), then say honestly in the report what was NOT seen in a real browser (nav styling, skip link, wide dashboards, the gauge beyond the SVG geometry test): the owner's next look covers it.
+- [ ] Add the Trend-chart gap-rule limits (see "Out of scope") as a line in `docs/superpowers/backlog.md`, mark W0a done in the roadmap, merge `--no-ff` into `main`, push `main`, update the project memory.
+- [ ] Rebuild the dev stack from the merged tree after `scripts/backup.sh`: `docker compose --profile dev up -d --build`. Then say honestly in the report what was NOT seen in a real browser (nav styling, skip link, wide dashboards, the gauge beyond the SVG geometry test): the owner's next look covers it.
 
 ## Out of scope (so a reviewer does not ask for it)
 
-- `bool` accepted where a number is expected on `PUT /api/settings/storage` (`true` reads as 1): pydantic's lax mode; the ranges already refuse the ones that matter. Not changed.
-- The `ReviewDialog` indentation uses ordinary spaces (a browser strips them from an option); only the new `assetOptions` uses non-breaking spaces. Not changed.
+- Lax inputs on `PUT /api/settings/storage` that stay as they are (pydantic's lax mode, no `extra="forbid"`): a number sent as a string (`"45"`), `85.0` for an integer field, `true` read as 1, and unknown keys, so a PUT that echoes GET's `factory` back succeeds and ignores it. The ranges and the cross-field rules already refuse the ones that matter (`85.5` for an integer, negatives, `true` for a percentage). Not changed.
+- Task 4 uses the dashboard widgets' gap rule on purpose (the same data must look the same on both pages). The rule has two known limits that exist in the widgets today: a metric sampled every 13 to 23 s on the 1-hour range (12 s grid, steps `12, 12, 12, 24` s, median 12 s) breaks its line every minute, and a series of three points with one outage ties its two steps and bridges the outage. A better rule changes both places, so it goes to the backlog (the orchestrator adds the line at the wave close), not into this wave.
 - Auditing storage and timezone changes (W1a/W1b), the Set/Reset buttons (W1b), Sources Edit and list sorting (W3a), long names in widgets (S7-3), phone layout (parked).
 
 ## Review log
 
-Opus logic review of this plan: pending. Review file: `.superpowers/sdd/2026-10-09-w0a-quick-wins/planreview-A.md` (git-ignored workspace; findings are folded into this document and listed here once done).
+Opus logic review of this plan: two reviewers, 2026-10-09 (files `planreview-A.md` for Tasks 1 to 7 and `planreview-B.md` for the backend half of Task 3, Tasks 8 to 10 and the wave close, in the git-ignored workspace `.superpowers/sdd/2026-10-09-w0a-quick-wins/`). Result: 1 Blocker, 7 Majors, 19 Minors, all folded into this document.
+
+- Blocker (B): a non-finite storage capacity would have made the 422 response itself crash; Task 8 now defuses non-finite numbers first.
+- Majors: an existing tariff test pins the key set (Task 3); the rewritten gap test would have thrown (Task 4); an existing AssetPage test pins browser-zone times (Task 7); Undo after a drag could stack two widgets (Task 6); a large finite capacity breaks `/api/storage` for good, now bounded (Task 8); no recovery path for a lost `.env` without a copy, and the refusal message used to offer only `docker volume rm` (Task 9).
+- Minors: the invisible non-breaking spaces, wrong line numbers, the test filters, the scaffolding descriptions, the guard checking both Compose projects, the fail-closed branch really being `volume ls`, a keyless `.env`, README sentences the code contradicts (Tasks 9 and 10), and three gaps in the wave close.
+- Left as known limits: the widgets' gap rule (Out of scope) and lax pydantic inputs.
+
+This revised plan has not been reviewed a second time; the changes are corrections the reviewers specified.
