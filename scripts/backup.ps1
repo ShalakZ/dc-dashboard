@@ -14,3 +14,4 @@ $Version = (docker compose exec -T db psql -U dcdash -d dcdash -tAc "SELECT vers
 if ($LASTEXITCODE -ne 0) { throw "could not read alembic_version" }
 Set-Content -Path "$File.version" -Encoding ascii -NoNewline -Value $Version
 Write-Host "wrote $File (schema $Version)"
+Write-Host "note: .env and certs/ are NOT in this dump. .env holds DCDASH_SECRET_KEY, the key that encrypts the stored source secrets: keep a copy of both with the dump, or the secrets cannot be decrypted after a restore."
