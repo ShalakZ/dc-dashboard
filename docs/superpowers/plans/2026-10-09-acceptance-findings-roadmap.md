@@ -139,6 +139,8 @@ Design rules given by the owner (hard constraints for any design, mockup or CSS 
 
 How to run it (proposal, for the owner to confirm in that session): its own session, started with the brainstorming skill, then a design spec and a plan, both Opus-reviewed before any implementer starts. Look at Sunbird's public material for the patterns (navigation and menus, dashboard layout, density, status colours), decide the design direction and the shared style tokens first (`app.css` today is plain black on white with no tokens), and only then restyle screen by screen. It belongs after W3a to W3c, so screens whose layout is about to change are not restyled twice. The parked items fit in naturally: phone support (S13-1 to S13-3, S13-8) and the accessibility items (S13-9 to S13-11), and the Discovery ideas S11-1 to S11-3.
 
+**Widgets overhaul (separate, dedicated session).** The owner looked at W0a in the browser on 2026-10-09 ("looks fine") and said the dashboard widgets themselves (stat, gauge, time series, bar, table, and the widget frame and editor) need an overhaul of their own, to be done in its own future session, not folded into the rest of W6. Inputs for it: the owner's design rules above, W3b's widget items (S7-3 long names, S7-4 overlap, D6) and the gauge and Trend-chart leftovers in backlog section G.
+
 ## Parked
 
 - Phone support (owner): S13-1, S13-2, S13-3, the phone part of S13-8. S13-1 (the nav) is the one cheap fix that would help
