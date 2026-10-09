@@ -99,6 +99,24 @@ describe("ReviewDialog", () => {
     expect(options.map((o) => (o as HTMLOptionElement).value)).toEqual(["", "10", "11"]);
   });
 
+  it("tells two assets with one name apart by their parent, in the asset list and in the parent list", async () => {
+    mockFetch({
+      ...routes(),
+      "GET /api/discovery/graph": { body: { ...graph(), assets: [
+        { id: 20, parent_id: null, name: "Room 1", kind: "generic" },
+        { id: 21, parent_id: null, name: "Room 2", kind: "generic" },
+        { id: 22, parent_id: 20, name: "LV Panel", kind: "generic" },
+        { id: 23, parent_id: 21, name: "LV Panel", kind: "generic" },
+      ] } },
+    });
+    renderWithProviders(<Harness initialTarget={existing(null)} onClose={vi.fn()} />);
+    await screen.findByRole("dialog", { name: "Review mappings" });
+    const texts = (select: HTMLElement) => within(select).getAllByRole("option").map((o) => o.textContent!.replace(/\u00a0/g, "_"));
+    expect(texts(screen.getByLabelText("Asset"))).toEqual(["(choose)", "Room 1", "__LV Panel (Room 1)", "Room 2", "__LV Panel (Room 2)"]);
+    await userEvent.click(screen.getByRole("radio", { name: "New asset" }));
+    expect(texts(screen.getByLabelText("Parent asset"))).toEqual(["(root)", "Room 1", "__LV Panel (Room 1)", "Room 2", "__LV Panel (Room 2)"]);
+  });
+
   it("rows whose metric the asset already has start unchecked and show their note", async () => {
     await open(existing(10));
     expect(box("LVP01 kW")).not.toBeChecked();

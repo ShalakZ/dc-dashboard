@@ -55,4 +55,23 @@ describe("SourcePointsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("already mapped");
   });
+
+  it("tells two assets with one name apart: in the Map form's Asset list and in a mapped row's Mapped to cell", async () => {
+    mockFetch({
+      ...routes,
+      "GET /api/assets": { body: [
+        { id: 1, parent_id: null, name: "Room 1", kind: "room", sort_order: 0 },
+        { id: 2, parent_id: null, name: "Room 2", kind: "room", sort_order: 1 },
+        { id: 3, parent_id: 1, name: "LV Panel", kind: "panel", sort_order: 0 },
+        { id: 4, parent_id: 2, name: "LV Panel", kind: "panel", sort_order: 0 },
+      ] },
+    });
+    renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
+    const mapped = (await screen.findByText("panel1/energy")).closest("tr")!;
+    expect(await within(mapped).findByText(/^LV Panel \(Room 2\) · energy_kwh/)).toBeInTheDocument();
+    const row = screen.getByText("panel1/power").closest("tr")!;
+    await userEvent.click(within(row).getByRole("button", { name: "Map" }));
+    const texts = within(screen.getByLabelText("Asset")).getAllByRole("option").map((o) => o.textContent!.replace(/\u00a0/g, "").trim());
+    expect(texts).toEqual(["(choose)", "Room 1", "LV Panel (Room 1)", "Room 2", "LV Panel (Room 2)"]);
+  });
 });

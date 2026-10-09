@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import type { Asset } from "../../api/types";
-import { AssetPicker, assetLabels, pickerRows } from "./AssetPicker";
+import { AssetPicker, assetLabels, assetOptions, pickerRows } from "./AssetPicker";
 
 const tree: Asset[] = [
   { id: 1, parent_id: null, name: "Site", kind: "site", sort_order: 0 },
@@ -66,6 +66,37 @@ describe("assetLabels", () => {
     expect([...assetLabels(twins)]).toEqual([
       [1, "Rack"], [7, "Meter (Rack) #7"], [8, "Meter (Rack) #8"], [9, "Meter (top level)"],
     ]);
+  });
+});
+
+const asset = (id: number, name: string, parent_id: number | null = null, sort_order = 0) => ({ id, parent_id, name, kind: "x", sort_order });
+
+describe("labels that tell equal names apart", () => {
+  const tree = [asset(1, "Room"), asset(2, "Other room"), asset(3, "Meter", 1), asset(4, "Meter", 1), asset(5, "Panel", 1), asset(6, "Panel", 2)];
+
+  it("adds the parent path for a shared name and the id for two siblings that share both", () => {
+    const labels = assetLabels(tree);
+    expect(labels.get(3)).toBe("Meter (Room) #3");
+    expect(labels.get(4)).toBe("Meter (Room) #4");
+    expect(labels.get(5)).toBe("Panel (Room)");
+    expect(labels.get(6)).toBe("Panel (Other room)");
+    expect(labels.get(1)).toBe("Room");
+  });
+
+  it("the dashboard picker shows the same labels (BL:86)", () => {
+    render(<AssetPicker assets={tree} selected={[]} onChange={() => {}} single={false} max={5} />);
+    expect(screen.getByLabelText("Meter (Room) #3")).toBeInTheDocument();
+    expect(screen.getByLabelText("Meter (Room) #4")).toBeInTheDocument();
+  });
+
+  it("assetOptions lists the tree in order, indented, with those labels, and drops the excluded ids", () => {
+    // Roots come in code-point name order ("Other room" before "Room"). With 5 excluded, the remaining "Panel" is no longer a
+    // shared name among the offered rows, so it needs no path: the invariant is that no two offered options read alike.
+    const options = assetOptions(tree, new Set([5]));
+    expect(options.map((o) => o.text.replace(/\u00a0/g, "_"))).toEqual([
+      "Other room", "__Panel", "Room", "__Meter (Room) #3", "__Meter (Room) #4",
+    ]);
+    expect(options.some((o) => o.id === 5)).toBe(false);
   });
 });
 

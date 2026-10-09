@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { Asset, AssetIn } from "../api/types";
+import { assetOptions } from "./dashboard/AssetPicker";
 
 export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
   assets: Asset[]; initial?: Partial<AssetIn>; excludeIds: Set<number>;
@@ -27,7 +28,7 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
       <label>Parent
         <select value={parent} onChange={(e) => setParent(e.target.value)}>
           <option value="">(none)</option>
-          {assets.filter((a) => !excludeIds.has(a.id)).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          {assetOptions(assets, excludeIds).map((o) => <option key={o.id} value={o.id}>{o.text}</option>)}
         </select>
       </label>
       <label>Kind<input value={kind} onChange={(e) => setKind(e.target.value)} /></label>

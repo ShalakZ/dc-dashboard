@@ -3,6 +3,7 @@ import { api } from "../../api/client";
 import { keys, useInvalidate } from "../../api/queries";
 import { METRICS, type AcceptResult, type GraphModel, type Metric } from "../../api/types";
 import { useAction } from "../../hooks/useAction";
+import { assetLabels } from "../dashboard/AssetPicker";
 import {
   MAX_UNIT_LENGTH, acceptBody, assetChoices, metricConflicts, missingUnits, reviewRows, takenMetrics, withMetric,
   type AcceptTarget, type DropPayload, type ReviewRow,
@@ -68,6 +69,7 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
 
   const choices = useMemo(() => assetChoices(model.assets), [model.assets]);
+  const labels = useMemo(() => assetLabels(model.assets.map((a) => ({ ...a, sort_order: 0 }))), [model.assets]);
   const taken = useMemo(() => takenFor(model, mode, assetId), [model, mode, assetId]);
 
   // Moving to another asset starts the review over: which metrics are free depends on the asset.
@@ -167,7 +169,7 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
               <label htmlFor={assetSelectId}>Asset</label>
               <select id={assetSelectId} ref={assetSelect} value={assetId ?? ""} onChange={(e) => retarget("existing", e.target.value === "" ? null : Number(e.target.value))}>
                 <option value="">(choose)</option>
-                {choices.map((a) => <option key={a.id} value={a.id}>{indent(a.depth) + a.name}</option>)}
+                {choices.map((a) => <option key={a.id} value={a.id}>{indent(a.depth) + (labels.get(a.id) ?? a.name)}</option>)}
               </select>
             </div>
           ) : (
@@ -179,7 +181,7 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
                 <label htmlFor={parentSelectId}>Parent asset</label>
                 <select id={parentSelectId} value={parentId ?? ""} onChange={(e) => setParentId(e.target.value === "" ? null : Number(e.target.value))}>
                   <option value="">(root)</option>
-                  {choices.map((a) => <option key={a.id} value={a.id}>{indent(a.depth) + a.name}</option>)}
+                  {choices.map((a) => <option key={a.id} value={a.id}>{indent(a.depth) + (labels.get(a.id) ?? a.name)}</option>)}
                 </select>
               </div>
             </>
