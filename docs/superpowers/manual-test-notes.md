@@ -22,7 +22,7 @@ Status legend: `todo`, `testing` (in progress), `done` (all items checked, findi
 | 9 | Storage: sizes, tiers, retention settings | 4 | done (the rest good; findings S9-1..S9-5, incl. recommended enterprise defaults) |
 | 10 | Audit: what is logged and who can see it | 1 and the others | done (log works; 7 findings S10-1..S10-7, plus S2-2 found by the inventory) |
 | 11 | Scans and Discovery: find sources on the network, map by drag and drop (moved late: it adds assets and sources on top of the clean data) | 3, 4 | done (owner: works great; rows not reported one by one; 4 ideas S11-1..S11-4) |
-| 12 | Operations: backup and restore, upgrade runbook, setup scripts, TLS, offline | - | testing |
+| 12 | Operations: backup and restore, upgrade runbook, setup scripts, TLS, offline | - | done (Claude ran the checks in four throwaway Compose projects; 14 findings S12-1..S12-14; offline bundle facts below) |
 | 13 | Cross-cutting: roles on every screen, phone width, keyboard use | all | todo |
 
 (Order changed on 2026-10-09: the original section 5, Scans and Discovery, became 11, and every later
@@ -45,6 +45,143 @@ behaviour), `ux` (works but confusing), `idea` (a wish), `question` (I do not un
   deactivate. To design later: what happens to the audit entries that name the user (keep the name, or
   anonymise), refuse deleting yourself and the last active admin, remove the user's sessions, ask for
   confirmation like the asset and source deletes do, and write an audit entry (`user.deleted`).
+
+### Section 12: Operations (done; Claude ran every check, nothing here was tested by the owner)
+
+Method: four throwaway Compose projects `dcdash_e2e_ops_a..d` (own volumes, ports 18080-18446, a compose override
+kept outside the repo, `COMPOSE_PROJECT_NAME` set per shell, a guard that refuses to run unless the project is
+scratch). The scripts call a bare `docker compose`, so without the variable they act on the project named in
+`compose.yaml` (`dcdash`); confirmed empirically that the variable wins over `name:`. The dev volume
+`dcdash_dbdata` was only read (a fresh `scripts/backup.sh` first: `backups/dcdash-20261009-170424.dump`, 0004).
+Afterwards the four projects were removed (`docker volume ls` shows only `dcdash_dbdata`), the repo tree is clean.
+
+What was verified (evidence from the run, not from reading code):
+
+| Check | Result |
+|---|---|
+| Backup of the live dev DB | 0.8 s, 350 kB; pg_dump took a consistent snapshot while the collector kept writing; the circular-FK warning is the expected one |
+| Restore of that dump into a fresh project, compared with fingerprints (count + md5 of ordered rows per table, readings and both rollups below a cut-off, jobs, extensions) | identical, except what changed in dev after the dump (the owner moved Discovery nodes and signed in again: re-read from the dump file, `graph_layout` and `sessions` equal the dump) and `settings.collector_networks`, which the scratch collector rewrote with its own Docker subnet (172.21 instead of 172.20); restore 10.6 s |
+| Usable after restore | `/api/setup` says `needed:false`; all three sources `online` (secrets decrypted with the same `.env`); newest reading advances; next asset id is 9; no errors in the logs. One-minute hole in the raw data between dump and restore (the RPO) |
+| Guards of `restore.sh` | version mismatch refused with exit 3; `--force` of the old 0003 dump restores and the restarted api migrates it to 0004 by itself (10.7 s + about 30 s; `minutes` column present, both rollups rebuilt, `billing` setting seeded); a corrupted dump fails (exit 1) and leaves the DB usable and api running. `scripts/backup_smoke.sh` passes in a scratch project (45 s) |
+| Large data and compressed chunks | seeded 4.52 M raw rows (22 days, 31 points), compressed 3 of 5 chunks (15x on this synthetic data), 378 k 1-minute and 6.3 k hourly rollup rows; db 200 MB; backup 3.8 s, dump 47.6 MB; restore into a brand-new project 12.8 s; the compressed chunk came back compressed and queryable; rollups, policies and the overlapping raw data identical (count, sum, per-point digest) |
+| Restart behaviour | database stopped for 42 s: api and collector recover with no action, readings resume within seconds. Real crash (`pg_ctl stop -m immediate`): container restarted by the restart policy in about 1 s, crash recovery clean, data identical afterwards. Everything stopped, then api/collector started before the db (what a host reboot does, no `depends_on` ordering): both crash-loop (6 restarts) and are healthy about 12 s after the db is up. Note: `docker kill` is not a crash (Docker treats it as a manual stop and does not restart) |
+| TLS (an adapted copy of the script's steps in a scratch certs dir) | unreadable key gives the clear entrypoint message; after the chown to uid 10002, HTTPS 200, HTTP gets 308, HSTS present, the session cookie gains `Secure`, SSE works over HTTP/2 (`: connected` arrives at once) |
+| Setup re-run | `.env` unchanged by a second run; the first run took 44 s (cached build) |
+| `scripts/check_web.sh` | all four lines ok |
+| Secrets in logs | none (db password, secret key and `sim-key` searched in all retained logs of the dev stack) |
+
+Not verified (say so, do not assume): the `.ps1` scripts (they parse cleanly in PowerShell 5.1, but were never executed; a
+run from the WSL path would write into `C:\Windows` because `cmd /c` refuses a UNC working directory); a real host reboot
+or Docker Desktop autostart; disk-full behaviour; the server side of TLS 1.0/1.1 (my probe was refused by the client's
+OpenSSL, so it proves nothing); `check_tls.sh` as written (not run, see S12-5); the pinned TimescaleDB Windows build
+(see the offline bundle part).
+
+- **S12-1 [bug, high] (Claude)** `/api/health` always answers `{"status":"ok"}` (`api/main.py:79`), so Docker shows the api
+  `healthy` for the whole time the database is dead (verified over a 42 s outage), while real requests do not answer
+  within 3 s (measured with a 3 s client limit; the actual server-side wait was not measured). The collector, web and
+  simulator have no healthcheck at all, and nothing watches "newest reading age". After the outage the raw data of the
+  outage window is present but at half density (1 reading per 10 s instead of 2 for a 5 s stream; cause not
+  investigated). Idea: health checks the database with a short timeout (separate liveness and readiness), a
+  collector heartbeat that Docker or the UI can see, and a "last reading" age on the Sources page.
+- **S12-2 [bug, high] (Claude)** No log rotation: the engine default is `json-file` with no options (checked on every
+  dev container), so logs grow without limit. The collector writes 1.86 MB an hour on the dev data (3 sources), 43
+  MB a day, about 15 GB a year, and it is almost entirely asyncua at INFO: `opening connection`, `create_session`,
+  `activate_session`, `read_attributes`, `close_session`, plus a 1.4 kB `find_endpoint` line, 759 times an hour each.
+  Fix: `logging: options: max-size / max-file` in `compose.yaml`, and set the `asyncua` (and `pymodbus`) loggers to
+  WARNING in `collector/main.py` (the scan code already does it process-wide during scans).
+- **S12-3 [bug, medium] (Claude)** The collector and the api ignore SIGTERM: the collector's PID 1 is Python without a
+  SIGTERM handler (signal mask checked; a direct `kill -s TERM` left it running after 3 s), the api's PID 1 is `sh -c
+  "alembic upgrade head && uvicorn ..."` which does not forward it. `docker stop` therefore waits the whole grace
+  period and ends with SIGKILL (exit 137; 10.2 s with `-t 10`). This machine's Docker has `StopTimeout=1` in every
+  container config, which is not from `compose.yaml`, so here it only costs 1 s; a normal Linux host waits 10 s for
+  every stop, restart and `down`. Cost: the writer's in-memory buffer (flushed every 1 s) is lost on each stop, and
+  Postgres sees dropped connections. Fix: `exec uvicorn` in the command, a SIGTERM handler in the collector that
+  flushes the writer, or `init: true`.
+- **S12-4 [risk, high] (Claude)** `.env` is the one thing the backup does not contain and nothing protects. (a) A
+  wrong or new `DCDASH_SECRET_KEY`: nothing crashes, the sources without a secret keep working, and a source with a
+  secret goes `offline` with `stored secret cannot be decrypted` (verified). (b) A lost `.env` plus `scripts/setup.sh`:
+  the script sees no `.env`, writes new random values and prints `Created .env`, like a first run; the existing
+  database volume still has the old password, so the api crash-loops with `password authentication failed for user
+  "dcdash"`, the web answers nothing, `setup.sh` exits 1 with `dependency failed to start` (verified; putting the
+  original `.env` back and `docker compose up -d` recovers, the data was intact). Someone who then "fixes" it with
+  `down -v` loses the database. Fix: `setup.sh` refuses (or asks) when the `dbdata` volume exists and `.env` is
+  missing; `backup.sh` warns that `.env` is not included and says where the key must be kept; the README's disaster
+  recovery steps list `.env` plus the dump.
+- **S12-5 [bug, medium] (Claude)** The ops scripts act on whatever stack is running, which is the data-safety problem
+  `e2e.sh` had. `check_tls.sh` (read, not run, because it cannot be isolated): `docker compose up -d --build web` also
+  starts db and api and re-tags the shared images; it ends with a bare `docker compose down` (stops the whole stack);
+  it overwrites `certs/privkey.pem` and `certs/fullchain.pem` and deletes both at the end (a real certificate with
+  those names would be destroyed); `sudo chown` needs a password prompt; and it tests `https://localhost` and
+  `http://localhost`, so the ports cannot be changed. `backup_smoke.sh` deletes an asset and drops and restores the
+  live database (fine only on a stack you can lose). Both should name a project like `e2e.sh` does (`-p`, a prefix
+  guard) and the TLS script should use its own certs directory and a throwaway container for the chown.
+- **S12-6 [gap, medium] (Claude)** Certificate life cycle. A new certificate written to `./certs` is not picked up: the
+  old serial is served until `docker compose restart web` (verified; the README does not say so). An expired
+  certificate is served silently (the container is `Up`, no log line, nothing in the app), so users only learn from
+  their browser. A key that does not match the certificate gives a clear Caddy error (`private key does not match
+  public key`) and a crash loop, which is fine. Ideas: show the certificate's expiry in Settings or the future doctor
+  script and warn 30 days before, and write the rotation steps in the README.
+- **S12-7 [hardening, medium] (Claude)** The site sends no security headers except HSTS in TLS mode (no
+  `X-Frame-Options` / `frame-ancestors`, `Content-Security-Policy`, `X-Content-Type-Options`, `Referrer-Policy`);
+  `Server: Caddy` is shown. The HTTP to HTTPS redirect drops a non-standard HTTPS port (`https://localhost/...`),
+  which only matters if 443 is not the public port. The session cookie is `HttpOnly; SameSite=strict` and gets
+  `Secure` over TLS (verified).
+- **S12-8 [ux, medium] (Claude)** Re-running `scripts/setup.sh` is safe for the data and for `.env` (unchanged), but it
+  recreates the api, collector, web and simulator every time (about 12 s without service): two consecutive fully
+  cached builds produced different image ids (probably BuildKit's per-build attestation, not tested with
+  `--provenance=false`), so Compose sees a new image. Because the build tags `dcdash-backend:local` and
+  `dcdash-web:local` are shared by every project, any build re-tags them for all of them (the README already says it
+  for the e2e run). Lesson from this pass: do not remove images by id on this engine (containerd store: a container's
+  `.Image` is not the id that `docker image inspect` prints); I removed the two tagged images by mistake and rebuilt
+  them from cache; the dev containers still run their older images and will be recreated at the next `up -d`.
+- **S12-9 [gap, medium] (Claude)** A restore re-arms the retention policy at once. In the large drill the restored
+  database lost, within 30 s, exactly the two chunks that lay wholly beyond `raw_retention_days` (14), because the
+  retention job runs right after `timescaledb_post_restore()` (job 1026, success, 0 failures); the source had not run
+  its daily job yet. A forensic restore of an old dump therefore discards its old raw data unless the retention is
+  raised first. Idea: `restore.sh` prints the retention horizon and how many chunks it will drop, and the README says
+  to raise `raw_retention_days` before restoring old data.
+- **S12-10 [design risk, medium for real OPC UA] (Claude)** The OPC UA connector opens and closes a session for every
+  poll on purpose (`connectors/opcua.py:104`, "a fresh client per call, always disconnected"): about 720 sessions an
+  hour per source at 5 s. Only the simulator was tried; real SCADA servers cap the number of sessions and many log
+  each session in their security audit. To decide before the first real connection: keep one session with a
+  watchdog, or a longer interval per source (links to the OPC UA credentials item in backlog section B).
+- **S12-11 [gap, medium] (Claude)** Backups are manual, unencrypted, never rotated and stored beside the database
+  (`./backups`); nothing schedules them, copies them off the machine, or reminds anyone to practise a restore. The
+  dump holds password hashes and the source secrets as ciphertext (useless without the key, see S12-4). Idea: a
+  scheduled backup (Task Scheduler or cron), keep the last N, an off-host copy step, and the restore drill of this
+  pass written as a runbook (new machine: `.env`, `setup`, dump, `restore.sh`, checks).
+- **S12-12 [docs] (Claude)** The README's "Upgrading to Phase 3" part is now history for this install (the dev stack is
+  on 0004); it should become a general "upgrade" runbook: back up, read the pre-check, start, verify, go back. The
+  `--force` path it describes was exercised in this pass and works.
+- **S12-13 [observation] (Claude)** After a restore the collector rewrites `settings.collector_networks` with its own
+  Docker subnet, so the scan range prefill follows the machine, not the restored data (the backlog section B item
+  "prefill will be wrong" is the same behaviour).
+- **S12-14 [gap] (Claude)** The Windows scripts (`setup.ps1`, `backup.ps1`, `restore.ps1`) have never been run; their
+  logic mirrors the shell scripts (read side by side) but `backup.ps1` and `restore.ps1` depend on `cmd /c` binary
+  redirection. They need one real run on a Windows machine with Docker before anyone relies on them.
+
+Idle footprint of the dev stack (one sample): collector 94 MiB, api 155 MiB, db 242 MiB, web 14 MiB, simulator 116 MiB;
+CPU about 2 % in total. Without the simulator the stack idles under 0.5 GB of memory.
+
+#### Offline bundle (backlog section D): what exists, what is still missing
+
+- Measured: the three images to ship are 788 MB (`dcdash-backend`), 95.5 MB (`dcdash-web`) and 2.48 GB
+  (`timescale/timescaledb:2.30.2-pg16`); one `docker save` piped through `gzip -3` is 0.73 GB (782 MB), a single file
+  that fits the RDP transfer plan. The simulator runs from the backend image.
+- Nothing of the bundle exists yet: no bundle script, no image-only compose file (every app service has `build:`, and
+  `setup.sh` / `setup.ps1` always run `up -d --build`, which cannot work offline), no checksum manifest, no `doctor`
+  script, no log collector, no offline smoke test.
+- The build needs the internet for `python:3.12-slim`, `ghcr.io/astral-sh/uv:latest`, `node:22-alpine`, `caddy:2-alpine`,
+  PyPI (`uv sync`), npm (`npm ci`) and Alpine (`apk add libcap`). All four base references float; pin them by digest
+  so the bundle can be reproduced (see S12-8).
+- The bigger question: the owner's note says the workstation has no Docker and no WSL. A `docker save` bundle only serves
+  a Linux VM image or a Docker install. For a native Windows install: release 2.30.2 does ship
+  `timescaledb-postgresql-16-windows-amd64.zip` (8 MB, checked through the GitHub releases API; every recent release
+  has one). Not verified, and decisive: whether that Windows build includes compression, continuous aggregates and
+  policies, which the app uses. The vendor's Windows page names no edition and no feature list, so only a test on a
+  Windows machine will tell. The backend and the Caddy part have not been run natively on Windows either.
+- Decisions the bundle waits on: route A (native Windows) or B (Linux VM), the Windows edition, Hyper-V or virtualization
+  availability, the RDP file-transfer limit, and whether the workstation may run Docker Desktop at all.
 
 ### Section 11: Scans and Discovery (done; the owner likes it a lot)
 
