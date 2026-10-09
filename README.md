@@ -67,6 +67,11 @@ uv run --project backend python scripts/smoke.py          # drives http://localh
 scripts/check_web.sh                                     # SPA, proxy and SSE route checks
 ```
 
+The simulator's three protocols are added as sources in the app like any other. Its HTTP source needs the Secret
+`sim-key` (the simulator's API key, `SIM_API_KEY` in `compose.yaml`); without it the source goes `offline` with
+`auth_failed` (credentials rejected). The OPC UA simulator accepts any login (or none) unless `SIM_OPCUA_PASSWORD` is set
+in `.env`; then it takes the user `sim` with that password. Modbus needs none.
+
 ## Services
 
 | Service | Role |
@@ -418,6 +423,10 @@ use one) is not in it either. Keep a copy of `.env` and `certs/` with every back
   database (`docker compose up -d db`) and run `scripts/backup.sh`. Then remove the volume on purpose and start over from
   the dump: `docker compose down` (without `-v`), `docker volume rm` of the project's `dbdata` volume (`dcdash_dbdata`
   unless `COMPOSE_PROJECT_NAME` is set), `scripts/setup.sh`, `scripts/restore.sh <dump>`, then type each source's secret in again.
+
+Every collector start, including the one at the end of a restore, rewrites the stored scan network (`collector_networks`)
+with the /24 around the collector's own addresses, so the targets pre-filled in a new scope follow this installation, not
+the restored data. Check them before the first scan.
 
 ## Upgrading an existing database to Phase 3
 
