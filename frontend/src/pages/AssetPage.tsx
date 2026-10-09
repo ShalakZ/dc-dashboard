@@ -22,7 +22,7 @@ export function AssetPage() {
   return (
     <>
       <p><Link to="/assets">Assets</Link> / {data.asset.name}</p>
-      <div className="row"><h1>{data.asset.name}</h1><span className="muted">{connected ? "live" : "reconnecting…"}</span></div>
+      <div className="row"><h1>{data.asset.name}</h1>{wanted.size > 0 && <span className="muted">{connected ? "live" : "reconnecting…"}</span>}</div>
       <div className="tile"><div className="muted">Live power</div><div className="big">{power ? `${fmt(livePower)} kW` : "—"}</div></div>
       <EnergyTile energy={data.energy_today} />
       <CostTile cost={data.cost_today ?? null} currency={data.currency ?? null} />

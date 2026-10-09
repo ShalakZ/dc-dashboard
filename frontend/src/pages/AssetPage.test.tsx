@@ -75,6 +75,25 @@ describe("AssetPage", () => {
     expect(screen.getByText("reconnecting…")).toBeInTheDocument();
   });
 
+  it("says neither live nor reconnecting for an asset without points, which opens no stream", async () => {
+    mockFetch({ ...routes(null), "GET /api/assets/4/summary": { body: { ...summary(null), metrics: [] } } });
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    await screen.findByRole("heading", { name: "Panel 1" });
+    expect(screen.queryByText("live")).not.toBeInTheDocument();
+    expect(screen.queryByText("reconnecting…")).not.toBeInTheDocument();
+  });
+
+  it("says reconnecting for an asset with points until the stream opens", async () => {
+    mockFetch(routes(null));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    await screen.findByRole("heading", { name: "Panel 1" });
+    expect(screen.getByText("reconnecting…")).toBeInTheDocument();
+    expect(screen.queryByText("live")).not.toBeInTheDocument();
+    act(() => FakeEventSource.last!.onopen?.());
+    expect(screen.getByText("live")).toBeInTheDocument();
+    expect(screen.queryByText("reconnecting…")).not.toBeInTheDocument();
+  });
+
   it("labels estimated energy and handles missing energy", async () => {
     mockFetch(routes({ kwh: 3.25, estimated: true, no_data: false }));
     const { unmount } = renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
