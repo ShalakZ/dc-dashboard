@@ -1,7 +1,11 @@
 # Roadmap from the manual acceptance pass (2026-10-09)
 
-Status: DRAFT 2 for the owner's approval, revised after an Opus logic review (2 Blockers and 14 Majors, all accepted, see the
-review log at the end). Nothing here is built. Source of every item: `docs/superpowers/manual-test-notes.md` (finding ids
+Status: APPROVED by the owner on 2026-10-09 (draft 2, revised after an Opus logic review: 2 Blockers and 14 Majors, all
+accepted, see the review log at the end). Decisions given with the approval: D4 and D7a as proposed, D10 (Windows script
+test on the dev machine), D11 keep the name, D14 as proposed. D12 (the TimescaleDB Windows spike) installs software, so it
+is announced with the exact list before it runs. There is no production stack today, only the dev stack with dev data, so
+"live stack" below means whichever stack is running (the dev stack now, production later); the guards stay because the
+same scripts will run on the workstation. Building starts with W0a and W0b, each with its own plan and Opus review first. Source of every item: `docs/superpowers/manual-test-notes.md` (finding ids
 `S<section>-<n>`, 68 entries from sections 1-13, plus the owner decisions at its top). Older deferred items live in
 `docs/superpowers/backlog.md` (`BL:<line>`); the ones that ride along with a finding are listed in the "rides along" table.
 
@@ -82,7 +86,7 @@ Order inside the wave: S12-5 and S12-14 first (the PowerShell scripts depend on 
 | Id | Item | Effort | Risk |
 |---|---|---|---|
 | S12-5 | Isolate the ops scripts like `e2e.sh`: `check_tls.sh`, `backup_smoke.sh` (and the three `.ps1` scripts) take a scratch project name with a prefix guard that refuses `dcdash`, `check_tls.sh` gets its own certs directory and a throwaway container for the chown, no bare `down`, and a port override; test the guard against the name `dcdash`. `backup.sh` and `restore.sh` print the project they act on | M | Med |
-| S12-14 | Run `setup.ps1`, `backup.ps1`, `restore.ps1` for real on the Windows dev machine, in a scratch project (the engine is shared with WSL, so a copy on a Windows drive would otherwise act on `dcdash`), after a verified backup, port override for 80/443. Needs D10 | S | Med |
+| S12-14 | Run `setup.ps1`, `backup.ps1`, `restore.ps1` for real on the Windows dev machine, in a scratch project (the engine is shared with WSL, so a copy on a Windows drive would otherwise act on the dev stack `dcdash`), after a backup, port override for 80/443. D10 approved | S | Low (dev data only) |
 | route A spike (D12) | On the same machine, prove whether the TimescaleDB Windows zip (2.30.2, PostgreSQL 16) offers compression, continuous aggregates and policies. It is a property of the build, so it can be settled now and decides whether route A is viable | S | Low |
 | S12-6 | Certificate: README rotation steps (a `web` restart), expiry shown (the api has no `./certs` mount, so the collector publishes the expiry to `settings`, or the doctor script reads it), warning 30 days ahead; nothing to show in HTTP mode | S-M | Low |
 | S12-8 | Pin base images by digest, including `timescale/timescaledb` and the uv image; stop rebuilds recreating containers when nothing changed (test `--provenance=false`); a re-pin step in the upgrade runbook so security fixes still arrive | M | Med |

@@ -46,6 +46,11 @@ section moved up by one. Finding ids S1-S4 refer to the numbering at the time th
   default needs a new `settings` key and an audit entry for all three actions (S9-3), and an empty `PUT` must be refused
   (S13-12) instead of resetting.
 
+- **Roadmap approved (2026-10-09)** (`docs/superpowers/plans/2026-10-09-acceptance-findings-roadmap.md`, `e4dca9b`): D4 and
+  D7a as proposed; D10 the Windows script test may run on the dev machine; D11 keep the actor's name in old audit entries;
+  D14 audit Set as default and record the origin in the next Save; the rest approved. D12 (TimescaleDB Windows spike)
+  installs software and is announced first. The owner clarified that no production stack exists, only the dev stack.
+
 ## Findings log
 
 Format: `S<section>-<n> [severity] what I did, what I expected, what happened`. Severity: `bug` (wrong
