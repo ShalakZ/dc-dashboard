@@ -1,5 +1,6 @@
-import { act, screen } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { PARTIAL_TIP } from "../components/Figure";
+import { formatSiteClock } from "../lib/siteTime";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { AssetPage } from "./AssetPage";
@@ -61,8 +62,31 @@ describe("AssetPage", () => {
     await screen.findByRole("heading", { name: "Panel 1" });
     const now = new Date(2026, 9, 7, 13, 45, 30);
     act(() => FakeEventSource.last!.emit([[7, now.getTime() / 1000, 11.25, 0]]));
-    expect(screen.getByText(now.toLocaleTimeString())).toBeInTheDocument();
-    expect(screen.queryByText(new Date(0).toLocaleTimeString())).not.toBeInTheDocument();
+    // findBy: the site zone is fetched when the table mounts, so the clock appears a moment after the heading.
+    expect(await screen.findByText(formatSiteClock(now.toISOString(), "Asia/Qatar"))).toBeInTheDocument();
+    expect(screen.queryByText(formatSiteClock(new Date(0).toISOString(), "Asia/Qatar"))).not.toBeInTheDocument();
+  });
+
+  describe("the Updated column follows the site zone", () => {
+    const stamped = (ts: string) => ({
+      "GET /api/assets/4/summary": { body: { ...summary(null), metrics: [{ ...summary(null).metrics[0], ts }] } },
+    });
+    const updatedCell = async () => within(await screen.findByRole("row", { name: /^active_power_kw / })).getAllByRole("cell")[3];
+
+    it("prints the reading's time on the wall clock of the zone GET /api/site reports", async () => {
+      mockFetch({ ...routes(null), ...stamped("2026-10-07T10:00:05+00:00") });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      const cell = await updatedCell();
+      await waitFor(() => expect(cell).toHaveTextContent(/^13:00:05$/)); // Asia/Qatar is UTC+3
+    });
+
+    it("shows a dash, not a time in the browser's zone, when the site zone cannot be read", async () => {
+      const calls = mockFetch({ ...routes(null), ...stamped("2026-10-07T10:00:05+00:00"), "GET /api/site": { status: 500, body: { detail: "site unavailable" } } });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      const cell = await updatedCell();
+      await waitFor(() => expect(calls.some((c) => c.path === "/api/site")).toBe(true));
+      expect(cell).toHaveTextContent(/^—$/);
+    });
   });
 
   it("shows the stream state next to the heading", async () => {

@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { api } from "../api/client";
-import { keys, useInvalidate, useScans, useScopes, useScopeSuggestions } from "../api/queries";
+import { keys, useInvalidate, useScans, useScopes, useScopeSuggestions, useSite } from "../api/queries";
 import type { Scope, ScopePreview } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ScanProgress } from "../components/ScanProgress";
 import { ScopeForm } from "../components/ScopeForm";
 import { useAction } from "../hooks/useAction";
 import { claimedCount } from "../lib/scanText";
+import { formatSiteDateTime } from "../lib/siteTime";
 
 type FormState = "new" | Scope | null;
 
@@ -15,6 +16,7 @@ export function ScansPage() {
   const isAdmin = hasRole("admin");
   const { data: scopes = [], error: scopesError, isLoading } = useScopes();
   const { data: scans = [], error: scansError, isLoading: scansLoading } = useScans();
+  const site = useSite();
   const invalidate = useInvalidate();
   const { run, busy, error: actionError } = useAction();
   const [form, setForm] = useState<FormState>(null);
@@ -120,7 +122,7 @@ export function ScansPage() {
               <tr key={scan.id}>
                 <td>{scan.scope_name}</td>
                 <td>{scan.status}</td>
-                <td>{new Date(scan.created_at).toLocaleString()}</td>
+                <td>{site.data ? formatSiteDateTime(scan.created_at, site.data.timezone) : "—"}</td>
                 <td>{claimedCount(scan.progress)} / {scan.progress.points ?? 0}</td>
                 <td><button onClick={() => setActiveScan(scan.id)}>Details</button></td>
               </tr>
