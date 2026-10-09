@@ -17,6 +17,7 @@ const done = {
 const base = (role: string) => ({
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
   "GET /api/scopes": { body: [scope] },
   "GET /api/scans": { body: [{ ...done, findings: undefined }] },
   "GET /api/scopes/suggestions": { body: { targets: ["172.18.0.0/24"], ports: [502, 4840, 9000] } },
@@ -30,6 +31,26 @@ describe("ScansPage", () => {
     expect(await screen.findAllByText("lab")).toHaveLength(2); // the scope row and its scan in the history
     expect(screen.queryByRole("button", { name: "New scope" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Scan" })).not.toBeInTheDocument();
+  });
+
+  it("prints the start of a scan on the wall clock of the site zone", async () => {
+    mockFetch({ ...base("operator"), "GET /api/scans": { body: [{ ...done, created_at: "2026-10-09T11:05:00Z", findings: undefined }] } });
+    open();
+    const history = await screen.findByRole("row", { name: /^lab done/ });
+    expect(await within(history).findByText("2026-10-09 14:05:00")).toBeInTheDocument();
+  });
+
+  it("shows a dash, not a time in the browser's zone, while the site zone is unavailable", async () => {
+    const calls = mockFetch({
+      ...base("operator"),
+      "GET /api/site": { status: 500, body: { detail: "site unavailable" } },
+      "GET /api/scans": { body: [{ ...done, created_at: "2026-10-09T11:05:00Z", findings: undefined }] },
+    });
+    open();
+    const history = await screen.findByRole("row", { name: /^lab done/ });
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/site")).toBe(true));
+    expect(within(history).getByText("—")).toBeInTheDocument();
+    expect(history).not.toHaveTextContent(/2026|2:05|14:05/);
   });
 
   it("creates a scope from a prefilled form and sends parsed targets and ports", async () => {

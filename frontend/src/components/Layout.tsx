@@ -1,11 +1,25 @@
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
+
+// Billing's day columns and a dashboard on a wall screen use the whole window; every other page keeps the 1200 px column.
+const WIDE = /^\/(billing|dashboards\/[^/]+)\/?$/;
 
 export function Layout() {
   const { user, hasRole, logout } = useAuth();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   return (
     <>
+      <a
+        className="skip-link"
+        href="#main"
+        onClick={(event) => {
+          event.preventDefault(); // a hash in the URL would be one more history entry
+          document.getElementById("main")?.focus();
+        }}
+      >
+        Skip to content
+      </a>
       <nav>
         <strong>DC Dashboard</strong>
         <NavLink to="/assets">Assets</NavLink>
@@ -24,7 +38,7 @@ export function Layout() {
         <NavLink to="/password">Password</NavLink>
         <button onClick={() => logout().then(() => navigate("/login"))}>Sign out</button>
       </nav>
-      <main>
+      <main id="main" tabIndex={-1} className={WIDE.test(pathname) ? "wide" : undefined}>
         <Outlet />
       </main>
     </>

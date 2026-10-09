@@ -80,6 +80,8 @@ export interface StorageSettings {
   disk_capacity_gb: number;
   warn_threshold_pct: number;
 }
+/** What GET /api/settings/storage answers: the stored values plus the factory values; PUT takes and returns only the five. */
+export type StorageSettingsOut = StorageSettings & { factory: StorageSettings };
 export interface StorageStats {
   database_bytes: number;
   readings_bytes_uncompressed: number;
@@ -137,7 +139,7 @@ export interface Site { timezone: string; currency: string | null }
 export interface BillingSettings { currency: string | null }
 
 export interface Tariff {
-  id: number; asset_id: number | null; asset_name: string | null; rate_per_kwh: number;
+  id: number; asset_id: number | null; asset_name: string | null; asset_path: string | null; rate_per_kwh: number;
   effective_from: string; created_by: number | null; created_at: string;
 }
 export interface TariffIn { asset_id: number | null; rate_per_kwh: number; effective_from: string }

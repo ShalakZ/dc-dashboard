@@ -4,7 +4,7 @@ import { api } from "./client";
 import type {
   Asset, AuditPage, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
   GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
-  Series, Site, Source, StorageSettings, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
+  Series, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType,
 } from "./types";
 
@@ -110,7 +110,7 @@ export function usePutGeneralSettings() {
 export const useStorage = () => useQuery({ queryKey: keys.storage, queryFn: () => api.get<StorageStats>("/api/storage") });
 
 export const useStorageSettings = () =>
-  useQuery({ queryKey: keys.storageSettings, queryFn: () => api.get<StorageSettings>("/api/settings/storage") });
+  useQuery({ queryKey: keys.storageSettings, queryFn: () => api.get<StorageSettingsOut>("/api/settings/storage") });
 
 export function useSaveStorageSettings() {
   const invalidate = useInvalidate();

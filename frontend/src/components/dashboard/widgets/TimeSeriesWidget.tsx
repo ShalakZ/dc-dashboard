@@ -25,7 +25,7 @@ const PALETTE = ["#1f6feb", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989
  * drawn right only when the median lands on its common step and its other step is at most 1.5 times that median; with
  * steps further apart it is drawn as dots or flips between a line and dots (see withGaps). Null when no two points are apart.
  */
-export function bucketMs(bucket: WidgetData["bucket"], points: readonly Point[]): number | null {
+export function bucketMs(bucket: WidgetData["bucket"], points: readonly { ts: string }[]): number | null {
   if (bucket === "hour") return 3_600_000;
   if (bucket === "day") return 86_400_000;
   const steps: number[] = [];

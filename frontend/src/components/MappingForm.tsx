@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { METRICS, type Asset, type MappingIn, type Metric } from "../api/types";
+import { assetOptions } from "./dashboard/AssetPicker";
 
 export type MappingBody = Omit<MappingIn, "point_id">;
 
@@ -33,7 +34,7 @@ export function MappingForm({ assets, initial, onSubmit, onCancel }: {
       <label>Asset
         <select value={assetId} onChange={(e) => setAssetId(e.target.value)}>
           <option value="">(choose)</option>
-          {assets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          {assetOptions(assets).map((o) => <option key={o.id} value={o.id}>{o.text}</option>)}
         </select>
       </label>
       <label>Metric

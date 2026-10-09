@@ -10,3 +10,4 @@ FILE="$OUT/dcdash-$STAMP.dump"
 docker compose exec -T db pg_dump -U dcdash -d dcdash -Fc > "$FILE"
 docker compose exec -T db psql -U dcdash -d dcdash -tAc "SELECT version_num FROM alembic_version" > "$FILE.version"
 echo "wrote $FILE (schema $(cat "$FILE.version"))"
+echo "note: .env and certs/ are NOT in this dump. .env holds DCDASH_SECRET_KEY, the key that encrypts the stored source secrets: keep a copy of both with the dump, or the secrets cannot be decrypted after a restore." >&2

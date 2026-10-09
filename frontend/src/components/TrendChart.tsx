@@ -5,6 +5,7 @@ import { useSeries, useSite } from "../api/queries";
 import type { Metric, Series, SeriesTier, SummaryMetric } from "../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../lib/siteTime";
 import { rangeToQuery, type Range } from "../lib/timeRange";
+import { bucketMs, markIsolated } from "./dashboard/widgets/TimeSeriesWidget";
 import { RangePicker } from "./RangePicker";
 
 type SeriesPoint = Series["points"][number];
@@ -13,16 +14,20 @@ type Query = { start: string; end: string; buckets: number };
 const TIER_LABEL: Record<SeriesTier, string> = { raw: "raw samples", "1m": "1-minute rollup", "1h": "1-hour rollup" };
 
 /**
- * Build chart rows, inserting a `[ts, null]` row wherever two consecutive buckets are more than one
- * bucket width apart. time_bucket omits empty buckets, so without this the line would bridge outages.
+ * Build chart rows, inserting a `[ts, null]` row wherever two consecutive points are more than 1.5 steps apart.
+ * time_bucket omits empty buckets, so without this the line would bridge outages. The step is the query's bucket
+ * width, or the series' own median step when that is larger (a metric sampled every 60 s on a 12 s grid has steps of 60 s;
+ * judged against 12 s every point would sit alone, which is how the 1h energy chart drew nothing), the way the dashboard
+ * widgets read it.
  */
 export function withGaps(points: SeriesPoint[], query: Query, pick: (p: SeriesPoint) => number): [string, number | null][] {
-  const width = (Date.parse(query.end) - Date.parse(query.start)) / query.buckets;
+  const grid = (Date.parse(query.end) - Date.parse(query.start)) / query.buckets;
+  const width = Math.max(Number.isFinite(grid) ? grid : 0, bucketMs(null, points) ?? 0);
   const rows: [string, number | null][] = [];
   let previous: number | null = null;
   for (const p of points) {
     const t = Date.parse(p.ts);
-    if (previous !== null && t - previous > width * 1.5) rows.push([new Date(previous + width).toISOString(), null]);
+    if (previous !== null && width > 0 && t - previous > width * 1.5) rows.push([new Date(previous + width).toISOString(), null]);
     rows.push([p.ts, pick(p)]);
     previous = t;
   }
@@ -57,13 +62,13 @@ export function seriesToOption(series: Series, range: Range, query: Query = rang
     grid: { left: 60, right: 20, top: 30, bottom: 40 },
     xAxis: {
       type: "time",
-      axisLabel: { formatter: (value: number) => formatSiteTick(new Date(value).toISOString(), timezone, bucket) },
+      axisLabel: { formatter: (value: number) => (Number.isFinite(value) ? formatSiteTick(new Date(value).toISOString(), timezone, bucket) : "") },
     },
     yAxis: { type: "value", name: series.unit, scale: true },
     series: [
       { name: "min", type: "line", data: withGaps(series.points, query, (p) => p.min), lineStyle: { opacity: 0 }, symbol: "none", stack: "band", connectNulls: false },
       { name: "max", type: "line", data: withGaps(series.points, query, (p) => p.max - p.min), lineStyle: { opacity: 0 }, symbol: "none", stack: "band", areaStyle: { color: "#000", opacity: 0.1 }, connectNulls: false },
-      { name: "avg", type: "line", data: withGaps(series.points, query, (p) => p.avg), symbol: "none", color: "#000", connectNulls: false },
+      { name: "avg", type: "line", data: markIsolated(withGaps(series.points, query, (p) => p.avg)), symbol: "none", color: "#000", connectNulls: false },
     ],
   };
 }

@@ -58,6 +58,21 @@ async def test_create_returns_the_tariff_with_the_asset_name(client, db):
     assert default["asset_id"] is None and default["asset_name"] is None
 
 
+async def test_a_tariff_names_its_asset_by_path(client, db):
+    await login_as(client, db)
+    room = await make_asset(db, "Room 1")
+    panel = await make_asset(db, "Panel", parent_id=room)
+    created = await create(client, asset_id=panel, effective_from="2026-10-02")
+    assert created["asset_name"] == "Panel" and created["asset_path"] == "Room 1 / Panel"
+    site = await create(client, effective_from="2026-10-03")
+    assert site["asset_path"] is None and site["asset_name"] is None
+    listed = {t["id"]: t for t in (await client.get("/api/tariffs")).json()}
+    assert listed[created["id"]]["asset_path"] == "Room 1 / Panel"
+    assert listed[site["id"]]["asset_path"] is None
+    patched = (await client.patch(f"/api/tariffs/{created['id']}", json={"rate_per_kwh": 0.2})).json()
+    assert patched["asset_path"] == "Room 1 / Panel"
+
+
 async def test_list_orders_site_default_first_then_asset_name_then_newest_first(client, db):
     await login_as(client, db)
     b = await make_asset(db, "B Panel")
@@ -72,7 +87,9 @@ async def test_list_orders_site_default_first_then_asset_name_then_newest_first(
         (None, "2026-07-01"), (None, "2026-01-01"),
         ("A Panel", "2026-09-01"), ("A Panel", "2026-02-01"), ("B Panel", "2026-03-01"),
     ]
-    assert set(rows[0]) == {"id", "asset_id", "asset_name", "rate_per_kwh", "effective_from", "created_by", "created_at"}
+    assert set(rows[0]) == {
+        "id", "asset_id", "asset_name", "asset_path", "rate_per_kwh", "effective_from", "created_by", "created_at",
+    }
     assert rows[0]["rate_per_kwh"] == 0.11
     assert rows[0]["created_by"] == await db.fetchval("SELECT id FROM users WHERE username = 'admin'")
 

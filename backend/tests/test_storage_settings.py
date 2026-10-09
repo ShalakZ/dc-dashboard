@@ -1,26 +1,37 @@
 import pytest
 
-from dcdash.core.storage import StorageSettings
+from dcdash.core.storage import FACTORY_STORAGE_SETTINGS, StorageSettings
 from tests.helpers import login_as
+
+
+def settings(**overrides) -> StorageSettings:
+    return StorageSettings(**{**FACTORY_STORAGE_SETTINGS.model_dump(), **overrides})
+
+
+def test_the_factory_values_are_the_owners_decision():
+    assert FACTORY_STORAGE_SETTINGS.model_dump() == {
+        "raw_retention_days": 30, "compress_after_days": 7, "rollup_1m_retention_days": 730,
+        "disk_capacity_gb": 100, "warn_threshold_pct": 80,
+    }
 
 
 def test_raw_must_exceed_compression():
     with pytest.raises(ValueError, match="longer than compression delay"):
-        StorageSettings(raw_retention_days=10, compress_after_days=10)
+        settings(raw_retention_days=10, compress_after_days=10)
 
 
 def test_raw_retention_must_outlast_the_rollup_refresh_window():
     # The rollups refresh over the last 7 days (migration 0004), so raw data must be kept at least 8.
     with pytest.raises(ValueError, match="at least 8 days"):
-        StorageSettings(raw_retention_days=7, compress_after_days=1)
-    assert StorageSettings(raw_retention_days=8, compress_after_days=1).raw_retention_days == 8
+        settings(raw_retention_days=7, compress_after_days=1)
+    assert settings(raw_retention_days=8, compress_after_days=1).raw_retention_days == 8
 
 
 def test_the_stricter_of_the_raw_retention_rules_wins():
     with pytest.raises(ValueError, match="at least 8 days"):  # 5 breaks both rules; the 8-day floor is reported first
-        StorageSettings(raw_retention_days=5, compress_after_days=7)
+        settings(raw_retention_days=5, compress_after_days=7)
     with pytest.raises(ValueError, match="longer than compression delay"):  # 12 clears the floor but not compression
-        StorageSettings(raw_retention_days=12, compress_after_days=12)
+        settings(raw_retention_days=12, compress_after_days=12)
 
 
 async def test_get_requires_admin(client, db):

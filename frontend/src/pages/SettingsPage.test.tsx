@@ -30,6 +30,17 @@ describe("SettingsPage", () => {
     expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ timezone: "Europe/Amsterdam" });
   });
 
+  it("says what the zone decides: where a day and a month start, and the times shown", async () => {
+    mockFetch({ ...base, "GET /api/settings/general": { body: { timezone: "UTC" } } });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    await screen.findByLabelText("Timezone");
+    const hint = screen.getByText(/Readings are stored in UTC/);
+    expect(hint).toHaveTextContent("day");
+    expect(hint).toHaveTextContent("month");
+    expect(hint).toHaveTextContent("times");
+    expect(hint).not.toHaveTextContent('Used for "today"');
+  });
+
   it("shows the API message for an unknown timezone", async () => {
     mockFetch({
       ...base,

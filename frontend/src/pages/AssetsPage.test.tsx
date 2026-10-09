@@ -37,6 +37,22 @@ describe("AssetsPage", () => {
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ name: "Room B", parent_id: 1, kind: "generic", sort_order: 0 });
   });
 
+  it("tells two assets with one name apart in the Add asset form's Parent list", async () => {
+    mockFetch({
+      ...authed("admin"),
+      "GET /api/assets": { body: [
+        { id: 1, parent_id: null, name: "Room 1", kind: "room", sort_order: 0 },
+        { id: 2, parent_id: null, name: "Room 2", kind: "room", sort_order: 1 },
+        { id: 3, parent_id: 1, name: "LV Panel", kind: "panel", sort_order: 0 },
+        { id: 4, parent_id: 2, name: "LV Panel", kind: "panel", sort_order: 0 },
+      ] },
+    });
+    renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+    await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+    const texts = within(screen.getByLabelText("Parent")).getAllByRole("option").map((o) => o.textContent!.replace(/\u00a0/g, "").trim());
+    expect(texts).toEqual(["(none)", "Room 1", "LV Panel (Room 1)", "Room 2", "LV Panel (Room 2)"]);
+  });
+
   it("shows the API error when a move is rejected", async () => {
     mockFetch({
       ...authed("admin"),

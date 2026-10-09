@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
-import { keys, useInvalidate, useSources } from "../api/queries";
+import { keys, useInvalidate, useSite, useSources } from "../api/queries";
 import type { SourceImpact } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
@@ -9,10 +9,12 @@ import { JobStatus } from "../components/JobStatus";
 import { SourceForm } from "../components/SourceForm";
 import { useAction } from "../hooks/useAction";
 import { sourceImpact, sourceLoss } from "../lib/impact";
+import { formatSiteDateTime } from "../lib/siteTime";
 
 export function SourcesPage() {
   const { hasRole } = useAuth();
   const { data: sources = [], error, isLoading } = useSources();
+  const site = useSite();
   const invalidate = useInvalidate();
   const [jobs, setJobs] = useState<Record<number, number>>({});
   const [showAdd, setShowAdd] = useState(false);
@@ -73,7 +75,7 @@ export function SourcesPage() {
             <tr key={s.id}>
               <td>{s.name}</td><td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
               <td>{s.status}</td>
-              <td>{s.last_seen ? new Date(s.last_seen).toLocaleString() : "—"}</td>
+              <td>{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
               <td className="error">{s.last_error ?? ""}</td>
               <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
               <td className="row">

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { api } from "../api/client";
 import { keys, useAssets, useInvalidate, usePoints, useSources } from "../api/queries";
 import type { PointRow } from "../api/types";
+import { assetLabels } from "../components/dashboard/AssetPicker";
 import { JobStatus } from "../components/JobStatus";
 import { MappingForm, type MappingBody } from "../components/MappingForm";
 import { useAction } from "../hooks/useAction";
@@ -16,7 +17,8 @@ export function SourcePointsPage() {
   const invalidate = useInvalidate();
   const [browseJob, setBrowseJob] = useState<number | null>(null);
   const [editing, setEditing] = useState<PointRow | null>(null);
-  const assetName = (id: number) => assets.find((a) => a.id === id)?.name ?? `#${id}`;
+  const labels = useMemo(() => assetLabels(assets), [assets]);
+  const assetName = (id: number) => labels.get(id) ?? `#${id}`;
   const { run, error: actionError } = useAction();
 
   const browse = () => run(async () => {

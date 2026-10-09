@@ -4,7 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
 from dcdash.core.storage import (
+    FACTORY_STORAGE_SETTINGS,
     StorageSettings,
+    StorageSettingsOut,
     StorageStats,
     load_storage_settings,
     save_storage_settings,
@@ -19,9 +21,10 @@ async def get_storage(db: AsyncSession = Depends(get_db)) -> StorageStats:
     return await storage_stats(db)
 
 
-@router.get("/settings/storage", response_model=StorageSettings)
-async def get_storage_settings(db: AsyncSession = Depends(get_db)) -> StorageSettings:
-    return await load_storage_settings(db)
+@router.get("/settings/storage", response_model=StorageSettingsOut)
+async def get_storage_settings(db: AsyncSession = Depends(get_db)) -> StorageSettingsOut:
+    stored = await load_storage_settings(db)
+    return StorageSettingsOut(**stored.model_dump(), factory=FACTORY_STORAGE_SETTINGS)
 
 
 @router.put("/settings/storage", response_model=StorageSettings)

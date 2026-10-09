@@ -37,7 +37,10 @@ export function StoragePage() {
   const [form, setForm] = useState<StorageSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (settings.data && !form) setForm(settings.data);
+    if (settings.data && !form) {
+      const { factory: _factory, ...values } = settings.data;
+      setForm(values);
+    }
   }, [settings.data, form]);
   if (stats.isError) return <p className="error" role="alert">{stats.error.message}</p>;
   if (settings.isError) return <p className="error" role="alert">{settings.error.message}</p>;

@@ -5,6 +5,7 @@ Settings persist under the `storage` key of the shared `settings` table (see set
 """
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta, timezone
 
 from pydantic import BaseModel, Field, model_validator
@@ -20,12 +21,25 @@ STORAGE_KEY = "storage"
 REFRESH_WINDOW_DAYS = 7
 
 
+def _defuse_non_finite(data: object) -> object:
+    """JSON parsers read NaN and Infinity, but a 422 echoes the offending input back and cannot encode them (the request
+    would answer 500). Turn them into their text first; `allow_inf_nan=False` then refuses them by name."""
+    if isinstance(data, dict):
+        return {k: repr(v) if isinstance(v, float) and not math.isfinite(v) else v for k, v in data.items()}
+    return data
+
+
 class StorageSettings(BaseModel):
-    raw_retention_days: int = Field(30, le=3650)
-    compress_after_days: int = Field(7, ge=1, le=365)
-    rollup_1m_retention_days: int = Field(730, ge=30, le=36500)
-    disk_capacity_gb: float = Field(100, gt=0)
-    warn_threshold_pct: int = Field(80, ge=50, le=99)
+    """The five storage settings. Every field is required: a request that leaves one out is refused, because filling the
+    gap with a default would silently reset retention. The factory values are FACTORY_STORAGE_SETTINGS below."""
+
+    raw_retention_days: int = Field(le=3650)
+    compress_after_days: int = Field(ge=1, le=365)
+    rollup_1m_retention_days: int = Field(ge=30, le=36500)
+    disk_capacity_gb: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)  # 1 PB; 1e300 would overflow storage_stats
+    warn_threshold_pct: int = Field(ge=50, le=99)
+
+    _defuse = model_validator(mode="before")(_defuse_non_finite)
 
     @model_validator(mode="after")
     def _ordered(self) -> StorageSettings:
@@ -41,8 +55,21 @@ class StorageSettings(BaseModel):
         return self
 
 
+# The one place the factory values live (the migrations 0002 and 0004 seed the same numbers as history). GET exposes them.
+FACTORY_STORAGE_SETTINGS = StorageSettings(
+    raw_retention_days=30, compress_after_days=7, rollup_1m_retention_days=730, disk_capacity_gb=100, warn_threshold_pct=80
+)
+
+
+class StorageSettingsOut(StorageSettings):
+    """What GET answers: the stored values plus the factory values a reset can fall back on."""
+
+    factory: StorageSettings
+
+
 async def load_storage_settings(db: AsyncSession) -> StorageSettings:
-    return StorageSettings.model_validate(await get_setting(db, STORAGE_KEY, StorageSettings().model_dump()))
+    factory = FACTORY_STORAGE_SETTINGS.model_dump()
+    return StorageSettings.model_validate({**factory, **await get_setting(db, STORAGE_KEY, factory)})
 
 
 # readings_1h deliberately has no retention policy: the hourly tier is kept forever.

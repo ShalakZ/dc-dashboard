@@ -31,7 +31,7 @@ scripts\setup.ps1
 
 The first run creates `.env` with a database password and an encryption key,
 then builds and starts the stack. Keep `.env`: without its key, stored source
-credentials cannot be decrypted. Set `DCDASH_TIMEZONE` in `.env` (for example
+credentials cannot be decrypted. Keep a copy of `.env` with every backup (see "What the backup does not contain"). Set `DCDASH_TIMEZONE` in `.env` (for example
 `Asia/Qatar`) so that "today" starts at local midnight. The zone must have a whole-hour UTC offset in
 both January and July (`Asia/Qatar` and `Europe/London` do, `Asia/Kolkata` does not); see
 "Dashboards and billing".
@@ -66,6 +66,13 @@ scripts/setup.sh --profile dev
 uv run --project backend python scripts/smoke.py          # drives http://localhost through Caddy
 scripts/check_web.sh                                     # SPA, proxy and SSE route checks
 ```
+
+The simulator's three protocols are added as sources in the app like any other. Its HTTP source
+(type `simulator`, URL `http://simulator:9000`) needs the Secret `sim-key` (the simulator's API key,
+`SIM_API_KEY` in `compose.yaml`). Without it, Test shows `auth_failed - credentials rejected` and
+marks the source `offline` with that Last error, and Browse fails, so there is nothing to map. The
+OPC UA simulator accepts any login (or none) unless `SIM_OPCUA_PASSWORD` is set in `.env`; then it takes
+the user `sim` with that password. Modbus needs none.
 
 ## Services
 
@@ -401,6 +408,43 @@ The dump is a full `pg_dump -Fc` wrapped in `timescaledb_pre_restore()` / `times
 so hypertables, the 1-minute and 1-hour rollups and their compression and retention policies are
 part of the backup and come back with it; nothing has to be re-created by hand. The `pg_dump`
 warning about `continuous_agg` circular foreign keys is expected and harmless for a full dump.
+
+### What the backup does not contain
+
+The dump is the database only. `.env` is not in it, and `.env` holds `DCDASH_SECRET_KEY`, the key that encrypts the
+passwords and keys stored for your sources. `certs/` (the HTTPS key and certificate, and an OPC UA client certificate if you
+use one) is not in it either. Keep a copy of `.env` and `certs/` with every backup, off the machine.
+
+- **Restoring on a new machine:** put that `.env` and `certs/` in place, run `scripts/setup.sh`, then `scripts/restore.sh <dump>`.
+- **`.env` lost, dump kept:** the data restores, but every enabled source that has mapped points and a stored secret goes
+  `offline` with `stored secret cannot be decrypted` until an admin types its secret in again (Discovery, the source's
+  Details, Secret).
+- **`.env` lost, database volume still there:** `scripts/setup.sh` refuses to create a new `.env`, because a new password
+  cannot open the old volume. Put the original `.env` back. Do not "fix" it with `docker compose down -v`: that deletes the database.
+- **`.env` lost, old containers still there:** containers keep the values they were created with.
+  `docker ps -a --filter label=com.docker.compose.project=dcdash` lists them (use your
+  `COMPOSE_PROJECT_NAME` if set). If `dcdash-api-1` is there,
+  `docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' dcdash-api-1` prints
+  `DCDASH_SECRET_KEY`, `DCDASH_TIMEZONE` and `DCDASH_DATABASE_URL`; the database password is the part
+  between `dcdash:` and `@db` (`dcdash-web-1` holds `DCDASH_TLS_*`). Write a new `.env` with
+  `DCDASH_DB_PASSWORD=`, `DCDASH_SECRET_KEY=` and `DCDASH_TIMEZONE=`, then run `scripts/setup.sh`:
+  everything comes back, source secrets included. The output contains secrets, so do not paste it
+  anywhere. Do this before any `docker compose down` or `up`, which remove or recreate those containers.
+- **`.env` lost, no copy of it anywhere, no old containers either, database volume still there:** the data
+  is still in the volume. Start only the database (`docker compose up -d db`) and run
+  `scripts/backup.sh`. Then remove the volume on purpose and start over from the dump:
+  `docker compose down` (without `-v`), `docker volume rm` of the project's `dbdata` volume
+  (`dcdash_dbdata` unless `COMPOSE_PROJECT_NAME` is set), `scripts/setup.sh`,
+  `scripts/restore.sh <dump>`, then type each source's secret in again. Without `.env`, Compose warns
+  many times that `DCDASH_DB_PASSWORD` and `DCDASH_SECRET_KEY` are not set and default to a blank
+  string. That is expected here: the password is only used to create a new database, and the commands
+  still work.
+
+### After a restore
+
+Every collector start, including the one at the end of a restore, rewrites the stored scan network (`collector_networks`)
+with the /24 around the collector's own addresses, so the targets pre-filled in a new scope follow this installation, not
+the restored data. Check them before the first scan.
 
 ## Upgrading an existing database to Phase 3
 

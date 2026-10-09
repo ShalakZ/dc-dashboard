@@ -46,13 +46,15 @@ describe("seriesToOption gaps", () => {
     const width = 60_000; // 300 buckets over 5h
     const start = new Date(T0).toISOString();
     const end = new Date(T0 + 300 * width).toISOString();
-    const gapped = { ...series, points: [point(0, width), point(1, width), point(4, width)] };
+    // A gap is judged against the series' normal step (the median), which needs more than one step to know:
+    // the steps are 1, 1, 1, 3, 1 widths, median 1 width. The last two points are adjacent, so neither is alone.
+    const gapped = { ...series, points: [point(0, width), point(1, width), point(2, width), point(3, width), point(6, width), point(7, width)] };
     const option = seriesToOption(gapped as never, "1h", { start, end, buckets: 300 }) as Opt;
     const avg = option.series.find((s) => s.name === "avg")!.data;
-    expect(avg.map(([, v]) => v)).toEqual([1, 1, null, 1]);
-    expect(avg[2][0]).toBe(new Date(T0 + 2 * width).toISOString());
+    expect(avg.map(([, v]) => v)).toEqual([1, 1, 1, 1, null, 1, 1]);
+    expect(avg[4][0]).toBe(new Date(T0 + 4 * width).toISOString());
     for (const name of ["min", "max"]) {
-      expect(option.series.find((s) => s.name === name)!.data[2][1]).toBeNull();
+      expect(option.series.find((s) => s.name === name)!.data[4][1]).toBeNull();
     }
   });
 
@@ -63,6 +65,41 @@ describe("seriesToOption gaps", () => {
     const dense = { ...series, points: [point(0, width), point(1, width), point(2, width)] };
     const option = seriesToOption(dense as never, "1h", { start, end, buckets: 300 }) as Opt;
     expect(option.series.find((s) => s.name === "avg")!.data.map(([, v]) => v)).toEqual([1, 1, 1]);
+  });
+});
+
+describe("seriesToOption on a grid finer than the data", () => {
+  type Row = [string, number | null] | { value: [string, number | null]; symbol: string; symbolSize: number };
+  const T0 = Date.parse("2026-10-07T10:00:00Z");
+  // 1 hour in 300 buckets = a 12 s grid, as the 1h range asks for
+  const query = { start: new Date(T0).toISOString(), end: new Date(T0 + 3_600_000).toISOString(), buckets: 300 };
+  const at = (seconds: number) => ({ ts: new Date(T0 + seconds * 1000).toISOString(), avg: 5, min: 4, max: 6 });
+  const avgOf = (points: ReturnType<typeof at>[]) => {
+    const option = seriesToOption({ metric: "energy_kwh", unit: "kWh", points } as never, "1h", query) as unknown as { series: { name: string; data: Row[] }[] };
+    return option.series.find((s) => s.name === "avg")!.data;
+  };
+
+  it("draws a series sampled every 60 s as one line, with no gap rows between its points", () => {
+    const data = avgOf([0, 60, 120, 180, 240, 300].map(at));
+    expect(data).toHaveLength(6);
+    expect(data.every((row) => Array.isArray(row) && row[1] === 5)).toBe(true);
+  });
+
+  it("still breaks the line at a real outage in such a series", () => {
+    const data = avgOf([0, 60, 120, 180, 240, 840, 900].map(at)); // ten minutes missing
+    expect(data.map((row) => (Array.isArray(row) ? row[1] : row.value[1]))).toEqual([5, 5, 5, 5, 5, null, 5, 5]);
+  });
+
+  it("gives a lone point a dot, so a one-point range is not an empty chart", () => {
+    const data = avgOf([at(0)]);
+    expect(data).toHaveLength(1);
+    expect(data[0]).toMatchObject({ symbol: "circle", symbolSize: 6 });
+  });
+
+  it("an axis label for a value that is not a finite number is empty, not a thrown RangeError", () => {
+    const option = seriesToOption({ metric: "energy_kwh", unit: "kWh", points: [at(0), at(60)] } as never, "1h", query) as unknown as { xAxis: { axisLabel: { formatter: (v: number) => string } } };
+    expect(option.xAxis.axisLabel.formatter(Number.NaN)).toBe("");
+    expect(option.xAxis.axisLabel.formatter(T0)).not.toBe("");
   });
 });
 

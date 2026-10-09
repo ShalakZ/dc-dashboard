@@ -10,7 +10,8 @@ const assets = [
   { id: 5, parent_id: 1, name: "LV Panel 1", kind: "panel", sort_order: 0 },
 ];
 const tariff = (id: number, asset_id: number | null, rate: number, from: string) => ({
-  id, asset_id, asset_name: asset_id === 5 ? "LV Panel 1" : null, rate_per_kwh: rate,
+  id, asset_id, asset_name: asset_id === 5 ? "LV Panel 1" : null, asset_path: asset_id === 5 ? "Site / LV Panel 1" : null,
+  rate_per_kwh: rate,
   effective_from: from, created_by: 1, created_at: "2026-10-01T00:00:00Z",
 });
 type Row = ReturnType<typeof tariff>;
@@ -166,6 +167,28 @@ describe("TariffsPage", () => {
     expect(await within(screen.getByRole("table", { name: "Site default rates" })).findByText("2026-11-01")).toBeInTheDocument();
   });
 
+  it("steps both rate inputs by cents, the add forms' and an edit row's", async () => {
+    open();
+    for (const name of ["Add site default rate", "Add asset override"]) {
+      const form = await screen.findByRole("form", { name });
+      expect(within(form).getByLabelText("Rate per kWh")).toHaveAttribute("step", "0.01");
+    }
+    const row = (await screen.findByText("2026-10-01")).closest("tr")!;
+    await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    expect(within(row).getByLabelText("Rate per kWh")).toHaveAttribute("step", "0.01");
+  });
+
+  it("still submits a rate of six decimals although the input steps by cents (the form is not validated by the browser)", async () => {
+    const calls = open();
+    const form = await screen.findByRole("form", { name: "Add site default rate" });
+    await fillRate(form, "2026-11-01", "0.123456");
+    expect(within(form).getByLabelText("Rate per kWh")).toHaveValue(0.123456);
+    await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body)
+      .toEqual({ asset_id: null, rate_per_kwh: 0.123456, effective_from: "2026-11-01" }));
+    expect(within(form).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("adds an override for the chosen asset and refuses to submit without one", async () => {
     const calls = open();
     const form = await screen.findByRole("form", { name: "Add asset override" });
@@ -192,7 +215,8 @@ describe("TariffsPage", () => {
       { id: 8, parent_id: 6, name: "Meter", kind: "meter", sort_order: 1 },
     ];
     const override = (id: number, asset_id: number, rate: number) => ({
-      id, asset_id, asset_name: "PDU A", rate_per_kwh: rate, effective_from: "2026-10-15", created_by: 1, created_at: "2026-10-01T00:00:00Z",
+      id, asset_id, asset_name: "PDU A", asset_path: asset_id === 3 ? "Site / Room 1 / PDU A" : "Site / Room 2 / PDU A",
+      rate_per_kwh: rate, effective_from: "2026-10-15", created_by: 1, created_at: "2026-10-01T00:00:00Z",
     });
     beforeEach(() => {
       rows = [override(20, 3, 0.31), override(21, 5, 0.32)];
@@ -224,6 +248,17 @@ describe("TariffsPage", () => {
       await userEvent.click(within(body[1]).getByRole("button", { name: "Delete" }));
       expect(confirm).toHaveBeenCalledWith(expect.stringContaining("for PDU A (Site / Room 2)?"));
     });
+  });
+
+  it("names the asset of an override by the API's path when the asset is not in the asset list", async () => {
+    rows = [{ ...tariff(30, 99, 0.4, "2026-10-15"), asset_name: "Panel", asset_path: "Room 1 / Panel" }];
+    open();
+    const table = await screen.findByRole("table", { name: "Asset overrides" });
+    const cells = within(within(table).getAllByRole("row")[1]).getAllByRole("cell");
+    expect(cells[0].textContent).toBe("Room 1 / Panel");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await userEvent.click(within(table).getByRole("button", { name: "Delete" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("for Room 1 / Panel?"));
   });
 
   it("refuses a missing date and a negative rate without calling the API", async () => {

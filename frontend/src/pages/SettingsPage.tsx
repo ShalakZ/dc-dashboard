@@ -43,7 +43,10 @@ export function SettingsPage() {
         <datalist id="tz-options">
           {ZONES.map((z) => <option key={z} value={z} />)}
         </datalist>
-        <p className="muted">Used for "today" in energy totals. Readings are stored in UTC.</p>
+        <p className="muted">
+          The site's time zone. It decides where a day and a month start (today, yesterday, this month and last month in
+          energy totals, Billing and dashboard ranges) and the times shown in the app. Readings are stored in UTC.
+        </p>
         <button type="submit" disabled={put.isPending}>Save</button>
         {put.isSuccess && <span className="muted"> saved</span>}
         {put.isError && <p className="error" role="alert">{detailText(put.error)}</p>}

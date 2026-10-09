@@ -33,6 +33,12 @@ export function formatSiteDateTime(iso: string, timezone: string): string {
   return f ? `${f.year}-${f.month}-${f.day} ${f.hour}:${f.minute}:${f.second}` : iso;
 }
 
+/** `13:05:00` in the site zone. Returns `iso` unchanged when it cannot be formatted. */
+export function formatSiteClock(iso: string, timezone: string): string {
+  const f = fields(new Date(iso), timezone);
+  return f ? `${f.hour}:${f.minute}:${f.second}` : iso;
+}
+
 /** Short axis label: `13:00` (no bucket), `10-07 13:00` (hour) or `10-07` (day), in the site zone. */
 export function formatSiteTick(iso: string, timezone: string, bucket: "hour" | "day" | null): string {
   const f = fields(new Date(iso), timezone);

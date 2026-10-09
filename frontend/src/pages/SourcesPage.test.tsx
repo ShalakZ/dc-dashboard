@@ -8,6 +8,7 @@ import { SourcesPage } from "./SourcesPage";
 const source = { id: 2, name: "sim", connector_type: "simulator", config: { url: "http://simulator:9000" }, enabled: true, status: "online", last_seen: "2026-10-07T10:00:00+00:00", last_error: null, has_secret: true };
 const routes = (role: string) => ({
   "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
   "GET /api/sources": { body: [{ ...source, status: "offline", last_error: "timeout" }] },
   "POST /api/sources/2/test": { status: 202, body: { job_id: 9 } },
   "POST /api/sources/test-all": { status: 202, body: { job_ids: [9] } },
@@ -33,6 +34,30 @@ describe("SourcesPage", () => {
     expect(within(zedRow).getByText("zed")).toBeInTheDocument();
     expect(within(screen.getByText("ok-for-alpha 5 ms").closest("tr")!).getByText("alpha")).toBeInTheDocument();
     expect(within(screen.getByText("mid").closest("tr")!).queryByText(/ms/)).not.toBeInTheDocument();
+  });
+
+  it("prints Last seen on the wall clock of the site zone, and a dash for a source never seen", async () => {
+    mockFetch({
+      ...routes("operator"),
+      "GET /api/sources": { body: [{ ...source, last_seen: "2026-10-09T11:05:00Z" }, { ...source, id: 3, name: "idle", last_seen: null }] },
+    });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    const row = (await screen.findByText("sim")).closest("tr")!;
+    expect(await within(row).findByText("2026-10-09 14:05:00")).toBeInTheDocument();
+    expect(within(screen.getByText("idle").closest("tr")!).getByText("—")).toBeInTheDocument();
+  });
+
+  it("shows a dash, not a time in the browser's zone, while the site zone is unavailable", async () => {
+    const calls = mockFetch({
+      ...routes("operator"),
+      "GET /api/site": { status: 500, body: { detail: "site unavailable" } },
+      "GET /api/sources": { body: [{ ...source, last_seen: "2026-10-09T11:05:00Z" }] },
+    });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    const row = (await screen.findByText("sim")).closest("tr")!;
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/site")).toBe(true));
+    expect(within(row).getByText("—")).toBeInTheDocument();
+    expect(row).not.toHaveTextContent(/2026|2:05|14:05/);
   });
 
   it("shows an alert when deleting a source is rejected", async () => {

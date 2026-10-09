@@ -12,6 +12,8 @@ const routes = (role: string) => ({
   "GET /api/tariffs": { body: [] },
   "GET /api/settings/billing": { body: { currency: "QAR" } },
   "GET /api/assets": { body: [] },
+  "GET /api/sources": { body: [] },
+  "GET /api/sources/4/points": { body: [] },
   "GET /api/billing/costs": { body: { month: "2026-10", timezone: "Asia/Qatar", currency: "QAR", days: [], assets: [] } },
   "GET /api/dashboards": { body: [] },
   "GET /api/dashboards/3": { body: dashboard({ widgets: [widget(5, "table", { title: "Assets", config: config({ assets: [5, 6] }) })] }) },
@@ -52,5 +54,33 @@ describe("App routes", () => {
     expect(await screen.findByRole("region", { name: "Assets" })).toBeInTheDocument();
     expect(await screen.findByText("LV Panel 2")).toBeInTheDocument();
     expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it("keeps Sources away from a viewer", async () => {
+    const calls = visit("viewer", "/sources");
+    expect(await screen.findByText("Operators only")).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/sources")).toBe(false);
+  });
+
+  it("opens Sources for an operator", async () => {
+    visit("operator", "/sources");
+    expect(await screen.findByRole("heading", { name: "Sources" })).toBeInTheDocument();
+  });
+
+  it.each(["viewer", "operator"])("keeps the source points page away from a %s", async (role) => {
+    const calls = visit(role, "/sources/4/points");
+    expect(await screen.findByText("Admins only")).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/sources/4/points")).toBe(false);
+  });
+
+  it("opens the source points page for an admin", async () => {
+    visit("admin", "/sources/4/points");
+    expect(await screen.findByRole("heading", { name: "Points" })).toBeInTheDocument();
+  });
+
+  it.each(["viewer", "operator", "admin"])("answers an unknown address with a page, inside the layout, for a %s", async (role) => {
+    visit(role, "/nope");
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Assets" })).toBeInTheDocument(); // the nav is still there
   });
 });

@@ -1,4 +1,4 @@
-import { formatSiteDateTime, formatSiteDay, formatSiteTick, siteMonth } from "./siteTime";
+import { formatSiteClock, formatSiteDateTime, formatSiteDay, formatSiteTick, siteMonth } from "./siteTime";
 
 describe("formatSiteDateTime", () => {
   // Every case names its zone, so the result never depends on the machine running the tests.
@@ -17,6 +17,17 @@ describe("formatSiteDateTime", () => {
   it("returns the input unchanged when it cannot format it", () => {
     expect(formatSiteDateTime("not a date", "UTC")).toBe("not a date");
     expect(formatSiteDateTime("2026-10-07T10:00:00Z", "Mars/Olympus")).toBe("2026-10-07T10:00:00Z");
+  });
+});
+
+describe("formatSiteClock", () => {
+  it("prints the wall clock of the site zone", () => {
+    expect(formatSiteClock("2026-10-07T10:00:05Z", "Asia/Qatar")).toBe("13:00:05");
+    expect(formatSiteClock("2026-10-07T23:30:00Z", "Asia/Qatar")).toBe("02:30:00"); // the next day over there
+  });
+  it("returns the input when it cannot be formatted", () => {
+    expect(formatSiteClock("not a date", "Asia/Qatar")).toBe("not a date");
+    expect(formatSiteClock("2026-10-07T10:00:05Z", "Not/AZone")).toBe("2026-10-07T10:00:05Z");
   });
 });
 
