@@ -1,4 +1,5 @@
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { RequireRole } from "../auth/RequireAuth";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
@@ -124,5 +125,29 @@ describe("Layout phase 3 links", () => {
     expect(screen.getByRole("link", { name: "Billing" })).toHaveAttribute("href", "/billing");
     if (role === "admin") expect(screen.getByRole("link", { name: "Tariffs" })).toHaveAttribute("href", "/tariffs");
     else expect(screen.queryByRole("link", { name: "Tariffs" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Layout skip link and page width", () => {
+  it("starts with a skip link that moves focus to the main area", async () => {
+    mockFetch(routes("viewer"));
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    const first = (await screen.findAllByRole("link"))[0];
+    expect(first).toHaveAccessibleName("Skip to content");
+    await userEvent.click(first);
+    expect(screen.getByRole("main")).toHaveFocus();
+  });
+
+  it.each([
+    ["/billing", true],
+    ["/dashboards/3", true],
+    ["/dashboards", false],
+    ["/assets", false],
+    ["/sources/4/points", false],
+  ])("gives %s the whole window: %s", async (route, wide) => {
+    mockFetch(routes("viewer"));
+    renderWithProviders(<Layout />, { route, path: "*" });
+    const main = await screen.findByRole("main");
+    expect(main.classList.contains("wide")).toBe(wide);
   });
 });

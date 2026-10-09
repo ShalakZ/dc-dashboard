@@ -56,3 +56,16 @@ describe("contrast of the muted text", () => {
     expect(contrast(declared(".muted", "color"), declared("body", "background"))).toBeGreaterThanOrEqual(AA);
   });
 });
+
+describe("navigation and page width", () => {
+  it("styles the current page link (nothing marked it visibly before)", () => {
+    expect(css).toMatch(/nav a\[aria-current="page"\]\s*\{[^}]*font-weight:\s*700/);
+  });
+  it("hides the skip link until it has focus", () => {
+    expect(css).toMatch(/\.skip-link\s*\{[^}]*position:\s*absolute/);
+    expect(css).toMatch(/\.skip-link:focus\s*\{/);
+  });
+  it("lets the wide pages use the whole window", () => {
+    expect(css).toMatch(/main\.wide\s*\{[^}]*max-width:\s*none/);
+  });
+});
