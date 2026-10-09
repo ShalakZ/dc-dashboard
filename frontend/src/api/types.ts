@@ -80,6 +80,8 @@ export interface StorageSettings {
   disk_capacity_gb: number;
   warn_threshold_pct: number;
 }
+/** What GET /api/settings/storage answers: the stored values plus the factory values; PUT takes and returns only the five. */
+export type StorageSettingsOut = StorageSettings & { factory: StorageSettings };
 export interface StorageStats {
   database_bytes: number;
   readings_bytes_uncompressed: number;
