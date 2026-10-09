@@ -40,6 +40,8 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
   const [conflict, setConflict] = useState(false);
   /** Cancel was pressed with unsaved edits: ask before they are thrown away. */
   const [confirmCancel, setConfirmCancel] = useState(false);
+  /** The widget removed last in this session and where it sat, so Undo can put it back. */
+  const [removed, setRemoved] = useState<{ draft: DraftWidget; index: number } | null>(null);
 
   const edit = { name, range, drafts };
   const dirty = isDirty(baseline, edit);
@@ -67,12 +69,25 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
   const accept = (fields: EditorFields) => {
     const target = dialog?.draft ?? null;
     const key = newKey();
+    if (!target) setRemoved(null);
     setDrafts((current) => {
       if (target) return current.map((d) => (d.key === target.key ? { ...d, ...fields } : d));
       const size = defaultSize(fields.type);
       return [...current, { key, ...fields, ...size, ...nextPosition(current, size) }];
     });
     setDialog(null);
+  };
+  const removeWidget = (d: DraftWidget) => {
+    const index = drafts.findIndex((x) => x.key === d.key);
+    if (index < 0) return;
+    setRemoved({ draft: d, index });
+    setDrafts((current) => current.filter((x) => x.key !== d.key));
+  };
+  const undoRemove = () => {
+    if (!removed) return;
+    const { draft, index } = removed;
+    setDrafts((current) => (current.some((x) => x.key === draft.key) ? current : [...current.slice(0, index), draft, ...current.slice(index)]));
+    setRemoved(null);
   };
 
   const renderWidget = (d: DraftWidget) => (
@@ -82,7 +97,7 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
       actions={
         <span className="widget-actions">
           <button type="button" disabled={!ready} onClick={() => setDialog({ draft: d })} aria-label={`Edit ${d.title}`}>Edit</button>
-          <button type="button" onClick={() => setDrafts((current) => current.filter((x) => x.key !== d.key))} aria-label={`Delete ${d.title}`}>Delete</button>
+          <button type="button" onClick={() => removeWidget(d)} aria-label={`Delete ${d.title}`}>Delete</button>
         </span>
       }
     />
@@ -115,8 +130,15 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
           <div className="row"><button type="button" onClick={reload} disabled={busy}>Reload</button></div>
         </div>
       )}
+      <div role="status" aria-live="polite">
+        {removed && (
+          <p className="muted">
+            Removed “{removed.draft.title || "widget"}”. <button type="button" onClick={undoRemove}>Undo</button>
+          </p>
+        )}
+      </div>
       <p className="muted">Drag a widget by its title bar and resize it from the corner or the edges. Nothing is saved until you press Save.</p>
-      {drafts.length === 0 ? <p className="muted">No widgets yet. Use Add widget.</p> : <DashboardGrid drafts={drafts} onChange={setDrafts} renderWidget={renderWidget} />}
+      {drafts.length === 0 ? <p className="muted">No widgets yet. Use Add widget.</p> : <DashboardGrid drafts={drafts} onChange={(next) => { if (next !== drafts) setRemoved(null); setDrafts(next); }} renderWidget={renderWidget} />}
       {dialog && assets.data && metricAssets && (
         <WidgetEditor
           initial={dialog.draft} assets={assets.data} metricAssets={metricAssets} dashboardRange={range} timezone={timezone}

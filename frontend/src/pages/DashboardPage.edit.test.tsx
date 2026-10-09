@@ -242,6 +242,71 @@ describe("editing", () => {
   });
 });
 
+describe("undo after a delete", () => {
+  const three = dashboard({
+    widgets: [
+      widget(1, "stat", { title: "A", config: config({ aggregation: "last" }), x: 0, y: 0, w: 3, h: 2 }),
+      widget(2, "stat", { title: "B", config: config({ aggregation: "last" }), x: 3, y: 0, w: 3, h: 2 }),
+      widget(3, "stat", { title: "C", config: config({ aggregation: "last" }), x: 6, y: 0, w: 3, h: 2 }),
+    ],
+  });
+  const openThree = async () => {
+    open("operator", "/dashboards/3", { "GET /api/dashboards/3": { body: three } });
+    await startEditing();
+  };
+
+  it("offers Undo after a delete and puts the widget back where it was", async () => {
+    await openThree();
+    await userEvent.click(screen.getByRole("button", { name: "Delete B" }));
+    expect(screen.queryByRole("button", { name: "Edit B" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Removed “B”");
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByRole("button", { name: "Edit B" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    // the editor is clean again: Save is disabled because nothing differs from what was loaded
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("only the last delete can be undone", async () => {
+    await openThree();
+    await userEvent.click(screen.getByRole("button", { name: "Delete A" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete B" }));
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByRole("button", { name: "Edit B" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit A" })).not.toBeInTheDocument();
+  });
+
+  it("deleting the only widget works and can be undone", async () => {
+    open("operator"); // the file's own dashboard: one widget, "Current power"
+    await startEditing();
+    await userEvent.click(screen.getByRole("button", { name: "Delete Current power" }));
+    expect(screen.getByText("No widgets yet. Use Add widget.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByRole("button", { name: "Edit Current power" })).toBeInTheDocument();
+  });
+
+  it("adding a widget retires the Undo offer", async () => {
+    await openThree();
+    await userEvent.click(screen.getByRole("button", { name: "Delete C" }));
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+    // add a widget through the dialog, with the steps of 'adds a widget, saves the exact body'
+    await userEvent.click(add());
+    await userEvent.type(screen.getByLabelText("Title"), "Hall power");
+    await userEvent.click(screen.getByRole("checkbox", { name: "LV Panel 1" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save widget" }));
+    expect(await screen.findByRole("region", { name: "Hall power" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("dragging another widget (into the gap) retires the Undo offer, so Undo can never stack two widgets", async () => {
+    await openThree();
+    await userEvent.click(screen.getByRole("button", { name: "Delete B" }));
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("move-1")); // the stand-in plays a finished drag of widget A
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+});
+
 describe("before the mappings are known", () => {
   it("keeps Add widget and every Edit button off, and says why, when the metric mappings cannot be loaded", async () => {
     open("operator", "/dashboards/3", { "GET /api/discovery/graph": { status: 500, body: { detail: "graph unavailable" } } });
