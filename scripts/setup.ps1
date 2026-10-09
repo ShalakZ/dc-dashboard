@@ -21,13 +21,13 @@ if (Test-Path .env) {
     }
 } else {
     # No .env but the database volume exists: it belongs to the .env that is gone (see scripts/setup.sh). .env belongs to the
-    # directory, so the project this command line selects and the one compose.yaml names are both checked. Fail closed.
+    # directory, so two projects are checked: the one this command line selects (looked up with the same arguments, so -p and
+    # COMPOSE_PROJECT_NAME count) and the one compose.yaml names (looked up without the arguments and with COMPOSE_PROJECT_NAME
+    # unset). Fail closed.
     $projects = @(Get-ComposeProject @args)
-    if ($env:COMPOSE_PROJECT_NAME) {
-        $saved = $env:COMPOSE_PROJECT_NAME
-        Remove-Item Env:COMPOSE_PROJECT_NAME
-        try { $projects += Get-ComposeProject @args } finally { $env:COMPOSE_PROJECT_NAME = $saved }
-    }
+    $saved = $env:COMPOSE_PROJECT_NAME
+    if ($saved) { Remove-Item Env:COMPOSE_PROJECT_NAME }
+    try { $projects += Get-ComposeProject } finally { if ($saved) { $env:COMPOSE_PROJECT_NAME = $saved } }
     foreach ($project in ($projects | Select-Object -Unique)) {
         $volumes = docker volume ls -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.volume=dbdata"
         if ($LASTEXITCODE -ne 0) { throw "Cannot list Docker volumes (is Docker running?). .env was not created." }

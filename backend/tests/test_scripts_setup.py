@@ -14,7 +14,10 @@ FAKE_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$CALLS_LOG"
 case "$*" in
   *"config --no-interpolate")
-    printf 'name: %s\nservices: {}\n' "${COMPOSE_PROJECT_NAME:-dcdash}"
+    name="${COMPOSE_PROJECT_NAME:-dcdash}"
+    # like Compose, -p NAME on the command line beats COMPOSE_PROJECT_NAME
+    case "$*" in *" -p "*) name="$(printf '%s' "$*" | sed -n 's/.* -p \([^ ]*\).*/\1/p')" ;; esac
+    printf 'name: %s\nservices: {}\n' "$name"
     exit 0 ;;
 esac
 if [ -n "$FAKE_DOCKER_DOWN" ]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi
@@ -50,6 +53,10 @@ def run_setup(tmp_path: Path, *, env_file: str | None = None, volumes: tuple[str
     result = subprocess.run(["bash", str(root / "scripts" / "setup.sh"), *args], capture_output=True, text=True,
                             env=env, timeout=60, cwd=tmp_path)
     return result, root, log.read_text().splitlines()
+
+
+def looked_up(calls: list[str], project: str) -> bool:
+    return any(f"label=com.docker.compose.project={project} " in c for c in lookups(calls))  # the label is followed by a space
 
 
 def started(calls: list[str]) -> bool:
@@ -92,6 +99,24 @@ def test_the_directorys_own_project_counts_even_when_another_project_is_selected
     assert result.returncode == 1
     assert not (root / ".env").exists()
     assert not started(calls)
+
+
+def test_a_project_name_flag_does_not_hide_the_directorys_own_project(tmp_path):
+    # -p selects a scratch project on the command line, but the new .env would still be the one the normal project reads
+    result, root, calls = run_setup(tmp_path, volumes=("dcdash",), args=("-p", "dcdash_e2e_x"))
+    assert result.returncode == 1
+    assert not (root / ".env").exists()
+    assert not started(calls)
+    assert looked_up(calls, "dcdash")
+
+
+def test_with_a_project_name_flag_both_projects_are_looked_up_and_the_second_without_the_arguments(tmp_path):
+    result, root, calls = run_setup(tmp_path, args=("-p", "dcdash_e2e_x"))
+    assert result.returncode == 0, result.stderr
+    assert "docker compose -p dcdash_e2e_x config --no-interpolate" in calls  # the selected project: with the arguments
+    assert "docker compose config --no-interpolate" in calls  # the directory's own project: without them
+    assert looked_up(calls, "dcdash_e2e_x") and looked_up(calls, "dcdash")
+    assert (root / ".env").exists() and "docker compose -p dcdash_e2e_x up -d --build" in calls
 
 
 def test_extra_arguments_reach_config_and_up(tmp_path):

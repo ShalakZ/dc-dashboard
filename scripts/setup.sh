@@ -17,11 +17,12 @@ if [ -f .env ]; then
 else
   # No .env but the database volume already exists: the volume was created with the password of the .env that is gone, so a
   # new random password would never open it (the api would crash-loop) and the new key could not decrypt the stored source
-  # secrets. Stop before anything is written. .env belongs to the directory, not to one Compose project, so both the project
-  # this command line selects (COMPOSE_PROJECT_NAME, -p) and the one compose.yaml names are checked. Fail closed: `compose config`
-  # never contacts the daemon, `docker volume ls` does, and when it cannot answer the check cannot be made.
+  # secrets. Stop before anything is written. .env belongs to the directory, not to one Compose project, so two projects are
+  # checked: the one this command line selects (looked up with the same arguments, so -p and COMPOSE_PROJECT_NAME count) and
+  # the one compose.yaml names (looked up without the arguments and with COMPOSE_PROJECT_NAME unset). Fail closed: `compose
+  # config` never contacts the daemon, `docker volume ls` does, and when it cannot answer the check cannot be made.
   effective="$(project_name docker compose "$@")" || { echo "cannot read the Compose configuration; .env was not created" >&2; exit 1; }
-  own="$(project_name env -u COMPOSE_PROJECT_NAME docker compose "$@")" || { echo "cannot read the Compose configuration; .env was not created" >&2; exit 1; }
+  own="$(project_name env -u COMPOSE_PROJECT_NAME docker compose)" || { echo "cannot read the Compose configuration; .env was not created" >&2; exit 1; }
   [ -n "$effective" ] && [ -n "$own" ] || { echo "cannot tell the Compose project name; .env was not created" >&2; exit 1; }
   projects="$effective"
   if [ "$own" != "$effective" ]; then projects="$effective $own"; fi
