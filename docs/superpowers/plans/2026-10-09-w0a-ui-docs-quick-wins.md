@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-06-dc-dashboard-design.md` (sections 2, 6, 8, 10). Source of every item: `docs/superpowers/plans/2026-10-09-acceptance-findings-roadmap.md` section "W0a" and `docs/superpowers/manual-test-notes.md` (finding ids `S<section>-<n>`, backlog ids `BL:<line>` in `docs/superpowers/backlog.md`). Executors read the finding text in the notes file for the task they own.
 
-**Review status:** this plan has NOT yet been logic-reviewed by Opus (that happens before any implementer starts; the review file is named at the end of this document).
+**Review status:** logic-reviewed by Opus twice before implementation (see the Review log at the end).
 
 ## Global Constraints
 

@@ -108,7 +108,7 @@ function AddTariff({ assets, labels, assetsError = null }: {
   );
 }
 
-/** `where` names the asset of an override (its path when the name alone is ambiguous); the API's `asset_name` is the fallback. */
+/** `where` names the asset of an override (its path when the name alone is ambiguous); the API's `asset_path`, then `asset_name`, is the fallback. */
 function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) {
   const update = useUpdateTariff();
   const remove = useDeleteTariff();
