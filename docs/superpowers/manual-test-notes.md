@@ -23,7 +23,7 @@ Status legend: `todo`, `testing` (in progress), `done` (all items checked, findi
 | 10 | Audit: what is logged and who can see it | 1 and the others | done (log works; 7 findings S10-1..S10-7, plus S2-2 found by the inventory) |
 | 11 | Scans and Discovery: find sources on the network, map by drag and drop (moved late: it adds assets and sources on top of the clean data) | 3, 4 | done (owner: works great; rows not reported one by one; 4 ideas S11-1..S11-4) |
 | 12 | Operations: backup and restore, upgrade runbook, setup scripts, TLS, offline | - | done (Claude ran the checks in four throwaway Compose projects; 14 findings S12-1..S12-14; offline bundle facts below) |
-| 13 | Cross-cutting: roles on every screen, phone width, keyboard use | all | todo |
+| 13 | Cross-cutting: roles on every screen, phone width, keyboard use | all | testing (Claude's measured pre-checks logged as S13-1..S13-13; the owner's pass by eye is pending) |
 
 (Order changed on 2026-10-09: the original section 5, Scans and Discovery, became 11, and every later
 section moved up by one. Finding ids S1-S4 refer to the numbering at the time they were logged.)
@@ -45,6 +45,76 @@ behaviour), `ux` (works but confusing), `idea` (a wish), `question` (I do not un
   deactivate. To design later: what happens to the audit entries that name the user (keep the name, or
   anonymise), refuse deleting yourself and the last active admin, remove the user's sessions, ask for
   confirmation like the asset and source deletes do, and write an audit entry (`user.deleted`).
+
+### Section 13: Cross-cutting: roles, phone width, keyboard (testing; Claude's pre-checks are below, the owner's pass is pending)
+
+Before writing the owner's script, Claude measured what can be measured, on a scratch copy (throwaway project, the dev
+data restored, three test users `t_admin`, `t_op`, `t_view` inserted with the app's own hasher; removed afterwards).
+A read-only Sonnet subagent surveyed the code first (role matrix, mobile CSS, keyboard code); its claims were
+spot-checked against `App.tsx`, `app.css`, `SourcePointsPage.tsx` and then replaced by measurements where possible.
+
+- **Roles, backend:** every route (61) was called as anonymous, viewer, operator and admin (244 calls, invalid bodies or
+  non-existent ids so nothing changed): no mismatch with the gate table of the code. A demotion applies on the very next
+  request (POST dashboards 422, then 403; `/api/me` shows the new role at once); a deactivated user gets 401 at once.
+- **Phone width**, headless Chromium at 360x800, per role and page (script and PNGs in the session scratchpad, not in the
+  repo): see S13-1..S13-3. Content that fits: Assets, Asset page, Dashboards list, Dashboard viewer (stacks), Billing (scrolls
+  inside its own box), Settings, Tariffs (not in edit mode), Storage, Password.
+- **Keyboard**, real browser: Tab presses before the page content: viewer 6, operator 9, admin 14 (no skip link). The New
+  dashboard dialog puts focus in the first field, Tab cycles input, select, Cancel, then the browser UI, then the input again;
+  Escape closes it and focus returns to the button that opened it. Deleting an asset first uses the browser's own
+  `window.confirm`; the app's modal appears only for an asset with dependents.
+
+- **S13-1 [bug, high for phones] (Claude, measured)** The nav bar never wraps or collapses (`app.css:4`, no flex-wrap, no
+  menu). At 360 px the page is laid out 559 px wide for a viewer, 786 px for an operator and 1081 px for an admin, on every
+  page, and the number equals the nav's right edge. A phone shrinks such a page to fit (an admin sees it at about a third
+  of its size); a desktop browser at that width scrolls sideways, with the nav cut off after "Billing, Sou...". Idea: wrap
+  or fold the links into a menu button below about 700 px, and shorten the user label.
+- **S13-2 [ux] (Claude, measured)** Page content wider than 360 px (nav excluded): Sources 616 px, Source points 505,
+  Audit 447, Scans 424, Users 375, and in the dashboard editor the widget Edit/Delete buttons reach 428. Billing already
+  scrolls inside `.table-scroll`; the same wrapper would fix the tables. Tariffs in edit mode was not measured.
+- **S13-3 [bug] (Claude, measured)** Discovery at 360 px: the first node's Details button sits at x = -536 (outside the
+  screen; the default view is not fitted), and with the Details panel open the panel is 320 px wide and the canvas 0 px,
+  so the panel is the whole screen (Close brings the graph back). Touch dragging to map was not tested.
+- **S13-4 [bug, low] (Claude)** Operators and viewers can open `/sources` and `/sources/:id/points` by typing the URL:
+  neither route has `RequireRole` (`App.tsx:38-39`). A viewer gets the page shell with a red "insufficient role" line, not
+  the "Operators only" notice the other pages give. An operator on the points page is offered Browse points, Map/Edit and
+  Unmap, and `SourcePointsPage` never checks the role; the API refuses all three with 403 (verified: browse, mapping create,
+  update, delete are admin-only). Fix: `RequireRole operator` on `/sources`, `admin` on the points page.
+- **S13-5 [ux] (Claude, measured)** An unknown URL (for example `/nope`) renders a blank page: no nav, no text, no way
+  back except the browser's Back button (no catch-all route in `App.tsx`). Same for every role. The tab title is "DC
+  Dashboard" on every page.
+- **S13-6 [ux] (Claude, measured)** The current page is marked `aria-current="page"` in the nav, but nothing styles it: no
+  visible difference for any role. No skip link; 6, 9 or 14 Tab stops precede the content on every page.
+- **S13-7 [bug, medium] (Claude)** The UI learns your role once, at page load (`AuthProvider.tsx`), while the API checks it
+  on every request (verified). After an admin changes someone's role, the nav and buttons keep the old role until a reload,
+  and a demoted operator with a dashboard editor open gets a 403 only when pressing Save. Idea: refetch `/api/me` on window
+  focus and after any 403, and say "your role changed, reload" instead of a bare error.
+- **S13-8 [gap] (Claude, code + measurement)** The dashboard editor's move and resize are pointer-only (known: backlog
+  section E); with a keyboard you can add, edit, delete and save, but not arrange. It also cannot be used on a phone:
+  fixed 12 columns (about 18 px each at 360 px).
+- **S13-9 [gap] (Claude, code)** Charts are canvases with no text alternative (no `aria`, no `role="img"`): the Gauge value
+  exists only on the canvas, the asset Trend chart has no table or CSV, tooltips and legend toggles are pointer-only.
+  Hints in `title` attributes (Billing "no data / no meter / not yet", the `~` and `*` marks, "no data" on tiles) show on
+  neither touch nor keyboard focus; the Billing legend repeats the markers in text, which is the mitigation.
+- **S13-10 [gap] (Claude, measured)** A focused Discovery node shows no focus ring (the wrapper has `tabindex=0`,
+  `outline: none`, no shadow; the buttons inside do show the browser ring). Each node costs several Tab stops (16 in this
+  graph). Per the library code, arrow keys move a selected node but the app saves the layout only on drag stop, so keyboard
+  moves are probably not saved (not verified in a browser).
+- **S13-11 [ux, low] (Claude, code)** Row buttons carry no row context for a screen reader on Sources, Source points,
+  Scans, Users and Tariffs ("Delete", "Test", "Edit" repeated); the dashboards list, the editor and the graph nodes use
+  `aria-label` with the item name.
+- **S13-12 [bug, medium] (Claude, measured on the scratch copy)** `PUT /api/settings/storage` with an empty JSON body returns
+  200 and resets every storage setting to the factory defaults (retention 30, compression 7, 1-minute rollups 730, capacity
+  100, warning 80), rewrites the live TimescaleDB policies, and writes no audit row. The Storage page always sends every field,
+  so the screen is safe; any client or script that leaves a field out changes retention silently. The other `PUT` and
+  `POST` routes answered 422 to an empty body. Ties to S9-1, S9-2, S9-3.
+- **S13-13 [info] (Claude)** Handled well, from the code and the measurements: every clickable thing is a real `button` or
+  link (no `onClick` on a div), all inputs are labelled, the browser's focus ring is kept, dialogs trap focus, close on
+  Escape and give focus back, the Discovery side panel hands focus over and back, dashboard and node buttons have names,
+  the Billing grid scrolls inside its box and the dashboard viewer stacks into one column below 700 px.
+
+Not verified: a real phone (touch, address-bar height, zoom), touch drag-to-map in Discovery, a screen reader, the dashboard
+editor's tab order, Tariffs in edit mode at 360 px, keyboard-only use of Billing and the asset page end to end.
 
 ### Section 12: Operations (done; Claude ran every check, nothing here was tested by the owner)
 
