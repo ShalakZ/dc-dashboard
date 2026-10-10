@@ -35,7 +35,8 @@ services:
     image: dcdash-backend:local
     restart: unless-stopped
     logging: *default-logging
-    command: sh -c "alembic upgrade head && uvicorn dcdash.api.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "alembic upgrade head && exec uvicorn dcdash.api.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5"
+    stop_grace_period: 15s
     environment: *backend-env
     depends_on:
       db:
@@ -71,6 +72,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     command: python -m dcdash.collector.main
+    stop_grace_period: 20s
     environment: *backend-env
     volumes:
       - ./certs:/certs:ro          # OPC UA client certificate for basic256sha256 (see README)

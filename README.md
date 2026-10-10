@@ -392,6 +392,13 @@ recreates `api`, which then runs the database migrations. Otherwise rebuild your
 Every container keeps at most 5 log files of 10 MB (50 MB per service, set in `compose.yaml`). The collector logs
 `asyncua`, `pymodbus` and `httpx` at WARNING and above only. Read it with `docker compose logs --since 10m collector`.
 
+### Stopping
+
+`docker compose stop` and `docker compose restart` return in seconds instead of waiting out the grace period. The api
+waits up to 5 s for open pages (a live dashboard keeps its stream open) before it closes them. The collector writes its
+last readings before it exits. If the database is unreachable at that moment, the readings still in memory (everything
+collected since the database stopped answering, at most 100,000) are lost, and the collector logs how many.
+
 ### Housekeeping
 
 The collector deletes expired sessions and finished jobs older than 7 days every hour

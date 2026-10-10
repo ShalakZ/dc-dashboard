@@ -3,6 +3,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
@@ -14,10 +15,33 @@ from dcdash.api import (
 from dcdash.api.settings import seed_general
 from dcdash.api.stream import Broadcaster
 from dcdash.core.config import get_settings
-from dcdash.core.db import get_sessionmaker
+from dcdash.core.db import dispose_engine, get_sessionmaker
 from dcdash.core.pg import CONFIG_CHANNEL, LATEST_CHANNEL, create_pool, listen_forever
 
 log = logging.getLogger(__name__)
+
+# The longest the lifespan shutdown (cancel the background tasks, close the pool, dispose the engine) may take. compose.yaml
+# gives the service stop_grace_period 15 s, uvicorn spends up to 5 s before it (a test pins the sum).
+LIFESPAN_SHUTDOWN_SECONDS = 5.0
+
+
+async def _shut_down(tasks: list[asyncio.Task], pool: asyncpg.Pool) -> None:
+    async def steps() -> None:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await pool.close()
+        await dispose_engine()
+
+    closing = asyncio.ensure_future(steps())
+    done, _ = await asyncio.wait({closing}, timeout=LIFESPAN_SHUTDOWN_SECONDS)
+    if not done:
+        # asyncpg waits, without a deadline, for a database that accepted the connection and never answers; a single
+        # cancellation does not end that wait, aborting the connections does. Do not sit here until Docker kills the process.
+        log.warning("shutdown did not finish in %.0f s", LIFESPAN_SHUTDOWN_SECONDS)
+        pool.terminate()
+        closing.cancel()
+        await asyncio.wait({closing}, timeout=1)
 
 
 async def _database_unavailable(_request: Request, _exc: Exception) -> JSONResponse:
@@ -59,10 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        await pool.close()
+        await _shut_down(tasks, pool)
 
 
 def create_app() -> FastAPI:

@@ -45,3 +45,23 @@ def test_every_service_rotates_its_logs(service):
     logging_config = compose_config()["services"][service]["logging"]
     assert logging_config["driver"] == "json-file"
     assert logging_config["options"] == {"max-size": "10m", "max-file": "5"}
+
+
+def _api_command() -> str:
+    command = compose_config()["services"]["api"]["command"]
+    return " ".join(command) if isinstance(command, list) else command
+
+
+def test_the_api_command_hands_pid_1_to_uvicorn_with_a_graceful_timeout():
+    assert "alembic upgrade head && exec uvicorn" in _api_command()
+    assert re.search(r"--timeout-graceful-shutdown \d+", _api_command())
+
+
+def test_the_grace_periods_cover_the_shutdown_budgets():
+    from dcdash.api.main import LIFESPAN_SHUTDOWN_SECONDS
+    from dcdash.collector.main import SHUTDOWN_SECONDS
+
+    services = compose_config()["services"]
+    graceful = float(re.search(r"--timeout-graceful-shutdown (\d+)", _api_command()).group(1))
+    assert seconds(services["api"]["stop_grace_period"]) >= graceful + LIFESPAN_SHUTDOWN_SECONDS + 3
+    assert seconds(services["collector"]["stop_grace_period"]) >= SHUTDOWN_SECONDS + 5
