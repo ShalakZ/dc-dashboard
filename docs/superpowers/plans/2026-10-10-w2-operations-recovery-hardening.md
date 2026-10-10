@@ -680,7 +680,7 @@ header {
 
 ### Task 13: Part B close
 
-- [ ] **Step 1: Suites once:** backend `uv run pytest -q` (background), frontend `npx vitest run` and `npm run typecheck`. **Step 2: The isolated Playwright run** (all projects, including `headers`) on a `dcdash_e2e_w2_e2e` stack through the drill helper, `E2E_BASE_URL=http://127.0.0.1:18080/`, not `scripts/e2e.sh`. **Step 3: Whole-branch Opus review** of `main..w2b-web-hardening`. **Step 4: Docs:** roadmap W2 status DONE, `manual-test-notes.md` (S12-6, S12-7, S12-8, S13-7 closed), `backlog.md` section K for leftovers, project memory. **Step 5: Merge** `--no-ff`, push `main`. **Step 6: The dev-stack rebuild from the merged tree waits for the owner's explicit go** (Part B changes images, the Caddy config and the schema-free API; a verified `scripts/backup.sh --copy-to` backup comes first when the owner says go).
+- [x] **Step 1: Suites once:** backend `uv run pytest -q` (background), frontend `npx vitest run` and `npm run typecheck`. **Step 2: The isolated Playwright run** (all projects, including `headers`) on a `dcdash_e2e_w2_e2e` stack through the drill helper, `E2E_BASE_URL=http://127.0.0.1:18080/`, not `scripts/e2e.sh`. **Step 3: Whole-branch Opus review** of `main..w2b-web-hardening`. **Step 4: Docs:** roadmap W2 status DONE, `manual-test-notes.md` (S12-6, S12-7, S12-8, S13-7 closed), `backlog.md` section K for leftovers, project memory. **Step 5: Merge** `--no-ff`, push `main`. **Step 6: The dev-stack rebuild from the merged tree waits for the owner's explicit go** (Part B changes images, the Caddy config and the schema-free API; a verified `scripts/backup.sh --copy-to` backup comes first when the owner says go). (Step 6 waits for the owner's go)
 
 ---
 
@@ -800,3 +800,40 @@ Approval: Appendix B was approved by the owner at the start of the session ("lgt
 - **Suites once:** backend `uv run pytest -q` = **1654 passed** in 12:28 (at `88cb8fa`); frontend `npx vitest run` = 68 files, **810 passed**, `npm run typecheck` clean (no frontend change in Part A). After the review fix round only script files and their tests changed: `test_scripts_{backup,restore,ops,setup,e2e}.py`, `test_compose_config.py`, `test_readme_ops.py` = **287 passed** at the branch head, `bash -n` clean for every script.
 - **Whole-branch Opus review** (`review-whole.md`, effort high, scratch clone, fakes only, 38 mutations, 30 killed): **0 Blockers, 5 Majors, 7 Minors.** Fixed in code (`c503d1e`, Sonnet implementer, 22 of 22 mutants killed): MA-3 the copy folder is checked again right before the first file is written (an unmount during the dump used to get the copy on the root disk with exit 0); MA-4 and mi-7 a failure between the stop of api/collector and the load now starts them again and exits 1 (bash `recover()`; PowerShell checks `$LASTEXITCODE`, which the old script did not), `%` refused in the PowerShell dump path; mi-1 `restore.sh` without an argument exits 2, a mistyped dump path is named instead of ending in the schema refusal with its advice to use `--force`; MA-2 the `not rotating` message names what to do; MA-5 the surviving mutants are pinned (restore reads the whole dump, exit codes, a real `pg_restore` failure with exit 1, `Sort-Object Name`, `down -v`). Fixed in the README: MA-1 (one OUTPUT folder per installation), mi-2 (`--force` of a newer schema), mi-3 (option b runs the old commit's `restore.sh`), mi-4 (check the name with `docker compose config` first), mi-5 (no restore lock), mi-6 (`LastRunTime`, `-StartWhenAvailable`, `.env` may set the project name). Parked for the owner in backlog section K: an output-folder marker, a signal for skipped rotation, a restore lock. The two fixes the review could only reason about were then run for real: bash and PowerShell `backup` with the marker removed during the dump (exit 5, nothing written there) and the new `restore.ps1` paths on Windows (good dump 0, no argument 2, `%` 2, mistyped path 1, cut-off dump 1 with the database intact). The failure window itself (a failing DROP/CREATE) is covered by the fake-docker tests only.
 - **Merge:** `w2a-ops-scripts` into `main` with `--no-ff`, then push `main`. The dev stack `dcdash` was NOT rebuilt (it carries only script and README changes in Part A); rebuilding waits for the owner's explicit go.
+
+## Execution log: Part B (session 2026-10-10)
+
+Branch `w2b-web-hardening` (cut from main `f74eed0`), merged into main with `--no-ff` by the controller right after the close commit. Tasks 9-12 followed the lighter process: implementers only wrote code and tests (no Docker), the drills run by the controller in throwaway projects `dcdash_e2e_w2_*` (dev stack and `dcdash_dbdata` untouched, verified after each), one whole-branch Opus review and one scoped re-review. Workspace: `.superpowers/sdd/2026-10-10-w2-operations-recovery-hardening/`.
+
+| Commit | What |
+|---|---|
+| `59cd3a4` | Task 9: `scripts/pin_images.sh` (`--check`, `--update`) and the image pin tests |
+| `6e67fb3` | Task 9: the five base images pinned by digest |
+| `e8765aa` | Task 9: setup scripts export `BUILDX_NO_DEFAULT_ATTESTATIONS=1`, README "Upgrading images" |
+| `0659ecd` | Task 10: the collector publishes the certificate expiry hourly; `GET /api/tls/status` (admin only) |
+| `02212b7` | Task 10: certificate notice in the app shell and a Certificate line on Settings |
+| `3dc468d` | Task 11: `deploy/security-headers.caddy` imported in every site block, Report-Only CSP, `headers` Playwright project, `check_tls.sh` assertions |
+| `cb79bab` | Task 11 fix: the `headers` spec's console matcher accepts Chromium's `info` type for Report-Only messages (found by the real run) |
+| `63c81be` | Task 12: role-change notice, `setForbiddenHandler` |
+| `b4bff0a`, `603e026`, `326a755`, `d4ed958` | plan checkboxes for Tasks 9-12 |
+| `8068970` | fix wave for the 8 Minors of the whole-branch review |
+
+**Drills** (all in throwaway projects `dcdash_e2e_w2_*`):
+- **Task 9:** the stack builds from the pinned references and is healthy. By default a cached rebuild changes the image id and `up -d` recreates api, collector, simulator and web. With `BUILDX_NO_DEFAULT_ATTESTATIONS=1` cached builds keep the id, and `up -d`, build + `up -d` and `up -d --build` keep every container. No shared-tag collision.
+- **Task 10 (14 of 14 checks):** a 1-day certificate gives `expiring`, `days_left` 0 and the notice in a real browser; an unreadable file (mode 600, the collector runs as uid 10001) gives `unreadable` and its notice; a 90-day certificate plus `restart web` and `restart collector` gives `ok` and no notice; `DCDASH_TLS_CERT` unset gives `enabled` false, the settings row removed and no notice. (The first run failed two checks because of a drill defect, a helper that could not overwrite the uid-10002 key, not a product defect.)
+- **Task 11:** headers on `/`, `/api/health`, `/api/setup` and the SPA fallback, no `Server` header. Playwright 5 of 5, including a walk over 16 routes with zero violations and a working live stream (run 1 failed on the matcher, see `cb79bab`). `check_tls.sh` for real: HTTPS 200, HTTP 308, nosniff and no `Server` header on both.
+- **Upgrade drill** (old tree `f74eed0` to this branch, `build api web` + `up -d`): db, api, collector, simulator and web were all recreated, db included (its `image:` line changed; same image id; the data volume is kept). With the api stopped, Caddy's own 502 first carried `Server: Caddy` and none of the security headers (review finding m1); after the fix (`handle_errors` in every site block) it carries all of them, no `Server` header, body `502 Bad Gateway`.
+
+**Suites:** first full run at `d4ed958`: backend 1759 passed (9:42); frontend 71 files, 848 passed; typecheck clean; closing Playwright 5 of 5. Final full suites on 8068970: see the controller's note below.
+
+**Opus:** whole-branch review (effort high): 0 Blockers, 0 Majors, 8 Minors, all fixed in `8068970`. Scoped re-review (effort medium): all 8 addressed, 0 Blocker/Major, 1 new Minor (n1, in backlog section L). Two Opus runs for Part B; per-task Opus reviews were skipped for Tasks 9-12 by the plan's lighter process.
+
+**Deviations from the plan:**
+- (a) `pin_images.sh` reads the digest from the default `docker buildx imagetools inspect` text, because `--format '{{.Manifest.Digest}}'` is ignored by buildx v0.30.1 here.
+- (b) The uv image is pinned at 0.13.0.
+- (c) Task 10 was built in two implementer sessions (backend, then frontend).
+- (d) Task 11 also edited `backend/tests/test_scripts_ops.py` for the fake curl's `-D`.
+- (e) The fix wave added things beyond the Part B tasks: the `handle_errors` blocks, `notifyForbidden`, the trailing role check, the `.warning` rule.
+- (f) The leftovers went to backlog section L, not K (K already holds Part A).
+
+**Open:** Step 6, the rebuild of the dev stack `dcdash` from the merged tree, waits for the owner's explicit go (a verified backup first; it recreates `db` once). The deferred items are in backlog section L.
