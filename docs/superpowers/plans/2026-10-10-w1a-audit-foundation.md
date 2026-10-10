@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-06-dc-dashboard-design.md` (sections 7.7 and 10.7 are rewritten in Task 9; section 8 for users and security). Source of every item: `docs/superpowers/plans/2026-10-09-acceptance-findings-roadmap.md` section "W1a Audit foundation" and decisions D7a (important actions: the high-importance list of notes section 10, plus the medium group) and D11 (keep the actor's name in old entries), both approved "as proposed"; `docs/superpowers/manual-test-notes.md` findings S10-1, S2-2, S3-5 (S1-2 account deletion is W3d and only needs the snapshot built here) and the "Audit coverage inventory" under section 10; backlog items BL:48 (`PATCH {}` writes `scope.updated`), BL:60 (Phase 1 actions unaudited), BL:111 (F6, `tariff.updated` keeps only the new values). Executors read the finding text for the task they own. The owner confirmed the six design decisions on 2026-10-10 ("lgtm"): the snapshot is a database trigger plus a plain integer `actor_id`; a failed sign-in on a deactivated account is attributed to that account; failure rows are bounded; secrets never appear; logout and the discovery layout save stay unaudited; backlog section H's health-probe item is not part of W1a.
 
-**Review status:** NOT yet reviewed by Opus. An Opus logic review of this plan runs before any implementer starts; this line is replaced by its result.
+**Review status:** Reviewed by Opus before implementation (review A of the whole plan, `planreview-A.md` in the SDD workspace): 0 Blockers, 3 Majors, 12 Minors; all folded in as draft 2 (see the Review log at the end). The fixes themselves have not been reviewed a second time; each task still gets an Opus code review.
 
 ## Global Constraints
 
@@ -19,7 +19,7 @@ Every task's requirements include this section.
 - **One migration, `0005`, and no new dependency (uv or npm), no new table.** The migration only adds two nullable columns, a function and a trigger to `audit_log`. Alembic head after this wave is `0005`; the tests read the head from disk (`_head()` in `test_schema_tiers.py`), so no test hard-codes it.
 - **The audit row is part of the route.** A route writes its audit row with `audit()` / `audit_change()` (`dcdash/core/audit.py`) on the request's own session BEFORE its `commit()`, so the change and its row commit or roll back together. The only exception is a failed sign-in (Task 5): its row is written through a separate short session and commit, because the request's transaction is rolled back on the 401.
 - **The detail contract.** Created and deleted rows are flat dicts of ids and names (unchanged for the actions that exist today). Update rows are `{<subject: ids and the current name>, "before": {<only the changed fields>}, "after": {<the same fields>}}`. A field that did not change is not in `before`/`after`. Exception: `storage.changed` carries all five fields on both sides (see Task 6). `audit_change` builds this shape; never assemble `before`/`after` by hand.
-- **No-op rule.** An update writes no row when nothing changed in the database, side effects included. `audit_change` returns `False` and writes nothing when the normalised `before` and `after` are equal. The storage save is the one update that is never a no-op (it re-applies the compression and retention policies), so it passes `always=True`.
+- **No-op rule.** An update writes no row when none of the values it audits changed. A refreshed timestamp, widget rows re-created with the same content, or a reload notification to the collector do not count as a change. `audit_change` returns `False` and writes nothing when the normalised `before` and `after` are equal. The storage save is the one exception (it re-applies the compression and retention policies even for equal values), so it passes `always=True`.
 - **Normalise before comparing.** `Decimal('0.100000')`, `0.1` and `"0.1"`-as-float are the same rate; a `date` and its ISO string, an `Enum` and its value are the same. `audit_change` does this through `plain()`; routes pass raw ORM values.
 - **Secrets never reach the audit log.** No password, no password hash, no source secret, no session token, no credentials inside a URL. Markers instead: a password or source secret shows as `"set"` / `"changed"` / `"none"`; connector configs go through `safe_config()` (URL userinfo stripped, credential-named keys masked). A sign-in that names an account that does not exist never stores the typed username.
 - **Action catalogue (the names are stable; W3c renders them).**
@@ -98,7 +98,7 @@ The inputs and conditions the roadmap rows imply but the task list does not spel
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: `audit_log.actor_id INTEGER` (no foreign key) and `audit_log.actor_name TEXT`, both filled by a `BEFORE INSERT` trigger when `user_id` is set and `actor_name` is missing; `AuditLog.actor_id` / `AuditLog.actor_name` ORM columns; `GET /api/audit` items gain `actor_id` and `username` becomes `coalesce(actor_name, users.username)`; `helpers.run_alembic(*args) -> subprocess.CompletedProcess[str]`.
+- Produces: `audit_log.actor_id INTEGER` (no foreign key) and `audit_log.actor_name TEXT`, both filled by a `BEFORE INSERT` trigger when `user_id` is set and `actor_name` is missing; `AuditLog.actor_id` / `AuditLog.actor_name` ORM columns; `GET /api/audit` items gain `actor_id` and `username` becomes `coalesce(actor_name, users.username)`; `helpers.run_alembic(*args) -> subprocess.CompletedProcess[str]`. The frontend type `AuditEntry` is NOT changed in this wave (TypeScript ignores the extra field); W3c adds `actor_id` when the audit screen needs it.
 
 Why a trigger and why "fill only when missing": the collector writes audit rows with a raw `INSERT` (`audit_pool`), and future writers must not be able to forget the snapshot. Filling only missing values keeps a dump restored into a fresh database intact (a full `pg_restore` creates the trigger after the data, but a data-only import must not blank names either). The FK `ON DELETE SET NULL` performs an UPDATE of `user_id`; the trigger is `BEFORE INSERT` only, so the snapshot survives it.
 
@@ -248,7 +248,7 @@ UP = [
     "ALTER TABLE audit_log ADD COLUMN actor_id INTEGER, ADD COLUMN actor_name TEXT",
     "UPDATE audit_log a SET actor_id = u.id, actor_name = u.username FROM users u WHERE u.id = a.user_id",
     """
-    CREATE FUNCTION audit_log_snapshot_actor() RETURNS trigger LANGUAGE plpgsql AS $$
+    CREATE FUNCTION audit_log_snapshot_actor() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
     BEGIN
         IF NEW.user_id IS NOT NULL AND NEW.actor_name IS NULL THEN
             NEW.actor_id := COALESCE(NEW.actor_id, NEW.user_id);
@@ -310,7 +310,7 @@ In `backend/dcdash/api/audit.py` change the query and the item dict:
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd backend && uv run pytest tests/test_schema_audit_actor.py tests/test_api_audit.py tests/test_audit.py tests/test_schema.py -q`
-Expected: all pass. Then the migrations still round-trip: `cd backend && uv run pytest tests/test_schema_tiers.py -q -k "downgrade"` (these go down to 0001 and back to head through 0005). Expected: pass.
+Expected: all pass. Then run the migration's direct neighbour, the WHOLE file (most of its tests go down to 0003 or 0001 and back up, so 0005's down and up steps run inside them; a `-k downgrade` filter would miss most): `cd backend && uv run pytest tests/test_schema_tiers.py -q`. Expected: pass.
 
 - [ ] **Step 6: Commit**
 
@@ -528,7 +528,11 @@ def without_credentials(url: str) -> str:
 
 
 def safe_config(config: Mapping[str, Any]) -> dict[str, Any]:
-    """A connector's config as it may be written to the audit log: URLs lose credentials, credential keys are masked."""
+    """A connector's config as it may be written to the audit log: URLs lose credentials, credential keys are masked.
+
+    Top-level values only: query strings and nested values are not inspected (no connector has either today, and the
+    schema guard in test_audit.py fails if one adds a credential-named field).
+    """
     safe: dict[str, Any] = {}
     for key, value in config.items():
         if SENSITIVE_KEYS.search(key):
@@ -554,7 +558,9 @@ Create `backend/tests/test_audit_coverage.py`:
 
 The rule lives in the route: a write route's own body must call one of AUDIT_CALLS (an AST check, so a route that
 forgets fails here the day it is added). Routes are listed as EXEMPT (with a reason) or PENDING (not audited yet;
-this set only shrinks and must be empty at the end of W1a). Behaviour is pinned by the per-route tests.
+this set only shrinks and must be empty at the end of W1a). The check is syntactic: it proves the route's body
+mentions an audit call (so a route that audits through a helper must call audit itself), the per-route tests prove
+the call runs.
 """
 import ast
 import inspect
@@ -703,7 +709,7 @@ git push -u origin w1a-audit-foundation
 - Modify: `backend/dcdash/api/scans.py` (`update_scope`, around lines 118-131)
 - Modify: `backend/dcdash/api/settings.py` (`put_billing`, around lines 102-113)
 - Modify: `backend/dcdash/api/dashboards.py` (`save_dashboard`, around lines 205-235)
-- Modify the existing tests that assert the old shapes: `backend/tests/test_api_tariffs.py` (around line 213), `test_api_scans.py` (line 60 area), `test_api_settings.py` (line 104 area), `test_api_dashboards.py` (lines 255, 325, 414-418)
+- Modify the existing tests that assert the old shapes: `backend/tests/test_api_tariffs.py` (`test_changes_are_audited_with_the_tariff_details`, lines 202-218), `test_api_settings.py` (line 104 area), `test_api_dashboards.py` (lines 255, 325, 414-418). `test_api_scans.py` only gets a new test appended: its existing `test_scope_crud_and_audit` asserts action names only, and its PATCH really changes name and ports, so it keeps passing.
 
 **Interfaces:**
 - Consumes: `audit_change(db, user_id, action, subject, before, after, *, always=False) -> bool`, `plain`, from `dcdash/core/audit.py` (Task 2).
@@ -740,7 +746,22 @@ async def test_tariff_update_records_before_and_after_and_skips_a_no_op(client, 
     }
 ```
 
-Append to `backend/tests/test_api_scans.py` (check how the file creates a scope, reuse its helper or payload):
+In `backend/tests/test_api_tariffs.py` the existing `test_changes_are_audited_with_the_tariff_details` (lines 202-218) asserts the old flat `tariff.updated` detail and that the deleted row equals the updated one. Replace its last two detail assertions with (`panel` is the asset id the test already uses; keep its other lines):
+
+```python
+    assert rows[1]["detail"] == {
+        "tariff_id": tariff["id"], "asset_id": panel,
+        "before": {"rate_per_kwh": 0.12, "effective_from": "2026-10-01"},
+        "after": {"rate_per_kwh": 0.2, "effective_from": "2026-10-05"},
+    }
+    assert rows[2]["detail"] == {
+        "tariff_id": tariff["id"], "asset_id": panel, "rate_per_kwh": 0.2, "effective_from": "2026-10-05",
+    }
+```
+
+(Read the test first: if its variable names or values differ from `panel`, `0.12`, `0.2`, `2026-10-01`, `2026-10-05`, use the test's own values; the shape is what changes. The `tariff.deleted` row keeps its flat shape, so it no longer equals the updated row.)
+
+Append to `backend/tests/test_api_scans.py`. Keep the explicit payload below; do not switch to the file's `create_scope` helper, which sends ports `[9000, 4840]` and would change the expected `before.ports`:
 
 ```python
 async def test_scope_update_audits_before_and_after_and_skips_no_ops(client, db):
@@ -1107,7 +1128,7 @@ git push -u origin w1a-audit-foundation
 
 Design (the owner approved it; do not redesign):
 - Success: `login.succeeded {client}` joins the request transaction with the new session, so if the audit write fails the sign-in fails (fail closed, 500).
-- Failure: the request transaction is rolled back on the 401, so the row goes through its own short session and commit. It is best effort: any exception is logged and swallowed, the 401 is still returned.
+- Failure: the request transaction is rolled back on the 401, so the row goes through its own short session and commit. It is best effort: any exception is logged and swallowed, the 401 is still returned. The route first reads the ids it needs, then calls `await db.rollback()` to give its pooled connection back, and only then writes the row, so a failure holds one connection, not two (the pool is 5 plus 10 overflow with a 30 s timeout; a burst of failing sign-ins must not be able to exhaust it).
 - Attribution: the lookup finds the account by exact username WITHOUT the `active` filter. Active account: `reason: wrong_password`. Inactive: `reason: account_inactive`, still attributed (`user_id` set). No account: `reason: unknown_account`, `user_id` null, and the typed name is stored nowhere. The password check still runs against `DUMMY_HASH` for inactive and unknown accounts (timing unchanged).
 - Volume: the existing `LoginLimiter` stops a `host:username` key after 5 failures, so at most 5 rows per key and window, and a blocked attempt (429) writes nothing. The fifth failure writes `login.locked` instead of `login.failed`. Two global budgets of 30 rows per 300 s (failures; lockouts) bound the rest; a refused row is counted and the next row that is written carries `suppressed_before: N`. State is in memory (like the limiter; one api worker), so an api restart resets it.
 - `client` = the last `X-Forwarded-For` entry (Caddy, the only way to reach the api, sets that header itself; same trust as the `X-Forwarded-Proto` handling in `api/auth.py`), else the socket peer; at most 64 characters.
@@ -1273,8 +1294,11 @@ In `backend/tests/helpers.py`, `login_as` ends with its status assert; add after
 
 ```python
     # The sign-in wrote a login.succeeded audit row. Tests that list or count audit rows are about other actions, so
-    # drop it here; the sign-in tests (test_security_events.py) call /api/login themselves and keep theirs.
-    await db.execute("DELETE FROM audit_log WHERE action = 'login.succeeded'")
+    # drop this user's rows here; the sign-in tests (test_security_events.py) call /api/login themselves and keep theirs.
+    await db.execute(
+        "DELETE FROM audit_log WHERE action = 'login.succeeded' AND user_id = (SELECT id FROM users WHERE username = $1)",
+        username,
+    )
 ```
 
 Remove `"POST /api/login"` from `PENDING` in `tests/test_audit_coverage.py`.
@@ -1293,6 +1317,8 @@ Create `backend/dcdash/api/security_events.py`:
 
 A failed sign-in answers 401 and the request's transaction is rolled back, so its audit row cannot join it: it goes
 through a short session of its own. That write is best effort (it is logged and swallowed; the 401 still goes out).
+The caller releases its request connection first (`await db.rollback()`), so a failure needs one pooled connection,
+not two: otherwise a burst of failing sign-ins could hold the whole pool while each waits for a second connection.
 The budgets are in memory like the LoginLimiter and assume one api worker; an api restart resets them.
 """
 import logging
@@ -1344,7 +1370,8 @@ def client_address(request: Request) -> str:
 
     Caddy is the only way to reach the api and sets X-Forwarded-For itself (the same trust the X-Forwarded-Proto handling
     in api/auth.py relies on), so the last entry is the real client. Without the header (tests, a direct run) the
-    socket peer is used. Capped at 64 characters so a hostile header cannot bloat the row.
+    socket peer is used. Capped at 64 characters so a hostile header cannot bloat the row. On a run without Caddy the
+    header can be forged: `client` is then a hint, not evidence.
     """
     forwarded = request.headers.get("x-forwarded-for", "").rsplit(",", 1)[-1].strip()
     peer = request.client.host if request.client else "-"
@@ -1408,9 +1435,11 @@ async def login(
     if not verify_password(stored_hash, body.password) or user is None:
         limiter.record_failure(key)
         reason = "wrong_password" if user is not None else "account_inactive" if found is not None else "unknown_account"
+        found_id = found.id if found is not None else None  # read before the rollback expires the instances
+        locked = limiter.blocked(key)
+        await db.rollback()  # free this request's pooled connection before the failure row takes one of its own
         await sign_in_events.audit_sign_in_failure(
-            via="login", user_id=found.id if found is not None else None, reason=reason,
-            client=client_address(request), locked=limiter.blocked(key),
+            via="login", user_id=found_id, reason=reason, client=client_address(request), locked=locked,
         )
         raise HTTPException(401, "invalid username or password")
     limiter.reset(key)
@@ -1425,9 +1454,11 @@ In `change_my_password`, replace the wrong-password branch:
 ```python
     if not verify_password(user.password_hash, body.current_password):
         limiter.record_failure(key)
+        user_id = user.id  # read before the rollback expires the instance
+        locked = limiter.blocked(key)
+        await db.rollback()  # free this request's pooled connection before the failure row takes one of its own
         await sign_in_events.audit_sign_in_failure(
-            via="password_change", user_id=user.id, reason=None,
-            client=client_address(request), locked=limiter.blocked(key),
+            via="password_change", user_id=user_id, reason=None, client=client_address(request), locked=locked,
         )
         raise HTTPException(401, "current password is incorrect")
 ```
@@ -1435,7 +1466,32 @@ In `change_my_password`, replace the wrong-password branch:
 - [ ] **Step 4: Run to verify they pass, and find what else a sign-in row disturbs**
 
 Run: `cd backend && uv run pytest tests/test_security_events.py tests/test_audit_coverage.py tests/test_auth.py tests/test_security.py tests/test_api_me_password.py tests/test_api_audit.py tests/test_api_scans.py tests/test_api_dashboards.py -q`
-Expected: pass. Any other test that fails because it counted every `audit_log` row after a direct `/api/login`: fix the test to filter by action (do not weaken the new tests). Report each one.
+Expected: pass. Any other test that fails because it counted every `audit_log` row after a direct `/api/login`: fix the test to filter by action (do not weaken the new tests), add that file to the `git add` line below, and report each one. (The planning review found none: every existing whole-table count goes through `login_as`.)
+
+Also add a test of the connection release to `test_security_events.py` (it pins the review's pool finding):
+
+```python
+async def test_a_failed_sign_in_gives_its_request_connection_back_before_writing_the_row(client, db, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    order: list[str] = []
+    real_rollback = AsyncSession.rollback
+
+    async def spy_rollback(self):
+        order.append("rollback")
+        return await real_rollback(self)
+
+    real_failure = sign_in_events.audit_sign_in_failure
+
+    async def spy_failure(**kwargs):
+        order.append("failure row")
+        return await real_failure(**kwargs)
+
+    monkeypatch.setattr(AsyncSession, "rollback", spy_rollback)
+    monkeypatch.setattr(sign_in_events, "audit_sign_in_failure", spy_failure)
+    assert (await client.post("/api/login", json={"username": "nobody", "password": "whatever1"})).status_code == 401
+    assert order[:2] == ["rollback", "failure row"]
+```
 
 - [ ] **Step 5: Commit**
 
@@ -1469,13 +1525,17 @@ Append to `backend/tests/test_api_storage.py` (it defines `FULL` and imports `lo
 ```python
 async def test_a_storage_save_is_audited_with_every_field_even_when_nothing_changed(client, db):
     await login_as(client, db)
-    changed = {**FULL, "raw_retention_days": 45, "rollup_1m_retention_days": 800}
+    changed = {**FULL, "raw_retention_days": 60, "rollup_1m_retention_days": 900}  # FULL itself has 45 and 800
     assert (await client.put("/api/settings/storage", json=changed)).status_code == 200
     assert (await client.put("/api/settings/storage", json=changed)).status_code == 200  # same values again
     rows = await db.fetch("SELECT actor_name, detail FROM audit_log WHERE action = 'storage.changed' ORDER BY id")
     assert len(rows) == 2 and rows[0]["actor_name"] == "admin"
     assert rows[0]["detail"]["policies_reapplied"] is True
-    assert rows[0]["detail"]["before"]["raw_retention_days"] == FULL["raw_retention_days"]
+    seeded = {  # the storage row the db fixture seeds (conftest.py)
+        "raw_retention_days": 30, "compress_after_days": 7, "rollup_1m_retention_days": 730,
+        "disk_capacity_gb": 100, "warn_threshold_pct": 80,
+    }
+    assert rows[0]["detail"]["before"] == seeded  # disk_capacity_gb comes back as 100.0, equal to 100
     assert rows[0]["detail"]["after"] == changed
     assert rows[1]["detail"]["before"] == changed and rows[1]["detail"]["after"] == changed
 
@@ -1986,7 +2046,7 @@ Read the lines first. Replace the sentences that say user management, source edi
 - Around line 100 (the sidebar bullet) make it: "**Audit** (admin): the read-only audit log, newest first, 50 entries per page. Every change a user makes is recorded with who did it (the name stays even after the account is deleted), when, and for updates the values before and after; sign-in successes, failures and lockouts are recorded too."
 - Around lines 212-214 (the numbered "Audit log" item) replace "Scope changes, scan start and finish and every accepted mapping are recorded with the user and time. Phase 1 actions (user management, source edits and so on) are not audited." with a paragraph that lists what is audited: users (create, role, active, password reset), own password changes, first-run setup, sign-ins (success, failure, lockout), site timezone, currency, storage settings (every save), assets, mappings, sources (create, edit, delete, test, browse), tariffs, dashboards, scopes, scans and accepted discoveries; and that never recorded are passwords, source secrets and credentials inside URLs (a marker shows that a secret changed), a sign-in with an unknown username (only that one happened, from which address), logging out and node positions on the Discovery graph. Add one sentence: failed sign-ins are capped at 30 rows per 5 minutes, then counted on the next row.
 - Around lines 279, 353 and 361: where the text says tariff/currency/dashboard changes "appear in the Audit log" or lists expected e2e entries, keep the sentences true (extend them only if they now understate what is audited).
-- The upgrade section (around lines 485-533) names migration revisions (`0003`, `0004 (head)`): update every statement that makes `0004` the expected head to `0005`, and add one sentence that migration `0005` adds two columns and a trigger to `audit_log`, is fast and needs no pre-check. Do not touch the 0004 refusal steps.
+- The Phase 3 upgrade section (README lines 483-596; read it) is the Phase 2 to Phase 3 procedure and its "Going back" text reasons about a schema of exactly `0004`: leave it as it is, apart from two sentences. In its step 3 write "must print the head revision (`0005 (head)` since W1a)", and in its step 5 write "returns `0005`" (find them by their wording, not by line number). Then add a short new section after it, "Upgrading to W1a (migration 0005)": take a backup with `scripts/backup.sh`, then rebuild and start with `docker compose up -d --build`; migration `0005` adds two columns, a backfill and a trigger to `audit_log`, runs in a moment and needs no pre-check; verify that `alembic current` prints `0005 (head)`; going back means restoring the backup (the same `scripts/restore.sh` steps as in the Phase 3 section).
 
 - [ ] **Step 3: Spec**
 
@@ -2015,7 +2075,7 @@ Same method as W0b. Nothing here is done by an implementer. Every container oper
 1. **Full suites once:** `cd backend && uv run pytest -q` (10 to 14 minutes) and `cd frontend && npx vitest run && npm run typecheck`. Fix nothing yet; collect failures. Expect most findings to be tests that counted every audit row after a direct sign-in.
 2. **Whole-branch Opus review** (prompt in a file, effort High): the full diff `main..w1a-audit-foundation`, with this plan's Review Focus as the checklist.
 3. **ONE fix wave** for the Critical and Important findings (Sonnet), then a scoped Opus re-review (effort medium) of the fix diff; re-run only the touched test files.
-4. **Migration rehearsal on a copy of the dev data (the "verified backup"):** `scripts/backup.sh` against the dev stack (read-only: it runs `pg_dump` inside the running `db`), then in a scratch project `dcdash_e2e_w1a_mig`: start only `db`, restore the dump with `pg_restore` directly (never `scripts/restore.sh`, it is not project-isolated), run `alembic upgrade head` with the branch image (`dc run --rm --no-deps api alembic upgrade head`), and check: `alembic_version` is `0005`, `count(*)` of `audit_log` equals the dump's, `count(actor_name) = count(user_id)`, the trigger exists, and one test insert gets a snapshot. Tear the project down. Record everything in `drill-migration.log`.
+4. **Migration rehearsal on a copy of the dev data (the "verified backup"):** `scripts/backup.sh` against the dev stack (read-only: it runs `pg_dump` inside the running `db`), then in a scratch project `dcdash_e2e_w1a_mig`: start only `db`, restore the dump with the same sequence `scripts/restore.sh` uses but written out in `drill-migration.sh` against the scratch project (never run `scripts/restore.sh` itself, it is not project-isolated): `DROP DATABASE IF EXISTS dcdash WITH (FORCE)` and `CREATE DATABASE dcdash OWNER dcdash` from the `postgres` database, then `CREATE EXTENSION IF NOT EXISTS timescaledb; SELECT timescaledb_pre_restore();`, then `pg_restore -U dcdash -d dcdash --no-owner < dump`, then `SELECT timescaledb_post_restore();`, recording `pg_restore`'s exit code and log in `drill-migration.log`; then run `alembic upgrade head` with the branch image (`dc run --rm --no-deps api alembic upgrade head`), and check: `alembic_version` is `0005`, `count(*)` of `audit_log` equals the dump's, `count(actor_name) = count(user_id)`, the trigger exists, and one test insert gets a snapshot. Tear the project down. Record everything in `drill-migration.log`.
 5. **Isolated e2e** on a scratch stack `dcdash_e2e_w1a_close` (copy `e2e-close.sh` from the W0b workspace, change the project name and paths): `npm run e2e` against `$DRILL_BASE` must pass both specs.
 6. **Merge:** `git merge --no-ff w1a-audit-foundation` into `main`, `git push origin main` (never `--force`).
 7. **Docs commit on main:** roadmap W1a row marked DONE with the merge commit and the evidence; S10-1, S2-2 and S3-5 closed in `manual-test-notes.md` (S1-2 stays open for W3d, note that the snapshot now exists); BL:48, BL:60, BL:111 and F6 marked done in `backlog.md`; a new backlog section I for the leftovers of the final review; the memory file `dc-dashboard-project.md` updated.
@@ -2031,4 +2091,9 @@ Opus reviewers at effort High (a scoped fix re-review at medium), implementers o
 
 ## Review log
 
-(To be filled in with what the Opus plan review changed.)
+Opus review A (whole plan, draft 1): the gate's route table (35 write routes: 17 pending, 4 exempt, 14 audited, each audited route calling `audit` in its own body), the migration SQL under Alembic, the trigger semantics, the helper semantics and almost every new test were checked against the real code and found correct. Findings folded into draft 2:
+
+- **M1** Task 6: the storage test compared `before` with FULL's 45, but the `db` fixture seeds 30; the "changed" values were identical to FULL. Fixed (60/900 and the seeded row).
+- **M2** Task 3: the existing `test_changes_are_audited_with_the_tariff_details` asserts the old flat shape; replacement assertions added, the wrong `test_api_scans.py` entry dropped from the Files list.
+- **M3** Task 5: a failure row opened a second pooled connection while the request held its first (a burst could stall the API for the pool timeout). The route now captures the ids, rolls back, then writes the row; a test pins the order.
+- m1 `login_as` deletes only its own user's sign-in row; m2 changed test files go into the commit; m3 Task 1 runs the whole `test_schema_tiers.py`; m4 `SET search_path = public` on the trigger function; m5 the rehearsal follows `restore.sh`'s TimescaleDB steps; m6 the Phase 3 README section is left alone apart from two sentences plus a new short "Upgrading to W1a" section; m7 the no-op rule wording; m8 the forged-header caveat; m9 the frontend type waits for W3c; m10 `safe_config` limits documented; m11 the explicit scope payload is kept; m12 the gate's "syntactic" caveat documented.
