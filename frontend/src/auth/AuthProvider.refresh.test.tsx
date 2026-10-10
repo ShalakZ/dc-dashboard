@@ -268,16 +268,159 @@ describe("AuthProvider refresh after a 403", () => {
     expect(calls.some((c) => c.path === "/api/login")).toBe(true);
     expect(meCalls()).toBe(1);
   });
+});
 
-  it("shares the 10 second limit with the focus refresh", async () => {
-    await open();
-    await focus();
-    await waitFor(() => expect(meCalls()).toBe(2));
-    await userEvent.setup({ advanceTimers: later }).click(screen.getByRole("button", { name: "load assets" }));
-    await settle();
+describe("AuthProvider refresh after a 403 inside the 10 second window", () => {
+  // Real fake timers here (the tests above fake only Date): the trailing check is a timer. No waitFor and no user-event, which
+  // would wait on the faked clock; every step is an act around advancing the clock, which also lets the mocked requests finish.
+  const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+  const loadAssets = () => act(() => { fireEvent.click(screen.getByRole("button", { name: "load assets" })); });
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-10T12:00:00Z"));
+  });
+
+  async function openOnFakeTimers() {
+    calls = mockFetch(routes());
+    const view = renderWithProviders(<Harness capture={{ seen: new Set() }} />);
+    await advance(10);
+    expect(screen.getByText(`u (${server.role})`)).toBeInTheDocument();
+    return view;
+  }
+
+  it("shares the 10 second limit with the focus refresh: one check now, one trailing check at the end of the window", async () => {
+    await openOnFakeTimers();
+    expect(meCalls()).toBe(1);
+    await focus(); // t = 0: the check now
+    await advance(0);
     expect(meCalls()).toBe(2);
-    later(10_500);
-    await userEvent.setup({ advanceTimers: later }).click(screen.getByRole("button", { name: "load assets" }));
-    await waitFor(() => expect(meCalls()).toBe(3));
+    await advance(3_000);
+    await loadAssets(); // t = 3 s: a 403 inside the window is not answered now ...
+    await advance(0);
+    expect(meCalls()).toBe(2);
+    await advance(6_900); // t = 9.9 s
+    expect(meCalls()).toBe(2);
+    await advance(100); // ... but at the end of the window (t = 10 s)
+    expect(meCalls()).toBe(3);
+    await advance(60_000); // and that was the only one
+    expect(meCalls()).toBe(3);
+  });
+
+  it("finds the demotion behind a 403 that landed inside the window: nothing at 5 s, one fetch at 10 s, then the banner", async () => {
+    await openOnFakeTimers();
+    await focus(); // t = 0, same role
+    await advance(0);
+    expect(meCalls()).toBe(2);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await advance(2_000);
+    server.role = "viewer"; // t = 2 s: an administrator demotes this user
+    await advance(3_000);
+    await loadAssets(); // t = 5 s: the 403 is the first sign of it
+    await advance(0);
+    expect(meCalls()).toBe(2);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await advance(5_000); // t = 10 s
+    expect(meCalls()).toBe(3);
+    expect(screen.getByRole("status")).toHaveTextContent("Your role changed from operator to viewer");
+  });
+
+  it("gives a burst of five 403s inside the window exactly one trailing check", async () => {
+    await openOnFakeTimers();
+    await focus();
+    await advance(0);
+    expect(meCalls()).toBe(2);
+    for (let i = 0; i < 5; i += 1) {
+      await advance(500);
+      await loadAssets();
+    }
+    await advance(0);
+    expect(meCalls()).toBe(2);
+    await advance(8_000); // t = 10.5 s
+    expect(meCalls()).toBe(3);
+    await advance(60_000);
+    expect(meCalls()).toBe(3);
+  });
+
+  it("starts a new window after the trailing check: the next 403 waits for its end again", async () => {
+    await openOnFakeTimers();
+    await focus();
+    await advance(0);
+    await loadAssets();
+    await advance(10_000); // the trailing check at t = 10 s
+    expect(meCalls()).toBe(3);
+    await advance(4_000);
+    await loadAssets(); // t = 14 s: inside the window that began at 10 s
+    await advance(0);
+    expect(meCalls()).toBe(3);
+    await advance(6_000); // t = 20 s
+    expect(meCalls()).toBe(4);
+  });
+
+  it("asks nothing at the end of the window when the page was unmounted before it", async () => {
+    const view = await openOnFakeTimers();
+    await focus();
+    await advance(0);
+    await loadAssets();
+    await advance(0);
+    view.unmount();
+    await advance(60_000);
+    expect(meCalls()).toBe(2);
+  });
+
+  it("asks nothing at the end of the window when the user signed out before it, and leaves no timer behind", async () => {
+    await openOnFakeTimers();
+    await focus();
+    await advance(0);
+    const timers = vi.getTimerCount();
+    await loadAssets();
+    await advance(0);
+    expect(vi.getTimerCount()).toBe(timers + 1); // the one trailing check
+    await act(() => { fireEvent.click(screen.getByRole("button", { name: "sign out" })); });
+    await advance(0);
+    expect(screen.getByText("signed out")).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(timers);
+    await advance(60_000);
+    expect(meCalls()).toBe(2);
+  });
+
+  it("schedules nothing while nobody is signed in", async () => {
+    server.me = 401;
+    calls = mockFetch(routes());
+    renderWithProviders(<Harness capture={{ seen: new Set() }} />);
+    await advance(10);
+    expect(screen.getByText("signed out")).toBeInTheDocument();
+    await loadAssets();
+    await advance(0);
+    const timers = vi.getTimerCount();
+    await loadAssets();
+    await focus();
+    await advance(0);
+    expect(vi.getTimerCount()).toBe(timers);
+    await advance(60_000);
+    expect(meCalls()).toBe(1);
+  });
+
+  it("still drops the answer of a trailing check that arrives after the user signed out", async () => {
+    await openOnFakeTimers();
+    const inner = fetch;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).startsWith("/api/me") ? gate.then(() => inner(input, init)) : inner(input, init));
+    server.role = "viewer";
+    await focus(); // t = 0: held at the gate
+    await advance(0);
+    await loadAssets();
+    await advance(10_000); // the trailing check is out too, and held at the gate
+    await act(() => { fireEvent.click(screen.getByRole("button", { name: "sign out" })); });
+    await advance(0);
+    expect(screen.getByText("signed out")).toBeInTheDocument();
+    release();
+    await advance(10);
+    expect(meCalls()).toBe(3); // the page's own load, the focus check and the trailing check: both of the latter were really out
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByText("signed out")).toBeInTheDocument();
   });
 });

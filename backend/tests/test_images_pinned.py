@@ -258,6 +258,23 @@ def test_update_is_idempotent_and_replaces_an_older_digest(tmp_path):
         assert re.sub(r"@sha256:[0-9a-f]{64}", "", text) == re.sub(r"@sha256:[0-9a-f]{64}", "", once[name].decode())
 
 
+@pytest.mark.parametrize("quote", ['"', "'"], ids=["double", "single"])
+def test_update_pins_a_quoted_image_reference_and_keeps_the_quotes(tmp_path, quote):
+    tree = make_tree(tmp_path)
+    path = tree / "compose.yaml"
+    plain = "image: timescale/timescaledb:2.30.2-pg16\n"
+    assert plain in path.read_text()
+    path.write_text(path.read_text().replace(plain, f"image: {quote}timescale/timescaledb:2.30.2-pg16{quote}\n"))
+    result, _ = run_script(tree, "--update")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"image: {quote}timescale/timescaledb:2.30.2-pg16@sha256:{A64}{quote}\n" in path.read_text()
+    assert run_script(tree, "--check")[0].returncode == 0
+    # a quoted, already pinned line takes a newer digest in place (the old digest must not swallow the closing quote)
+    newer, _ = run_script(tree, "--update", FAKE_HEX="c" * 64)
+    assert newer.returncode == 0, newer.stdout + newer.stderr
+    assert f"image: {quote}timescale/timescaledb:2.30.2-pg16@sha256:{'c' * 64}{quote}\n" in path.read_text()
+
+
 def test_update_prints_a_before_and_after_table(tmp_path):
     tree = make_tree(tmp_path)
     result, _ = run_script(tree, "--update")

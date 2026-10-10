@@ -1,4 +1,4 @@
-import { ApiError, notifyUnauthorized } from "../api/client";
+import { ApiError, notifyForbidden, notifyUnauthorized } from "../api/client";
 
 /** A filename must stay a plain name: path separators from either spelling of the header become underscores. */
 const safeName = (name: string) => name.replace(/[\\/]/g, "_");
@@ -31,6 +31,7 @@ export async function downloadCsv(path: string, init: { method?: "GET" | "POST";
   const response = await fetch(path, request);
   if (!response.ok) {
     if (response.status === 401) notifyUnauthorized(path);
+    if (response.status === 403) notifyForbidden(path);
     const text = await response.text();
     let detail: unknown = text || null;
     try {

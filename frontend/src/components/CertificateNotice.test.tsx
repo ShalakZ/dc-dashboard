@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import type { TlsStatus } from "../api/types";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
@@ -66,6 +66,24 @@ describe("CertificateNotice", () => {
     mockFetch({ ...routes(status({ state: "expiring", days_left: 5 })), "GET /api/site": { status: 500, body: { detail: "boom" } } });
     renderWithProviders(<CertificateNotice />, { route: "/assets", path: "/assets" });
     expect(await screen.findByRole("status")).toHaveTextContent("expires on 2026-11-09 11:03:11");
+  });
+
+  it("holds the notice back while the site time zone is still pending, then shows it on the site clock", async () => {
+    const calls = mockFetch(routes(status({ state: "expiring", days_left: 29 })));
+    const answering = globalThis.fetch;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      return url.includes("/api/site") ? gate.then(() => answering(input, init)) : answering(input, init);
+    }));
+    renderWithProviders(<CertificateNotice />, { route: "/assets", path: "/assets" });
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/tls/status")).toBe(true));
+    await act(() => new Promise<void>((resolve) => setTimeout(resolve, 50))); // the status has been answered; the site has not
+    expect(calls.some((c) => c.path === "/api/site")).toBe(false);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByRole("status")).toHaveTextContent("expires on 2026-11-09 14:03:11");
   });
 
   it.each([

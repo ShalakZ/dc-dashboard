@@ -5,8 +5,10 @@
 # --check   needs no network and no docker. Exit 1, naming the file, when an external reference is unpinned or its digest is malformed,
 #           when a reference in a file is not in the table below, or when a table reference is missing from its file.
 # --update  asks the registry for the digest of each tag (docker buildx imagetools inspect <ref>, the digest is the first `Digest:`
-#           line), rewrites the files and prints a before/after table. Nothing is written unless all five answers are valid
-#           digests. Idempotent. Run it before a release or monthly, rebuild, run the tests, commit.
+#           line), rewrites the files in place, one after the other, and prints a before/after table. Nothing is written unless
+#           all five answers are valid digests. If the check of the rewritten files then fails, the files stay rewritten and the
+#           script says so (exit 1): `git diff` shows the change, `git checkout` on the three files undoes it. Idempotent. Run it
+#           before a release or monthly, rebuild, run the tests, commit.
 # Exit 2: bad usage.
 set -euo pipefail
 export LC_ALL=C   # [0-9a-f] must not match capitals
@@ -123,14 +125,16 @@ printf '%-20s %-36s %-14s %-14s\n' file reference before after
 for i in "${!PINS[@]}"; do
   f="${PINS[$i]%% *}"; ref="${PINS[$i]#* }"
   old="$(refs_in "$f" | awk -v r="$ref" '{ n = split($0, a, "@"); if (a[1] == r) { print (n > 1 ? a[2] : "none"); exit } }')"
-  # only the FROM / COPY / image: lines, and only the whole reference (a following tag character would make it another image)
+  # only the FROM / COPY / image: lines, and only the whole reference (a following tag character would make it another image);
+  # a single or double quote around the reference (image: "ref") stays where it is
   re="$(printf '%s' "$ref" | sed 's/[.]/\\./g')"
-  sed -E "/^[[:space:]]*(FROM|COPY|image:)[[:space:]]/ s#(^|[[:space:]=])${re}(@[^[:space:]]*)?([[:space:]]|\$)#\1${ref}@${NEW[$i]}\3#g" "$f" > "$TMP"
+  q=$'["\']'
+  sed -E "/^[[:space:]]*(FROM|COPY|image:)[[:space:]]/ s#(^|[[:space:]=])(${q}?)${re}(@[^[:space:]\"']*)?(${q}?)([[:space:]]|\$)#\1\2${ref}@${NEW[$i]}\4\5#g" "$f" > "$TMP"
   cat "$TMP" > "$f"   # not mv: the file keeps its mode
   printf '%-20s %-36s %-14s %-14s%s\n' "$f" "$ref" "$(short "$old")" "$(short "${NEW[$i]}")" "$([[ $old == "${NEW[$i]}" ]] && echo '  (unchanged)')"
 done
 
 check_structure
 check_digests
-[[ $fail -eq 0 ]] || { echo "pin_images: the files do not pass --check after the rewrite; see git diff" >&2; exit 1; }
+[[ $fail -eq 0 ]] || { echo "pin_images: the files were rewritten but do not pass --check; see git diff (git checkout backend/Dockerfile frontend/Dockerfile compose.yaml undoes it)" >&2; exit 1; }
 echo "pin_images: done; review git diff, rebuild, run the tests, commit"

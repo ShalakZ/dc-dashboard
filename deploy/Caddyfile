@@ -1,6 +1,11 @@
 :80 {
 	import /etc/caddy/security-headers.caddy
 
+	handle_errors {
+		import /etc/caddy/security-headers.caddy
+		respond "{err.status_code} {err.status_text}"
+	}
+
 	handle /api/* {
 		reverse_proxy api:8000 {
 			flush_interval -1

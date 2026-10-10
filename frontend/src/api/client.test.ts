@@ -1,5 +1,5 @@
 import { mockFetch } from "../test/fetchMock";
-import { api, ApiError, setUnauthorizedHandler } from "./client";
+import { api, ApiError, notifyForbidden, setForbiddenHandler, setUnauthorizedHandler } from "./client";
 
 describe("api client", () => {
   it("sends JSON with same-origin credentials and parses the reply", async () => {
@@ -16,6 +16,13 @@ describe("api client", () => {
     mockFetch({ "GET /api/me": { status: 401, body: { detail: "not authenticated" } } });
     await expect(api.get("/api/me")).rejects.toMatchObject({ status: 401, detail: "not authenticated" });
     await expect(api.get("/api/me")).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("reads Caddy's plain-text 502 (the api is restarting) as an ApiError, the way it read the empty body before", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("502 Bad Gateway", { status: 502, headers: { "content-type": "text/plain" } })));
+    await expect(api.get("/api/sources")).rejects.toMatchObject({ status: 502, detail: "502 Bad Gateway", message: "502 Bad Gateway" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 502 })));
+    await expect(api.get("/api/sources")).rejects.toMatchObject({ status: 502, message: "request failed with status 502" });
   });
 
   it("calls the unauthorized handler on 401, except for auth endpoints", async () => {
@@ -39,6 +46,47 @@ describe("api client", () => {
     } finally {
       setUnauthorizedHandler(null);
     }
+  });
+
+  it("calls the forbidden handler on 403, except for auth endpoints, and not once it is set to null", async () => {
+    const handler = vi.fn();
+    setForbiddenHandler(handler);
+    try {
+      mockFetch({
+        "GET /api/sources": { status: 403, body: { detail: "insufficient role" } },
+        "GET /api/me": { status: 403, body: { detail: "forbidden" } },
+        "POST /api/login": { status: 403, body: { detail: "account disabled" } },
+        "POST /api/me/password": { status: 403, body: { detail: "forbidden" } },
+        "GET /api/assets": { status: 401, body: { detail: "not authenticated" } },
+      });
+      await expect(api.get("/api/sources")).rejects.toMatchObject({ status: 403 });
+      expect(handler).toHaveBeenCalledTimes(1);
+      await expect(api.get("/api/me")).rejects.toBeInstanceOf(ApiError);
+      await expect(api.post("/api/login", {})).rejects.toBeInstanceOf(ApiError);
+      await expect(api.post("/api/me/password", {})).rejects.toBeInstanceOf(ApiError);
+      await expect(api.get("/api/assets")).rejects.toMatchObject({ status: 401 }); // not a 403
+      expect(handler).toHaveBeenCalledTimes(1);
+      setForbiddenHandler(null);
+      await expect(api.get("/api/sources")).rejects.toMatchObject({ status: 403 });
+      expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      setForbiddenHandler(null);
+    }
+  });
+
+  it("notifyForbidden follows the same rules for raw fetches: a handler call, except for auth endpoints and query strings of them", () => {
+    const handler = vi.fn();
+    setForbiddenHandler(handler);
+    try {
+      notifyForbidden("/api/billing/costs.csv?month=2026-10");
+      expect(handler).toHaveBeenCalledTimes(1);
+      notifyForbidden("/api/login");
+      notifyForbidden("/api/me?x=1");
+      expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      setForbiddenHandler(null);
+    }
+    expect(() => notifyForbidden("/api/sources")).not.toThrow(); // no handler registered
   });
 
   it("put sends JSON body with PUT", async () => {

@@ -104,3 +104,41 @@ def test_the_upgrade_runbook_says_how_to_re_pin_the_images_and_how_to_keep_uncha
     # a hand-typed `up -d --build` needs the variable first, in both shells; the setup scripts set it themselves
     assert "export BUILDX_NO_DEFAULT_ATTESTATIONS=1" in runbook
     assert "$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'" in runbook
+    # step 4 (the hand-typed `up -d --build`) points at that paragraph
+    apply = runbook.split("4. **Apply.**")[1].split("5. **Verify.**")[0]
+    assert "BUILDX_NO_DEFAULT_ATTESTATIONS" in apply and "Upgrading images" in apply
+
+
+def flat(text: str) -> str:
+    """The text on one line, so a phrase may wrap across the README's hard line breaks."""
+    return " ".join(text.split())
+
+
+def test_the_runbook_says_the_first_start_after_the_pins_recreates_db():
+    # measured in a drill: the `image:` line of `db` gained the digest, so Compose recreated db (same image, data volume kept) once
+    runbook = flat(section(2, "Upgrading and going back"))
+    assert "The first `docker compose up -d` after the digests arrived recreates `db` as well as the other services, once" in runbook
+    assert "The database is unavailable for a short while" in runbook
+    assert "The data volume is kept" in runbook
+    assert 'Take a backup first, as for any upgrade (step 1 above, and "Backup and restore")' in runbook
+    assert "`db` is kept after that first time" in runbook  # the BUILDX paragraph no longer promises that db is never recreated
+
+
+def test_the_https_section_says_the_certificate_must_stay_readable_by_the_collector():
+    https = flat(section(3, "Optional HTTPS"))
+    assert "`fullchain.pem` must stay readable by everyone (mode 644)" in https
+    assert "the collector (uid 10001) reads the certificate" in https and "never reads the key" in https
+    assert "cannot be read" in https  # what the Settings page and the notice say when it is not
+
+
+def test_the_https_section_says_error_answers_carry_the_headers_and_how_to_enforce_the_policy_later():
+    https = flat(section(3, "Optional HTTPS"))
+    assert "That includes the error answer Caddy gives while the `api` restarts" in https and "`502 Bad Gateway`" in https
+    assert "`handle_errors`" in https
+    assert "rename `Content-Security-Policy-Report-Only` to `Content-Security-Policy` in `deploy/security-headers.caddy`" in https
+    assert "run the Playwright `headers` project first (it must stay at zero violations)" in https
+    assert "`docker compose up -d --build web`" in https
+    assert "`test_the_policy_is_report_only_on_purpose` in `backend/tests/test_caddy_headers.py`" in https
+    # the order: rename, then the Playwright project, then the rebuild
+    assert (https.index("rename `Content-Security-Policy-Report-Only`") < https.index("run the Playwright `headers` project")
+            < https.rindex("`docker compose up -d --build web`"))

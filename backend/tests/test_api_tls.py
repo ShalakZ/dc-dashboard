@@ -89,6 +89,15 @@ async def test_a_check_older_than_three_hours_is_unknown(client, db):
     assert (await client.get("/api/tls/status")).json()["state"] == "ok"
 
 
+async def test_the_three_hour_limit_is_where_the_docs_say_it_is(client, db):
+    await login_as(client, db, "admin")
+    await store(db, expires_in_days=90, checked_hours_ago=2 + 59 / 60)  # one minute inside the limit: still the real state
+    body = (await client.get("/api/tls/status")).json()
+    assert body["state"] == "ok" and body["days_left"] in (89, 90)
+    await store(db, expires_in_days=90, checked_hours_ago=3 + 1 / 60)  # one minute past it
+    assert (await client.get("/api/tls/status")).json()["state"] == "unknown"
+
+
 async def test_a_stale_error_row_is_unknown_too(client, db):
     await login_as(client, db, "admin")
     await store(db, error="cannot read /certs/fullchain.pem: boom", checked_hours_ago=5)

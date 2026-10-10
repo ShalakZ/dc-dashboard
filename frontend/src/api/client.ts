@@ -50,6 +50,11 @@ export function notifyUnauthorized(path: string): void {
   if (!isAuthPath(path)) onUnauthorized?.();
 }
 
+/** Tell the app a request was refused (a 403 from anything but the sign-in endpoints), so it can check whether the user's role has changed. Shared by `request` and raw fetches such as CSV downloads. */
+export function notifyForbidden(path: string): void {
+  if (!isAuthPath(path)) onForbidden?.();
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method, credentials: "same-origin", headers: {} };
   if (body !== undefined) {
@@ -67,7 +72,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   if (!response.ok) {
     if (response.status === 401) notifyUnauthorized(path);
-    if (response.status === 403 && !isAuthPath(path)) onForbidden?.();
+    if (response.status === 403) notifyForbidden(path);
     const detail = data && typeof data === "object" && "detail" in data ? (data as { detail: unknown }).detail : data;
     throw new ApiError(response.status, detail, data);
   }

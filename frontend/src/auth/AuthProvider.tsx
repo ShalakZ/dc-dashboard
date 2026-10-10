@@ -5,7 +5,7 @@ import { ROLE_LEVEL, type Role, type User } from "../api/types";
 
 export const RETURN_KEY = "dcdash.returnTo";
 
-/** At most one /api/me check per this long, whatever asks for it (focus, tab visible, a 403). */
+/** At most one /api/me check per this long, whatever asks for it (focus, tab visible, a 403). A request inside the window is answered at its end. */
 const ROLE_CHECK_GAP_MS = 10_000;
 
 interface AuthState {
@@ -31,13 +31,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // The latest signed-in user, for callbacks that must not depend on it. The role the page "loaded with" is this user's role.
   const userRef = useRef<User | null>(null);
   const lastRoleCheck = useRef<number | null>(null);
+  /** The one check that waits for the end of the 10 second window; further requests inside the window reuse it. */
+  const trailingCheck = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelTrailingCheck = useCallback(() => {
+    if (trailingCheck.current !== null) clearTimeout(trailingCheck.current);
+    trailingCheck.current = null;
+  }, []);
 
   /** Every change of who is signed in goes through here, so an announcement never outlives the session it was about. */
   const replaceUser = useCallback((next: User | null) => {
     userRef.current = next; // at once, so a focus event right after sign-in already finds the user
+    cancelTrailingCheck();
     setUser(next);
     setRoleChange(null);
-  }, []);
+  }, [cancelTrailingCheck]);
 
   const endSession = useCallback(() => {
     replaceUser(null);
@@ -45,13 +53,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [replaceUser, queryClient]);
 
   /** Ask the server who we are now, to notice a role changed under an open page. Never throws; does nothing while signed out. */
-  const checkRole = useCallback(async () => {
+  const askRole = useCallback(async () => {
     const loadedWith = userRef.current;
     if (!loadedWith) return;
-    const now = Date.now();
-    const sinceLast = lastRoleCheck.current === null ? Infinity : now - lastRoleCheck.current;
-    if (sinceLast >= 0 && sinceLast < ROLE_CHECK_GAP_MS) return;
-    lastRoleCheck.current = now;
+    lastRoleCheck.current = Date.now();
     try {
       const fresh = await api.get<User>("/api/me");
       if (userRef.current !== loadedWith) return; // signed out, or in as someone else, while the request was out
@@ -65,6 +70,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Any other failure (network, 5xx) says nothing about the role; the next focus tries again.
     }
   }, [endSession]);
+
+  /** Ask now, or, inside the window after the last check, once at its end: a 403 is often the first sign of a demotion, so it is not dropped. */
+  const checkRole = useCallback(() => {
+    if (!userRef.current) return;
+    const sinceLast = lastRoleCheck.current === null ? Infinity : Date.now() - lastRoleCheck.current;
+    if (sinceLast >= 0 && sinceLast < ROLE_CHECK_GAP_MS) {
+      trailingCheck.current ??= setTimeout(() => {
+        trailingCheck.current = null;
+        void askRole();
+      }, ROLE_CHECK_GAP_MS - sinceLast);
+      return;
+    }
+    cancelTrailingCheck(); // this check answers whatever was waiting
+    void askRole();
+  }, [askRole, cancelTrailingCheck]);
+
+  useEffect(() => cancelTrailingCheck, [cancelTrailingCheck]);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,15 +117,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [endSession]);
 
   useEffect(() => {
-    setForbiddenHandler(() => void checkRole());
+    setForbiddenHandler(checkRole);
     return () => setForbiddenHandler(null);
   }, [checkRole]);
 
   useEffect(() => {
     // checkRole does nothing while signed out, so these can stay registered for the life of the provider.
-    const onFocus = () => void checkRole();
+    const onFocus = () => checkRole();
     const onVisibility = () => {
-      if (document.visibilityState === "visible") void checkRole();
+      if (document.visibilityState === "visible") checkRole();
     };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisibility);

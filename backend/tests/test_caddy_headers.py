@@ -2,8 +2,9 @@
 
 Static checks on the files in the repository (no Docker, no Caddy): which headers the snippet sets, that the Content-Security-Policy
 is Report-Only and keeps `script-src 'self'` strict, that both Caddyfiles import the snippet in each of their site blocks (the
-`:80` redirect block of Caddyfile.tls included, so the redirect carries the headers too), and that the Dockerfile copies the
-snippet to the path the Caddyfiles import. frontend/e2e/headers.spec.ts and scripts/check_tls.sh check the real responses.
+`:80` redirect block of Caddyfile.tls included, so the redirect carries the headers too) and again inside each block's
+`handle_errors` (Caddy's own error answer, such as the 502 while the api restarts, would carry none otherwise), and that the
+Dockerfile copies the snippet to the path the Caddyfiles import. frontend/e2e/headers.spec.ts and scripts/check_tls.sh check the real responses.
 """
 import re
 import shlex
@@ -44,6 +45,32 @@ def blocks(text: str) -> list[tuple[str, list[str]]]:
         depth += line.count("{") - line.count("}")
         if depth == 0 and address:  # the closing brace of a site block
             found.append((address, directives))
+            address = ""
+    assert depth == 0, "unbalanced braces"
+    return found
+
+
+def handle_errors_bodies(text: str) -> list[tuple[str, list[str] | None]]:
+    """(address, the lines directly inside the site block's `handle_errors { ... }`, None when it has none) for every site block."""
+    found: list[tuple[str, list[str] | None]] = []
+    depth = 0
+    address, body, collecting = "", None, False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if depth == 0 and line.endswith("{") and line != "{":
+            address, body, collecting = line[:-1].strip(), None, False
+        elif depth == 1 and line == "handle_errors {":
+            body, collecting = [], True
+        elif depth == 2 and collecting:
+            if line == "}":
+                collecting = False
+            else:
+                body.append(line)
+        depth += line.count("{") - line.count("}")
+        if depth == 0 and address:
+            found.append((address, body))
             address = ""
     assert depth == 0, "unbalanced braces"
     return found
@@ -130,10 +157,26 @@ def test_every_site_block_imports_the_snippet(name):
 
 
 @pytest.mark.parametrize("name", list(CADDYFILES))
-def test_the_import_appears_only_as_a_site_level_directive(name):
+def test_every_site_block_answers_its_own_errors_with_the_headers(name):
+    # `header` runs only when the next handler writes; an error that reverse_proxy returns (502 while the api restarts) never
+    # does, so Caddy's own error answer needs the snippet again inside `handle_errors`
+    found = handle_errors_bodies((ROOT / "deploy" / name).read_text())
+    assert [address for address, _ in found] == CADDYFILES[name]
+    for address, body in found:
+        assert body is not None, f"{name}: the {address} block has no handle_errors"
+        assert f"import {IMPORT_PATH}" in body, f"{name}: the {address} handle_errors does not import the snippet"
+        assert any(line.startswith("respond ") for line in body), f"{name}: the {address} handle_errors answers nothing"
+
+
+@pytest.mark.parametrize("name", list(CADDYFILES))
+def test_the_import_appears_only_at_the_site_level_and_in_handle_errors(name):
     # inside a handle block it would cover only that route; the redirect and the static files must carry the headers too
-    lines = [line.strip() for line in (ROOT / "deploy" / name).read_text().splitlines()]
-    assert len([line for line in lines if line.startswith("import ")]) == len(CADDYFILES[name])
+    text = (ROOT / "deploy" / name).read_text()
+    site_level = sum(f"import {IMPORT_PATH}" in directives for _, directives in blocks(text))
+    in_errors = sum(body is not None and f"import {IMPORT_PATH}" in body for _, body in handle_errors_bodies(text))
+    every_import = len([line for line in text.splitlines() if line.strip().startswith("import ")])
+    assert site_level == in_errors == len(CADDYFILES[name])
+    assert every_import == site_level + in_errors
 
 
 # ---- the image --------------------------------------------------------------------------------------------------------
