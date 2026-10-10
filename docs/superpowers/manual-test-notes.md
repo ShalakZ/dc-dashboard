@@ -278,6 +278,12 @@ OpenSSL, so it proves nothing); `check_tls.sh` as written (not run, see S12-5); 
 - **S12-14 [gap] (Claude)** The Windows scripts (`setup.ps1`, `backup.ps1`, `restore.ps1`) have never been run; their
   logic mirrors the shell scripts (read side by side) but `backup.ps1` and `restore.ps1` depend on `cmd /c` binary
   redirection. They need one real run on a Windows machine with Docker before anyone relies on them.
+  **Closed by W2 Task 4 (2026-10-10).** All three scripts, plus a Task Scheduler task, were run for real on this Windows
+  machine (Docker Desktop, Windows PowerShell 5.1) in a throwaway project, from a redirected shell and from a console
+  window; exit codes, rotation, the copy folder marker and the `cmd /c` binary redirection all work. The drill found that
+  `restore.sh`/`restore.ps1` dropped the live database before reading the dump (fixed: the dump is read in full first),
+  that PowerShell 5.1 accepts `--keep 3`, and that a rebuild on an unchanged tree still recreates api, collector and web
+  (new image id each time). Details in the W2 plan's execution log for Task 4.
 
 Idle footprint of the dev stack (one sample): collector 94 MiB, api 155 MiB, db 242 MiB, web 14 MiB, simulator 116 MiB;
 CPU about 2 % in total. Without the simulator the stack idles under 0.5 GB of memory.
