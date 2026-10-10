@@ -170,6 +170,19 @@ one hour, `1h` beyond; the `series` response carries the chosen `tier` and the c
 continuous aggregates and policies configured from the Storage settings; no application code ever
 deletes readings.
 
+**Defaults and resets.** Next to Save the Storage page has three buttons. *Set as default* remembers the values in the form as this
+site's own default and changes nothing else. *Reset to default* fills the form with that default, or with the factory values (raw 30
+days, compress after 7, 1-minute rollups 730, capacity 100 GB, warn at 80 %) when no default was set. *Reset to factory settings*
+fills it with the factory values. The two Resets only fill in the form; nothing is saved until you press Save.
+
+**Saving can delete data, so it asks first.** Retention deletes whole chunks (7 days wide for raw readings, 70 days for the 1-minute
+rollup), and a save re-applies the policies, which TimescaleDB then runs within about a minute. So `PUT /api/settings/storage` answers
+**409** unless the request carries `confirm=true` when the save shortens the raw or the 1-minute retention, or when chunks older than
+the new limits exist that no scheduled retention would delete anyway (the state after a restore that paused retention: pressing Save
+then deletes them, also with unchanged values). The 409 says how many chunks, which days and how many MB; the page shows it in a
+dialog. The audit row `storage.changed` records the `origin` of the values (`factory`, `site_default` or `manual`, judged by the
+saved values) and, for a confirmed save, `confirmed_loss`.
+
 ## Discovery
 
 Discovery finds sources on the network and lets an admin map their points to assets without typing
@@ -217,7 +230,9 @@ data-retrieval requests the connectors already use, nothing else.
    storage save, which re-applies the compression and retention policies and is always recorded).
    Audited: users (create, role, active, password reset), your own password changes, first-run
    setup, sign-ins (success, failure, lockout; a wrong current password on a password change counts as
-   a failure), the site timezone, the currency, the storage settings (every save), assets, mappings,
+   a failure), the site timezone, the currency, the storage settings (every save, `storage.changed`, whose
+   subject carries `origin`, and, for a save that needed confirmation, `confirmed_loss`; remembering a site
+   default is `storage.default_set`), assets, mappings,
    sources (create, edit, delete, test, test all, browse), tariffs, dashboards, scopes, scans (start and
    finish) and accepted discoveries. Never recorded: passwords and password hashes, source secrets and
    credentials inside a URL (a marker shows that one was set or changed: `secret: set -> changed`, or
@@ -312,6 +327,12 @@ estimate for an asset with only a power reading covers the minutes in which it h
 no data shows its energy as zero (`0.0` kWh in Billing cells, `0.00` in a widget), muted and titled
 "no data" (a rate in effect makes its cost `0.00`, otherwise the cost is a dash). The hourly rollup is
 the only permanent copy of this data, so back it up (see "Backup and restore").
+
+**Asset names and scales.** Within one parent (the top level counts as one) two assets cannot have the same name; case and spacing do
+not make a different name ("Panel A" and " panel  a " are the same). Creating, renaming, moving and Discovery's "new asset" are refused
+with a 409 that names the clash. Twins created before the rule stay as they are and can still be edited while their name and parent
+stay. A mapping's scale must be above 0 and at most 1e12; a reading that is NaN or infinite is stored with bad quality and never
+reaches Billing.
 
 Limits: the site timezone must have a whole-hour UTC offset in both January and July (so that day and
 month edges fall on hourly buckets); Settings refuses other zones, and Billing and widget data answer 409
@@ -446,7 +467,7 @@ The collector deletes expired sessions and finished jobs older than 7 days every
 Both scripts talk to the `db` container of the running stack (`.ps1` twins exist for Windows).
 
     scripts/backup.sh [out_dir]            # ./backups/dcdash-YYYYmmdd-HHMMSS.dump + .version (Alembic revision)
-    scripts/restore.sh <dump> [--force]    # stops api+collector, recreates the database, restores, restarts
+    scripts/restore.sh <dump> [--force] [--apply-retention]    # stops api+collector, recreates the database, restores, restarts
     scripts/backup_smoke.sh                # backs up, deletes an asset, restores, checks it is back
 
 `restore.sh` refuses (exit 3) when the dump's `.version` differs from the running schema.
@@ -458,11 +479,26 @@ so hypertables, the 1-minute and 1-hour rollups and their compression and retent
 part of the backup and come back with it; nothing has to be re-created by hand. The `pg_dump`
 warning about `continuous_agg` circular foreign keys is expected and harmless for a full dump.
 
+**Retention and a restore.** The dump contains the retention policies, and a restored policy runs the moment the database starts its
+background jobs again, so restoring an old dump used to delete everything older than its retention limits within seconds. Raising the
+retention before the restore does not help: the restore brings the old limits back. `restore.sh` and `restore.ps1` now stop that.
+After `pg_restore` and before `timescaledb_post_restore()` they print, per table, how many chunks the restored policies would delete
+(and the oldest and newest day), and if that is more than none they pause the retention jobs. While retention is paused nothing is
+deleted and the disk is not trimmed either: the Storage page shows a banner, and pressing Save there starts retention again (the save
+lists what it would delete and asks first). `--apply-retention` skips the pause, so the data beyond the limits is deleted as the
+policies say. Read the printed table before you go back to normal use. If the restore worked but the retention check itself fails, the
+scripts pause every retention job anyway (unless `--apply-retention` was given) and exit with code 4.
+
 ### What the backup does not contain
 
 The dump is the database only. `.env` is not in it, and `.env` holds `DCDASH_SECRET_KEY`, the key that encrypts the
 passwords and keys stored for your sources. `certs/` (the HTTPS key and certificate, and an OPC UA client certificate if you
 use one) is not in it either. Keep a copy of `.env` and `certs/` with every backup, off the machine.
+
+The api checks the key when it starts. It stores a fingerprint of `DCDASH_SECRET_KEY` in the database (`settings`, key
+`secret_key_check`; it cannot be turned back into the key) and test-decrypts the stored source secrets. If some cannot be decrypted,
+the api log names the sources, and the Sources page shows a banner to operators and admins until the original `.env` is back or the
+secrets are typed in again.
 
 - **Restoring on a new machine:** put that `.env` and `certs/` in place, run `scripts/setup.sh`, then `scripts/restore.sh <dump>`.
 - **`.env` lost, dump kept:** the data restores, but every enabled source that has mapped points and a stored secret goes
