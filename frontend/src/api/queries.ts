@@ -5,7 +5,7 @@ import type {
   Asset, AuditPage, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
   GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   Series, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
-  WidgetData, WidgetType, CollectorStatus,
+  WidgetData, WidgetType, CollectorStatus, SecretKeyStatus,
 } from "./types";
 
 export const keys = {
@@ -35,6 +35,7 @@ export const keys = {
   dashboard: (id: number) => ["dashboards", "detail", id] as const,
   widgetData: ["widget-data"] as const,
   collectorStatus: ["collector-status"] as const,
+  secretKey: ["secret-key"] as const,
 };
 
 /** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today). */
@@ -63,6 +64,10 @@ export const useSources = () =>
 
 export const useCollectorStatus = () =>
   useQuery({ queryKey: keys.collectorStatus, queryFn: () => api.get<CollectorStatus>("/api/collector/status"), refetchInterval: 10_000 });
+
+/** Operators and admins only (the Sources page). A fetch error shows nothing: the warning is an extra, not a gate. */
+export const useSecretKeyStatus = () =>
+  useQuery({ queryKey: keys.secretKey, queryFn: () => api.get<SecretKeyStatus>("/api/secret-key/status"), refetchInterval: 60_000 });
 
 export const useConnectors = (enabled: boolean) =>
   useQuery({ queryKey: keys.connectors, queryFn: () => api.get<Connector[]>("/api/connectors"), enabled, staleTime: Infinity });

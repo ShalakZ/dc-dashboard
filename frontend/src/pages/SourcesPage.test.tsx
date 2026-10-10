@@ -13,6 +13,7 @@ const routes = (role: string) => ({
   "GET /api/sources": { body: [{ ...source, status: "offline", last_error: "timeout" }] },
   "POST /api/sources/2/test": { status: 202, body: { job_id: 9 } },
   "GET /api/collector/status": { body: { alive: true, age_seconds: 3 } },
+  "GET /api/secret-key/status": { body: { ok: true, key_changed: false, unreadable: [] } },
   "POST /api/sources/test-all": { status: 202, body: { job_ids: [9] } },
   "GET /api/jobs/9": { body: { id: 9, kind: "test_source", status: "done", result: { ok: false, status: "timeout", latency_ms: null, message: "no reply" }, created_at: "t", finished_at: "t" } },
 });
@@ -208,6 +209,24 @@ describe("SourcesPage", () => {
     mockFetch({ ...routes("operator"), "GET /api/collector/status": { body: { alive: false, age_seconds: null } } });
     renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
     expect(await screen.findByRole("alert")).toHaveTextContent("The collector has not reported yet.");
+  });
+
+  it("warns when stored secrets cannot be read with the key in .env, and names the sources", async () => {
+    mockFetch({
+      ...routes("operator"),
+      "GET /api/secret-key/status": { body: { ok: false, key_changed: true, unreadable: [{ id: 2, name: "Boiler" }] } },
+    });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    const warning = await screen.findByText(/DCDASH_SECRET_KEY/);
+    expect(warning).toHaveTextContent(/different from the one this database was set up with/i);
+    expect(warning).toHaveTextContent(/Boiler/);
+  });
+
+  it("shows no key warning when every secret can be read, or when the status cannot be fetched", async () => {
+    mockFetch({ ...routes("operator"), "GET /api/secret-key/status": { status: 500, body: { detail: "boom" } } });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    await screen.findByText("offline");
+    expect(screen.queryByText(/DCDASH_SECRET_KEY/)).not.toBeInTheDocument();
   });
 
   describe("the collector notice", () => {

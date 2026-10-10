@@ -21,6 +21,7 @@ from dcdash.api.stream import Broadcaster
 from dcdash.core.config import get_settings
 from dcdash.core.db import dispose_engine, get_sessionmaker
 from dcdash.core.pg import CONFIG_CHANNEL, LATEST_CHANNEL, create_pool, listen_forever
+from dcdash.core.secret_key import check_secret_key_at_start
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +88,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     async with get_sessionmaker()() as session:
                         await seed_general(session)
                     seeded = True
+                    try:  # extra information: a failing check is logged and must never keep the mapping scales from loading
+                        async with get_sessionmaker()() as session:
+                            await check_secret_key_at_start(session)
+                    except Exception:
+                        log.exception("could not check DCDASH_SECRET_KEY")
                 await broadcaster.load_scales(pool)
             except Exception:
                 log.exception("could not load mapping scales, retrying")
