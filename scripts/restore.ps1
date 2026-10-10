@@ -2,6 +2,8 @@
 # Usage: scripts\restore.ps1 <dump> [--force] [--apply-retention]
 # Exits 3 when the dump's Alembic revision differs from the running schema unless --force
 # is given; after a forced restore the api container migrates on start.
+# The dump is read completely before anything is changed: when it cannot be read (missing, cut off, damaged) the script exits 1
+# with nothing touched, so the running database is never dropped for a dump that could not have been restored.
 # Retention: see scripts/restore.sh. Between pg_restore and timescaledb_post_restore() the script runs
 # scripts\restore_retention.sql, which prints what the restored retention policies would delete and, when that is more than
 # nothing, pauses the retention jobs (saving the Storage page starts them again). --apply-retention leaves them scheduled.
@@ -33,6 +35,10 @@ if ($Current -ne $Wanted -and $Force -ne "--force") {
   [Console]::Error.WriteLine("refusing: dump schema '$Wanted' differs from running schema '$Current' (use --force to restore then migrate)")
   exit 3
 }
+# Read the whole dump (a read-only call; /dev/null is the path inside the container) before anything is stopped or dropped.
+# Binary through cmd, never text-decoded, like the real restore below. exit 1, not throw: no PowerShell error block on top of the message.
+cmd /c "docker compose exec -T db pg_restore -f /dev/null < `"$Dump`""
+if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("refusing: cannot read the dump '$Dump' (missing, cut off or damaged); nothing was changed"); exit 1 }
 docker compose stop api collector
 docker compose exec -T db psql -U dcdash -d postgres -c "DROP DATABASE IF EXISTS dcdash WITH (FORCE)" -c "CREATE DATABASE dcdash OWNER dcdash"
 docker compose exec -T db psql -U dcdash -d dcdash -c "CREATE EXTENSION IF NOT EXISTS timescaledb" -c "SELECT timescaledb_pre_restore()"

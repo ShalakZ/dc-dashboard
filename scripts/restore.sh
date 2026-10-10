@@ -3,6 +3,8 @@
 # Usage: scripts/restore.sh <dump> [--force] [--apply-retention]
 # Refuses (exit 3) when the dump's Alembic revision differs from the running schema
 # unless --force is given; after a forced restore the api container migrates on start.
+# The dump is read completely before anything is changed: when it cannot be read (missing, cut off, damaged) the script exits 1
+# with nothing touched, so the running database is never dropped for a dump that could not have been restored.
 # Retention: the restored retention jobs run the moment the database starts its background jobs again and delete every chunk
 # older than the restored limits, so restoring an old dump would lose its old data within seconds. Between pg_restore and
 # timescaledb_post_restore() the script runs scripts/restore_retention.sql: it prints what the policies would delete and,
@@ -31,6 +33,12 @@ WANTED="$(cat "$DUMP.version" 2>/dev/null || echo unknown)"
 if [[ "$CURRENT" != "$WANTED" && "$FORCE" != "--force" ]]; then
   echo "refusing: dump schema '$WANTED' differs from running schema '$CURRENT' (use --force to restore then migrate)" >&2
   exit 3
+fi
+# Read the whole dump (a read-only call; /dev/null is the path inside the container) before anything is stopped or dropped.
+# The trap below is not installed yet, so a plain exit is right.
+if ! docker compose exec -T db pg_restore -f /dev/null < "$DUMP"; then
+  echo "refusing: cannot read the dump '$DUMP' (missing, cut off or damaged); nothing was changed" >&2
+  exit 1
 fi
 LOG="${TMPDIR:-/tmp}/dcdash-restore-$(date +%Y%m%d-%H%M%S).log"
 PRE_RESTORE_DONE=0

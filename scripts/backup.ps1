@@ -10,8 +10,10 @@ param([string]$Out = ".\backups", [string]$Keep = "", [string]$CopyTo = "")
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 $Usage = "usage: backup.ps1 [Out] [-Keep N] [-CopyTo DIR]"
-# Unknown named arguments land in $args and a bash-style --keep binds to $Out: refuse both. -Keep is a string checked by hand because an
-# [int] parameter fails binding with exit 1 (verified on PowerShell 5.1), the contract says exit 2.
+# Unknown named arguments land in $args: refuse them. A bash-style --copy-to X is refused this way (it lands in $Out and $args, exit 2).
+# PowerShell 5.1 binds a bash-style `--keep 3` to `-Keep 3`, so that one is accepted and works exactly like -Keep 3 (it rotates).
+# -Keep is a string checked by hand because an [int] parameter fails binding with exit 1 (verified on PowerShell 5.1), the contract
+# says exit 2.
 if ($args.Count -gt 0 -or $Out -like "-*" -or $CopyTo -like "-*") { [Console]::Error.WriteLine($Usage); exit 2 }
 if ($PSBoundParameters.ContainsKey('CopyTo') -and -not $CopyTo) { [Console]::Error.WriteLine("$Usage (-CopyTo needs a folder)"); exit 2 }
 $KeepN = 0
@@ -27,7 +29,10 @@ try {
 $ProjectShown = if ($Project) { $Project } else { "unknown" }
 Write-Host "backing up Compose project: $ProjectShown"
 
-# An absolute Out: cmd /c below starts in the PowerShell location only when that is a drive path, and cmd expands a % in the path.
+# cmd expands a % in a path. The raw argument is checked before the folder is created, so a refused run leaves no empty folder behind.
+if ($Out.Contains("%")) { [Console]::Error.WriteLine("the output folder '$Out' contains a % that cmd would expand; use another folder"); exit 2 }
+# An absolute Out: cmd /c below starts in the PowerShell location only when that is a drive path. The resolved path is checked too,
+# because the repo path itself could contain a %.
 $Out = (New-Item -ItemType Directory -Force -Path $Out).FullName
 if ($Out.Contains("%")) { [Console]::Error.WriteLine("the output folder '$Out' contains a % that cmd would expand; use another folder"); exit 2 }
 

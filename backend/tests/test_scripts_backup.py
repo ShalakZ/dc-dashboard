@@ -715,7 +715,7 @@ def test_backup_ps1_keep_is_a_string_checked_by_hand_and_bad_usage_exits_2():
     assert "[string]$Keep" in param and "[int]" not in param  # an [int] parameter fails binding with exit 1, the contract says 2
     assert "^[1-9][0-9]{0,4}$" in text
     guard = next(line for line in text.splitlines() if "$args.Count -gt 0" in line)
-    assert '$Out -like "-*"' in guard and '$CopyTo -like "-*"' in guard and "exit 2" in guard  # bash-style --keep binds to $Out
+    assert '$Out -like "-*"' in guard and '$CopyTo -like "-*"' in guard and "exit 2" in guard  # a bash-style --copy-to X lands in $Out/$args and is refused
     keep_check = next(line for line in text.splitlines() if "-notmatch" in line)
     assert "$Keep -notmatch '^[1-9][0-9]{0,4}$'" in keep_check and "exit 2" in keep_check
     assert text.index("[int]$Keep") > text.index("-notmatch")  # the cast happens only after the check
@@ -820,6 +820,28 @@ def test_backup_ps1_header_says_how_to_run_it_and_what_binding_errors_do():
 def test_backup_ps1_makes_out_absolute_and_refuses_a_percent_sign():
     text = ps1_code()
     absolute = text.index("$Out = (New-Item -ItemType Directory -Force -Path $Out).FullName")
-    percent = next(line for line in text.splitlines() if '$Out.Contains("%")' in line)
-    assert "exit 2" in percent
-    assert absolute < text.index('$Out.Contains("%")') < text.index("Resolve-Path -LiteralPath $CopyTo") < text.index("cmd /c")
+    resolved = text.rindex('$Out.Contains("%")')  # the check of the resolved path: the repo path itself could hold a %
+    assert absolute < resolved < text.index("Resolve-Path -LiteralPath $CopyTo") < text.index("cmd /c")
+    for line in (line for line in text.splitlines() if '$Out.Contains("%")' in line):
+        assert "exit 2" in line
+
+
+def test_backup_ps1_refuses_a_percent_sign_in_the_raw_out_argument_before_it_creates_the_folder():
+    text = ps1_code()
+    raw = text.index('$Out.Contains("%")')
+    assert raw < text.index("New-Item")  # exit 2 must not leave an empty folder behind
+    assert text.count('$Out.Contains("%")') == 2  # the raw argument and, after New-Item, the resolved path
+    assert text.index("exit 2", raw) < text.index("New-Item")
+    assert text.index("$KeepN = 0") < raw  # after the argument checks
+
+
+def test_backup_ps1_comment_tells_the_truth_about_bash_style_flags():
+    lines = PS1.read_text().splitlines()
+    guard = next(i for i, line in enumerate(lines) if "$args.Count -gt 0" in line)
+    first = guard
+    while lines[first - 1].startswith("#"):
+        first -= 1
+    comment = " ".join(line.lstrip("# ") for line in lines[first:guard])
+    assert "binds to $Out" not in "\n".join(lines) and "--keep binds" not in comment  # the old claim, which a real run disproved
+    assert "binds a bash-style `--keep 3` to `-Keep 3`" in comment and "works exactly like -Keep 3" in comment  # PowerShell 5.1
+    assert "--copy-to" in comment and "refuse" in comment and "exit 2" in comment

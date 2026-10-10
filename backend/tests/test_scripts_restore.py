@@ -22,6 +22,8 @@ case "$*" in
     printf 'name: dcdash_e2e_w2_probe\nservices: {}\n'; exit 0 ;;
   *"SELECT version_num FROM alembic_version"*) echo "${FAKE_SCHEMA:-0005}"; exit 0 ;;
   *"compose stop"*) echo "fake docker: stop called" >&2 ;;  # a marker, so a test can tell what came before it on stderr
+  *" pg_restore -f /dev/null"*)  # the read-only check of the whole dump, made before anything is changed
+    if [ -n "$FAKE_PGRESTORE_READ_FAILS" ]; then cat > /dev/null; echo "pg_restore: error: unexpected end of file" >&2; exit 1; fi ;;
   *" pg_restore "*) if [ -n "$FAKE_PGRESTORE_FAILS" ]; then echo "pg_restore: error: boom" >&2; exit 2; fi ;;
   *"apply_retention"*) echo "SQL-READ: $(head -c 40 | tr '\n' ' ')" >> "$CALLS_LOG" ;;
 esac
@@ -29,7 +31,8 @@ exit 0
 """
 
 
-def run_restore(tmp_path: Path, *args: str, schema: str = "0005", pg_restore_fails: bool = False, config_fails: bool = False):
+def run_restore(tmp_path: Path, *args: str, schema: str = "0005", pg_restore_fails: bool = False, config_fails: bool = False,
+                read_check_fails: bool = False, dump_missing: bool = False):
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
     for name in ("restore.sh", "restore_retention.sql"):
@@ -42,12 +45,14 @@ def run_restore(tmp_path: Path, *args: str, schema: str = "0005", pg_restore_fai
     dump = tmp_path / "d.dump"
     dump.write_bytes(b"not a real dump")
     Path(f"{dump}.version").write_text("0005\n")
+    if dump_missing:
+        dump.unlink()  # the .version file stays, so the schema check passes and only the dump itself is gone
     log = tmp_path / "calls.log"
     log.touch()
     env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "DCDASH_"))}
     env.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", CALLS_LOG=str(log), FAKE_SCHEMA=schema,
                FAKE_PGRESTORE_FAILS="1" if pg_restore_fails else "", FAKE_CONFIG_FAILS="1" if config_fails else "",
-               TMPDIR=str(tmp_path))
+               FAKE_PGRESTORE_READ_FAILS="1" if read_check_fails else "", TMPDIR=str(tmp_path))
     result = subprocess.run(["bash", str(root / "scripts" / "restore.sh"), str(dump), *args],
                             capture_output=True, text=True, env=env, timeout=60, cwd=tmp_path)
     return result, log.read_text().splitlines()
@@ -68,7 +73,7 @@ def retention_call(calls: list[str]) -> str:
 def test_retention_is_checked_after_pg_restore_and_before_post_restore(tmp_path):
     result, calls = run_restore(tmp_path)
     assert result.returncode == 0, result.stderr
-    order = [at(calls, f) for f in ("compose stop api collector", "timescaledb_pre_restore", " pg_restore ",
+    order = [at(calls, f) for f in ("compose stop api collector", "timescaledb_pre_restore", "--no-owner",
                                     "apply_retention", "timescaledb_post_restore", "compose start api collector")]
     assert order == sorted(order) and len(set(order)) == len(order)
     assert "apply_retention=0" in retention_call(calls)
@@ -89,7 +94,7 @@ def test_apply_retention_reaches_the_sql_in_either_order_with_force(tmp_path, ar
 def test_a_failed_pg_restore_still_checks_retention_runs_post_restore_and_starts_the_services(tmp_path):
     result, calls = run_restore(tmp_path, pg_restore_fails=True)
     assert result.returncode != 0
-    order = [at(calls, f) for f in (" pg_restore ", "apply_retention", "timescaledb_post_restore", "compose start api collector")]
+    order = [at(calls, f) for f in ("--no-owner", "apply_retention", "timescaledb_post_restore", "compose start api collector")]
     assert order == sorted(order) and len(set(order)) == len(order)
 
 
@@ -169,6 +174,67 @@ def test_restore_ps1_parses():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+# ---- the whole dump is read before anything is stopped or dropped (Windows drill, S12-14) ----------------------------------
+
+READ_CHECK = "pg_restore -f /dev/null"
+STATE_CHANGES = ("compose stop api collector", "DROP DATABASE", "timescaledb_pre_restore", "timescaledb_post_restore",
+                 "compose start api collector", "--no-owner", "apply_retention")
+
+
+def test_restore_sh_reads_the_whole_dump_before_it_stops_drops_or_pre_restores(tmp_path):
+    result, calls = run_restore(tmp_path)
+    assert result.returncode == 0, result.stderr
+    order = [at(calls, f) for f in (READ_CHECK, "compose stop api collector", "DROP DATABASE", "timescaledb_pre_restore", "--no-owner")]
+    assert order == sorted(order) and len(set(order)) == len(order)
+    assert at(calls, "SELECT version_num FROM alembic_version") < at(calls, READ_CHECK)  # the schema refusal (exit 3) still comes first
+
+
+def test_a_dump_that_cannot_be_read_exits_1_and_changes_nothing(tmp_path):
+    result, calls = run_restore(tmp_path, read_check_fails=True)
+    assert result.returncode == 1
+    assert "nothing was changed" in result.stderr and "cannot read the dump" in result.stderr
+    assert any(READ_CHECK in c for c in calls)  # the check did run
+    for fragment in STATE_CHANGES:
+        assert not any(fragment in c for c in calls), f"{fragment!r} must not be called:\n" + "\n".join(calls)
+
+
+def test_a_dump_that_does_not_exist_exits_1_and_changes_nothing(tmp_path):
+    result, calls = run_restore(tmp_path, dump_missing=True)
+    assert result.returncode == 1
+    assert "nothing was changed" in result.stderr and "cannot read the dump" in result.stderr  # the echo is reached although the redirection failed
+    for fragment in STATE_CHANGES:
+        assert not any(fragment in c for c in calls), f"{fragment!r} must not be called:\n" + "\n".join(calls)
+
+
+def test_a_schema_mismatch_is_refused_with_exit_3_before_the_dump_is_read(tmp_path):
+    result, calls = run_restore(tmp_path, schema="0004", read_check_fails=True)
+    assert result.returncode == 3 and "nothing was changed" not in result.stderr
+    assert not any(READ_CHECK in c for c in calls)
+
+
+def read_check_line(text: str) -> str:
+    return next(line for line in text.splitlines() if "-f /dev/null" in line and not line.lstrip().startswith("#"))
+
+
+def test_restore_ps1_reads_the_whole_dump_before_it_stops_anything_and_exits_1_without_a_throw():
+    text = (SCRIPTS / "restore.ps1").read_text()
+    check = read_check_line(text)
+    assert check.lstrip().startswith("cmd /c ") and "pg_restore -f /dev/null" in check and "< `\"$Dump`\"" in check  # binary, through cmd
+    after = text[text.index(check) + len(check):]
+    refusal = next(line for line in after.splitlines() if line.strip())  # the line right after the read check
+    assert refusal.lstrip().startswith("if ($LASTEXITCODE -ne 0)")
+    assert "[Console]::Error.WriteLine(" in refusal and "nothing was changed" in refusal and refusal.rstrip().endswith("exit 1 }")
+    assert "throw" not in refusal  # a throw would print a PowerShell error block on top of the message
+    assert text.index("exit 3") < text.index(check) < text.index("docker compose stop api collector")
+    assert text.index(check) < text.index("DROP DATABASE") and text.index(check) < text.index("timescaledb_pre_restore")
+
+
+def test_both_restore_scripts_say_in_their_usage_comment_that_the_dump_is_read_first():
+    for name in ("restore.sh", "restore.ps1"):
+        header = " ".join(line.lstrip("# ") for line in (SCRIPTS / name).read_text().splitlines() if line.startswith("#"))
+        assert "read completely before anything is changed" in header and "nothing touched" in header, name
+
+
 def test_the_compose_project_is_the_first_thing_printed_and_comes_before_the_first_stop(tmp_path):
     result, calls = run_restore(tmp_path)
     assert result.returncode == 0, result.stderr
@@ -188,7 +254,7 @@ def test_a_config_call_that_fails_prints_unknown_and_the_restore_still_runs(tmp_
     result, calls = run_restore(tmp_path, config_fails=True)
     assert result.returncode == 0, result.stderr
     assert result.stderr.splitlines()[0] == "restoring into Compose project: unknown"
-    order = [at(calls, f) for f in ("compose stop api collector", "timescaledb_pre_restore", " pg_restore ",
+    order = [at(calls, f) for f in ("compose stop api collector", "timescaledb_pre_restore", "--no-owner",
                                     "apply_retention", "timescaledb_post_restore", "compose start api collector")]
     assert order == sorted(order) and len(set(order)) == len(order)
     assert "restored" in result.stdout
