@@ -37,6 +37,97 @@ describe("AssetsPage", () => {
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ name: "Room B", parent_id: 1, kind: "generic", sort_order: 0 });
   });
 
+  describe("dialogs and the + on each branch", () => {
+    const created = { status: 201, body: { id: 3, parent_id: 1, name: "Room B", kind: "generic", sort_order: 0 } };
+    const posts = (calls: { method: string; body?: unknown }[]) => calls.filter((c) => c.method === "POST");
+
+    it("shows a + on every node for an admin, named after the node", async () => {
+      mockFetch(authed("admin"));
+      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      expect(await screen.findByRole("button", { name: "Add child of Site" })).toHaveTextContent("+");
+      expect(screen.getByRole("button", { name: "Add child of Room A" })).toHaveAttribute("type", "button");
+    });
+
+    it.each(["viewer", "operator"])("shows no + to a %s", async (role) => {
+      mockFetch(authed(role));
+      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      await screen.findByRole("link", { name: "Site" });
+      expect(screen.queryByRole("button", { name: /Add child of/ })).not.toBeInTheDocument();
+    });
+
+    it("the + opens one dialog titled Add asset with that node as the parent, and Save posts it and closes", async () => {
+      const calls = mockFetch({ ...authed("admin"), "POST /api/assets": created });
+      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      await userEvent.click(await screen.findByRole("button", { name: "Add child of Site" }));
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      const dialog = screen.getByRole("dialog", { name: "Add asset" });
+      expect(within(dialog).getByLabelText("Parent")).toHaveValue("1");
+      await userEvent.type(within(dialog).getByLabelText("Name"), "Room B");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(posts(calls).map((c) => c.body)).toEqual([{ name: "Room B", parent_id: 1, kind: "generic", sort_order: 0 }]);
+    });
+
+    it.each([
+      ["Cancel", async () => userEvent.click(screen.getByRole("button", { name: "Cancel" }))],
+      ["Escape", async () => userEvent.keyboard("{Escape}")],
+    ])("%s closes the dialog without a request", async (_how, close) => {
+      const calls = mockFetch({ ...authed("admin"), "POST /api/assets": created });
+      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      await userEvent.click(await screen.findByRole("button", { name: "Add child of Room A" }));
+      expect(screen.getByRole("dialog", { name: "Add asset" })).toBeInTheDocument();
+      await close();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(posts(calls)).toHaveLength(0);
+    });
+
+    it("the Add asset button opens the dialog with no parent when nothing is selected", async () => {
+      mockFetch(authed("admin"));
+      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+      const dialog = screen.getByRole("dialog", { name: "Add asset" });
+      expect(within(dialog).getByLabelText("Parent")).toHaveValue("");
+    });
+
+    it("the Add asset button opens the dialog with the selected asset as the parent", async () => {
+      mockFetch(authed("admin"));
+      renderWithProviders(<AssetsPage />, { route: "/assets?selected=2", path: "/assets" });
+      await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+      expect(within(screen.getByRole("dialog", { name: "Add asset" })).getByLabelText("Parent")).toHaveValue("2");
+    });
+
+    it("Edit opens the same form, titled Edit asset, with the asset's values", async () => {
+      mockFetch(authed("admin"));
+      renderWithProviders(<AssetsPage />, { route: "/assets?selected=2", path: "/assets" });
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      const dialog = screen.getByRole("dialog", { name: "Edit asset" });
+      expect(within(dialog).getByLabelText("Name")).toHaveValue("Room A");
+      expect(within(dialog).getByLabelText("Parent")).toHaveValue("1");
+      expect(within(dialog).getByLabelText("Kind")).toHaveValue("room");
+    });
+
+    it("Escape on a dialog opened by Add asset puts focus back on the Add asset button", async () => {
+      mockFetch(authed("admin"));
+      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      const add = await screen.findByRole("button", { name: "Add asset" });
+      await userEvent.click(add);
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(add).toHaveFocus();
+    });
+
+    it("Cancel on a dialog opened by Edit puts focus back on the Edit button", async () => {
+      mockFetch(authed("admin"));
+      renderWithProviders(<AssetsPage />, { route: "/assets?selected=2", path: "/assets" });
+      const edit = await screen.findByRole("button", { name: "Edit" });
+      await userEvent.click(edit);
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(edit).toHaveFocus();
+    });
+  });
+
   it("tells two assets with one name apart in the Add asset form's Parent list", async () => {
     mockFetch({
       ...authed("admin"),
