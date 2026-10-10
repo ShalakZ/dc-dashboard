@@ -184,12 +184,22 @@ OpenSSL, so it proves nothing); `check_tls.sh` as written (not run, see S12-5); 
   outage window is present but at half density (1 reading per 10 s instead of 2 for a 5 s stream; cause not
   investigated). Idea: health checks the database with a short timeout (separate liveness and readiness), a
   collector heartbeat that Docker or the UI can see, and a "last reading" age on the Sources page.
+  **Closed by W0b (2026-10-10).** `/api/health` is a readiness check (503 `database unavailable` within 2 s, also against a
+  paused database), the api healthcheck has `start_period: 120s`, web has a healthcheck, the collector writes a heartbeat
+  row every 10 s, `GET /api/collector/status` and the Sources page show a silent-collector notice and the age of each
+  source's newest reading. **The half-density finding:** the raw data after an outage was a lower sampling rate, not lost
+  readings. `run_group` awaited the status write inline, and with the database gone every failed write cost the DNS lookup
+  of the vanished name `db` (3.6 s here), so a 5 s stream was polled every 8.65 s (1.14 readings per 10 s instead of 2).
+  Status writes now run in a background task per group: 1.96 readings per 10 s with the database stopped and 2.08 with it
+  frozen, against 1.90 at baseline.
 - **S12-2 [bug, high] (Claude)** No log rotation: the engine default is `json-file` with no options (checked on every
   dev container), so logs grow without limit. The collector writes 1.86 MB an hour on the dev data (3 sources), 43
   MB a day, about 15 GB a year, and it is almost entirely asyncua at INFO: `opening connection`, `create_session`,
   `activate_session`, `read_attributes`, `close_session`, plus a 1.4 kB `find_endpoint` line, 759 times an hour each.
   Fix: `logging: options: max-size / max-file` in `compose.yaml`, and set the `asyncua` (and `pymodbus`) loggers to
   WARNING in `collector/main.py` (the scan code already does it process-wide during scans).
+  **Closed by W0b (2026-10-10).** Every service rotates its logs at 10 MB x 5 files; the collector logs asyncua, pymodbus
+  and httpx at WARNING and above (scans restore the saved level).
 - **S12-3 [bug, medium] (Claude)** The collector and the api ignore SIGTERM: the collector's PID 1 is Python without a
   SIGTERM handler (signal mask checked; a direct `kill -s TERM` left it running after 3 s), the api's PID 1 is `sh -c
   "alembic upgrade head && uvicorn ..."` which does not forward it. `docker stop` therefore waits the whole grace
@@ -198,6 +208,11 @@ OpenSSL, so it proves nothing); `check_tls.sh` as written (not run, see S12-5); 
   every stop, restart and `down`. Cost: the writer's in-memory buffer (flushed every 1 s) is lost on each stop, and
   Postgres sees dropped connections. Fix: `exec uvicorn` in the command, a SIGTERM handler in the collector that
   flushes the writer, or `init: true`.
+  **Closed by W0b (2026-10-10).** api: `exec uvicorn --timeout-graceful-shutdown 5`, lifespan shutdown bounded at 5 s,
+  `stop_grace_period: 15s`. Collector: SIGTERM and SIGINT handlers, shutdown bounded at 10 s with a final flush that says
+  how many readings stayed unwritten, `stop_grace_period: 20s`. Against a paused database the collector stops in 10.3 s
+  and the api in 5.5 s (exit 0, not 137). Not changed: web (Caddy) is still killed at its stop timeout while a page is
+  open, and db has no grace period (backlog section H).
 - **S12-4 [risk, high] (Claude)** `.env` is the one thing the backup does not contain and nothing protects. (a) A
   wrong or new `DCDASH_SECRET_KEY`: nothing crashes, the sources without a secret keep working, and a source with a
   secret goes `offline` with `stored secret cannot be decrypted` (verified). (b) A lost `.env` plus `scripts/setup.sh`:

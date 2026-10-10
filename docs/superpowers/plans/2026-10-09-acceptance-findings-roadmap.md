@@ -50,6 +50,15 @@ Phone support is deferred by the owner; accessibility beyond the listed items is
 
 ## W0b Container and health chain (ONE ordered task chain: S12-2, then S12-3, then S12-1; they edit the same `compose.yaml` and `collector/main.py`)
 
+**Status: DONE and merged 2026-10-10** (merge commit `60d8b65`; plan `2026-10-09-w0b-container-health-chain.md`). Seven tasks, each
+Opus-reviewed (Task 5 needed one fix round: a status write that timed out but committed could hide a source going offline), a
+whole-branch Opus review with no Critical finding and two Important ones (a frozen database left the Sources page showing a
+stale reading age; a test that could not fail), fixed in one wave with a scoped re-review. Evidence: backend 1304 passed (run
+before the final fix wave, whose four touched files were re-run), frontend 791 passed and typecheck clean, the isolated
+Playwright journey 3 passed on a scratch stack at the final commit, the stop drills against a paused database at the final code
+(collector 10.3 s, api 5.5 s, exit 0), the density drill (1.96 and 2.08 readings per 10 s against 1.90 at baseline). The dev
+stack was rebuilt from the merged tree after a verified backup (schema stays `0004`). Leftovers are in `backlog.md` section H.
+
 Risk Med, effort L in total. Docker-route work; the route A counterpart is planned in W4 (NSSM stop, log rotation).
 
 | Id | Item |
