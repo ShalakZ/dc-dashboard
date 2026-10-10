@@ -88,8 +88,16 @@ async def get_general(db: AsyncSession = Depends(get_db)) -> GeneralSettings:
 
 
 @router.put("/settings/general", response_model=GeneralSettings)
-async def put_general(body: GeneralSettingsIn, db: AsyncSession = Depends(get_db)) -> GeneralSettingsIn:
+async def put_general(
+    body: GeneralSettingsIn,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_role("admin")),
+) -> GeneralSettingsIn:
+    before = await current_timezone(db)
     await set_setting(db, GENERAL_KEY, body.model_dump())
+    await audit_change(
+        db, admin.id, "settings.timezone_changed", {}, {"timezone": before}, {"timezone": body.timezone}
+    )
     await db.commit()
     return body
 

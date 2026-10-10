@@ -138,3 +138,16 @@ async def test_get_still_answers_for_a_stored_zone_that_breaks_the_whole_hour_ru
     response = await client.get("/api/settings/general")
     assert response.status_code == 200 and response.json() == {"timezone": "Asia/Kolkata"}
     assert (await client.put("/api/settings/general", json={"timezone": "Asia/Qatar"})).status_code == 200
+
+
+async def test_a_timezone_change_is_audited_and_an_unchanged_zone_is_not(client, db):
+    await login_as(client, db)
+    current = (await client.get("/api/settings/general")).json()["timezone"]  # "UTC" in the tests
+    assert (await client.put("/api/settings/general", json={"timezone": current})).status_code == 200
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'settings.timezone_changed'") == 0
+    assert (await client.put("/api/settings/general", json={"timezone": "Asia/Qatar"})).status_code == 200
+    (row,) = await db.fetch("SELECT actor_name, detail FROM audit_log WHERE action = 'settings.timezone_changed'")
+    assert row["actor_name"] == "admin"
+    assert row["detail"] == {"before": {"timezone": current}, "after": {"timezone": "Asia/Qatar"}}
+    assert (await client.put("/api/settings/general", json={"timezone": "Mars/Olympus"})).status_code == 422
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'settings.timezone_changed'") == 1
