@@ -208,7 +208,7 @@ The plan names section K for these; K already holds Part A, so they are here.
 - **`_power_rollup` reads every power mapping** on each summary of a parent (`backend/dcdash/api/data.py`); limit the query to the subtree's asset ids.
 - **The roll-up only ages at the next summary refresh** (at most 60 s, `useSummary` in `api/queries.ts`): a meter that goes silent is noticed then, not live.
 - **The visible `Not reporting:` line** appears only when some but not all meters report (`rollupNote` in `lib/rollup.ts`); with none reporting the names are only in the tooltip. The Live power tile has no max-width, so a long path list can widen it, and `AssetPage.test.tsx` has no page-level test for the none-reporting case.
-- **The Trend's pause covers the whole section** (also while the mouse is over its controls), and `refetchOnWindowFocus` is not gated by the pause (`TrendChart.tsx`, `useSeries`).
+- **The Trend's pause covers the whole section** (also while the mouse is over its controls; `TrendChart.tsx`, `useSeries`). Refetch on window focus is off for every query (`main.tsx`), so nothing else refetches under a resting mouse.
 - **`hideOverlap` on the bar chart's category axis** may hide some labels of a crowded axis (`BarWidget.tsx`); the tooltip has the full name.
 - **View and editor sort raw versus normalised rows:** the view sorts the raw saved rows while the editor sorts the normalised ones; they can differ only for rows the API refuses (negative `x` or `y`) (`StaticGrid.tsx` against `toDrafts` in `lib/layout.ts`).
 - **The w3b spec** (`frontend/e2e/w3b.spec.ts`): a run killed before its `afterEach` leaves its mappings, and it needs three unmapped kW points of the `sim` source.
