@@ -49,7 +49,7 @@ export function SourcesPage() {
     await api.del(`/api/sources/${id}${confirm ? "?confirm=true" : ""}`);
     setConfirming(null);
     // Its points and mappings go with it, so what Billing, the dashboards' widgets and the tariff list show can change too.
-    await invalidate(keys.sources, keys.billing, keys.widgetData, keys.tariffs);
+    await invalidate(keys.sources, keys.secretKey, keys.billing, keys.widgetData, keys.tariffs);
   };
   const remove = (id: number, name: string) => run(async () => {
     if (!window.confirm(`Delete source "${name}", its points and mappings?`)) return;
@@ -77,7 +77,7 @@ export function SourcesPage() {
         <p className="error" role="alert">
           {`The DCDASH_SECRET_KEY in .env ${secretKey.data.key_changed ? "is different from the one this database was set up with" : "does not open the stored secrets"}: `}
           {`the secrets of ${secretKey.data.unreadable.map((s) => s.name).join(", ")} cannot be decrypted, so those sources stay offline. `}
-          Put the original .env back, or type each source's secret in again.
+          Put the original .env back, or have an admin type each source's secret in again.
         </p>
       )}
       {statusUnreadable ? (

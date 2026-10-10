@@ -99,7 +99,7 @@ export function StoragePage() {
       {s.warn && <p role="alert" className="warning">Database uses {s.used_pct}% of the configured capacity.</p>}
       {s.retention_paused && (
         <p role="alert" className="warning">
-          Retention is paused (a restore paused it so that older readings survive). Nothing is deleted while it is paused, and the disk is
+          Retention is paused (usually because a restore paused it so that older readings survive). Nothing is deleted while it is paused, and the disk is
           not trimmed either. Press Save to start retention again; the save lists what it would delete and asks first.
         </p>
       )}
@@ -149,7 +149,7 @@ export function StoragePage() {
       {needsConfirm && (
         <ConfirmDeleteDialog
           title={needsConfirm.deletesNow ? "Delete old readings?" : "Shorten retention?"}
-          message={needsConfirm.detail}
+          message={needsConfirm.detail.replace(/ Repeat the request with confirm=true to go ahead\.$/, "")}
           confirmLabel={needsConfirm.deletesNow ? "Save and delete" : "Shorten and save"}
           onConfirm={async () => {
             await save.mutateAsync({ values: form, confirm: true });

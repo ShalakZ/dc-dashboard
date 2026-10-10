@@ -417,7 +417,9 @@ an event); the one exception is `storage.changed`, which is written on every
 save, with all five settings on both sides, because a save re-applies the
 compression and retention policies even for equal values. Its subject carries
 `origin` (`factory`, `site_default` or `manual`, judged by the saved values) and,
-for a save that needed confirmation, `confirmed_loss`. Values are compared in
+for a save that needed confirmation, `confirmed_loss` (`{shorter, raw_chunks, rollup_1m_chunks}`); the subject
+also carries `policies_reapplied: true`. `storage.default_set` has an empty subject, and its first row has an
+empty `before`. Values are compared in
 their plain form (`Decimal('0.10')` and `0.1` are the same rate, a date and its
 ISO string are the same).
 

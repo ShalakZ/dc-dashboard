@@ -27,7 +27,7 @@ export function SourcePanel({ source, canEdit, onClose }: Props) {
   const finished = job !== null && (job.status === "done" || job.status === "failed");
   useEffect(() => {
     if (jobId === null || !finished) return;
-    void Promise.all([keys.graph, keys.sources].map((queryKey) => queryClient.invalidateQueries({ queryKey })));
+    void Promise.all([keys.graph, keys.sources, keys.secretKey].map((queryKey) => queryClient.invalidateQueries({ queryKey })));
   }, [jobId, finished, queryClient]);
 
   // Opening the panel (from a click or from a node's Details button) puts the keyboard where the new content is.

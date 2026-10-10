@@ -179,7 +179,7 @@ fills it with the factory values. The two Resets only fill in the form; nothing 
 rollup), and a save re-applies the policies, which TimescaleDB then runs within about a minute. So `PUT /api/settings/storage` answers
 **409** unless the request carries `confirm=true` when the save shortens the raw or the 1-minute retention, or when chunks older than
 the new limits exist that no scheduled retention would delete anyway (the state after a restore that paused retention: pressing Save
-then deletes them, also with unchanged values). The 409 says how many chunks, which days and how many MB; the page shows it in a
+then deletes them, also with unchanged values). The 409 says how many chunks, which days and how much space they take; the page shows it in a
 dialog. The audit row `storage.changed` records the `origin` of the values (`factory`, `site_default` or `manual`, judged by the
 saved values) and, for a confirmed save, `confirmed_loss`.
 
@@ -487,7 +487,7 @@ After `pg_restore` and before `timescaledb_post_restore()` they print, per table
 deleted and the disk is not trimmed either: the Storage page shows a banner, and pressing Save there starts retention again (the save
 lists what it would delete and asks first). `--apply-retention` skips the pause, so the data beyond the limits is deleted as the
 policies say. Read the printed table before you go back to normal use. If the restore worked but the retention check itself fails, the
-scripts pause every retention job anyway (unless `--apply-retention` was given) and exit with code 4.
+scripts pause every retention job anyway (unless `--apply-retention` was given) and exit with code 4; if that pause fails as well they say so (`could not check or pause retention`) and still exit 4, and the restored policies may then delete data older than their limits.
 
 ### What the backup does not contain
 
@@ -495,8 +495,8 @@ The dump is the database only. `.env` is not in it, and `.env` holds `DCDASH_SEC
 passwords and keys stored for your sources. `certs/` (the HTTPS key and certificate, and an OPC UA client certificate if you
 use one) is not in it either. Keep a copy of `.env` and `certs/` with every backup, off the machine.
 
-The api checks the key when it starts. It stores a fingerprint of `DCDASH_SECRET_KEY` in the database (`settings`, key
-`secret_key_check`; it cannot be turned back into the key) and test-decrypts the stored source secrets. If some cannot be decrypted,
+The api checks the key when it starts. It test-decrypts the stored source secrets and, once every one of them decrypts, stores a
+fingerprint of `DCDASH_SECRET_KEY` in the database (`settings`, key `secret_key_check`; it cannot be turned back into the key). If some cannot be decrypted,
 the api log names the sources, and the Sources page shows a banner to operators and admins until the original `.env` is back or the
 secrets are typed in again.
 

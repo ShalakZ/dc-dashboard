@@ -109,7 +109,7 @@ async def test_the_api_start_stores_the_fingerprint(db):
         await wait_for(stored, key_fingerprint())
 
 
-async def test_a_failing_key_check_does_not_keep_the_mapping_scales_from_loading(db):
+async def test_a_failing_key_check_does_not_keep_the_mapping_scales_from_loading(db, caplog):
     point = await make_point(db, await make_source(db), "a")
     await make_mapping(db, point, await make_asset(db, "p"), scale=0.001)
     await db.execute("INSERT INTO settings (key, value) VALUES ($1, '\"broken\"'::jsonb)", KEY_CHECK_KEY)  # the check raises on this
@@ -119,3 +119,5 @@ async def test_a_failing_key_check_does_not_keep_the_mapping_scales_from_loading
             return dict(app.state.broadcaster.scales)
 
         await wait_for(scales, {point: 0.001})
+    assert "could not check DCDASH_SECRET_KEY" in caplog.text
+    assert "could not load mapping scales" not in caplog.text  # the inner guard caught it, not the outer retry

@@ -199,7 +199,7 @@ describe("StoragePage defaults, resets and the confirmation", () => {
 
   const lossReply = {
     status: 409,
-    body: { detail: "Saving these settings deletes stored readings now: 5 chunks of raw readings (7 days each, 2026-08-06 to 2026-09-10, 0.3 MB).", deletes_now: true, shorter: false },
+    body: { detail: "Saving these settings deletes stored readings now: 5 chunks of raw readings (7 days each, 2026-08-06 to 2026-09-10, 0.3 MB). Repeat the request with confirm=true to go ahead.", deletes_now: true, shorter: false },
   };
 
   it("asks before a save that deletes data and repeats the request with confirm=true", async () => {
@@ -214,6 +214,7 @@ describe("StoragePage defaults, resets and the confirmation", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^save$/i }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent(/5 chunks of raw readings/);
+    expect(dialog).not.toHaveTextContent(/confirm=true/);  // the API hint is for scripts, not for the person at the page
     expect(urls).toHaveLength(1);
     await userEvent.click(within(dialog).getByRole("button", { name: /save and delete/i }));
     await waitFor(() => expect(urls).toHaveLength(2));
