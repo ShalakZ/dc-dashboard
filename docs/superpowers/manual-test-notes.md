@@ -446,12 +446,14 @@ prompt, Save and reload, rename and duplicate name, two-tab conflict) were confi
 - **S7-3 [ux] (owner)** Long asset names do not fit in a default-size widget: legends scroll or cut off
   and bar labels are shortened (`MV2-R2-LV-Panel-02`). Ideas: bigger default sizes per widget type, legends
   that wrap, labels that truncate with a tooltip. S7-2 gives more room.
+  **Closed by W3b (2026-10-11).** Legends and bar axes shorten a long name to 24 (legend) or 18 (axis) characters with a middle ellipsis, so the `(#id)`, `~` and `*` suffixes survive and two names that would look alike keep their full text; the full name is in the chart tooltip and the legend's hover; a long name in a stat or table widget wraps; new bar and time series widgets are 6x5 (existing widgets keep their size). S7-2 (the wide screen) is not part of it.
 - **S7-4 [bug] (owner)** Dragging a widget onto an occupied place sends the displaced widget far down
   instead of only making room for the moved one. Cause: the editor uses `noCompactor` on purpose
   (`DashboardGrid.tsx:34`), so that saved positions look the same in the view and in the editor, and
   without compaction a collision just pushes the other widget below. Options: vertical compaction in the
   editor, the view and on Save (editor and view must stay identical), or swapping positions when dropping
   on an occupied place. Also `nextPosition`'s comment still says "the grid then compacts it upwards".
+  **Closed by W3b (2026-10-11).** D6 resolved as vertical compaction: dropping a widget on an occupied place makes the others close up under it, only as far as needed. The same `compactVertical` is used by the editor (on every change, and when it opens), the read-only view and Save, so they cannot disagree; a saved gappy dashboard is shown closed up, opening the editor on it is not "unsaved", the first real change makes Save store the closed-up positions, and a view-only visit writes nothing.
 - **S7-5 [ux] (owner)** Deleting a widget does not ask first. Nothing is saved until Save (Cancel or Reload
   undoes it) but there is no undo inside a session. Ideas: confirm like the other deletes, or an "Undo"
   link right after a delete.
@@ -532,6 +534,7 @@ Metrics "No metrics are mapped to this asset".
   the live stream (every few seconds); the chart refetches every 30 s (`useSeries`,
   `refetchInterval: 30_000`), so it looks frozen. Ideas: append streamed points, refetch faster on short
   ranges, or at least show "updated hh:mm:ss".
+  **Closed by W3b (2026-10-11).** The Trend refetches by range (1h every 10 s, 6h 30 s, 24h 60 s, 7d 5 min), says `updated hh:mm:ss` in the site time zone, and waits while a mouse rests on it (a refetch would close an open tooltip; touch never pauses). Appending streamed points is parked (backlog section N).
 - **S4-8 [bug] (from the owner's screenshots)** An asset with no points of its own (a room) shows
   `reconnecting…` next to its title forever. The label is `connected ? "live" : "reconnecting…"`, and
   with nothing to subscribe to no connection is ever opened. It should say nothing, or "no live data".
@@ -539,6 +542,7 @@ Metrics "No metrics are mapped to this asset".
   an empty Metrics table, although Energy today does roll up from the children. Ideas: roll up the
   children's live power, let the Trend show the rolled-up energy for a parent, and explain `(estimated)`
   (part of the figure came from average power x time, not from an energy counter) with a tooltip.
+  **Closed by W3b (2026-10-11), except the rolled-up Trend (parked, backlog section N).** A parent asset without its own power meter shows `Live power` as the sum of its sub-assets' power meters (own meter wins; only good, fresh readings count; a partial sum says `Sum of K of N meters below; the other(s) not reporting` with a visible `Not reporting: <paths>` line; none reporting shows `—`, never 0.00). Display only: billing and the energy figures are unchanged (D1 untouched). The Energy tile's `(estimated)` now explains itself in a tooltip.
 
 Mappings completed by Claude at the owner's request (direct database insert plus the collector
 notification, the same rows `POST /api/mappings` writes; ids 30-32): `MV2-R1-LV-Panel-02` energy from
