@@ -18,6 +18,10 @@ const FIRST = "W3b first";
 const SECOND = "W3b second";
 const BAR = "W3b bar";
 const SERIES = "W3b series";
+// A run suffix, so the spec can run again on a stack an earlier run left its dashboards and assets on: dashboard names are unique
+// everywhere, asset names among siblings (the room sits under the shared root, the rest under the room).
+const RUN = Date.now().toString(36);
+// Exactly 45 characters on purpose; it is created under this run's own room, so it needs no suffix.
 const LONG_NAME = "W3b-Main-Switchgear-Feeder-Room-East-Panel-07";
 
 interface ApiAsset { id: number; parent_id: number | null; name: string; kind: string }
@@ -69,6 +73,12 @@ function farthest(a: Box[], b: Box[]): number {
   return Math.max(...a.flatMap((box, i) => [Math.abs(box.x - b[i].x), Math.abs(box.y - b[i].y), Math.abs(box.width - b[i].width), Math.abs(box.height - b[i].height)]));
 }
 
+// The mappings the test makes, removed again afterwards so the unmapped kW points of sim are free for the next run.
+const ownMappings: number[] = [];
+test.afterEach(async ({ page }) => {
+  for (const id of ownMappings.splice(0)) await page.request.delete(`/api/mappings/${id}`).catch(() => undefined);
+});
+
 test("W3b: dashboards close up, a parent's live power, the Trend's updated time, long names in charts", async ({ page }) => {
   test.setTimeout(360_000);
 
@@ -87,8 +97,11 @@ test("W3b: dashboards close up, a parent's live power, the Trend's updated time,
 
   const createAsset = (name: string, parent: number | null, kind: string) =>
     sendJson<ApiAsset>(page, "post", "/api/assets", { name, parent_id: parent, kind, sort_order: 0 });
-  const mapPower = (point: ApiPoint, asset: ApiAsset) =>
-    sendJson<{ id: number }>(page, "post", "/api/mappings", { point_id: point.id, asset_id: asset.id, metric: "active_power_kw", scale: 1 });
+  const mapPower = async (point: ApiPoint, asset: ApiAsset) => {
+    const mapping = await sendJson<{ id: number }>(page, "post", "/api/mappings", { point_id: point.id, asset_id: asset.id, metric: "active_power_kw", scale: 1 });
+    ownMappings.push(mapping.id);
+    return mapping;
+  };
 
   await test.step("compaction: the view and the editor show the same closed-up layout, and only a change stores it", async () => {
     const stat = (title: string, y: number): ApiWidget => ({
@@ -96,7 +109,7 @@ test("W3b: dashboards close up, a parent's live power, the Trend's updated time,
       config: { assets: [mv2!.id], source: "metric", metric: "active_power_kw", aggregation: "last", range: null },
     });
     // A dashboard as the old editor could leave it: a gap of four rows between the two widgets.
-    const made = await createDashboard(page, "W3b compaction", "24h", [stat(FIRST, 0), stat(SECOND, 6)]);
+    const made = await createDashboard(page, `W3b compaction ${RUN}`, "24h", [stat(FIRST, 0), stat(SECOND, 6)]);
     const stored = await getJson<ApiDashboard>(page, `/api/dashboards/${made.id}`);
     expect(stored.widgets.map((w) => w.y)).toEqual([0, 6]);
 
@@ -157,7 +170,8 @@ test("W3b: dashboards close up, a parent's live power, the Trend's updated time,
     expect(writes, "one save, nothing else").toEqual([`PUT /api/dashboards/${made.id}`]);
   });
 
-  // sim has nine unmapped kW points (LVP02_kW ... LVP10_kW); the next two steps map three of them.
+  // sim has nine unmapped kW points (LVP02_kW ... LVP10_kW) on a fresh journey; the next two steps map three of them and the
+  // afterEach above frees them again, so a rerun finds them. (Not rerunnable after a run that was killed before its afterEach.)
   const sim = (await getJson<ApiSource[]>(page, "/api/sources")).find((s) => s.name === "sim");
   expect(sim, "the source sim from the journey").toBeTruthy();
   const points = await getJson<ApiPoint[]>(page, `/api/sources/${sim!.id}/points`);
@@ -165,9 +179,9 @@ test("W3b: dashboards close up, a parent's live power, the Trend's updated time,
   expect(free.length, "unmapped kW points of sim").toBeGreaterThanOrEqual(3);
   const [pointA, pointB, pointC] = free;
 
-  const room = await createAsset("W3b-Room", root?.id ?? null, "Room");
-  const meterA = await createAsset("W3b-Meter-A", room.id, "generic");
-  const meterB = await createAsset("W3b-Meter-B", room.id, "generic");
+  const room = await createAsset(`W3b-Room-${RUN}`, root?.id ?? null, "Room");
+  const meterA = await createAsset(`W3b-Meter-A-${RUN}`, room.id, "generic");
+  const meterB = await createAsset(`W3b-Meter-B-${RUN}`, room.id, "generic");
 
   await test.step("roll-up: a room without a power meter shows the sum of its sub-assets' meters", async () => {
     await mapPower(pointA, meterA);
@@ -198,7 +212,7 @@ test("W3b: dashboards close up, a parent's live power, the Trend's updated time,
     await expect(updated).not.toHaveText(before, { timeout: 30_000 });
 
     // A real mouse over the chart says it is paused; moving away resumes.
-    const trend = page.locator("section").filter({ has: updated });
+    const trend = page.getByRole("region", { name: "Trend", exact: true });
     await trend.hover();
     await expect(updated).toContainText("(paused while you point at the chart)");
     await page.mouse.move(0, 0);
@@ -216,7 +230,7 @@ test("W3b: dashboards close up, a parent's live power, the Trend's updated time,
     }, { timeout: 90_000, intervals: [2000], message: "the long-named asset has a reading" }).not.toBeNull();
 
     const config = { assets: [meterA.id, meterB.id, longAsset.id], source: "metric", metric: "active_power_kw", aggregation: "avg", range: null };
-    const made = await createDashboard(page, "W3b long names", "1h", [
+    const made = await createDashboard(page, `W3b long names ${RUN}`, "1h", [
       { type: "bar", title: BAR, config, x: 0, y: 0, w: 6, h: 5 },
       { type: "timeseries", title: SERIES, config, x: 6, y: 0, w: 6, h: 5 },
     ]);
@@ -227,6 +241,8 @@ test("W3b: dashboards close up, a parent's live power, the Trend's updated time,
       await expect(region(page, title).getByRole("alert")).toHaveCount(0);
     }
     await expect(page.getByRole("alert")).toHaveCount(0);
+    // A chart is drawn on a canvas: look at the picture only once both have one.
+    for (const title of [BAR, SERIES]) await expect(region(page, title).locator("canvas")).toBeVisible();
     // The charts draw to canvas: the controller looks at the picture (the shortening itself is covered by the option-level tests).
     await page.mouse.move(0, 0);
     await page.screenshot({ path: "test-results/w3b-longnames.png", fullPage: true });

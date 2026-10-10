@@ -28,15 +28,18 @@ export function rollupPower(sources: readonly RollupSource[], live: ReadonlyMap<
 const OWN_METER_TIP = "This asset has no power meter of its own: the figure is the sum of its sub-assets' meters.";
 
 /**
- * The line under the figure and its tooltip: how many meters the sum is made of. The tooltip names the meters that do
- * not report, or all of them when every one does.
+ * The line under the figure, its tooltip and, when some but not all meters are silent, the list of the silent ones for a visible
+ * line (`silent`, else null). Meters are named by path, so two sub-assets with one name can be told apart.
  */
-export function rollupNote({ counted, of, missing }: RollupPower, sources: readonly RollupSource[]): { text: string; title: string } {
+export function rollupNote(
+  { counted, of, missing }: RollupPower,
+  sources: readonly RollupSource[],
+): { text: string; title: string; silent: string | null } {
   let text: string;
   if (counted === of) text = `Sum of the live power of ${of === 1 ? "1 meter" : `${of} meters`} below`;
-  else if (counted > 0) text = `Sum of ${counted} of ${of} meters below; the others are not reporting`;
+  else if (counted > 0) text = `Sum of ${counted} of ${of} meters below; ${of - counted === 1 ? "the other is" : "the others are"} not reporting`;
   else text = of === 1 ? "The meter below is not reporting" : `None of the ${of} meters below is reporting`;
-  const names = (list: readonly RollupSource[]) => list.map((s) => s.name).join(", ");
+  const names = (list: readonly RollupSource[]) => list.map((s) => s.path).join(", ");
   const detail = missing.length > 0 ? `Not reporting: ${names(missing)}.` : `Meters: ${names(sources)}.`;
-  return { text, title: `${OWN_METER_TIP} ${detail}` };
+  return { text, title: `${OWN_METER_TIP} ${detail}`, silent: counted > 0 && missing.length > 0 ? names(missing) : null };
 }

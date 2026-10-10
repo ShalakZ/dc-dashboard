@@ -36,6 +36,7 @@ export function AssetPage() {
         <div className="muted">Live power</div>
         <div className="big">{power ? `${fmt(livePower)} kW` : rollup?.kw != null ? `${fmt(rollup.kw)} kW` : "—"}</div>
         {note && <small className="muted" title={note.title}>{note.text}</small>}
+        {note?.silent && <div className="muted"><small>Not reporting: {note.silent}</small></div>}
       </div>
       <EnergyTile energy={data.energy_today} />
       <CostTile cost={data.cost_today ?? null} currency={data.currency ?? null} />

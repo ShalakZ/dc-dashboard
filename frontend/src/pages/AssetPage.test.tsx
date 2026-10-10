@@ -223,10 +223,23 @@ describe("AssetPage", () => {
     it("sums the meters that report and names the others in the tooltip", async () => {
       await render([...two(), rollupSource(3, "Rack C", 9, { stale: true })]);
       expect(figure()).toHaveTextContent(/^7\.50 kW$/);
-      const note = screen.getByText("Sum of 2 of 3 meters below; the others are not reporting");
-      expect(note.getAttribute("title")).toContain("Rack C");
+      const note = screen.getByText("Sum of 2 of 3 meters below; the other is not reporting");
+      expect(note.getAttribute("title")).toContain("Site / Hall / Rack C");
       expect(note.getAttribute("title")).not.toContain("Rack A");
       expect(note.getAttribute("title")!.startsWith(TIP)).toBe(true);
+    });
+
+    it("names the silent meters in a visible line, not only in the tooltip", async () => {
+      await render([...two(), rollupSource(3, "Rack C", 9, { stale: true }), rollupSource(4, "Rack D", null)]);
+      const line = screen.getByText("Not reporting: Site / Hall / Rack C, Site / Hall / Rack D");
+      expect(tile()).toContainElement(line);
+      expect(line.closest(".muted")).not.toBeNull();
+      expect(screen.getByText("Sum of 2 of 4 meters below; the others are not reporting")).toBeInTheDocument();
+    });
+
+    it("shows no such line when every meter reports, or none does", async () => {
+      await render(two());
+      expect(screen.queryByText(/^Not reporting:/)).not.toBeInTheDocument();
     });
 
     it("shows a dash, never 0.00, when no meter reports", async () => {
@@ -254,7 +267,8 @@ describe("AssetPage", () => {
       expect(figure()).toHaveTextContent(/^14\.50 kW$/);
       act(() => FakeEventSource.last!.emit([[22, Date.now() / 1000, null, 1]]));
       expect(figure()).toHaveTextContent(/^10\.00 kW$/);
-      expect(screen.getByText("Sum of 1 of 2 meters below; the others are not reporting")).toBeInTheDocument();
+      expect(screen.getByText("Sum of 1 of 2 meters below; the other is not reporting")).toBeInTheDocument();
+      expect(screen.getByText("Not reporting: Site / Hall / Rack B")).toBeInTheDocument();
     });
 
     it("lets a streamed value revive a meter that was stale when the page loaded", async () => {

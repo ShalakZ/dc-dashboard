@@ -120,6 +120,17 @@ describe("TrendChart", () => {
     expect(calls.filter((c) => c.path === "/api/assets/4/series").length).toBeGreaterThanOrEqual(2);
   });
 
+  it("is a region named Trend, so a page (and a test) can find it by its name", async () => {
+    mockFetch({
+      ...siteRoute,
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/assets/4/series": { body: series },
+    });
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    const region = await screen.findByRole("region", { name: "Trend" });
+    expect(region).toContainElement(await screen.findByTestId("chart"));
+  });
+
   it("labels the storage tier the series came from", async () => {
     mockFetch({
       ...siteRoute,

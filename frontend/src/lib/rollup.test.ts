@@ -84,7 +84,32 @@ describe("rollupNote", () => {
   });
 
   it("says how many report when some do not", () => {
-    expect(note([source(1), source(2, { stale: true }), source(3)]).text).toBe("Sum of 2 of 3 meters below; the others are not reporting");
+    expect(note([source(1), source(2, { stale: true }), source(3, { value: null })]).text).toBe("Sum of 1 of 3 meters below; the others are not reporting");
+  });
+
+  it("says 'the other is' when exactly one meter is missing", () => {
+    expect(note([source(1), source(2, { stale: true }), source(3)]).text).toBe("Sum of 2 of 3 meters below; the other is not reporting");
+    expect(note([source(1), source(2, { stale: true })]).text).toBe("Sum of 1 of 2 meters below; the other is not reporting");
+  });
+
+  it("lists the silent meters by path in a visible line when some, but not all, report", () => {
+    expect(note([source(1), source(2, { stale: true }), source(3, { value: null })]).silent).toBe("Site / Room / Rack 2, Site / Room / Rack 3");
+  });
+
+  it("has no visible list when every meter reports or none does", () => {
+    expect(note([source(1), source(2)]).silent).toBeNull();
+    expect(note([source(1, { stale: true }), source(2, { stale: true })]).silent).toBeNull();
+  });
+
+  it("tells two sub-assets with one name apart by their paths", () => {
+    const a = source(1, { name: "Meter", path: "Site / Hall A / Meter" });
+    const b = source(2, { name: "Meter", path: "Site / Hall B / Meter", stale: true });
+    const { title, silent } = note([a, b]);
+    expect(silent).toBe("Site / Hall B / Meter");
+    expect(title).toContain("Not reporting: Site / Hall B / Meter.");
+    expect(title).not.toContain("Hall A");
+    expect(note([source(3, { name: "Meter", path: "Site / Hall A / Meter" }), source(4, { name: "Meter", path: "Site / Hall B / Meter" })]).title)
+      .toContain("Meters: Site / Hall A / Meter, Site / Hall B / Meter.");
   });
 
   it("says that none reports, with the singular form for one meter", () => {
@@ -95,15 +120,15 @@ describe("rollupNote", () => {
   it("starts the tooltip with why the figure is a sum, then names the meters that do not report", () => {
     const { title } = note([source(1), source(2, { stale: true }), source(3, { value: null })]);
     expect(title.startsWith(TIP)).toBe(true);
-    expect(title).toContain("Rack 2");
-    expect(title).toContain("Rack 3");
+    expect(title).toContain("Site / Room / Rack 2");
+    expect(title).toContain("Site / Room / Rack 3");
     expect(title).not.toContain("Rack 1");
   });
 
   it("names every meter in the tooltip when all of them report", () => {
     const { title } = note([source(1), source(2)]);
     expect(title.startsWith(TIP)).toBe(true);
-    expect(title).toContain("Rack 1");
-    expect(title).toContain("Rack 2");
+    expect(title).toContain("Site / Room / Rack 1");
+    expect(title).toContain("Site / Room / Rack 2");
   });
 });
