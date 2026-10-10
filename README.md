@@ -97,7 +97,9 @@ UI screens, besides Assets, Sources and Points:
   raw retention, compression delay, 1-minute rollup retention and the warning threshold.
 - **Password** (everyone): change your own password; your other sessions are signed out.
 - **Scans** and **Discovery** (operators and admins; only admins can change anything): see "Discovery".
-- **Audit** (admin): the read-only audit log, newest first, 50 entries per page.
+- **Audit** (admin): the read-only audit log, newest first, 50 entries per page. Every change a user
+  makes is recorded with who did it (the name stays even after the account is deleted), when, and for
+  updates the values before and after; sign-in successes, failures and lockouts are recorded too.
 - **Dashboards** (everyone can read; operators and admins build): shared dashboards of widgets; see
   "Dashboards and billing".
 - **Billing** (everyone): cost per asset per day and per month, with a CSV export.
@@ -209,9 +211,20 @@ data-retrieval requests the connectors already use, nothing else.
 7. **Credentials.** Click a source that shows "needs credentials" (or press its **Details** button) to open its side panel, enter the
    secret (and the user name for OPC UA) and save: the source is browsed again. Secrets are stored
    encrypted and never returned by the API.
-8. **Audit log** (Audit, admin). Scope changes, scan start and finish and every accepted mapping are
-   recorded with the user and time. Phase 1 actions (user management, source edits and so on) are not
-   audited.
+8. **Audit log** (Audit, admin). Every change is recorded with the user (name and id, kept on the row,
+   so the name stays after the account is deleted) and the time, and an update records the values
+   before and after (only the fields that changed; a save that changes nothing writes no row, except a
+   storage save, which re-applies the compression and retention policies and is always recorded).
+   Audited: users (create, role, active, password reset), your own password changes, first-run
+   setup, sign-ins (success, failure, lockout; a wrong current password on a password change counts as
+   a failure), the site timezone, the currency, the storage settings (every save), assets, mappings,
+   sources (create, edit, delete, test, test all, browse), tariffs, dashboards, scopes, scans (start and
+   finish) and accepted discoveries. Never recorded: passwords and password hashes, source secrets and
+   credentials inside a URL (a marker shows that one was set or changed: `secret: set -> changed`, or
+   `config_credentials: unchanged -> changed` when only the credentials inside a source's URL changed),
+   a sign-in with an unknown username (only that one happened, and from which address), logging out and
+   the node positions on the Discovery graph. Failed sign-ins are capped at 30 rows per 5 minutes, then
+   counted on the next row (lockouts have their own cap of 30).
 
 Environment variables (set them in `.env`; both are optional):
 
@@ -276,7 +289,7 @@ more with up to six decimals and an effective date (a date in the site timezone)
 given day the rate is the latest one effective on or before that day, taken from the nearest asset up
 the tree that has its own rates, otherwise from the site default; an override therefore takes over from
 its own date. Editing a past rate recalculates history: cost is for visibility, not invoicing. Tariff,
-currency and dashboard changes appear in the Audit log.
+currency and dashboard changes appear in the Audit log; an update shows the values before and after.
 
 **The energy engine.** One engine produces every energy figure (asset page, Billing, dashboards), so
 they agree. It reads the hourly rollup (`readings_1h`) and works in whole hours; a day or a month is the
@@ -350,7 +363,8 @@ Three specs run in one `playwright test` run against the dev-profile stack on `h
   source into its ten panel clusters, maps `LVP01` onto an existing asset and `LVP02` onto a new one
   by real mouse drags, creates `LVP03`...`LVP10` through the buttons, then checks through the API that
   all 60 points are mapped (six distinct metrics per asset), that a live value arrives, and that the
-  Audit page shows the scope, the scan and ten accepted mappings.
+  audit log holds the scope, the scan and ten accepted mappings (counted through the API, because the
+  Audit page shows only the newest 50 rows and every sign-in adds one).
 - `phase3.spec.ts` (after it, at 1600×1000) reuses that state. An admin sets the currency, sees a dash
   (not zero) on Billing while no rate exists, adds a site default rate, and checks the current month on
   Billing (a priced panel row, its month total and today's cell, the month CSV with its header and
@@ -358,7 +372,7 @@ Three specs run in one `playwright test` run against the dev-profile stack on `h
   operator builds a dashboard with a stat and a bar widget, saves it, reloads and finds both widgets and
   their layout, changes the dashboard range and downloads a widget's CSV; the viewer sees the dashboard
   with no edit controls, no Tariffs link and `403` from the write API; the admin finds the tariff,
-  currency and dashboard entries in the Audit log.
+  currency and dashboard entries in the audit log (counted through the API as well).
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -530,9 +544,9 @@ interval are not collected.
    `--profile dev` on a stack that has no simulator). Alembic prints nothing while it migrates, so watch
    `docker compose logs -f api` until Uvicorn's start-up lines appear (`Application startup complete`);
    a migration that fails prints an error instead. Then `docker compose exec api alembic current` must
-   print `0004 (head)`. If Compose reports the `api` unhealthy or a dependency failed while the rollup
-   was rebuilding, wait for Uvicorn to start and run the same `up -d` again; `web` and `collector` start
-   once `api` is healthy.
+   print the head revision (`0005 (head)` since W1a). If Compose reports the `api` unhealthy or a
+   dependency failed while the rollup was rebuilding, wait for Uvicorn to start and run the same
+   `up -d` again; `web` and `collector` start once `api` is healthy.
 4. **If something goes wrong.**
    - `tuple concurrently deleted` in the log: a refresh job raced the drop of the view. The container
      restarts and the migration runs again by itself.
@@ -566,7 +580,7 @@ interval are not collected.
    - Any other error that repeats: `docker compose stop api` and report the error.
    - Never use `docker compose down -v`: it deletes the database volume.
 5. **Verify.**
-   - `SELECT version_num FROM alembic_version;` returns `0004`.
+   - `SELECT version_num FROM alembic_version;` returns `0005`.
    - `\d readings_1h` lists a `minutes` column.
    - `SELECT view_name FROM timescaledb_information.continuous_aggregates;` lists `readings_1m` and
      `readings_1h`.
@@ -594,6 +608,22 @@ interval are not collected.
       dependency api`, which the script ignores by design.
    6. `docker compose --profile dev up -d` creates fresh Phase 2 containers; on the restored `0003`
       database Alembic has nothing to do.
+
+## Upgrading to W1a (migration 0005)
+
+W1a (the audit foundation) adds migration `0005`: two columns (`actor_id`, `actor_name`) on `audit_log`, a
+backfill that copies the name of each existing entry's user into them, and a trigger that fills them on every
+new entry, so an entry keeps who did it after the account is gone. It runs in a moment and needs no pre-check.
+The `api` container applies it the first time it starts from the new image.
+
+1. **Back up first.** `scripts/backup.sh` (the `db` container must be running). Keep the `.dump` and the
+   `.version` file (it says `0004`).
+2. **Apply.** `docker compose up -d --build` (add `--profile dev` on a stack that has the simulator).
+3. **Verify.** `docker compose exec api alembic current` prints `0005 (head)`.
+4. **Going back** means restoring the backup from step 1, with the same `scripts/restore.sh` steps as in "Going
+   back" of the Phase 3 section: the code and images of the version before W1a must be checked out and built
+   first, and `--force` is needed because the dump's `.version` (`0004`) differs from the running schema
+   (`0005`).
 
 ## Add a connector
 

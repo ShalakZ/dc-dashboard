@@ -1,11 +1,11 @@
 """The audit coverage gate: every route that changes data writes an audit row, or says why not.
 
 The rule lives in the route: a write route's own body must call one of AUDIT_CALLS (an AST check, so a route that
-forgets fails here the day it is added). Routes are listed as EXEMPT (with a reason) or PENDING (not audited yet;
-this set only shrinks and must be empty at the end of W1a). The check is syntactic: it proves the route's body
-mentions an audit call (so a route that audits through a helper must call audit itself), the per-route tests prove
-the call runs. Routes are enumerated with fastapi.routing.iter_route_contexts because include_router does not copy
-routes into app.routes on FastAPI 0.142.
+forgets fails here the day it is added). A route that is not audited is listed in EXEMPT with its reason; there is no
+other way out (coverage_problems still takes a `pending` set, which only the tests of the gate itself use). The check
+is syntactic: it proves the route's body mentions an audit call (so a route that audits through a helper must call
+audit itself), the per-route tests prove the call runs. Routes are enumerated with
+fastapi.routing.iter_route_contexts because include_router does not copy routes into app.routes on FastAPI 0.142.
 """
 import ast
 import inspect
@@ -28,9 +28,6 @@ EXEMPT: dict[str, str] = {
     "POST /api/widget-data": "a read sent as POST because the body carries the widget configs",
     "POST /api/widget-data/csv": "a read sent as POST: the CSV export of widget values",
 }
-
-# Routes not audited yet. Each task removes the routes it audits; Task 9 deletes this set.
-PENDING: set[str] = set()
 
 
 def write_routes(app: FastAPI) -> dict[str, Any]:
@@ -71,7 +68,7 @@ def coverage_problems(app: FastAPI, exempt: dict[str, str], pending: set[str]) -
 
 
 def test_every_write_route_is_audited_or_explained():
-    assert coverage_problems(create_app(), EXEMPT, PENDING) == []
+    assert coverage_problems(create_app(), EXEMPT, set()) == []
 
 
 def test_every_exemption_has_a_reason():
