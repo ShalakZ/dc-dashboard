@@ -47,14 +47,18 @@ try {
 } finally {
   # Before the background workers come back: print what retention would delete and pause it if that is data.
   try {
-    cmd /c "docker compose exec -T db psql -U dcdash -d dcdash -q -v apply_retention=$ApplyRetention < `"$RetentionSql`""
+    cmd /c "docker compose exec -T db psql -U dcdash -d dcdash -q -v ON_ERROR_STOP=1 -v apply_retention=$ApplyRetention < `"$RetentionSql`""
     if ($LASTEXITCODE -ne 0) { throw "psql exit $LASTEXITCODE" }
   } catch {
     $RetentionFailed = $true
     if ($ApplyRetention -eq 0) {
       # Fail safe: pausing loses nothing (the Storage page shows a banner and a Save starts retention again).
       docker compose exec -T db psql -U dcdash -d dcdash -qtAc "SELECT count(*) FROM (SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention') paused" | Out-Null
-      Write-Host "could not check retention ($_): paused every retention job to be safe (see scripts\restore_retention.sql)"
+      if ($LASTEXITCODE -eq 0) {
+        Write-Host "could not check retention ($_): paused every retention job to be safe (see scripts\restore_retention.sql)"
+      } else {
+        Write-Host "could not check or pause retention ($_): data older than the restored limits may be deleted now"
+      }
     } else {
       Write-Host "could not check or pause retention ($_): data older than the restored limits may be deleted now"
     }

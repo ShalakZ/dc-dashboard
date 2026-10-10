@@ -67,6 +67,7 @@ def test_retention_is_checked_after_pg_restore_and_before_post_restore(tmp_path)
                                     "apply_retention", "timescaledb_post_restore", "compose start api collector")]
     assert order == sorted(order) and len(set(order)) == len(order)
     assert "apply_retention=0" in retention_call(calls)
+    assert "ON_ERROR_STOP=1" in retention_call(calls)  # the fail-safe must not depend on a line inside the SQL file
     assert "SQL-READ: -- Run by scripts/restore.sh" in "\n".join(calls)  # the SQL file is what reaches psql's stdin
 
 
@@ -98,6 +99,23 @@ def test_when_the_retention_check_fails_retention_is_paused_anyway_and_the_exit_
     assert result.returncode == 4 and "paused every retention job" in result.stderr
     order = [at(calls, f) for f in ("apply_retention", "scheduled => false", "timescaledb_post_restore", "compose start api collector")]
     assert order == sorted(order) and len(set(order)) == len(order)
+
+
+def fake_docker_where_the_retention_sql_and_the_fallback_pause_fail() -> str:
+    failing = FAKE_DOCKER.replace(
+        '*"apply_retention"*) echo "SQL-READ: $(head -c 40 | tr \'\\n\' \' \')" >> "$CALLS_LOG" ;;',
+        '*"apply_retention"*) cat > /dev/null; echo "psql: error: boom" >&2; exit 3 ;;\n  *"scheduled => false"*) echo "psql: error: no pause" >&2; exit 3 ;;',
+    )
+    assert failing != FAKE_DOCKER
+    return failing
+
+
+@pytest.mark.parametrize("args", [(), ("--apply-retention",)])
+def test_when_neither_the_check_nor_the_fallback_pause_works_the_script_says_data_may_be_deleted(tmp_path, monkeypatch, args):
+    monkeypatch.setitem(globals(), "FAKE_DOCKER", fake_docker_where_the_retention_sql_and_the_fallback_pause_fail())
+    result, calls = run_restore(tmp_path, *args)
+    assert result.returncode == 4 and "may be deleted now" in result.stderr and "paused every retention job" not in result.stderr
+    assert at(calls, "timescaledb_post_restore") and at(calls, "compose start api collector")
 
 
 def test_an_unknown_flag_exits_2_before_touching_docker(tmp_path):
