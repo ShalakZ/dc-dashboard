@@ -71,6 +71,19 @@ the date and the days left), when it has expired (browsers already warn your use
 (the notice says why). Nothing is shown when `DCDASH_TLS_CERT` is unset. If the collector is not running, the stored
 answer is not trusted after three hours and no notice is shown.
 
+**Security headers.** Every answer of the `web` container (pages, the API, and the redirect from port 80), over HTTP and
+over HTTPS alike, carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY` and a
+`Content-Security-Policy-Report-Only`; Caddy's own `Server` header is removed (so is the API's). They come from one file,
+`deploy/security-headers.caddy`, which both Caddyfiles import in every site block. The content policy is **Report-Only on
+purpose**: a browser that finds a violation writes it to the console and blocks nothing, so a policy that is too tight cannot
+break a page. It allows scripts, connections (the live stream included), fonts and forms from the site's own origin only,
+images from the site, `data:` and `blob:`, inline styles (React and the charts write `style` attributes), and no plug-ins.
+It names no report address, because that would be a new unauthenticated route. To read violations, open the browser's developer
+tools on any page: a violation is a console message that starts with `[Report Only] Refused to ...` and names the directive.
+`frontend/e2e/headers.spec.ts` walks every page an administrator can open and fails on any such message. The policy has no
+`frame-ancestors` because `X-Frame-Options: DENY` already forbids framing. The redirect from port 80 is `https://<host><path>`
+and drops a non-standard port, so publish HTTPS on 443. Changes to the headers need `docker compose up -d --build web`.
+
 Open `http://localhost/`. The first visit asks you to create the admin
 account. Then: Sources → Add source → Test → Points → Browse points → Map;
 Assets → open the asset to see live and historical values.

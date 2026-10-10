@@ -12,6 +12,7 @@ RUN apk add --no-cache libcap \
  && mkdir -p /data /config && chown -R web:web /data /config
 COPY deploy/Caddyfile /etc/caddy/Caddyfile
 COPY deploy/Caddyfile.tls /etc/caddy/Caddyfile.tls
+COPY deploy/security-headers.caddy /etc/caddy/security-headers.caddy
 COPY --chmod=0755 deploy/entrypoint.sh /entrypoint.sh
 COPY --from=build /app/dist /srv
 USER web

@@ -23,6 +23,16 @@ https() { curl -sk --resolve "localhost:$SCRATCH_HTTPS_PORT:127.0.0.1" -o /dev/n
 for _ in $(seq 1 60); do [ "$(https)" = 200 ] && break; sleep 2; done
 check "https" "$(https)" 200
 check "http redirects" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SCRATCH_HTTP_PORT/api/setup" || true)" 308
+# The security headers (deploy/security-headers.caddy) ride on the HTTPS answer and on the port-80 redirect alike, and Caddy's own
+# `Server` header is gone. `-D -` writes the response headers to stdout (CR removed); the body goes nowhere.
+header_value() { printf '%s\n' "$2" | awk -F': *' -v n="$1" 'tolower($1) == n { print $2; exit }'; }
+https_headers="$(curl -sk --resolve "localhost:$SCRATCH_HTTPS_PORT:127.0.0.1" -D - -o /dev/null "https://localhost:$SCRATCH_HTTPS_PORT/api/setup" | tr -d '\r' || true)"
+http_headers="$(curl -s -D - -o /dev/null "http://127.0.0.1:$SCRATCH_HTTP_PORT/api/setup" | tr -d '\r' || true)"
+for scheme in https http; do
+  headers="${scheme}_headers"
+  check "$scheme x-content-type-options" "$(header_value x-content-type-options "${!headers}")" nosniff
+  check "$scheme server header (absent)" "$(header_value server "${!headers}")" ""
+done
 compose stop web
 # `run` (not `up`) so the restart policy does not apply and the container's exit code is ours.
 out="$(compose run --rm --no-deps -e DCDASH_TLS_KEY=/certs/missing.pem web 2>&1 || true)"

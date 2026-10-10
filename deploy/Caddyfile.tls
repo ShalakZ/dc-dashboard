@@ -3,12 +3,14 @@
 }
 
 :80 {
+	import /etc/caddy/security-headers.caddy
 	redir https://{host}{uri} 308
 }
 
 :443 {
 	tls {env.DCDASH_TLS_CERT} {env.DCDASH_TLS_KEY}
 	header Strict-Transport-Security "max-age=31536000"
+	import /etc/caddy/security-headers.caddy
 
 	handle /api/* {
 		reverse_proxy api:8000 {

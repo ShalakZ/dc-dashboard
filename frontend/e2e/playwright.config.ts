@@ -27,5 +27,11 @@ export default defineConfig({
       dependencies: ["discovery"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
     },
+    {
+      name: "headers",
+      testMatch: "headers.spec.ts",
+      dependencies: ["phase3"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
+    },
   ],
 });
