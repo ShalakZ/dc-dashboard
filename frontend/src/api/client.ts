@@ -35,9 +35,19 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): voi
   onUnauthorized = handler;
 }
 
+type ForbiddenHandler = () => void;
+let onForbidden: ForbiddenHandler | null = null;
+
+/** Register the callback invoked after any non-auth request answers 403, so the app can check whether the user's role has changed. */
+export function setForbiddenHandler(handler: ForbiddenHandler | null): void {
+  onForbidden = handler;
+}
+
+const isAuthPath = (path: string) => AUTH_PATHS.has(path.split("?")[0]);
+
 /** Tell the app the session is gone (a 401 from anything but the sign-in endpoints). Shared by `request` and raw fetches such as CSV downloads. */
 export function notifyUnauthorized(path: string): void {
-  if (!AUTH_PATHS.has(path.split("?")[0])) onUnauthorized?.();
+  if (!isAuthPath(path)) onUnauthorized?.();
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -57,6 +67,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   if (!response.ok) {
     if (response.status === 401) notifyUnauthorized(path);
+    if (response.status === 403 && !isAuthPath(path)) onForbidden?.();
     const detail = data && typeof data === "object" && "detail" in data ? (data as { detail: unknown }).detail : data;
     throw new ApiError(response.status, detail, data);
   }
