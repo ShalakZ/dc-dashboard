@@ -3,6 +3,7 @@
 // replace echarts-for-react by a stub and can only see the option, which is how a bucket-width error that made
 // every line of a 24h chart vanish slipped through once.
 import * as echarts from "echarts";
+import { shortLabel } from "../../../lib/widgetFormat";
 import { seriesData, seriesPoint } from "../../../test/dashboardFixtures";
 import { withLegendSelection } from "./legendSelection";
 import { timeSeriesOption } from "./TimeSeriesWidget";
@@ -90,6 +91,29 @@ describe("legend selection, kept by the real chart library", () => {
     expect(shownLegend(chart)).toEqual({ A: true, B: false });
     expect(dataLines("#1f6feb")).toHaveLength(1); // asset A's line
     expect(dataLines("#cf222e")).toHaveLength(0); // asset B's is not drawn
+    chart.dispose();
+  });
+
+  it("draws a long name shortened in the legend but still reports and remembers the full name (S7-3)", () => {
+    const first = "Main-Switchboard-Feeder-Room-East-Hall-3";
+    const second = "Auxiliary-Distribution-Panel-Block-West";
+    const named = (base: number) => {
+      const data = twoAssets(base);
+      data.series[0].name = first;
+      data.series[1].name = second;
+      return data;
+    };
+    const chart = echarts.init(null, undefined, { renderer: "svg", ssr: true, width: 600, height: 300 });
+    let reported: Record<string, boolean> | null = null;
+    chart.on("legendselectchanged", (event) => { reported = (event as unknown as { selected: Record<string, boolean> }).selected; });
+    chart.setOption(timeSeriesOption(named(0), "Asia/Qatar"), { notMerge: true });
+    const svg = chart.renderToSVGString();
+    expect(svg).toContain(shortLabel(first, 24));
+    expect(svg).not.toContain(`>${first}<`);
+    chart.dispatchAction({ type: "legendToggleSelect", name: second });
+    expect(reported).toEqual({ [first]: true, [second]: false });
+    chart.setOption(withLegendSelection(timeSeriesOption(named(100), "Asia/Qatar"), reported!), { notMerge: true });
+    expect(shownLegend(chart)).toEqual({ [first]: true, [second]: false });
     chart.dispose();
   });
 });

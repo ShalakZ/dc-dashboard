@@ -108,3 +108,34 @@ export function uniqueLabels(rows: readonly Labelled[]): string[] {
 export function chartLabels(rows: readonly (Labelled & Flags)[]): string[] {
   return uniqueLabels(rows).map((label, i) => `${label}${rows[i].estimated ? " ~" : ""}${rows[i].partial ? " *" : ""}`);
 }
+
+/** The identifying tail `uniqueLabels` and `chartLabels` append: " (#12)", then " ~", then " *". */
+const SUFFIX = / \(#\d+\)(?: ~)?(?: \*)?$| ~(?: \*)?$| \*$/;
+
+/** `text` cut in the middle to `max` characters (code points, so an emoji is never split): "head…tail". */
+function middle(text: string, max: number): string {
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+  const tail = Math.min(10, Math.floor((max - 1) / 3));
+  return `${chars.slice(0, max - 1 - tail).join("")}…${chars.slice(chars.length - tail).join("")}`;
+}
+
+/**
+ * A name shortened for a chart legend or axis. The "(#id)", "~" and "*" suffix is kept whole and only the name before it is
+ * cut in the middle, so two assets that differ only in that suffix still look different. When the suffix leaves less than
+ * 6 characters for the name, the whole label is cut in the middle instead.
+ */
+export function shortLabel(label: string, max: number): string {
+  if (Array.from(label).length <= max) return label;
+  const suffix = SUFFIX.exec(label)?.[0] ?? "";
+  const room = max - Array.from(suffix).length;
+  return room >= 6 ? `${middle(label.slice(0, label.length - suffix.length), room)}${suffix}` : middle(label, max);
+}
+
+/** `shortLabel` of a whole set; a label whose short form another label shares keeps its FULL text, so no two entries look alike. */
+export function shortLabels(labels: readonly string[], max: number): Map<string, string> {
+  const short = new Map(labels.map((label) => [label, shortLabel(label, max)] as const));
+  const owners = new Map<string, number>();
+  for (const s of short.values()) owners.set(s, (owners.get(s) ?? 0) + 1);
+  return new Map([...short].map(([label, s]) => [label, (owners.get(s) ?? 0) > 1 ? label : s] as const));
+}

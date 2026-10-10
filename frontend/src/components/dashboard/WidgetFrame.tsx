@@ -45,7 +45,7 @@ export function WidgetFrame({ title, loading, error, missing, noMetric = 0, hint
   return (
     <section className="widget-frame" aria-label={title}>
       <header className={dragHandle ? "widget-head widget-drag-handle" : "widget-head"}>
-        <h3>{title}</h3>
+        <h3 title={title}>{title}</h3>
         {missing > 0 && <span className="chip chip-warn" title="Assets this widget used were deleted; it shows the rest.">{removedText(missing)}</span>}
         {noMetric > 0 && <span className="chip chip-warn" title="These assets have no reading of this metric; they are left out.">{noMetricText(noMetric)}</span>}
         <span className="spacer" />

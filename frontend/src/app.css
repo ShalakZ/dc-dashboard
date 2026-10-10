@@ -95,6 +95,7 @@ ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; pad
 .stat .big { font-size: 32px; }
 .stat .big small { font-size: 14px; margin-left: 4px; }
 .stat .big.muted { color: #6e6e6e; }
+.stat .muted, .widget-body td { overflow-wrap: anywhere; }
 .gauge { height: 100%; display: flex; flex-direction: column; }
 .dialog.narrow { width: min(440px, 100%); }
 @media (max-width: 700px) {

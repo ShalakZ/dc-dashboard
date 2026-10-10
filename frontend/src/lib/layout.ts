@@ -8,7 +8,7 @@ export interface GridItem { i: string; x: number; y: number; w: number; h: numbe
 export type DraftWidget = Omit<Widget, "id"> & { key: string };
 
 const SIZE: Record<WidgetType, { w: number; h: number }> = {
-  timeseries: { w: 6, h: 4 }, bar: { w: 6, h: 4 }, stat: { w: 3, h: 2 }, gauge: { w: 3, h: 3 }, table: { w: 6, h: 4 },
+  timeseries: { w: 6, h: 5 }, bar: { w: 6, h: 5 }, stat: { w: 3, h: 2 }, gauge: { w: 3, h: 3 }, table: { w: 6, h: 4 },
 };
 const MIN: Record<WidgetType, { minW: number; minH: number }> = {
   timeseries: { minW: 3, minH: 3 }, bar: { minW: 3, minH: 3 }, stat: { minW: 2, minH: 2 }, gauge: { minW: 2, minH: 2 }, table: { minW: 3, minH: 3 },

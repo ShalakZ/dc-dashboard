@@ -26,6 +26,14 @@ describe("toDrafts / toGrid", () => {
     ]);
   });
 
+  it("a new bar chart and time series are 6 x 5 (room for a legend, S7-3); the other types keep their size", () => {
+    expect(defaultSize("bar")).toEqual({ w: 6, h: 5 });
+    expect(defaultSize("timeseries")).toEqual({ w: 6, h: 5 });
+    expect(defaultSize("stat")).toEqual({ w: 3, h: 2 });
+    expect(defaultSize("gauge")).toEqual({ w: 3, h: 3 });
+    expect(defaultSize("table")).toEqual({ w: 6, h: 4 });
+  });
+
   it.each<WidgetType>(["timeseries", "bar", "stat", "gauge", "table"])("a new %s fits its own minimum and the grid", (type) => {
     const size = defaultSize(type);
     const item = toGrid([draft("k", { type, ...size })])[0];
