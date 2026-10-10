@@ -5,7 +5,7 @@ import type {
   Asset, AuditPage, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
   GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   Series, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
-  WidgetData, WidgetType,
+  WidgetData, WidgetType, CollectorStatus,
 } from "./types";
 
 export const keys = {
@@ -34,6 +34,7 @@ export const keys = {
   dashboardList: ["dashboards", "list"] as const,
   dashboard: (id: number) => ["dashboards", "detail", id] as const,
   widgetData: ["widget-data"] as const,
+  collectorStatus: ["collector-status"] as const,
 };
 
 /** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today). */
@@ -59,6 +60,9 @@ export const useSeries = (id: number, metric: Metric | null, range: Range, mappi
 
 export const useSources = () =>
   useQuery({ queryKey: keys.sources, queryFn: () => api.get<Source[]>("/api/sources"), refetchInterval: 10_000 });
+
+export const useCollectorStatus = () =>
+  useQuery({ queryKey: keys.collectorStatus, queryFn: () => api.get<CollectorStatus>("/api/collector/status"), refetchInterval: 10_000 });
 
 export const useConnectors = (enabled: boolean) =>
   useQuery({ queryKey: keys.connectors, queryFn: () => api.get<Connector[]>("/api/connectors"), enabled, staleTime: Infinity });

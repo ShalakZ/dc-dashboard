@@ -1,19 +1,21 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
-import { keys, useInvalidate, useSite, useSources } from "../api/queries";
+import { keys, useCollectorStatus, useInvalidate, useSite, useSources } from "../api/queries";
 import type { SourceImpact } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { JobStatus } from "../components/JobStatus";
 import { SourceForm } from "../components/SourceForm";
 import { useAction } from "../hooks/useAction";
+import { formatAge, formatSpan } from "../lib/age";
 import { sourceImpact, sourceLoss } from "../lib/impact";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 export function SourcesPage() {
   const { hasRole } = useAuth();
   const { data: sources = [], error, isLoading } = useSources();
+  const collector = useCollectorStatus();
   const site = useSite();
   const invalidate = useInvalidate();
   const [jobs, setJobs] = useState<Record<number, number>>({});
@@ -59,6 +61,13 @@ export function SourcesPage() {
         {hasRole("admin") && <button onClick={() => setShowAdd((v) => !v)}>Add source</button>}
       </div>
       {actionError && <p className="error" role="alert">{actionError}</p>}
+      {collector.data && !collector.data.alive && (
+        <p className="error" role="alert">
+          {collector.data.age_seconds === null
+            ? "The collector has not reported yet. No readings are collected until it does."
+            : `The collector has not reported for ${formatSpan(collector.data.age_seconds)}. No readings are collected while it is silent.`}
+        </p>
+      )}
       {showAdd && <SourceForm onDone={() => setShowAdd(false)} />}
       {confirming && (
         <ConfirmDeleteDialog
@@ -69,13 +78,14 @@ export function SourcesPage() {
         />
       )}
       <table>
-        <thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th>Status</th><th>Last seen</th><th>Last error</th><th>Test result</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th>Status</th><th>Last seen</th><th>Last reading</th><th>Last error</th><th>Test result</th><th></th></tr></thead>
         <tbody>
           {sources.map((s) => (
             <tr key={s.id}>
               <td>{s.name}</td><td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
               <td>{s.status}</td>
               <td>{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
+              <td>{formatAge(s.last_reading_age_seconds)}</td>
               <td className="error">{s.last_error ?? ""}</td>
               <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
               <td className="row">

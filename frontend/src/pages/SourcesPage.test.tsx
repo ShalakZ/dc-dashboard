@@ -5,12 +5,13 @@ import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { renderWithProviders } from "../test/render";
 import { SourcesPage } from "./SourcesPage";
 
-const source = { id: 2, name: "sim", connector_type: "simulator", config: { url: "http://simulator:9000" }, enabled: true, status: "online", last_seen: "2026-10-07T10:00:00+00:00", last_error: null, has_secret: true };
+const source = { id: 2, name: "sim", connector_type: "simulator", config: { url: "http://simulator:9000" }, enabled: true, status: "online", last_seen: "2026-10-07T10:00:00+00:00", last_error: null, has_secret: true, last_reading_age_seconds: 5 };
 const routes = (role: string) => ({
   "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "u", role } },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
   "GET /api/sources": { body: [{ ...source, status: "offline", last_error: "timeout" }] },
   "POST /api/sources/2/test": { status: 202, body: { job_id: 9 } },
+  "GET /api/collector/status": { body: { alive: true, age_seconds: 3 } },
   "POST /api/sources/test-all": { status: 202, body: { job_ids: [9] } },
   "GET /api/jobs/9": { body: { id: 9, kind: "test_source", status: "done", result: { ok: false, status: "timeout", latency_ms: null, message: "no reply" }, created_at: "t", finished_at: "t" } },
 });
@@ -185,5 +186,38 @@ describe("SourcesPage", () => {
       expect(await screen.findByRole("alert")).toHaveTextContent("something else");
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+  });
+
+  it("shows how old each source's newest reading is, and a dash for a source with no stored reading", async () => {
+    mockFetch({
+      ...routes("operator"),
+      "GET /api/sources": { body: [{ ...source, last_reading_age_seconds: 125 }, { ...source, id: 3, name: "idle", last_reading_age_seconds: null }] },
+    });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    expect(await screen.findByRole("columnheader", { name: "Last reading" })).toBeInTheDocument();
+    expect(within((await screen.findByText("sim")).closest("tr")!).getByText("2 min ago")).toBeInTheDocument();
+    expect(within(screen.getByText("idle").closest("tr")!).queryByText(/ago/)).not.toBeInTheDocument();
+  });
+
+  it("warns when the collector has been silent, and says so when it never reported", async () => {
+    mockFetch({ ...routes("operator"), "GET /api/collector/status": { body: { alive: false, age_seconds: 95 } } });
+    const first = renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("The collector has not reported for 1 min. No readings are collected while it is silent.");
+    first.unmount();
+    mockFetch({ ...routes("operator"), "GET /api/collector/status": { body: { alive: false, age_seconds: null } } });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("The collector has not reported yet.");
+  });
+
+  it("shows no notice while the collector is alive, nor when its status cannot be read", async () => {
+    mockFetch(routes("operator"));
+    const first = renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    await screen.findByText("sim");
+    expect(screen.queryByText(/The collector has not reported/)).not.toBeInTheDocument();
+    first.unmount();
+    mockFetch({ ...routes("operator"), "GET /api/collector/status": { status: 500, body: { detail: "boom" } } });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    await screen.findByText("sim");
+    expect(screen.queryByText(/The collector has not reported/)).not.toBeInTheDocument();
   });
 });
