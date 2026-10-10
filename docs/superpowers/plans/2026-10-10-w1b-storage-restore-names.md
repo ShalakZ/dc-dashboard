@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-06-dc-dashboard-design.md` (sections 7.7 and 10.7 audit, the storage tiers around lines 220-236). Source of every item: `docs/superpowers/plans/2026-10-09-acceptance-findings-roadmap.md` section "W1b Storage, restore and duplicate-name safety" and decisions D3 (factory values stay 30 / 7 / 730 / 100 GB / 80 %), D4 and D14 (approved "as proposed" 2026-10-09); `docs/superpowers/manual-test-notes.md` findings S9-1, S9-2, S9-3, S12-9, S12-4 (key fingerprint half), S4-3 (refusal half) and the "Owner decisions" block at its top; `docs/superpowers/backlog.md` BL:F4 (section F), BL:50, and the Storage line of section G. The W1a plan (`2026-10-10-w1a-audit-foundation.md`, action catalogue and implementation notes) defines `audit_change`, which this wave uses.
 
-**Review status:** Draft 1, not yet reviewed. An Opus logic review of this plan (code claims run, not read) comes BEFORE any implementer starts; each task then gets an Opus code review.
+**Review status:** Draft 2. Draft 1 (`b0fa35e`) got an Opus logic review that applied every snippet of this plan to a scratch clone and ran it (report `planreview-A.md` in the SDD workspace): 0 Blockers, 3 Majors (M1 to M3) and 12 Minors, all folded in below; see the Review log. The reviewer ran the fixes in its clone except where the Review log says otherwise. **Lighter process (owner, 2026-10-10, for this wave):** an Opus code review only for the two tasks that delete or restore data (Tasks 3 and 5); Tasks 1, 2, 4, 6 and 7 are implementer plus tests; then the full suites once, the real restore and storage drill, one whole-branch Opus review, merge.
 
 ## Owner decisions taken for this wave (2026-10-10)
 
@@ -18,8 +18,8 @@ The owner answered three questions, every time with the recommended option, and 
 
 1. **D4, duplicate asset names: an API check plus a transaction-level advisory lock** on the three write paths (`POST /api/assets`, `PATCH /api/assets/{id}` when the name or parent changes, Discovery accept with `new_asset`). No migration, no unique index (the High-risk variant is not built). Names are stored trimmed; two names clash when they are equal after trimming, collapsing inner whitespace runs to one space and lower-casing (compared in SQL, so the rule has one definition); a whitespace-only name is a 422; existing duplicates are left alone and an edit that touches neither name nor parent is never blocked.
 2. **Restore and retention:** `restore.sh` and `restore.ps1` print what the restored retention policies would delete; they pause the retention jobs only if that is more than zero; `--apply-retention` leaves them scheduled; the Storage page shows a banner while retention is paused, and a Save re-arms it.
-3. **Storage confirm rule:** `PUT /api/settings/storage` answers 409 without `confirm=true` when the save shortens raw or 1-minute retention, or would delete existing chunks right now, also with unchanged values. (The roadmap text only said "shorter"; the post-restore case below shows why "now" is needed.)
-4. Defaults taken by the planner: the origin of a Save (`factory`, `site_default`, `manual`) is derived by the SERVER from the saved values, not claimed by the client; the scale gets an upper bound (`MAX_SCALE = 1e12`) as well as a finite check; the key fingerprint is kept, but the warning condition is "a stored secret does not decrypt" (the fingerprint decides the wording and travels inside dumps).
+3. **Storage confirm rule:** `PUT /api/settings/storage` answers 409 without `confirm=true` when the save shortens raw or 1-minute retention, or would delete existing chunks right now, also with unchanged values. (The roadmap text only said "shorter"; the post-restore case below shows why "now" is needed.) **Refinement after the plan review (the planner's, for the owner to confirm or revert):** "deletes now" counts only chunks that no armed retention job would delete anyway. Retention jobs run once a day, so an expired chunk waits up to a day; asking about it on every routine Save would be a false alarm that teaches people to click through. A paused or missing job (the post-restore case), a longer armed limit, or a shorter new limit still asks.
+4. Defaults taken by the planner: the origin of a Save (`factory`, `site_default`, `manual`) is derived by the SERVER from the saved values, not claimed by the client; the scale gets an upper bound (`MAX_SCALE = 1e12`) as well as a finite check; the key fingerprint is kept, but the warning condition is "a stored secret does not decrypt" (the fingerprint decides the wording and travels inside dumps). Deviation from S9-2's "about X rows": the 409 reports chunks, the day span and bytes, because TimescaleDB's row estimate is 0 until the table has been analysed (verified after a restore).
 
 ## Verified facts (run on 2026-10-10 in the scratch project `dcdash_e2e_w1b_probe`, since torn down, and read-only on the dev database)
 
@@ -29,6 +29,7 @@ The owner answered three questions, every time with the recommended option, and 
 - **Chunk widths:** `readings` chunks are 7 days; the materialization hypertables of the continuous aggregates (`readings_1m`, `readings_1h`) have **70-day** chunks. `show_chunks('readings_1m', older_than => make_interval(days => N))` works on the aggregate view. The combined impact query of Task 3 (joins `show_chunks` to `timescaledb_information.chunks` and `chunks_detailed_size`) ran on both tiers of the dev database: `1 | 2026-10-08 | 2026-10-15 | 7 days | 17047552` and `1 | 2026-09-24 | 2026-12-03 | 70 days | 2252800`. `approximate_row_count` returned 0 on a freshly restored table, so the estimate reports chunks, the day span and bytes, never rows.
 - **Retention jobs** appear in `timescaledb_information.jobs` with `proc_name = 'policy_retention'`, `hypertable_name` `readings` / `readings_1m`, `scheduled`, `config->>'drop_after'`.
 - **BL:F4 is real.** `decode()` of float32 NaN / Inf registers gives `nan` / `inf`, stored as quality GOOD; pydantic writes NaN and Inf as JSON `null` (the UI reads "no rate"); in Postgres `avg`, `max` and `sum` over a set holding one NaN are NaN, so one bad reading poisons its minute and its hour bucket for good (the hourly tier is kept forever). `MappingIn` accepts scale `1e309` and `Infinity`, and also the finite `1e300`, which overflows to `inf` when a value is scaled at read time. With only field constraints, a request carrying `Infinity`, `NaN` or `1e309` answers **500** (FastAPI echoes the input into its 422 body and the encoder refuses it): the refusal needs the `RequestValidationError` handler of Task 1.
+- **Plan review A re-ran the plan's code in a scratch clone** (tests before and after each task, the SQL in three restore modes plus a partial restore, an empty database and a dump with one job already paused, compressed chunks, the lock test without the lock, the PowerShell parser on a broken copy): no existing backend test and none of the 807 frontend tests breaks; three Majors and twelve Minors were found and are folded in below. A compressed raw chunk reports its compressed size (the size actually freed).
 - **Dev data:** 7 assets, no sibling duplicates; 1 source holds a secret; dev retention is 14 days; the drill helper's guard refuses `dcdash`, `dcdash_e2e_w0b_*`, `dcdash_e2e_w1a_*`, a near-miss name, an empty name, `-p`/`-f` and a changed `COMPOSE_PROJECT_NAME`.
 
 ## Global Constraints
@@ -55,11 +56,12 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 
 The inputs and conditions the roadmap rows imply but the task list does not spell out, most likely to bite first. Each has a test in the task named in brackets.
 
-1. **An unchanged Save after a restore.** Old chunks exist beyond the retention (a restore paused retention, or a policy was off); pressing Save with the same values deletes them within a minute. It must answer 409 with the chunk count, the day span and the size, require `confirm=true`, record `confirmed_loss` in the audit row, and the Storage page must say retention is paused. A Save that only lengthens retention, with nothing to drop, must not ask. [Task 3, Task 4]
-2. **Asset names that look different but are the same.** `"Panel A"`, `" panel a "`, `"PANEL   A"` under one parent; the same name at the top level twice (parent NULL); a rename into a sibling's name; a move into a parent that already has the name; a case-only rename of the asset itself (allowed); an edit of `kind` on an asset that already has a twin (allowed); two simultaneous creates of one name (one wins, the other gets 409). [Task 2]
+1. **A Save right after a restore.** Old chunks exist and no armed retention job would drop them (a restore paused retention, or a policy was removed); pressing Save, also with the same values, deletes them within a minute. It must answer 409 with the chunk count, the day span and the size, require `confirm=true`, record `confirmed_loss` in the audit row, and the Storage page must say retention is paused. A Save that only lengthens retention, with nothing to drop, must not ask. [Task 3, Task 4]
+2. **Asset names that look different but are the same.** `"Panel A"`, `" panel a "`, `"PANEL   A"` under one parent; the same name at the top level twice (parent NULL); a rename into a sibling's name; a move into a parent that already has the name; a case-only rename of the asset itself (allowed unless another sibling already has that name); an edit of `kind` on an asset that already has a twin (allowed); two simultaneous creates of one name (one wins, the other gets 409). [Task 2]
 3. **A scale or reading that is not a usable number.** `Infinity`, `-Infinity`, `NaN`, `1e309`, `1e300`, `0`, `-2` on mapping create, mapping patch and Discovery accept answer 422 (not 500) and write nothing; a NaN, +Inf or -Inf reading is stored with quality BAD and no value, never as GOOD, and its live notification carries `null`, not `NaN`. [Task 1]
-4. **A restore that fails half way, or an unknown flag.** pg_restore failing must still pause/print before `timescaledb_post_restore()` and still start api and collector; `--force` and `--apply-retention` in either order; an unknown flag exits 2 before touching Docker. [Task 5]
-5. **A key warning that cries wolf, or stays silent.** No stored secrets and a different fingerprint: no warning and the fingerprint is updated; a secret that does not decrypt: the Sources page names the sources and says which key is expected; a viewer cannot read the status; a first start with no stored fingerprint stores it without a warning. [Task 6]
+4. **A restore that fails half way, a retention check that fails, or an unknown flag.** pg_restore failing must still pause/print before `timescaledb_post_restore()` and still start api and collector; a failing retention SQL must pause every retention job anyway and exit 4 (never 0); `--force` and `--apply-retention` in either order; an unknown flag exits 2 before touching Docker (pinned for `restore.sh`; `restore.ps1` is parsed only, and its exit codes are fixed by reading until S12-14 runs it). [Task 5]
+5. **A key warning that cries wolf, or stays silent.** No stored secrets and a different fingerprint: no warning and the fingerprint is updated; a secret that does not decrypt: the Sources page names the sources and says which key is expected; a viewer cannot read the status; a first start with no stored fingerprint stores it without a warning; a check that raises must not keep the mapping scales from loading. [Task 6]
+6. **A routine Save in steady state.** Retention is armed and an expired chunk is waiting for the next daily run: a Save that only changes the capacity or the threshold must answer 200, not ask to confirm a deletion that happens anyway. [Task 3]
 
 ## File Structure
 
@@ -137,11 +139,12 @@ Append to `backend/tests/test_api_discovery.py` (keep the file's imports; `login
 async def test_accept_refuses_a_scale_that_is_not_a_usable_number_with_a_422(client, db):
     await login_as(client, db)
     # Validation runs before any lookup, so the ids need not exist.
-    for scale in ("Infinity", "NaN", "1e309", "1e300"):
+    for scale in ("Infinity", "-Infinity", "NaN", "1e309", "1e300", "0", "-2"):
         raw = ('{"source_id": 1, "asset_id": 1, "points": '
                '[{"point_id": 1, "metric": "active_power_kw", "scale": %s}]}' % scale)
         r = await client.post("/api/discovery/accept", content=raw, headers={"content-type": "application/json"})
         assert r.status_code == 422, (scale, r.text)
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 0
 ```
 
 Append to `backend/tests/test_writer.py` (it imports `json`, `asyncio`, `datetime`, `timedelta`, `timezone`, `Writer`, `LATEST_CHANNEL`, `listening`, `make_point`, `make_source`; add `import math`):
@@ -184,7 +187,7 @@ async def test_a_non_finite_reading_is_notified_as_null_not_nan(db, database_url
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd backend && uv run pytest tests/test_api_mappings.py tests/test_api_discovery.py tests/test_writer.py -q`
-Expected: the new mapping, accept and writer tests FAIL (500 instead of 422 for `Infinity`/`NaN`/`1e309`, 201 for `1e300`, NaN stored with quality 0).
+Expected: the new mapping, accept and writer tests FAIL (an internal error instead of a 422 for `Infinity` / `NaN` / `1e309`, 201 for `1e300`, NaN stored with quality 0).
 
 - [ ] **Step 3: Implement**
 
@@ -201,7 +204,7 @@ and below the `Metric` class add:
 
 ```python
 # A scale multiplies every stored value when it is read. An infinite or absurd scale makes the result infinite, which the
-# API writes as null (the UI reads "no rate"). 1e12 leaves room for any unit conversion and keeps float32 readings finite.
+# API writes as null (the UI reads "no rate"). 1e12 leaves room for any unit conversion and keeps float32 readings finite (a double near 1.8e308 can still overflow; that is a corrupt reading, not a scale).
 MAX_SCALE = 1e12
 Scale = Annotated[float, Field(gt=0, le=MAX_SCALE, allow_inf_nan=False)]
 ```
@@ -287,7 +290,7 @@ git push -u origin w1b-storage-restore-names
 **Interfaces:**
 - Produces (in `api/`, not `core/`: it raises `HTTPException`): `dcdash.api.asset_names.AssetName` (stripped, 1-100 characters), `ASSET_NAMES_LOCK: int`, `async require_free_name(db, parent_id, name, *, exclude_id=None) -> None` (takes the lock, raises `HTTPException(409)` naming the clashing sibling).
 
-**The rule (D4):** within one parent (top level included, `parent_id IS NULL`), two names clash when `lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))` is equal. The check runs only when a request creates an asset, renames it, or moves it. Existing twins stay untouched. The advisory lock is `pg_advisory_xact_lock`, held until the request's commit or rollback (the pattern of `SCAN_START_LOCK` in `api/scans.py`; it relies on READ COMMITTED, the PostgreSQL default, so the check after the lock sees what the lock holder committed).
+**The rule (D4):** within one parent (top level included, `parent_id IS NULL`), two names clash when `lower(btrim(regexp_replace(name, '\s+', ' ', 'g')))` is equal. The check runs only when a request creates an asset, renames it, or moves it. Existing twins stay untouched. The advisory lock is `pg_advisory_xact_lock`, held until the request's commit or rollback (the pattern of `SCAN_START_LOCK` in `api/scans.py`; it relies on READ COMMITTED, the PostgreSQL default, so the check after the lock sees what the lock holder committed). Two accepted limits (review A): a case-only rename is allowed unless another sibling already has that name, so an old twin cannot be renamed to a case variant of its twin; and PostgreSQL's `\s` does not match a no-break space inside a name, so two names that differ only by one are not twins (Python already trims one at the ends).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -441,7 +444,7 @@ Add to `frontend/src/pages/AssetsPage.test.tsx`, next to the existing "shows the
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd backend && uv run pytest tests/test_api_assets.py tests/test_api_discovery.py -q`
-Expected: the new tests FAIL (the second create answers 201; `ASSET_NAMES_LOCK` cannot be imported).
+Expected: the new tests FAIL (the second create answers 201; `ASSET_NAMES_LOCK` cannot be imported); the different-parents test and the old-twin edit are guards and pass before as well.
 
 - [ ] **Step 3: Implement**
 
@@ -576,7 +579,7 @@ git push -u origin w1b-storage-restore-names
   - `GET /api/storage` gains `retention_paused: bool`.
   - Audit: `storage.default_set` `{before: {...}, after: {...}}` (first time: every `before` value `null`; no row for a no-op); `storage.changed` subject `{policies_reapplied: true, origin: "factory"|"site_default"|"manual"}` plus `confirmed_loss: {shorter, raw_chunks, rollup_1m_chunks}` when the save needed confirmation.
 
-**Semantics (decisions 3 and 4 above).** `needs_confirmation = shorter or deletes_now`. `shorter`: the new raw or 1-minute retention is lower than the stored one. `deletes_now`: `show_chunks(table, older_than => new limit)` finds at least one chunk, for `readings` or for `readings_1m`. `origin` is judged by the values: equal to the site default (when one exists) is `site_default`; else equal to the factory values is `factory`; else `manual`. A stored site default that no longer passes the validation reads as absent.
+**Semantics (decisions 3 and 4 above).** `needs_confirmation = shorter or deletes_now`. `shorter`: the new raw or 1-minute retention is lower than the stored one. `deletes_now`: for `readings` or for `readings_1m`, `show_chunks(table, older_than => new limit)` finds at least one chunk AND no armed retention job of that table would delete it anyway. A scheduled job whose limit is not longer than the new one drops such a chunk at its next daily run, so this save causes no loss there; a paused or missing job (the state after `restore.sh`) or a longer armed limit does not, and then the chunk counts. `origin` is judged by the values: equal to the site default (when one exists) is `site_default`; else equal to the factory values is `factory`; else `manual`. A stored site default that no longer passes the validation reads as absent.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -591,6 +594,13 @@ async def old_reading(db, days_ago: int) -> None:
     """One raw reading `days_ago` days back: that creates a raw chunk that far back."""
     pid = await make_point(db, await make_source(db), "OLD")
     await insert_readings(db, pid, datetime.now(timezone.utc) - timedelta(days=days_ago), 60, [1.0])
+
+
+async def pause_retention(db) -> None:
+    """Pause both retention jobs, as scripts/restore.sh does when a restore would delete data."""
+    await db.execute(
+        "SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention'"
+    )
 
 
 async def test_get_shows_no_site_default_until_one_is_set_and_setting_it_applies_nothing(client, db):
@@ -667,6 +677,7 @@ async def test_a_shorter_1_minute_retention_needs_confirm_too(client, db):
 async def test_an_unchanged_save_that_would_delete_old_chunks_needs_confirm(client, db):
     await login_as(client, db)
     await old_reading(db, days_ago=60)  # a raw chunk wholly older than the 30-day limit
+    await pause_retention(db)  # the state after a restore: no armed policy would drop it, so this save is what deletes it
     r = await client.put("/api/settings/storage", json=SEEDED)  # not shorter, not different: it still deletes
     assert r.status_code == 409
     body = r.json()
@@ -699,6 +710,8 @@ async def test_the_1_minute_tier_is_counted_in_its_own_70_day_chunks(client, db)
     assert r.status_code == 409
     tier = r.json()["rollup_1m"]
     assert tier["chunks"] >= 1 and tier["chunk_days"] == 70 and tier["bytes"] > 0
+    # the db fixture's TRUNCATE leaves materialized chunks behind; do not let the next test inherit this one
+    await db.execute("SELECT drop_chunks('readings_1m', older_than => interval '1 day')")
 
 
 async def test_retention_paused_is_reported_until_a_save_arms_it_again(client, db):
@@ -711,16 +724,26 @@ async def test_retention_paused_is_reported_until_a_save_arms_it_again(client, d
     assert (await client.get("/api/storage")).json()["retention_paused"] is True
     assert (await client.put("/api/settings/storage", json=SEEDED)).status_code == 200  # re-adds both policies
     assert (await client.get("/api/storage")).json()["retention_paused"] is False
+
+
+async def test_a_save_with_retention_armed_does_not_ask_for_a_chunk_the_daily_run_drops_anyway(client, db):
+    await login_as(client, db)
+    assert (await client.put("/api/settings/storage", json=SEEDED)).status_code == 200  # both policies armed at 30 / 730
+    await old_reading(db, days_ago=60)  # expired, waiting for the next daily run of the armed policy
+    r = await client.put("/api/settings/storage", json={**SEEDED, "disk_capacity_gb": 200})  # capacity only
+    assert r.status_code == 200, r.text
+    await pause_retention(db)
+    assert (await client.put("/api/settings/storage", json=SEEDED)).status_code == 409  # paused: this save is what deletes
 ```
 
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd backend && uv run pytest tests/test_api_storage.py -q`
-Expected: the new tests FAIL (no `site_default` key, no route for the default, the unchanged and the shorter saves answer 200, no `retention_paused`). Existing tests still pass.
+Expected: the new tests FAIL (no `site_default` key, no route for the default, the unchanged and the shorter saves answer 200, no `retention_paused`); `test_a_longer_retention_does_not_ask_even_when_old_chunks_exist` is a guard and passes before as well. Existing tests still pass.
 
 - [ ] **Step 3: Implement**
 
-`backend/dcdash/core/storage.py`: extend the imports (`from typing import Literal`, `from pydantic import BaseModel, Field, ValidationError, model_validator`, `from sqlalchemy.sql.elements import TextClause` is not needed), then add below `FACTORY_STORAGE_SETTINGS`:
+`backend/dcdash/core/storage.py`: extend the imports (`from typing import Literal`, `from pydantic import BaseModel, Field, ValidationError, model_validator`), then add below `FACTORY_STORAGE_SETTINGS`:
 
 ```python
 SITE_DEFAULT_KEY = "storage_default"  # never seeded: absent means "no site default has been set"
@@ -764,7 +787,7 @@ class StorageSettingsOut(StorageSettings):
     site_default: StorageSettings | None = None
 ```
 
-Below `save_storage_settings` add the impact code (add `from sqlalchemy.sql.elements import TextClause`-free: `text` is already imported):
+Below `save_storage_settings` add the impact code (`text` and `timedelta` are already imported in the module):
 
 ```python
 _TIERS = {"readings": "raw readings", "readings_1m": "1-minute rollup"}
@@ -828,7 +851,7 @@ class RetentionImpact(BaseModel):
             )
         parts = [
             f"{t.chunks} chunk{'' if t.chunks == 1 else 's'} of {t.label} "
-            f"({t.chunk_days} days each, {t.first_day} to {t.last_day}, {_size(t.bytes)})"
+            f"({t.chunk_days} days each; the oldest starts {t.first_day}, the newest ends {t.last_day}; {_size(t.bytes)})"
             for t in (self.raw, self.rollup_1m)
             if t.chunks
         ]
@@ -848,13 +871,34 @@ async def _tier_impact(db: AsyncSession, table: str, days: int) -> TierImpact:
     )
 
 
+_ARMED_LIMITS_SQL = text(
+    """
+    SELECT hypertable_name, (config->>'drop_after')::interval AS drop_after FROM timescaledb_information.jobs
+    WHERE proc_name = 'policy_retention' AND scheduled AND hypertable_name IN ('readings', 'readings_1m')
+    """
+)
+
+
 async def retention_impact(db: AsyncSession, current: StorageSettings, new: StorageSettings) -> RetentionImpact:
-    """What saving `new` over `current` deletes now (whole chunks older than the new limits) and whether it is a shorter limit."""
+    """What saving `new` over `current` deletes now (whole chunks older than the new limits) and whether it is a shorter limit.
+
+    A tier whose retention job is armed with a limit no longer than the new one is not counted: its daily run deletes those
+    chunks anyway (a chunk waits up to a day for it), so this save causes no loss there. A paused or missing job (after a
+    restore) or a longer armed limit is counted.
+    """
+    armed = {row["hypertable_name"]: row["drop_after"] for row in (await db.execute(_ARMED_LIMITS_SQL)).mappings()}
+
+    async def tier(table: str, days: int) -> TierImpact:
+        limit = armed.get(table)
+        if limit is not None and limit <= timedelta(days=days):
+            return TierImpact(label=_TIERS[table])
+        return await _tier_impact(db, table, days)
+
     return RetentionImpact(
         shorter=new.raw_retention_days < current.raw_retention_days
         or new.rollup_1m_retention_days < current.rollup_1m_retention_days,
-        raw=await _tier_impact(db, "readings", new.raw_retention_days),
-        rollup_1m=await _tier_impact(db, "readings_1m", new.rollup_1m_retention_days),
+        raw=await tier("readings", new.raw_retention_days),
+        rollup_1m=await tier("readings_1m", new.rollup_1m_retention_days),
     )
 
 
@@ -985,9 +1029,9 @@ git push -u origin w1b-storage-restore-names
 
 **Interfaces:**
 - Consumes: the HTTP contract of Task 3 (exactly as listed there).
-- Produces: `storageLoss(error: unknown): string | null` (the 409 `detail` of a storage save, else null); `ConfirmDeleteDialog` prop `confirmLabel?: string` (default `"Delete anyway"`).
+- Produces: `storageLoss(error: unknown): { detail: string; deletesNow: boolean } | null` (the 409 `detail` and `deletes_now` of a storage save, else null); `ConfirmDeleteDialog` prop `confirmLabel?: string` (default `"Delete anyway"`).
 
-Behaviour: **Save** sends the form; on a 409 the dialog "Delete old readings?" shows the server's `detail`, **Cancel** sends nothing, **Save and delete** repeats the PUT with `?confirm=true`. **Set as default** validates the form like Save does, `PUT /api/settings/storage/default` with the five values, then says it is saved as the site default and NOT in use yet. **Reset to default** fills the form with `site_default`, or with `factory` when none is set; **Reset to factory settings** fills it with `factory`. Both Resets only fill the form: nothing is sent, nothing is saved. A banner (`role="alert"`) shows while `retention_paused` is true. `validate()` gains the server's upper and lower bounds and whole-number checks, keeping the order of the existing messages (a rollup shorter than raw is reported before the rollup's own range).
+Behaviour: **Save** sends the form; on a 409 a dialog shows the server's `detail` ("Delete old readings?" with **Save and delete** when `deletes_now`, "Shorten retention?" with **Shorten and save** when only the limit is shorter), **Cancel** sends nothing, the confirming button repeats the PUT with `?confirm=true`. **Set as default** validates the form like Save does, `PUT /api/settings/storage/default` with the five values, then says it is saved as the site default and NOT in use yet. **Reset to default** fills the form with `site_default`, or with `factory` when none is set; **Reset to factory settings** fills it with `factory`. Both Resets only fill the form: nothing is sent, nothing is saved. A banner (`role="alert"`) shows while `retention_paused` is true. `validate()` gains the server's upper and lower bounds and whole-number checks, keeping the order of the existing messages (a rollup shorter than raw is reported before the rollup's own range).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1089,6 +1133,16 @@ describe("StoragePage defaults, resets and the confirmation", () => {
     expect(urls).toHaveLength(1);
   });
 
+  it("words the dialog for a shorter limit that deletes nothing yet", async () => {
+    mockFetch(routes({
+      "PUT /api/settings/storage": { status: 409, body: { detail: "These settings shorten how long readings are kept. Nothing stored today is old enough to be deleted.", deletes_now: false, shorter: true } },
+    }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await userEvent.click(await screen.findByRole("button", { name: /^save$/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Shorten retention?" });
+    expect(within(dialog).getByRole("button", { name: "Shorten and save" })).toBeInTheDocument();
+  });
+
   it("shows another error from the server as text, not as the confirmation", async () => {
     mockFetch(routes({ "PUT /api/settings/storage": { status: 422, body: { detail: "raw retention must be at least 8 days" } } }));
     renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
@@ -1101,6 +1155,13 @@ describe("StoragePage defaults, resets and the confirmation", () => {
     mockFetch({ ...routes(), "GET /api/storage": { body: { ...stats, retention_paused: true } } });
     renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
     expect(await screen.findByText(/retention is paused/i)).toBeInTheDocument();
+  });
+
+  it("shows no banner while retention is armed", async () => {
+    mockFetch({ ...routes(), "GET /api/storage": { body: { ...stats, retention_paused: false } } });
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByLabelText(/raw retention/i);
+    expect(screen.queryByText(/retention is paused/i)).not.toBeInTheDocument();
   });
 });
 
@@ -1115,6 +1176,15 @@ describe("validate bounds", () => {
     expect(validate({ ...ok, disk_capacity_gb: 1_000_001 })).toMatch(/1,000,000/);
     expect(validate({ ...ok, warn_threshold_pct: 49 })).toMatch(/between 50 and 99/);
     expect(validate({ ...ok, warn_threshold_pct: 100 })).toMatch(/between 50 and 99/);
+  });
+  it("accepts the bounds themselves", () => {
+    expect(validate({ ...ok, raw_retention_days: 3650, rollup_1m_retention_days: 3650 })).toBeNull();
+    expect(validate({ ...ok, compress_after_days: 365, raw_retention_days: 366 })).toBeNull();
+    expect(validate({ ...ok, rollup_1m_retention_days: 36500 })).toBeNull();
+    expect(validate({ ...ok, raw_retention_days: 8, compress_after_days: 1, rollup_1m_retention_days: 30 })).toBeNull();
+    expect(validate({ ...ok, disk_capacity_gb: 1_000_000 })).toBeNull();
+    expect(validate({ ...ok, warn_threshold_pct: 50 })).toBeNull();
+    expect(validate({ ...ok, warn_threshold_pct: 99 })).toBeNull();
   });
   it("wants whole numbers where the server wants integers, and any number for the capacity", () => {
     expect(validate({ ...ok, raw_retention_days: 30.5 })).toMatch(/whole number/);
@@ -1131,7 +1201,7 @@ Add to `frontend/src/lib/impact.test.ts` (import `storageLoss` and `ApiError` as
 describe("storageLoss", () => {
   it("returns the detail of the storage confirmation 409 only", () => {
     const storage = new ApiError(409, "text", { detail: "text", deletes_now: true, shorter: false });
-    expect(storageLoss(storage)).toBe("text");
+    expect(storageLoss(storage)).toEqual({ detail: "text", deletesNow: true });
     expect(storageLoss(new ApiError(409, "x", { detail: "x" }))).toBeNull(); // another kind of 409
     expect(storageLoss(new ApiError(422, "x", { detail: "x", deletes_now: true }))).toBeNull();
     expect(storageLoss(new Error("boom"))).toBeNull();
@@ -1193,11 +1263,14 @@ export function useSetStorageDefault() {
 `src/lib/impact.ts`: append
 
 ```ts
-/** PUT /api/settings/storage wants confirmation: the server's description of what saving would delete, otherwise null. */
-export const storageLoss = (error: unknown): string | null => {
+/** PUT /api/settings/storage wants confirmation: the server's description of what saving would delete and whether anything is
+ * deleted now (false = the limit is only shorter), otherwise null. */
+export const storageLoss = (error: unknown): { detail: string; deletesNow: boolean } | null => {
   if (!(error instanceof ApiError) || error.status !== 409) return null;
   const body = error.body as { detail?: unknown; deletes_now?: unknown } | null | undefined;
-  return typeof body?.detail === "string" && typeof body.deletes_now === "boolean" ? body.detail : null;
+  return typeof body?.detail === "string" && typeof body.deletes_now === "boolean"
+    ? { detail: body.detail, deletesNow: body.deletes_now }
+    : null;
 };
 ```
 
@@ -1247,7 +1320,7 @@ export function StoragePage() {
   const [form, setForm] = useState<StorageSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [needsConfirm, setNeedsConfirm] = useState<string | null>(null);
+  const [needsConfirm, setNeedsConfirm] = useState<{ detail: string; deletesNow: boolean } | null>(null);
   useEffect(() => {
     if (settings.data && !form) {
       const { factory: _factory, site_default: _siteDefault, ...values } = settings.data;
@@ -1256,7 +1329,7 @@ export function StoragePage() {
   }, [settings.data, form]);
   if (stats.isError) return <p className="error" role="alert">{stats.error.message}</p>;
   if (settings.isError) return <p className="error" role="alert">{settings.error.message}</p>;
-  if (stats.isPending || !form) return <p>loading…</p>;
+  if (stats.isPending || settings.isPending || !form) return <p>loading…</p>;
   const s = stats.data;
   const factory = settings.data.factory;
   const siteDefault = settings.data.site_default ?? null;
@@ -1321,9 +1394,9 @@ export function StoragePage() {
       </form>
       {needsConfirm && (
         <ConfirmDeleteDialog
-          title="Delete old readings?"
-          message={needsConfirm}
-          confirmLabel="Save and delete"
+          title={needsConfirm.deletesNow ? "Delete old readings?" : "Shorten retention?"}
+          message={needsConfirm.detail}
+          confirmLabel={needsConfirm.deletesNow ? "Save and delete" : "Shorten and save"}
           onConfirm={async () => {
             await save.mutateAsync({ values: form, confirm: true });
             setNeedsConfirm(null);
@@ -1462,6 +1535,19 @@ def test_a_failed_pg_restore_still_checks_retention_runs_post_restore_and_starts
     assert order == sorted(order) and len(set(order)) == len(order)
 
 
+def test_when_the_retention_check_fails_retention_is_paused_anyway_and_the_exit_code_says_so(tmp_path, monkeypatch):
+    failing = FAKE_DOCKER.replace(
+        '*"apply_retention"*) echo "SQL-READ: $(head -c 40 | tr \'\\n\' \' \')" >> "$CALLS_LOG" ;;',
+        '*"apply_retention"*) cat > /dev/null; echo "psql: error: boom" >&2; exit 3 ;;',
+    )
+    assert failing != FAKE_DOCKER
+    monkeypatch.setitem(globals(), "FAKE_DOCKER", failing)
+    result, calls = run_restore(tmp_path)
+    assert result.returncode == 4 and "paused every retention job" in result.stderr
+    order = [at(calls, f) for f in ("apply_retention", "scheduled => false", "timescaledb_post_restore", "compose start api collector")]
+    assert order == sorted(order) and len(set(order)) == len(order)
+
+
 def test_an_unknown_flag_exits_2_before_touching_docker(tmp_path):
     result, calls = run_restore(tmp_path, "--aply-retention")
     assert result.returncode == 2 and "usage" in result.stderr and calls == []
@@ -1487,6 +1573,8 @@ def test_restore_sh_parses():
 def test_restore_ps1_takes_the_flag_and_runs_the_sql_before_post_restore():
     text = (SCRIPTS / "restore.ps1").read_text()
     assert "--apply-retention" in text and "restore_retention.sql" in text
+    assert text.count("[Console]::Error.WriteLine") >= 3  # Write-Error under -Stop throws before `exit`, so the code would be 1
+    assert "exit 4" in text
     finally_block = text[text.index("} finally {"):]
     assert finally_block.index("$RetentionSql") < finally_block.index("timescaledb_post_restore")
 
@@ -1526,6 +1614,7 @@ Create `scripts/restore_retention.sql` (this exact text was run in the three mod
 \echo 'What the restored retention policies would delete as soon as they run:'
 SELECT j.hypertable_name AS "table",
        j.config->>'drop_after' AS "keeps",
+       j.scheduled AS "scheduled",
        d.chunks AS "chunks to drop",
        d.first_day AS "oldest day",
        d.last_day AS "newest day"
@@ -1541,14 +1630,14 @@ ORDER BY j.job_id;
 
 SELECT EXISTS (
     SELECT 1 FROM timescaledb_information.jobs j
-    WHERE j.proc_name = 'policy_retention'
+    WHERE j.proc_name = 'policy_retention' AND j.scheduled
       AND EXISTS (SELECT 1 FROM show_chunks(format('%I.%I', j.hypertable_schema, j.hypertable_name)::regclass,
                                             older_than => (j.config->>'drop_after')::interval))
 ) AS would_drop \gset
 
 \if :would_drop
     \if :apply_retention
-        \echo 'Retention stays scheduled (--apply-retention): the chunks above are deleted as soon as the database starts its background jobs.'
+        \echo 'Retention is left as restored (--apply-retention): scheduled jobs delete the chunks above as soon as the database starts its background jobs.'
     \else
         SELECT count(*) AS "retention jobs paused"
         FROM (SELECT alter_job(job_id, scheduled => false)
@@ -1557,7 +1646,7 @@ SELECT EXISTS (
         \echo 'and the disk is not trimmed either: open Storage and press Save to start retention again (that deletes the chunks above).'
     \endif
 \else
-    \echo 'Nothing would be deleted: retention stays scheduled.'
+    \echo 'Nothing would be deleted now.'
 \endif
 ```
 
@@ -1574,6 +1663,8 @@ SELECT EXISTS (
 # timescaledb_post_restore() the script runs scripts/restore_retention.sql: it prints what the policies would delete and,
 # when that is more than nothing, pauses the retention jobs (saving the Storage page starts them again). --apply-retention
 # leaves them scheduled, so the data beyond the limits is deleted as the policies say.
+# Exit 4: the restore worked but the retention check failed (every retention job was paused to be safe unless --apply-retention
+# was given; read the messages).
 # Whatever happens after timescaledb_pre_restore(), the script runs timescaledb_post_restore()
 # and starts api/collector again, so a failed restore never leaves the database stranded.
 set -euo pipefail
@@ -1600,8 +1691,17 @@ recover() {
   local rc=$?
   if [[ "$PRE_RESTORE_DONE" == 1 ]]; then
     # Before the background workers come back: print what retention would delete and pause it if that is data.
-    docker compose exec -T db psql -U dcdash -d dcdash -q -v apply_retention="$APPLY_RETENTION" < scripts/restore_retention.sql \
-      || echo "could not check or pause retention: data older than the restored limits may be deleted now (see scripts/restore_retention.sql)" >&2
+    if ! docker compose exec -T db psql -U dcdash -d dcdash -q -v apply_retention="$APPLY_RETENTION" < scripts/restore_retention.sql; then
+      # Fail safe: pausing loses nothing (the Storage page shows a banner and a Save starts retention again); not pausing
+      # lets the restored policies delete the old data the moment post_restore runs.
+      if [[ "$APPLY_RETENTION" == 0 ]] && docker compose exec -T db psql -U dcdash -d dcdash -qtAc \
+          "SELECT count(*) FROM (SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention') paused"; then
+        echo "could not check retention (see scripts/restore_retention.sql): paused every retention job to be safe" >&2
+      else
+        echo "could not check or pause retention: data older than the restored limits may be deleted now" >&2
+      fi
+      [[ "$rc" != 0 ]] || rc=4
+    fi
     docker compose exec -T db psql -U dcdash -d dcdash -c "SELECT timescaledb_post_restore()" >/dev/null || true
     docker compose start api collector >/dev/null || true   # api runs `alembic upgrade head`, a no-op unless --force restored an older schema
     [[ "$rc" == 0 ]] || echo "restore failed (exit $rc): ran timescaledb_post_restore() and started api/collector; log: $LOG" >&2
@@ -1625,14 +1725,14 @@ recover() {
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 $Usage = "usage: restore.ps1 <dump> [--force] [--apply-retention]"
-if ($args.Count -lt 1) { Write-Error $Usage; exit 2 }
+if ($args.Count -lt 1) { [Console]::Error.WriteLine($Usage); exit 2 }
 $Dump = $args[0]
 $Force = ""
 $ApplyRetention = 0
 foreach ($arg in ($args | Select-Object -Skip 1)) {
   if ($arg -eq "--force") { $Force = "--force" }
   elseif ($arg -eq "--apply-retention") { $ApplyRetention = 1 }
-  else { Write-Error $Usage; exit 2 }
+  else { [Console]::Error.WriteLine($Usage); exit 2 }
 }
 $RetentionSql = Join-Path $PSScriptRoot "restore_retention.sql"
 ```
@@ -1646,11 +1746,20 @@ $RetentionSql = Join-Path $PSScriptRoot "restore_retention.sql"
     cmd /c "docker compose exec -T db psql -U dcdash -d dcdash -q -v apply_retention=$ApplyRetention < `"$RetentionSql`""
     if ($LASTEXITCODE -ne 0) { throw "psql exit $LASTEXITCODE" }
   } catch {
-    Write-Host "could not check or pause retention ($_): data older than the restored limits may be deleted now (see scripts\restore_retention.sql)"
+    $RetentionFailed = $true
+    if ($ApplyRetention -eq 0) {
+      # Fail safe: pausing loses nothing (the Storage page shows a banner and a Save starts retention again).
+      docker compose exec -T db psql -U dcdash -d dcdash -qtAc "SELECT count(*) FROM (SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention') paused" | Out-Null
+      Write-Host "could not check retention ($_): paused every retention job to be safe (see scripts\restore_retention.sql)"
+    } else {
+      Write-Host "could not check or pause retention ($_): data older than the restored limits may be deleted now"
+    }
   }
   docker compose exec -T db psql -U dcdash -d dcdash -c "SELECT timescaledb_post_restore()" | Out-Null
   ...
 ```
+
+Also in `restore.ps1`: set `$RetentionFailed = $false` next to `$Failed = $true`; put `if ($RetentionFailed) { exit 4 }` after the final `Write-Host "restored $Dump"`; and turn the version refusal (`Write-Error "refusing: ..."; exit 3`) into `[Console]::Error.WriteLine("refusing: ..."); exit 3`. Under `$ErrorActionPreference = "Stop"` `Write-Error` throws before `exit` runs, so the script exits 1 for the usage error and for the refusal (review A measured it). Nothing can run `restore.ps1` here; S12-14 does, in W2.
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -1678,7 +1787,7 @@ git push -u origin w1b-storage-restore-names
 **Interfaces:**
 - Produces: `dcdash.core.secret_key.key_fingerprint() -> str` (16 hex characters), `SecretKeyStatus {ok: bool, key_changed: bool, unreadable: [{id, name}]}`, `async secret_key_status(db) -> SecretKeyStatus` (read-only), `async check_secret_key_at_start(db) -> SecretKeyStatus` (stores or refreshes the fingerprint, logs the warning, commits); `GET /api/secret-key/status` (operator or admin; viewers 403). Frontend: `SecretKeyStatus` type and `useSecretKeyStatus()`.
 
-**Design (see decision 4).** The warning condition is a stored source secret that does not decrypt with the key in `.env` (the stored secrets are test-decrypted, there are few). The fingerprint is `HMAC-SHA256(key, "dcdash secret key check v1")` cut to 16 hex characters, stored in `settings` under `secret_key_check`. At API start: no stored fingerprint, or a different one while every stored secret decrypts, stores/refreshes it; a different fingerprint while some secret does not decrypt keeps the stored one and warns (the wording says the key differs from the one the database was set up with); no stored fingerprint and an unreadable secret warns without claiming a change. The check never raises into the start-up: it runs inside the existing retry step of `scales_loop`.
+**Design (see decision 4).** The warning condition is a stored source secret that does not decrypt with the key in `.env` (the stored secrets are test-decrypted, there are few). The fingerprint is `HMAC-SHA256(key, "dcdash secret key check v1")` cut to 16 hex characters, stored in `settings` under `secret_key_check`. At API start: no stored fingerprint, or a different one while every stored secret decrypts, stores/refreshes it; a different fingerprint while some secret does not decrypt keeps the stored one and warns (the wording says the key differs from the one the database was set up with); no stored fingerprint and an unreadable secret warns without claiming a change. The check never raises into the start-up: it runs right after `seed_general` in the existing retry step of `scales_loop`, in its own `try`, so a failure is logged and never keeps the mapping scales from loading.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1695,7 +1804,7 @@ from dcdash.api.main import create_app
 from dcdash.core.config import get_settings
 from dcdash.core.db import get_sessionmaker
 from dcdash.core.secret_key import KEY_CHECK_KEY, check_secret_key_at_start, key_fingerprint, secret_key_status
-from helpers import login_as, make_source, wait_for
+from helpers import login_as, make_asset, make_mapping, make_point, make_source, wait_for
 
 
 def use_another_key(monkeypatch) -> None:
@@ -1794,6 +1903,18 @@ async def test_the_api_start_stores_the_fingerprint(db):
             return await stored_fingerprint(db)
 
         await wait_for(stored, key_fingerprint())
+
+
+async def test_a_failing_key_check_does_not_keep_the_mapping_scales_from_loading(db):
+    point = await make_point(db, await make_source(db), "a")
+    await make_mapping(db, point, await make_asset(db, "p"), scale=0.001)
+    await db.execute("INSERT INTO settings (key, value) VALUES ($1, '\"broken\"'::jsonb)", KEY_CHECK_KEY)  # the check raises on this
+    app = create_app()
+    async with LifespanManager(app):
+        async def scales():
+            return dict(app.state.broadcaster.scales)
+
+        await wait_for(scales, {point: 0.001})
 ```
 
 Add to `frontend/src/pages/SourcesPage.test.tsx` (add `"GET /api/secret-key/status": { body: { ok: true, key_changed: false, unreadable: [] } }` to the file's shared `routes(role)` helper so the other tests get a quiet answer):
@@ -1915,8 +2036,12 @@ async def check_secret_key_at_start(db: AsyncSession) -> SecretKeyStatus:
                     # Seed inside the retry loop so a slow DB does not crash the API at startup.
                     async with get_sessionmaker()() as session:
                         await seed_general(session)
-                        await check_secret_key_at_start(session)
                     seeded = True
+                    try:  # extra information: a failing check is logged and must never keep the mapping scales from loading
+                        async with get_sessionmaker()() as session:
+                            await check_secret_key_at_start(session)
+                    except Exception:
+                        log.exception("could not check DCDASH_SECRET_KEY")
 ```
 
 `backend/dcdash/api/health.py`: `from dcdash.core.secret_key import SecretKeyStatus, secret_key_status` and, after `collector_status`:
@@ -2000,8 +2125,7 @@ fills it with the factory values. The two Resets only fill in the form; nothing 
 
 **Saving can delete data, so it asks first.** Retention deletes whole chunks (7 days wide for raw readings, 70 days for the 1-minute
 rollup), and a save re-applies the policies, which TimescaleDB then runs within about a minute. So `PUT /api/settings/storage` answers
-**409** unless the request carries `confirm=true` when the save shortens the raw or the 1-minute retention, or when chunks older than
-the new limits exist right now (also with unchanged values: after a restore that paused retention, pressing Save deletes them). The
+**409** unless the request carries `confirm=true` when the save shortens the raw or the 1-minute retention, or when chunks older than the new limits exist that no scheduled retention would delete anyway (the state after a restore that paused retention: pressing Save then deletes them, also with unchanged values). The
 409 says how many chunks, which days and how many MB; the page shows it in a dialog. The audit row `storage.changed` records the
 `origin` of the values (`factory`, `site_default` or `manual`, judged by the saved values) and, for a confirmed save, `confirmed_loss`.
 ```
@@ -2040,7 +2164,7 @@ reaches Billing.
 
 - [ ] **Step 3: Spec**
 
-Section 7.7: in the table row `Site settings` add `storage.default_set`; in the sentence about `storage.changed` add that its subject carries `origin` (`factory`, `site_default`, `manual`) and, for a save that needed confirmation, `confirmed_loss`. In the retention paragraph around lines 228-236 add: "A save that shortens the raw or 1-minute retention, or that would delete existing chunks at once, is refused with a 409 unless the request confirms it; the restore scripts pause the retention jobs when the restored policies would delete the restored data."
+Section 7.7: in the table row `Site settings` add `storage.default_set`; in the sentence about `storage.changed` add that its subject carries `origin` (`factory`, `site_default`, `manual`) and, for a save that needed confirmation, `confirmed_loss`. In the retention paragraph around lines 228-236 add: "A save that shortens the raw or 1-minute retention, or that would delete chunks no scheduled retention would delete anyway (after a restore that paused retention), is refused with a 409 unless the request confirms it; the restore scripts pause the retention jobs when the restored policies would delete the restored data."
 
 - [ ] **Step 4: Run to verify nothing else broke**
 
@@ -2063,7 +2187,7 @@ git push -u origin w1b-storage-restore-names
 
 Same method as W1a. Nothing here is done by an implementer. Every container operation runs only through the drill helper, in a project named `dcdash_e2e_w1b_*`; the dev stack (`dcdash`) is touched only in step 9, after a verified backup. This wave has no migration, so the schema stays `0005` and there is no migration rehearsal.
 
-1. **Full suites once:** `cd backend && uv run pytest -q` (10 to 14 minutes) and `cd frontend && npx vitest run && npm run typecheck`. Fix nothing yet; collect failures. Expect: tests that created two same-named siblings, tests that lowered a retention through the API without `confirm`, and tests that listed `StorageStats` or `StorageSettingsOut` without the new fields.
+1. **Full suites once:** `cd backend && uv run pytest -q` (10 to 14 minutes) and `cd frontend && npx vitest run && npm run typecheck`. Fix nothing yet; collect failures. Review A found no existing test that breaks (everything it ran passed, with the full frontend suite at 807 tests), but it did not run the full backend suite: expect none or very few.
 2. **Whole-branch Opus review** (prompt in a file, effort High): the full diff `main..w1b-storage-restore-names`, with this plan's Review Focus as the checklist and the "Verified facts" section as the claims to re-run.
 3. **ONE fix wave** for the Critical and Important findings (Sonnet), then a scoped Opus re-review (effort medium) of the fix diff; re-run only the touched test files.
 4. **Real-script restore drill (S12-9)** in a scratch stack `dcdash_e2e_w1b_restore` (the large drill of the acceptance pass, now with the real scripts). `drill_script` (Appendix A) runs `scripts/backup.sh` and `scripts/restore.sh` with the project environment of the drill and refuses unless `docker compose config` reports the scratch project name.
@@ -2074,16 +2198,19 @@ Same method as W1a. Nothing here is done by an implementer. Every container oper
    5. Restore the same dump again with `--apply-retention`: the table is printed, no pause, and the old chunks are gone within 30 s (the control).
    6. The corrupted-dump path (`scripts/backup_smoke.sh`'s failure branch, run through `drill_script`) still ends with api and collector running.
    7. Key and names on the same stack: create a source with a secret through the API; `DCDASH_SECRET_KEY=<another key> dc up -d api` (a shell variable beats `.env`, so `.env` is untouched); `GET /api/secret-key/status` answers `ok: false` naming the source and the api log has the warning; start the api again with the right key. `POST /api/assets` twice with `{"name":"Panel"}` answers 201 then 409; a mapping `PATCH` with `{"scale": Infinity}` answers 422.
+   8. A dump that arrives with ONE retention job already paused (raw paused, 1-minute armed): with `--apply-retention` the SQL must not promise a deletion (the reviewer's `drill-setup.sh` and `drill-run.sh` in the session scratchpad `w1b-review` build such a dump).
+   9. A failing retention check: make a scratch copy of the script directory (`mkdir -p $WS/restorefail/scripts`, copy `scripts/restore.sh`, write `SELECT 1/0;` as `scripts/restore_retention.sql` there) and run it through `drill_script`: expected exit 4, every retention job paused, the chunks still there after 60 s, api and collector started.
+   10. Retention armed and an expired chunk (a Save right after step 4.4): a capacity-only `PUT /api/settings/storage` answers 200 with no `confirm`; after pausing the jobs the same PUT answers 409.
    Record everything in `drill-restore.log`; tear the project down.
 5. **Isolated e2e** on a scratch stack `dcdash_e2e_w1b_close` (copy `e2e-close.sh` from the W1a workspace, change the project name and paths): `npm run e2e` against `$DRILL_BASE` must pass both specs.
 6. **Merge:** `git merge --no-ff w1b-storage-restore-names` into `main`, `git push origin main` (never `--force`).
-7. **Docs commit on main:** roadmap W1b row marked DONE with the merge commit and the evidence; S9-1, S9-2, S9-3, S12-9, S12-4 (key half) and S4-3 (refusal) closed in `manual-test-notes.md`; BL:F4 and BL:50 and the Storage line of section G marked done in `backlog.md`, and a new section J for the leftovers of the final review; the memory file `dc-dashboard-project.md` updated.
-8. **Verified backup of the dev stack** with `scripts/backup.sh` (the file exists, is non-empty, `.version` says `0005`).
+7. **Docs commit on main:** roadmap W1b row marked DONE with the merge commit and the evidence; S9-1, S9-2, S9-3, S12-9, S12-4 (key half) and S4-3 (refusal) closed in `manual-test-notes.md`; BL:F4 and BL:50 and the Storage line of section G marked done in `backlog.md`, and a new section J for the leftovers of the final review (known already: a no-break space inside a name is not matched by the name rule; `restore.ps1` was parsed but never run until S12-14; NaN readings or out-of-range scales stored before this wave are not repaired; a stored `disk_capacity_gb` above 1,000,000 makes both storage GETs answer 500; the Storage tests' "changes nothing" assertions check one field); the memory file `dc-dashboard-project.md` updated.
+8. **Verified backup of the dev stack** with `scripts/backup.sh` (the file exists, is non-empty, `.version` says `0005`). Then, read-only on the dev database: `SELECT count(*) FROM readings WHERE value IN ('NaN','Infinity','-Infinity');` and `SELECT count(*) FROM mappings WHERE NOT (scale > 0 AND scale <= 1e12);`. Report both numbers; a non-zero count goes to backlog section J (the repair is: set the value to NULL with quality 1 and refresh the rollups over the affected windows; the hourly tier beyond raw retention cannot be repaired).
 9. **Dev stack:** `docker compose build api web` and `docker compose up -d --timeout 60` (no migration this wave). Check `alembic_version` is `0005`, the five containers are healthy, `GET /api/storage` has `retention_paused: false`, `GET /api/settings/storage` has `site_default: null`, and the Storage page loads in the browser or with curl.
 
 ## Appendix A: orchestrator workspace
 
-`.superpowers/sdd/2026-10-10-w1b-storage-restore-names/` (git-ignored). Already there: `progress.md` (the ledger), `drill-lib.sh` and `drill-override.yaml` (copies of the W1a helper with the guard `dcdash_e2e_w1b_*`, image tags `dcdash_e2e_w1b-backend:drill` / `dcdash_e2e_w1b-web:drill`, ports 18080/18443; the guard was tested: it refuses `dcdash`, `dcdash_e2e_w0b_x`, `dcdash_e2e_w1a_x`, `dcdash_e2e_w1bx`, an empty name, `-p`, `-f` and a changed `COMPOSE_PROJECT_NAME`), `probe-1-setup.sql`, `probe-2-restore.sh`, `restore_retention.draft.sql` (the text of Task 5's SQL file that was run in three modes). To write before first use: `global-constraints.md` (the Global Constraints section, copied), `task-N-brief.md` (each task's section plus the constraints: what an implementer gets), `reviewer-common.md`, `planreview-prompt.md` and `planreview-*.md`, `review-task-N.md`, `e2e-close.sh`, `drill-restore.sh`, the logs.
+`.superpowers/sdd/2026-10-10-w1b-storage-restore-names/` (git-ignored). Already there: `progress.md` (the ledger), `drill-lib.sh` and `drill-override.yaml` (copies of the W1a helper with the guard `dcdash_e2e_w1b_*`, image tags `dcdash_e2e_w1b-backend:drill` / `dcdash_e2e_w1b-web:drill`, ports 18080/18443; the guard was tested: it refuses `dcdash`, `dcdash_e2e_w0b_x`, `dcdash_e2e_w1a_x`, `dcdash_e2e_w1bx`, an empty name, `-p`, `-f` and a changed `COMPOSE_PROJECT_NAME`), `probe-1-setup.sql`, `probe-2-restore.sh`, `restore_retention.draft.sql` (the SQL as first run in three modes; Task 5 now carries review A's m1 changes, the `scheduled` column and the `AND j.scheduled` condition, which the Task 5 review and the wave-close drill run). To write before first use: `global-constraints.md` (the Global Constraints section, copied), `task-N-brief.md` (each task's section plus the constraints: what an implementer gets), `reviewer-common.md`, `planreview-prompt.md` and `planreview-*.md`, `review-task-N.md`, `e2e-close.sh`, `drill-restore.sh`, the logs.
 
 Add to `drill-lib.sh` before the restore drill:
 
@@ -2093,6 +2220,7 @@ Add to `drill-lib.sh` before the restore drill:
 # really resolves to the scratch project, so a lost variable can never point restore.sh (DROP DATABASE) at the dev stack.
 drill_script() {
   case "${COMPOSE_PROJECT_NAME:-}" in dcdash_e2e_w1b_*) ;; *) echo "drill_script: refusing" >&2; return 1 ;; esac
+  [ "${COMPOSE_FILE:-}" = "$REPO/compose.yaml:$WS/drill-override.yaml" ] || { echo "drill_script: COMPOSE_FILE changed, refusing" >&2; return 1; }
   [ "$(docker compose config --format json | jq -r .name)" = "$COMPOSE_PROJECT_NAME" ] \
     || { echo "drill_script: Compose does not resolve to $COMPOSE_PROJECT_NAME, refusing" >&2; return 1; }
   [ -z "$(docker compose ps --format '{{.Name}}' | grep -v "^${COMPOSE_PROJECT_NAME}-")" ] \
@@ -2105,11 +2233,17 @@ and test it the same way as the guard: with `DRILL_PROJECT=dcdash_e2e_w1b_x` but
 
 ## Appendix B: review plan and budget
 
-Opus reviewers at effort High (the scoped fix re-review at medium), implementers on Sonnet, no Fable. Haiku is not planned (Task 4 is the only candidate and it integrates a page with its tests). Review groups: Tasks 1 and 2 together in one pass over two commits (small backend rules), Task 3, Task 4, Task 5 and Task 6 each their own review; Task 7 is read by the whole-branch review. That is 1 plan review + 5 task reviews + 1 whole-branch review + 1 scoped re-review = 8 Opus runs. The orchestrator asks the owner before launching more.
+Lighter process (owner, 2026-10-10). Implementers on Sonnet, reviewers on Opus at effort High, no Fable. Plan review A: done (1 run, 47 minutes, it ran the plan's code). Task reviews: only Task 3 and Task 5, because they delete or restore data; the Task 5 reviewer also runs the SQL in the guarded scratch project in four modes (pause, apply, nothing to drop, one job already paused). Tasks 1, 2, 4, 6 and 7: implementer plus tests, no per-task review. Then the full suites once, the wave-close drill, ONE whole-branch Opus review, and a scoped re-review only if it reports a Critical or Important finding. That is 5 to 6 Opus runs in all, 4 to 5 of them still to come. The orchestrator asks the owner before launching more.
 
 ## Review log
 
-Draft 1 written 2026-10-10 after the probes above; not yet reviewed.
+Draft 1 (`b0fa35e`) written 2026-10-10 after the probes above. Opus review A (whole plan, effort High, 47 minutes, every snippet applied and run in a scratch clone): 0 Blockers, 3 Majors, 12 Minors; verdict "ready for implementers after the listed fixes". Folded into draft 2:
+
+- **M1** Task 3: in steady state a routine Save answered 409 "the data cannot be recovered" for a chunk the armed daily policy drops anyway. `retention_impact` now counts a tier only when its job is paused or missing, its armed limit is longer than the new one, or the new limit is shorter; new steady-state test, Review Focus 6. This narrows owner decision 3 (see there); the planner's call, for the owner to confirm or revert.
+- **M2** Task 5: when the retention SQL failed, `restore.sh` went on to `post_restore` and exited 0 while the restored jobs deleted the data. It now pauses every retention job as a fallback and exits 4 (the `.ps1` twin written the same way, parsed but not run); new test.
+- **M3** Task 4: `npm run typecheck` failed (TS18048); the loading guard now includes `settings.isPending`.
+- m1 SQL: a `scheduled` column, `AND j.scheduled` in the decision, honest messages; m2 the key check runs in its own `try` so it cannot keep the scales from loading (new test); m3 `restore.ps1` usage and refusal exit codes through `[Console]::Error.WriteLine`; m4 the dialog is worded by `deletes_now`; m5 the day span reads "the oldest starts ..., the newest ends ..."; m6 Review Focus 2 wording (case-only rename); m7 no-break space accepted and documented; m8 the 70-day test drops its materialized chunk; m9 `drill_script` checks `COMPOSE_FILE`; m10 wording fixes; m11 the banner's negative test; m12 the Discovery accept test covers `-Infinity`, `0`, `-2` and "nothing stored".
+- Missing items added: Review Focus 6; a read-only data check and a backlog entry for already stored NaN readings and out-of-range scales (wave close step 8); the "about X rows" deviation stated in decision 4; the bound-edge validate test; three more wave-close drill scenarios (steps 4.8 to 4.10); backlog section J seeds in step 7.
 
 ## Implementation notes (deviations from draft 1)
 
