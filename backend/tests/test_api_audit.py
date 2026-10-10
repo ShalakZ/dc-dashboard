@@ -19,3 +19,15 @@ async def test_audit_is_admin_only_and_newest_first_with_paging_and_usernames(cl
     await client.post("/api/logout")
     await login_as(client, db, "operator")
     assert (await client.get("/api/audit")).status_code == 403
+
+
+async def test_audit_keeps_the_actor_name_after_the_user_is_deleted(client, db):
+    await login_as(client, db, "admin")
+    gone = await db.fetchval(
+        "INSERT INTO users (username, password_hash, role) VALUES ('gone', 'x', 'viewer') RETURNING id"
+    )
+    await audit_pool(db, gone, "x.did")
+    await db.execute("DELETE FROM users WHERE id = $1", gone)
+    item = (await client.get("/api/audit")).json()["items"][0]
+    assert item["action"] == "x.did"
+    assert item["user_id"] is None and item["actor_id"] == gone and item["username"] == "gone"

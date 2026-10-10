@@ -1,7 +1,11 @@
 import asyncio
 import contextlib
+import os
 import socket
+import subprocess
+import sys
 from datetime import timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import asyncpg
@@ -257,3 +261,11 @@ async def freezable_proxy(database_url: str):
         server.close()
         for writer in writers:
             writer.close()
+
+
+def run_alembic(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run `alembic <args>` against the test database (the database_url fixture exports DCDASH_DATABASE_URL)."""
+    backend = Path(__file__).resolve().parents[1]
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", *args], cwd=backend, env=os.environ.copy(), capture_output=True, text=True
+    )
