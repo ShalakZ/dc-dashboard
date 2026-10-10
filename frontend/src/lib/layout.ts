@@ -14,8 +14,18 @@ const MIN: Record<WidgetType, { minW: number; minH: number }> = {
   timeseries: { minW: 3, minH: 3 }, bar: { minW: 3, minH: 3 }, stat: { minW: 2, minH: 2 }, gauge: { minW: 2, minH: 2 }, table: { minW: 3, minH: 3 },
 };
 
+/** The columns (end exclusive) the read-only grid really draws for a widget: it never spills past the last column. */
+export function columnsOf({ x, w }: { x: number; w: number }): { start: number; end: number } {
+  const start = Math.min(Math.max(x, 0), GRID_COLS - 1);
+  return { start, end: start + Math.max(1, Math.min(w, GRID_COLS - start)) };
+}
+
+/** Saved rows are normalised once to the rectangle the grid draws (x/w inside the 12 columns, h at least 1, y at least 0); valid rows are unchanged. */
 export function toDrafts(widgets: Widget[]): DraftWidget[] {
-  return widgets.map((w) => ({ key: String(w.id), type: w.type, title: w.title, config: w.config, x: w.x, y: w.y, w: w.w, h: w.h }));
+  return widgets.map((w) => {
+    const { start, end } = columnsOf(w);
+    return { key: String(w.id), type: w.type, title: w.title, config: w.config, x: start, y: Math.max(0, w.y), w: end - start, h: Math.max(1, w.h) };
+  });
 }
 
 export function toGrid(drafts: DraftWidget[]): GridItem[] {
@@ -42,9 +52,38 @@ export function defaultSize(type: WidgetType): { w: number; h: number } {
   return { ...SIZE[type] };
 }
 
-/** A new widget starts a fresh row at column 0, whatever its size (the grid then compacts it upwards). */
+/** A new widget starts a fresh row at column 0 below everything; the editor then closes it up into any free space (compactVertical). */
 export function nextPosition(drafts: DraftWidget[], _size: { w: number; h: number }): { x: number; y: number } {
   return { x: 0, y: drafts.reduce((bottom, d) => Math.max(bottom, d.y + d.h), 0) };
+}
+
+/**
+ * Close the layout upwards (gravity), in reading order (y, then x, then position in `items`): each item moves up while the row above
+ * is free, then moves down while it collides. For layouts without overlaps this is the result of react-grid-layout's
+ * `verticalCompactor`, so the editor's live preview and the committed state agree; for overlapping (old saved) layouts the library
+ * pushes later items ahead of itself and ours does not, and OURS is used everywhere. Collisions use the columns the read-only grid
+ * draws (`columnsOf`) and a height of at least 1. Returns `items` itself when nothing moved.
+ */
+export function compactVertical<T extends { x: number; y: number; w: number; h: number }>(items: readonly T[]): T[] {
+  const order = items.map((_, index) => index).sort((a, b) => items[a].y - items[b].y || items[a].x - items[b].x || a - b);
+  const placed: { start: number; end: number; top: number; bottom: number }[] = [];
+  const out = [...items];
+  let moved = false;
+  for (const index of order) {
+    const item = items[index];
+    const { start, end } = columnsOf(item);
+    const height = Math.max(1, item.h);
+    const hits = (y: number) => placed.some((p) => p.start < end && start < p.end && p.top < y + height && y < p.bottom);
+    let y = Math.max(0, item.y);
+    while (y > 0 && !hits(y - 1)) y -= 1;
+    while (hits(y)) y += 1;
+    placed.push({ start, end, top: y, bottom: y + height });
+    if (y !== item.y) {
+      out[index] = { ...item, y };
+      moved = true;
+    }
+  }
+  return moved ? out : (items as T[]);
 }
 
 let counter = 0;

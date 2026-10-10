@@ -7,7 +7,7 @@ import {
   isSingleAsset, isStaleConflict, keepAssetsWithMetric, metricAssetsOf, newest, saveBody, toWidgetBody, WIDGET_METRICS, withMetric,
   withSource, withType, type FormIssues, type WidgetForm,
 } from "./dashboardEdit";
-import { toDrafts } from "./layout";
+import { compactVertical, toDrafts } from "./layout";
 
 const valid = (over: Partial<WidgetForm> = {}): WidgetForm => ({ ...blankForm(), title: "Hall power", assets: [5], ...over });
 
@@ -182,6 +182,16 @@ describe("save body and unsaved changes", () => {
     const [draft] = unchanged().drafts;
     expect(isDirty(base, { ...unchanged(), drafts: [{ ...draft, x: 4 }] })).toBe(true);
     expect(isDirty(base, { ...unchanged(), drafts: [] })).toBe(true);
+  });
+
+  it("compares with the compacted layout: a dashboard saved with a gap is not dirty until something changes", () => {
+    const gappy = dashboard({ widgets: [widget(1, "stat", { x: 0, y: 0, w: 3, h: 2 }), widget(2, "stat", { x: 0, y: 5, w: 3, h: 2 })] });
+    const closed = () => ({ name: gappy.name, range: gappy.range, drafts: compactVertical(toDrafts(gappy.widgets)) });
+    expect(closed().drafts.map((d) => d.y)).toEqual([0, 2]);
+    expect(isDirty(gappy, closed())).toBe(false);
+    expect(isDirty(gappy, { ...closed(), drafts: toDrafts(gappy.widgets) })).toBe(true); // the old, gappy positions would be a change
+    const [first, second] = closed().drafts;
+    expect(isDirty(gappy, { ...closed(), drafts: [first, { ...second, h: 3 }] })).toBe(true);
   });
 
   it("ignores key order inside a config and spaces around the name", () => {

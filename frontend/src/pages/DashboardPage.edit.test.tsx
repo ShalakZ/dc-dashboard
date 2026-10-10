@@ -229,7 +229,8 @@ describe("editing", () => {
     await userEvent.click(await screen.findByTestId(/^move-/));
     await userEvent.click(screen.getByTestId(/^resize-/));
     await userEvent.click(saveButton());
-    expect((putBody(calls) as { widgets: unknown[] }).widgets).toEqual([{ type: "stat", title: "Current power", config: now.config, x: 4, y: 7, w: 9, h: 5 }]);
+    // The stand-in drops the widget at y 7 with nothing above it, so closing up puts it at the top (its x 4 + w 9 is the stand-in's own doing).
+    expect((putBody(calls) as { widgets: unknown[] }).widgets).toEqual([{ type: "stat", title: "Current power", config: now.config, x: 4, y: 0, w: 9, h: 5 }]);
   });
 
   it("will not add a 25th widget", async () => {
@@ -508,5 +509,77 @@ describe("leaving with unsaved changes", () => {
     const dirty = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(dirty);
     expect(dirty.defaultPrevented).toBe(true);
+  });
+});
+
+describe("closing up (vertical compaction)", () => {
+  const stat = (id: number, title: string, x: number, y: number, w = 3, h = 2) =>
+    widget(id, "stat", { title, config: config({ aggregation: "last" }), x, y, w, h });
+  const withWidgets = (...widgets: ReturnType<typeof stat>[]) => ({ "GET /api/dashboards/3": { body: dashboard({ widgets }) } });
+  const bodyPositions = (calls: Call[]) =>
+    (putBody(calls) as { widgets: { title: string; x: number; y: number }[] }).widgets.map(({ title, x, y }) => ({ title, x, y }));
+
+  it("opens a dashboard that was saved with a gap as it looks, and it is not an unsaved change", async () => {
+    const { calls } = open("operator", "/dashboards/3", withWidgets(stat(1, "A", 0, 0), stat(2, "B", 0, 5)));
+    await startEditing();
+    expect(saveButton()).toBeDisabled();
+    expect(screen.queryByText("Not saved yet")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(puts(calls)).toHaveLength(0);
+  });
+
+  it("saves the closed-up positions with the first real change", async () => {
+    const { calls } = open("operator", "/dashboards/3", withWidgets(stat(1, "A", 0, 0), stat(2, "B", 0, 5)));
+    await startEditing();
+    await userEvent.type(screen.getByLabelText("Dashboard name"), "2");
+    await userEvent.click(saveButton());
+    expect(bodyPositions(calls)).toEqual([{ title: "A", x: 0, y: 0 }, { title: "B", x: 0, y: 2 }]);
+  });
+
+  it("closes the gap a delete leaves: the next widget moves up to the top", async () => {
+    const { calls } = open("operator", "/dashboards/3", withWidgets(stat(1, "A", 0, 0), stat(2, "B", 0, 2)));
+    await startEditing();
+    await userEvent.click(screen.getByRole("button", { name: "Delete A" }));
+    await userEvent.click(saveButton());
+    expect(bodyPositions(calls)).toEqual([{ title: "B", x: 0, y: 0 }]);
+  });
+
+  it.each([
+    ["the first of two stacked ones", [stat(1, "A", 0, 0), stat(2, "B", 0, 2)], "A"],
+    ["the left of two side-by-side widgets", [stat(1, "A", 0, 0, 6), stat(2, "B", 6, 0, 6)], "A"],
+    ["the middle of three stacked ones", [stat(1, "A", 0, 0), stat(2, "B", 0, 2), stat(3, "C", 0, 4)], "B"],
+    ["a widget with another at a different x below it", [stat(1, "A", 0, 0), stat(2, "B", 2, 2, 6), stat(3, "C", 0, 4, 4)], "B"],
+  ])("Undo restores exactly where everything was after deleting %s", async (_name, widgets, victim) => {
+    open("operator", "/dashboards/3", withWidgets(...widgets));
+    await startEditing();
+    await userEvent.click(screen.getByRole("button", { name: `Delete ${victim}` }));
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByRole("button", { name: `Edit ${victim}` })).toBeInTheDocument();
+    expect(saveButton()).toBeDisabled(); // every position equals what was loaded
+  });
+
+  it("Undo does not swap two widgets when a drag made the array order differ from the reading order", async () => {
+    const { calls } = open("operator", "/dashboards/3", withWidgets(stat(1, "A", 4, 0), stat(2, "B", 4, 2)));
+    await startEditing();
+    await userEvent.click(screen.getByTestId("move-1")); // A is dropped at (4, 7), below B: B closes up to the top, A sits under it
+    await userEvent.click(screen.getByRole("button", { name: "Delete B" }));
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await userEvent.click(saveButton());
+    expect(bodyPositions(calls)).toEqual([{ title: "A", x: 4, y: 2 }, { title: "B", x: 4, y: 0 }]);
+  });
+
+  it("closes a new widget up into free space: the saved rectangles never overlap", async () => {
+    const { calls } = open("operator", "/dashboards/3", withWidgets(stat(1, "A", 0, 0), stat(2, "B", 6, 0, 6, 4)));
+    await startEditing();
+    await userEvent.click(add());
+    await userEvent.type(screen.getByLabelText("Title"), "Hall power");
+    await userEvent.click(screen.getByRole("checkbox", { name: "LV Panel 1" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save widget" }));
+    await userEvent.click(saveButton());
+    const saved = (putBody(calls) as { widgets: { title: string; x: number; y: number; w: number; h: number }[] }).widgets;
+    expect(saved.find((w) => w.title === "Hall power")).toMatchObject({ x: 0, y: 2 }); // not below B (y 4): under A, which is only 2 high, in the free space
+    const overlap = (a: (typeof saved)[number], b: (typeof saved)[number]) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    expect(saved.some((a, i) => saved.slice(i + 1).some((b) => overlap(a, b)))).toBe(false);
   });
 });

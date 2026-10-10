@@ -80,6 +80,19 @@ describe("DashboardPage (view)", () => {
     expect(screen.getByRole("heading", { name: "Hall A" })).toBeInTheDocument();
   });
 
+  it("draws a dashboard saved with a gap closed up, and sends no save on a view-only visit", async () => {
+    const gap = [
+      widget(1, "stat", { title: "Upper", config: config({ aggregation: "last" }), x: 0, y: 0, w: 3, h: 2 }),
+      widget(2, "stat", { title: "Lower", config: config({ aggregation: "last" }), x: 0, y: 5, w: 3, h: 2 }),
+    ];
+    const calls = open("viewer", { "GET /api/dashboards/3": { body: dashboard({ widgets: gap }) } });
+    const lower = (await region("Lower")).closest<HTMLElement>(".dash-cell")!;
+    expect(lower.style.gridRow).toBe("3 / span 2"); // directly under Upper (rows 1-2), not at row 6
+    await waitFor(() => expect(dataRequests(calls).length).toBeGreaterThan(0)); // the widgets have loaded
+    // Opening a dashboard changes nothing on the server: the only non-GET request is the widget data query, a read.
+    expect(calls.filter((c) => c.method !== "GET" && c.path !== "/api/widget-data")).toEqual([]);
+  });
+
   it("changes the range for widgets that inherit it, keeps overrides, and saves nothing", async () => {
     const calls = open();
     await waitFor(() => expect(dataRequests(calls)).toHaveLength(5));

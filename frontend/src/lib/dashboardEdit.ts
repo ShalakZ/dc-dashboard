@@ -3,7 +3,7 @@ import {
   METRICS, type Dashboard, type DashboardSave, type GraphModel, type Metric, type RangePreset, type WidgetAggregation, type WidgetConfig,
   type WidgetIn, type WidgetSource, type WidgetType,
 } from "../api/types";
-import { toDrafts, type DraftWidget } from "./layout";
+import { compactVertical, toDrafts, type DraftWidget } from "./layout";
 
 export const MAX_WIDGETS = 24;
 export const MAX_ASSETS = 20;
@@ -198,9 +198,12 @@ export function canonical(value: unknown): string {
       : v);
 }
 
-/** Unsaved changes: the would-be save body differs from what was loaded. */
+/**
+ * Unsaved changes: the would-be save body differs from what was loaded. The loaded side is the compacted layout, because that
+ * is what the editor starts from: a dashboard saved with gaps is not changed until the user changes something.
+ */
 export function isDirty(baseline: Dashboard, edit: EditState): boolean {
-  const loaded = saveBody(baseline, { name: baseline.name, range: baseline.range, drafts: toDrafts(baseline.widgets) });
+  const loaded = saveBody(baseline, { name: baseline.name, range: baseline.range, drafts: compactVertical(toDrafts(baseline.widgets)) });
   return canonical(saveBody(baseline, edit)) !== canonical(loaded);
 }
 
