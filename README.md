@@ -394,10 +394,12 @@ Every container keeps at most 5 log files of 10 MB (50 MB per service, set in `c
 
 ### Stopping
 
-`docker compose stop` and `docker compose restart` return in seconds instead of waiting out the grace period. The api
-waits up to 5 s for open pages (a live dashboard keeps its stream open) before it closes them. The collector writes its
-last readings before it exits. If the database is unreachable at that moment, the readings still in memory (everything
-collected since the database stopped answering, at most 100,000) are lost, and the collector logs how many.
+The api and the collector stop on SIGTERM instead of waiting out their grace period: usually within a second, and within
+about 11 s each when the database does not answer. `web` is the exception while a browser has a page open: Caddy waits
+for the page's live stream until Docker kills it at its stop timeout (10 s on a standard Docker engine). With a page
+open, the api waits up to 5 s for it (a live dashboard keeps its stream open) before it closes it. The collector writes
+its last readings before it exits. If the database is unreachable at that moment, the readings still in memory
+(everything collected since the database stopped answering, at most 100,000) are lost, and the collector logs how many.
 
 ### Health
 
@@ -411,10 +413,13 @@ database migration does not make `scripts/setup.sh` fail; a migration that takes
 `docker compose up -d` run again, which is safe.
 
 The collector writes a heartbeat to the database every 10 s. `GET /api/collector/status` (operators and admins) says
-whether a beat arrived within the last 30 s, measured by the database's clock. The Sources page shows a notice when it
-did not and, per source, the age of its newest stored reading (BAD-quality readings count, and the age stays after a
-point is unmapped; a source with no stored reading shows a dash). After a restore the old heartbeat reads as "silent"
-until the collector starts.
+whether a beat arrived within the last 30 s, measured by the database's clock. The Sources page shows a notice when the
+last beat is older than 30 s and, per source, the age of its newest stored reading in the Last reading column
+(BAD-quality readings count; a source with no stored reading shows a dash; the age keeps counting after a point is
+unmapped, as long as the source is still listed, because a discovered source leaves the list when its last mapped point
+is unmapped). No notice is shown when the status cannot be read, for example while the database is down; once the page
+has had no answer for 30 s it says "Collector status cannot be read" instead, and the Last reading ages keep counting
+from the last answer. After a restore the old heartbeat reads as "silent" until the collector starts.
 
 ### Housekeeping
 

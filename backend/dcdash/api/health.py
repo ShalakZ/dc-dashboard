@@ -1,4 +1,5 @@
-"""Readiness: GET /api/health answers 200 only when the database answers a query in time."""
+"""Readiness: GET /api/health answers 200 only when the database answers a query in time.
+Also holds the authenticated collector status route."""
 import asyncio
 
 from fastapi import APIRouter, Depends

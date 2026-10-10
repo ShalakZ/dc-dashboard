@@ -68,9 +68,12 @@ def test_the_grace_periods_cover_the_shutdown_budgets():
 
 
 def test_the_api_healthcheck_survives_a_slow_migration_and_fails_inside_its_timeout():
+    from dcdash.api.health import PROBE_TIMEOUT_SECONDS
+
     check = compose_config()["services"]["api"]["healthcheck"]
     assert seconds(check["start_period"]) >= 120
-    assert seconds(check["timeout"]) == 3  # health.PROBE_TIMEOUT_SECONDS (2 s) must stay below it
+    assert seconds(check["timeout"]) == 3
+    assert PROBE_TIMEOUT_SECONDS + 0.5 <= seconds(check["timeout"])  # the probe answers before Docker gives up
 
 
 def test_the_web_service_has_a_healthcheck_that_works_with_and_without_tls():

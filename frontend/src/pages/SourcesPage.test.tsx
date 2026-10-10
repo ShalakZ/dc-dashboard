@@ -1,5 +1,6 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useCollectorStatus } from "../api/queries";
 import { mockFetch } from "../test/fetchMock";
 import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { renderWithProviders } from "../test/render";
@@ -209,15 +210,72 @@ describe("SourcesPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The collector has not reported yet.");
   });
 
-  it("shows no notice while the collector is alive, nor when its status cannot be read", async () => {
-    mockFetch(routes("operator"));
-    const first = renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
-    await screen.findByText("sim");
-    expect(screen.queryByText(/The collector has not reported/)).not.toBeInTheDocument();
-    first.unmount();
-    mockFetch({ ...routes("operator"), "GET /api/collector/status": { status: 500, body: { detail: "boom" } } });
-    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
-    await screen.findByText("sim");
-    expect(screen.queryByText(/The collector has not reported/)).not.toBeInTheDocument();
+  describe("the collector notice", () => {
+    /** Sits next to the page on the same query and shows how that query stands, so a test can wait for the status request to be answered. */
+    function StatusProbe() {
+      const { status } = useCollectorStatus();
+      return <p data-testid="status-probe">{status}</p>;
+    }
+    /** Opens the page and returns once /api/collector/status has been requested and its query has settled as `settledAs`. */
+    async function openAndSettle(statusReply: { status?: number; body: object }, settledAs: "success" | "error") {
+      const calls = mockFetch({ ...routes("operator"), "GET /api/collector/status": statusReply });
+      const view = renderWithProviders(<><SourcesPage /><StatusProbe /></>, { route: "/sources", path: "/sources" });
+      await screen.findByText("sim");
+      await waitFor(() => expect(calls.some((c) => c.path === "/api/collector/status")).toBe(true));
+      await waitFor(() => expect(screen.getByTestId("status-probe")).toHaveTextContent(settledAs));
+      return view;
+    }
+
+    it("shows no notice while the collector is alive, nor when its status cannot be read, but does when it is silent", async () => {
+      const alive = await openAndSettle({ body: { alive: true, age_seconds: 3 } }, "success");
+      expect(screen.queryByText(/The collector has not reported/)).not.toBeInTheDocument();
+      alive.unmount();
+      const unreadable = await openAndSettle({ status: 500, body: { detail: "boom" } }, "error");
+      expect(screen.queryByText(/The collector has not reported/)).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      unreadable.unmount();
+      // positive control: the same flow, the same wait, with a silent collector: the notice is there as soon as the wait ends
+      await openAndSettle({ body: { alive: false, age_seconds: 95 } }, "success");
+      expect(screen.getByText(/The collector has not reported for 1 min/)).toBeInTheDocument();
+    });
+  });
+
+  describe("when /api/sources and /api/collector/status stop answering", () => {
+    /** Each path in `paths` is answered the first time and never again (its request stays pending, as against a database that freezes). */
+    function stopAnsweringAfterTheFirst(paths: string[]) {
+      const answering = globalThis.fetch;
+      const answered = new Set<string>();
+      vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const path = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
+        if (paths.includes(path) && answered.has(path)) return new Promise<Response>(() => {});
+        answered.add(path);
+        return answering(input, init);
+      }));
+    }
+    const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+    afterEach(() => vi.useRealTimers());
+
+    it("keeps counting the age of each reading from the last answer, then says the collector status cannot be read", async () => {
+      vi.useFakeTimers();
+      mockFetch(routes("operator")); // sim: last reading 5 s old, collector alive
+      stopAnsweringAfterTheFirst(["/api/sources", "/api/collector/status"]);
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await advance(1_000); // the first answers arrive
+      const row = () => screen.getByText("sim").closest("tr")!;
+      expect(within(row()).getByText("5 s ago")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      await advance(25_000); // 25 s with no new answer: the age has grown, the status is still within its 30 s
+      expect(within(row()).getByText("30 s ago")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      await advance(20_000); // 45 s: no answer for longer than 30 s
+      expect(within(row()).getByText("50 s ago")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Collector status cannot be read (no answer for 45 s). Last-reading ages are counted from the last answer.",
+      );
+      expect(screen.queryByText(/The collector has not reported/)).not.toBeInTheDocument();
+    });
   });
 });

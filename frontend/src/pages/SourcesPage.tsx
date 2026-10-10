@@ -8,14 +8,25 @@ import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { JobStatus } from "../components/JobStatus";
 import { SourceForm } from "../components/SourceForm";
 import { useAction } from "../hooks/useAction";
-import { formatAge, formatSpan } from "../lib/age";
+import { useNow } from "../hooks/useNow";
+import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
 import { sourceImpact, sourceLoss } from "../lib/impact";
 import { formatSiteDateTime } from "../lib/siteTime";
 
+/** The collector status counts as unreadable when its last answer is older than this. It is the backend's STALE_AFTER_SECONDS (backend/dcdash/core/heartbeat.py), the age at which a heartbeat reads as silent. */
+const COLLECTOR_STATUS_STALE_SECONDS = 30;
+/** How often the ages on the page are brought up to date between answers. */
+const TICK_MS = 5_000;
+
 export function SourcesPage() {
   const { hasRole } = useAuth();
-  const { data: sources = [], error, isLoading } = useSources();
+  const { data: sources = [], error, isLoading, dataUpdatedAt: sourcesAnsweredAt } = useSources();
   const collector = useCollectorStatus();
+  // The ages in both answers are the server's, as of the answer. Against a database that stops answering, the last answers stay on the
+  // page, so the page adds the time elapsed since them (its own elapsed time, not its clock against the server's).
+  const now = useNow(TICK_MS);
+  const statusSilentFor = secondsSince(collector.dataUpdatedAt, now);
+  const statusUnreadable = collector.dataUpdatedAt > 0 && statusSilentFor > COLLECTOR_STATUS_STALE_SECONDS;
   const site = useSite();
   const invalidate = useInvalidate();
   const [jobs, setJobs] = useState<Record<number, number>>({});
@@ -61,11 +72,15 @@ export function SourcesPage() {
         {hasRole("admin") && <button onClick={() => setShowAdd((v) => !v)}>Add source</button>}
       </div>
       {actionError && <p className="error" role="alert">{actionError}</p>}
-      {collector.data && !collector.data.alive && (
+      {statusUnreadable ? (
+        <p className="error" role="alert">
+          {`Collector status cannot be read (no answer for ${formatSpan(statusSilentFor)}). Last-reading ages are counted from the last answer.`}
+        </p>
+      ) : collector.data && !collector.data.alive && (
         <p className="error" role="alert">
           {collector.data.age_seconds === null
             ? "The collector has not reported yet. No readings are collected until it does."
-            : `The collector has not reported for ${formatSpan(collector.data.age_seconds)}. No readings are collected while it is silent.`}
+            : `The collector has not reported for ${formatSpan(ageNow(collector.data.age_seconds, collector.dataUpdatedAt, now))}. No readings are collected while it is silent.`}
         </p>
       )}
       {showAdd && <SourceForm onDone={() => setShowAdd(false)} />}
@@ -85,7 +100,7 @@ export function SourcesPage() {
               <td>{s.name}</td><td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
               <td>{s.status}</td>
               <td>{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
-              <td>{formatAge(s.last_reading_age_seconds)}</td>
+              <td>{formatAge(ageNow(s.last_reading_age_seconds, sourcesAnsweredAt, now))}</td>
               <td className="error">{s.last_error ?? ""}</td>
               <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
               <td className="row">
