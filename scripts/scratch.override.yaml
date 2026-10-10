@@ -1,0 +1,19 @@
+# Used ONLY through scripts/lib/scratch.sh (COMPOSE_FILE=compose.yaml:this file). Gives a throwaway stack its own image tags (so the
+# normal stack's dcdash-backend:local / dcdash-web:local are never re-tagged), its own certs folder, and ports on 127.0.0.1 instead of 80/443.
+services:
+  api:
+    image: ${SCRATCH_PROJECT}-backend:scratch
+  collector:
+    image: ${SCRATCH_PROJECT}-backend:scratch
+    volumes: !override
+      - ${SCRATCH_CERTS_DIR}:/certs:ro
+  simulator:
+    image: ${SCRATCH_PROJECT}-backend:scratch
+    ports: !reset []
+  web:
+    image: ${SCRATCH_PROJECT}-web:scratch
+    ports: !override
+      - "127.0.0.1:${SCRATCH_HTTP_PORT}:80"
+      - "127.0.0.1:${SCRATCH_HTTPS_PORT}:443"
+    volumes: !override
+      - ${SCRATCH_CERTS_DIR}:/certs:ro

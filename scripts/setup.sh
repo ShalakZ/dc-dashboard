@@ -41,4 +41,6 @@ else
     "$db_password" "$secret_key" > .env
   echo "Created .env"
 fi
+PROJECT="$(project_name docker compose "$@" 2>/dev/null || true)"
+echo "starting Compose project: ${PROJECT:-unknown}" >&2
 docker compose "$@" up -d --build

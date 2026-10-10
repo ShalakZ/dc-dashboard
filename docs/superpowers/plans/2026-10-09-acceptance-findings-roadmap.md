@@ -109,11 +109,13 @@ Risk Med (High only if D4 picks a database constraint).
 
 Order inside the wave: S12-5 and S12-14 first (the PowerShell scripts depend on the guard), then the rest.
 
+**Status 2026-10-10: Part A is done** (branch `w2a-ops-scripts`, plan `2026-10-10-w2-operations-recovery-hardening.md` Tasks 1-8): S12-5, S12-14, the route A spike (D12: yes), S12-11, S12-12. **Part B is next** (branch `w2b-web-hardening`): S12-8, S12-6, S12-7, S13-7. Evidence for S12-8 from Part A: `setup.ps1`/`up --build` on an unchanged tree still recreates api, collector and web, because every build exports a new image id (the BuildKit provenance attestation); test `--provenance=false`.
+
 | Id | Item | Effort | Risk |
 |---|---|---|---|
 | S12-5 | Isolate the ops scripts like `e2e.sh`: `check_tls.sh`, `backup_smoke.sh` (and the three `.ps1` scripts) take a scratch project name with a prefix guard that refuses `dcdash`, `check_tls.sh` gets its own certs directory and a throwaway container for the chown, no bare `down`, and a port override; test the guard against the name `dcdash`. `backup.sh` and `restore.sh` print the project they act on | M | Med |
 | S12-14 | Run `setup.ps1`, `backup.ps1`, `restore.ps1` for real on the Windows dev machine, in a scratch project (the engine is shared with WSL, so a copy on a Windows drive would otherwise act on the dev stack `dcdash`), after a backup, port override for 80/443. D10 approved | S | Low (dev data only) |
-| route A spike (D12) | On the same machine, prove whether the TimescaleDB Windows zip (2.30.2, PostgreSQL 16) offers compression, continuous aggregates and policies. It is a property of the build, so it can be settled now and decides whether route A is viable | S | Low |
+| route A spike (D12) | On the same machine, prove whether the TimescaleDB Windows zip (2.30.2, PostgreSQL 16) offers compression, continuous aggregates and policies. It is a property of the build, so it can be settled now and decides whether route A is viable **Done 2026-10-10 (W2 Task 7): yes**, see the spike document. | S | Low |
 | S12-6 | Certificate: README rotation steps (a `web` restart), expiry shown (the api has no `./certs` mount, so the collector publishes the expiry to `settings`, or the doctor script reads it), warning 30 days ahead; nothing to show in HTTP mode | S-M | Low |
 | S12-8 | Pin base images by digest, including `timescale/timescaledb` and the uv image; stop rebuilds recreating containers when nothing changed (test `--provenance=false`); a re-pin step in the upgrade runbook so security fixes still arrive | M | Med |
 | S13-7 | The UI refetches `/api/me` on window focus and after a 403 and says "your role changed, reload" | S-M | Low |
@@ -188,7 +190,7 @@ How to run it (proposal, for the owner to confirm in that session): its own sess
 | D9 | OPC UA session strategy | before the first real connection (W4 entry gate) |
 | D10 | May the Windows script test (S12-14) and the route A spike (D12) run on the dev machine, in a scratch project and with a copy of the repo on a Windows drive? | W2 |
 | D11 | After a user is deleted, keep the actor's name in old audit entries (proposed) or anonymise it | W1a |
-| D12 | Route A spike: allow proving the TimescaleDB Windows build now, on the dev machine | W2 |
+| D12 | Route A spike: allow proving the TimescaleDB Windows build now, on the dev machine | W2; **done 2026-10-10: the Windows build supports what the app uses** (`docs/superpowers/spikes/route-a-timescaledb-windows.md`) |
 | D13 | Backups: off-host target, and who keeps the encryption key on an offline workstation | W2 |
 | D14 | What "audit all three storage actions" means: proposal, audit Set as default, and record the origin (factory, site default or manual) in the following Save's `storage.changed`, because the two Resets only fill the form | W1b |
 

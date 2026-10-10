@@ -233,6 +233,10 @@ OpenSSL, so it proves nothing); `check_tls.sh` as written (not run, see S12-5); 
   `http://localhost`, so the ports cannot be changed. `backup_smoke.sh` deletes an asset and drops and restores the
   live database (fine only on a stack you can lose). Both should name a project like `e2e.sh` does (`-p`, a prefix
   guard) and the TLS script should use its own certs directory and a throwaway container for the chown.
+  **Closed by W2 Part A (2026-10-10).** `scripts/lib/scratch.sh` is the guard: `check_tls.sh` and `backup_smoke.sh` run only in a
+  throwaway Compose project whose name matches `dcdash_e2e*`, with their own images, ports (127.0.0.1:18080/18443), certs folder
+  and secrets, and a cleanup that cannot reach another project; `restore`/`setup`/`backup` (sh and ps1) print the project they act on.
+  Both scripts were run for real on Compose (exit 0, nothing left behind, dev stack identical).
 - **S12-6 [gap, medium] (Claude)** Certificate life cycle. A new certificate written to `./certs` is not picked up: the
   old serial is served until `docker compose restart web` (verified; the README does not say so). An expired
   certificate is served silently (the container is `Up`, no log line, nothing in the app), so users only learn from
@@ -269,15 +273,28 @@ OpenSSL, so it proves nothing); `check_tls.sh` as written (not run, see S12-5); 
   dump holds password hashes and the source secrets as ciphertext (useless without the key, see S12-4). Idea: a
   scheduled backup (Task Scheduler or cron), keep the last N, an off-host copy step, and the restore drill of this
   pass written as a runbook (new machine: `.env`, `setup`, dump, `restore.sh`, checks).
+  **Closed by W2 Part A (2026-10-10).** `backup.sh`/`backup.ps1` verify the dump with a full read, keep the newest N (`--keep`),
+  copy to a folder that carries a marker file (`--copy-to`) and exit 5 when the copy did not happen; README "Scheduled backups" and
+  "Practise a restore". The bash and PowerShell versions, a Task Scheduler task and every exit code were run for real. Open: the
+  trigger firing by itself, a drive pulled mid-copy, encryption (by the medium, decision D13), see backlog section K.
 - **S12-12 [docs] (Claude)** The README's "Upgrading to Phase 3" part is now history for this install (the dev stack is
   on 0004); it should become a general "upgrade" runbook: back up, read the pre-check, start, verify, go back. The
   `--force` path it describes was exercised in this pass and works.
+  **Closed by W2 Part A (2026-10-10).** README "Upgrading and going back" is the general runbook (back up, release notes, pre-checks,
+  apply, verify, two ways back) with the Phase 3 and W1a text under "Release notes"; both ways back were run step by step in a
+  throwaway project (option a lossless, option b loses what came after the dump).
 - **S12-13 [observation] (Claude)** After a restore the collector rewrites `settings.collector_networks` with its own
   Docker subnet, so the scan range prefill follows the machine, not the restored data (the backlog section B item
   "prefill will be wrong" is the same behaviour).
 - **S12-14 [gap] (Claude)** The Windows scripts (`setup.ps1`, `backup.ps1`, `restore.ps1`) have never been run; their
   logic mirrors the shell scripts (read side by side) but `backup.ps1` and `restore.ps1` depend on `cmd /c` binary
   redirection. They need one real run on a Windows machine with Docker before anyone relies on them.
+  **Closed by W2 Task 4 (2026-10-10).** All three scripts, plus a Task Scheduler task, were run for real on this Windows
+  machine (Docker Desktop, Windows PowerShell 5.1) in a throwaway project, from a redirected shell and from a console
+  window; exit codes, rotation, the copy folder marker and the `cmd /c` binary redirection all work. The drill found that
+  `restore.sh`/`restore.ps1` dropped the live database before reading the dump (fixed: the dump is read in full first),
+  that PowerShell 5.1 accepts `--keep 3`, and that a rebuild on an unchanged tree still recreates api, collector and web
+  (new image id each time). Details in the W2 plan's execution log for Task 4.
 
 Idle footprint of the dev stack (one sample): collector 94 MiB, api 155 MiB, db 242 MiB, web 14 MiB, simulator 116 MiB;
 CPU about 2 % in total. Without the simulator the stack idles under 0.5 GB of memory.

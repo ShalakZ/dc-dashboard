@@ -29,6 +29,9 @@ Windows PowerShell:
 scripts\setup.ps1
 ```
 
+(If PowerShell refuses the script, for example because the folder came over a share or a download, run
+`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1`; see "Backup and restore" for what that does.)
+
 The first run creates `.env` with a database password and an encryption key,
 then builds and starts the stack. Keep `.env`: without its key, stored source
 credentials cannot be decrypted. Keep a copy of `.env` with every backup (see "What the backup does not contain"). Set `DCDASH_TIMEZONE` in `.env` (for example
@@ -37,8 +40,8 @@ both January and July (`Asia/Qatar` and `Europe/London` do, `Asia/Kolkata` does 
 "Dashboards and billing".
 
 Later starts need only `docker compose up -d`. The exception is a start after you pulled a new
-version: starting `api` migrates the database, so read "Upgrading an existing database to Phase 3"
-before the first start on a database that already holds data.
+version: starting `api` migrates the database, so read "Upgrading and going back" (and the release
+notes it points to) before the first start on a database that already holds data.
 
 ### Optional HTTPS
 
@@ -53,7 +56,10 @@ gets the `Secure` flag automatically. The `web` container runs as uid/gid 10002,
 without making the file world-readable: `sudo chown 10002:10002 certs/privkey.pem && chmod 640
 certs/privkey.pem`. If either file is missing or unreadable the `web` container exits with
 `TLS file not readable inside the container: ...` in `docker compose logs web`. Leave both variables
-unset for plain HTTP. `scripts/check_tls.sh` exercises both paths with a throwaway self-signed cert.
+unset for plain HTTP. `scripts/check_tls.sh` exercises both paths in a throwaway Compose project of its own
+(a self-signed certificate in a temporary folder, its own images, `web` published only on `127.0.0.1:18080`
+and `127.0.0.1:18443`): it leaves `./certs`, your `.env`, the normal stack and ports 80 and 443 alone. See
+"Practise a restore" for the project-name guard it shares with `scripts/backup_smoke.sh`.
 
 Open `http://localhost/`. The first visit asks you to create the admin
 account. Then: Sources → Add source → Test → Points → Browse points → Map;
@@ -417,11 +423,17 @@ keeps the volume until the next run, which starts with `down -v`;
 
 The isolated `-p dcdash_e2e` run builds the same `dcdash-backend:local` and `dcdash-web:local` images
 as the normal stack, so it re-tags them. If your database is still at an older schema, read "Upgrading
-an existing database to Phase 3" before you start the normal stack again: because the image tag was
+and going back" before you start the normal stack again: because the image tag was
 replaced, any later `docker compose up -d` on the normal project (with or without `--build`) creates or
 recreates `api`, which then runs the database migrations. Otherwise rebuild your normal stack afterwards
 (`docker compose --profile dev up -d --build`) to be sure it runs your own code. Either way, check with
 `docker volume ls` that `dcdash_dbdata` is still listed.
+
+`scripts/check_tls.sh` and `scripts/backup_smoke.sh` are different: each builds images of its own
+(`<project>-backend:scratch` and `<project>-web:scratch`, so `dcdash-backend:local` and `dcdash-web:local`
+are not re-tagged) and publishes only on `127.0.0.1` (ports 18080 and 18443 by default), so neither takes
+ports 80 and 443. They run in a Compose project whose name must start with `dcdash_e2e`, and they delete only
+that project's own volume; see "Practise a restore".
 
 ### Logs
 
@@ -466,13 +478,62 @@ The collector deletes expired sessions and finished jobs older than 7 days every
 
 Both scripts talk to the `db` container of the running stack (`.ps1` twins exist for Windows).
 
-    scripts/backup.sh [out_dir]            # ./backups/dcdash-YYYYmmdd-HHMMSS.dump + .version (Alembic revision)
-    scripts/restore.sh <dump> [--force] [--apply-retention]    # stops api+collector, recreates the database, restores, restarts
-    scripts/backup_smoke.sh                # backs up, deletes an asset, restores, checks it is back
+    scripts/backup.sh [out_dir] [--keep N] [--copy-to DIR]   # ./backups/dcdash-YYYYmmdd-HHMMSS.dump + .dump.version (Alembic revision)
+    scripts/restore.sh <dump> [--force] [--apply-retention]  # reads the dump, stops api+collector, recreates the database, restores, restarts
+
+A self-test that runs both in a throwaway Compose project of its own, never in your stack, is
+`OPS_COMPOSE_PROJECT=dcdash_e2e_drill scripts/backup_smoke.sh` (see "Practise a restore").
+
+Windows PowerShell (run them like this):
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup.ps1 [Out] [-Keep N] [-CopyTo DIR]
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restore.ps1 <dump> [--force] [--apply-retention]
+
+`-ExecutionPolicy Bypass` applies to that one process and changes nothing on the machine. It is there because the default
+policy, `RemoteSigned`, refuses a script that came over a share or a download. `-File` (not `-Command`) matters for
+`backup.ps1`: Task Scheduler gets exit code 5 only when the script is started with `-File`. `-Keep` also accepts the bash spelling
+`--keep 3`; `--copy-to DIR` is refused with exit 2 (the PowerShell parameter is `-CopyTo`).
+
+`restore.sh` prints `restoring into Compose project: <name>` as the first line on stderr; `backup.sh` prints
+`backing up Compose project: <name>` and `setup.sh` `starting Compose project: <name>` (the `.ps1` twins print the same lines). The scripts
+print the name and then go on without asking, so check it BEFORE you run one: `docker compose config --no-interpolate | grep '^name:'`
+(Windows: `| Select-String '^name:'`). A script acts on the project that `COMPOSE_PROJECT_NAME`, `-p` or the `name:` of `compose.yaml`
+selects, and the one with your data is `dcdash` unless you changed it.
+
+`backup.sh` writes the dump under a temporary name, reads the whole of it back (`pg_restore -f /dev/null`, because a dump cut off in
+its data section still passes a table-of-contents check), reads the schema revision, and only then gives the dump its name and
+writes the `.version` file next to it (the Alembic revision, for example `0005`; `backup.sh` ends it with a newline, `backup.ps1` does not, and both restore scripts trim it). A failed, empty or cut-off dump
+therefore never replaces or evicts a good backup. After every backup it says that `.env` and `certs/` are not in the dump (see "What the
+backup does not contain"). With Docker stopped it cannot reach the database: it prints `pg_dump failed; no backup was made and no old
+backup was touched` and exits 1 (read from the script; not tried with Docker stopped).
+
+| Exit | `backup.sh` / `backup.ps1` | `restore.sh` / `restore.ps1` |
+|---|---|---|
+| 0 | the backup was made (and copied, when `--copy-to` was given) | restored |
+| 1 | failed: `pg_dump` failed, the dump was empty or cannot be read back, another backup is running in that folder (one at a time per output folder), or a backup with this timestamp exists. Nothing was created, nothing deleted | the dump file does not exist (`no such dump file`) or cannot be read (cut off, damaged): refused up front, "nothing was changed". Or something failed after `api` and `collector` were stopped but before the dump was loaded (the `DROP`/`CREATE DATABASE` step, say): they are started again, the database may be missing or empty, run the restore again with the same dump. Or the restore failed after the database was replaced: read the messages and the log path it prints (it still runs `timescaledb_post_restore()` and starts `api` and `collector`, so the database may be partly restored) |
+| 2 | usage error (`--keep` outside 1 to 99999, an unknown argument, a `%` in the output folder on Windows; PowerShell's own parameter errors, such as a missing value or a duplicate parameter, exit 1 instead) | usage error |
+| 3 | - | the dump's `.version` differs from the running schema (needs `--force`) |
+| 4 | - | restored, but the retention check failed (see "Retention and a restore") |
+| 5 | **the local backup was made but NOT copied**; nothing was rotated | - |
+
+Exit 5 and the copy folder are explained under "Scheduled backups".
 
 `restore.sh` refuses (exit 3) when the dump's `.version` differs from the running schema.
 `--force` restores anyway; the `api` container then runs `alembic upgrade head` on start, which
-brings an older dump up to the current schema. Never force-restore a dump from a *newer* version.
+brings an older dump up to the current schema. Never force-restore a dump from a *newer* version: the script does not stop you
+(it replaces the database, and the `api` then fails on start with an unknown revision); recover by checking out the newer code, or by
+restoring the backup you made first.
+
+`restore.sh` reads the whole dump before it stops or drops anything. A dump that is missing, cut off or damaged is refused with exit 1
+and the message `nothing was changed`: the database and the containers are untouched. (The first version of the script dropped the
+database first, and the Windows drill showed that a cut-off dump then left the running database empty; this check is the fix, and it
+was run for real afterwards, with a dump cut to half its size in bash and one cut to 1,500 bytes in PowerShell.) `restore.sh` keeps `pg_restore`'s messages in
+`dcdash-restore-<stamp>.log` under `$TMPDIR` (default `/tmp`); every `restore.ps1` run that gets as far as loading the dump leaves the same kind of log in `%TEMP%`, empty
+when nothing went wrong.
+
+A restore takes no lock. Do not start two at once, and do not let a scheduled backup fire while one runs (pause the schedule first):
+the second restore's `DROP DATABASE` kills the first one's load, and a backup of a half-restored database passes its checks and counts
+toward `--keep`.
 
 The dump is a full `pg_dump -Fc` wrapped in `timescaledb_pre_restore()` / `timescaledb_post_restore()`,
 so hypertables, the 1-minute and 1-hour rollups and their compression and retention policies are
@@ -483,24 +544,26 @@ warning about `continuous_agg` circular foreign keys is expected and harmless fo
 background jobs again, so restoring an old dump used to delete everything older than its retention limits within seconds. Raising the
 retention before the restore does not help: the restore brings the old limits back. `restore.sh` and `restore.ps1` now stop that.
 After `pg_restore` and before `timescaledb_post_restore()` they print, per table, how many chunks the restored policies would delete
-(and the oldest and newest day), and if that is more than none they pause the retention jobs. While retention is paused nothing is
-deleted and the disk is not trimmed either: the Storage page shows a banner, and pressing Save there starts retention again (the save
-lists what it would delete and asks first). `--apply-retention` skips the pause, so the data beyond the limits is deleted as the
-policies say. Read the printed table before you go back to normal use. If the restore worked but the retention check itself fails, the
-scripts pause every retention job anyway (unless `--apply-retention` was given) and exit with code 4; if that pause fails as well they say so (`could not check or pause retention`) and still exit 4, and the restored policies may then delete data older than their limits.
+(and the oldest and newest day), and if that is more than none they pause the retention jobs and print `Retention is PAUSED`. While
+retention is paused nothing is deleted and the disk is not trimmed either: the Storage page shows a banner, and pressing Save there
+starts retention again (the save lists what it would delete and asks first). `--apply-retention` skips the pause, so the data beyond
+the limits is deleted as the policies say. Read the printed table before you go back to normal use. If the restore worked but the
+retention check itself fails, the scripts pause every retention job anyway (unless `--apply-retention` was given) and exit with code 4; if that pause fails as well they say so (`could not check or pause retention`) and still exit 4, and the restored policies may then delete data older than their limits.
 
 ### What the backup does not contain
 
 The dump is the database only. `.env` is not in it, and `.env` holds `DCDASH_SECRET_KEY`, the key that encrypts the
 passwords and keys stored for your sources. `certs/` (the HTTPS key and certificate, and an OPC UA client certificate if you
-use one) is not in it either. Keep a copy of `.env` and `certs/` with every backup, off the machine.
+use one) is not in it either. Keep a copy of `.env` and `certs/` with every backup, off the machine. The scripts never copy them, not
+even with `--copy-to`; `backup.sh` says so after every backup.
 
 The api checks the key when it starts. It test-decrypts the stored source secrets and, once every one of them decrypts, stores a
 fingerprint of `DCDASH_SECRET_KEY` in the database (`settings`, key `secret_key_check`; it cannot be turned back into the key). If some cannot be decrypted,
 the api log names the sources, and the Sources page shows a banner to operators and admins until the original `.env` is back or the
 secrets are typed in again.
 
-- **Restoring on a new machine:** put that `.env` and `certs/` in place, run `scripts/setup.sh`, then `scripts/restore.sh <dump>`.
+- **Restoring on a new machine:** put that `.env` and `certs/` in place, run `scripts/setup.sh`, then `scripts/restore.sh <dump>`
+  (the whole sequence, with the checks, is under "Practise a restore").
 - **`.env` lost, dump kept:** the data restores, but every enabled source that has mapped points and a stored secret goes
   `offline` with `stored secret cannot be decrypted` until an admin types its secret in again (Discovery, the source's
   Details, Secret).
@@ -531,7 +594,223 @@ Every collector start, including the one at the end of a restore, rewrites the s
 with the /24 around the collector's own addresses, so the targets pre-filled in a new scope follow this installation, not
 the restored data. Check them before the first scan.
 
-## Upgrading an existing database to Phase 3
+### Practise a restore
+
+A backup you have never restored is a guess. Practise the restore before you need it, and again after you change anything about how
+backups are made. The sequence for a new machine (or a machine whose stack you have lost):
+
+1. Install Docker (Docker Desktop on Windows) and get the code. Check out the commit the dump was made on, or a later one: the
+   dump's `.version` file says which schema it has (see "Upgrading and going back" for what a different schema means).
+2. Put the copies of `.env` and `certs/` that you kept with the dump in place (see "What the backup does not contain"; the HTTPS key
+   needs the owner and mode from "Optional HTTPS").
+3. `scripts/setup.sh` (Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1`). It leaves an existing
+   `.env` alone, and refuses to create a new one when the database volume already exists. It prints
+   `starting Compose project: <name>`; check the name.
+4. `scripts/restore.sh <dump>` (Windows: `scripts\restore.ps1`, started the way "Backup and restore" shows). Check the first line,
+   `restoring into Compose project: <name>`. A dump from an older schema needs `--force`; a dump from a newer one must not be restored.
+   Read the retention table it prints: if it says `Retention is PAUSED`, decide on the Storage page before you press Save (see
+   "Retention and a restore").
+5. Check: `docker compose ps` shows `db`, `api` and `web` healthy; `docker compose exec api alembic current` prints the head revision;
+   `scripts/check_web.sh` prints four `ok` lines; sign in with the account from the old system; on the Sources page no source says
+   `stored secret cannot be decrypted` (it does when `.env` is not the original) and the Last reading ages shrink once the collector
+   runs; check the scan targets in a new scope before the first scan (see "After a restore").
+
+What the drills did and did not cover. Run for real, in throwaway Compose projects: on Windows `setup.ps1`, `backup.ps1` (with
+`-Keep` and `-CopyTo`), `restore.ps1` and a Task Scheduler task; on Linux `backup.sh` (with `--keep` and `--copy-to`: rotation, the
+marker file, every exit 5 case, the usage errors, a second backup at the same time, a dump dated in the future, and the database
+stopped), `restore.sh` (with and without `--force`, with `--apply-retention`, with a cut-off dump and with a missing one), both
+"going back" options of "Upgrading and going back", and the two self-test scripts below. Not run for real: `setup.sh` (its Windows
+twin `setup.ps1` was), Docker Desktop stopped under `backup.ps1`, a cron or Task Scheduler trigger firing by itself, a copy drive
+pulled out in the middle of a copy, and a restore on a second machine from a dump and an `.env` that were carried over.
+
+**The self-test.** `OPS_COMPOSE_PROJECT=dcdash_e2e_drill scripts/backup_smoke.sh` builds a throwaway stack of its own, backs it up,
+deletes an asset, checks that a dump with a wrong `.version` is refused (exit 3), restores, checks that the asset is back, and then
+checks that a corrupted dump is refused with nothing changed (exit 1, `api` still running). It removes its project and its volume
+when it ends (run for real: it ended with `backup smoke OK` and `restore failure-path OK`, and left no container or volume). `scripts/check_tls.sh` is the same kind
+of script for HTTPS (see "Optional HTTPS"). Both:
+
+- need a project name that starts with `dcdash_e2e` (`OPS_COMPOSE_PROJECT` picks it; without it `backup_smoke.sh` uses
+  `dcdash_e2e_smoke` and `check_tls.sh` uses `dcdash_e2e_tls`) and refuse any other name, so they cannot be pointed at the project with
+  your data (`dcdash`, volume `dcdash_dbdata`);
+- build images of their own (`<project>-backend:scratch`, `<project>-web:scratch`) and make up a database password and a secret key
+  for the run, so `dcdash-backend:local`, `dcdash-web:local` and your `.env` are not used or changed. They remove their containers,
+  network and volume when they end but leave those images behind (the drill left three); remove them with
+  `docker image rm <project>-backend:scratch <project>-web:scratch` when you do not need the build cache they hold;
+- publish what they publish (`check_tls.sh`: the `web` service) only on `127.0.0.1:18080` and `127.0.0.1:18443`
+  (`SCRATCH_HTTP_PORT` and `SCRATCH_HTTPS_PORT` change the numbers, from 1024 to 65535), never on ports 80 and 443.
+
+They are bash scripts: on Windows run them from WSL.
+
+## Scheduled backups
+
+Nothing in the stack takes backups by itself. Run `scripts/backup.sh` (or `backup.ps1`) from the machine's scheduler, with a folder
+for the local copies, `--keep N` so that the folder does not fill the disk, and `--copy-to` a folder on another drive or share, so
+that a lost disk does not take the backups with it.
+
+**Linux (cron).** This is an example: the cron entry itself was not run (the script it calls, with `--keep` and `--copy-to`, was; see
+"Practise a restore" for what was proved how). The cron user must be
+allowed to run `docker`. cron keeps no exit code, so send the output to a file and look at it (an exit 5 shows as the line
+`local backup made, NOT copied; nothing was rotated (exit 5)`):
+
+    0 2 * * * cd /path/to/DC_Dashboard && scripts/backup.sh /var/backups/dcdash --keep 14 --copy-to /mnt/offsite >> "$HOME/dcdash-backup.log" 2>&1
+
+**Windows (Task Scheduler).** A task with this action and principal was registered and started by hand with `Start-ScheduledTask` for
+real: it ended with `LastTaskResult` 0, and, with a copy folder that did not exist, with 5. The trigger line is the standard
+PowerShell form and was not run:
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\path\to\DC_Dashboard\scripts\backup.ps1" -Keep 14 -CopyTo D:\backups'
+$trigger = New-ScheduledTaskTrigger -Daily -At 2am
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive   # runs only while this user is logged on
+Register-ScheduledTask -TaskName dcdash_backup -Action $action -Trigger $trigger -Principal $principal
+(Get-ScheduledTaskInfo -TaskName dcdash_backup).LastTaskResult   # 0 ok, 1 failed, 5 made but not copied
+```
+
+- Docker Desktop must be running in that user's session, and the copy drive must be mounted, when the task fires. With Docker not
+  running the script exits 1 and makes no backup (see "Backup and restore").
+- With `-LogonType Interactive` the task runs only while that user is logged on. After a reboot without a logon, or with the machine
+  asleep at the trigger time, it does not run, and `LastTaskResult` keeps the PREVIOUS result: a `0` there can be stale. Read
+  `(Get-ScheduledTaskInfo -TaskName dcdash_backup).LastRunTime` as well (or the date of the newest file in the backup folder), and
+  consider `New-ScheduledTaskSettingsSet -StartWhenAvailable` on the `Register-ScheduledTask` call so that a missed run starts as
+  soon as the machine is back (not tried).
+- `-File` (not `-Command`) is what hands exit code 5 to Task Scheduler. `-ExecutionPolicy Bypass` applies to that process only and
+  changes nothing on the machine; without it the default policy, `RemoteSigned`, refuses a script that came over a share or a
+  download.
+- The task's environment has no `COMPOSE_PROJECT_NAME`, so it acts on the Compose project named in the `compose.yaml` next to the
+  script it runs, unless a `.env` next to it sets `COMPOSE_PROJECT_NAME` (Compose reads that variable from `.env` too; the drill's
+  `.env` did not set it).
+- `backup.ps1` leaves a permanent, empty file `.dcdash-backup.lock` in the output folder (the one-backup-at-a-time lock; `backup.sh`
+  locks the folder itself, leaves no file, and only warns when `flock` is not installed). Do not delete it while a backup runs. Folders with spaces, `&` and `()` in their
+  names work; a `%` in the output folder is refused with exit 2.
+
+**Read the result.** `0` is a backup. `1` is no backup (and nothing was deleted). **`5` means the local backup was made but NOT copied**
+and nothing was rotated, anywhere. A task list that only shows that the task ran looks the same for `0` and `5`, so read
+`LastTaskResult` (or the cron log) and treat anything but `0` as a failure to be looked at. Even `0` does not prove that old backups
+were rotated: the line `not rotating` in the log says rotation was skipped (see `--keep` below). While the copy drive stays absent the
+local folder is never rotated, so it grows without limit, and the database volume may be on the same disk: do not leave an exit 5
+unanswered.
+
+**`--keep N`** (1 to 99999; without it nothing is ever deleted):
+
+- After a verified new dump it keeps the newest N dated pairs (`dcdash-YYYYmmdd-HHMMSS.dump` and `.dump.version`) in the output
+  folder, and in the `--copy-to` folder when there is one, and deletes the older pairs. The new backup is never deleted.
+- It never touches other names: a pair you named yourself (`before-upgrade.dump` and `before-upgrade.dump.version`) stays, and so
+  does any dump without its `.version`.
+- It refuses to rotate a folder that holds a dump dated later than the new one (the clock went back, or a file was misnamed), with a
+  message on stderr: rotating oldest-first would otherwise delete the previous nights' backups while the clock is wrong. The exit
+  code stays 0. If the clock once jumped FORWARD, the script itself wrote a future-dated dump, and from then on every run prints
+  `not rotating` while the folders keep growing, with the clock right again. A monitor that reads only the exit code does not see it:
+  look for the `not rotating` line in the log, and move or delete the future-dated file and its `.version` file so that rotation
+  can resume.
+- A removal that fails is reported on stderr and the exit code stays 0, because the new backup is fine.
+- Nothing is rotated when the backup was not copied (exit 5).
+
+**`--copy-to DIR`** copies the dump and its `.version` to `DIR`, under a temporary name first, compares the copy with the original and
+only then renames it.
+
+- `DIR` must exist (the script never creates it) and must not be the output folder.
+- `DIR` must hold a file `.dcdash-backup-target` whose first line is the Compose project name (CRLF line ends and a byte order mark are
+  fine). Create it once on the drive: `echo dcdash > /mnt/offsite/.dcdash-backup-target` in bash, and
+  `Set-Content -Encoding ascii D:\backups\.dcdash-backup-target dcdash` in PowerShell (`dcdash` is the name in `compose.yaml`; the
+  refusal message for a missing marker prints the exact command for your project). Why: on Linux a mount point with nothing mounted
+  is an empty folder on the root disk, which a plain "folder exists" test would accept and then rotate; and a drive set up for
+  another installation would be treated as one set.
+- One folder per installation. Two installations on one drive need two folders, each with its own marker, and different Compose
+  project names. The same goes for the OUTPUT folder: `--keep` counts every dated pair in it, whichever installation wrote it (the
+  file names carry no project name), so two installations that back up into the same folder delete each other's backups. Give each
+  its own output folder (the cron example below uses one path; change it per installation).
+- If the folder is missing, has no marker, names another installation, or is the output folder itself, the local backup is still made
+  and verified, nothing is rotated, and the script exits 5.
+
+**What is decided and what is not** (the owner's decision D13). The off-host target is a folder you point `--copy-to` at, for example
+a USB drive or a share. The scripts do no file encryption: encrypt the drive or share itself (BitLocker To Go on a Windows edition
+that has it; otherwise a password-protected archive made by hand, for example with 7-Zip). That was decided, not drilled. The scripts
+never copy `.env` or `certs/`, so you keep those yourself. `.env` holds the key for the stored source secrets, so whoever holds the
+dump and `.env` together can read them: keep a copy of `.env` (and `certs/`) off the machine, in a place as well protected as the
+backups, and again whenever they change.
+
+After the first night, look at the folder and at `LastTaskResult` (or the cron log), and do one "Practise a restore" with the dump.
+
+## Upgrading and going back
+
+Starting an `api` container from a newer image runs `alembic upgrade head`, which applies the release's migrations to your data: treat
+"start the stack on the new code" as "upgrade the database". Do these steps for every upgrade. **Never use `docker compose down -v`**:
+it deletes the database volume.
+
+1. **Back up first, and write down where you are.**
+   - `scripts/backup.sh --copy-to <folder>` (Windows: `backup.ps1 -CopyTo <folder>`; the folder is explained under "Scheduled
+     backups", and plain `scripts/backup.sh` does when you have none). The `db` container must be running.
+     If the stack is not running, start only the database with `docker compose up -d db` (`db` has no dependencies and uses the
+     TimescaleDB image, so `api` is not created and nothing is migrated). Do not use a plain `docker compose up -d` yet. Keep both
+     files the script writes, the `.dump` and the `.version` file.
+   - Note the commit you run now (`git rev-parse --short HEAD`) and the revision (`docker compose exec api alembic current`): going
+     back needs both.
+   - A scheduled `--keep N` deletes dated dumps after N more nights. If you may need this one longer, copy both files of the pair
+     under another name (`before-upgrade.dump` and `before-upgrade.dump.version`); `--keep` never touches other names.
+   - Keep a copy of `.env` and `certs/` as well (see "What the backup does not contain").
+2. **Read the release notes** below, for every release between the one you run and the new one, oldest first: what each changes, which
+   pre-checks it names, how to verify it, and whether its downgrade is lossless.
+3. **Do the pre-checks the notes name**, and stop if one says to.
+4. **Apply.** Get the new code (`git pull`, or check out the commit you want), then `docker compose up -d --build` (add
+   `--profile dev` on a stack that has the simulator). Alembic prints nothing while it migrates, so watch
+   `docker compose logs -f api` until Uvicorn's start-up lines appear (`Application startup complete`); a migration that fails prints
+   an error instead. If Compose reports `api` unhealthy, or a dependency failed, while a long migration was running, wait for Uvicorn
+   to start and run the same `up -d` again (it is safe); `web` and `collector` start once `api` is healthy. Collection pauses while
+   the migration runs, so readings for that interval are not collected. If your Docker stops with an image tag that "already exists"
+   (the drills did not see this: `up -d --build` and `build` ran clean although the backend services share one image tag), run
+   `docker compose build api web` and then `docker compose up -d`.
+5. **Verify.** `docker compose exec api alembic current` prints the revision the release notes name (for example `0005 (head)`);
+   `scripts/check_web.sh` prints four `ok` lines (index, spa fallback, api proxy, stream route); the Sources page shows no collector
+   notice and the Last reading ages stay small once the collector runs; then the extra checks of the release notes.
+6. **Going back.** The release notes say which of the two ways is open. Two rules hold for both. First, go back to the commit you noted
+   in step 1, the code that matches the revision you noted and the dump, and **not further**: the code must know the revision the database ends
+   up at, and older code fails on start with an unknown revision. With a database at `0004` or `0005` the Phase 2 code (schema
+   `0003`) is not a place to go back to. Second, a restart of the new
+   `api` would run `alembic upgrade head` and apply the migration again, so the new `api` must not be running again once the schema is
+   back; the orders below make sure of that. Afterwards `git checkout main` (or the branch you came from) returns to the new code;
+   `.env` and `backups/` are not in git, so they stay. This README changes with the checkout, so copy these steps somewhere first.
+   - **Option a, keep what was collected since the upgrade.** Only when the release notes say that the downgrade of this release is
+     lossless. `<previous>` is the revision you noted in step 1, `<old commit>` the commit.
+     1. `docker compose stop collector`.
+     2. `docker compose exec api alembic downgrade <previous>`.
+     3. `docker compose stop api` at once.
+     4. `git checkout <old commit>`.
+     5. `docker compose up -d --build` (add `--profile dev` on a stack that has the simulator). The new `api` runs
+        `alembic upgrade head` on the old code, where `<previous>` is the head: nothing to do.
+     6. `docker compose exec api alembic current` prints `<previous> (head)`.
+   - **Option b, restore the dump from step 1.** It works for every release, and everything collected since that dump is lost. Do it
+     with the old code and with no new container left to be restarted. Restoring the dump on the new image would not undo the
+     upgrade: the last step of `restore.sh` starts the existing `api` and `collector` containers, and they run the migration again.
+     1. `docker compose --profile dev rm --stop --force api collector web simulator` removes the new containers (containers only:
+        never the `dbdata` volume, and `db` is left alone). Do not add `-v`.
+     2. `git checkout <old commit>`.
+     3. `docker compose build` builds the images of the old code (see step 4 for a tag that "already exists").
+     4. `docker compose up -d db` (a no-op when `db` is already running).
+     5. `scripts/restore.sh backups/<dump file> --force`. This is the script of the OLD commit you checked out in step 2, not the
+        current one: depending on its age it may not print the project line, may not read the dump first and may not pause retention,
+        so expect fewer messages than described under "Backup and restore" (the drill of option b ran the old script of `1ef27a2`).
+        `--force` is needed when the volume holds a newer revision than the dump's
+        `.version` says: without it the script refuses (exit 3). It is not needed when the migration never ran. The script drops and
+        recreates the database from the dump (read the retention table it prints). Its last step, `docker compose start api
+        collector`, finds no containers and prints `collector is missing dependency api`, which the script ignores by design.
+     6. `docker compose --profile dev up -d` creates fresh containers of the old code; on the restored database Alembic has
+        nothing to do. `docker compose exec api alembic current` prints the dump's revision.
+
+Both options were run step by step as written, in a throwaway Compose project, on `1ef27a2` (schema `0004`) upgraded to `a6d11e1`
+(schema `0005`). Option a was lossless: the asset made and the readings collected after the upgrade were still there, and
+`alembic current` printed `0004 (head)`. Option b refused without `--force` (exit 3), restored with it (exit 0,
+and the ignored message appeared as described), and lost what came after the dump.
+
+## Release notes
+
+One entry for each release that changes the database: the revision it leads to, what it changes, the pre-checks to run before it,
+how to verify it, and whether its downgrade is lossless (which decides whether option a of "Upgrading and going back" is open). Read
+the entries of every release you skip over, oldest first. Add the entry of the next release at the end.
+
+### Upgrading an existing database to Phase 3
+
+Schema `0003` to `0004`. Downgrade: **not lossless** (step 6), so go back with option b. (The error messages of migration 0004 call this
+entry "Upgrading an existing database to Phase 3" and name its steps 4 and 6; the numbering is kept for that reason.)
 
 Phase 3 adds migration `0004` (tariffs, dashboards, widgets, the billing setting and a rebuilt hourly
 rollup `readings_1h`). The `api` container runs `alembic upgrade head` every time it starts, so the
@@ -541,12 +820,9 @@ and can be run again after an interruption, but it rebuilds `readings_1h` from `
 why the steps below start with a backup. Collection pauses while the migration runs, so readings for that
 interval are not collected.
 
-1. **Back up first.** `scripts/backup.sh` needs the `db` container running. If the stack is not running,
-   start only the database: `docker compose up -d db` (`db` has no dependencies and uses the TimescaleDB
-   image, so `api` is not created and nothing is migrated). Do not use a plain `docker compose up -d`
-   yet. Then run `scripts/backup.sh`. Keep both files it writes, the `.dump` and the `.version` file
-   (it says `0003`). Restoring with `scripts/restore.sh` is the only way back to the database as it was
-   before the upgrade (see "Going back" at the end of this section).
+1. **Back up first**, as in step 1 of "Upgrading and going back" (start only the database when the stack is not running, and note the
+   commit you run now). Keep both files the script writes, the `.dump` and the `.version` file (it says `0003`). Restoring with
+   `scripts/restore.sh` is the only way back to the database as it was before the upgrade (see step 6).
 2. **Pre-check.** In `docker compose exec db psql -U dcdash -d dcdash` run:
 
    ```sql
@@ -608,16 +884,17 @@ interval are not collected.
      when that app is running.) The rollup rows that lost their raw data stay as they are until the date and
      time that the message prints, when the newest of the affected minutes is more than 8 days old. Until
      then there is no collection and no UI on the Phase 3 images. The database is still at `0003`, so you
-     can run Phase 2 meanwhile: do step 6 without its sub-step 5 (nothing was migrated, so no restore:
-     sub-steps 1 to 4, then 6), raise the retention on Phase 2's Storage page instead of with the SQL
-     above, and `git checkout phase-3-dashboards-billing` again when the date has passed. Then start again
+     can run Phase 2 meanwhile (the commit you noted in step 1, or the commit on `main` just before Phase 3 was merged): do option b of
+     "Upgrading and going back" without its step 5, the restore (nothing was migrated, so there is nothing to restore), raise the retention on Phase 2's Storage page instead of with the SQL
+     above, and check out the Phase 3 code again when the date has passed. Then start again
      at step 1 and take a fresh backup: the one from before the wait lacks everything collected since
      (Phase 2 may have run for days), and a restore of it would lose that data. Go on with steps 2 and 3
      after it.
    - Any other error that repeats: `docker compose stop api` and report the error.
    - Never use `docker compose down -v`: it deletes the database volume.
 5. **Verify.**
-   - `SELECT version_num FROM alembic_version;` returns `0005`.
+   - `SELECT version_num FROM alembic_version;` returns the head revision of the code you run (`0004` on the Phase 3 release,
+     `0005` since W1a).
    - `\d readings_1h` lists a `minutes` column.
    - `SELECT view_name FROM timescaledb_information.continuous_aggregates;` lists `readings_1m` and
      `readings_1h`.
@@ -625,66 +902,44 @@ interval are not collected.
      until you set it) and the storage settings.
    - In the UI, set the currency and the rates on Tariffs. Check that Settings has a timezone with
      whole-hour UTC offsets, or Billing answers 409.
-6. **Going back.** Do not run `alembic downgrade`: it rebuilds the hourly rollup from the minutes again and
+6. **Going back.** The `0004` downgrade is not lossless, so option a of "Upgrading and going back" is not open for this release. Do not
+   run `alembic downgrade`: it rebuilds the hourly rollup from the minutes again and
    refuses (leaving the database as it is) when that would lose hourly history older than the 1-minute
    tier. Restoring the step 1 dump on the Phase 3 image does not undo the upgrade: its
    `.version` says `0003` while the running schema is `0004`, so `scripts/restore.sh` refuses without
    `--force`, and with `--force` the script restarts the existing `api` and `collector` containers,
-   which run migration 0004 again. To really return to Phase 2, restore with the Phase 2 code and images
-   and with no Phase 3 container left to be restarted:
-   1. `git checkout 855cbf8` (`main` before Phase 3). Afterwards `git checkout phase-3-dashboards-billing`
-      returns to the branch; `.env` and `backups/` are not in git, so they stay. This README changes with
-      the checkout, so keep these steps at hand.
-   2. `docker compose build` builds the Phase 2 images.
-   3. `docker compose --profile dev rm --stop --force api collector web simulator` removes the Phase 3
-      containers (containers only: never the `dbdata` volume, and `db` is left alone).
-   4. `docker compose up -d db` (a no-op when `db` is already running).
-   5. `scripts/restore.sh backups/<dump file> --force`. `--force` is needed when the database was
-      already migrated to `0004`; it is not when the migration never ran. The script's last step,
-      `docker compose start api collector`, finds no containers and prints `collector is missing
-      dependency api`, which the script ignores by design.
-   6. `docker compose --profile dev up -d` creates fresh Phase 2 containers; on the restored `0003`
-      database Alembic has nothing to do.
+   which run migration 0004 again. To really return to Phase 2, use option b of "Upgrading and going back": restore the step 1
+   dump with the Phase 2 code and images and with no Phase 3 container left to be restarted. The Phase 2 code is the commit you noted
+   in step 1; if you upgraded before this README asked for the note, it is the commit on `main` just before Phase 3 was merged.
+   `--force` is needed when the database was already migrated to `0004`; it is not when the migration never ran. The script's last
+   step, `docker compose start api collector`, finds no containers and prints `collector is missing dependency api`, which the script
+   ignores by design. Afterwards check out the branch you came from to return to the Phase 3 code; `.env` and `backups/` are not in
+   git, so they stay.
 
-## Upgrading to W1a (migration 0005)
+### Upgrading to W1a (migration 0005)
+
+Schema `0004` to `0005`. Downgrade: **lossless** for every audit entry whose user still exists, so option a is open. The code to go
+back to is `1ef27a2` (`main` before W1a).
 
 W1a (the audit foundation) adds migration `0005`: two columns (`actor_id`, `actor_name`) on `audit_log`, a
 backfill that copies the name of each existing entry's user into them, and a trigger that fills them on every
 new entry, so an entry keeps who did it after the account is gone. It runs in a moment and needs no pre-check.
 The `api` container applies it the first time it starts from the new image.
 
-1. **Back up first.** `scripts/backup.sh` (the `db` container must be running). Keep the `.dump` and the
-   `.version` file (it says `0004`).
-2. **Apply.** `docker compose up -d --build` (add `--profile dev` on a stack that has the simulator).
+1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0004`).
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator).
 3. **Verify.** `docker compose exec api alembic current` prints `0005 (head)`.
-4. **Going back.** Do not follow the "Going back" steps of the Phase 3 section: they check out Phase 2
-   (`855cbf8`, schema `0003`), and a `0004` database on that code makes Alembic fail with an unknown revision.
-   The code to go back to is `1ef27a2` (`main` before W1a). In both options a restart of the W1a `api` would run
-   `alembic upgrade head` and apply `0005` again, so the W1a `api` must not be running again once the schema is
-   back at `0004`. Afterwards `git checkout main` (or the branch you came from) returns to the W1a code; `.env`
-   and `backups/` are not in git, so they stay. This README changes with the checkout, so keep these steps at hand.
-   - **Option a, keep what was collected since the upgrade.** The `0005` downgrade is lossless for every user that
-     still exists: it drops the trigger and the two snapshot columns, and `upgrade` rebuilds them.
-     1. `docker compose stop collector`.
-     2. `docker compose exec api alembic downgrade 0004`.
-     3. `docker compose stop api` at once.
-     4. `git checkout 1ef27a2`.
-     5. `docker compose up -d --build` (add `--profile dev` on a stack that has the simulator). The new `api`
-        runs `alembic upgrade head` on the old code, where `0004` is the head: nothing to do.
-     6. `docker compose exec api alembic current` prints `0004 (head)`.
-   - **Option b, restore the backup from step 1.** Everything collected since that backup is lost. Do it with the
-     old code and with no W1a container left to be restarted:
-     1. `docker compose --profile dev rm --stop --force api collector web simulator` removes the W1a containers
-        (containers only: never the `dbdata` volume, and `db` is left alone). Do not add `-v`.
-     2. `git checkout 1ef27a2`.
-     3. `docker compose build` builds the images of the old code.
-     4. `docker compose up -d db` (a no-op when `db` is already running).
-     5. `scripts/restore.sh backups/<dump file> --force`. `--force` is needed: the volume still holds the W1a
-        database (`0005`) and the dump's `.version` says `0004`, so the script refuses without it. It drops and
-        recreates the database from the dump. Its last step, `docker compose start api collector`, finds no
-        containers and prints a message that the script ignores by design.
-     6. `docker compose --profile dev up -d` creates fresh containers of the old code; on the restored `0004`
-        database Alembic has nothing to do. `docker compose exec api alembic current` prints `0004 (head)`.
+4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0004` and `<old commit>` = `1ef27a2`. Do
+   not use step 6 of the Phase 3 entry above for this: it returns to Phase 2 (schema `0003`), which is not a place to go back to from
+   a `0004` or `0005` database (Alembic fails with an unknown revision). In both options a restart of the W1a `api` would run
+   `alembic upgrade head` and apply `0005` again, so the W1a `api` must not be running again once the schema is back at `0004`.
+   - **Option a, keep what was collected since the upgrade.** The `0005` downgrade drops the trigger, its function and the two snapshot
+     columns, and `upgrade` rebuilds them from the users. That loses nothing for an entry whose user still exists; the names of
+     users deleted after `0005` was applied are lost.
+   - **Option b, restore the backup from step 1.** Everything collected since that backup is lost. The restore script is the one of
+     the old commit (see step 5 of option b in "Upgrading and going back"). `--force` is needed: the volume
+     still holds the W1a database (`0005`) and the dump's `.version` says `0004`, so the script refuses without it.
 
 ## Add a connector
 
