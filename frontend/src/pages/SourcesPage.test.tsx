@@ -1,7 +1,10 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useCollectorStatus } from "../api/queries";
+import { api } from "../api/client";
+import { keys, useCollectorStatus } from "../api/queries";
 import { mockFetch } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { renderWithProviders } from "../test/render";
 import { SourcesPage } from "./SourcesPage";
@@ -17,6 +20,30 @@ const routes = (role: string) => ({
   "POST /api/sources/test-all": { status: 202, body: { job_ids: [9] } },
   "GET /api/jobs/9": { body: { id: 9, kind: "test_source", status: "done", result: { ok: false, status: "timeout", latency_ms: null, message: "no reply" }, created_at: "t", finished_at: "t" } },
 });
+
+const connectors = [
+  { type: "simulator", config_schema: { type: "object", title: "SimulatorConfig", properties: {
+    url: { type: "string", format: "uri", title: "Url", default: "http://simulator:9000" },
+    timeout_seconds: { type: "number", title: "Timeout Seconds", default: 5.0 } } } },
+  { type: "other", config_schema: { type: "object", required: ["host"], properties: {
+    host: { type: "string", title: "Host" }, port: { type: "integer", title: "Port", default: 502 }, tls: { type: "boolean", title: "Tls", default: false } } } },
+];
+
+/** Fetches the sources again, as the page's own 10 s poll does. */
+function RefetchSources() {
+  const client = useQueryClient();
+  return <button onClick={() => void client.invalidateQueries({ queryKey: keys.sources })}>refetch sources</button>;
+}
+
+/** Queries on the assets and graph keys: each is fetched again only when something invalidates its key. */
+function AssetGraphProbes() {
+  useQuery({ queryKey: keys.assets, queryFn: () => api.get("/api/probe/assets"), staleTime: Infinity });
+  useQuery({ queryKey: keys.graph, queryFn: () => api.get("/api/probe/graph"), staleTime: Infinity });
+  return null;
+}
+const assetGraphRoutes = { "GET /api/probe/assets": { body: {} }, "GET /api/probe/graph": { body: {} } };
+const assetGraphFetches = (calls: { path: string }[]) =>
+  [calls.filter((c) => c.path === "/api/probe/assets").length, calls.filter((c) => c.path === "/api/probe/graph").length];
 
 describe("SourcesPage", () => {
   it("attributes test-all job ids to sources by id order, not name order", async () => {
@@ -91,6 +118,265 @@ describe("SourcesPage", () => {
     expect(screen.getByRole("link", { name: "Points" })).toHaveAttribute("href", "/sources/2/points");
   });
 
+  describe("adding and editing", () => {
+    const withConnectors = { "GET /api/connectors": { body: connectors } };
+
+    it("gives admins an Edit button on every row, and operators and viewers none", async () => {
+      mockFetch({ ...routes("admin"), "GET /api/sources": { body: [source, { ...source, id: 3, name: "second" }] } });
+      const admin = renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      expect(await screen.findAllByRole("button", { name: "Edit" })).toHaveLength(2);
+      admin.unmount();
+      for (const role of ["operator", "viewer"]) {
+        mockFetch(routes(role));
+        const view = renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+        await screen.findByText("sim");
+        expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+        view.unmount();
+      }
+    });
+
+    it("Edit opens a dialog named after the source with its stored values; Cancel and Escape close it and focus returns to Edit", async () => {
+      mockFetch({ ...routes("admin"), ...withConnectors });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      const edit = await screen.findByRole("button", { name: "Edit" });
+      await userEvent.click(edit);
+      const dialog = await screen.findByRole("dialog", { name: "Edit source sim" });
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      expect(within(dialog).getByLabelText("Name")).toHaveValue("sim");
+      expect(await within(dialog).findByLabelText("Url")).toHaveValue("http://simulator:9000");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(edit).toHaveFocus();
+      await userEvent.click(edit);
+      await screen.findByRole("dialog", { name: "Edit source sim" });
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("saves an edit with PATCH, closes the dialog and fetches the list again", async () => {
+      let listed = 0;
+      const calls = mockFetch({
+        ...routes("admin"), ...withConnectors,
+        "GET /api/sources": () => ({ body: [{ ...source, name: ++listed > 1 ? "renamed" : "sim" }] }),
+        "PATCH /api/sources/2": { body: { id: 2 } },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      const name = await screen.findByLabelText("Name");
+      await userEvent.clear(name);
+      await userEvent.type(name, "renamed");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
+        name: "renamed", config: { url: "http://simulator:9000", timeout_seconds: 5 }, enabled: true, // the stored config lacks timeout_seconds: the field's default fills it
+      });
+      expect(await screen.findByText("renamed")).toBeInTheDocument();
+    });
+
+    it("keeps what is typed in an open Edit dialog when the list is fetched again with new values", async () => {
+      let listed = 0;
+      mockFetch({
+        ...routes("admin"), ...withConnectors,
+        "GET /api/sources": () => ({ body: [{ ...source, last_reading_age_seconds: ++listed > 1 ? 125 : 5 }] }),
+      });
+      renderWithProviders(<><SourcesPage /><RefetchSources /></>, { route: "/sources", path: "/sources" });
+      expect(await screen.findByText("5 s ago")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+      const name = await screen.findByLabelText("Name");
+      const url = await screen.findByLabelText("Url");
+      await userEvent.clear(name);
+      await userEvent.type(name, "renamed");
+      await userEvent.clear(url);
+      await userEvent.type(url, "http://other:1");
+      await userEvent.click(screen.getByRole("button", { name: "refetch sources" }));
+      expect(await screen.findByText("2 min ago")).toBeInTheDocument();
+      expect(screen.getByLabelText("Name")).toHaveValue("renamed");
+      expect(screen.getByLabelText("Url")).toHaveValue("http://other:1");
+    });
+
+    it("keeps the Edit dialog and what is typed when a later fetch of the list fails, and shows the error above the table", async () => {
+      let listed = 0;
+      mockFetch({
+        ...routes("admin"), ...withConnectors,
+        "GET /api/sources": () => (++listed > 1 ? { status: 500, body: { detail: "database is down" } } : { body: [source] }),
+      });
+      renderWithProviders(<><SourcesPage /><RefetchSources /></>, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      const name = await screen.findByLabelText("Name");
+      await userEvent.clear(name);
+      await userEvent.type(name, "renamed");
+      await userEvent.click(screen.getByRole("button", { name: "refetch sources" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("database is down");
+      expect(screen.getByRole("dialog", { name: "Edit source sim" })).toBeInTheDocument();
+      expect(screen.getByLabelText("Name")).toHaveValue("renamed");
+      expect(screen.getByRole("heading", { name: "Sources" })).toBeInTheDocument();
+      expect(screen.getByRole("table")).toBeInTheDocument();
+    });
+
+    it("still shows the error alone when the very first fetch of the list fails", async () => {
+      mockFetch({ ...routes("admin"), "GET /api/sources": { status: 500, body: { detail: "database is down" } } });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      expect(await screen.findByRole("alert")).toHaveTextContent("database is down");
+      expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    });
+
+    it("edits a source whose connector is the last in the list with that connector's fields, and sends them", async () => {
+      const plc = { ...source, id: 4, name: "plc", connector_type: "other", config: { host: "10.0.0.1", port: 503, tls: true }, has_secret: false };
+      const calls = mockFetch({
+        ...routes("admin"), ...withConnectors, "GET /api/sources": { body: [plc] }, "PATCH /api/sources/4": { body: { id: 4 } },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      const dialog = await screen.findByRole("dialog", { name: "Edit source plc" });
+      expect(await within(dialog).findByLabelText("Host")).toHaveValue("10.0.0.1");
+      expect(within(dialog).queryByLabelText("Url")).not.toBeInTheDocument();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
+        name: "plc", config: { host: "10.0.0.1", port: 503, tls: true }, enabled: true,
+      });
+    });
+
+    it("ignores Escape and Cancel while an edit is being saved, then closes the dialog when the save is done", async () => {
+      const calls = mockFetch({
+        ...routes("admin"), ...withConnectors,
+        "PATCH /api/sources/2": { body: { ...source, name: "renamed" } },
+      });
+      const hold = holdFetch((method, path) => method === "PATCH" && path === "/api/sources/2");
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      const name = await screen.findByLabelText("Name");
+      await userEvent.clear(name);
+      await userEvent.type(name, "renamed");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      const dialog = screen.getByRole("dialog");
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+      expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      hold.release();
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+    });
+
+    it("shows the saved name and config in the list, and in the next Edit, even when the fetch after the save fails", async () => {
+      const saved = { ...source, name: "renamed", config: { url: "http://changed:9000", timeout_seconds: 5 } };
+      let listed = 0;
+      mockFetch({
+        ...routes("admin"), ...withConnectors,
+        "GET /api/sources": () => (++listed > 1 ? { status: 500, body: { detail: "database is down" } } : { body: [source] }),
+        "PATCH /api/sources/2": { body: saved },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      const name = await screen.findByLabelText("Name");
+      await userEvent.clear(name);
+      await userEvent.type(name, "renamed");
+      const url = screen.getByLabelText("Url");
+      await userEvent.clear(url);
+      await userEvent.type(url, "http://changed:9000");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(await screen.findByText("renamed")).toBeInTheDocument();
+      expect(screen.getByText("5 s ago")).toBeInTheDocument(); // what the PATCH reply does not carry keeps its old value
+      await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+      const dialog = await screen.findByRole("dialog", { name: "Edit source renamed" });
+      expect(within(dialog).getByLabelText("Name")).toHaveValue("renamed");
+      expect(await within(dialog).findByLabelText("Url")).toHaveValue("http://changed:9000");
+    });
+
+    describe("while a delete runs or its confirmation is open", () => {
+      const impact = { detail: "needs confirmation", points: 3, mappings: 3 };
+      /** DELETE of source 2 is held, then answers 409 with the counts. */
+      function startDelete() {
+        mockFetch({ ...routes("admin"), ...withConnectors, "DELETE /api/sources/2": { status: 409, body: impact } });
+        const hold = holdFetch((method, path) => method === "DELETE" && path === "/api/sources/2");
+        renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+        return hold;
+      }
+      beforeEach(() => { vi.spyOn(window, "confirm").mockReturnValue(true); });
+
+      it("keeps Add source and Edit from opening a second dialog, and the confirm dialog ends up alone", async () => {
+        const hold = startDelete();
+        await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+        const add = screen.getByRole("button", { name: "Add source" });
+        const edit = screen.getByRole("button", { name: "Edit" });
+        expect(add).toBeDisabled();
+        expect(edit).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
+        await userEvent.click(add);
+        await userEvent.click(edit);
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        hold.release();
+        expect(await screen.findByRole("dialog", { name: 'Delete source "sim"?' })).toBeInTheDocument();
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      });
+
+      it("keeps them from opening a dialog next to the confirm dialog, and frees them when it is cancelled", async () => {
+        const hold = startDelete();
+        await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+        hold.release();
+        await screen.findByRole("dialog", { name: 'Delete source "sim"?' });
+        for (const name of ["Add source", "Edit"]) {
+          expect(screen.getByRole("button", { name })).toBeDisabled();
+          await userEvent.click(screen.getByRole("button", { name }));
+        }
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Add source" })).toBeEnabled();
+        expect(screen.getByRole("button", { name: "Edit" })).toBeEnabled();
+      });
+    });
+
+    it("Add source opens a dialog with the same fields as before; pressing the button again does not close it; Escape does", async () => {
+      const calls = mockFetch({ ...routes("admin"), ...withConnectors, "POST /api/sources": { status: 201, body: { id: 3 } } });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      const add = await screen.findByRole("button", { name: "Add source" });
+      await userEvent.click(add);
+      const dialog = await screen.findByRole("dialog", { name: "Add source" });
+      expect(await within(dialog).findByLabelText("Connector")).toBeInTheDocument();
+      expect(within(dialog).getByLabelText("Name")).toBeInTheDocument();
+      expect(within(dialog).getByLabelText("Secret")).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeInTheDocument();
+      await userEvent.click(add);
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      await userEvent.type(within(dialog).getByLabelText("Name"), "new one");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(calls.find((c) => c.method === "POST" && c.path === "/api/sources")?.body).toMatchObject({ name: "new one", connector_type: "simulator" });
+      await userEvent.click(add);
+      await screen.findByRole("dialog", { name: "Add source" });
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("the status column", () => {
+    it("says why a source is not polled, keeps the last check visible, and shows the stored status of a polled one", async () => {
+      mockFetch({
+        ...routes("operator"),
+        "GET /api/sources": { body: [
+          { ...source, id: 1, name: "empty", mapped_points: 0, status: "unknown" },
+          { ...source, id: 3, name: "checked", mapped_points: 0, status: "offline" },
+          { ...source, id: 4, name: "off", enabled: false, mapped_points: 2, status: "unknown" },
+          { ...source, id: 5, name: "live", mapped_points: 3, status: "online" },
+        ] },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      const row = async (name: string) => within((await screen.findByText(name)).closest("tr")!);
+      const empty = await row("empty");
+      expect(empty.getByText("not polled (no mapped points)")).toHaveClass("muted");
+      expect((await row("checked")).getByText("not polled (no mapped points); last check: offline")).toBeInTheDocument();
+      expect((await row("off")).getByText("not polled (disabled)")).toBeInTheDocument();
+      const live = await row("live");
+      expect(live.getByText("online")).not.toHaveClass("muted");
+      expect(live.queryByText(/not polled/)).not.toBeInTheDocument();
+    });
+  });
+
   describe("deleting", () => {
     const impact = { detail: "needs confirmation", points: 3, mappings: 3 };
     /** DELETE answers 409 with the counts until the request carries confirm=true. `needsConfirm` false = nothing mapped. */
@@ -99,7 +385,7 @@ describe("SourcesPage", () => {
       let removed = false;
       const calls = mockFetch({
         ...routes("admin"),
-        ...(probes ? probeRoutes : {}),
+        ...(probes ? { ...probeRoutes, ...assetGraphRoutes } : {}),
         "GET /api/sources": () => ({ body: removed ? [] : [source] }),
         "DELETE /api/sources/2": ({ url }) => {
           urls.push(url);
@@ -108,7 +394,7 @@ describe("SourcesPage", () => {
           return confirmed;
         },
       });
-      renderWithProviders(<><SourcesPage />{probes && <CacheProbes />}</>, { route: "/sources", path: "/sources" });
+      renderWithProviders(<><SourcesPage />{probes && <><CacheProbes /><AssetGraphProbes /></>}</>, { route: "/sources", path: "/sources" });
       return { calls, urls };
     }
     const deletes = (calls: { method: string }[]) => calls.filter((c) => c.method === "DELETE").length;
@@ -133,6 +419,17 @@ describe("SourcesPage", () => {
         await click("Delete");
         if (needsConfirm) await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
         await waitFor(() => expect(probeFetches(calls)).toEqual({ billing: 2, widgetData: 2, tariffs: 2 }));
+      },
+    );
+
+    it.each([["a source with nothing mapped", false], ["a source with mapped points, after Delete anyway", true]])(
+      "refreshes the assets and the graph too, because its points and mappings go with it: %s",
+      async (_case, needsConfirm) => {
+        const { calls } = setup(needsConfirm, undefined, true);
+        await waitFor(() => expect(assetGraphFetches(calls)).toEqual([1, 1]));
+        await click("Delete");
+        if (needsConfirm) await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
+        await waitFor(() => expect(assetGraphFetches(calls)).toEqual([2, 2]));
       },
     );
 

@@ -54,6 +54,7 @@ class SourceOut(BaseModel):
 
 class SourceListOut(SourceOut):
     last_reading_age_seconds: float | None = None  # newest stored reading of any of its points; None = none yet
+    mapped_points: int = 0  # points of this source that have a mapping
 
 
 def validated_config(connector_type: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -136,8 +137,21 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
         )
     )
     ages = {source_id: max(0.0, float(age)) for source_id, age in rows}
+    counts = dict(
+        (
+            await db.execute(
+                text(
+                    "SELECT p.source_id, count(DISTINCT m.point_id) FROM mappings m "
+                    "JOIN points p ON p.id = m.point_id GROUP BY p.source_id"
+                )
+            )
+        ).all()
+    )
     return [
-        SourceListOut.model_validate(s).model_copy(update={"last_reading_age_seconds": ages.get(s.id)}) for s in sources
+        SourceListOut.model_validate(s).model_copy(
+            update={"last_reading_age_seconds": ages.get(s.id), "mapped_points": int(counts.get(s.id, 0))}
+        )
+        for s in sources
     ]
 
 

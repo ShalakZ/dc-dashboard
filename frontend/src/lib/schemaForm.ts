@@ -43,6 +43,19 @@ export function initialValues(fields: FormField[]): RawValues {
   return out;
 }
 
+/** The form values for a source's stored config: stored values as text (booleans as booleans), the defaults for fields the config lacks. */
+export function valuesFromConfig(fields: FormField[], config: Record<string, unknown>): RawValues {
+  const defaults = initialValues(fields);
+  const out: RawValues = {};
+  for (const field of fields) {
+    const stored = config[field.name];
+    if (stored === undefined || stored === null) out[field.name] = defaults[field.name];
+    else if (field.kind === "boolean") out[field.name] = stored === true;
+    else out[field.name] = String(stored);
+  }
+  return out;
+}
+
 export function coerceValues(fields: FormField[], raw: RawValues): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const field of fields) {

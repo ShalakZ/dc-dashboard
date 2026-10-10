@@ -415,7 +415,7 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Three specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Five specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
 
 - `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
@@ -434,6 +434,10 @@ Three specs run in one `playwright test` run against the dev-profile stack on `h
   their layout, changes the dashboard range and downloads a widget's CSV; the viewer sees the dashboard
   with no edit controls, no Tariffs link and `403` from the write API; the admin finds the tariff,
   currency and dashboard entries in the audit log (counted through the API as well).
+- `headers.spec.ts` (after it) checks the security headers on the page and the API and walks every page an admin can open,
+  failing on a Content-Security-Policy violation.
+- `w3a.spec.ts` (last, at 1600×1000) adds a child asset from a `+` and picks the Kind from the list, sorts, filters and searches the
+  source's points, checks the unit warning in the mapping dialog, and adds and edits a source that has no mapped points.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

@@ -1,5 +1,5 @@
 import type { JsonSchema } from "../api/types";
-import { coerceValues, fieldsFromSchema, initialValues } from "./schemaForm";
+import { coerceValues, fieldsFromSchema, initialValues, valuesFromConfig } from "./schemaForm";
 
 // Exactly what pydantic emits for SimulatorConfig (backend/dcdash/connectors/simulator.py).
 const simulator: JsonSchema = {
@@ -61,5 +61,29 @@ describe("initialValues / coerceValues", () => {
     expect(coerceValues(fieldsFromSchema(simulator), { url: "http://x", timeout_seconds: "abc" })).toEqual({
       url: "http://x", timeout_seconds: "abc",
     });
+  });
+});
+
+describe("valuesFromConfig", () => {
+  it("turns stored strings, numbers and booleans into form values (booleans stay booleans)", () => {
+    expect(valuesFromConfig(fieldsFromSchema(mixed), { host: "10.0.0.1", port: 503, tls: true, note: "x" })).toEqual({
+      host: "10.0.0.1", port: "503", tls: true, note: "x",
+    });
+  });
+
+  it("falls back to the field's default for a key the stored config lacks", () => {
+    expect(valuesFromConfig(fieldsFromSchema(mixed), { host: "10.0.0.1" })).toEqual({ host: "10.0.0.1", port: "502", tls: false, note: "" });
+  });
+
+  it("falls back to the default for a stored null", () => {
+    expect(valuesFromConfig(fieldsFromSchema(mixed), { host: "h", port: null, tls: null, note: null })).toEqual({
+      host: "h", port: "502", tls: false, note: "",
+    });
+  });
+
+  it("round-trips: the stored config comes back out of coerceValues unchanged", () => {
+    const fields = fieldsFromSchema(mixed);
+    const stored = { host: "10.0.0.1", port: 503, tls: true, note: "x" };
+    expect(coerceValues(fields, valuesFromConfig(fields, stored))).toEqual(stored);
   });
 });

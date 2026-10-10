@@ -7,6 +7,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { AssetForm } from "../components/AssetForm";
 import { AssetTree } from "../components/AssetTree";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { Modal } from "../components/Modal";
 import { useAction } from "../hooks/useAction";
 import { assetImpact, assetLoss } from "../lib/impact";
 import { buildTree, descendantIds } from "../lib/tree";
@@ -17,13 +18,18 @@ export function AssetsPage() {
   const invalidate = useInvalidate();
   const [params, setParams] = useSearchParams();
   const selectedId = params.get("selected") ? Number(params.get("selected")) : null;
-  const [mode, setMode] = useState<"none" | "add" | "edit">("none");
+  const [dialog, setDialog] = useState<{ kind: "add"; parentId: number | null } | { kind: "edit" } | null>(null);
   const [confirming, setConfirming] = useState<{ asset: Asset; impact: AssetImpact } | null>(null);
   const tree = useMemo(() => buildTree(assets), [assets]);
   const selected = assets.find((a) => a.id === selectedId) ?? null;
-  const { run, error: actionError } = useAction();
+  const { run, busy, error: actionError } = useAction();
+  // While a delete runs or its confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap).
+  const locked = busy || confirming !== null;
+  const openAdd = (parentId: number | null) => { if (!locked) setDialog({ kind: "add", parentId }); };
+  const openEdit = () => { if (!locked) setDialog({ kind: "edit" }); };
 
-  const finish = async () => { await invalidate(keys.assets); setMode("none"); };
+  const closeDialog = () => setDialog(null);
+  const finish = async () => { await invalidate(keys.assets); setDialog(null); };
   const create = async (body: AssetIn) => { await api.post("/api/assets", body); await finish(); };
   const update = async (body: AssetIn) => { await api.patch(`/api/assets/${selected!.id}`, body); await finish(); };
   const removed = async (asset: Asset, confirm: boolean) => {
@@ -51,14 +57,20 @@ export function AssetsPage() {
     <>
       <h1>Assets</h1>
       {assets.length === 0 && <p className="muted">No assets yet.</p>}
-      <AssetTree nodes={tree} selectedId={selectedId} onSelect={(id) => setParams({ selected: String(id) })} />
+      <AssetTree
+        nodes={tree}
+        selectedId={selectedId}
+        onSelect={(id) => setParams({ selected: String(id) })}
+        onAddChild={hasRole("admin") ? openAdd : undefined}
+        disabled={locked}
+      />
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {selected && <p>Selected: <Link to={`/assets/${selected.id}`}>{selected.name}</Link> (open page)</p>}
-      {hasRole("admin") && mode === "none" && (
+      {hasRole("admin") && (
         <div className="row">
-          <button onClick={() => setMode("add")}>Add asset</button>
-          {selected && <button onClick={() => setMode("edit")}>Edit</button>}
-          {selected && <button onClick={remove}>Delete</button>}
+          <button onClick={() => openAdd(selectedId)} disabled={locked}>Add asset</button>
+          {selected && <button onClick={openEdit} disabled={locked}>Edit</button>}
+          {selected && <button onClick={remove} disabled={locked}>Delete</button>}
         </div>
       )}
       {confirming && (
@@ -69,11 +81,15 @@ export function AssetsPage() {
           onCancel={() => setConfirming(null)}
         />
       )}
-      {mode === "add" && (
-        <AssetForm assets={assets} initial={{ parent_id: selectedId }} excludeIds={new Set()} onSubmit={create} onCancel={() => setMode("none")} />
+      {dialog?.kind === "add" && (
+        <Modal title="Add asset" onClose={closeDialog}>
+          <AssetForm key={dialog.parentId ?? "none"} assets={assets} initial={{ parent_id: dialog.parentId }} excludeIds={new Set()} onSubmit={create} onCancel={closeDialog} />
+        </Modal>
       )}
-      {mode === "edit" && selected && (
-        <AssetForm assets={assets} initial={selected} excludeIds={descendantIds(tree, selected.id)} onSubmit={update} onCancel={() => setMode("none")} />
+      {dialog?.kind === "edit" && selected && (
+        <Modal title="Edit asset" onClose={closeDialog}>
+          <AssetForm assets={assets} initial={selected} excludeIds={descendantIds(tree, selected.id)} onSubmit={update} onCancel={closeDialog} />
+        </Modal>
       )}
     </>
   );

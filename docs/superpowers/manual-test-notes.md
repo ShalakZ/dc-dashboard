@@ -494,9 +494,11 @@ mapping, so they show `online` with a Last seen about 6 minutes old.
   gets harder as the list grows. The owner then found you can already add under a specific asset by
   pressing it. So the need is to make that obvious: for example a `+` next to each branch that preselects
   the parent.
+  **Closed by W3a (2026-10-11).** A `+` beside every asset in the tree (admins) opens Add asset with that asset already chosen as the parent; the top-level Add asset button still works.
 - **S4-2 [idea] (owner)** `Kind` is free text, so the naming convention has to be remembered (`LV_Panel`
   vs `LV panel`). Make it a dropdown or a pick from a list of defined kinds, maybe with the same
   "choose where you are" behaviour as S4-1. Not decided yet.
+  **Closed by W3a (2026-10-11).** Kind is picked from a list (starter kinds, `generic`, every kind already in use, and "Other…" for a new one); a typed kind that differs from an existing one only by case or blanks reuses the existing spelling. The stored value is still free text and the API still accepts any text (D5 resolved, no migration).
 - **S4-3 [bug] (owner)** Duplicate asset names are allowed, even with the same kind, and there is no
   refusal text. With two `LV_Panel_01` in two rooms, the asset list in the mapping dialog shows both as
   `LV_Panel_01` with no way to tell which room each is in, so a point can be mapped to the wrong one. The
@@ -507,9 +509,11 @@ mapping, so they show `online` with a Last seen about 6 minutes old.
   **Refusal half closed by W1b (2026-10-10).** The same name under one parent is refused (409) on create, rename, move and Discovery's "new asset": trimmed, case-insensitive, inner whitespace collapsed, serialised by an advisory lock (no unique index, D4). Old twins stay and stay editable. The label half was closed in W0a.
 - **S4-4 [ux] (owner)** Mapping a point means scrolling all the way down to the mapping form. To tackle
   in the UI polish.
+  **Closed by W3a (2026-10-11).** Map and Edit mapping open as a dialog over the list (titled `Map <address>`), so there is nothing to scroll to; Add and Edit asset and Add and Edit source are dialogs too.
 - **S4-5 [idea] (owner)** The points list needs sorting (name, address, type, unit, mapped or not) and
   most likely a filter such as "unmapped only" and a search. Without it, mapping 60 points per source is
   slow and error-prone, and a real SCADA will have far more.
+  **Closed by W3a (2026-10-11).** The points table sorts by any column header (the default is natural address order, `3:2` before `3:10`), has an "Unmapped only" checkbox and a search box (address, name, type, unit hint, mapped asset, metric), and says "Showing n of m points". The table is not paged (backlog section M).
 
 Second round (owner): the duplicate-asset and duplicate-mapping refusal works (a point has one mapping,
 an asset has one per metric). Live tiles and tables update; the 1h `energy_kwh` chart is empty; charts
@@ -571,6 +575,7 @@ login. The owner recreated `sim-http` with the secret: Test OK in 4 ms.
   the source and add it again. The API supports it (`PATCH /api/sources/{id}`, admin) and the Discovery
   side panel (a source's Details) edits credentials, but the Sources page does not. Idea: an Edit on the
   Sources page using the same form as Add.
+  **Closed by W3a (2026-10-11).** The Sources page has Edit (admins): name, config, enabled and secret (blank keeps the stored secret, "Remove the stored secret" clears it); the connector type cannot be changed. Deleting a source now also refreshes the assets and the graph.
 - **S3-5 [idea] (Claude, for section 11)** The README says user management and source create/edit are not
   audited (only the Phase 3 actions: tariffs, currency, dashboards, asset and source deletes). Consider
   auditing user and source changes. It ties into S1-2 (deleting accounts).
@@ -583,12 +588,14 @@ Found by Claude while preparing (not by the owner):
   poll. So the dev source `sim-modbus` (0 mapped points) keeps showing status `online` with a
   `Last seen` that is hours old. The status is just the last known one. Idea: show "not polled (no mapped
   points)" instead of a stale `online`.
+  **Closed by W3a (2026-10-11).** The status column reads `not polled (no mapped points)` or `not polled (disabled)`, followed by `; last check: <status>` once a Test or Browse has written a status (those jobs do write it, which the plan review found); `GET /api/sources` rows carry `mapped_points`.
 - **S3-2 [idea]** The dev database holds leftovers of `scripts/smoke.py`: three assets all named
   `smoke-asset` (ids 2, 3, 4), an asset `Smoke Panel`, and a nonsense mapping (the voltage point
   `LVP08 V`, unit hint V, mapped to `energy_kwh` on a `smoke-asset`). The app accepted that mapping
   without any warning. Idea: warn in the mapping dialog when a point's unit hint does not fit the chosen
   metric (V on an energy metric). The duplicate names are what Billing and the Tariffs picker had to be
   taught to tell apart.
+  **Closed by W3a (2026-10-11).** The mapping dialog warns under Metric (Save stays enabled) when the point's unit hint is a known unit of a different metric (`V` on `energy_kwh`); a blank or unknown hint and the `custom` metric never warn. The dialog opens on `active_power_kw`, so a non-kW point warns at once (preselecting the metric from the hint is in backlog section M).
 
 ### Section 2: Settings (done)
 
