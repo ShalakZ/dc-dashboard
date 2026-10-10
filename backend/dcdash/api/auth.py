@@ -9,6 +9,7 @@ from dcdash.api.deps import COOKIE, current_user, get_db
 from dcdash.api.security import (
     DUMMY_HASH, LoginLimiter, hash_password, hash_token, new_session_token, verify_password,
 )
+from dcdash.core.audit import audit
 from dcdash.core.config import get_settings
 from dcdash.core.models import User, UserSession
 
@@ -72,6 +73,7 @@ async def setup(
     user = User(username=body.username, password_hash=hash_password(body.password), role="admin")
     db.add(user)
     await db.flush()
+    await audit(db, user.id, "setup.completed", {"username": user.username, "role": "admin"})
     _start_session(db, user, response, _is_https(request))
     await db.commit()
     return user
@@ -129,7 +131,8 @@ async def change_my_password(
     limiter.reset(key)
     user.password_hash = hash_password(body.new_password)
     keep = hash_token(request.cookies.get(COOKIE, ""))
-    await db.execute(
+    closed = await db.execute(
         delete(UserSession).where(UserSession.user_id == user.id, UserSession.id != keep)
     )
+    await audit(db, user.id, "password.changed", {"other_sessions_signed_out": closed.rowcount})
     await db.commit()

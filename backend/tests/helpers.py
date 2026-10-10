@@ -95,6 +95,14 @@ async def login_as(client, db, role="admin", username=None, password="correct-ho
     assert response.status_code == 200, response.text
 
 
+async def make_user(db, username: str, role: str = "viewer", active: bool = True) -> int:
+    """A user whose password is `correct-horse` (the one login_as uses)."""
+    return await db.fetchval(
+        "INSERT INTO users (username, password_hash, role, active) VALUES ($1, $2, $3, $4) RETURNING id",
+        username, hash_password("correct-horse"), role, active,
+    )
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))

@@ -124,3 +124,13 @@ async def test_cookie_secure_when_forwarded_https(client, db):
     )
     assert "; secure" in tls.headers["set-cookie"].lower()
     assert "httponly" in tls.headers["set-cookie"].lower()
+
+
+async def test_first_run_setup_is_audited_once(client, db):
+    response = await client.post("/api/setup", json={"username": "boss", "password": "longenough"})
+    assert response.status_code == 201
+    row = await db.fetchrow("SELECT user_id, actor_name, detail FROM audit_log WHERE action = 'setup.completed'")
+    assert row["actor_name"] == "boss" and row["user_id"] == response.json()["id"]
+    assert row["detail"] == {"username": "boss", "role": "admin"}
+    assert (await client.post("/api/setup", json={"username": "x", "password": "longenough"})).status_code == 409
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'setup.completed'") == 1
