@@ -399,6 +399,17 @@ waits up to 5 s for open pages (a live dashboard keeps its stream open) before i
 last readings before it exits. If the database is unreachable at that moment, the readings still in memory (everything
 collected since the database stopped answering, at most 100,000) are lost, and the collector logs how many.
 
+### Health
+
+`GET /api/health` is a readiness check that needs no login: it answers `{"status":"ok"}` while the database answers a
+query, and 503 `{"status":"unavailable","detail":"database unavailable"}` when it does not answer within 2 s (stopped or
+frozen). `docker compose ps` shows `healthy` or `unhealthy` for `api`, `web` and `db`; the `web` check confirms that the
+UI is baked into the image and that Caddy is running, in HTTP and in HTTPS mode. The collector serves nothing to probe and
+has no Docker health status. Compose never restarts an unhealthy container: an `api` that lost its database shows as
+`unhealthy` and keeps running until the database is back. The `api` gets 120 s before failed checks count, so a long
+database migration does not make `scripts/setup.sh` fail; a migration that takes longer than about 220 s needs
+`docker compose up -d` run again, which is safe.
+
 ### Housekeeping
 
 The collector deletes expired sessions and finished jobs older than 7 days every hour

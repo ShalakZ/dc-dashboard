@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import socket
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 import asyncpg
 import httpx
@@ -222,3 +223,37 @@ async def refresh_policies(db) -> dict[str, tuple[timedelta, timedelta, timedelt
         r["view_name"]: (r["start_offset"], r["end_offset"], r["schedule_interval"])
         for r in await db.fetch(_REFRESH_POLICIES)
     }
+
+
+@contextlib.asynccontextmanager
+async def freezable_proxy(database_url: str):
+    """A TCP proxy to the test database that freezes like `docker pause`: after `freeze()` it forwards nothing, and new
+    connections are accepted and never answered. Yields (port, freeze); on exit it closes every socket."""
+    target = urlsplit(database_url)
+    frozen, closed = asyncio.Event(), asyncio.Event()
+    writers: list[asyncio.StreamWriter] = []
+
+    async def pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
+        with contextlib.suppress(Exception):
+            while data := await src.read(65536):
+                while frozen.is_set() and not closed.is_set():
+                    await asyncio.sleep(0.02)  # hold the bytes, as a frozen server does
+                dst.write(data)
+                await dst.drain()
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        writers.append(writer)
+        if frozen.is_set():
+            return  # accepted, never answered
+        up_reader, up_writer = await asyncio.open_connection(target.hostname, target.port)
+        writers.append(up_writer)
+        await asyncio.gather(pipe(reader, up_writer), pipe(up_reader, writer))
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    try:
+        yield server.sockets[0].getsockname()[1], frozen.set
+    finally:
+        closed.set()
+        server.close()
+        for writer in writers:
+            writer.close()

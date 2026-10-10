@@ -65,3 +65,15 @@ def test_the_grace_periods_cover_the_shutdown_budgets():
     graceful = float(re.search(r"--timeout-graceful-shutdown (\d+)", _api_command()).group(1))
     assert seconds(services["api"]["stop_grace_period"]) >= graceful + LIFESPAN_SHUTDOWN_SECONDS + 3
     assert seconds(services["collector"]["stop_grace_period"]) >= SHUTDOWN_SECONDS + 5
+
+
+def test_the_api_healthcheck_survives_a_slow_migration_and_fails_inside_its_timeout():
+    check = compose_config()["services"]["api"]["healthcheck"]
+    assert seconds(check["start_period"]) >= 120
+    assert seconds(check["timeout"]) == 3  # health.PROBE_TIMEOUT_SECONDS (2 s) must stay below it
+
+
+def test_the_web_service_has_a_healthcheck_that_works_with_and_without_tls():
+    check = compose_config()["services"]["web"]["healthcheck"]
+    command = " ".join(check["test"])
+    assert "/srv/index.html" in command and "127.0.0.1:2019" in command  # Caddy's admin endpoint, same in HTTP and TLS mode

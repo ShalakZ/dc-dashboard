@@ -46,6 +46,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+      start_period: 120s
 
   web:
     build:
@@ -65,6 +66,13 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      # Caddy's admin endpoint answers in HTTP and in TLS mode (port 80 only redirects in TLS mode); the file proves the UI is baked in.
+      test: ["CMD-SHELL", "test -f /srv/index.html && wget -q -O /dev/null http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
   collector:
     build: ./backend

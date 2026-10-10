@@ -9,8 +9,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 
 from dcdash.api import (
-    assets, audit, auth, billing, dashboards, data, discovery, jobs, mappings, scans, settings, site, sources,
-    storage, stream, tariffs, users, widget_data,
+    assets, audit, auth, billing, dashboards, data, discovery, health, jobs, mappings, scans, settings, site,
+    sources, storage, stream, tariffs, users, widget_data,
 )
 from dcdash.api.settings import seed_general
 from dcdash.api.stream import Broadcaster
@@ -97,12 +97,8 @@ def create_app() -> FastAPI:
     for error in (OperationalError, InterfaceError, ConnectionError):
         app.add_exception_handler(error, _database_unavailable)
 
-    @app.get("/api/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
-
     for router in (
-        auth.router, jobs.router, sources.router, assets.router,
+        health.router, auth.router, jobs.router, sources.router, assets.router,
         mappings.router, data.router, stream.router, users.router, settings.router, storage.router,
         scans.router, discovery.router, audit.router, site.router, tariffs.router, billing.router,
         dashboards.router, widget_data.router,
