@@ -495,9 +495,10 @@ policy, `RemoteSigned`, refuses a script that came over a share or a download. `
 `--keep 3`; `--copy-to DIR` is refused with exit 2 (the PowerShell parameter is `-CopyTo`).
 
 `restore.sh` prints `restoring into Compose project: <name>` as the first line on stderr; `backup.sh` prints
-`backing up Compose project: <name>` and `setup.sh` `starting Compose project: <name>` (the `.ps1` twins print the same lines). Check
-the name before you let a script run: a script acts on the project that `compose.yaml` (or `COMPOSE_PROJECT_NAME`) selects, and the
-one with your data is `dcdash` unless you changed it.
+`backing up Compose project: <name>` and `setup.sh` `starting Compose project: <name>` (the `.ps1` twins print the same lines). The scripts
+print the name and then go on without asking, so check it BEFORE you run one: `docker compose config --no-interpolate | grep '^name:'`
+(Windows: `| Select-String '^name:'`). A script acts on the project that `COMPOSE_PROJECT_NAME`, `-p` or the `name:` of `compose.yaml`
+selects, and the one with your data is `dcdash` unless you changed it.
 
 `backup.sh` writes the dump under a temporary name, reads the whole of it back (`pg_restore -f /dev/null`, because a dump cut off in
 its data section still passes a table-of-contents check), reads the schema revision, and only then gives the dump its name and
@@ -509,7 +510,7 @@ backup was touched` and exits 1 (read from the script; not tried with Docker sto
 | Exit | `backup.sh` / `backup.ps1` | `restore.sh` / `restore.ps1` |
 |---|---|---|
 | 0 | the backup was made (and copied, when `--copy-to` was given) | restored |
-| 1 | failed: `pg_dump` failed, the dump was empty or cannot be read back, another backup is running in that folder (one at a time per output folder), or a backup with this timestamp exists. Nothing was created, nothing deleted | the dump cannot be read (missing, cut off, damaged): refused up front, "nothing was changed". Or the restore failed after the database was replaced: read the messages and the log path it prints (it still runs `timescaledb_post_restore()` and starts `api` and `collector`, so the database may be partly restored) |
+| 1 | failed: `pg_dump` failed, the dump was empty or cannot be read back, another backup is running in that folder (one at a time per output folder), or a backup with this timestamp exists. Nothing was created, nothing deleted | the dump file does not exist (`no such dump file`) or cannot be read (cut off, damaged): refused up front, "nothing was changed". Or something failed after `api` and `collector` were stopped but before the dump was loaded (the `DROP`/`CREATE DATABASE` step, say): they are started again, the database may be missing or empty, run the restore again with the same dump. Or the restore failed after the database was replaced: read the messages and the log path it prints (it still runs `timescaledb_post_restore()` and starts `api` and `collector`, so the database may be partly restored) |
 | 2 | usage error (`--keep` outside 1 to 99999, an unknown argument, a `%` in the output folder on Windows; PowerShell's own parameter errors, such as a missing value or a duplicate parameter, exit 1 instead) | usage error |
 | 3 | - | the dump's `.version` differs from the running schema (needs `--force`) |
 | 4 | - | restored, but the retention check failed (see "Retention and a restore") |
@@ -519,14 +520,20 @@ Exit 5 and the copy folder are explained under "Scheduled backups".
 
 `restore.sh` refuses (exit 3) when the dump's `.version` differs from the running schema.
 `--force` restores anyway; the `api` container then runs `alembic upgrade head` on start, which
-brings an older dump up to the current schema. Never force-restore a dump from a *newer* version.
+brings an older dump up to the current schema. Never force-restore a dump from a *newer* version: the script does not stop you
+(it replaces the database, and the `api` then fails on start with an unknown revision); recover by checking out the newer code, or by
+restoring the backup you made first.
 
 `restore.sh` reads the whole dump before it stops or drops anything. A dump that is missing, cut off or damaged is refused with exit 1
 and the message `nothing was changed`: the database and the containers are untouched. (The first version of the script dropped the
 database first, and the Windows drill showed that a cut-off dump then left the running database empty; this check is the fix, and it
 was run for real afterwards, with a dump cut to half its size in bash and one cut to 1,500 bytes in PowerShell.) `restore.sh` keeps `pg_restore`'s messages in
-`dcdash-restore-<stamp>.log` under `$TMPDIR` (default `/tmp`); every `restore.ps1` run leaves the same kind of log in `%TEMP%`, empty
+`dcdash-restore-<stamp>.log` under `$TMPDIR` (default `/tmp`); every `restore.ps1` run that gets as far as loading the dump leaves the same kind of log in `%TEMP%`, empty
 when nothing went wrong.
+
+A restore takes no lock. Do not start two at once, and do not let a scheduled backup fire while one runs (pause the schedule first):
+the second restore's `DROP DATABASE` kills the first one's load, and a backup of a half-restored database passes its checks and counts
+toward `--keep`.
 
 The dump is a full `pg_dump -Fc` wrapped in `timescaledb_pre_restore()` / `timescaledb_post_restore()`,
 so hypertables, the 1-minute and 1-hour rollups and their compression and retention policies are
@@ -661,18 +668,25 @@ Register-ScheduledTask -TaskName dcdash_backup -Action $action -Trigger $trigger
 
 - Docker Desktop must be running in that user's session, and the copy drive must be mounted, when the task fires. With Docker not
   running the script exits 1 and makes no backup (see "Backup and restore").
+- With `-LogonType Interactive` the task runs only while that user is logged on. After a reboot without a logon, or with the machine
+  asleep at the trigger time, it does not run, and `LastTaskResult` keeps the PREVIOUS result: a `0` there can be stale. Read
+  `(Get-ScheduledTaskInfo -TaskName dcdash_backup).LastRunTime` as well (or the date of the newest file in the backup folder), and
+  consider `New-ScheduledTaskSettingsSet -StartWhenAvailable` on the `Register-ScheduledTask` call so that a missed run starts as
+  soon as the machine is back (not tried).
 - `-File` (not `-Command`) is what hands exit code 5 to Task Scheduler. `-ExecutionPolicy Bypass` applies to that process only and
   changes nothing on the machine; without it the default policy, `RemoteSigned`, refuses a script that came over a share or a
   download.
 - The task's environment has no `COMPOSE_PROJECT_NAME`, so it acts on the Compose project named in the `compose.yaml` next to the
-  script it runs.
+  script it runs, unless a `.env` next to it sets `COMPOSE_PROJECT_NAME` (Compose reads that variable from `.env` too; the drill's
+  `.env` did not set it).
 - `backup.ps1` leaves a permanent, empty file `.dcdash-backup.lock` in the output folder (the one-backup-at-a-time lock; `backup.sh`
   locks the folder itself, leaves no file, and only warns when `flock` is not installed). Do not delete it while a backup runs. Folders with spaces, `&` and `()` in their
   names work; a `%` in the output folder is refused with exit 2.
 
 **Read the result.** `0` is a backup. `1` is no backup (and nothing was deleted). **`5` means the local backup was made but NOT copied**
 and nothing was rotated, anywhere. A task list that only shows that the task ran looks the same for `0` and `5`, so read
-`LastTaskResult` (or the cron log) and treat anything but `0` as a failure to be looked at. While the copy drive stays absent the
+`LastTaskResult` (or the cron log) and treat anything but `0` as a failure to be looked at. Even `0` does not prove that old backups
+were rotated: the line `not rotating` in the log says rotation was skipped (see `--keep` below). While the copy drive stays absent the
 local folder is never rotated, so it grows without limit, and the database volume may be on the same disk: do not leave an exit 5
 unanswered.
 
@@ -683,7 +697,11 @@ unanswered.
 - It never touches other names: a pair you named yourself (`before-upgrade.dump` and `before-upgrade.dump.version`) stays, and so
   does any dump without its `.version`.
 - It refuses to rotate a folder that holds a dump dated later than the new one (the clock went back, or a file was misnamed), with a
-  message on stderr: rotating oldest-first would otherwise delete the previous nights' backups while the clock is wrong.
+  message on stderr: rotating oldest-first would otherwise delete the previous nights' backups while the clock is wrong. The exit
+  code stays 0. If the clock once jumped FORWARD, the script itself wrote a future-dated dump, and from then on every run prints
+  `not rotating` while the folders keep growing, with the clock right again. A monitor that reads only the exit code does not see it:
+  look for the `not rotating` line in the log, and move or delete the future-dated file and its `.version` file so that rotation
+  can resume.
 - A removal that fails is reported on stderr and the exit code stays 0, because the new backup is fine.
 - Nothing is rotated when the backup was not copied (exit 5).
 
@@ -698,7 +716,9 @@ only then renames it.
   is an empty folder on the root disk, which a plain "folder exists" test would accept and then rotate; and a drive set up for
   another installation would be treated as one set.
 - One folder per installation. Two installations on one drive need two folders, each with its own marker, and different Compose
-  project names.
+  project names. The same goes for the OUTPUT folder: `--keep` counts every dated pair in it, whichever installation wrote it (the
+  file names carry no project name), so two installations that back up into the same folder delete each other's backups. Give each
+  its own output folder (the cron example below uses one path; change it per installation).
 - If the folder is missing, has no marker, names another installation, or is the output folder itself, the local backup is still made
   and verified, nothing is rotated, and the script exits 5.
 
@@ -766,7 +786,10 @@ it deletes the database volume.
      2. `git checkout <old commit>`.
      3. `docker compose build` builds the images of the old code (see step 4 for a tag that "already exists").
      4. `docker compose up -d db` (a no-op when `db` is already running).
-     5. `scripts/restore.sh backups/<dump file> --force`. `--force` is needed when the volume holds a newer revision than the dump's
+     5. `scripts/restore.sh backups/<dump file> --force`. This is the script of the OLD commit you checked out in step 2, not the
+        current one: depending on its age it may not print the project line, may not read the dump first and may not pause retention,
+        so expect fewer messages than described under "Backup and restore" (the drill of option b ran the old script of `1ef27a2`).
+        `--force` is needed when the volume holds a newer revision than the dump's
         `.version` says: without it the script refuses (exit 3). It is not needed when the migration never ran. The script drops and
         recreates the database from the dump (read the retention table it prints). Its last step, `docker compose start api
         collector`, finds no containers and prints `collector is missing dependency api`, which the script ignores by design.
@@ -914,7 +937,8 @@ The `api` container applies it the first time it starts from the new image.
    - **Option a, keep what was collected since the upgrade.** The `0005` downgrade drops the trigger, its function and the two snapshot
      columns, and `upgrade` rebuilds them from the users. That loses nothing for an entry whose user still exists; the names of
      users deleted after `0005` was applied are lost.
-   - **Option b, restore the backup from step 1.** Everything collected since that backup is lost. `--force` is needed: the volume
+   - **Option b, restore the backup from step 1.** Everything collected since that backup is lost. The restore script is the one of
+     the old commit (see step 5 of option b in "Upgrading and going back"). `--force` is needed: the volume
      still holds the W1a database (`0005`) and the dump's `.version` says `0004`, so the script refuses without it.
 
 ## Add a connector

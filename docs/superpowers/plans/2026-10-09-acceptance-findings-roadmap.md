@@ -109,6 +109,8 @@ Risk Med (High only if D4 picks a database constraint).
 
 Order inside the wave: S12-5 and S12-14 first (the PowerShell scripts depend on the guard), then the rest.
 
+**Status 2026-10-10: Part A is done** (branch `w2a-ops-scripts`, plan `2026-10-10-w2-operations-recovery-hardening.md` Tasks 1-8): S12-5, S12-14, the route A spike (D12: yes), S12-11, S12-12. **Part B is next** (branch `w2b-web-hardening`): S12-8, S12-6, S12-7, S13-7. Evidence for S12-8 from Part A: `setup.ps1`/`up --build` on an unchanged tree still recreates api, collector and web, because every build exports a new image id (the BuildKit provenance attestation); test `--provenance=false`.
+
 | Id | Item | Effort | Risk |
 |---|---|---|---|
 | S12-5 | Isolate the ops scripts like `e2e.sh`: `check_tls.sh`, `backup_smoke.sh` (and the three `.ps1` scripts) take a scratch project name with a prefix guard that refuses `dcdash`, `check_tls.sh` gets its own certs directory and a throwaway container for the chown, no bare `down`, and a port override; test the guard against the name `dcdash`. `backup.sh` and `restore.sh` print the project they act on | M | Med |
