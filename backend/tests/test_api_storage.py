@@ -264,7 +264,7 @@ async def test_a_shorter_retention_needs_confirm_and_nothing_changes_without_it(
     assert r.status_code == 409
     body = r.json()
     assert body["shorter"] is True and body["deletes_now"] is False
-    assert "confirm=true" in body["detail"] and "Nothing stored today is old enough" in body["detail"]
+    assert "confirm=true" in body["detail"] and "Nothing is deleted now beyond what the daily retention run deletes anyway" in body["detail"]
     assert (await client.get("/api/settings/storage")).json()["raw_retention_days"] == 30
     assert await retention_days(db) == policy_before
     assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'storage.changed'") == 0
@@ -340,3 +340,27 @@ async def test_a_save_with_retention_armed_does_not_ask_for_a_chunk_the_daily_ru
     assert r.status_code == 200, r.text
     await pause_retention(db)
     assert (await client.put("/api/settings/storage", json=SEEDED)).status_code == 409  # paused: this save is what deletes
+    # leave the jobs armed again for the tests that follow (the db fixture resets tables, not jobs)
+    assert (await client.put("/api/settings/storage", json=SEEDED, params={"confirm": "true"})).status_code == 200
+
+
+async def test_the_1_minute_tier_follows_its_own_job(client, db):
+    await login_as(client, db)
+    assert (await client.put("/api/settings/storage", json=SEEDED)).status_code == 200  # both armed at 30 / 730
+    await old_reading(db, days_ago=800)  # one raw chunk and one 1-minute chunk past their limits
+    await refresh_rollup(db, "readings_1m")
+    assert (await client.put("/api/settings/storage", json={**SEEDED, "disk_capacity_gb": 200})).status_code == 200
+    await db.execute(
+        "SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs "
+        "WHERE proc_name = 'policy_retention' AND hypertable_name = 'readings_1m'"
+    )
+    r = await client.put("/api/settings/storage", json=SEEDED)
+    assert r.status_code == 409 and r.json()["rollup_1m"]["chunks"] >= 1 and r.json()["raw"]["chunks"] == 0
+    assert (await client.put("/api/settings/storage", json=SEEDED, params={"confirm": "true"})).status_code == 200
+    await db.execute("SELECT drop_chunks('readings_1m', older_than => interval '1 day')")
+
+
+def test_sizes_are_printed_in_a_unit_that_does_not_round_to_zero():
+    from dcdash.core.storage import _size
+
+    assert [_size(n) for n in (0, 900, 40960, 5 * 1024**2, 3 * 1024**3)] == ["0 bytes", "900 bytes", "40.0 KB", "5.0 MB", "3.0 GB"]

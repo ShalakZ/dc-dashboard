@@ -137,13 +137,13 @@ def _impact_sql(table: str):
     # asyncpg would type a bound parameter as regclass and refuse the string.
     return text(
         f"""
-        SELECT count(*) AS chunks,
+        SELECT count(c) AS chunks,
                min(i.range_start)::date AS first_day, max(i.range_end)::date AS last_day,
                max(i.range_end - i.range_start) AS width,
                coalesce(sum(s.total_bytes), 0)::bigint AS bytes
         FROM show_chunks('{table}', older_than => make_interval(days => :days)) c
-        JOIN timescaledb_information.chunks i ON format('%I.%I', i.chunk_schema, i.chunk_name) = c::text
-        LEFT JOIN chunks_detailed_size('{table}') s ON format('%I.%I', s.chunk_schema, s.chunk_name) = c::text
+        LEFT JOIN timescaledb_information.chunks i ON format('%I.%I', i.chunk_schema, i.chunk_name)::regclass = c
+        LEFT JOIN chunks_detailed_size('{table}') s ON format('%I.%I', s.chunk_schema, s.chunk_name)::regclass = c
         """
     )
 
@@ -165,7 +165,12 @@ class TierImpact(BaseModel):
 
 
 def _size(n: int) -> str:
-    return f"{n / 1024**2:.1f} MB"
+    size = float(n)
+    for unit in ("bytes", "KB", "MB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "bytes" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
 
 
 class RetentionImpact(BaseModel):
@@ -184,8 +189,8 @@ class RetentionImpact(BaseModel):
     def message(self) -> str:
         if not self.deletes_now:
             return (
-                "These settings shorten how long readings are kept. Nothing stored today is old enough to be deleted, but "
-                "readings that age past the new limit are deleted from now on, a whole chunk at a time. "
+                "These settings shorten how long readings are kept. Nothing is deleted now beyond what the daily retention "
+                "run deletes anyway, but readings that age past the new limit are deleted from now on, a whole chunk at a time. "
                 "Repeat the request with confirm=true to go ahead."
             )
         parts = [
