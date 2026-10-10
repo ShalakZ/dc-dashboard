@@ -135,6 +135,37 @@ async def test_wrong_current_passwords_are_audited_and_five_of_them_lock(client,
     assert rows[-1]["detail"]["via"] == "password_change"
 
 
+def key_blocked_by_a_concurrent_request(monkeypatch) -> None:
+    """The entry check sees an open key; by the time this request records its failure, another request has blocked it."""
+    calls: list[str] = []
+
+    def blocked(key: str) -> bool:
+        calls.append(key)
+        return len(calls) > 1
+
+    monkeypatch.setattr(auth_module.limiter, "blocked", blocked)
+
+
+async def test_a_failure_that_finds_the_key_already_blocked_is_not_written_as_a_lockout(client, db, monkeypatch):
+    uid = await make_user(db, "ann")
+    key_blocked_by_a_concurrent_request(monkeypatch)
+    response = await client.post("/api/login", json={"username": "ann", "password": "wrong-wrong"})
+    assert response.status_code == 401
+    (row,) = await sign_in_rows(db)
+    assert (row["action"], row["user_id"]) == ("login.failed", uid)
+
+
+async def test_a_wrong_current_password_that_finds_the_key_already_blocked_is_not_written_as_a_lockout(
+    client, db, monkeypatch
+):
+    await login_as(client, db, "viewer")  # sign in first: the fake below counts every call to blocked()
+    key_blocked_by_a_concurrent_request(monkeypatch)
+    body = {"current_password": "wrong-wrong", "new_password": "newpassword1"}
+    assert (await client.post("/api/me/password", json=body)).status_code == 401
+    (row,) = await sign_in_rows(db)
+    assert row["action"] == "password.change_failed" and row["actor_name"] == "viewer"
+
+
 async def test_a_failed_sign_in_gives_its_request_connection_back_before_writing_the_row(client, db, monkeypatch):
     from sqlalchemy.ext.asyncio import AsyncSession
 

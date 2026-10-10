@@ -560,14 +560,16 @@ The rule lives in the route: a write route's own body must call one of AUDIT_CAL
 forgets fails here the day it is added). Routes are listed as EXEMPT (with a reason) or PENDING (not audited yet;
 this set only shrinks and must be empty at the end of W1a). The check is syntactic: it proves the route's body
 mentions an audit call (so a route that audits through a helper must call audit itself), the per-route tests prove
-the call runs.
+the call runs. Routes are enumerated with fastapi.routing.iter_route_contexts because include_router does not copy
+routes into app.routes on FastAPI 0.142.
 """
 import ast
 import inspect
 import textwrap
+from typing import Any
 
-from fastapi import FastAPI
-from fastapi.routing import APIRoute
+from fastapi import APIRouter, FastAPI
+from fastapi.routing import APIRoute, iter_route_contexts
 
 from dcdash.api.main import create_app
 from dcdash.core.audit import audit, audit_change  # noqa: F401  (the synthetic app below calls them)
@@ -605,12 +607,12 @@ PENDING: set[str] = {
 }
 
 
-def write_routes(app: FastAPI) -> dict[str, APIRoute]:
-    found: dict[str, APIRoute] = {}
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            for method in route.methods & WRITE_METHODS:
-                found[f"{method} {route.path}"] = route
+def write_routes(app: FastAPI) -> dict[str, Any]:
+    found: dict[str, Any] = {}
+    for context in iter_route_contexts(app.routes):
+        if isinstance(context.original_route, APIRoute):
+            for method in (context.methods or set()) & WRITE_METHODS:
+                found[f"{method} {context.path}"] = context
     return found
 
 
@@ -664,6 +666,23 @@ def test_the_gate_fails_for_a_write_route_without_an_audit_call():
     @app.get("/api/read")
     async def read() -> None:
         return None
+
+    assert coverage_problems(app, {}, set()) == ["POST /api/forgot: no audit call, not exempt and not pending"]
+
+
+def test_the_gate_sees_routes_added_with_include_router():
+    app = FastAPI()
+    router = APIRouter(prefix="/api")
+
+    @router.post("/forgot")
+    async def forgot() -> None:
+        return None
+
+    @router.patch("/remembered")
+    async def remembered(db=None) -> None:
+        await audit(db, 1, "x")
+
+    app.include_router(router)
 
     assert coverage_problems(app, {}, set()) == ["POST /api/forgot: no audit call, not exempt and not pending"]
 
@@ -2097,3 +2116,12 @@ Opus review A (whole plan, draft 1): the gate's route table (35 write routes: 17
 - **M2** Task 3: the existing `test_changes_are_audited_with_the_tariff_details` asserts the old flat shape; replacement assertions added, the wrong `test_api_scans.py` entry dropped from the Files list.
 - **M3** Task 5: a failure row opened a second pooled connection while the request held its first (a burst could stall the API for the pool timeout). The route now captures the ids, rolls back, then writes the row; a test pins the order.
 - m1 `login_as` deletes only its own user's sign-in row; m2 changed test files go into the commit; m3 Task 1 runs the whole `test_schema_tiers.py`; m4 `SET search_path = public` on the trigger function; m5 the rehearsal follows `restore.sh`'s TimescaleDB steps; m6 the Phase 3 README section is left alone apart from two sentences plus a new short "Upgrading to W1a" section; m7 the no-op rule wording; m8 the forged-header caveat; m9 the frontend type waits for W3c; m10 `safe_config` limits documented; m11 the explicit scope payload is kept; m12 the gate's "syntactic" caveat documented.
+
+## Implementation notes (deviations from draft 2)
+
+- **Task 2: `iter_route_contexts` and an `include_router` self-test.** The gate enumerates write routes with `fastapi.routing.iter_route_contexts`, and `test_the_gate_sees_routes_added_with_include_router` proves it sees them. Why: on FastAPI 0.142 `include_router` does not copy routes into `app.routes` (it holds included-router entries, not `APIRoute`s), so the draft's loop over `app.routes` would have matched nothing. The code block of Task 2 above is the version that is in `backend/tests/test_audit_coverage.py`. The gate now depends on a 0.142 symbol, while `pyproject.toml` still says `fastapi>=0.115`.
+- **Task 8: the `config_credentials` marker.** A change of only the credentials inside a source's URL (or of a credential-named config key) left the safe config equal, so the update wrote no row at all. Commits `cfb2a2a` and `13b23e5` add the marker `config_credentials: unchanged -> changed`, never the values. The final fix wave fires it by comparing, in memory only, the hidden parts of the raw config before and after (`credentials_in` and `hidden_parts` in `core/audit.py`), so it also appears when the host changes in the same edit.
+- **`without_credentials` hardening (final fix wave).** `urlsplit` ends the netloc at the first `/`, `?` or `#`, and raises on a `[`, so a password containing one of them (or a user name containing an `@`) came back unmasked. When an `@` sits outside the parsed netloc, or the URL cannot be parsed, everything between `://` and the last `@` is replaced by `[hidden]`. This over-masks an `@` in a path (`http://host/a@b` becomes `http://[hidden]@b`), which is the safe direction.
+- **Task 5: one `login.locked` per lockout (final fix wave).** `login` and `change_my_password` read `was_blocked = limiter.blocked(key)` right before `record_failure` and write `login.locked` only when the key was open before and blocked after, so concurrent failing requests do not each write a lockout.
+- **README rollback (final fix wave).** "Upgrading to W1a", step 4 "Going back" stands alone: the last commit before W1a is `1ef27a2`, and there are two options: downgrade to `0004` and keep the new readings, or restore the backup (`restore.sh --force`, with the W1a containers removed first).
+- **Test counts at `b4618ab`:** backend 1359 passed, frontend (vitest) 791 passed.

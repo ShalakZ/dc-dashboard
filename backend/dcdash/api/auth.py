@@ -93,10 +93,12 @@ async def login(
     user = found if found is not None and found.active else None
     stored_hash = user.password_hash if user is not None else DUMMY_HASH
     if not verify_password(stored_hash, body.password) or user is None:
+        # No await between the two reads: only the failure that blocks the key is the lockout, not a concurrent one.
+        was_blocked = limiter.blocked(key)
         limiter.record_failure(key)
+        locked = not was_blocked and limiter.blocked(key)
         reason = "wrong_password" if user is not None else "account_inactive" if found is not None else "unknown_account"
         found_id = found.id if found is not None else None  # read before the rollback expires the instances
-        locked = limiter.blocked(key)
         await db.rollback()  # free this request's pooled connection before the failure row takes one of its own
         await sign_in_events.audit_sign_in_failure(
             via="login", user_id=found_id, reason=reason, client=client_address(request), locked=locked,
@@ -135,9 +137,11 @@ async def change_my_password(
     if limiter.blocked(key):
         raise HTTPException(429, "too many failed attempts, try again later")
     if not verify_password(user.password_hash, body.current_password):
+        # No await between the two reads: only the failure that blocks the key is the lockout, not a concurrent one.
+        was_blocked = limiter.blocked(key)
         limiter.record_failure(key)
+        locked = not was_blocked and limiter.blocked(key)
         user_id = user.id  # read before the rollback expires the instance
-        locked = limiter.blocked(key)
         await db.rollback()  # free this request's pooled connection before the failure row takes one of its own
         await sign_in_events.audit_sign_in_failure(
             via="password_change", user_id=user_id, reason=None, client=client_address(request), locked=locked,

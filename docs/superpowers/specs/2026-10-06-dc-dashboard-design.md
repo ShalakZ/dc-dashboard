@@ -170,7 +170,7 @@ points are not collected.
 | `readings` | point_id, ts, value (double), quality — hypertable |
 | `point_latest` | point_id, ts, value, quality |
 | `jobs` | id, kind, params, status, result, requested_by, created_at, finished_at |
-| `audit_log` | id, user_id, action, detail, ts |
+| `audit_log` | id, user_id, action, detail, ts, actor_id, actor_name (snapshot of the actor, filled by a trigger, section 7.7) |
 | `settings` | key, value |
 
 Phase 2 adds `scan_scopes`, `scans`, `scan_findings`, `graph_layout`, and
@@ -421,15 +421,15 @@ ISO string are the same).
 Secrets are never stored: no password or hash, no source secret, no session
 token, no credentials inside a URL. A password or a source secret shows as a
 marker (`set`, `changed`, `none`); a source's config goes through `safe_config`
-(URL credentials removed, credential-named keys masked), and a change of only
-the credentials inside a URL is recorded as `config_credentials: unchanged ->
-changed`. A failed sign-in answers 401 and rolls its request back, so its row
-is written through a short session of its own; it is bounded (at most 30
-failure rows, `login.failed` and `password.change_failed` sharing the cap, and,
-separately, 30 `login.locked` rows per 5 minutes; the next row carries the
-number suppressed) and never stores a typed username for an
-account that does not exist (the row has no user, only the reason and the
-client address).
+(URL credentials removed, credential-named keys masked), and a change of the
+credentials inside a URL is recorded as `config_credentials: unchanged ->
+changed` (also next to a visible change of the same edit). A failed sign-in
+answers 401 and rolls its request back, so its row is written through a short
+session of its own; it is bounded (at most 30 failure rows, `login.failed` and
+`password.change_failed` sharing the cap, and, separately, 30 `login.locked`
+rows per 5 minutes; the next row carries the number suppressed) and never stores
+a typed username for an account that does not exist (the row has no user, only
+the reason and the client address).
 
 Actions recorded:
 

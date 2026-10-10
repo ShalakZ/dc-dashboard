@@ -80,15 +80,61 @@ async def audit_change(
     return True
 
 
-def without_credentials(url: str) -> str:
-    """`url` without the user name and password in front of its host; anything else comes back unchanged."""
+def _split_credentials(url: str) -> tuple[str, str]:
+    """(the credentials in `url`, `url` without them); ("", url) when there is nothing to remove.
+
+    Two rules. When every "@" sits inside the netloc that urlsplit finds, the text before the last "@" of the netloc
+    goes. Otherwise (an unencoded "/", "?" or "#" in the password ended the netloc early, a "[" made urlsplit raise, or
+    an "@" in the user name) the text between "://" and the last "@" goes, and the URL comes back as
+    `<scheme>://[hidden]@<what follows the last "@">`. The second rule over-masks: an "@" in a path hides the host too
+    (`http://host/a@b` becomes `http://[hidden]@b`), which is the safe direction for an audit log.
+    """
+    scheme, separator, rest = url.partition("://")
     try:
         parts = urlsplit(url)
     except ValueError:
-        return url
-    if "@" not in parts.netloc:
-        return url
-    return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
+        parts = None
+    if separator and "@" in rest and (parts is None or rest.count("@") > parts.netloc.count("@")):
+        credentials, _, tail = rest.rpartition("@")
+        return credentials, f"{scheme}://[hidden]@{tail}"
+    if parts is not None and "@" in parts.netloc:
+        credentials, _, host = parts.netloc.rpartition("@")
+        return credentials, urlunsplit(parts._replace(netloc=host))
+    return "", url
+
+
+def without_credentials(url: str) -> str:
+    """`url` without the user name and password in front of its host; anything else comes back unchanged.
+
+    A URL whose credentials urlsplit cannot isolate (see `_split_credentials`) is masked up to its last "@".
+    """
+    return _split_credentials(url)[1]
+
+
+def credentials_in(url: str) -> str:
+    """The part of `url` that `without_credentials` removes, "" when it removes nothing.
+
+    Only for comparing two configs in memory: the value must never be written anywhere.
+    """
+    return _split_credentials(url)[0]
+
+
+def hidden_parts(config: Mapping[str, Any]) -> dict[str, str]:
+    """What `safe_config` hides from `config`, by key: the value of a credential-named key, the credentials in a URL.
+
+    Only for comparing two configs in memory (did a hidden part change?): the values must never be written anywhere.
+    """
+    hidden: dict[str, str] = {}
+    for key, value in config.items():
+        if SENSITIVE_KEYS.search(key):
+            text = str(value)
+        elif isinstance(value, str):
+            text = credentials_in(value)
+        else:
+            continue
+        if text:
+            hidden[key] = text
+    return hidden
 
 
 def safe_config(config: Mapping[str, Any]) -> dict[str, Any]:

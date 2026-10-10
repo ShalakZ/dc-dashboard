@@ -409,6 +409,51 @@ async def test_a_credential_only_config_change_is_audited_without_the_credential
     assert len(await source_rows(db)) == 2
 
 
+async def test_url_credentials_with_a_slash_hash_or_question_mark_never_reach_the_audit_log(client, db):
+    await login_as(client, db)
+    plc = {"name": "plc", "connector_type": "opcua", "config": {"endpoint": "opc.tcp://user:p#ss@10.0.0.1:4840"}}
+    created = await client.post("/api/sources", json=plc)
+    assert created.status_code == 201, created.text
+    (row,) = await source_rows(db)
+    assert row["action"] == "source.created"
+    assert row["detail"]["config"]["endpoint"] == "opc.tcp://[hidden]@10.0.0.1:4840"
+    assert "p#ss" not in json.dumps(row["detail"]) and "user:" not in json.dumps(row["detail"])
+    moved = {"config": {"endpoint": "opc.tcp://user:n/ew?pw@10.0.0.1:4840"}}
+    patched = await client.patch(f"/api/sources/{created.json()['id']}", json=moved)
+    assert patched.status_code == 200
+    (_, updated) = await source_rows(db)
+    dumped = json.dumps(updated["detail"])
+    assert "p#ss" not in dumped and "n/ew" not in dumped and "user:" not in dumped
+    assert updated["detail"]["after"] == {"config_credentials": "changed"}  # the masked endpoint did not change
+
+
+async def test_a_host_change_together_with_a_credential_rotation_has_both_the_change_and_the_marker(client, db):
+    await login_as(client, db)
+    created = await client.post("/api/sources", json={**SIM, "config": {"url": "http://svc:oldpass@simulator:9000"}})
+    assert created.status_code == 201
+    url = f"/api/sources/{created.json()['id']}"
+    changed = {"config": {"url": "http://svc:newpass@other-host:9000"}}
+    assert (await client.patch(url, json=changed)).status_code == 200
+    (_, row) = await source_rows(db)  # one source.updated row for the one request
+    assert row["action"] == "source.updated"
+    detail = row["detail"]
+    assert detail["before"]["config"]["url"] == "http://simulator:9000/"
+    assert detail["after"]["config"]["url"] == "http://other-host:9000/"
+    assert detail["before"]["config_credentials"] == "unchanged" and detail["after"]["config_credentials"] == "changed"
+    assert "oldpass" not in json.dumps(detail) and "newpass" not in json.dumps(detail)
+
+
+async def test_a_host_change_with_the_same_credentials_has_no_marker(client, db):
+    await login_as(client, db)
+    created = await client.post("/api/sources", json={**SIM, "config": {"url": "http://svc:samepass@simulator:9000"}})
+    url = f"/api/sources/{created.json()['id']}"
+    assert (await client.patch(url, json={"config": {"url": "http://svc:samepass@other-host:9000"}})).status_code == 200
+    (_, row) = await source_rows(db)
+    assert "config_credentials" not in row["detail"]["after"] and "config_credentials" not in row["detail"]["before"]
+    assert row["detail"]["after"]["config"]["url"] == "http://other-host:9000/"
+    assert "samepass" not in json.dumps(row["detail"])
+
+
 async def test_clearing_a_source_secret_with_an_empty_string_is_audited(client, db):
     await login_as(client, db)
     source = await create_sim(client)

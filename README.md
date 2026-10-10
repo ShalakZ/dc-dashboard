@@ -97,8 +97,8 @@ UI screens, besides Assets, Sources and Points:
   raw retention, compression delay, 1-minute rollup retention and the warning threshold.
 - **Password** (everyone): change your own password; your other sessions are signed out.
 - **Scans** and **Discovery** (operators and admins; only admins can change anything): see "Discovery".
-- **Audit** (admin): the read-only audit log, newest first, 50 entries per page. Every change a user
-  makes is recorded with who did it (the name stays even after the account is deleted), when, and for
+- **Audit** (admin): the read-only audit log, newest first, 50 entries per page. Changes to configuration
+  and access are recorded with who did it (the name stays even after the account is deleted), when, and for
   updates the values before and after; sign-in successes, failures and lockouts are recorded too.
 - **Dashboards** (everyone can read; operators and admins build): shared dashboards of widgets; see
   "Dashboards and billing".
@@ -221,7 +221,8 @@ data-retrieval requests the connectors already use, nothing else.
    sources (create, edit, delete, test, test all, browse), tariffs, dashboards, scopes, scans (start and
    finish) and accepted discoveries. Never recorded: passwords and password hashes, source secrets and
    credentials inside a URL (a marker shows that one was set or changed: `secret: set -> changed`, or
-   `config_credentials: unchanged -> changed` when only the credentials inside a source's URL changed),
+   `config_credentials: unchanged -> changed` when the credentials inside a source's URL changed, also when
+   other fields changed in the same edit),
    a sign-in with an unknown username (only that one happened, and from which address), logging out and
    the node positions on the Discovery graph. Failed sign-ins are capped at 30 rows per 5 minutes, then
    counted on the next row (lockouts have their own cap of 30).
@@ -620,10 +621,34 @@ The `api` container applies it the first time it starts from the new image.
    `.version` file (it says `0004`).
 2. **Apply.** `docker compose up -d --build` (add `--profile dev` on a stack that has the simulator).
 3. **Verify.** `docker compose exec api alembic current` prints `0005 (head)`.
-4. **Going back** means restoring the backup from step 1, with the same `scripts/restore.sh` steps as in "Going
-   back" of the Phase 3 section: the code and images of the version before W1a must be checked out and built
-   first, and `--force` is needed because the dump's `.version` (`0004`) differs from the running schema
-   (`0005`).
+4. **Going back.** Do not follow the "Going back" steps of the Phase 3 section: they check out Phase 2
+   (`855cbf8`, schema `0003`), and a `0004` database on that code makes Alembic fail with an unknown revision.
+   The code to go back to is `1ef27a2` (`main` before W1a). In both options a restart of the W1a `api` would run
+   `alembic upgrade head` and apply `0005` again, so the W1a `api` must not be running again once the schema is
+   back at `0004`. Afterwards `git checkout main` (or the branch you came from) returns to the W1a code; `.env`
+   and `backups/` are not in git, so they stay. This README changes with the checkout, so keep these steps at hand.
+   - **Option a, keep what was collected since the upgrade.** The `0005` downgrade is lossless for every user that
+     still exists: it drops the trigger and the two snapshot columns, and `upgrade` rebuilds them.
+     1. `docker compose stop collector`.
+     2. `docker compose exec api alembic downgrade 0004`.
+     3. `docker compose stop api` at once.
+     4. `git checkout 1ef27a2`.
+     5. `docker compose up -d --build` (add `--profile dev` on a stack that has the simulator). The new `api`
+        runs `alembic upgrade head` on the old code, where `0004` is the head: nothing to do.
+     6. `docker compose exec api alembic current` prints `0004 (head)`.
+   - **Option b, restore the backup from step 1.** Everything collected since that backup is lost. Do it with the
+     old code and with no W1a container left to be restarted:
+     1. `docker compose --profile dev rm --stop --force api collector web simulator` removes the W1a containers
+        (containers only: never the `dbdata` volume, and `db` is left alone). Do not add `-v`.
+     2. `git checkout 1ef27a2`.
+     3. `docker compose build` builds the images of the old code.
+     4. `docker compose up -d db` (a no-op when `db` is already running).
+     5. `scripts/restore.sh backups/<dump file> --force`. `--force` is needed: the volume still holds the W1a
+        database (`0005`) and the dump's `.version` says `0004`, so the script refuses without it. It drops and
+        recreates the database from the dump. Its last step, `docker compose start api collector`, finds no
+        containers and prints a message that the script ignores by design.
+     6. `docker compose --profile dev up -d` creates fresh containers of the old code; on the restored `0004`
+        database Alembic has nothing to do. `docker compose exec api alembic current` prints `0004 (head)`.
 
 ## Add a connector
 

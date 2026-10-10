@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.api.deps import get_db, notify, require_role
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
-from dcdash.core.audit import audit, audit_change, safe_config
+from dcdash.core.audit import audit, audit_change, hidden_parts, safe_config
 from dcdash.core.crypto import encrypt
 from dcdash.core.models import Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
@@ -179,8 +179,9 @@ async def update_source(
     after = _values(source)
     if "secret" in body.model_fields_set and body.secret:
         after["secret"] = "changed"  # a supplied value always counts: the stored token cannot be compared
-    if after["config"] == before["config"] and source.config != raw_config:
-        # Only what safe_config hides changed (URL credentials, a masked key): record that, never the values.
+    if hidden_parts(raw_config) != hidden_parts(source.config):
+        # What safe_config hides (URL credentials, a masked key) changed, whatever else changed with it: record that,
+        # never the values (hidden_parts is only compared here).
         before["config_credentials"], after["config_credentials"] = "unchanged", "changed"
     await audit_change(db, admin.id, "source.updated", {"source_id": source.id, "name": source.name}, before, after)
     await _publish(db)
