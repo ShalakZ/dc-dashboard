@@ -1,4 +1,4 @@
-import { RANGES, rangeToQuery } from "./timeRange";
+import { RANGES, rangeToQuery, trendRefetchMs } from "./timeRange";
 
 describe("rangeToQuery", () => {
   const now = new Date("2026-10-07T12:00:00Z");
@@ -17,5 +17,15 @@ describe("rangeToQuery", () => {
 
   it("lists the four ranges in order", () => {
     expect(RANGES).toEqual(["1h", "6h", "24h", "7d"]);
+  });
+});
+
+describe("trendRefetchMs", () => {
+  it.each([["1h", 10_000], ["6h", 30_000], ["24h", 60_000], ["7d", 300_000]] as const)("%s refetches every %i ms", (range, ms) => {
+    expect(trendRefetchMs(range)).toBe(ms);
+  });
+
+  it("has an interval for every range", () => {
+    for (const range of RANGES) expect(trendRefetchMs(range)).toBeGreaterThan(0);
   });
 });

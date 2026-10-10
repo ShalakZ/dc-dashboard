@@ -73,9 +73,15 @@ export interface SummaryMetric {
   mapping_id: number; point_id: number; metric: Metric; unit: string;
   value: number | null; ts: string | null; quality: number | null;
 }
+/** One meter that makes up a parent's live power; `value` is already scaled and null when there is no good reading. */
+export interface RollupSource {
+  asset_id: number; name: string; path: string; point_id: number; value: number | null; ts: string | null; stale: boolean;
+}
 export interface Summary {
   asset: { id: number; name: string; parent_id: number | null; kind: string };
   metrics: SummaryMetric[];
+  /** Set only for an asset with no power meter of its own whose sub-assets have some (optional so older fixtures type-check). */
+  power_rollup?: { sources: RollupSource[] } | null;
   energy_today: { kwh: number; estimated: boolean; no_data: boolean } | null;
   cost_today: CostToday | null;
   currency: string | null;

@@ -314,7 +314,7 @@ def _cost_point(label: datetime, hours: list[HourCost]) -> _Point:
     return _Point(label, cost.cost, estimated=cost.estimated, partial=cost.partial)
 
 
-def _is_stale(read_at: datetime, now: datetime, interval_seconds: int) -> bool:
+def is_stale(read_at: datetime, now: datetime, interval_seconds: int) -> bool:
     return now - read_at > max(timedelta(seconds=STALE_AFTER_INTERVALS * interval_seconds), STALE_MINIMUM)
 
 
@@ -362,7 +362,7 @@ async def _fill_metric(
         if live:
             reading = latest.get(mapping.id)
             if reading is not None:
-                read_at, stale = reading.ts, _is_stale(reading.ts, now, mapping.interval_seconds)
+                read_at, stale = reading.ts, is_stale(reading.ts, now, mapping.interval_seconds)
                 value = reading.value if reading.ts >= start else None  # a reading from before the range is no data
         elif aggregation == "last":
             reading = await last_rollup_value(db, mapping, start, end)

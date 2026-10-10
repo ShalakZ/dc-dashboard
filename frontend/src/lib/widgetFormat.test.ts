@@ -1,7 +1,7 @@
 import { seriesData, seriesPoint, valueRow, valuesData } from "../test/dashboardFixtures";
 import {
-  ageText, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, sinceText,
-  uniqueLabels, unitSuffix,
+  ageText, chartLabels, escapeHtml, figureOrNoData, figureText, flagsOf, formatValue, labelBucket, markerHint, noMetricText, removedText, shortLabel,
+  shortLabels, sinceText, uniqueLabels, unitSuffix,
 } from "./widgetFormat";
 
 const none = { estimated: false, partial: false };
@@ -139,5 +139,66 @@ describe("time labels derived from the range", () => {
 describe("series points", () => {
   it("builds a point with every flag defaulted (fixture sanity)", () => {
     expect(seriesPoint({ ts: "2026-10-08T00:00:00Z" })).toMatchObject({ value: null, estimated: false, partial: false, no_data: false });
+  });
+});
+
+describe("shortLabel", () => {
+  const long = "Main-Switchboard-Feeder-Room-East-Hall-3"; // 40 characters
+  it("leaves a label that fits unchanged", () => {
+    expect(shortLabel("Hall A", 24)).toBe("Hall A");
+    expect(shortLabel("x".repeat(24), 24)).toBe("x".repeat(24));
+  });
+  it("cuts a long name in the middle to exactly max characters, keeping the start and the end", () => {
+    expect(long).toHaveLength(40);
+    const short = shortLabel(long, 24);
+    expect(Array.from(short)).toHaveLength(24);
+    expect(short).toBe(`${long.slice(0, 16)}…${long.slice(-7)}`);
+    expect(short.startsWith("Main-Switchboard")).toBe(true);
+    expect(short).toContain("…");
+  });
+  it("keeps the (#id) and the ~ and * markers whole, so two names that differ only there stay different (review M5)", () => {
+    const a = shortLabel("MV2-R2-LV-Panel-02 (#12) ~ *", 18);
+    const b = shortLabel("MV2-R2-LV-Panel-02 (#13) ~ *", 18);
+    expect(a).not.toBe(b);
+    expect(a.endsWith(" (#12) ~ *")).toBe(true);
+    expect(b.endsWith(" (#13) ~ *")).toBe(true);
+    expect(Array.from(a)).toHaveLength(18);
+    const c = shortLabel("Main-Switchboard-Feeder-Room-East (#112)", 24);
+    const d = shortLabel("Main-Switchboard-Feeder-Room-East (#212)", 24);
+    expect(c).not.toBe(d);
+    expect(c.endsWith(" (#112)")).toBe(true);
+  });
+  it("keeps a lone ~ or * suffix", () => {
+    expect(shortLabel("A-very-long-name-that-goes-on-and-on ~", 24).endsWith(" ~")).toBe(true);
+    expect(shortLabel("A-very-long-name-that-goes-on-and-on *", 24).endsWith(" *")).toBe(true);
+    expect(shortLabel("A-very-long-name-that-goes-on-and-on ~ *", 24).endsWith(" ~ *")).toBe(true);
+  });
+  it("shortens the whole label when the suffix leaves too little room for the name", () => {
+    const short = shortLabel("Switchboard-East-Wing (#123456) ~ *", 12);
+    expect(Array.from(short)).toHaveLength(12);
+    expect(short).toContain("…");
+  });
+  it("does not split an emoji or another surrogate pair", () => {
+    const short = shortLabel("😀".repeat(30), 10);
+    expect(Array.from(short)).toHaveLength(10);
+    expect(Array.from(short).every((c) => c === "…" || c === "😀")).toBe(true);
+  });
+  it("does not throw for a max below 4", () => {
+    for (const max of [3, 2, 1, 0]) expect(typeof shortLabel(long, max)).toBe("string");
+  });
+});
+
+describe("shortLabels", () => {
+  it("keeps the FULL label of every label whose short form is shared, and shortens the rest", () => {
+    const a = "Main-Switchboard-Feeder-01-Room-East";
+    const b = "Main-Switchboard-Feeder-02-Room-East";
+    expect(shortLabel(a, 18)).toBe(shortLabel(b, 18)); // the trap this guards against
+    const third = "Generator-Hall-Battery-Bank-A";
+    const short = shortLabels([a, b, third, "Hall A"], 18);
+    expect(short.get(a)).toBe(a);
+    expect(short.get(b)).toBe(b);
+    expect(short.get(third)).toBe(shortLabel(third, 18));
+    expect(Array.from(short.get(third)!)).toHaveLength(18);
+    expect(short.get("Hall A")).toBe("Hall A");
   });
 });

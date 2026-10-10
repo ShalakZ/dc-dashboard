@@ -5,7 +5,9 @@ export function EnergyTile({ energy }: { energy: { kwh: number; estimated: boole
       <div className="muted">Energy today</div>
       {energy === null ? <div className="big">no energy data</div> : (
         <div className={energy.no_data ? "big muted" : "big"} title={energy.no_data ? "no data" : undefined}>
-          {energy.kwh.toFixed(2)} kWh{energy.estimated && <small className="muted"> (estimated)</small>}
+          {energy.kwh.toFixed(2)} kWh{energy.estimated && (
+            <small className="muted" title="Part of this figure is estimated from average power over time, not read from an energy counter."> (estimated)</small>
+          )}
         </div>
       )}
     </div>

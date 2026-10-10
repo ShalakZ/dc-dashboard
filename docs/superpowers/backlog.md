@@ -200,3 +200,17 @@ The plan names section K for these; K already holds Part A, so they are here.
 - **Kind clean-up:** `cleanKind` in `lib/kinds.ts` trims and collapses blanks but does not NFC-normalise (only `kindKey` does), and the API still accepts any text as Kind, blank included (the form never sends blank). Fix: NFC in `cleanKind`; a `min_length` check in the API schema if wanted.
 - **Selector trap in the tests:** the `AssetTree` `+` buttons have the aria-label `Add child of <name>`, so an asset whose name contains "name" would match Playwright's substring `getByLabel("Name")` while an asset dialog is open (the e2e specs use `exact` where it matters).
 
+## N. W3b leftovers (final reviews, 2026-10-11; none of these blocks)
+
+- **Dashboard widgets for a parent asset:** a stat of a parent's power still reads "without this metric"; only the asset page rolls up (`lib/rollup.ts`, `AssetPage.tsx`). Idea: let the widget data use the same `power_rollup` rule (`core/rollup.py`, `core/widgets.py`).
+- **A rolled-up Trend for a parent** (S4-9's second idea): a parent's Trend is still empty for power (`TrendChart.tsx`, `useSeries` in `api/queries.ts`).
+- **Appending streamed points to the Trend** instead of refetching (S4-7's other idea; W3b only refetches by range, `trendRefetchMs` in `lib/timeRange.ts`).
+- **`_power_rollup` reads every power mapping** on each summary of a parent (`backend/dcdash/api/data.py`); limit the query to the subtree's asset ids.
+- **The roll-up only ages at the next summary refresh** (at most 60 s, `useSummary` in `api/queries.ts`): a meter that goes silent is noticed then, not live.
+- **The visible `Not reporting:` line** appears only when some but not all meters report (`rollupNote` in `lib/rollup.ts`); with none reporting the names are only in the tooltip. The Live power tile has no max-width, so a long path list can widen it, and `AssetPage.test.tsx` has no page-level test for the none-reporting case.
+- **The Trend's pause covers the whole section** (also while the mouse is over its controls; `TrendChart.tsx`, `useSeries`). Refetch on window focus is off for every query (`main.tsx`), so nothing else refetches under a resting mouse.
+- **`hideOverlap` on the bar chart's category axis** may hide some labels of a crowded axis (`BarWidget.tsx`); the tooltip has the full name.
+- **View and editor sort raw versus normalised rows:** the view sorts the raw saved rows while the editor sorts the normalised ones; they can differ only for rows the API refuses (negative `x` or `y`) (`StaticGrid.tsx` against `toDrafts` in `lib/layout.ts`).
+- **The w3b spec** (`frontend/e2e/w3b.spec.ts`): a run killed before its `afterEach` leaves its mappings, and it needs three unmapped kW points of the `sim` source.
+- **Test fixture:** the resize mock in `DashboardPage.edit.test.tsx` yields x 4 + w 9 = 13, a rectangle the API would refuse (the test fixture only).
+

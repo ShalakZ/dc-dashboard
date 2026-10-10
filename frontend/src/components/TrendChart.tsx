@@ -1,9 +1,9 @@
 import type { EChartsOption } from "echarts";
 import ReactECharts from "echarts-for-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSeries, useSite } from "../api/queries";
 import type { Metric, Series, SeriesTier, SummaryMetric } from "../api/types";
-import { formatSiteDateTime, formatSiteTick } from "../lib/siteTime";
+import { formatSiteClock, formatSiteDateTime, formatSiteTick } from "../lib/siteTime";
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { bucketMs, markIsolated } from "./dashboard/widgets/TimeSeriesWidget";
 import { RangePicker } from "./RangePicker";
@@ -82,11 +82,16 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
   const [mappingId, setMappingId] = useState<number | undefined>(undefined);
   const mappings = metrics.filter((m) => m.metric === metric);
   const chosenMapping = mappings.some((m) => m.mapping_id === mappingId) ? mappingId : undefined;
-  const { data, error, isFetching } = useSeries(assetId, metric, range, mappings.length > 1 ? chosenMapping : undefined);
+  // A refetch resets the chart and closes an open tooltip, so it waits while a mouse rests on the chart (touch never pauses).
+  const [hover, setHover] = useState(false);
+  const { data, error, isFetching, dataUpdatedAt } = useSeries(assetId, metric, range, mappings.length > 1 ? chosenMapping : undefined, hover);
   const site = useSite();
+  const timezone = site.data?.timezone;
+  // Memoised: every stream message re-renders the asset page, and a new option object would make the chart redraw and close a tooltip.
+  const option = useMemo(() => (data && timezone ? seriesToOption(data, range, undefined, timezone) : null), [data, range, timezone]);
   if (metric === null) return <p className="muted">No metric to chart.</p>;
   return (
-    <section>
+    <section aria-label="Trend" onPointerEnter={(e) => { if (e.pointerType === "mouse") setHover(true); }} onPointerLeave={() => setHover(false)}>
       <div className="row">
         <label>Metric
           <select value={metric} onChange={(e) => setMetric(e.target.value as Metric)}>
@@ -103,16 +108,17 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
         )}
         <RangePicker value={range} onChange={setRange} />
         {data && <span className="muted">{TIER_LABEL[data.tier ?? "raw"]}</span>}
-        {isFetching && <span className="muted">updating…</span>}
+        {data && timezone && dataUpdatedAt > 0 && (
+          <span className="muted">updated {formatSiteClock(new Date(dataUpdatedAt).toISOString(), timezone)}{hover && " (paused while you point at the chart)"}</span>
+        )}
+        {isFetching && !data && <span className="muted">updating…</span>}
       </div>
       {error && <p className="error" role="alert">{error.message}</p>}
       {site.error && <p className="error" role="alert">Could not load the site time zone: {site.error.message}</p>}
       {data && data.points.length === 0 && <p className="muted">No data in this range.</p>}
       {/* The axis is drawn in the site's zone: wait for it rather than showing UTC for a moment, or for good. */}
       {data && data.points.length > 0 && !site.data && !site.error && <p className="muted">loading…</p>}
-      {data && data.points.length > 0 && site.data && (
-        <ReactECharts option={seriesToOption(data, range, undefined, site.data.timezone)} style={{ height: 320 }} notMerge />
-      )}
+      {data && data.points.length > 0 && option && <ReactECharts option={option} style={{ height: 320 }} notMerge />}
     </section>
   );
 }

@@ -3,10 +3,13 @@ import ReactECharts from "echarts-for-react";
 import { memo } from "react";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { chartLabels, escapeHtml, figureText, hasNoReading, labelBucket, NO_DATA, unitSuffix } from "../../../lib/widgetFormat";
+import { chartLabels, escapeHtml, figureText, hasNoReading, labelBucket, NO_DATA, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
 import { useLegendSelection } from "./legendSelection";
 
 const DASH = "—";
+/** Characters a legend entry or a category label shows; the full name is in the tooltip and in the legend's own tooltip (S7-3). */
+const LEGEND_CHARS = 24;
+const AXIS_CHARS = 18;
 
 /**
  * A null bar has no shape, so ECharts draws no label for it. Each slot with no figure therefore gets a point mark on
@@ -47,6 +50,7 @@ export function barOption(data: WidgetData, timezone: string): EChartsOption {
   const unit = unitSuffix(data.unit);
   if (data.mode === "values") {
     const labels = chartLabels(data.values);
+    const axisShort = shortLabels(labels, AXIS_CHARS);
     // A metric that recorded nothing is "no data", with no dash mark: the dash means a missing rate and nothing else. A cost
     // without a rate keeps its dash whether or not anything was recorded, like the stat, the table and Billing.
     const noReading = (v: WidgetData["values"][number]) => hasNoReading(v.value, v.no_data, data.source);
@@ -55,7 +59,11 @@ export function barOption(data: WidgetData, timezone: string): EChartsOption {
       animation: false,
       tooltip: { trigger: "axis", formatter: tooltipFor([lines], labels, false) },
       grid: { left: 60, right: 20, top: 30, bottom: 40 },
-      xAxis: { type: "category", data: labels },
+      // interval 0: every name is drawn (hideOverlap may still drop some of a crowded axis; the tooltip has the full name)
+      xAxis: {
+        type: "category", data: labels,
+        axisLabel: { interval: 0, hideOverlap: true, formatter: (v: string) => axisShort.get(String(v)) ?? shortLabel(String(v), AXIS_CHARS) },
+      },
       yAxis: { type: "value", name: data.unit ?? undefined },
       series: [{
         type: "bar", data: data.values.map((v) => v.value),
@@ -68,6 +76,7 @@ export function barOption(data: WidgetData, timezone: string): EChartsOption {
   for (const s of data.series) for (const p of s.points) stamps.set(Date.parse(p.ts), p.ts);
   const times = [...stamps.keys()].sort((a, b) => a - b);
   const labels = chartLabels(data.series);
+  const legendShort = shortLabels(labels, LEGEND_CHARS);
   const bucket = labelBucket(data);
   // A bucket nobody recorded is a gap (null, no line); a bucket recorded without a rate is a dash.
   const cells = data.series.map((s) => {
@@ -82,7 +91,11 @@ export function barOption(data: WidgetData, timezone: string): EChartsOption {
   return {
     animation: false,
     tooltip: { trigger: "axis", formatter: tooltipFor(cells.map((row) => row.map((c) => c.text)), times.map((t) => formatSiteDateTime(stamps.get(t)!, timezone)), true) },
-    legend: { show: data.series.length > 1, bottom: 0, type: "scroll" },
+    // The legend still selects by the full series name; only the text shown is shortened.
+    legend: {
+      show: data.series.length > 1, bottom: 0, type: "scroll",
+      formatter: (name: string) => legendShort.get(name) ?? shortLabel(name, LEGEND_CHARS), tooltip: { show: true },
+    },
     grid: { left: 60, right: 20, top: 30, bottom: data.series.length > 1 ? 50 : 30 },
     xAxis: { type: "category", data: times.map((t) => formatSiteTick(stamps.get(t)!, timezone, bucket)) },
     yAxis: { type: "value", name: data.unit ?? undefined },

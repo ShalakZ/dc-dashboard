@@ -12,10 +12,12 @@ from dcdash.core.cost import cost_by_hour, load_tariffs, no_data, rate_at, summa
 from dcdash.core.energy import hourly_energy, total
 from dcdash.core.metrics import Metric, unit_for
 from dcdash.core.models import Asset, Mapping, PointLatest
+from dcdash.core.rollup import power_sources
 from dcdash.core.series import find_mapping, metric_series, pick_tier  # noqa: F401  (pick_tier: tests import it from here)
 from dcdash.core.settings_store import get_currency
 from dcdash.core.timeutil import day_bounds, day_start  # noqa: F401  (day_start: existing importers use this path)
 from dcdash.core.tree import AssetTree
+from dcdash.core.widgets import is_stale
 
 router = APIRouter(prefix="/api", tags=["data"], dependencies=[Depends(require_role("viewer"))])
 
@@ -23,6 +25,39 @@ router = APIRouter(prefix="/api", tags=["data"], dependencies=[Depends(require_r
 def _now() -> datetime:
     """The clock `summary()` reads; tests monkeypatch `dcdash.api.data._now`."""
     return datetime.now(timezone.utc)
+
+
+async def _power_rollup(
+    db: AsyncSession, tree: AssetTree, asset_id: int, metrics: list[dict[str, Any]], now: datetime,
+) -> dict[str, Any] | None:
+    """The meters that make up a parent's live power, or None when the asset has its own power meter (its own
+    reading is shown) or no power meter below it. Good quality is 0, as in the readings the charts use."""
+    power = Metric.ACTIVE_POWER_KW.value
+    if any(m["metric"] == power for m in metrics) or not tree.children(asset_id):
+        return None
+    rows = await db.execute(
+        select(Mapping, PointLatest)
+        .outerjoin(PointLatest, PointLatest.point_id == Mapping.point_id)
+        .where(Mapping.metric == power)
+        .order_by(Mapping.id)
+    )
+    metered: dict[int, tuple[Mapping, PointLatest | None]] = {}
+    for mapping, latest in rows:
+        metered.setdefault(mapping.asset_id, (mapping, latest))  # at most one per asset; the lowest id wins anyway
+    sources = []
+    for source_id in power_sources(tree, metered.keys(), asset_id):
+        mapping, latest = metered[source_id]
+        good = latest is not None and latest.quality == 0 and latest.value is not None
+        sources.append({
+            "asset_id": source_id,
+            "name": tree.nodes[source_id].name,
+            "path": tree.path(source_id),
+            "point_id": mapping.point_id,
+            "value": latest.value * mapping.scale if good else None,
+            "ts": None if latest is None else latest.ts,
+            "stale": latest is not None and is_stale(latest.ts, now, mapping.interval_seconds),
+        })
+    return {"sources": sources} if sources else None
 
 
 @router.get("/assets/{asset_id}/summary")
@@ -48,11 +83,12 @@ async def summary(asset_id: int, db: AsyncSession = Depends(get_db)) -> dict[str
         }
         for mapping, latest in rows
     ]
+    tree = await AssetTree.load(db)
+    now = _now()
+    power_rollup = await _power_rollup(db, tree, asset_id, metrics, now)
     # Today = the site's local day. Settings refuses a zone whose day edges are not whole UTC hours; one stored
     # before that rule shifts these edges to the next rollup bucket instead of failing the page.
     tz = await current_timezone(db)
-    tree = await AssetTree.load(db)
-    now = _now()
     start, end = day_bounds(now, tz)
     result = await hourly_energy(db, tree, start, end)
     energy = total(result.hours.get(asset_id))
@@ -66,6 +102,7 @@ async def summary(asset_id: int, db: AsyncSession = Depends(get_db)) -> dict[str
     return {
         "asset": {"id": asset.id, "name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind},
         "metrics": metrics,
+        "power_rollup": power_rollup,
         "energy_today": None if energy is None else {
             "kwh": energy.kwh, "estimated": energy.estimated, "no_data": nothing_recorded,
         },

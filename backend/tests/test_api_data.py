@@ -253,3 +253,122 @@ async def test_series_errors(client, db):
                  "end": (today() - MINUTE).isoformat()}
     assert (await client.get(url, params=backwards)).status_code == 422
     assert (await client.get(url, params={"metric": "active_power_kw", "buckets": 5})).status_code == 422
+
+
+# ---- power_rollup: a parent without a meter of its own shows the meters below it (S4-9) ----
+
+ROLLUP_NOW = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def rollup_clock(monkeypatch):
+    monkeypatch.setattr("dcdash.api.data._now", lambda: ROLLUP_NOW)
+
+
+async def metered(db, name, parent_id=None, *, interval=5, scale=1.0, reading=None, metric="active_power_kw"):
+    """An asset with one mapped point. `reading` is None (never read) or (age_seconds, raw_value, quality)."""
+    source = await db.fetchval("SELECT id FROM sources LIMIT 1") or await make_source(db)
+    asset = await make_asset(db, name, parent_id)
+    point = await make_point(db, source, f"{name}_{metric}")
+    await make_mapping(db, point, asset, metric, interval, scale=scale)
+    if reading is not None:
+        age, value, quality = reading
+        await db.execute(
+            "INSERT INTO point_latest (point_id, ts, value, quality) VALUES ($1, $2, $3, $4)",
+            point, ROLLUP_NOW - timedelta(seconds=age), value, quality,
+        )
+    return asset, point
+
+
+async def rollup_of(client, asset_id):
+    response = await client.get(f"/api/assets/{asset_id}/summary")
+    assert response.status_code == 200, response.text
+    return response.json()["power_rollup"]
+
+
+async def test_a_room_lists_the_meters_of_its_children_scaled_and_fresh(client, db, rollup_clock):
+    await login_as(client, db, "viewer")
+    site = await make_asset(db, "Site")
+    room = await make_asset(db, "Room", site)
+    a, a_point = await metered(db, "Rack A", room, reading=(10, 3.0, 0))
+    b, b_point = await metered(db, "Rack B", room, scale=2.0, reading=(20, 4.0, 0))
+
+    rollup = await rollup_of(client, room)
+
+    assert [s["asset_id"] for s in rollup["sources"]] == [a, b]
+    first, second = rollup["sources"]
+    assert (first["name"], first["path"], first["point_id"]) == ("Rack A", "Site / Room / Rack A", a_point)
+    assert first["value"] == pytest.approx(3.0) and first["stale"] is False
+    assert second["value"] == pytest.approx(8.0) and second["point_id"] == b_point and second["stale"] is False
+    assert datetime.fromisoformat(first["ts"]) == ROLLUP_NOW - timedelta(seconds=10)
+
+
+@pytest.mark.parametrize(
+    ("interval", "age", "stale"),
+    [(5, 59, False), (5, 61, True), (30, 80, False), (30, 91, True)],  # max(3 intervals, 60 s)
+)
+async def test_a_source_is_stale_after_three_intervals_but_at_least_a_minute(client, db, rollup_clock, interval, age, stale):
+    await login_as(client, db, "viewer")
+    room = await make_asset(db, "Room")
+    await metered(db, "Rack", room, interval=interval, reading=(age, 5.0, 0))
+    (source,) = (await rollup_of(client, room))["sources"]
+    assert source["stale"] is stale
+    assert source["value"] == pytest.approx(5.0)  # a stale reading keeps its value; the caller decides
+
+
+async def test_a_bad_quality_reading_has_no_value_and_a_mapped_point_never_read_has_no_ts(client, db, rollup_clock):
+    await login_as(client, db, "viewer")
+    room = await make_asset(db, "Room")
+    bad, _ = await metered(db, "Bad", room, reading=(5, 7.0, 192))
+    silent, _ = await metered(db, "Silent", room)
+
+    sources = {s["asset_id"]: s for s in (await rollup_of(client, room))["sources"]}
+
+    assert sources[bad]["value"] is None and sources[bad]["ts"] is not None and sources[bad]["stale"] is False
+    assert sources[silent] == {
+        "asset_id": silent, "name": "Silent", "path": "Room / Silent", "point_id": sources[silent]["point_id"],
+        "value": None, "ts": None, "stale": False,
+    }
+
+
+async def test_a_parent_with_its_own_power_meter_shows_its_own_reading_only(client, db, rollup_clock):
+    await login_as(client, db, "viewer")
+    room, _ = await metered(db, "Room", reading=(5, 10.0, 0))
+    await metered(db, "Rack", room, reading=(5, 3.0, 0))
+
+    body = (await client.get(f"/api/assets/{room}/summary")).json()
+
+    assert body["power_rollup"] is None
+    (power,) = [m for m in body["metrics"] if m["metric"] == "active_power_kw"]
+    assert power["value"] == pytest.approx(10.0) and power["quality"] == 0
+
+
+async def test_a_metered_child_counts_itself_and_not_its_metered_grandchildren(client, db, rollup_clock):
+    await login_as(client, db, "viewer")
+    room = await make_asset(db, "Room")
+    child, _ = await metered(db, "Row", room, reading=(5, 10.0, 0))
+    await metered(db, "Rack", child, reading=(5, 3.0, 0))
+    assert [s["asset_id"] for s in (await rollup_of(client, room))["sources"]] == [child]
+
+
+async def test_an_unmetered_child_is_walked_into(client, db, rollup_clock):
+    await login_as(client, db, "viewer")
+    room = await make_asset(db, "Room")
+    row = await make_asset(db, "Row", room)
+    rack, _ = await metered(db, "Rack", row, reading=(5, 3.0, 0))
+    (source,) = (await rollup_of(client, room))["sources"]
+    assert source["asset_id"] == rack and source["path"] == "Room / Row / Rack"
+
+
+async def test_a_leaf_or_a_subtree_without_power_meters_has_no_rollup(client, db, rollup_clock):
+    await login_as(client, db, "viewer")
+    leaf = await make_asset(db, "Leaf")
+    room = await make_asset(db, "Room")
+    await metered(db, "Counter", room, metric="energy_kwh", reading=(5, 100.0, 0))
+    empty = await make_asset(db, "Empty")
+    await make_asset(db, "Nothing", empty)
+
+    assert await rollup_of(client, leaf) is None
+    assert await rollup_of(client, room) is None
+    assert await rollup_of(client, empty) is None
+

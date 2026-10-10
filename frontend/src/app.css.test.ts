@@ -69,3 +69,16 @@ describe("navigation and page width", () => {
     expect(css).toMatch(/main\.wide\s*\{[^}]*max-width:\s*none/);
   });
 });
+
+describe("long asset names wrap, figures do not", () => {
+  /** The selector list of the rule that sets `overflow-wrap: anywhere` in the widget block. */
+  const wrapping = [...css.matchAll(/([^{}]+)\{([^{}]*overflow-wrap:\s*anywhere[^{}]*)\}/g)].map((m) => m[1].trim()).join(" | ");
+  it("wraps the asset name under a stat figure and the first column of a table widget", () => {
+    expect(wrapping).toContain(".stat > .muted:not(.big)");
+    expect(wrapping).toContain(".widget-body td:first-child");
+  });
+  it("does not wrap the dimmed stat figure or the other table cells", () => {
+    expect(wrapping).not.toMatch(/\.stat \.muted(?!:)/); // the old rule matched .big.muted too
+    expect(wrapping).not.toMatch(/\.widget-body td(?!:first-child)/); // and every cell, including the number column
+  });
+});

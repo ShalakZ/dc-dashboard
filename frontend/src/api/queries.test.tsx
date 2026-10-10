@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { mockFetch } from "../test/fetchMock";
 import {
   useAudit, useBillingCosts, useCreateTariff, useDashboard, useDashboards, useGraph, usePatchUser, usePutGeneralSettings,
-  useSaveDashboard, useScan, useSite, useTariffs, useUsers, useWidgetData,
+  useSaveDashboard, useScan, useSeries, useSite, useTariffs, useUsers, useWidgetData,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
 
@@ -179,5 +179,49 @@ describe("phase 3 queries", () => {
     expect(calls.find((c) => c.method === "PUT")?.body).toEqual(body);
     expect(calls.filter((c) => c.method === "GET" && c.path === "/api/dashboards/5")).toHaveLength(1); // no refetch of the detail
     await waitFor(() => expect(calls.filter((c) => c.path === "/api/dashboards")).toHaveLength(2));
+  });
+});
+
+describe("useSeries refetching", () => {
+  afterEach(() => vi.useRealTimers());
+  const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+  const series = { metric: "active_power_kw", unit: "kW", points: [] };
+  const fetched = (calls: { path: string }[]) => calls.filter((c) => c.path === "/api/assets/4/series").length;
+
+  it("fetches a 1h series again after 10 s, not after 5 s", async () => {
+    vi.useFakeTimers();
+    const calls = mockFetch({ "GET /api/assets/4/series": { body: series } });
+    renderHook(() => useSeries(4, "active_power_kw", "1h"), { wrapper: stableWrapper() });
+    await advance(1_000);
+    expect(fetched(calls)).toBe(1);
+    await advance(5_000); // 6 s since the first answer
+    expect(fetched(calls)).toBe(1);
+    await advance(5_000); // 11 s
+    expect(fetched(calls)).toBe(2);
+  });
+
+  it("fetches a 24h series every minute, not every 10 s", async () => {
+    vi.useFakeTimers();
+    const calls = mockFetch({ "GET /api/assets/4/series": { body: series } });
+    renderHook(() => useSeries(4, "active_power_kw", "24h"), { wrapper: stableWrapper() });
+    await advance(30_000);
+    expect(fetched(calls)).toBe(1);
+    await advance(35_000); // 65 s
+    expect(fetched(calls)).toBe(2);
+  });
+
+  it("stops refetching while paused and goes on when resumed", async () => {
+    vi.useFakeTimers();
+    const calls = mockFetch({ "GET /api/assets/4/series": { body: series } });
+    const { rerender } = renderHook(({ paused }: { paused: boolean }) => useSeries(4, "active_power_kw", "1h", undefined, paused), {
+      wrapper: stableWrapper(), initialProps: { paused: true },
+    });
+    await advance(1_000);
+    expect(fetched(calls)).toBe(1);
+    await advance(60_000);
+    expect(fetched(calls)).toBe(1); // paused: nothing for a whole minute
+    rerender({ paused: false });
+    await advance(11_000);
+    expect(fetched(calls)).toBe(2);
   });
 });

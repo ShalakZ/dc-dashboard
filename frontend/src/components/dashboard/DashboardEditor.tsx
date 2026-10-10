@@ -5,7 +5,7 @@ import type { Dashboard, RangePreset } from "../../api/types";
 import { useAction } from "../../hooks/useAction";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import { isDirty, isStaleConflict, MAX_TEXT, MAX_WIDGETS, metricAssetsOf, saveBody } from "../../lib/dashboardEdit";
-import { defaultSize, newKey, nextPosition, toDrafts, type DraftWidget } from "../../lib/layout";
+import { compactVertical, defaultSize, newKey, nextPosition, toDrafts, type DraftWidget } from "../../lib/layout";
 import { RANGE_LABELS, RANGE_PRESETS } from "../../lib/ranges";
 import { DashboardGrid } from "./DashboardGrid";
 import { WidgetEditor, type EditorFields } from "./WidgetEditor";
@@ -34,14 +34,14 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
   const rangeId = useId();
   const [name, setName] = useState(baseline.name);
   const [range, setRange] = useState<RangePreset>(baseline.range);
-  const [drafts, setDrafts] = useState<DraftWidget[]>(() => toDrafts(baseline.widgets));
+  const [drafts, setDrafts] = useState<DraftWidget[]>(() => compactVertical(toDrafts(baseline.widgets)));
   const [dialog, setDialog] = useState<{ draft: DraftWidget | null } | null>(null);
   /** True when a save lost a race with someone else's save (the API's "changed since you loaded it" 409). */
   const [conflict, setConflict] = useState(false);
   /** Cancel was pressed with unsaved edits: ask before they are thrown away. */
   const [confirmCancel, setConfirmCancel] = useState(false);
-  /** The widget removed last in this session and where it sat, so Undo can put it back. */
-  const [removed, setRemoved] = useState<{ draft: DraftWidget; index: number } | null>(null);
+  /** The widget removed last in this session, where it sat in the list, and where every widget stood, so Undo can put things back exactly. */
+  const [removed, setRemoved] = useState<{ draft: DraftWidget; index: number; positions: { key: string; x: number; y: number }[] } | null>(null);
 
   const edit = { name, range, drafts };
   const dirty = isDirty(baseline, edit);
@@ -73,20 +73,30 @@ export function DashboardEditor({ dashboard, timezone, onSaved, onCancel, onRelo
     setDrafts((current) => {
       if (target) return current.map((d) => (d.key === target.key ? { ...d, ...fields } : d));
       const size = defaultSize(fields.type);
-      return [...current, { key, ...fields, ...size, ...nextPosition(current, size) }];
+      return compactVertical([...current, { key, ...fields, ...size, ...nextPosition(current, size) }]);
     });
     setDialog(null);
   };
   const removeWidget = (d: DraftWidget) => {
     const index = drafts.findIndex((x) => x.key === d.key);
     if (index < 0) return;
-    setRemoved({ draft: d, index });
-    setDrafts((current) => current.filter((x) => x.key !== d.key));
+    setRemoved({ draft: d, index, positions: drafts.map(({ key, x, y }) => ({ key, x, y })) });
+    setDrafts((current) => compactVertical(current.filter((x) => x.key !== d.key)));
   };
+  // Undo puts the positions of the moment before the delete back instead of compacting again: re-inserting and compacting
+  // gives another answer whenever the list order differs from the reading order. Anything that moves a widget (a drag,
+  // a resize, Add) retires the offer first, and Edit keeps positions, so the snapshot still fits the other widgets.
   const undoRemove = () => {
     if (!removed) return;
-    const { draft, index } = removed;
-    setDrafts((current) => (current.some((x) => x.key === draft.key) ? current : [...current.slice(0, index), draft, ...current.slice(index)]));
+    const { draft, index, positions } = removed;
+    const was = new Map(positions.map((p) => [p.key, p]));
+    setDrafts((current) => {
+      if (current.some((x) => x.key === draft.key)) return current;
+      return [...current.slice(0, index), draft, ...current.slice(index)].map((d) => {
+        const p = was.get(d.key);
+        return p && (p.x !== d.x || p.y !== d.y) ? { ...d, x: p.x, y: p.y } : d;
+      });
+    });
     setRemoved(null);
   };
 

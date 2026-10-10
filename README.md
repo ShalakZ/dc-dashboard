@@ -315,7 +315,10 @@ changing the range on the page affects that visit only. Stat and gauge widgets t
 follow the live stream while their range ends now (the rolling ranges, `today` and `this_month`; not
 `yesterday` or `last_month`); every widget also refreshes every 30 seconds. **Edit** (operators and admins)
 opens the grid editor: drag a widget by its title bar, resize it from the corner or the edges, **Add
-widget**, then **Save**, which stores the whole dashboard in one step. If someone else saved first you are
+widget**, then **Save**, which stores the whole dashboard in one step. Widgets always close up vertically
+(there are no gaps), in the editor and in the view alike: dropping a widget on an occupied place moves the
+others down only as far as needed, and a dashboard saved earlier with gaps is shown closed up without being
+rewritten until someone changes it and saves. If someone else saved first you are
 told, nothing is overwritten, and you can reload their version. Leaving the editor from inside the app,
 or closing the page, asks first when something is unsaved; a session that expires while you edit does
 not: the app signs you out and the unsaved edits are dropped without a prompt. A widget whose asset
@@ -415,7 +418,7 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Five specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Six specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
 
 - `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
@@ -436,8 +439,11 @@ Five specs run in one `playwright test` run against the dev-profile stack on `ht
   currency and dashboard entries in the audit log (counted through the API as well).
 - `headers.spec.ts` (after it) checks the security headers on the page and the API and walks every page an admin can open,
   failing on a Content-Security-Policy violation.
-- `w3a.spec.ts` (last, at 1600×1000) adds a child asset from a `+` and picks the Kind from the list, sorts, filters and searches the
+- `w3a.spec.ts` (after it, at 1600×1000) adds a child asset from a `+` and picks the Kind from the list, sorts, filters and searches the
   source's points, checks the unit warning in the mapping dialog, and adds and edits a source that has no mapped points.
+- `w3b.spec.ts` (last, at 1600×1000) checks that a dashboard saved with a gap closes up the same in the view and in the editor (and
+  that Save stays disabled until something changes), that a parent asset shows the sum of its sub-assets' live power, that the asset
+  page's Trend says when it was updated, and that a dashboard with a 45-character asset name draws its bar and time series widgets.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

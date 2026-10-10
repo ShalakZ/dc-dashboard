@@ -3,13 +3,16 @@ import ReactECharts from "echarts-for-react";
 import { memo } from "react";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { chartLabels, escapeHtml, figureText, formatValue, labelBucket, unitSuffix } from "../../../lib/widgetFormat";
+import { chartLabels, escapeHtml, figureText, formatValue, labelBucket, shortLabel, shortLabels, unitSuffix } from "../../../lib/widgetFormat";
 import { useLegendSelection } from "./legendSelection";
 
 type Point = WidgetData["series"][number]["points"][number];
 type Row = [string, number | null];
 /** A row, or a row with a symbol of its own (see markIsolated). */
 type ChartRow = Row | { value: Row; symbol: string; symbolSize: number };
+
+/** Characters a legend entry shows; the full name is in the chart tooltip and in the legend's own tooltip (S7-3). */
+const LEGEND_CHARS = 24;
 
 const PALETTE = ["#1f6feb", "#cf222e", "#1a7f37", "#9a6700", "#8250df", "#bf3989", "#0a7d8c", "#57606a"];
 
@@ -121,6 +124,7 @@ export function timeAxisBounds(data: WidgetData): { min: number; max: number } |
 
 export function timeSeriesOption(data: WidgetData, timezone: string): EChartsOption {
   const labels = chartLabels(data.series);
+  const legendShort = shortLabels(labels, LEGEND_CHARS);
   const bucket = labelBucket(data);
   const band = data.source === "metric";
   const series = data.series.flatMap((s, i): object[] => {
@@ -140,7 +144,11 @@ export function timeSeriesOption(data: WidgetData, timezone: string): EChartsOpt
     animation: false,
     useUTC: true, // tick positions on whole UTC hours; labels below are formatted in the site zone, not the browser's
     tooltip: { trigger: "axis", formatter: tooltipFormatter(data, timezone) },
-    legend: { show: data.series.length > 1, bottom: 0, type: "scroll", data: labels },
+    // The legend still selects by the full series name; only the text shown is shortened.
+    legend: {
+      show: data.series.length > 1, bottom: 0, type: "scroll", data: labels,
+      formatter: (name: string) => legendShort.get(name) ?? shortLabel(name, LEGEND_CHARS), tooltip: { show: true },
+    },
     grid: { left: 60, right: 20, top: 30, bottom: data.series.length > 1 ? 50 : 30 },
     xAxis: {
       type: "time",

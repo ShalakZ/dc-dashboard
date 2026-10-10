@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import type { WidgetData } from "../../../api/types";
 import { formatSiteDateTime, formatSiteTick } from "../../../lib/siteTime";
-import { MUTED_FIGURE } from "../../../lib/widgetFormat";
+import { escapeHtml, MUTED_FIGURE, shortLabel } from "../../../lib/widgetFormat";
 import { config, seriesData, seriesPoint, valueRow, valuesData } from "../../../test/dashboardFixtures";
 import { LiveValuesContext } from "../LiveValuesContext";
 import { BarWidget, barOption } from "./BarWidget";
@@ -32,6 +32,12 @@ const asOption = (option: unknown) => option as Opt<LineSeries>;
 const asBar = (option: unknown) => option as Opt<BarSeries>;
 const barSeries = (option: unknown) => asBar(option).series;
 const TZ = "Asia/Qatar";
+/** What the legend and the category axis of an option are asked to draw (S7-3). */
+interface LegendOpt { show: boolean; type: string; formatter: (name: string) => string; tooltip: { show: boolean } }
+const legendOf = (option: unknown) => (option as { legend: LegendOpt }).legend;
+const axisLabelOf = (option: unknown) => (option as { xAxis: { axisLabel: { interval: number; formatter: (value: string) => string } } }).xAxis.axisLabel;
+const LONG = "Main-Switchboard-Feeder-Room-East-Hall-3"; // 40 characters
+const LONG_2 = "Auxiliary-Distribution-Panel-Block-West"; // differs from LONG at the start, so the two shorten to different texts
 const stream = (value: number | null, quality = 0, connected = true, ts = "2026-10-08T06:00:00.000Z") => ({
   values: new Map([[7, { ts, value, quality }]]), connected, register: () => {},
 });
@@ -168,6 +174,34 @@ describe("time series", () => {
     expect(plain(avg.data[3])[0]).toBe("2026-10-08T00:03:00.000Z");
     expect(option.series.find((s) => s.id === "band-min-5")!.data.map((c) => plain(c)[1])).toEqual([0.5, 1, 2, null, 3]);
     expect(option.series.find((s) => s.id === "band-span-5")!.data.map((c) => plain(c)[1])).toEqual([1, 2, 2, null, 2]);
+  });
+
+  it("shortens long names in the legend to 24 characters, with the full name in the legend's tooltip and as the series name (S7-3)", () => {
+    const two = seriesData({
+      series: [LONG, LONG_2].map((name, i) => ({ asset_id: 5 + i, name, estimated: false, partial: false, points }) ),
+    });
+    const option = timeSeriesOption(two, TZ);
+    const legend = legendOf(option);
+    expect(legend.type).toBe("scroll");
+    expect(legend.tooltip).toEqual({ show: true });
+    expect(Array.from(legend.formatter(LONG))).toHaveLength(24);
+    expect(legend.formatter(LONG)).toBe(shortLabel(LONG, 24));
+    expect(legend.formatter(LONG)).not.toBe(legend.formatter(LONG_2));
+    expect(legend.formatter("Hall A")).toBe("Hall A");
+    // the legend selects by the full name: the series and the legend data keep it
+    expect((option as unknown as { legend: { data: string[] } }).legend.data).toEqual([LONG, LONG_2]);
+    expect(asOption(option).series.filter((s) => s.id?.startsWith("avg-")).map((s) => s.name)).toEqual([LONG, LONG_2]);
+  });
+
+  it("shows the full label of two names that would shorten to the same legend entry", () => {
+    const a = "Main-Switchboard-Feeder-01-Room-East-Hall-Annex"; // identical start and end, different middle
+    const b = "Main-Switchboard-Feeder-02-Room-East-Hall-Annex";
+    expect(shortLabel(a, 24)).toBe(shortLabel(b, 24));
+    const legend = legendOf(timeSeriesOption(seriesData({
+      series: [a, b].map((name, i) => ({ asset_id: 5 + i, name, estimated: false, partial: false, points })),
+    }), TZ));
+    expect(legend.formatter(a)).toBe(a);
+    expect(legend.formatter(b)).toBe(b);
   });
 
   it("draws energy as plain hourly lines (no band) and breaks the line over a missing hour", () => {
@@ -376,6 +410,42 @@ describe("bar", () => {
   const point = (ts: string, over: Parameters<typeof seriesPoint>[0] extends infer P ? Partial<P> : never = {}) => seriesPoint({ ts, ...over });
   const hourly = (series: WidgetData["series"], over: Partial<WidgetData> = {}) =>
     seriesData({ type: "bar", source: "energy", metric: null, unit: "kWh", bucket: "hour", tier: null, series, ...over });
+
+  it("shortens long asset names on the category axis, with every label drawn and the full name in the tooltip (S7-3)", () => {
+    const name = "Main <Switchboard> Feeder 01 Room East Hall"; // 43 characters, and a name that must be escaped
+    const option = barOption(byAsset([valueRow({ name, value: 3 }), valueRow({ asset_id: 6, name: "Hall A", value: 4 })]), TZ);
+    const axis = axisLabelOf(option);
+    expect(axis.interval).toBe(0);
+    expect(axis.formatter(name).length).toBeLessThan(name.length);
+    expect(Array.from(axis.formatter(name))).toHaveLength(18);
+    expect(axis.formatter("Hall A")).toBe("Hall A");
+    expect(asBar(option).xAxis.data).toEqual([name, "Hall A"]); // the data keeps the full names
+    const header = asBar(option).tooltip.formatter([{ name, dataIndex: 0, seriesIndex: 0, marker: "" }]);
+    expect(header).toContain(escapeHtml(name));
+    expect(header).not.toContain("<Switchboard>");
+  });
+
+  it("keeps the full label on the axis for two names that would shorten to the same text", () => {
+    const a = "Main-Switchboard-Feeder-01-Room-East";
+    const b = "Main-Switchboard-Feeder-02-Room-East";
+    const axis = axisLabelOf(barOption(byAsset([valueRow({ name: a }), valueRow({ asset_id: 6, name: b })]), TZ));
+    expect(axis.formatter(a)).toBe(a);
+    expect(axis.formatter(b)).toBe(b);
+  });
+
+  it("shortens the legend of the bar chart per time bucket to 24 characters, with the full name as the series name", () => {
+    const data = hourly([LONG, LONG_2].map((name, i) => ({
+      asset_id: 5 + i, name, estimated: false, partial: false, points: [point("2026-10-08T00:00:00+00:00", { value: 1 })],
+    })));
+    const option = barOption(data, TZ);
+    const legend = legendOf(option);
+    expect(legend.show).toBe(true);
+    expect(legend.type).toBe("scroll");
+    expect(legend.tooltip).toEqual({ show: true });
+    expect(Array.from(legend.formatter(LONG))).toHaveLength(24);
+    expect(legend.formatter(LONG)).not.toBe(legend.formatter(LONG_2));
+    expect(asBar(option).series.map((s) => s.name)).toEqual([LONG, LONG_2]);
+  });
 
   it("draws one bar per time bucket, grouped by asset", () => {
     const data = hourly([

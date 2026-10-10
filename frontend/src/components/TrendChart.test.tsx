@@ -1,5 +1,6 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { seriesToOption, TrendChart } from "./TrendChart";
@@ -117,6 +118,17 @@ describe("TrendChart", () => {
     const urls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.includes("metric=active_power_kw") && u.includes("buckets=300"))).toBe(true);
     expect(calls.filter((c) => c.path === "/api/assets/4/series").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("is a region named Trend, so a page (and a test) can find it by its name", async () => {
+    mockFetch({
+      ...siteRoute,
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/assets/4/series": { body: series },
+    });
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    const region = await screen.findByRole("region", { name: "Trend" });
+    expect(region).toContainElement(await screen.findByTestId("chart"));
   });
 
   it("labels the storage tier the series came from", async () => {
@@ -248,5 +260,108 @@ describe("TrendChart site timezone", () => {
       const option = captured.options.at(-1) as { xAxis: { axisLabel: { formatter: (ms: number) => string } } };
       expect(option.xAxis.axisLabel.formatter(Date.parse("2026-10-06T21:00:00Z"))).toBe("00:00");
     });
+  });
+});
+
+describe("TrendChart says when it was updated and pauses under a mouse", () => {
+  const routes = {
+    ...siteRoute,
+    "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+    "GET /api/assets/4/series": { body: series },
+  };
+  const PAUSED = "(paused while you point at the chart)";
+
+  beforeEach(() => {
+    captured.options.length = 0;
+    // Only Date is faked, so React Query, user-event and findBy keep their real timers.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-07T10:05:00Z")); // 13:05:00 in Asia/Qatar
+    // jsdom 26 has no PointerEvent: without this stub pointerType would be undefined and "mouse" could never be told from "touch".
+    vi.stubGlobal("PointerEvent", class extends MouseEvent {
+      pointerType: string;
+      constructor(type: string, init: PointerEventInit = {}) { super(type, init); this.pointerType = init.pointerType ?? ""; }
+    });
+  });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  async function open() {
+    mockFetch(routes);
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    const section = (await screen.findByTestId("chart")).closest("section")!;
+    return section;
+  }
+  /** Points at the section the way a pointer of this kind does, and returns the pointer types the DOM actually carried. */
+  function point(section: HTMLElement, pointerType: string, action: "enter" | "leave") {
+    const seen: string[] = [];
+    const listener = (e: Event) => seen.push((e as unknown as { pointerType: string }).pointerType);
+    section.addEventListener(action === "enter" ? "pointerover" : "pointerout", listener);
+    if (action === "enter") fireEvent.pointerEnter(section, { pointerType });
+    else fireEvent.pointerLeave(section, { pointerType });
+    section.removeEventListener(action === "enter" ? "pointerover" : "pointerout", listener);
+    return seen;
+  }
+
+  it("says when the data was fetched, in the site zone", async () => {
+    await open();
+    expect(await screen.findByText("updated 13:05:00")).toBeInTheDocument();
+  });
+
+  it("pauses while a mouse is over the chart and resumes when it leaves", async () => {
+    const section = await open();
+    await screen.findByText("updated 13:05:00");
+    expect(point(section, "mouse", "enter")).toEqual(["mouse"]);
+    expect(screen.getByText(`updated 13:05:00 ${PAUSED}`)).toBeInTheDocument();
+    point(section, "mouse", "leave");
+    expect(screen.getByText("updated 13:05:00")).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(`paused while`))).not.toBeInTheDocument();
+  });
+
+  it("never pauses for a touch or a pen pointer", async () => {
+    const section = await open();
+    await screen.findByText("updated 13:05:00");
+    expect(point(section, "touch", "enter")).toEqual(["touch"]); // the stub carried the type through, so this is a real touch event
+    expect(point(section, "pen", "enter")).toEqual(["pen"]);
+    expect(screen.getByText("updated 13:05:00")).toBeInTheDocument();
+    expect(screen.queryByText(/paused while/)).not.toBeInTheDocument();
+  });
+
+  it("shows 'updating…' only while there is no data yet, not on a refetch", async () => {
+    mockFetch(routes);
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    expect(screen.getByText("updating…")).toBeInTheDocument();
+    await screen.findByTestId("chart");
+    await waitFor(() => expect(screen.queryByText("updating…")).not.toBeInTheDocument());
+    // hold the next series answer and make React Query refetch (the tab becomes visible again)
+    const answer = fetch;
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => (String(input).includes("/series") ? new Promise<Response>(() => {}) : answer(input, init)));
+    fireEvent(window, new Event("visibilitychange"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText("updating…")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chart")).toBeInTheDocument();
+  });
+
+  it("gives the chart the identical option when the parent re-renders with the same data", async () => {
+    mockFetch(routes);
+    function Parent() {
+      const [n, setN] = useState(0);
+      return (
+        <>
+          <button onClick={() => setN(n + 1)}>tick {n}</button>
+          <TrendChart assetId={4} metrics={metrics} />
+        </>
+      );
+    }
+    renderWithProviders(<Parent />);
+    await screen.findByText("updated 13:05:00");
+    await waitFor(() => expect(screen.getByTestId("chart")).toBeInTheDocument());
+    const before = captured.options.length;
+    await userEvent.click(screen.getByRole("button", { name: "tick 0" }));
+    await screen.findByRole("button", { name: "tick 1" });
+    expect(captured.options.length).toBeGreaterThan(before); // the chart really rendered again
+    expect(captured.options.at(-1)).toBe(captured.options.at(-2));
+    // a hover re-renders the chart too, and must not hand it a new option either
+    fireEvent.pointerEnter(screen.getByTestId("chart").closest("section")!, { pointerType: "mouse" });
+    await screen.findByText(/paused while you point/);
+    expect(captured.options.at(-1)).toBe(captured.options.at(-2));
   });
 });

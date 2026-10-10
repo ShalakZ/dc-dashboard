@@ -25,6 +25,11 @@ describe("WidgetFrame", () => {
     expect(screen.queryByText(/without this metric/)).not.toBeInTheDocument();
   });
 
+  it("gives the heading a title of the full widget title, so a name cut by the ellipsis can still be read (S7-3)", () => {
+    frame({ title: "Energy per transformer feeder, main switchboard, east hall" });
+    expect(screen.getByRole("heading")).toHaveAttribute("title", "Energy per transformer feeder, main switchboard, east hall");
+  });
+
   it("shows a loading note instead of the body while loading", () => {
     frame({ loading: true });
     expect(screen.getByText("loading…")).toBeInTheDocument();
