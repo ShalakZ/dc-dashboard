@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT =Path(__file__).resolve().parents[2] / "scripts" / "setup.sh"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "setup.sh"
 
 FAKE_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$CALLS_LOG"

@@ -43,16 +43,22 @@ for a in "$@"; do [ "$prev" = -p ] && project="$a"; prev="$a"; done
 case "$line" in *" up "*) touch "$FAKE_LOG.up" ;; esac
 case "$line" in
   *" config --no-interpolate "*)
-    # what Compose does: -p, else COMPOSE_PROJECT_NAME, else the `name:` of compose.yaml
+    # what Compose does: -p, else COMPOSE_PROJECT_NAME, else the `name:` of compose.yaml. An explicit -p always wins, so the
+    # FAKE_CONFIG_NAME* overrides (a Compose that "resolves" to another project) only apply to a call that carries none.
     name="${project:-${COMPOSE_PROJECT_NAME:-dcdash}}"
-    [ -n "$FAKE_CONFIG_NAME" ] && name="$FAKE_CONFIG_NAME"
-    [ -n "$FAKE_CONFIG_NAME_AFTER_UP" ] && [ -e "$FAKE_LOG.up" ] && name="$FAKE_CONFIG_NAME_AFTER_UP"
-    [ -n "$FAKE_CONFIG_NAME_AFTER_DUMP" ] && [ -e "$FAKE_LOG.dumplen" ] && name="$FAKE_CONFIG_NAME_AFTER_DUMP"
+    if [ -z "$project" ]; then
+      [ -n "$FAKE_CONFIG_NAME" ] && name="$FAKE_CONFIG_NAME"
+      [ -n "$FAKE_CONFIG_NAME_AFTER_UP" ] && [ -e "$FAKE_LOG.up" ] && name="$FAKE_CONFIG_NAME_AFTER_UP"
+      [ -n "$FAKE_CONFIG_NAME_AFTER_DUMP" ] && [ -e "$FAKE_LOG.dumplen" ] && name="$FAKE_CONFIG_NAME_AFTER_DUMP"
+    fi
     echo "name: $name"; exit 0 ;;
   *" ps "*)
     case "$line" in
       *" --status running "*) echo api ;;
-      *" --format "*) [ -n "$FAKE_PS_NAMES" ] && printf '%s\n' $FAKE_PS_NAMES ;;
+      *" --format "*)
+        names="$FAKE_PS_NAMES"
+        [ -n "$FAKE_PS_NAMES_AFTER_DUMP" ] && [ -e "$FAKE_LOG.dumplen" ] && names="$FAKE_PS_NAMES_AFTER_DUMP"
+        [ -n "$names" ] && printf '%s\n' $names ;;
     esac
     exit 0 ;;
   *" exec "*)
@@ -62,14 +68,23 @@ case "$line" in
         wc -c < "$FAKE_LOG.pgdump" | tr -d ' ' > "$FAKE_LOG.dumplen"
         cat "$FAKE_LOG.pgdump"; exit 0 ;;
       *" pg_restore "*)
-        # both the read-back of a fresh dump and the restore: judged by length. A stream shorter than 4 bytes, or shorter than
-        # the last dump pg_dump wrote, is a truncated archive (the smoke test's `head -c 100` corrupt dump).
+        # `-d` is the restore itself, none is the read-back of a fresh dump. Both are judged by length: a stream shorter than 4
+        # bytes, or shorter than the last dump pg_dump wrote, is a truncated archive (the smoke test's `head -c 100` corrupt dump).
+        # FAKE_RESTORE_EXIT makes the restore itself fail with that code.
         n="$(wc -c | tr -d ' ')"; last="$(cat "$FAKE_LOG.dumplen" 2>/dev/null || echo 0)"
-        [ "$n" -ge 4 ] && [ "$n" -ge "$last" ] && exit 0
+        case "$line" in *" -d "*)
+          if [ -n "$FAKE_RESTORE_EXIT" ]; then echo "pg_restore: error: boom" >&2; exit "$FAKE_RESTORE_EXIT"; fi ;;
+        esac
+        if [ "$n" -ge 4 ] && [ "$n" -ge "$last" ]; then
+          case "$line" in *" -d "*) touch "$FAKE_LOG.restored" ;; esac
+          exit 0
+        fi
         echo "pg_restore: error: could not read the whole archive ($n bytes)" >&2; exit 1 ;;
       *" psql "*)
         case "$line" in
-          *"SELECT version_num"*) echo 0005 ;;
+          *"SELECT version_num"*)   # FAKE_SCHEMA_AFTER_RESTORE: the schema the database reports once a restore has run
+            if [ -n "$FAKE_SCHEMA_AFTER_RESTORE" ] && [ -e "$FAKE_LOG.restored" ]; then echo "$FAKE_SCHEMA_AFTER_RESTORE"
+            else echo "${FAKE_SCHEMA:-0005}"; fi ;;
           *"SELECT count(*)"*) echo 3 ;;
           *"SELECT 1 "*) echo 1 ;;
         esac
@@ -150,6 +165,11 @@ def docker_calls(calls: list[str]) -> list[Call]:
 
 def compose_calls(calls: list[str]) -> list[Call]:
     return [c for c in docker_calls(calls) if c.compose]
+
+
+def restores(calls: list[str]) -> list[Call]:
+    """The pg_restore calls that restore (restore.sh: `-d dcdash`), not backup.sh's `pg_restore -f /dev/null` read-back of a new dump."""
+    return [c for c in docker_calls(calls) if c.has("pg_restore") and c.has("-d")]
 
 
 # ---- 1. a name that is not a scratch name is refused before any Docker call -------------------------------------------
@@ -292,7 +312,10 @@ def test_backup_smoke_runs_the_real_scripts_only_against_the_scratch_project(tmp
     nested = [c for c in compose_calls(calls) if c.project is None]  # backup.sh and restore.sh: a plain `docker compose`
     kinds = {(c.sub, c.args[-2:] == ["api", "collector"]) for c in nested}
     assert ("stop", True) in kinds and ("start", True) in kinds and ("exec", False) in kinds
-    assert any(c.has("pg_dump") for c in nested) and any(c.has("pg_restore") for c in nested)
+    assert any(c.has("pg_dump") for c in nested) and any(c.has("pg_restore") and c.has("-d") for c in nested)
+    # one `ps --format {{.Name}}` per nested script: 1 backup.sh + 4 restore.sh. A restore.sh call that lost its scratch_script
+    # wrapper still runs (the environment routes it) but would leave this count at 4.
+    assert len([c for c in nested if c.sub == "ps" and c.has("{{.Name}}")]) == 5
     for call in nested:
         assert call.cpn == "dcdash_e2e_smoke" and call.cf == SCRATCH_FILES, call.line
     for call in compose_calls(calls):
@@ -340,11 +363,12 @@ def test_a_refusal_inside_scratch_script_stops_the_smoke_test(tmp_path):
     # Compose resolves correctly while the stack is built and the dump is made, then "changes its mind" before restore.sh
     result, calls = run("backup_smoke.sh", tmp_path, FAKE_CONFIG_NAME_AFTER_DUMP="dcdash")
     assert result.returncode == 1
-    assert result.stderr.count("scratch_script: Compose does not resolve to dcdash_e2e_smoke") == 1  # a `return 1` would print it twice
+    assert result.stderr.count("scratch_script: Compose does not resolve to dcdash_e2e_smoke") == 1
     assert "backup smoke OK" not in result.stdout and "restore failure-path OK" not in result.stdout
-    assert "restore must" not in result.stdout + result.stderr  # not reported as the script's own checks failing
+    # what tells `exit 1` from `return 1`: with a return the script goes on into its own exit-code check and says "restore must ..."
+    assert "restore must" not in result.stdout + result.stderr
     nested = [c for c in compose_calls(calls) if c.project is None and c.sub in ("stop", "start")]
-    assert nested == [] and not any(c.has("pg_restore") for c in docker_calls(calls))
+    assert nested == [] and restores(calls) == []
     assert compose_calls(calls)[-1].sub == "down"  # and the scratch stack is still taken down
 
 
@@ -356,12 +380,35 @@ def test_a_refusal_before_the_backup_stops_the_smoke_test(tmp_path):
     assert compose_calls(calls)[-1].sub == "down"
 
 
-def test_a_container_outside_the_scratch_project_stops_the_smoke_test(tmp_path):
-    result, calls = run("backup_smoke.sh", tmp_path, FAKE_PS_NAMES="dcdash_e2e_smoke-db-1 dcdash-api-1")
+@pytest.mark.parametrize("when", ["FAKE_PS_NAMES", "FAKE_PS_NAMES_AFTER_DUMP"], ids=["at-the-backup", "at-the-restore"])
+def test_a_container_outside_the_scratch_project_stops_the_smoke_test(tmp_path, when):
+    # AFTER_DUMP puts the refusal on the `rc=0; scratch_script ... || rc=$?` line, the only place where exit and return differ
+    result, calls = run("backup_smoke.sh", tmp_path, **{when: "dcdash_e2e_smoke-db-1 dcdash-api-1"})
     assert result.returncode == 1
-    assert "a container outside the scratch project is in scope" in result.stderr
-    assert not any(c.has("pg_dump") for c in docker_calls(calls))
-    assert compose_calls(calls)[-1].sub == "down"
+    assert result.stderr.count("a container outside the scratch project is in scope") == 1
+    assert "restore must" not in result.stdout + result.stderr
+    assert any(c.has("pg_dump") for c in docker_calls(calls)) == (when == "FAKE_PS_NAMES_AFTER_DUMP")
+    assert restores(calls) == [] and compose_calls(calls)[-1].sub == "down"
+
+
+# ---- the two exit codes the smoke test asserts are the real ones, not "it failed" ---------------------------------------
+
+def test_a_mismatch_restore_that_fails_with_another_code_is_reported_with_that_code(tmp_path):
+    # the database "has" the schema the bogus .version names, so restore.sh does not refuse (exit 3) and goes on to a pg_restore
+    # that fails: exit 1
+    result, _ = run("backup_smoke.sh", tmp_path, FAKE_SCHEMA="bogus", FAKE_RESTORE_EXIT="2")
+    assert result.returncode == 1
+    assert "restore must refuse a version mismatch with exit 3 (got 1)" in result.stdout
+    assert "backup smoke OK" not in result.stdout
+
+
+def test_a_corrupt_dump_restore_that_fails_with_another_code_is_reported_with_that_code(tmp_path):
+    # after the first real restore the database reports another schema: the corrupt dump is refused with exit 3, not failed with 1
+    result, _ = run("backup_smoke.sh", tmp_path, FAKE_SCHEMA_AFTER_RESTORE="0006")
+    assert result.returncode == 1
+    assert "backup smoke OK" in result.stdout  # the first half passed
+    assert "restore must fail on a corrupted dump with exit 1 (got 3)" in result.stdout
+    assert "restore failure-path OK" not in result.stdout
 
 
 # ---- 11. a missing openssl stops scratch_init ---------------------------------------------------------------------------
@@ -397,10 +444,67 @@ def test_check_tls_uses_localhost_with_resolve_for_https(tmp_path):
     assert http and all("http://127.0.0.1:18080/" in c for c in http)
 
 
-# ---- housekeeping -------------------------------------------------------------------------------------------------------
+# ---- housekeeping and scratch_init hardening ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("script", BOTH)
 def test_the_temporary_folder_is_removed_when_the_script_ends(tmp_path, script):
     result, _ = run(script, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert list((tmp_path / "tmp").glob("tmp.*")) == []
+    assert list((tmp_path / "tmp").iterdir()) == []  # not the work folder, and not a log restore.sh left in TMPDIR
+
+
+def test_the_logs_of_the_nested_restores_stay_in_the_work_folder_and_go_with_it(tmp_path):
+    result, _ = run("backup_smoke.sh", tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    logs = re.findall(r"(/\S*dcdash-restore-\S*?\.log)\b", result.stdout + result.stderr)
+    assert logs  # the corrupt dump's restore names its log
+    assert all(log.startswith(str(tmp_path / "tmp" / "tmp.")) for log in logs), logs
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+@pytest.mark.parametrize("script", BOTH)
+@pytest.mark.parametrize("variable", ["SCRATCH_HTTP_PORT", "SCRATCH_HTTPS_PORT"])
+@pytest.mark.parametrize(
+    "port", ["80", "443", "x", "", "1023", "0080", "65536", "99999999999999999999", "18080 ", "-1"],
+    ids=["80", "443", "letter", "empty", "1023", "leading-zeros", "65536", "huge", "space", "negative"],
+)
+def test_a_port_that_is_not_a_high_port_is_refused_before_any_docker_call(tmp_path, script, variable, port):
+    result, calls = run(script, tmp_path, **{variable: port})
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert calls == [] and f"{variable}='{port}'" in result.stderr
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+def test_other_high_ports_are_used_as_given(tmp_path):
+    result, calls = run("check_tls.sh", tmp_path, SCRATCH_HTTP_PORT="1024", SCRATCH_HTTPS_PORT="65535")
+    assert result.returncode == 0, result.stdout + result.stderr
+    curls = [c for c in calls if c.startswith("curl ")]
+    assert any("--resolve localhost:65535:127.0.0.1" in c and "https://localhost:65535/" in c for c in curls)
+    assert any("http://127.0.0.1:1024/" in c for c in curls)
+
+
+def fake_mktemp(relative: bool) -> str:
+    real = shutil.which("mktemp")
+    return f'#!/usr/bin/env bash\nd="$({real} "$@")" || exit 1\n' + ('realpath --relative-to="$PWD" "$d"\n' if relative else 'echo "$d"\n')
+
+
+def test_a_relative_path_from_mktemp_is_made_absolute_before_it_is_mounted(tmp_path):
+    result, calls = run("check_tls.sh", tmp_path, fakes={"mktemp": fake_mktemp(relative=True)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    mount = [a for c in docker_calls(calls) if c.args[0] == "run" for a in c.args if a.endswith(":/c")]
+    assert len(mount) == 1 and mount[0].startswith("/"), mount
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+@pytest.mark.parametrize("script", BOTH)
+def test_a_failing_mktemp_stops_before_any_docker_call(tmp_path, script):
+    result, calls = run(script, tmp_path, fakes={"mktemp": "#!/usr/bin/env bash\nexit 1\n"})
+    assert result.returncode == 1 and "mktemp failed" in result.stderr
+    assert calls == []
+
+
+@pytest.mark.parametrize("script", BOTH)
+def test_a_failure_after_mktemp_leaves_no_temporary_folder(tmp_path, script):
+    result, calls = run(script, tmp_path, fakes={"mkdir": "#!/usr/bin/env bash\nexit 1\n"})
+    assert result.returncode == 1
+    assert calls == [] and list((tmp_path / "tmp").iterdir()) == []

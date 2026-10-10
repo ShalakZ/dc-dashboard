@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds a throwaway stack in its own Compose project (OPS_COMPOSE_PROJECT, default dcdash_e2e_tls; the name must start with dcdash_e2e),
 # turns TLS on with a self-signed certificate kept in a temporary folder, and checks that HTTPS answers, HTTP redirects and a missing key
-# gives the clear error. Exit 1 when a check fails. Nothing of the normal project is read or changed: not ./certs, not .env, not the
-# images dcdash-*:local, not ports 80/443 (the stack is published on 127.0.0.1:18080/18443).
+# gives the clear error. Exit 1 when a check fails. Nothing of the normal project is changed: not ./certs, not the images
+# dcdash-*:local, not ports 80/443 (the stack is published on 127.0.0.1:18080/18443); the secrets in .env are overridden by the environment.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/scratch.sh
