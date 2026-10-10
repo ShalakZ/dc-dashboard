@@ -182,4 +182,115 @@ describe("AssetPage", () => {
       expect(screen.getByText(label).closest(".tile")!.querySelector(".big")).not.toHaveClass("muted");
     }
   });
+
+  describe("a parent without a power meter of its own shows the sum of the meters below it (S4-9)", () => {
+    const TIP = "This asset has no power meter of its own: the figure is the sum of its sub-assets' meters.";
+    const rollupSource = (id: number, name: string, value: number | null, over: Record<string, unknown> = {}) => ({
+      asset_id: id, name, path: `Site / Hall / ${name}`, point_id: 20 + id, value, ts: value === null ? null : "2026-10-07T10:00:00+00:00",
+      stale: false, ...over,
+    });
+    const parent = (sources: unknown[] | null, over: Record<string, unknown> = {}) => ({
+      ...routes(null),
+      "GET /api/assets/4/summary": {
+        body: { ...summary(null), metrics: [], power_rollup: sources === null ? null : { sources }, ...over },
+      },
+    });
+    const render = async (sources: unknown[] | null, over: Record<string, unknown> = {}) => {
+      mockFetch(parent(sources, over));
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      await screen.findByRole("heading", { name: "Panel 1" });
+    };
+    const tile = () => screen.getByText("Live power").closest(".tile")!;
+    const figure = () => tile().querySelector(".big")!;
+    const two = () => [rollupSource(1, "Rack A", 3), rollupSource(2, "Rack B", 4.5)];
+
+    it("shows the sum and says how many meters it is made of", async () => {
+      await render(two());
+      expect(figure()).toHaveTextContent(/^7\.50 kW$/);
+      expect(figure()).toHaveClass("big");
+      const note = screen.getByText("Sum of the live power of 2 meters below");
+      expect(tile()).toContainElement(note);
+      expect(note).toHaveClass("muted");
+      expect(note.getAttribute("title")!.startsWith(TIP)).toBe(true);
+    });
+
+    it("says meter, not meters, for exactly one", async () => {
+      await render([rollupSource(1, "Rack A", 3)]);
+      expect(figure()).toHaveTextContent(/^3\.00 kW$/);
+      expect(screen.getByText("Sum of the live power of 1 meter below")).toBeInTheDocument();
+    });
+
+    it("sums the meters that report and names the others in the tooltip", async () => {
+      await render([...two(), rollupSource(3, "Rack C", 9, { stale: true })]);
+      expect(figure()).toHaveTextContent(/^7\.50 kW$/);
+      const note = screen.getByText("Sum of 2 of 3 meters below; the others are not reporting");
+      expect(note.getAttribute("title")).toContain("Rack C");
+      expect(note.getAttribute("title")).not.toContain("Rack A");
+      expect(note.getAttribute("title")!.startsWith(TIP)).toBe(true);
+    });
+
+    it("shows a dash, never 0.00, when no meter reports", async () => {
+      await render([rollupSource(1, "Rack A", 3, { stale: true }), rollupSource(2, "Rack B", null)]);
+      expect(figure()).toHaveTextContent(/^—$/);
+      const note = screen.getByText("None of the 2 meters below is reporting");
+      expect(note.getAttribute("title")).toContain("Rack A");
+      expect(note.getAttribute("title")).toContain("Rack B");
+      expect(tile()).not.toHaveTextContent("0.00");
+    });
+
+    it("says it in the singular when the only meter below is not reporting", async () => {
+      await render([rollupSource(1, "Rack A", null)]);
+      expect(figure()).toHaveTextContent(/^—$/);
+      expect(screen.getByText("The meter below is not reporting")).toBeInTheDocument();
+    });
+
+    it("follows the stream, which is asked for the meters' points and reports live", async () => {
+      await render(two());
+      expect(screen.getByText("reconnecting…")).toBeInTheDocument();
+      act(() => FakeEventSource.last!.onopen?.());
+      expect(screen.getByText("live")).toBeInTheDocument();
+      // point 21 is Rack A, 22 is Rack B; an entry is only taken when the page asked for its point
+      act(() => FakeEventSource.last!.emit([[21, Date.now() / 1000, 10, 0], [99, Date.now() / 1000, 500, 0]]));
+      expect(figure()).toHaveTextContent(/^14\.50 kW$/);
+      act(() => FakeEventSource.last!.emit([[22, Date.now() / 1000, null, 1]]));
+      expect(figure()).toHaveTextContent(/^10\.00 kW$/);
+      expect(screen.getByText("Sum of 1 of 2 meters below; the others are not reporting")).toBeInTheDocument();
+    });
+
+    it("lets a streamed value revive a meter that was stale when the page loaded", async () => {
+      await render([rollupSource(1, "Rack A", 3), rollupSource(2, "Rack B", 4, { stale: true })]);
+      expect(figure()).toHaveTextContent(/^3\.00 kW$/);
+      act(() => FakeEventSource.last!.emit([[22, Date.now() / 1000, 6, 0]]));
+      expect(figure()).toHaveTextContent(/^9\.00 kW$/);
+      expect(screen.getByText("Sum of the live power of 2 meters below")).toBeInTheDocument();
+    });
+
+    it("ignores the roll-up when the asset has a power meter of its own", async () => {
+      mockFetch({
+        ...routes(null),
+        "GET /api/assets/4/summary": { body: { ...summary(null), power_rollup: { sources: two() } } },
+      });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      await screen.findByRole("heading", { name: "Panel 1" });
+      expect(figure()).toHaveTextContent(/^10\.50 kW$/);
+      expect(screen.queryByText(/meters? below/)).not.toBeInTheDocument();
+      // the roll-up's points are not streamed either: an update for one of them changes nothing
+      act(() => FakeEventSource.last!.emit([[21, Date.now() / 1000, 100, 0]]));
+      expect(figure()).toHaveTextContent(/^10\.50 kW$/);
+    });
+
+    it("still shows a dash and no note for an asset with neither a meter nor a roll-up", async () => {
+      await render(null);
+      expect(figure()).toHaveTextContent(/^—$/);
+      expect(screen.queryByText(/meters? below/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/not reporting/)).not.toBeInTheDocument();
+    });
+
+    it("still shows a dash when the summary has no power_rollup key at all", async () => {
+      mockFetch({ ...routes(null), "GET /api/assets/4/summary": { body: { ...summary(null), metrics: [] } } });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      await screen.findByRole("heading", { name: "Panel 1" });
+      expect(figure()).toHaveTextContent(/^—$/);
+    });
+  });
 });
