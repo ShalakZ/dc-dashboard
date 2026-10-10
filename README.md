@@ -387,6 +387,40 @@ recreates `api`, which then runs the database migrations. Otherwise rebuild your
 (`docker compose --profile dev up -d --build`) to be sure it runs your own code. Either way, check with
 `docker volume ls` that `dcdash_dbdata` is still listed.
 
+### Logs
+
+Every container keeps at most 5 log files of 10 MB (50 MB per service, set in `compose.yaml`). The collector logs
+`asyncua`, `pymodbus` and `httpx` at WARNING and above only. Read it with `docker compose logs --since 10m collector`.
+
+### Stopping
+
+The api and the collector stop on SIGTERM instead of waiting out their grace period: usually within a second, and within
+about 11 s each when the database does not answer. `web` is the exception while a browser has a page open: Caddy waits
+for the page's live stream until Docker kills it at its stop timeout (10 s on a standard Docker engine). With a page
+open, the api waits up to 5 s for it (a live dashboard keeps its stream open) before it closes it. The collector writes
+its last readings before it exits. If the database is unreachable at that moment, the readings still in memory
+(everything collected since the database stopped answering, at most 100,000) are lost, and the collector logs how many.
+
+### Health
+
+`GET /api/health` is a readiness check that needs no login: it answers `{"status":"ok"}` while the database answers a
+query, and 503 `{"status":"unavailable","detail":"database unavailable"}` when it does not answer within 2 s (stopped or
+frozen). `docker compose ps` shows `healthy` or `unhealthy` for `api`, `web` and `db`; the `web` check confirms that the
+UI is baked into the image and that Caddy is running, in HTTP and in HTTPS mode. The collector serves nothing to probe and
+has no Docker health status. Compose never restarts an unhealthy container: an `api` that lost its database shows as
+`unhealthy` and keeps running until the database is back. The `api` gets 120 s before failed checks count, so a long
+database migration does not make `scripts/setup.sh` fail; a migration that takes longer than about 220 s needs
+`docker compose up -d` run again, which is safe.
+
+The collector writes a heartbeat to the database every 10 s. `GET /api/collector/status` (operators and admins) says
+whether a beat arrived within the last 30 s, measured by the database's clock. The Sources page shows a notice when the
+last beat is older than 30 s and, per source, the age of its newest stored reading in the Last reading column
+(BAD-quality readings count; a source with no stored reading shows a dash; the age keeps counting after a point is
+unmapped, as long as the source is still listed, because a discovered source leaves the list when its last mapped point
+is unmapped). No notice is shown when the status cannot be read, for example while the database is down; once the page
+has had no answer for 30 s it says "Collector status cannot be read" instead, and the Last reading ages keep counting
+from the last answer. After a restore the old heartbeat reads as "silent" until the collector starts.
+
 ### Housekeeping
 
 The collector deletes expired sessions and finished jobs older than 7 days every hour

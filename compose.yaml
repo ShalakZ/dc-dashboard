@@ -7,10 +7,17 @@ x-backend-env: &backend-env
   DCDASH_SCAN_MAX_HOSTS: ${DCDASH_SCAN_MAX_HOSTS:-1024}
   DCDASH_SCAN_EXTRA_PORTS: ${DCDASH_SCAN_EXTRA_PORTS:-}
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: timescale/timescaledb:2.30.2-pg16
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: dcdash
       POSTGRES_PASSWORD: ${DCDASH_DB_PASSWORD}
@@ -27,7 +34,9 @@ services:
     build: ./backend
     image: dcdash-backend:local
     restart: unless-stopped
-    command: sh -c "alembic upgrade head && uvicorn dcdash.api.main:app --host 0.0.0.0 --port 8000"
+    logging: *default-logging
+    command: sh -c "alembic upgrade head && exec uvicorn dcdash.api.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5"
+    stop_grace_period: 15s
     environment: *backend-env
     depends_on:
       db:
@@ -37,6 +46,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+      start_period: 120s
 
   web:
     build:
@@ -44,6 +54,7 @@ services:
       dockerfile: frontend/Dockerfile
     image: dcdash-web:local
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
@@ -55,12 +66,21 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      # Caddy's admin endpoint answers in HTTP and in TLS mode (port 80 only redirects in TLS mode); the file proves the UI is baked in.
+      test: ["CMD-SHELL", "test -f /srv/index.html && wget -q -O /dev/null http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
   collector:
     build: ./backend
     image: dcdash-backend:local
     restart: unless-stopped
+    logging: *default-logging
     command: python -m dcdash.collector.main
+    stop_grace_period: 20s
     environment: *backend-env
     volumes:
       - ./certs:/certs:ro          # OPC UA client certificate for basic256sha256 (see README)
@@ -73,6 +93,7 @@ services:
     image: dcdash-backend:local
     profiles: [dev]
     restart: unless-stopped
+    logging: *default-logging
     command: python -m dcdash.simulator.main
     environment:
       SIM_API_KEY: sim-key

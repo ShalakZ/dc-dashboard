@@ -13,7 +13,10 @@ export interface SourceImpact { points: number; mappings: number }
 export interface Source {
   id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";
   enabled: boolean; status: string; last_seen: string | null; last_error: string | null; has_secret: boolean;
+  /** Seconds since the newest stored reading (BAD-quality rows count); null when the source has none. */
+  last_reading_age_seconds?: number | null;
 }
+export interface CollectorStatus { alive: boolean; age_seconds: number | null }
 export interface SourceIn {
   name: string; connector_type: string; config: Record<string, unknown>; secret?: string | null; enabled: boolean;
 }
