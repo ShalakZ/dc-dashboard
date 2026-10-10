@@ -30,13 +30,7 @@ EXEMPT: dict[str, str] = {
 }
 
 # Routes not audited yet. Each task removes the routes it audits; Task 9 deletes this set.
-PENDING: set[str] = {
-    "POST /api/sources",
-    "PATCH /api/sources/{source_id}",
-    "POST /api/sources/test-all",
-    "POST /api/sources/{source_id}/test",
-    "POST /api/sources/{source_id}/browse",
-}
+PENDING: set[str] = set()
 
 
 def write_routes(app: FastAPI) -> dict[str, Any]:

@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from dcdash.connectors.base import BAD, GOOD
 from dcdash.core.crypto import decrypt
@@ -324,3 +325,67 @@ async def test_only_the_list_carries_the_reading_age(client, db):
     await login_as(client, db, "admin")
     created = await create_sim(client)
     assert "last_reading_age_seconds" not in created
+
+
+async def source_rows(db, pattern: str = "source.%"):
+    return await db.fetch("SELECT actor_name, action, detail FROM audit_log WHERE action LIKE $1 ORDER BY id", pattern)
+
+
+async def test_source_create_is_audited_without_the_secret_or_url_credentials(client, db):
+    await login_as(client, db)
+    response = await client.post(
+        "/api/sources",
+        json={**SIM, "config": {"url": "http://svc:topsecret@simulator:9000"}, "secret": "hunter2"},
+    )
+    assert response.status_code == 201
+    (row,) = await source_rows(db)
+    assert row["action"] == "source.created" and row["actor_name"] == "admin"
+    detail = row["detail"]
+    assert detail["source_id"] == response.json()["id"] and detail["secret"] == "set"
+    assert detail["name"] == "sim" and detail["connector_type"] == "simulator" and detail["enabled"] is True
+    assert "topsecret" not in json.dumps(detail) and "hunter2" not in json.dumps(detail)
+    assert detail["config"]["url"].startswith("http://simulator:9000")
+
+
+async def test_source_update_records_before_after_and_markers(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    url = f"/api/sources/{source['id']}"
+    for patch in ({}, {"name": "sim"}, {"enabled": True}, {"config": {"url": "http://simulator:9000"}}):
+        assert (await client.patch(url, json=patch)).status_code == 200
+    assert [r["action"] for r in await source_rows(db)] == ["source.created"]  # all four were no-ops
+    assert (await client.patch(url, json={"name": "sim 2", "enabled": False, "secret": "new-key"})).status_code == 200
+    (_, row) = await source_rows(db)
+    assert row["detail"] == {
+        "source_id": source["id"], "name": "sim 2",
+        "before": {"name": "sim", "enabled": True, "secret": "set"},
+        "after": {"name": "sim 2", "enabled": False, "secret": "changed"},
+    }
+    assert "new-key" not in json.dumps(row["detail"])
+    assert (await client.patch(url, json={"secret": None})).status_code == 200
+    (_, _, cleared) = await source_rows(db)
+    assert cleared["detail"]["before"] == {"secret": "set"} and cleared["detail"]["after"] == {"secret": "none"}
+
+
+async def test_refused_source_writes_leave_no_row(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    assert (await client.post("/api/sources", json=SIM)).status_code == 409  # same name
+    assert (await client.patch(f"/api/sources/{source['id']}", json={"config": {"url": "nope"}})).status_code == 422
+    assert (await client.patch("/api/sources/999", json={"name": "x"})).status_code == 404
+    assert [r["action"] for r in await source_rows(db)] == ["source.created"]
+
+
+async def test_testing_and_browsing_sources_are_audited(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    tested = (await client.post(f"/api/sources/{source['id']}/test")).json()
+    browsed = (await client.post(f"/api/sources/{source['id']}/browse")).json()
+    everything = (await client.post("/api/sources/test-all")).json()
+    assert (await client.post("/api/sources/999/test")).status_code == 404
+    rows = await source_rows(db, "source.t%") + await source_rows(db, "source.browsed")
+    by_action = {r["action"]: r["detail"] for r in rows}
+    assert by_action["source.tested"] == {"source_id": source["id"], "name": "sim", "job_id": tested["job_id"]}
+    assert by_action["source.browsed"] == {"source_id": source["id"], "name": "sim", "job_id": browsed["job_id"]}
+    assert by_action["source.test_all"] == {"sources": 1, "job_ids": everything["job_ids"]}
+    assert len(rows) == 3  # the 404 wrote nothing

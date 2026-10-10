@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.api.deps import get_db, notify, require_role
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
-from dcdash.core.audit import audit
+from dcdash.core.audit import audit, audit_change, safe_config
 from dcdash.core.crypto import encrypt
 from dcdash.core.models import Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
@@ -92,15 +92,26 @@ async def _name_clash_message(db: AsyncSession, name: str | None) -> str:
     return "a source with this name already exists"
 
 
-async def _save(db: AsyncSession, name: str | None = None) -> None:
-    """Flush and commit; `name` is the name this request tried to set, used to explain a unique-name clash."""
+async def _flush(db: AsyncSession, name: str | None = None) -> None:
+    """Flush; `name` is the name this request tried to set, used to explain a unique-name clash."""
     try:
         await db.flush()
     except IntegrityError:
         await db.rollback()  # the failed flush leaves the session unusable until it is rolled back
         raise HTTPException(409, await _name_clash_message(db, name)) from None
+
+
+async def _publish(db: AsyncSession) -> None:
     await notify(db, CONFIG_CHANNEL)
     await db.commit()
+
+
+def _values(source: Source) -> dict[str, Any]:
+    """The audited fields of a source; the secret only as a marker, the config without URL credentials."""
+    return {
+        "name": source.name, "enabled": source.enabled, "config": safe_config(source.config),
+        "secret": "set" if source.secret else "none",
+    }
 
 
 @router.get("/connectors", dependencies=[Admin])
@@ -130,7 +141,7 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
 
 
 @router.post("/sources", response_model=SourceOut, status_code=201, dependencies=[Admin])
-async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db)) -> Source:
+async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db), admin: User = Admin) -> Source:
     source = Source(
         name=body.name,
         connector_type=body.connector_type,
@@ -139,13 +150,21 @@ async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db)) -> S
         enabled=body.enabled,
     )
     db.add(source)
-    await _save(db, body.name)
+    await _flush(db, body.name)
+    await audit(
+        db, admin.id, "source.created",
+        {"source_id": source.id, "connector_type": source.connector_type, **_values(source)},
+    )
+    await _publish(db)
     return source
 
 
 @router.patch("/sources/{source_id}", response_model=SourceOut, dependencies=[Admin])
-async def update_source(source_id: int, body: SourcePatch, db: AsyncSession = Depends(get_db)) -> Source:
+async def update_source(
+    source_id: int, body: SourcePatch, db: AsyncSession = Depends(get_db), admin: User = Admin
+) -> Source:
     source = await get_source(db, source_id)
+    before = _values(source)
     if body.name is not None:
         source.name = body.name
     if body.config is not None:
@@ -154,7 +173,12 @@ async def update_source(source_id: int, body: SourcePatch, db: AsyncSession = De
         source.secret = encrypt(body.secret) if body.secret else None
     if body.enabled is not None:
         source.enabled = body.enabled
-    await _save(db, body.name)
+    await _flush(db, body.name)
+    after = _values(source)
+    if "secret" in body.model_fields_set and body.secret:
+        after["secret"] = "changed"  # a supplied value always counts: the stored token cannot be compared
+    await audit_change(db, admin.id, "source.updated", {"source_id": source.id, "name": source.name}, before, after)
+    await _publish(db)
     return source
 
 
@@ -203,6 +227,7 @@ async def test_all_sources(
 ) -> dict[str, list[int]]:
     ids = (await db.scalars(select(Source.id).where(Source.enabled).order_by(Source.id))).all()
     job_ids = [await enqueue(db, "test_source", {"source_id": i}, user) for i in ids]
+    await audit(db, user.id, "source.test_all", {"sources": len(ids), "job_ids": job_ids})
     await db.commit()
     return {"job_ids": job_ids}
 
@@ -211,8 +236,9 @@ async def test_all_sources(
 async def test_source(
     source_id: int, user: User = Operator, db: AsyncSession = Depends(get_db)
 ) -> dict[str, int]:
-    await get_source(db, source_id)
+    source = await get_source(db, source_id)
     job_id = await enqueue(db, "test_source", {"source_id": source_id}, user)
+    await audit(db, user.id, "source.tested", {"source_id": source.id, "name": source.name, "job_id": job_id})
     await db.commit()
     return {"job_id": job_id}
 
@@ -221,8 +247,9 @@ async def test_source(
 async def browse_source(
     source_id: int, user: User = Admin, db: AsyncSession = Depends(get_db)
 ) -> dict[str, int]:
-    await get_source(db, source_id)
+    source = await get_source(db, source_id)
     job_id = await enqueue(db, "browse_source", {"source_id": source_id}, user)
+    await audit(db, user.id, "source.browsed", {"source_id": source.id, "name": source.name, "job_id": job_id})
     await db.commit()
     return {"job_id": job_id}
 
