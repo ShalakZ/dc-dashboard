@@ -327,6 +327,30 @@ async def test_only_the_list_carries_the_reading_age(client, db):
     assert "last_reading_age_seconds" not in created
 
 
+async def test_the_list_counts_each_sources_mapped_points(client, db):
+    await login_as(client, db, "operator")
+    busy = await make_source(db, name="busy")
+    asset = await make_asset(db, "Panel")
+    for address, metric in (("a", "active_power_kw"), ("b", "energy_kwh")):
+        await make_mapping(db, await make_point(db, busy, address), asset, metric=metric)
+    await make_point(db, busy, "unmapped")  # a point nobody mapped is not counted
+    await make_source(db, name="empty")
+    discovered = await hidden_discovered(db, "plc-1")
+    await make_mapping(db, await make_point(db, discovered, "d1"), asset, metric="power_factor")  # now it is listed
+    rows = {s["name"]: s for s in (await client.get("/api/sources")).json()}
+    assert rows["busy"]["mapped_points"] == 2
+    assert rows["empty"]["mapped_points"] == 0
+    assert rows["plc-1"]["mapped_points"] == 1
+
+
+async def test_only_the_list_carries_the_mapped_point_count(client, db):
+    await login_as(client, db, "admin")
+    created = await create_sim(client)
+    assert "mapped_points" not in created
+    patched = await client.patch(f"/api/sources/{created['id']}", json={"name": "renamed"})
+    assert patched.status_code == 200 and "mapped_points" not in patched.json()
+
+
 async def source_rows(db, pattern: str = "source.%"):
     return await db.fetch("SELECT actor_name, action, detail FROM audit_log WHERE action LIKE $1 ORDER BY id", pattern)
 
