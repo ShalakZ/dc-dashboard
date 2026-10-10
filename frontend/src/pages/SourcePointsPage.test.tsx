@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { SourcePointsPage } from "./SourcePointsPage";
 
@@ -321,6 +322,27 @@ describe("SourcePointsPage mapping dialog", () => {
     await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent("already mapped");
+  });
+
+  it("ignores Escape and Cancel while Save is in flight, so the refusal that comes back is still on screen", async () => {
+    const calls = mockFetch({ ...routes, "POST /api/mappings": { status: 409, body: { detail: "this point is already mapped" } } });
+    const hold = holdFetch((method, path) => method === "POST" && path === "/api/mappings");
+    page();
+    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    hold.release();
+    expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent("already mapped");
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/api/mappings")).toHaveLength(1);
+    await userEvent.keyboard("{Escape}"); // the save is over: Escape closes the dialog again
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("closes the dialog on Cancel without a request, and returns focus to the row's button", async () => {

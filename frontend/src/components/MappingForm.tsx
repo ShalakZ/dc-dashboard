@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { METRICS, type Asset, type MappingIn, type Metric } from "../api/types";
 import { unitMismatch } from "../lib/unitFit";
 import { assetOptions } from "./dashboard/AssetPicker";
+import { useModalBusy } from "./Modal";
 
 export type MappingBody = Omit<MappingIn, "point_id">;
 
@@ -14,13 +15,17 @@ export function MappingForm({ assets, initial, unitHint, onSubmit, onCancel }: {
   const [scale, setScale] = useState(String(initial?.scale ?? 1));
   const [unit, setUnit] = useState(initial?.custom_unit ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  useModalBusy(submitting); // Escape must not close the dialog on a save that is still running
 
   const unitWarning = unitMismatch(metric, unitHint);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (submitting) return;
     setError(null);
     if (assetId === "") return setError("choose an asset");
+    setSubmitting(true);
     try {
       await onSubmit({
         asset_id: Number(assetId), metric, scale: Number(scale) || 1,
@@ -29,6 +34,8 @@ export function MappingForm({ assets, initial, unitHint, onSubmit, onCancel }: {
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -50,7 +57,7 @@ export function MappingForm({ assets, initial, unitHint, onSubmit, onCancel }: {
       <label>Scale<input type="number" step="any" min="0" value={scale} onChange={(e) => setScale(e.target.value)} /></label>
       <label>Custom unit<input value={unit} disabled={metric !== "custom"} onChange={(e) => setUnit(e.target.value)} /></label>
       {error && <p className="error" role="alert">{error}</p>}
-      <div className="row"><button type="submit">Save</button><button type="button" onClick={onCancel}>Cancel</button></div>
+      <div className="row"><button type="submit" disabled={submitting}>Save</button><button type="button" onClick={onCancel} disabled={submitting}>Cancel</button></div>
     </form>
   );
 }

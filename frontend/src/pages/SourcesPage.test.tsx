@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { api } from "../api/client";
 import { keys, useCollectorStatus } from "../api/queries";
 import { mockFetch } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { renderWithProviders } from "../test/render";
 import { SourcesPage } from "./SourcesPage";
@@ -233,6 +234,100 @@ describe("SourcesPage", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
         name: "plc", config: { host: "10.0.0.1", port: 503, tls: true }, enabled: true,
+      });
+    });
+
+    it("ignores Escape and Cancel while an edit is being saved, then closes the dialog when the save is done", async () => {
+      const calls = mockFetch({
+        ...routes("admin"), ...withConnectors,
+        "PATCH /api/sources/2": { body: { ...source, name: "renamed" } },
+      });
+      const hold = holdFetch((method, path) => method === "PATCH" && path === "/api/sources/2");
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      const name = await screen.findByLabelText("Name");
+      await userEvent.clear(name);
+      await userEvent.type(name, "renamed");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      const dialog = screen.getByRole("dialog");
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+      expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      hold.release();
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+    });
+
+    it("shows the saved name and config in the list, and in the next Edit, even when the fetch after the save fails", async () => {
+      const saved = { ...source, name: "renamed", config: { url: "http://changed:9000", timeout_seconds: 5 } };
+      let listed = 0;
+      mockFetch({
+        ...routes("admin"), ...withConnectors,
+        "GET /api/sources": () => (++listed > 1 ? { status: 500, body: { detail: "database is down" } } : { body: [source] }),
+        "PATCH /api/sources/2": { body: saved },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      const name = await screen.findByLabelText("Name");
+      await userEvent.clear(name);
+      await userEvent.type(name, "renamed");
+      const url = screen.getByLabelText("Url");
+      await userEvent.clear(url);
+      await userEvent.type(url, "http://changed:9000");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(await screen.findByText("renamed")).toBeInTheDocument();
+      expect(screen.getByText("5 s ago")).toBeInTheDocument(); // what the PATCH reply does not carry keeps its old value
+      await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+      const dialog = await screen.findByRole("dialog", { name: "Edit source renamed" });
+      expect(within(dialog).getByLabelText("Name")).toHaveValue("renamed");
+      expect(await within(dialog).findByLabelText("Url")).toHaveValue("http://changed:9000");
+    });
+
+    describe("while a delete runs or its confirmation is open", () => {
+      const impact = { detail: "needs confirmation", points: 3, mappings: 3 };
+      /** DELETE of source 2 is held, then answers 409 with the counts. */
+      function startDelete() {
+        mockFetch({ ...routes("admin"), ...withConnectors, "DELETE /api/sources/2": { status: 409, body: impact } });
+        const hold = holdFetch((method, path) => method === "DELETE" && path === "/api/sources/2");
+        renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+        return hold;
+      }
+      beforeEach(() => { vi.spyOn(window, "confirm").mockReturnValue(true); });
+
+      it("keeps Add source and Edit from opening a second dialog, and the confirm dialog ends up alone", async () => {
+        const hold = startDelete();
+        await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+        const add = screen.getByRole("button", { name: "Add source" });
+        const edit = screen.getByRole("button", { name: "Edit" });
+        expect(add).toBeDisabled();
+        expect(edit).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
+        await userEvent.click(add);
+        await userEvent.click(edit);
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        hold.release();
+        expect(await screen.findByRole("dialog", { name: 'Delete source "sim"?' })).toBeInTheDocument();
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      });
+
+      it("keeps them from opening a dialog next to the confirm dialog, and frees them when it is cancelled", async () => {
+        const hold = startDelete();
+        await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+        hold.release();
+        await screen.findByRole("dialog", { name: 'Delete source "sim"?' });
+        for (const name of ["Add source", "Edit"]) {
+          expect(screen.getByRole("button", { name })).toBeDisabled();
+          await userEvent.click(screen.getByRole("button", { name }));
+        }
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Add source" })).toBeEnabled();
+        expect(screen.getByRole("button", { name: "Edit" })).toBeEnabled();
       });
     });
 

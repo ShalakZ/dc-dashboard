@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { AssetsPage } from "./AssetsPage";
 
@@ -269,6 +270,91 @@ describe("AssetsPage", () => {
       await click("Delete");
       expect(await screen.findByRole("alert")).toHaveTextContent("something else");
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("while a request is in flight", () => {
+    it("ignores Escape and Cancel during a save, then closes the dialog when the save is done", async () => {
+      const calls = mockFetch({
+        ...authed("admin"),
+        "POST /api/assets": { status: 201, body: { id: 3, parent_id: 1, name: "Room B", kind: "generic", sort_order: 0 } },
+      });
+      const hold = holdFetch((method, path) => method === "POST" && path === "/api/assets");
+      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+      await userEvent.type(screen.getByLabelText("Name"), "Room B");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      const dialog = screen.getByRole("dialog", { name: "Add asset" });
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+      expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.getByRole("dialog", { name: "Add asset" })).toBeInTheDocument();
+      hold.release();
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    });
+
+    it("can be saved only once: Enter in the Name box during a save sends nothing more", async () => {
+      const calls = mockFetch({
+        ...authed("admin"),
+        "POST /api/assets": { status: 201, body: { id: 3, parent_id: 1, name: "Room B", kind: "generic", sort_order: 0 } },
+      });
+      const hold = holdFetch((method, path) => method === "POST" && path === "/api/assets");
+      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+      await userEvent.type(screen.getByLabelText("Name"), "Room B");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await userEvent.type(screen.getByLabelText("Name"), "{Enter}");
+      hold.release();
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    });
+
+    describe("a delete", () => {
+      const impact = { detail: "needs confirmation", assets: 2, mappings: 3, tariffs: 1 };
+      /** DELETE of asset 2 is held, then answers 409 with the counts. */
+      function startDelete() {
+        mockFetch({ ...authed("admin"), "DELETE /api/assets/2": { status: 409, body: impact } });
+        const hold = holdFetch((method, path) => method === "DELETE" && path === "/api/assets/2");
+        renderWithProviders(<AssetsPage />, { route: "/assets?selected=2", path: "/assets" });
+        return hold;
+      }
+      beforeEach(() => { vi.spyOn(window, "confirm").mockReturnValue(true); });
+
+      it("keeps Add asset, Edit, Delete and every + from opening a second dialog while it runs, and the confirm dialog ends up alone", async () => {
+        const hold = startDelete();
+        await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+        const add = screen.getByRole("button", { name: "Add asset" });
+        expect(add).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Add child of Site" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Add child of Room A" })).toBeDisabled();
+        await userEvent.click(add);
+        await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+        await userEvent.click(screen.getByRole("button", { name: "Add child of Site" }));
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        hold.release();
+        expect(await screen.findByRole("dialog", { name: 'Delete "Room A"?' })).toBeInTheDocument();
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      });
+
+      it("keeps them from opening a dialog next to the confirm dialog", async () => {
+        const hold = startDelete();
+        await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+        hold.release();
+        await screen.findByRole("dialog", { name: 'Delete "Room A"?' });
+        for (const name of ["Add asset", "Edit", "Add child of Site"]) {
+          expect(screen.getByRole("button", { name })).toBeDisabled();
+          await userEvent.click(screen.getByRole("button", { name }));
+        }
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Add asset" })).toBeEnabled();
+        expect(screen.getByRole("button", { name: "Add child of Site" })).toBeEnabled();
+      });
     });
   });
 });

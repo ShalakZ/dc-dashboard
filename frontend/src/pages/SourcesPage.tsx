@@ -39,6 +39,10 @@ export function SourcesPage() {
   const [editing, setEditing] = useState<Source | null>(null);
   const [confirming, setConfirming] = useState<{ id: number; name: string; impact: SourceImpact } | null>(null);
   const { run, busy, error: actionError } = useAction();
+  // While a test or delete runs or a delete confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap).
+  const locked = busy || confirming !== null;
+  const openAdd = () => { if (!locked) setShowAdd(true); };
+  const openEdit = (s: Source) => { if (!locked) setEditing(s); };
 
   const testOne = (id: number) => run(async () => {
     const { job_id } = await api.post<{ job_id: number }>(`/api/sources/${id}/test`);
@@ -76,7 +80,7 @@ export function SourcesPage() {
       <h1>Sources</h1>
       <div className="row">
         <button onClick={testAll} disabled={sources.length === 0 || busy}>Test all</button>
-        {hasRole("admin") && <button onClick={() => setShowAdd(true)}>Add source</button>}
+        {hasRole("admin") && <button onClick={openAdd} disabled={locked}>Add source</button>}
       </div>
       {error && <p className="error" role="alert">{error.message}</p>}
       {actionError && <p className="error" role="alert">{actionError}</p>}
@@ -130,10 +134,10 @@ export function SourcesPage() {
                 <td className="error">{s.last_error ?? ""}</td>
                 <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
                 <td className="row">
-                  <button onClick={() => testOne(s.id)}>Test</button>
-                  {hasRole("admin") && <button onClick={() => setEditing(s)}>Edit</button>}
+                  <button onClick={() => testOne(s.id)} disabled={locked}>Test</button>
+                  {hasRole("admin") && <button onClick={() => openEdit(s)} disabled={locked}>Edit</button>}
                   {hasRole("admin") && <Link to={`/sources/${s.id}/points`}>Points</Link>}
-                  {hasRole("admin") && <button onClick={() => remove(s.id, s.name)}>Delete</button>}
+                  {hasRole("admin") && <button onClick={() => remove(s.id, s.name)} disabled={locked}>Delete</button>}
                 </td>
               </tr>
             );

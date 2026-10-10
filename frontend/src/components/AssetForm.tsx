@@ -2,6 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import type { Asset, AssetIn } from "../api/types";
 import { DEFAULT_KIND, kindKey, kindOptions, resolveKind } from "../lib/kinds";
 import { assetOptions } from "./dashboard/AssetPicker";
+import { useModalBusy } from "./Modal";
 
 export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
   assets: Asset[]; initial?: Partial<AssetIn>; excludeIds: Set<number>;
@@ -16,16 +17,22 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
   const [typed, setTyped] = useState("");
   const [sortOrder, setSortOrder] = useState(String(initial?.sort_order ?? 0));
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  useModalBusy(submitting); // Escape must not close the dialog on a save that is still running
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (submitting) return;
     setError(null);
     const stored = other ? resolveKind(typed, options) : kind;
     if (stored === "") return setError("type the new kind");
+    setSubmitting(true);
     try {
       await onSubmit({ name, parent_id: parent === "" ? null : Number(parent), kind: stored, sort_order: Number(sortOrder) || 0 });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -47,7 +54,7 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
       {other && <label>New kind<input value={typed} onChange={(e) => setTyped(e.target.value)} /></label>}
       <label>Sort order<input type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} /></label>
       {error && <p className="error" role="alert">{error}</p>}
-      <div className="row"><button type="submit">Save</button><button type="button" onClick={onCancel}>Cancel</button></div>
+      <div className="row"><button type="submit" disabled={submitting}>Save</button><button type="button" onClick={onCancel} disabled={submitting}>Cancel</button></div>
     </form>
   );
 }

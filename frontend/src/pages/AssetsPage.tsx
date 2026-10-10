@@ -22,7 +22,11 @@ export function AssetsPage() {
   const [confirming, setConfirming] = useState<{ asset: Asset; impact: AssetImpact } | null>(null);
   const tree = useMemo(() => buildTree(assets), [assets]);
   const selected = assets.find((a) => a.id === selectedId) ?? null;
-  const { run, error: actionError } = useAction();
+  const { run, busy, error: actionError } = useAction();
+  // While a delete runs or its confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap).
+  const locked = busy || confirming !== null;
+  const openAdd = (parentId: number | null) => { if (!locked) setDialog({ kind: "add", parentId }); };
+  const openEdit = () => { if (!locked) setDialog({ kind: "edit" }); };
 
   const closeDialog = () => setDialog(null);
   const finish = async () => { await invalidate(keys.assets); setDialog(null); };
@@ -57,15 +61,16 @@ export function AssetsPage() {
         nodes={tree}
         selectedId={selectedId}
         onSelect={(id) => setParams({ selected: String(id) })}
-        onAddChild={hasRole("admin") ? (id) => setDialog({ kind: "add", parentId: id }) : undefined}
+        onAddChild={hasRole("admin") ? openAdd : undefined}
+        disabled={locked}
       />
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {selected && <p>Selected: <Link to={`/assets/${selected.id}`}>{selected.name}</Link> (open page)</p>}
       {hasRole("admin") && (
         <div className="row">
-          <button onClick={() => setDialog({ kind: "add", parentId: selectedId })}>Add asset</button>
-          {selected && <button onClick={() => setDialog({ kind: "edit" })}>Edit</button>}
-          {selected && <button onClick={remove}>Delete</button>}
+          <button onClick={() => openAdd(selectedId)} disabled={locked}>Add asset</button>
+          {selected && <button onClick={openEdit} disabled={locked}>Edit</button>}
+          {selected && <button onClick={remove} disabled={locked}>Delete</button>}
         </div>
       )}
       {confirming && (

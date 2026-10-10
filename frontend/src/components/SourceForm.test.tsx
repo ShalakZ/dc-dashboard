@@ -27,7 +27,8 @@ function Probe({ name }: { name: keyof typeof PROBED }) {
   useQuery({ queryKey: PROBED[name], queryFn: () => api.get(`/api/probe/${name}`), staleTime: Infinity });
   return null;
 }
-const probeRoutes = Object.fromEntries(Object.keys(PROBED).map((name) => [`GET /api/probe/${name}`, { body: {} }]));
+// The sources key holds the list of sources, which a save now updates in place before it invalidates: its probe answers a list.
+const probeRoutes = Object.fromEntries(Object.keys(PROBED).map((name) => [`GET /api/probe/${name}`, { body: name === "sources" ? [] : {} }]));
 const probeFetches = (calls: { path: string }[]) =>
   Object.fromEntries(Object.keys(PROBED).map((name) => [name, calls.filter((c) => c.path === `/api/probe/${name}`).length]));
 
