@@ -275,3 +275,97 @@ describe("SourcePointsPage sorting, filtering and search", () => {
     expect(screen.getByRole("columnheader", { name: "Name" })).toHaveAttribute("aria-sort", "descending");
   });
 });
+
+describe("SourcePointsPage mapping dialog", () => {
+  const page = () => renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
+  const rowOf = async (address: string) => (await screen.findByText(address)).closest("tr")!;
+
+  it("opens Map as a dialog titled Map <address>, and not inline below the table", async () => {
+    mockFetch(routes);
+    page();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    const dialog = screen.getByRole("dialog", { name: "Map panel1/power" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(within(dialog).getByRole("heading", { name: "Map panel1/power" })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Asset")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeInTheDocument();
+    expect(within(screen.getByRole("table")).queryByLabelText("Asset")).not.toBeInTheDocument();
+  });
+
+  it("opens Edit as a dialog titled Edit mapping <address>, prefilled from the mapping", async () => {
+    mockFetch(routes);
+    page();
+    await userEvent.click(within(await rowOf("panel1/energy")).getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit mapping panel1/energy" });
+    expect(within(dialog).getByLabelText("Asset")).toHaveValue("4");
+    expect(within(dialog).getByLabelText("Metric")).toHaveValue("energy_kwh");
+  });
+
+  it("closes the dialog and refreshes the list when Save succeeds", async () => {
+    const calls = mockFetch(routes);
+    page();
+    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
+    const loads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/sources/2/points").length;
+    const before = loads();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(loads()).toBeGreaterThan(before));
+  });
+
+  it("keeps the dialog open and shows the error when Save fails", async () => {
+    mockFetch({ ...routes, "POST /api/mappings": { status: 409, body: { detail: "this point is already mapped" } } });
+    page();
+    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent("already mapped");
+  });
+
+  it("closes the dialog on Cancel without a request, and returns focus to the row's button", async () => {
+    const calls = mockFetch(routes);
+    page();
+    const map = within(await rowOf("panel1/power")).getByRole("button", { name: "Map" });
+    await userEvent.click(map);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(map).toHaveFocus();
+    expect(calls.some((c) => c.method === "POST" || c.method === "PATCH")).toBe(false);
+  });
+
+  it("closes the dialog on Escape", async () => {
+    mockFetch(routes);
+    page();
+    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("gives the dialog the row's unit hint: a V point warns on the default power metric, a kWh point on energy_kwh does not", async () => {
+    mockFetch({
+      ...routes,
+      "GET /api/sources/2/points": { body: [
+        { id: 7, address: "bus/volts", name: "Bus voltage", data_type: "float", unit_hint: "V", mapping: null },
+        points[1],
+      ] },
+    });
+    page();
+    await userEvent.click(within(await rowOf("bus/volts")).getByRole("button", { name: "Map" }));
+    expect(within(screen.getByRole("dialog")).getByRole("status")).toHaveTextContent(`unit hint is "V"`);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(within(await rowOf("panel1/energy")).getByRole("button", { name: "Edit" }));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("starts the form afresh when another row is mapped after the first dialog was closed", async () => {
+    mockFetch(routes);
+    page();
+    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(within(await rowOf("panel1/energy")).getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("dialog", { name: "Edit mapping panel1/energy" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Metric")).toHaveValue("energy_kwh");
+  });
+});

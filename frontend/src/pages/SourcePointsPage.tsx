@@ -6,6 +6,7 @@ import type { PointRow } from "../api/types";
 import { assetLabels } from "../components/dashboard/AssetPicker";
 import { JobStatus } from "../components/JobStatus";
 import { MappingForm, type MappingBody } from "../components/MappingForm";
+import { Modal } from "../components/Modal";
 import { useAction } from "../hooks/useAction";
 import { DEFAULT_POINT_VIEW, sortBy, viewPoints, type PointSortKey } from "../lib/points";
 
@@ -99,10 +100,10 @@ export function SourcePointsPage() {
         </tbody>
       </table>
       {editing && (
-        <>
-          <h2>{editing.mapping ? "Edit mapping" : "Map"} {editing.address}</h2>
-          <MappingForm assets={assets} initial={editing.mapping ?? undefined} onSubmit={save} onCancel={() => setEditing(null)} />
-        </>
+        <Modal title={`${editing.mapping ? "Edit mapping" : "Map"} ${editing.address}`} onClose={() => setEditing(null)}>
+          <MappingForm key={editing.id} assets={assets} initial={editing.mapping ?? undefined} unitHint={editing.unit_hint}
+            onSubmit={save} onCancel={() => setEditing(null)} />
+        </Modal>
       )}
     </>
   );
