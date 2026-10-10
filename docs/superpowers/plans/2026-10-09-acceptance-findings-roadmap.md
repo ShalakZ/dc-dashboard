@@ -69,6 +69,19 @@ Risk Med, effort L in total. Docker-route work; the route A counterpart is plann
 
 ## W1a Audit foundation (needs D7a and D11 first)
 
+**Status: DONE and merged 2026-10-10** (merge commit `efc7e66`; plan `2026-10-10-w1a-audit-foundation.md`). Nine tasks, each Opus-reviewed
+(Task 2 needed a ruling: FastAPI 0.142 no longer lists `include_router` routes in `app.routes`, so the gate enumerates them with
+`iter_route_contexts`; Task 8 needed one fix round: a change of only the credentials inside a source URL left no audit row), a whole-branch
+Opus review with 0 Critical and 2 Important findings (URL credentials containing an unencoded `/`, `?` or `#` were not masked; the README
+rollback steps pointed at Phase 2 code), fixed in one wave with a scoped re-review. Evidence: backend 1359 passed (run before the final fix
+wave, whose touched files were re-run: 84 passed), frontend 791 passed and typecheck clean, the isolated Playwright journey 3 passed on a scratch
+stack at the final commit, migration 0005 rehearsed on a restored copy of a dev backup (27 audit rows, 27 of 27 backfilled, the trigger fills the
+snapshot, `alembic downgrade 0004` and back up lossless). The dev stack was rebuilt from the merged tree after a verified backup (schema `0005`).
+Decisions taken inside it (owner, "lgtm" 2026-10-10): the snapshot is a fill-if-missing database trigger plus a plain integer `actor_id`; a failed
+sign-in on a deactivated account is attributed to that account; failure rows are capped (30 failure and 30 lockout rows per 5 minutes, then a
+count on the next row); logout and the discovery layout save stay unaudited. Not part of it: S1-2 (deleting accounts, W3d: the snapshot it needs now
+exists). Leftovers are in `backlog.md` section I.
+
 Risk Med, with one High item. Built first inside W1 because everything after it writes audit entries.
 
 | Id | Item | Effort |

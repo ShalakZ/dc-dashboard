@@ -68,6 +68,7 @@ behaviour), `ux` (works but confusing), `idea` (a wish), `question` (I do not un
   deactivate. To design later: what happens to the audit entries that name the user (keep the name, or
   anonymise), refuse deleting yourself and the last active admin, remove the user's sessions, ask for
   confirmation like the asset and source deletes do, and write an audit entry (`user.deleted`).
+  **Prerequisite built in W1a (2026-10-10):** audit entries now carry a snapshot of the actor's name and id (migration 0005), so deleting an account keeps its name in old entries (D11). The deletion itself is still W3d.
 
 ### Section 13: Cross-cutting: roles, phone width, keyboard (done; Claude's measured pre-checks, then the owner's pass)
 
@@ -340,6 +341,7 @@ container restarts (operational log, not the app's).
   inventory above as the work list; decide what counts as important (the high-importance list is the
   proposal), and make the audit write part of each route so a new route cannot forget it (a test that fails
   when a data-changing route has no audit call, with an explicit allow-list for the reads).
+  **Closed by W1a (2026-10-10).** Every write route on the agreed list now writes its audit row as part of the route (users, own password, first-run setup, sign-in success, failure and lockout, site timezone, storage saves, assets, mappings, sources including test, test-all and browse); a gate test fails for any write route without an audit call (explicit exempt list: logout, the discovery layout save, two reads sent as POST). Updates store `{before, after}` and skip no-ops. Passwords, source secrets and credentials inside URLs are never recorded; a typed username for an account that does not exist is never stored.
 - **S10-2 [idea] (owner)** Filtering and searching: by user, action, date range, and text inside the detail,
   plus quick filters (for example "only deletions", "only today").
 - **S10-3 [idea] (owner)** Export: CSV (and perhaps JSON) of the filtered view, with timestamps in the site
@@ -545,6 +547,7 @@ login. The owner recreated `sim-http` with the secret: Test OK in 4 ms.
 - **S3-5 [idea] (Claude, for section 11)** The README says user management and source create/edit are not
   audited (only the Phase 3 actions: tariffs, currency, dashboards, asset and source deletes). Consider
   auditing user and source changes. It ties into S1-2 (deleting accounts).
+  **Closed by W1a (2026-10-10).** User and source create/edit are audited (`user.created`, `user.updated`, `source.created`, `source.updated`), as are source test and browse; the README no longer says they are not.
 
 Found by Claude while preparing (not by the owner):
 
@@ -572,3 +575,4 @@ Found by Claude while preparing (not by the owner):
   In the section 2 script Claude wrongly told the owner that an entry for the settings change would
   appear in Audit. It would not. The timezone decides every day boundary and every displayed time, so it
   must be audited (old and new zone).
+  **Closed by W1a (2026-10-10).** `PUT /api/settings/general` writes `settings.timezone_changed` with the old and the new zone (nothing when the zone is unchanged).
