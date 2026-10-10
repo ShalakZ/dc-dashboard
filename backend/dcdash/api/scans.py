@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
-from dcdash.core.audit import audit
+from dcdash.core.audit import audit, audit_change
 from dcdash.core.config import get_settings
 from dcdash.core.discovery import Expansion, TargetError, expand_targets, scan_digest
 from dcdash.core.models import Scan, ScanFinding, ScanScope, User
@@ -124,10 +124,14 @@ async def update_scope(
     ports = scope.ports if body.ports is None else body.ports
     if body.targets is not None or body.ports is not None:
         expansion_of(targets, ports)  # validate the merged result before changing anything
+    before = {"name": scope.name, "targets": scope.targets, "ports": scope.ports}
     if body.name is not None:
         scope.name = body.name
     scope.targets, scope.ports = targets, ports
-    await audit(db, user.id, "scope.updated", {"scope_id": scope.id, "name": scope.name})
+    await audit_change(
+        db, user.id, "scope.updated", {"scope_id": scope.id, "name": scope.name},
+        before, {"name": scope.name, "targets": scope.targets, "ports": scope.ports},
+    )
     await db.commit()
     return scope
 

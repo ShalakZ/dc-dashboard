@@ -7,7 +7,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
-from dcdash.core.audit import audit
+from dcdash.core.audit import audit_change
 from dcdash.core.config import get_settings
 from dcdash.core.models import User
 from dcdash.core.settings_store import (
@@ -107,7 +107,8 @@ async def put_billing(
 ) -> BillingSettings:
     before = await get_currency(db)
     await set_setting(db, BILLING_KEY, {"currency": body.currency})
-    if body.currency != before:
-        await audit(db, admin.id, "billing.currency_changed", {"from": before, "to": body.currency})
+    await audit_change(
+        db, admin.id, "billing.currency_changed", {}, {"currency": before}, {"currency": body.currency}
+    )
     await db.commit()
     return body

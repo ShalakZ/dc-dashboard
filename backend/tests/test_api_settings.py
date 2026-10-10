@@ -104,7 +104,9 @@ async def test_currency_changes_are_audited_once_per_actual_change(client, db):
         "SELECT user_id, detail FROM audit_log WHERE action = 'billing.currency_changed' ORDER BY id"
     )
     assert [r["detail"] for r in rows] == [
-        {"from": None, "to": "QAR"}, {"from": "QAR", "to": "USD"}, {"from": "USD", "to": None},
+        {"before": {"currency": None}, "after": {"currency": "QAR"}},
+        {"before": {"currency": "QAR"}, "after": {"currency": "USD"}},
+        {"before": {"currency": "USD"}, "after": {"currency": None}},
     ]
     assert all(r["user_id"] == admin_id for r in rows)
 

@@ -412,11 +412,30 @@ async def test_create_save_and_delete_are_audited_and_reads_are_not(client, db):
     await client.post("/api/dashboards", json={"name": "Ops 2"})  # refused (409): no audit row
     await client.delete(f"/api/dashboards/{dash['id']}")
     rows = await db.fetch("SELECT user_id, action, detail FROM audit_log ORDER BY id")
-    assert [(r["user_id"], r["action"], r["detail"]) for r in rows] == [
-        (operator, "dashboard.created", {"dashboard_id": dash["id"], "name": "Ops", "widgets": 0}),
-        (operator, "dashboard.updated", {"dashboard_id": dash["id"], "name": "Ops 2", "widgets": 2}),
-        (operator, "dashboard.deleted", {"dashboard_id": dash["id"], "name": "Ops 2", "widgets": 2}),
+    assert [(r["user_id"], r["action"]) for r in rows] == [
+        (operator, "dashboard.created"), (operator, "dashboard.updated"), (operator, "dashboard.deleted"),
     ]
+    assert rows[0]["detail"] == {"dashboard_id": dash["id"], "name": "Ops", "widgets": 0}
+    updated = rows[1]["detail"]
+    assert updated["dashboard_id"] == dash["id"] and updated["name"] == "Ops 2"
+    assert updated["before"]["name"] == "Ops" and updated["after"]["name"] == "Ops 2"
+    assert updated["before"]["widgets"] == 0 and updated["after"]["widgets"] == 2
+    assert updated["before"]["widgets_hash"] != updated["after"]["widgets_hash"]
+    assert rows[2]["detail"] == {"dashboard_id": dash["id"], "name": "Ops 2", "widgets": 2}
+
+
+async def test_dashboard_save_audits_a_moved_widget_but_not_an_identical_save(client, db):
+    await login_as(client, db, "operator")
+    dash = await create(client, "Ops")
+    first = (await save(client, dash, [widget("a"), widget("b", y=3)])).json()
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'dashboard.updated'") == 1
+    same = (await save(client, first, [widget("a"), widget("b", y=3)])).json()  # nothing changed
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'dashboard.updated'") == 1
+    await save(client, same, [widget("a"), widget("b", y=6)])  # same count, one widget moved
+    rows = await db.fetch("SELECT detail FROM audit_log WHERE action = 'dashboard.updated' ORDER BY id")
+    assert len(rows) == 2
+    moved = rows[1]["detail"]
+    assert set(moved["before"]) == {"widgets_hash"} and set(moved["after"]) == {"widgets_hash"}
 
 
 async def test_dashboard_changes_do_not_wake_the_collector(client, db, database_url):
