@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from dcdash.api.deps import get_db, require_role
 from dcdash.core.db import get_engine
 from dcdash.core.heartbeat import HEARTBEAT_KEY, STALE_AFTER_SECONDS
+from dcdash.core.secret_key import SecretKeyStatus, secret_key_status
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -65,3 +66,9 @@ async def collector_status(db: AsyncSession = Depends(get_db)) -> CollectorStatu
         return CollectorStatus(alive=False, age_seconds=None)
     age = max(0.0, float(age))  # a beat stamped ahead of this clock is "just now", never a negative age
     return CollectorStatus(alive=age <= STALE_AFTER_SECONDS, age_seconds=age)
+
+
+@router.get("/secret-key/status", response_model=SecretKeyStatus, dependencies=[Depends(require_role("operator"))])
+async def get_secret_key_status(db: AsyncSession = Depends(get_db)) -> SecretKeyStatus:
+    """Whether every stored source secret can be decrypted with the key in .env. Read-only."""
+    return await secret_key_status(db)

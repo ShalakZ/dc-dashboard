@@ -1,4 +1,7 @@
 from enum import StrEnum
+from typing import Annotated
+
+from pydantic import Field
 
 
 class Metric(StrEnum):
@@ -11,6 +14,12 @@ class Metric(StrEnum):
     REACTIVE_POWER_KVAR = "reactive_power_kvar"
     APPARENT_POWER_KVA = "apparent_power_kva"
     CUSTOM = "custom"
+
+
+# A scale multiplies every stored value when it is read. An infinite or absurd scale makes the result infinite, which the
+# API writes as null (the UI reads "no rate"). 1e12 leaves room for any unit conversion and keeps float32 readings finite (a double near 1.8e308 can still overflow; that is a corrupt reading, not a scale).
+MAX_SCALE = 1e12
+Scale = Annotated[float, Field(gt=0, le=MAX_SCALE, allow_inf_nan=False)]
 
 
 _UNITS = {

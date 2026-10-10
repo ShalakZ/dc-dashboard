@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime, timedelta, timezone
+from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,10 +62,42 @@ FACTORY_STORAGE_SETTINGS = StorageSettings(
 )
 
 
+SITE_DEFAULT_KEY = "storage_default"  # never seeded: absent means "no site default has been set"
+
+Origin = Literal["site_default", "factory", "manual"]
+
+
+async def load_site_default(db: AsyncSession) -> StorageSettings | None:
+    """This site's own default, or None when none was set (or the stored value no longer passes the rules)."""
+    stored = await get_setting(db, SITE_DEFAULT_KEY, {})
+    if not stored:
+        return None
+    try:
+        return StorageSettings.model_validate(stored)
+    except ValidationError:
+        return None
+
+
+async def save_site_default(db: AsyncSession, s: StorageSettings) -> None:
+    """Upsert the site default. Does not commit, and touches neither the live settings nor the policies."""
+    await set_setting(db, SITE_DEFAULT_KEY, s.model_dump())
+
+
+def save_origin(values: StorageSettings, site_default: StorageSettings | None) -> Origin:
+    """Where a saved set of values came from, judged by the values: the Reset buttons only fill the form, so the server cannot
+    know which button was pressed, only whether the saved values equal the site default or the factory values."""
+    if site_default is not None and values == site_default:
+        return "site_default"
+    if values == FACTORY_STORAGE_SETTINGS:
+        return "factory"
+    return "manual"
+
+
 class StorageSettingsOut(StorageSettings):
-    """What GET answers: the stored values plus the factory values a reset can fall back on."""
+    """What GET answers: the stored values plus the factory values and this site's own default (None until one is set)."""
 
     factory: StorageSettings
+    site_default: StorageSettings | None = None
 
 
 async def load_storage_settings(db: AsyncSession) -> StorageSettings:
@@ -96,6 +129,137 @@ async def save_storage_settings(db: AsyncSession, s: StorageSettings) -> None:
     await apply_policies(db, s)
 
 
+_TIERS = {"readings": "raw readings", "readings_1m": "1-minute rollup"}
+
+
+def _impact_sql(table: str):
+    # `table` is one of the two constants above, never user input. It is written into the statement as a literal because
+    # asyncpg would type a bound parameter as regclass and refuse the string.
+    return text(
+        f"""
+        SELECT count(c) AS chunks,
+               min(i.range_start)::date AS first_day, max(i.range_end)::date AS last_day,
+               max(i.range_end - i.range_start) AS width,
+               coalesce(sum(s.total_bytes), 0)::bigint AS bytes
+        FROM show_chunks('{table}', older_than => make_interval(days => :days)) c
+        LEFT JOIN timescaledb_information.chunks i ON format('%I.%I', i.chunk_schema, i.chunk_name)::regclass = c
+        LEFT JOIN chunks_detailed_size('{table}') s ON format('%I.%I', s.chunk_schema, s.chunk_name)::regclass = c
+        """
+    )
+
+
+_IMPACT_SQL = {table: _impact_sql(table) for table in _TIERS}
+
+
+class TierImpact(BaseModel):
+    """The whole chunks of one table that a retention limit deletes now. Retention drops a chunk only when all of it is older
+    than the limit, and the chunk width is the table's own (7 days for raw readings, 70 days for the 1-minute rollup).
+    Rows are not counted: TimescaleDB's row estimate is 0 until the table has been analysed."""
+
+    label: str
+    chunks: int = 0
+    chunk_days: int | None = None
+    first_day: date | None = None
+    last_day: date | None = None
+    bytes: int = 0
+
+
+def _size(n: int) -> str:
+    size = float(n)
+    for unit in ("bytes", "KB", "MB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "bytes" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+class RetentionImpact(BaseModel):
+    shorter: bool
+    raw: TierImpact
+    rollup_1m: TierImpact
+
+    @property
+    def deletes_now(self) -> bool:
+        return self.raw.chunks > 0 or self.rollup_1m.chunks > 0
+
+    @property
+    def needs_confirmation(self) -> bool:
+        return self.shorter or self.deletes_now
+
+    def message(self) -> str:
+        if not self.deletes_now:
+            return (
+                "These settings shorten how long readings are kept. Nothing is deleted now beyond what the daily retention "
+                "run deletes anyway, but readings that age past the new limit are deleted from now on, a whole chunk at a time. "
+                "Repeat the request with confirm=true to go ahead."
+            )
+        parts = [
+            f"{t.chunks} chunk{'' if t.chunks == 1 else 's'} of {t.label} "
+            f"({t.chunk_days} days each; the oldest starts {t.first_day}, the newest ends {t.last_day}; {_size(t.bytes)})"
+            for t in (self.raw, self.rollup_1m)
+            if t.chunks
+        ]
+        later = " Readings that age past the new limit are deleted from now on as well." if self.shorter else ""
+        return (
+            f"Saving these settings deletes stored readings now: {' and '.join(parts)}. Retention removes whole chunks "
+            f"and the data cannot be recovered.{later} Repeat the request with confirm=true to go ahead."
+        )
+
+
+async def _tier_impact(db: AsyncSession, table: str, days: int) -> TierImpact:
+    row = (await db.execute(_IMPACT_SQL[table], {"days": days})).mappings().one()
+    width = row["width"]
+    return TierImpact(
+        label=_TIERS[table], chunks=row["chunks"], chunk_days=width.days if width else None,
+        first_day=row["first_day"], last_day=row["last_day"], bytes=row["bytes"],
+    )
+
+
+_ARMED_LIMITS_SQL = text(
+    """
+    SELECT hypertable_name, (config->>'drop_after')::interval AS drop_after FROM timescaledb_information.jobs
+    WHERE proc_name = 'policy_retention' AND scheduled AND hypertable_name IN ('readings', 'readings_1m')
+    """
+)
+
+
+async def retention_impact(db: AsyncSession, current: StorageSettings, new: StorageSettings) -> RetentionImpact:
+    """What saving `new` over `current` deletes now (whole chunks older than the new limits) and whether it is a shorter limit.
+
+    A tier whose retention job is armed with a limit no longer than the new one is not counted: its daily run deletes those
+    chunks anyway (a chunk waits up to a day for it), so this save causes no loss there. A paused or missing job (after a
+    restore) or a longer armed limit is counted.
+    """
+    armed = {row["hypertable_name"]: row["drop_after"] for row in (await db.execute(_ARMED_LIMITS_SQL)).mappings()}
+
+    async def tier(table: str, days: int) -> TierImpact:
+        limit = armed.get(table)
+        if limit is not None and limit <= timedelta(days=days):
+            return TierImpact(label=_TIERS[table])
+        return await _tier_impact(db, table, days)
+
+    return RetentionImpact(
+        shorter=new.raw_retention_days < current.raw_retention_days
+        or new.rollup_1m_retention_days < current.rollup_1m_retention_days,
+        raw=await tier("readings", new.raw_retention_days),
+        rollup_1m=await tier("readings_1m", new.rollup_1m_retention_days),
+    )
+
+
+_ARMED_SQL = text(
+    """
+    SELECT count(DISTINCT hypertable_name) FILTER (WHERE scheduled) FROM timescaledb_information.jobs
+    WHERE proc_name = 'policy_retention' AND hypertable_name IN ('readings', 'readings_1m')
+    """
+)
+
+
+async def retention_paused(db: AsyncSession) -> bool:
+    """True when either table has no scheduled retention job: scripts/restore.sh paused it, or the policy was removed.
+    A storage save adds both policies again."""
+    return (await db.scalar(_ARMED_SQL) or 0) < len(_TIERS)
+
+
 class DayRows(BaseModel):
     day: date
     rows: int
@@ -114,6 +278,7 @@ class StorageStats(BaseModel):
     used_pct: float
     days_until_full: float | None
     warn: bool
+    retention_paused: bool
     settings: StorageSettings
 
 
@@ -166,5 +331,6 @@ async def storage_stats(db: AsyncSession) -> StorageStats:
         used_pct=round(used_pct, 2),
         days_until_full=None if growth <= 0 or remaining <= 0 else round(remaining / growth, 1),
         warn=used_pct >= s.warn_threshold_pct,
+        retention_paused=await retention_paused(db),
         settings=s,
     )

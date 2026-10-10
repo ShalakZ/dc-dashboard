@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, notify, require_role
 from dcdash.core.audit import audit, audit_change
-from dcdash.core.metrics import Metric, default_interval
+from dcdash.core.metrics import Metric, Scale, default_interval
 from dcdash.core.models import Asset, Mapping, Point, User
 from dcdash.core.pg import CONFIG_CHANNEL
 
@@ -18,7 +18,7 @@ class MappingIn(BaseModel):
     point_id: int
     asset_id: int
     metric: Metric
-    scale: float = Field(default=1.0, gt=0)
+    scale: Scale = 1.0
     interval_seconds: int | None = Field(default=None, ge=1)
     custom_unit: str | None = None
 
@@ -26,7 +26,7 @@ class MappingIn(BaseModel):
 class MappingPatch(BaseModel):
     asset_id: int | None = None
     metric: Metric | None = None
-    scale: float | None = Field(default=None, gt=0)
+    scale: Scale | None = None
     interval_seconds: int | None = Field(default=None, ge=1)
     custom_unit: str | None = None
 

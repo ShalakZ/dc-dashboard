@@ -1,10 +1,14 @@
 import asyncio
 import logging
+import math
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import asyncpg
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 
@@ -17,6 +21,7 @@ from dcdash.api.stream import Broadcaster
 from dcdash.core.config import get_settings
 from dcdash.core.db import dispose_engine, get_sessionmaker
 from dcdash.core.pg import CONFIG_CHANNEL, LATEST_CHANNEL, create_pool, listen_forever
+from dcdash.core.secret_key import check_secret_key_at_start
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +49,23 @@ async def _shut_down(tasks: list[asyncio.Task], pool: asyncpg.Pool) -> None:
         await asyncio.wait({closing}, timeout=1)
 
 
+def _defuse(value: Any) -> Any:
+    """Non-finite floats as their text: JSON has no NaN or Infinity and JSONResponse refuses to write them."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    if isinstance(value, dict):
+        return {key: _defuse(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_defuse(item) for item in value]
+    return value
+
+
+async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """FastAPI's own 422 handler echoes each error's `input`; an input of NaN or Infinity then cannot be encoded and the
+    reply would be a 500. Same body otherwise."""
+    return JSONResponse(status_code=422, content={"detail": _defuse(jsonable_encoder(exc.errors()))})
+
+
 async def _database_unavailable(_request: Request, _exc: Exception) -> JSONResponse:
     return JSONResponse({"detail": "database unavailable"}, status_code=503)
 
@@ -66,6 +88,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     async with get_sessionmaker()() as session:
                         await seed_general(session)
                     seeded = True
+                    try:  # extra information: a failing check is logged and must never keep the mapping scales from loading
+                        async with get_sessionmaker()() as session:
+                            await check_secret_key_at_start(session)
+                    except Exception:
+                        log.exception("could not check DCDASH_SECRET_KEY")
                 await broadcaster.load_scales(pool)
             except Exception:
                 log.exception("could not load mapping scales, retrying")
@@ -96,6 +123,7 @@ def create_app() -> FastAPI:
     app.state.broadcaster = Broadcaster()
     for error in (OperationalError, InterfaceError, ConnectionError):
         app.add_exception_handler(error, _database_unavailable)
+    app.add_exception_handler(RequestValidationError, _validation_error)
 
     for router in (
         health.router, auth.router, jobs.router, sources.router, assets.router,

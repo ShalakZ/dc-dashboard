@@ -1,7 +1,8 @@
 import asyncio
 
+from dcdash.api.asset_names import ASSET_NAMES_LOCK
 from dcdash.core.pg import CONFIG_CHANNEL
-from helpers import listening, login_as, make_mapping, make_point, make_source
+from helpers import listening, login_as, make_asset, make_mapping, make_point, make_source
 
 
 async def add(client, name: str, parent_id: int | None = None, **extra) -> dict:
@@ -260,3 +261,102 @@ async def test_asset_patches_that_change_nothing_or_fail_write_no_row(client, db
     assert (await client.patch("/api/assets/999", json={"name": "x"})).status_code == 404
     assert (await client.patch(f"/api/assets/{asset['id']}", json={"parent_id": asset["id"]})).status_code == 422
     assert await rows_for(db, "asset.updated") == []
+
+
+async def post_asset(client, name, parent_id=None):
+    return await client.post("/api/assets", json={"name": name, "parent_id": parent_id})
+
+
+async def test_the_same_name_under_the_same_parent_is_refused(client, db):
+    await login_as(client, db)
+    room = (await post_asset(client, "Room A")).json()["id"]
+    assert (await post_asset(client, "LV Panel", room)).status_code == 201
+    r = await post_asset(client, "LV Panel", room)
+    assert r.status_code == 409
+    assert 'an asset named "LV Panel" already exists under "Room A"' in r.json()["detail"]
+    assert await db.fetchval("SELECT count(*) FROM assets WHERE parent_id = $1", room) == 1
+    # the refused request wrote no audit row: exactly the one from the successful create
+    assert await db.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action = 'asset.created' AND detail->>'name' = 'LV Panel'"
+    ) == 1
+
+
+async def test_case_and_whitespace_do_not_make_a_different_name(client, db):
+    await login_as(client, db)
+    room = (await post_asset(client, "Room A")).json()["id"]
+    first = await post_asset(client, "  Panel   A ", room)
+    assert first.status_code == 201 and first.json()["name"] == "Panel   A"  # trimmed, inner spaces kept as typed
+    for twin in ("panel a", "PANEL   A", " Panel A", "Panel\tA"):
+        assert (await post_asset(client, twin, room)).status_code == 409, twin
+
+
+async def test_the_same_name_under_different_parents_is_fine_and_so_is_one_at_the_top(client, db):
+    await login_as(client, db)
+    a = (await post_asset(client, "Room A")).json()["id"]
+    b = (await post_asset(client, "Room B")).json()["id"]
+    assert (await post_asset(client, "LV Panel", a)).status_code == 201
+    assert (await post_asset(client, "LV Panel", b)).status_code == 201
+    assert (await post_asset(client, "LV Panel")).status_code == 201  # the top level is its own parent
+
+
+async def test_two_top_level_assets_cannot_share_a_name(client, db):
+    await login_as(client, db)
+    assert (await post_asset(client, "Site")).status_code == 201
+    r = await post_asset(client, "site")
+    assert r.status_code == 409 and "at the top level" in r.json()["detail"]
+
+
+async def test_a_name_of_only_spaces_is_a_422(client, db):
+    await login_as(client, db)
+    assert (await post_asset(client, "   ")).status_code == 422
+    other = (await post_asset(client, "Other")).json()["id"]
+    assert (await client.patch(f"/api/assets/{other}", json={"name": "  "})).status_code == 422
+    assert await db.fetchval("SELECT name FROM assets WHERE id = $1", other) == "Other"
+
+
+async def test_renaming_into_a_siblings_name_is_refused_but_a_case_only_rename_of_itself_is_fine(client, db):
+    await login_as(client, db)
+    room = (await post_asset(client, "Room")).json()["id"]
+    one = (await post_asset(client, "One", room)).json()["id"]
+    await post_asset(client, "Two", room)
+    assert (await client.patch(f"/api/assets/{one}", json={"name": " two "})).status_code == 409
+    assert (await client.patch(f"/api/assets/{one}", json={"name": "ONE"})).status_code == 200
+    assert await db.fetchval("SELECT name FROM assets WHERE id = $1", one) == "ONE"
+
+
+async def test_moving_into_a_parent_that_already_has_the_name_is_refused(client, db):
+    await login_as(client, db)
+    a = (await post_asset(client, "Room A")).json()["id"]
+    b = (await post_asset(client, "Room B")).json()["id"]
+    await post_asset(client, "Panel", a)
+    mover = (await post_asset(client, "panel", b)).json()["id"]
+    r = await client.patch(f"/api/assets/{mover}", json={"parent_id": a})
+    assert r.status_code == 409 and 'under "Room A"' in r.json()["detail"]
+    assert await db.fetchval("SELECT parent_id FROM assets WHERE id = $1", mover) == b
+    assert (await client.patch(f"/api/assets/{mover}", json={"parent_id": None})).status_code == 200  # the top level is free
+
+
+async def test_an_old_twin_can_still_be_edited_when_name_and_parent_stay(client, db):
+    await login_as(client, db)
+    room = await make_asset(db, "Room")
+    first = await make_asset(db, "Twin", room)
+    await make_asset(db, "twin", room)  # inserted straight into the table: a twin from before the rule
+    r = await client.patch(f"/api/assets/{first}", json={"kind": "panel", "sort_order": 3})
+    assert r.status_code == 200 and r.json()["kind"] == "panel"
+    assert (await client.patch(f"/api/assets/{first}", json={"name": "Twin"})).status_code == 200  # same name: not a rename
+
+
+async def test_two_simultaneous_creates_of_one_name_cannot_both_win(client, db):
+    await login_as(client, db)
+    async with db.acquire() as holder:
+        tx = holder.transaction()
+        await tx.start()
+        await holder.execute("SELECT pg_advisory_xact_lock($1)", ASSET_NAMES_LOCK)
+        await holder.execute("INSERT INTO assets (name) VALUES ('Race')")  # not committed yet
+        request = asyncio.create_task(post_asset(client, "race"))
+        await asyncio.sleep(0.5)
+        assert not request.done()  # the request is waiting for the lock, not racing past it
+        await tx.commit()
+        response = await asyncio.wait_for(request, 10)
+    assert response.status_code == 409
+    assert await db.fetchval("SELECT count(*) FROM assets") == 1

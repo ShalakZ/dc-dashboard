@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { mockFetch } from "../test/fetchMock";
@@ -133,5 +133,162 @@ describe("validate", () => {
     expect(validate({ ...ok, rollup_1m_retention_days: 29 })).toMatch(/must not be shorter than raw retention/);
     expect(validate({ ...ok, disk_capacity_gb: 0 })).toMatch(/must be positive/);
     expect(validate(ok)).toBeNull();
+  });
+});
+
+const SITE_DEFAULT = { raw_retention_days: 60, compress_after_days: 10, rollup_1m_retention_days: 365, disk_capacity_gb: 500, warn_threshold_pct: 70 };
+const withDefault = { ...settingsOut, site_default: SITE_DEFAULT };
+const routes = (extra = {}, out: object = settingsOut) => ({
+  ...base, "GET /api/storage": { body: stats }, "GET /api/settings/storage": { body: out }, ...extra,
+});
+
+describe("StoragePage defaults, resets and the confirmation", () => {
+  it("Reset to factory settings fills the form with the factory values and sends nothing", async () => {
+    const calls = mockFetch(routes({}, { ...withDefault, raw_retention_days: 45 }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    const raw = await screen.findByLabelText(/raw retention/i);
+    expect(raw).toHaveValue(45);
+    await userEvent.click(screen.getByRole("button", { name: /reset to factory settings/i }));
+    expect(raw).toHaveValue(30);
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it("Reset to default fills the form with the site default when one is set", async () => {
+    const calls = mockFetch(routes({}, withDefault));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    const raw = await screen.findByLabelText(/raw retention/i);
+    await userEvent.click(screen.getByRole("button", { name: /^reset to default$/i }));
+    expect(raw).toHaveValue(60);
+    expect(screen.getByLabelText(/disk capacity/i)).toHaveValue(500);
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it("Reset to default falls back to the factory values when no site default is set, and says so", async () => {
+    mockFetch(routes({}, { ...settingsOut, raw_retention_days: 45 }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    const raw = await screen.findByLabelText(/raw retention/i);
+    expect(screen.getByText(/no site default has been set/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^reset to default$/i }));
+    expect(raw).toHaveValue(30);
+  });
+
+  it("Set as default sends the form to the default route, not to the live settings, and says it is not in use yet", async () => {
+    const calls = mockFetch(routes({ "PUT /api/settings/storage/default": (req: { body: unknown }) => ({ body: req.body as object }) }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    const raw = await screen.findByLabelText(/raw retention/i);
+    await userEvent.clear(raw);
+    await userEvent.type(raw, "60");
+    await userEvent.click(screen.getByRole("button", { name: /set as default/i }));
+    expect(await screen.findByText(/not in use yet/i)).toBeInTheDocument();
+    const puts = calls.filter((c) => c.method === "PUT");
+    expect(puts).toHaveLength(1);
+    expect(puts[0].path).toBe("/api/settings/storage/default");
+    expect(puts[0].body).toEqual({ ...settings, raw_retention_days: 60 });
+  });
+
+  it("Set as default refuses invalid values before asking the server", async () => {
+    const calls = mockFetch(routes());
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    const raw = await screen.findByLabelText(/raw retention/i);
+    await userEvent.clear(raw);
+    await userEvent.type(raw, "3");
+    await userEvent.click(screen.getByRole("button", { name: /set as default/i }));
+    expect(await screen.findByText(/at least 8 days/i)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  const lossReply = {
+    status: 409,
+    body: { detail: "Saving these settings deletes stored readings now: 5 chunks of raw readings (7 days each, 2026-08-06 to 2026-09-10, 0.3 MB). Repeat the request with confirm=true to go ahead.", deletes_now: true, shorter: false },
+  };
+
+  it("asks before a save that deletes data and repeats the request with confirm=true", async () => {
+    const urls: string[] = [];
+    mockFetch(routes({
+      "PUT /api/settings/storage": (req: { url: string; body: unknown }) => {
+        urls.push(req.url);
+        return req.url.includes("confirm=true") ? { body: { ...settings, ...(req.body as object) } } : lossReply;
+      },
+    }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await userEvent.click(await screen.findByRole("button", { name: /^save$/i }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/5 chunks of raw readings/);
+    expect(dialog).not.toHaveTextContent(/confirm=true/);  // the API hint is for scripts, not for the person at the page
+    expect(urls).toHaveLength(1);
+    await userEvent.click(within(dialog).getByRole("button", { name: /save and delete/i }));
+    await waitFor(() => expect(urls).toHaveLength(2));
+    expect(urls[1]).toContain("confirm=true");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("Cancel in that dialog sends nothing more", async () => {
+    const urls: string[] = [];
+    mockFetch(routes({ "PUT /api/settings/storage": (req: { url: string }) => { urls.push(req.url); return lossReply; } }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await userEvent.click(await screen.findByRole("button", { name: /^save$/i }));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: /cancel/i }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(urls).toHaveLength(1);
+  });
+
+  it("words the dialog for a shorter limit that deletes nothing yet", async () => {
+    mockFetch(routes({
+      "PUT /api/settings/storage": { status: 409, body: { detail: "These settings shorten how long readings are kept. Nothing stored today is old enough to be deleted.", deletes_now: false, shorter: true } },
+    }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await userEvent.click(await screen.findByRole("button", { name: /^save$/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Shorten retention?" });
+    expect(within(dialog).getByRole("button", { name: "Shorten and save" })).toBeInTheDocument();
+  });
+
+  it("shows another error from the server as text, not as the confirmation", async () => {
+    mockFetch(routes({ "PUT /api/settings/storage": { status: 422, body: { detail: "raw retention must be at least 8 days" } } }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await userEvent.click(await screen.findByRole("button", { name: /^save$/i }));
+    expect(await screen.findByText(/raw retention must be at least 8 days/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows a banner while retention is paused and none otherwise", async () => {
+    mockFetch({ ...routes(), "GET /api/storage": { body: { ...stats, retention_paused: true } } });
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    expect(await screen.findByText(/retention is paused/i)).toBeInTheDocument();
+  });
+
+  it("shows no banner while retention is armed", async () => {
+    mockFetch({ ...routes(), "GET /api/storage": { body: { ...stats, retention_paused: false } } });
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByLabelText(/raw retention/i);
+    expect(screen.queryByText(/retention is paused/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("validate bounds", () => {
+  const ok = { raw_retention_days: 30, compress_after_days: 7, rollup_1m_retention_days: 730, disk_capacity_gb: 100, warn_threshold_pct: 80 };
+  it("refuses what the server refuses", () => {
+    expect(validate({ ...ok, raw_retention_days: 3651, rollup_1m_retention_days: 5000 })).toMatch(/3650/);
+    expect(validate({ ...ok, compress_after_days: 0 })).toMatch(/between 1 and 365/);
+    expect(validate({ ...ok, compress_after_days: 366, raw_retention_days: 400 })).toMatch(/between 1 and 365/);
+    expect(validate({ ...ok, rollup_1m_retention_days: 36501 })).toMatch(/36500/);
+    expect(validate({ ...ok, raw_retention_days: 8, compress_after_days: 1, rollup_1m_retention_days: 20 })).toMatch(/between 30 and 36500/);
+    expect(validate({ ...ok, disk_capacity_gb: 1_000_001 })).toMatch(/1,000,000/);
+    expect(validate({ ...ok, warn_threshold_pct: 49 })).toMatch(/between 50 and 99/);
+    expect(validate({ ...ok, warn_threshold_pct: 100 })).toMatch(/between 50 and 99/);
+  });
+  it("accepts the bounds themselves", () => {
+    expect(validate({ ...ok, raw_retention_days: 3650, rollup_1m_retention_days: 3650 })).toBeNull();
+    expect(validate({ ...ok, compress_after_days: 365, raw_retention_days: 366 })).toBeNull();
+    expect(validate({ ...ok, rollup_1m_retention_days: 36500 })).toBeNull();
+    expect(validate({ ...ok, raw_retention_days: 8, compress_after_days: 1, rollup_1m_retention_days: 30 })).toBeNull();
+    expect(validate({ ...ok, disk_capacity_gb: 1_000_000 })).toBeNull();
+    expect(validate({ ...ok, warn_threshold_pct: 50 })).toBeNull();
+    expect(validate({ ...ok, warn_threshold_pct: 99 })).toBeNull();
+  });
+  it("wants whole numbers where the server wants integers, and any number for the capacity", () => {
+    expect(validate({ ...ok, raw_retention_days: 30.5 })).toMatch(/whole number/);
+    expect(validate({ ...ok, warn_threshold_pct: 80.5 })).toMatch(/whole number/);
+    expect(validate({ ...ok, disk_capacity_gb: 0.5 })).toBeNull();
+    expect(validate({ ...ok, disk_capacity_gb: Number.NaN })).toMatch(/must be a number/);
   });
 });

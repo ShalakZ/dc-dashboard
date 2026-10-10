@@ -64,6 +64,20 @@ describe("AssetsPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("cannot be moved under itself");
   });
 
+  it("shows the API's refusal when the name already exists under that parent", async () => {
+    mockFetch({
+      ...authed("admin"),
+      "POST /api/assets": { status: 409, body: { detail: 'an asset named "Room A" already exists under "Site"; choose another name' } },
+    });
+    renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+    await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+    await userEvent.type(screen.getByLabelText("Name"), "Room A");
+    await userEvent.selectOptions(screen.getByLabelText("Parent"), "1");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent('an asset named "Room A" already exists under "Site"');
+    expect(screen.getByLabelText("Name")).toHaveValue("Room A"); // the form stays open with what was typed
+  });
+
   describe("deleting", () => {
     const impact = { detail: "needs confirmation", assets: 2, mappings: 3, tariffs: 1 };
     /** DELETE answers 409 with the counts until the request carries confirm=true. `needsConfirm` false = a plain asset. */

@@ -7,12 +7,14 @@ interface Props {
   /** Runs the confirmed request. If it rejects the dialog stays open and shows the error; the opener closes it on success. */
   onConfirm: () => Promise<unknown>;
   onCancel: () => void;
+  /** Text of the confirming button. */
+  confirmLabel?: string;
 }
 
 const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** Ask whether to go ahead with a delete that takes more than the one row. Focus conventions as in ReviewDialog. */
-export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel }: Props) {
+export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confirmLabel = "Delete anyway" }: Props) {
   const { run, busy, error } = useAction();
   const dialog = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -49,7 +51,7 @@ export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel }: Pro
         {error && <p className="error" role="alert">{error}</p>}
         <div className="row">
           <button ref={cancel} onClick={onCancel} disabled={busy}>Cancel</button>
-          <button className="danger" onClick={() => void run(onConfirm)} disabled={busy}>Delete anyway</button>
+          <button className="danger" onClick={() => void run(onConfirm)} disabled={busy}>{confirmLabel}</button>
         </div>
       </div>
     </div>

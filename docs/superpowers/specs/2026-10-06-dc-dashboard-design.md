@@ -234,6 +234,7 @@ is built on `readings_1m`, so both are widened), so readings the collector
 writes late after an outage still reach them. Data that arrives later than
 that stays in raw until it expires and is never rolled up.
 Raw retention must therefore be at least 8 days (one more than the refresh window); Settings refuses a shorter value.
+A save that shortens the raw or 1-minute retention, or that would delete chunks no scheduled retention would delete anyway (after a restore that paused retention), is refused with a 409 unless the request confirms it; the restore scripts pause the retention jobs when the restored policies would delete the restored data.
 
 Sizing estimate: 200 points at 1 second is about 17 million readings per day,
 on the order of 1–2 GB/day before compression and roughly a tenth of that
@@ -414,7 +415,11 @@ stores `{<ids and the current name>, "before": {...}, "after": {...}}` with only
 the fields that changed, and writes nothing when nothing changed (a no-op is not
 an event); the one exception is `storage.changed`, which is written on every
 save, with all five settings on both sides, because a save re-applies the
-compression and retention policies even for equal values. Values are compared in
+compression and retention policies even for equal values. Its subject carries
+`origin` (`factory`, `site_default` or `manual`, judged by the saved values) and,
+for a save that needed confirmation, `confirmed_loss` (`{shorter, raw_chunks, rollup_1m_chunks}`); the subject
+also carries `policies_reapplied: true`. `storage.default_set` has an empty subject, and its first row has an
+empty `before`. Values are compared in
 their plain form (`Decimal('0.10')` and `0.1` are the same rate, a date and its
 ISO string are the same).
 
@@ -439,7 +444,7 @@ Actions recorded:
 | Sign-in | `login.succeeded`, `login.failed`, `login.locked` |
 | Own password | `password.changed`, `password.change_failed` (a wrong current password; a lockout is `login.locked`) |
 | Users | `user.created`, `user.updated` (role, active, password reset) |
-| Site settings | `settings.timezone_changed`, `billing.currency_changed`, `storage.changed` |
+| Site settings | `settings.timezone_changed`, `billing.currency_changed`, `storage.changed`, `storage.default_set` |
 | Assets | `asset.created`, `asset.updated`, `asset.deleted` |
 | Mappings | `mapping.created`, `mapping.updated`, `mapping.deleted` |
 | Sources | `source.created`, `source.updated`, `source.deleted`, `source.tested`, `source.test_all`, `source.browsed` |

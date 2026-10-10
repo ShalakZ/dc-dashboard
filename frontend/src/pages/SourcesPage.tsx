@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
-import { keys, useCollectorStatus, useInvalidate, useSite, useSources } from "../api/queries";
+import { keys, useCollectorStatus, useInvalidate, useSecretKeyStatus, useSite, useSources } from "../api/queries";
 import type { SourceImpact } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
@@ -22,6 +22,7 @@ export function SourcesPage() {
   const { hasRole } = useAuth();
   const { data: sources = [], error, isLoading, dataUpdatedAt: sourcesAnsweredAt } = useSources();
   const collector = useCollectorStatus();
+  const secretKey = useSecretKeyStatus();
   // The ages in both answers are the server's, as of the answer. Against a database that stops answering, the last answers stay on the
   // page, so the page adds the time elapsed since them (its own elapsed time, not its clock against the server's).
   const now = useNow(TICK_MS);
@@ -48,7 +49,7 @@ export function SourcesPage() {
     await api.del(`/api/sources/${id}${confirm ? "?confirm=true" : ""}`);
     setConfirming(null);
     // Its points and mappings go with it, so what Billing, the dashboards' widgets and the tariff list show can change too.
-    await invalidate(keys.sources, keys.billing, keys.widgetData, keys.tariffs);
+    await invalidate(keys.sources, keys.secretKey, keys.billing, keys.widgetData, keys.tariffs);
   };
   const remove = (id: number, name: string) => run(async () => {
     if (!window.confirm(`Delete source "${name}", its points and mappings?`)) return;
@@ -72,6 +73,13 @@ export function SourcesPage() {
         {hasRole("admin") && <button onClick={() => setShowAdd((v) => !v)}>Add source</button>}
       </div>
       {actionError && <p className="error" role="alert">{actionError}</p>}
+      {secretKey.data && !secretKey.data.ok && (
+        <p className="error" role="alert">
+          {`The DCDASH_SECRET_KEY in .env ${secretKey.data.key_changed ? "is different from the one this database was set up with" : "does not open the stored secrets"}: `}
+          {`the secrets of ${secretKey.data.unreadable.map((s) => s.name).join(", ")} cannot be decrypted, so those sources stay offline. `}
+          Put the original .env back, or have an admin type each source's secret in again.
+        </p>
+      )}
       {statusUnreadable ? (
         <p className="error" role="alert">
           {`Collector status cannot be read (no answer for ${formatSpan(statusSilentFor)}). Last-reading ages are counted from the last answer.`}

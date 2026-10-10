@@ -8,12 +8,13 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dcdash.api.asset_names import AssetName, require_free_name
 from dcdash.api.assets import get_asset
 from dcdash.api.deps import get_db, notify, require_role
 from dcdash.api.sources import get_source
 from dcdash.core.audit import audit
 from dcdash.core.discovery import MappingGuess, PointInfo, guess_mapping, suggest_groups
-from dcdash.core.metrics import Metric, default_interval
+from dcdash.core.metrics import Metric, Scale, default_interval
 from dcdash.core.models import Asset, GraphLayout, Mapping, Point, Scan, ScanFinding, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
 
@@ -26,7 +27,7 @@ MAX_UNIT_LENGTH = 20  # keep in step with MAX_UNIT_LENGTH in frontend/src/lib/dr
 class AcceptPoint(BaseModel):
     point_id: int
     metric: Metric
-    scale: float = Field(default=1.0, gt=0)
+    scale: Scale = 1.0
     interval_seconds: int | None = Field(default=None, ge=1)
     custom_unit: Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_UNIT_LENGTH)] | None = None
 
@@ -41,7 +42,7 @@ class AcceptPoint(BaseModel):
 
 
 class NewAsset(BaseModel):
-    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+    name: AssetName
     parent_id: int | None = None
 
 
@@ -190,6 +191,7 @@ async def accept(body: AcceptIn, user: User = Admin, db: AsyncSession = Depends(
     if new is not None:
         if new.parent_id is not None:
             await get_asset(db, new.parent_id)
+        await require_free_name(db, new.parent_id, new.name)
         asset = Asset(name=new.name, parent_id=new.parent_id)
     else:
         assert body.asset_id is not None  # AcceptIn requires exactly one of asset_id and new_asset

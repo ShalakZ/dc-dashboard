@@ -27,7 +27,7 @@ export function SourceForm({ onDone }: { onDone: () => void }) {
     try {
       await api.post("/api/sources", body);
       setSecret("");
-      await invalidate(keys.sources);
+      await invalidate(keys.sources, keys.secretKey);
       onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

@@ -4,7 +4,7 @@ from time import tzset
 
 import pytest
 
-from tests.helpers import insert_readings, login_as, make_point, make_source
+from tests.helpers import insert_readings, login_as, make_point, make_source, refresh_rollup
 
 
 def pinned_datetime(frozen: datetime) -> type[datetime]:
@@ -190,3 +190,177 @@ async def test_a_refused_storage_save_writes_no_row(client, db):
     await login_as(client, db, "operator")
     assert (await client.put("/api/settings/storage", json=FULL)).status_code == 403
     assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'storage.changed'") == 0
+
+
+SEEDED = {"raw_retention_days": 30, "compress_after_days": 7, "rollup_1m_retention_days": 730,
+          "disk_capacity_gb": 100, "warn_threshold_pct": 80}  # the row the db fixture seeds
+
+
+async def old_reading(db, days_ago: int) -> None:
+    """One raw reading `days_ago` days back: that creates a raw chunk that far back."""
+    pid = await make_point(db, await make_source(db), "OLD")
+    await insert_readings(db, pid, datetime.now(timezone.utc) - timedelta(days=days_ago), 60, [1.0])
+
+
+async def pause_retention(db) -> None:
+    """Pause both retention jobs, as scripts/restore.sh does when a restore would delete data."""
+    await db.execute(
+        "SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention'"
+    )
+
+
+async def test_get_shows_no_site_default_until_one_is_set_and_setting_it_applies_nothing(client, db):
+    await login_as(client, db)
+    assert (await client.get("/api/settings/storage")).json()["site_default"] is None
+    policy_before = await retention_days(db)
+    r = await client.put("/api/settings/storage/default", json=FULL)
+    assert r.status_code == 200 and r.json() == FULL
+    body = (await client.get("/api/settings/storage")).json()
+    assert body["site_default"] == FULL
+    assert body["raw_retention_days"] == 30  # the live settings did not move
+    assert await retention_days(db) == policy_before  # nor did the policies
+    assert await db.fetchval("SELECT count(*) FROM settings WHERE key = 'storage_default'") == 1
+
+
+async def test_set_as_default_is_admin_only_validated_audited_and_a_no_op_writes_nothing(client, db):
+    await login_as(client, db)
+    assert (await client.put("/api/settings/storage/default", json={**FULL, "raw_retention_days": 3})).status_code == 422
+    assert (await client.put("/api/settings/storage/default", json={})).status_code == 422
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'storage.default_set'") == 0
+    assert (await client.put("/api/settings/storage/default", json=FULL)).status_code == 200
+    assert (await client.put("/api/settings/storage/default", json=FULL)).status_code == 200  # the same again
+    (row,) = await db.fetch("SELECT actor_name, detail FROM audit_log WHERE action = 'storage.default_set'")
+    assert row["actor_name"] == "admin"
+    assert row["detail"] == {"before": {key: None for key in FULL}, "after": FULL}
+    await login_as(client, db, "operator")
+    assert (await client.put("/api/settings/storage/default", json=FULL)).status_code == 403
+
+
+async def test_a_stored_default_that_no_longer_passes_the_rules_reads_as_not_set(client, db):
+    await login_as(client, db)
+    await db.execute("INSERT INTO settings (key, value) VALUES ('storage_default', '{\"raw_retention_days\": 2}'::jsonb)")
+    assert (await client.get("/api/settings/storage")).json()["site_default"] is None
+
+
+async def test_the_origin_of_a_save_is_judged_by_its_values(client, db):
+    await login_as(client, db)
+    factory = (await client.get("/api/settings/storage")).json()["factory"]
+    confirmed = {"confirm": "true"}  # going back to 30 / 730 is shorter than FULL's 45 / 800
+    assert (await client.put("/api/settings/storage", json=FULL)).status_code == 200  # manual
+    assert (await client.put("/api/settings/storage", json=factory, params=confirmed)).status_code == 200  # factory
+    await client.put("/api/settings/storage/default", json=FULL)
+    assert (await client.put("/api/settings/storage", json=FULL)).status_code == 200  # the site default
+    await client.put("/api/settings/storage/default", json=factory)
+    assert (await client.put("/api/settings/storage", json=factory, params=confirmed)).status_code == 200  # both: default wins
+    rows = await db.fetch("SELECT detail FROM audit_log WHERE action = 'storage.changed' ORDER BY id")
+    assert [r["detail"]["origin"] for r in rows] == ["manual", "factory", "site_default", "site_default"]
+
+
+async def test_a_shorter_retention_needs_confirm_and_nothing_changes_without_it(client, db):
+    await login_as(client, db)
+    policy_before = await retention_days(db)
+    shorter = {**SEEDED, "raw_retention_days": 14}
+    r = await client.put("/api/settings/storage", json=shorter)
+    assert r.status_code == 409
+    body = r.json()
+    assert body["shorter"] is True and body["deletes_now"] is False
+    assert "confirm=true" in body["detail"] and "Nothing is deleted now beyond what the daily retention run deletes anyway" in body["detail"]
+    assert (await client.get("/api/settings/storage")).json()["raw_retention_days"] == 30
+    assert await retention_days(db) == policy_before
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'storage.changed'") == 0
+    ok = await client.put("/api/settings/storage", json=shorter, params={"confirm": "true"})
+    assert ok.status_code == 200 and ok.json()["raw_retention_days"] == 14
+    (row,) = await db.fetch("SELECT detail FROM audit_log WHERE action = 'storage.changed'")
+    assert row["detail"]["confirmed_loss"] == {"shorter": True, "raw_chunks": 0, "rollup_1m_chunks": 0}
+
+
+async def test_a_shorter_1_minute_retention_needs_confirm_too(client, db):
+    await login_as(client, db)
+    r = await client.put("/api/settings/storage", json={**SEEDED, "rollup_1m_retention_days": 100})
+    assert r.status_code == 409 and r.json()["shorter"] is True
+
+
+async def test_an_unchanged_save_that_would_delete_old_chunks_needs_confirm(client, db):
+    await login_as(client, db)
+    await old_reading(db, days_ago=60)  # a raw chunk wholly older than the 30-day limit
+    await pause_retention(db)  # the state after a restore: no armed policy would drop it, so this save is what deletes it
+    r = await client.put("/api/settings/storage", json=SEEDED)  # not shorter, not different: it still deletes
+    assert r.status_code == 409
+    body = r.json()
+    assert body["shorter"] is False and body["deletes_now"] is True
+    raw = body["raw"]
+    assert raw["chunks"] >= 1 and raw["chunk_days"] == 7 and raw["bytes"] > 0
+    day = (datetime.now(timezone.utc) - timedelta(days=60)).date().isoformat()
+    assert raw["first_day"] <= day <= raw["last_day"]  # the chunk that holds the old reading is in the span
+    assert body["rollup_1m"]["chunks"] == 0
+    assert f"{raw['chunks']} chunk" in body["detail"] and "confirm=true" in body["detail"]
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'storage.changed'") == 0
+    ok = await client.put("/api/settings/storage", json=SEEDED, params={"confirm": "true"})
+    assert ok.status_code == 200
+    (row,) = await db.fetch("SELECT detail FROM audit_log WHERE action = 'storage.changed'")
+    assert row["detail"]["confirmed_loss"] == {"shorter": False, "raw_chunks": raw["chunks"], "rollup_1m_chunks": 0}
+
+
+async def test_a_longer_retention_does_not_ask_even_when_old_chunks_exist(client, db):
+    await login_as(client, db)
+    await old_reading(db, days_ago=60)
+    longer = {**SEEDED, "raw_retention_days": 90, "rollup_1m_retention_days": 800}  # 60 days is inside 90: nothing to drop
+    assert (await client.put("/api/settings/storage", json=longer)).status_code == 200
+
+
+async def test_the_1_minute_tier_is_counted_in_its_own_70_day_chunks(client, db):
+    await login_as(client, db)
+    await old_reading(db, days_ago=400)
+    await refresh_rollup(db, "readings_1m")
+    r = await client.put("/api/settings/storage", json={**SEEDED, "rollup_1m_retention_days": 100})
+    assert r.status_code == 409
+    tier = r.json()["rollup_1m"]
+    assert tier["chunks"] >= 1 and tier["chunk_days"] == 70 and tier["bytes"] > 0
+    # the db fixture's TRUNCATE leaves materialized chunks behind; do not let the next test inherit this one
+    await db.execute("SELECT drop_chunks('readings_1m', older_than => interval '1 day')")
+
+
+async def test_retention_paused_is_reported_until_a_save_arms_it_again(client, db):
+    await login_as(client, db)
+    assert (await client.put("/api/settings/storage", json=SEEDED)).status_code == 200  # known state: both policies armed
+    assert (await client.get("/api/storage")).json()["retention_paused"] is False
+    await db.execute(
+        "SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention'"
+    )
+    assert (await client.get("/api/storage")).json()["retention_paused"] is True
+    assert (await client.put("/api/settings/storage", json=SEEDED)).status_code == 200  # re-adds both policies
+    assert (await client.get("/api/storage")).json()["retention_paused"] is False
+
+
+async def test_a_save_with_retention_armed_does_not_ask_for_a_chunk_the_daily_run_drops_anyway(client, db):
+    await login_as(client, db)
+    assert (await client.put("/api/settings/storage", json=SEEDED)).status_code == 200  # both policies armed at 30 / 730
+    await old_reading(db, days_ago=60)  # expired, waiting for the next daily run of the armed policy
+    r = await client.put("/api/settings/storage", json={**SEEDED, "disk_capacity_gb": 200})  # capacity only
+    assert r.status_code == 200, r.text
+    await pause_retention(db)
+    assert (await client.put("/api/settings/storage", json=SEEDED)).status_code == 409  # paused: this save is what deletes
+    # leave the jobs armed again for the tests that follow (the db fixture resets tables, not jobs)
+    assert (await client.put("/api/settings/storage", json=SEEDED, params={"confirm": "true"})).status_code == 200
+
+
+async def test_the_1_minute_tier_follows_its_own_job(client, db):
+    await login_as(client, db)
+    assert (await client.put("/api/settings/storage", json=SEEDED)).status_code == 200  # both armed at 30 / 730
+    await old_reading(db, days_ago=800)  # one raw chunk and one 1-minute chunk past their limits
+    await refresh_rollup(db, "readings_1m")
+    assert (await client.put("/api/settings/storage", json={**SEEDED, "disk_capacity_gb": 200})).status_code == 200
+    await db.execute(
+        "SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs "
+        "WHERE proc_name = 'policy_retention' AND hypertable_name = 'readings_1m'"
+    )
+    r = await client.put("/api/settings/storage", json=SEEDED)
+    assert r.status_code == 409 and r.json()["rollup_1m"]["chunks"] >= 1 and r.json()["raw"]["chunks"] == 0
+    assert (await client.put("/api/settings/storage", json=SEEDED, params={"confirm": "true"})).status_code == 200
+    await db.execute("SELECT drop_chunks('readings_1m', older_than => interval '1 day')")
+
+
+def test_sizes_are_printed_in_a_unit_that_does_not_round_to_zero():
+    from dcdash.core.storage import _size
+
+    assert [_size(n) for n in (0, 900, 40960, 5 * 1024**2, 3 * 1024**3)] == ["0 bytes", "900 bytes", "40.0 KB", "5.0 MB", "3.0 GB"]
