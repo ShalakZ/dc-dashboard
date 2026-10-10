@@ -15,6 +15,8 @@ export interface Source {
   enabled: boolean; status: string; last_seen: string | null; last_error: string | null; has_secret: boolean;
   /** Seconds since the newest stored reading (BAD-quality rows count); null when the source has none. */
   last_reading_age_seconds?: number | null;
+  /** How many of its points have a mapping (the list endpoint only). */
+  mapped_points?: number;
 }
 export interface CollectorStatus { alive: boolean; age_seconds: number | null }
 /** GET /api/secret-key/status: whether every stored source secret can be decrypted with the key in .env. */
