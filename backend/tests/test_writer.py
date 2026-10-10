@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -124,3 +125,37 @@ async def test_buffer_is_bounded_and_drops_oldest(db):
     await writer.flush()
     values = await db.fetch("SELECT value FROM readings ORDER BY ts")
     assert [r["value"] for r in values] == [2.0, 3.0, 4.0]
+
+
+async def test_a_non_finite_reading_is_stored_as_bad_with_no_value(db):
+    sid = await make_source(db)
+    pid = await make_point(db, sid, "A")
+    now = datetime.now(timezone.utc)
+    writer = Writer(db)
+    writer.add([
+        (pid, now, float("nan"), 0),
+        (pid, now + timedelta(seconds=1), math.inf, 0),
+        (pid, now + timedelta(seconds=2), -math.inf, 0),
+        (pid, now + timedelta(seconds=3), 2.5, 0),
+    ])
+    assert await writer.flush() == 4
+    rows = await db.fetch("SELECT value, quality FROM readings WHERE point_id = $1 ORDER BY ts", pid)
+    assert [(r["value"], r["quality"]) for r in rows] == [(None, 1), (None, 1), (None, 1), (2.5, 0)]
+    assert await db.fetchval(
+        "SELECT count(*) FROM readings WHERE value IN ('NaN', 'Infinity', '-Infinity')"
+    ) == 0
+    latest = await db.fetchrow("SELECT value, quality FROM point_latest WHERE point_id = $1", pid)
+    assert (latest["value"], latest["quality"]) == (2.5, 0)
+
+
+async def test_a_non_finite_reading_is_notified_as_null_not_nan(db, database_url):
+    sid = await make_source(db)
+    pid = await make_point(db, sid, "A")
+    async with listening(database_url, LATEST_CHANNEL) as received:
+        writer = Writer(db)
+        writer.add([(pid, datetime.now(timezone.utc), float("nan"), 0)])
+        await writer.flush()
+        payload = await asyncio.wait_for(received.get(), 5)
+    assert "NaN" not in payload and "Infinity" not in payload  # a bare NaN is not valid JSON for the browser
+    (item,) = json.loads(payload)
+    assert item[0] == pid and item[2] is None and item[3] == 1

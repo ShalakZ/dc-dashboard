@@ -1,10 +1,12 @@
 import asyncio
 import json
 import logging
+import math
 from datetime import datetime
 
 import asyncpg
 
+from dcdash.connectors.base import BAD
 from dcdash.core.pg import LATEST_CHANNEL
 
 log = logging.getLogger(__name__)
@@ -24,6 +26,15 @@ _UPSERT_LATEST = """
 """
 
 
+def _finite_or_bad(row: Row) -> Row:
+    """A NaN or infinite value is not a measurement. Stored as GOOD it makes the average, sum and maximum of its minute and
+    its hour NaN for good (the hourly tier is kept forever), and the API writes NaN as null, which the UI reads as "no rate"."""
+    point_id, ts, value, quality = row
+    if value is not None and not math.isfinite(value):
+        return (point_id, ts, None, BAD)
+    return row
+
+
 class Writer:
     """Buffers readings in memory and writes them to the database in batches."""
 
@@ -37,7 +48,7 @@ class Writer:
         return len(self._buffer)
 
     def add(self, rows: list[Row]) -> None:
-        self._buffer.extend(rows)
+        self._buffer.extend(_finite_or_bad(row) for row in rows)
         self._trim()
 
     def _trim(self) -> None:

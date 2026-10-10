@@ -1,10 +1,14 @@
 import asyncio
 import logging
+import math
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import asyncpg
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 
@@ -42,6 +46,23 @@ async def _shut_down(tasks: list[asyncio.Task], pool: asyncpg.Pool) -> None:
         pool.terminate()
         closing.cancel()
         await asyncio.wait({closing}, timeout=1)
+
+
+def _defuse(value: Any) -> Any:
+    """Non-finite floats as their text: JSON has no NaN or Infinity and JSONResponse refuses to write them."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    if isinstance(value, dict):
+        return {key: _defuse(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_defuse(item) for item in value]
+    return value
+
+
+async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """FastAPI's own 422 handler echoes each error's `input`; an input of NaN or Infinity then cannot be encoded and the
+    reply would be a 500. Same body otherwise."""
+    return JSONResponse(status_code=422, content={"detail": _defuse(jsonable_encoder(exc.errors()))})
 
 
 async def _database_unavailable(_request: Request, _exc: Exception) -> JSONResponse:
@@ -96,6 +117,7 @@ def create_app() -> FastAPI:
     app.state.broadcaster = Broadcaster()
     for error in (OperationalError, InterfaceError, ConnectionError):
         app.add_exception_handler(error, _database_unavailable)
+    app.add_exception_handler(RequestValidationError, _validation_error)
 
     for router in (
         health.router, auth.router, jobs.router, sources.router, assets.router,

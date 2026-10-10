@@ -1,7 +1,9 @@
 import asyncio
 
+import pytest
+
 from dcdash.core.pg import CONFIG_CHANNEL
-from helpers import listening, login_as, make_asset, make_point, make_source
+from helpers import listening, login_as, make_asset, make_mapping, make_point, make_source
 
 
 async def setup(client, db):
@@ -127,3 +129,32 @@ async def test_mapping_refusals_and_no_ops_write_no_row(client, db):
     assert (await client.patch("/api/mappings/999", json={"scale": 2})).status_code == 404
     assert (await client.delete("/api/mappings/999")).status_code == 404
     assert [r["action"] for r in await mapping_rows(db)] == ["mapping.created"]
+
+
+BAD_SCALES = ["Infinity", "-Infinity", "NaN", "1e309", "1e300", "0", "-2"]
+
+
+@pytest.mark.parametrize("scale", BAD_SCALES)
+async def test_a_scale_that_is_not_a_usable_number_is_a_422_and_nothing_is_stored(client, db, scale):
+    asset, kw, _ = await setup(client, db)
+    raw = '{"point_id": %d, "asset_id": %d, "metric": "active_power_kw", "scale": %s}' % (kw, asset, scale)
+    r = await client.post("/api/mappings", content=raw, headers={"content-type": "application/json"})
+    assert r.status_code == 422, r.text  # not a 500: the 422 body must be encodable
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 0
+
+
+@pytest.mark.parametrize("scale", BAD_SCALES)
+async def test_patching_a_scale_to_an_unusable_number_is_a_422_and_changes_nothing(client, db, scale):
+    asset, kw, _ = await setup(client, db)
+    mapping = await make_mapping(db, kw, asset, scale=0.5)
+    r = await client.patch(f"/api/mappings/{mapping}", content='{"scale": %s}' % scale,
+                           headers={"content-type": "application/json"})
+    assert r.status_code == 422, r.text
+    assert await db.fetchval("SELECT scale FROM mappings WHERE id = $1", mapping) == 0.5
+
+
+@pytest.mark.parametrize("scale", [0.001, 1.0, 1000.0, 1e12])
+async def test_ordinary_scales_still_work(client, db, scale):
+    asset, kw, _ = await setup(client, db)
+    r = await client.post("/api/mappings", json=body(kw, asset, "active_power_kw", scale=scale))
+    assert r.status_code == 201 and r.json()["scale"] == scale
