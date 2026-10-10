@@ -85,7 +85,7 @@ Charts
 
 Editor and dashboards
 - **DONE in W0a (2026-10-09):** The dashboard `AssetPicker` does not add `#id` for sibling assets with the same name and parent, while `assetLabels` (Tariffs) does, so two sibling "Meter"s read alike in the widget dialog (`AssetPicker.tsx` `pickerLabel`).
-- Deleting a source refreshes neither `keys.assets` (summaries and trend series, which poll every 60 s and 30 s) nor `keys.graph` (`SourcesPage.tsx`).
+- **DONE in W3a (2026-10-11):** Deleting a source refreshes neither `keys.assets` (summaries and trend series, which poll every 60 s and 30 s) nor `keys.graph` (`SourcesPage.tsx`).
 - Drag and resize are pointer-only (no keyboard reorder), and the editor is not usable on a narrow screen.
 - Cosmetic error UX: wording and guidance when a dashboard was deleted by someone else while open (`DashboardPage.tsx`, `DashboardEditor.tsx`).
 
@@ -185,4 +185,18 @@ The plan names section K for these; K already holds Part A, so they are here.
 - **Configuration and platforms:** the `BUILDX_NO_DEFAULT_ATTESTATIONS` effect was measured only on Docker Desktop (containerd store) and is likely a harmless no-op on a classic Linux engine; a certificate file with a CA first reports the CA's expiry (Caddy then refuses to start `web`, so the failure is visible); `unknown` (no check for over 3 hours) shows no notice by design (the collector may be down and the Sources page says so); `backend/tests/conftest.py` pins its testcontainers TimescaleDB tag separately and by hand; the `.warning` colour is a placeholder until the W6 UI overhaul.
 - **Machine hygiene (the owner's machine):** the drill images `dcdash_e2e_w2-backend:drill` and `dcdash_e2e_w2-web:drill` (and the older waves' `:drill` tags) remain, and the `docker buildx` cache grew; the first rebuild of the owner's dev stack after this merge recreates `db` once (documented in the README) and waits for the owner's explicit go with a verified backup first.
 - **Tooling:** the lighter process was used (Tasks 9-12 implementer plus tests only, drills by the controller, one whole-branch review plus one scoped re-review); GateGuard asked for its facts again for every new file; the controller had to move one probe (a Chromium console-type probe, `t11-console-probe.mjs`) into a throwaway script to find that Report-Only violations arrive as console type `info`.
+
+## M. W3a leftovers (final reviews, 2026-10-11; none of these blocks)
+
+- **Focus after a disabled button:** disabling the focused Save or Delete drops focus to `<body>` in a real browser (Save in `AssetForm`, `MappingForm` and `SourceForm`; Delete in `AssetsPage` and `SourcesPage` before the confirm dialog opens, so Cancel there may leave focus on the body). Fix: `aria-disabled` plus a handler guard instead of `disabled`, or give `ConfirmDeleteDialog` a fallback opener. One Playwright assertion would confirm it.
+- **A request that never answers:** it leaves a dialog impossible to close until a reload (Escape and Cancel are ignored while saving; `api/client.ts` `request` has no timeout and Caddy's `reverse_proxy` has no response timeout). Fix: `AbortSignal.timeout(30_000)` in `request`, or re-enable Cancel after about 15 s.
+- **`Modal` focus selector:** the `FOCUSABLE` selector in `Modal.tsx` includes hidden inputs and leaves out `a[href]`. Fix: filter invisible elements and add links. No current dialog is affected.
+- **Two copies of the focus trap:** `ConfirmDeleteDialog.tsx` has its own copy of the focus-trap code. Fix: move it onto `Modal`.
+- **Escape inside an open native `<select>`:** whether the popup swallows Escape or the dialog closes was not checked in a browser (Playwright cannot open native popups). Check by hand.
+- **Mapping dialog metric:** it opens on `active_power_kw`, so non-kW points warn at once. Fix: preselect the metric from the unit hint with the rules of `core/discovery.py` `_UNIT_RULES` (`MappingForm.tsx`).
+- **Credentials in `GET /api/sources`:** the route is operator-level and returns each source's raw `config`, which can hold URL credentials; the new Edit form shows them to admins in a text box. Fix: mask credentials in the response or in the form (`api/sources.py`, `SourceForm.tsx`). A W3d-or-later security item; not changed in W3a.
+- **Focus return on the Points page:** with "Unmapped only" on, saving a mapping removes the row that opened the dialog, so focus cannot return to it (`SourcePointsPage.tsx`). Accepted; one option is to move focus to the search box.
+- **Points table size and styling:** the table is not paged (a SCADA with thousands of points renders every row; page it or virtualise it), and the header buttons use inline style objects in `SourcePointsPage.tsx` (move them into `app.css` when W6 restyles).
+- **Kind clean-up:** `cleanKind` in `lib/kinds.ts` trims and collapses blanks but does not NFC-normalise (only `kindKey` does), and the API still accepts any text as Kind, blank included (the form never sends blank). Fix: NFC in `cleanKind`; a `min_length` check in the API schema if wanted.
+- **Selector trap in the tests:** the `AssetTree` `+` buttons have the aria-label `Add child of <name>`, so an asset whose name contains "name" would match Playwright's substring `getByLabel("Name")` while an asset dialog is open (the e2e specs use `exact` where it matters).
 
