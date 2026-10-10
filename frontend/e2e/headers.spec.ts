@@ -33,8 +33,10 @@ test("every page an admin can open runs under the policy without one violation, 
 
   // Channel 1: the browser's console (what a person would see). Channel 2: the event, reported from inside the page by a binding
   // that survives navigations (window state does not, so the page cannot keep the list itself).
+  // Any message type: Chromium logs a Report-Only violation as `info` (RUN against the real header: "Executing inline script violates the
+  // following Content Security Policy directive ... The policy is report-only"), an enforced one as `error`.
   page.on("console", (message) => {
-    if ((message.type() === "error" || message.type() === "warning") && POLICY.test(message.text())) {
+    if (POLICY.test(message.text())) {
       violations.push(`console ${message.type()}: ${message.text()}`);
     }
   });
