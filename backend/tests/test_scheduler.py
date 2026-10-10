@@ -112,9 +112,14 @@ async def test_run_group_backs_off_then_recovers(db):
     delays: list[float] = []
     statuses: list[str] = []
 
+    expected = ["offline", "offline", "online"]
+
+    async def status() -> str:
+        return await db.fetchval("SELECT status FROM sources WHERE id = $1", source)
+
     async def fake_sleep(delay: float) -> None:
         delays.append(delay)
-        statuses.append(await db.fetchval("SELECT status FROM sources WHERE id = $1", source))
+        statuses.append(await wait_for(status, expected[len(delays) - 1], timeout=5))
         if len(delays) == 3:
             raise asyncio.CancelledError
 
@@ -132,7 +137,11 @@ async def test_run_group_records_the_error_while_offline(db):
     source = await make_source(db)
     group = PollGroup(source, "flaky", {}, None, 5, ((1, "a"),))
 
+    async def last_error() -> str | None:
+        return await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source)
+
     async def stop_after_first(_delay: float) -> None:
+        await wait_for(last_error, "timeout: no answer", timeout=5)  # the background writer lands it after the poll
         raise asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
@@ -171,7 +180,7 @@ async def test_scheduler_collects_from_the_simulator_and_reloads(db):
         await wait_for(has_readings, True)
         await writer.flush()
         assert await db.fetchval("SELECT count(*) FROM readings WHERE point_id = $1", kw) >= 1
-        assert await db.fetchval("SELECT status FROM sources WHERE id = $1", source) == "online"
+        await wait_for(lambda: db.fetchval("SELECT status FROM sources WHERE id = $1", source), "online")
 
         await make_mapping(db, kwh, asset, "energy_kwh", 60)
         assert await scheduler.reload() == 2

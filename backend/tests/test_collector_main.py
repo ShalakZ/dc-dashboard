@@ -39,7 +39,7 @@ async def test_collector_runs_jobs_and_collects_after_config_change(db):
 
         await wait_for(has_readings, True)
         assert await db.fetchval("SELECT value FROM point_latest WHERE point_id = $1", point) > 0
-        assert await db.fetchval("SELECT status FROM sources WHERE id = $1", source) == "online"
+        await wait_for(lambda: db.fetchval("SELECT status FROM sources WHERE id = $1", source), "online")
     finally:
         stop.set()
         await asyncio.wait_for(task, timeout=10)

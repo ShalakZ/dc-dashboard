@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 
 MAX_BACKOFF_SECONDS = 60
 LAST_SEEN_REFRESH_SECONDS = 10
+STATUS_WRITE_TIMEOUT_SECONDS = 5.0
 
 _MAPPED_POINTS = """
     SELECT s.id AS source_id, s.connector_type, s.config, s.secret,
@@ -41,20 +42,22 @@ class PollGroup:
 
 
 async def mark_source(pool: asyncpg.Pool, source_id: int, online: bool, error: str | None = None) -> bool:
-    """Record a source's status. Returns False if the database was unavailable."""
+    """Record a source's status. Returns False if the database was unavailable or slower than STATUS_WRITE_TIMEOUT_SECONDS
+    (a frozen database is not covered, see _StatusWriter)."""
     try:
-        if online:
-            await pool.execute(
-                "UPDATE sources SET status = 'online', last_seen = now(), last_error = NULL WHERE id = $1",
-                source_id,
-            )
-        else:
-            await pool.execute(
-                "UPDATE sources SET status = 'offline', last_error = $2 WHERE id = $1", source_id, error
-            )
+        async with asyncio.timeout(STATUS_WRITE_TIMEOUT_SECONDS):
+            if online:
+                await pool.execute(
+                    "UPDATE sources SET status = 'online', last_seen = now(), last_error = NULL WHERE id = $1",
+                    source_id,
+                )
+            else:
+                await pool.execute(
+                    "UPDATE sources SET status = 'offline', last_error = $2 WHERE id = $1", source_id, error
+                )
         return True
-    except Exception:
-        log.exception("could not record status of source %s", source_id)
+    except Exception as exc:
+        log.warning("could not record status of source %s: %s", source_id, str(exc) or type(exc).__name__)
         return False
 
 
@@ -109,6 +112,47 @@ def backoff_delay(interval: int, failures: int) -> float:
     return float(max(interval, min(interval * 2**failures, MAX_BACKOFF_SECONDS)))
 
 
+class _StatusWriter:
+    """Writes one source's status in the background, one write at a time, never on the poll path.
+
+    The poll loop only says what the status should be (`request`); this task makes the database match. A write that fails
+    is retried when the next poll asks again, so the retry cadence is the poll cadence. Writes are serialised and always
+    use the latest request, so the last status written is the last poll outcome. Against a frozen database a write waits
+    until the database answers or the pool is terminated at shutdown (asyncpg ignores the single cancellation of the write's
+    timeout); the writer stays on it, which keeps the writes in order, and polling is not affected.
+    """
+
+    def __init__(self, pool: asyncpg.Pool, source_id: int) -> None:
+        self._pool = pool
+        self._source_id = source_id
+        self._wanted: tuple[bool, str | None] = (True, None)
+        self._wake = asyncio.Event()
+        self._written: bool | None = None  # the state the database is known to hold
+        self._written_at = 0.0  # monotonic time of the last successful write
+        self._task = asyncio.create_task(self._run())
+
+    def request(self, online: bool, error: str | None = None) -> None:
+        self._wanted = (online, error)
+        self._wake.set()
+
+    async def close(self) -> None:
+        self._task.cancel()
+        await asyncio.gather(self._task, return_exceptions=True)
+
+    def _due(self, online: bool) -> bool:
+        if online:
+            return self._written is not True or time.monotonic() - self._written_at >= LAST_SEEN_REFRESH_SECONDS
+        return self._written is not False
+
+    async def _run(self) -> None:
+        while True:
+            await self._wake.wait()
+            self._wake.clear()
+            online, error = self._wanted
+            if self._due(online) and await mark_source(self._pool, self._source_id, online, error):
+                self._written, self._written_at = online, time.monotonic()
+
+
 async def run_group(
     group: PollGroup,
     pool: asyncpg.Pool,
@@ -121,31 +165,33 @@ async def run_group(
     except Exception as exc:
         await mark_source(pool, group.source_id, False, f"invalid configuration: {exc}")
         return
+    status = _StatusWriter(pool, group.source_id)
     failures = 0
-    online: bool | None = None
-    seen_at = 0.0
+    polled_ok: bool | None = None  # outcome of the previous poll, so that only changes are logged
     try:
         while True:
             try:
                 await poll_once(group, connector, writer)
             except Exception as exc:
                 failures += 1
-                if online is not False:
+                if polled_ok is not False:
                     log.warning("source %s went offline: %s", group.source_id, exc)
-                    if isinstance(exc, ConnectorError):
-                        message = f"{exc.status}: {exc.message}"
-                    else:
-                        message = str(exc) or type(exc).__name__
-                    if await mark_source(pool, group.source_id, False, message):
-                        online = False
+                polled_ok = False
+                if isinstance(exc, ConnectorError):
+                    message = f"{exc.status}: {exc.message}"
+                else:
+                    message = str(exc) or type(exc).__name__
+                status.request(False, message)
             else:
                 failures = 0
-                stale = time.monotonic() - seen_at >= LAST_SEEN_REFRESH_SECONDS
-                if (online is not True or stale) and await mark_source(pool, group.source_id, True):
-                    online, seen_at = True, time.monotonic()
+                polled_ok = True
+                status.request(True)
             await sleep(backoff_delay(group.interval, failures))
     finally:
-        await connector.close()
+        try:
+            await status.close()
+        finally:
+            await connector.close()  # still closed when a second cancellation interrupts the wait on a stuck status write
 
 
 class Scheduler:
