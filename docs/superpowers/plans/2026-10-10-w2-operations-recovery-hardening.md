@@ -33,8 +33,8 @@
 ## Verified facts (planning session, 2026-10-10)
 
 - `powershell.exe` (Windows PowerShell 5.1.26100) is reachable from WSL; `docker.exe` on the Windows side and `docker` in WSL talk to the same Docker Desktop engine (contexts `desktop-linux` and `default`), so a repo copy on a Windows drive still creates containers on the shared engine.
-- **Environment variables set in WSL bash do not reach `powershell.exe`** unless listed in `WSLENV`. A Windows run must therefore set `$env:COMPOSE_PROJECT_NAME` itself, inside PowerShell (Appendix A).
-- `setup.ps1`/`setup.sh` look at TWO projects when `.env` is missing: the one the command line selects and the one `compose.yaml` names (`name: dcdash`). In a copy whose `compose.yaml` still says `dcdash`, `dcdash_dbdata` exists on this machine, so `setup.ps1` refuses to create `.env` (a free test of the W0a guard). The real run needs a copy whose `name:` was rewritten to the scratch name (a second lock: a bare `docker compose` in that folder then cannot reach `dcdash` even with no variable set).
+- **Environment variables set in WSL bash do not reach `powershell.exe`** unless listed in `WSLENV` (RUN on 2026-10-10: `FOO=bar powershell.exe ... $env:FOO` printed `[]`, with `WSLENV=FOO` it printed `[bar]`). A Windows run must therefore set `$env:COMPOSE_PROJECT_NAME` itself, inside PowerShell (Appendix A). Also RUN: an `[int]` parameter given `x` fails PowerShell 5.1 parameter binding (`ParameterArgumentTransformationError`, exit 1), which is why `backup.ps1` takes `-Keep` as a string.
+- `setup.ps1`/`setup.sh` look at TWO projects when `.env` is missing: the one the command line selects and the one `compose.yaml` names (`name: dcdash`). From READING `setup.ps1` (not run yet; Task 4 Step 3 proves it): in a copy whose `compose.yaml` still says `dcdash`, `dcdash_dbdata` exists on this machine, so `setup.ps1` refuses to create `.env` (a free test of the W0a guard). The real run needs a copy whose `name:` was rewritten to the scratch name (a second lock: a bare `docker compose` in that folder then cannot reach `dcdash` even with no variable set).
 - The W2 drill helper (`.superpowers/sdd/2026-10-10-w2-operations-recovery-hardening/drill-lib.sh`, copied from W1b with the prefix `dcdash_e2e_w2_`) was tested: it refuses `dcdash`, `dcdash_e2e`, `dcdash_e2e_w1b_x`, `dcdash_e2e_w2` (no trailing underscore) and an empty name, and accepts `dcdash_e2e_w2_probe`, for which `docker compose config` resolves to that name. The dev stack (db, api, collector, web, simulator) was running and untouched.
 - TimescaleDB 2.30.2 releases a Windows build for PostgreSQL 16: `timescaledb-postgresql-16-windows-amd64.zip`, 8,630,280 bytes, `sha256:9b0d72134c98a92e1ed1ce0cd06cf7611bb48fe9ce6979516cbf889b5decdc05` (GitHub API). The newest EDB PostgreSQL 16 Windows binaries zip is `postgresql-16.15-1-windows-x64-binaries.zip`, 332,441,502 bytes (HEAD request; 16.16 answers 403).
 - `/api/me` is in the client's `AUTH_PATHS`, so a 401 from it does not call the unauthorized handler today (Task 12 must handle that itself). The collector has `./certs:/certs:ro` mounted and runs `housekeeping_loop` and `heartbeat_loop` as tasks (`collector/main.py:84-85`); the api has no `./certs` mount. `frontend/e2e/playwright.config.ts` honours `E2E_BASE_URL`.
@@ -288,7 +288,7 @@ exit "$fail"
   9. `test_copy_to_a_folder_that_does_not_exist_is_refused_and_not_created` (an unmounted drive): exit 5, the path still does not exist, and the check happens BEFORE pg_dump (no `pg_dump` call).
   10. `test_a_failed_copy_keeps_the_local_backup_and_deletes_nothing`: the copy folder is a read-only directory (`chmod 555`; skip when running as root) -> exit 5, the new local pair exists, the old pairs still exist even with `--keep 1`.
   11. `test_version_file_holds_the_schema_revision`: bytes are `0005\n`; `restore.sh`'s `$(cat "$DUMP.version")` reads it (run `restore.sh` against it with the existing fake).
-  12. `test_the_project_line_comes_first`; `test_backup_ps1_parses` (skipif no PowerShell, like `test_restore_ps1_parses`); a text assertion that `backup.ps1` declares `-Keep`/`-CopyTo`, writes the dump to a partial name and moves it only after the read-back.
+  12. `test_the_project_line_comes_first`; `test_backup_ps1_parses` (skipif no PowerShell, like `test_restore_ps1_parses`); a text assertion that `backup.ps1` declares `-Keep` as a `[string]` (validated by hand, exit 2) and `-CopyTo`, writes the dump to a partial name and moves it only after the read-back.
 - [ ] **Step 2: Run, expect FAIL.**
 - [ ] **Step 3: Implement** `backup.sh`:
 
@@ -387,11 +387,16 @@ fi
 ```powershell
 # Dump the running database to <Out>\dcdash-<stamp>.dump (pg_dump custom format) and record the Alembic schema revision next to it in
 # <dump>.version. Usage: scripts\backup.ps1 [Out=.\backups] [-Keep N] [-CopyTo DIR]   (contract and exit codes: see scripts/backup.sh)
-param([string]$Out = ".\backups", [int]$Keep = 0, [string]$CopyTo = "")
+param([string]$Out = ".\backups", [string]$Keep = "", [string]$CopyTo = "")
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
-if ($PSBoundParameters.ContainsKey("Keep") -and $Keep -lt 1) {
-  [Console]::Error.WriteLine("usage: backup.ps1 [Out] [-Keep N] [-CopyTo DIR] (-Keep takes a whole number of at least 1)"); exit 2
+# -Keep is a string checked by hand: an [int] parameter fails binding with exit 1 (verified on PowerShell 5.1), the contract says exit 2.
+$KeepN = 0
+if ($Keep -ne "") {
+  if ($Keep -notmatch '^[1-9][0-9]*$') {
+    [Console]::Error.WriteLine("usage: backup.ps1 [Out] [-Keep N] [-CopyTo DIR] (-Keep takes a whole number of at least 1)"); exit 2
+  }
+  $KeepN = [int]$Keep
 }
 $Project = "unknown"
 try {
@@ -449,13 +454,13 @@ function Invoke-Rotate([string]$Dir) {
   $all = @(Get-ChildItem -LiteralPath $Dir -File |
     Where-Object { $_.Name -cmatch '^dcdash-[0-9]{8}-[0-9]{6}\.dump$' -and (Test-Path -LiteralPath ($_.FullName + ".version")) } |
     Sort-Object Name)
-  for ($i = 0; $i -lt ($all.Count - $Keep); $i++) {
+  for ($i = 0; $i -lt ($all.Count - $KeepN); $i++) {
     if ($all[$i].Name -eq $Name) { continue }
     Remove-Item -Force -LiteralPath $all[$i].FullName, ($all[$i].FullName + ".version")
     Write-Host "removed old backup $($all[$i].FullName)"
   }
 }
-if ($Keep -gt 0) {
+if ($KeepN -gt 0) {
   Invoke-Rotate $Out
   if ($CopyTo) { Invoke-Rotate $CopyTo }
 }
@@ -485,7 +490,7 @@ Runs after Tasks 1-3 are committed on `w2a-ops-scripts`, so the Windows run uses
 
 Scratch project `dcdash_e2e_w2_roll` through `drill-lib.sh`, with a clone of the repo in the workspace so `git checkout` never touches the working tree.
 
-- [ ] **Step 1: Clone** the repo into `.superpowers/sdd/<ws>/clone` and point the helper's `COMPOSE_FILE` at the clone's `compose.yaml` plus a copy of `drill-override.yaml` (the old commit has no scratch override, so the override file is what keeps the dev tags safe). Check `docker compose config` resolves to the scratch project before every step.
+- [ ] **Step 1: Clone** the repo into `.superpowers/sdd/2026-10-10-w2-operations-recovery-hardening/clone` and start every step of this task with `DRILL_REPO=<that clone> DRILL_PROJECT=dcdash_e2e_w2_roll . drill-lib.sh`. The helper takes `REPO` (so `compose.yaml`, the build contexts and the scripts) from `DRILL_REPO`, canonicalizes it and refuses anything that is not the main repo or a folder under the workspace; its two guard comparisons use that `REPO`, and `drill_up` refuses unless `docker compose config` reports the api build context as `$REPO/backend`. Without this, a drill that checks out `1ef27a2` in the clone but builds the main repo's current branch would "pass" while testing the wrong code. The drill override (scratch image tags, ports) is what keeps the dev tags safe on the old commit, which has no scratch override of its own. After each `git checkout` in the clone, check the build context again.
 - [ ] **Step 2: The upgrade being undone.** Check out `1ef27a2` (schema `0004`), build and start (`drill_up`), seed, take the pre-upgrade dump with the clone's `backup.sh`; check out the W1a-or-later code, `up -d --build` (migrates to `0005`), add data.
 - [ ] **Step 3: README option a** exactly as written in "Upgrading to W1a" > Going back > Option a (stop collector, `alembic downgrade 0004`, stop api at once, checkout `1ef27a2`, `up -d --build`, `alembic current` says `0004 (head)`). Expect lossless: readings collected after the upgrade are still there. Record every step that failed or needed a change (backlog I notes option b repeats `--profile dev` from the Phase 3 text).
 - [ ] **Step 4: Upgrade again, then README option b** (remove the containers without `-v`, checkout `1ef27a2`, `build`, `up -d db`, `restore.sh <pre-upgrade dump> --force`, `up -d`): data after the dump is gone, `alembic current` says `0004`.
@@ -641,6 +646,7 @@ Second lock: after the negative `setup.ps1` run, the copy's `compose.yaml` line 
 1. A folder `%USERPROFILE%\dcdash-w2-win\` with a copy of the committed repo tree (no `.git`, no `.env`, no secrets); removed at the end.
 2. A Compose project `dcdash_e2e_w2_win` on the shared Docker Desktop engine: its containers, network, volume `dcdash_e2e_w2_win_dbdata` and images tagged `dcdash_e2e_w2-*:drill`; removed at the end. Ports 127.0.0.1:18080 and 18443 only.
 3. **One scheduled task** `dcdash_e2e_w2_backup` under the current user (runs only while logged on), started once by hand and unregistered at the end.
+4. **A visible console window** opens on your desktop for a few seconds during Step 6(b) (`cmd /c start /wait powershell.exe ...`): that is the only way to run a script the way a person at a console runs it, as opposed to the redirected run from WSL.
 
 **Task 7 (D12): downloads and unpacks, no installer, no service, no registry or PATH change.**
 1. `timescaledb-postgresql-16-windows-amd64.zip` from the GitHub release 2.30.2 (8,630,280 bytes, SHA-256 `9b0d72134c98a92e1ed1ce0cd06cf7611bb48fe9ce6979516cbf889b5decdc05`).
