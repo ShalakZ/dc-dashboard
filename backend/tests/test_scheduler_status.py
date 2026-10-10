@@ -29,11 +29,13 @@ class _Writer:
 
 class _Pool:
     """Records the status writes. `delay` makes each slow (`delays` sets it per state, "online" or "offline"), `fail` makes
-    it raise, `hang` models asyncpg against a frozen database: the first cancellation does not end the call, a second one does."""
+    it raise, `hang` models asyncpg against a frozen database: the first cancellation does not end the call, a second one does,
+    `lose_answer` names the states whose write commits (it is recorded) and then raises, like a write that lands on the server
+    just as the client gives up on it."""
 
-    def __init__(self, delay=0.0, fail=False, hang=False, delays=None):
+    def __init__(self, delay=0.0, fail=False, hang=False, delays=None, lose_answer=()):
         self.delay, self.fail, self.hang, self.writes, self.calls = delay, fail, hang, [], 0
-        self.delays = delays or {}
+        self.delays, self.lose_answer = delays or {}, lose_answer
 
     async def execute(self, sql, *args):
         self.calls += 1
@@ -47,6 +49,8 @@ class _Pool:
         if self.fail:
             raise OSError("database down")
         self.writes.append(state)
+        if state in self.lose_answer:
+            raise OSError("answer lost after the commit")
 
 
 async def _quick_sleep(_seconds):  # the poll cadence shrunk so that a test takes milliseconds
@@ -106,6 +110,23 @@ async def test_the_last_status_written_is_the_last_poll_outcome_even_when_writes
     await until(lambda: pool.writes == ["offline", "online", "offline"])
     await asyncio.sleep(0.4)  # nothing may land after it
     assert pool.writes == ["offline", "online", "offline"]
+    await stop(task)
+
+
+async def test_a_write_that_committed_but_was_reported_failed_cannot_hide_a_source_going_offline():
+    """An online write that commits on the server but ends as a failure for the client (the 5 s bound fires as the UPDATE lands)
+    leaves the stored state unknown; when the source then fails again the offline write must still be made."""
+    connector = _Connector(fails=lambda n: n <= 3 or n >= 8)  # offline, online, offline for good
+    pool = _Pool(lose_answer=("online",))
+
+    async def poll_every_20_ms(_seconds):
+        await asyncio.sleep(0.02)
+
+    task = asyncio.create_task(run_group(GROUP, pool, _Writer(), lambda *_a: connector, sleep=poll_every_20_ms))
+    await until(lambda: connector.reads >= 12)
+    await until(lambda: pool.writes[-1:] == ["offline"])
+    await asyncio.sleep(0.2)  # and nothing lands after it
+    assert "online" in pool.writes and pool.writes[-1] == "offline"
     await stop(task)
 
 

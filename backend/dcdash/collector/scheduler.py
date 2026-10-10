@@ -149,8 +149,14 @@ class _StatusWriter:
             await self._wake.wait()
             self._wake.clear()
             online, error = self._wanted
-            if self._due(online) and await mark_source(self._pool, self._source_id, online, error):
+            if not self._due(online):
+                continue
+            if await mark_source(self._pool, self._source_id, online, error):
                 self._written, self._written_at = online, time.monotonic()
+            else:
+                # False does not mean "not written": a write that commits just as the timeout fires still ends as a failure.
+                # The stored state is unknown, so the next request, online or offline, writes again.
+                self._written = None
 
 
 async def run_group(
