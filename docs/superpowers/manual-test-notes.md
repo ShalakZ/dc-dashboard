@@ -224,6 +224,7 @@ OpenSSL, so it proves nothing); `check_tls.sh` as written (not run, see S12-5); 
   `down -v` loses the database. Fix: `setup.sh` refuses (or asks) when the `dbdata` volume exists and `.env` is
   missing; `backup.sh` warns that `.env` is not included and says where the key must be kept; the README's disaster
   recovery steps list `.env` plus the dump.
+  **Key-fingerprint half closed by W1b (2026-10-10).** The api test-decrypts the stored source secrets at start, stores a fingerprint of `DCDASH_SECRET_KEY` once all decrypt, logs a warning naming the sources otherwise, and the Sources page shows a banner (`GET /api/secret-key/status`). The script half was closed in W0a.
 - **S12-5 [bug, medium] (Claude)** The ops scripts act on whatever stack is running, which is the data-safety problem
   `e2e.sh` had. `check_tls.sh` (read, not run, because it cannot be isolated): `docker compose up -d --build web` also
   starts db and api and re-tags the shared images; it ends with a bare `docker compose down` (stops the whole stack);
@@ -257,6 +258,7 @@ OpenSSL, so it proves nothing); `check_tls.sh` as written (not run, see S12-5); 
   its daily job yet. A forensic restore of an old dump therefore discards its old raw data unless the retention is
   raised first. Idea: `restore.sh` prints the retention horizon and how many chunks it will drop, and the README says
   to raise `raw_retention_days` before restoring old data.
+  **Closed by W1b (2026-10-10).** `restore.sh` and `restore.ps1` run `scripts/restore_retention.sql` between `pg_restore` and `timescaledb_post_restore()`: it prints what the restored policies would delete and pauses the retention jobs when that is more than nothing (`--apply-retention` opts out); a failing check pauses everything and exits 4; the Storage page shows a banner while retention is paused. The drill kept all old chunks; the control without the pause lost them. `restore.ps1` was parsed, not run (S12-14).
 - **S12-10 [design risk, medium for real OPC UA] (Claude)** The OPC UA connector opens and closes a session for every
   poll on purpose (`connectors/opcua.py:104`, "a fresh client per call, always disconnected"): about 720 sessions an
   hour per source at 5 s. Only the simulator was tried; real SCADA servers cap the number of sessions and many log
@@ -373,13 +375,16 @@ the real compression ratio cannot be seen until data is older than the compressi
   default fills in the factory values (raw 30, compress after 7, 1-minute rollups 730, capacity 100 GB,
   warn 80) and saves, or leaves them to Save. The other possible meaning of "set as default" is "make the
   current values the organisation's defaults for later resets". Decide when planning.
+  **Closed by W1b (2026-10-10).** The Storage page has Set as default (saves the form's values as the site default, applies nothing), Reset to default (the site default, else the factory values) and Reset to factory settings; the two Resets only fill the form. The site default is the never-seeded `settings` key `storage_default`.
 - **S9-2 [safety] (Claude)** Shortening a retention period gives no warning and no confirmation, yet the
   next policy run deletes everything older than the new limit, permanently (checked: nothing in
   `StoragePage.tsx` asks). Idea: a confirmation that says what will be deleted (readings older than N days,
   about X rows) before saving.
+  **Closed by W1b (2026-10-10).** `PUT /api/settings/storage` answers 409 unless `confirm=true` when the save shortens the raw or 1-minute retention, or would delete chunks that no armed retention job would delete anyway; the 409 gives chunks, the day span and size (not rows: TimescaleDB's row estimate is 0 after a restore) and the page asks in a dialog.
 - **S9-3 [gap] (Claude)** Storage settings changes are not written to the Audit log (no `audit(` call in
   `backend/dcdash/api/storage.py`), although they decide how long data survives. Idea: audit
   `storage.changed` with the old and new values.
+  **Closed by W1b (2026-10-10).** `storage.default_set` is audited (before/after), and `storage.changed` records the `origin` of the saved values (`factory`, `site_default`, `manual`) and, for a confirmed save, `confirmed_loss`.
 - **S9-4 [idea] (owner's enterprise question, answered in the chat; for the planning phase)** Enterprise
   policy items: a default polling policy (the 5 s default for six metrics is the main driver of volume),
   named retention profiles (lean, standard, forensic), outbound alerts for the capacity warning, scheduled
@@ -478,6 +483,7 @@ mapping, so they show `online` with a Last seen about 6 minutes old.
   path) but not here: the mapping dialog's Asset list and the Assets form's Parent list still show bare
   names. Policy to decide: refuse the same name under the same parent (a real duplicate), allow it
   under different parents, and show the path in every asset list.
+  **Refusal half closed by W1b (2026-10-10).** The same name under one parent is refused (409) on create, rename, move and Discovery's "new asset": trimmed, case-insensitive, inner whitespace collapsed, serialised by an advisory lock (no unique index, D4). Old twins stay and stay editable. The label half was closed in W0a.
 - **S4-4 [ux] (owner)** Mapping a point means scrolling all the way down to the mapping form. To tackle
   in the UI polish.
 - **S4-5 [idea] (owner)** The points list needs sorting (name, address, type, unit, mapped or not) and
