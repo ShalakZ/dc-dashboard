@@ -109,7 +109,7 @@ Risk Med (High only if D4 picks a database constraint).
 
 Order inside the wave: S12-5 and S12-14 first (the PowerShell scripts depend on the guard), then the rest.
 
-**Status 2026-10-10: Part A is done** (branch `w2a-ops-scripts`, plan `2026-10-10-w2-operations-recovery-hardening.md` Tasks 1-8): S12-5, S12-14, the route A spike (D12: yes), S12-11, S12-12. **Part B is next** (branch `w2b-web-hardening`): S12-8, S12-6, S12-7, S13-7. Evidence for S12-8 from Part A: `setup.ps1`/`up --build` on an unchanged tree still recreates api, collector and web, because every build exports a new image id (the BuildKit provenance attestation); test `--provenance=false`.
+**Status 2026-10-10: Part A is done** (branch `w2a-ops-scripts`, plan `2026-10-10-w2-operations-recovery-hardening.md` Tasks 1-8): S12-5, S12-14, the route A spike (D12: yes), S12-11, S12-12. **Part B is done 2026-10-10** (branch `w2b-web-hardening`, merged into main): S12-8, S12-6, S12-7, S13-7. **W2 is complete.** S12-8 ended as digest-pinned base images plus `BUILDX_NO_DEFAULT_ATTESTATIONS=1` in the setup scripts (the BuildKit attestation was why every build exported a new image id). The rebuild of the dev stack from the merged tree waits for the owner's go (it recreates `db` once; a verified backup comes first).
 
 | Id | Item | Effort | Risk |
 |---|---|---|---|

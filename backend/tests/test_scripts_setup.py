@@ -194,3 +194,19 @@ def test_ps1_prints_the_project():
     before = text[:line]
     # $project (the loop variable above) and $Project are one variable in PowerShell, so the line uses its own name
     assert '$ProjectName = "unknown"' in before and "$ProjectName = Get-ComposeProject @args" in before and "catch { }" in before
+
+
+def test_sh_switches_off_default_attestations_before_the_stack_is_started():
+    # without the variable every build changes the image id (the attestation manifest is part of it) and an unchanged re-run
+    # recreates api, collector, web and simulator
+    lines = SCRIPT.read_text().splitlines()
+    export = lines.index("export BUILDX_NO_DEFAULT_ATTESTATIONS=1")  # a line of its own, not a comment
+    up = next(i for i, line in enumerate(lines) if line == 'docker compose "$@" up -d --build')
+    assert export < up
+
+
+def test_ps1_switches_off_default_attestations_before_the_stack_is_started():
+    lines = (SCRIPT.parent / "setup.ps1").read_text().splitlines()
+    setting = lines.index("$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'")
+    up = next(i for i, line in enumerate(lines) if line == "docker compose @args up -d --build")
+    assert setting < up

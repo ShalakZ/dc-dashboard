@@ -61,6 +61,39 @@ unset for plain HTTP. `scripts/check_tls.sh` exercises both paths in a throwaway
 and `127.0.0.1:18443`): it leaves `./certs`, your `.env`, the normal stack and ports 80 and 443 alone. See
 "Practise a restore" for the project-name guard it shares with `scripts/backup_smoke.sh`.
 
+**Renewing the certificate.** Write the new `fullchain.pem` and `privkey.pem` into `./certs` under the same names, keep
+`chown 10002:10002` and `chmod 640` on the key, then run `docker compose restart web`. A new certificate is not picked up
+without that restart (checked). The `collector` mounts `./certs` too and reads the certificate at the same path once an
+hour, so the Settings page shows the new expiry within the hour; `docker compose restart collector` shows it at once.
+`fullchain.pem` must stay readable by everyone (mode 644): the collector (uid 10001) reads the certificate to watch its expiry and
+never reads the key. If the file is made unreadable, the Settings page and the notice both say "cannot be read" and name the
+file, and the notice adds that its expiry is not being watched until that is fixed (checked with a mode 600 file).
+While `DCDASH_TLS_CERT` is set, the Settings page has a read-only "Certificate" line with the expiry date, and
+administrators see a notice at the top of every page when the certificate has less than 30 days left (the notice names
+the date and the days left), when it has expired (browsers already warn your users then) or when the file cannot be read
+(the notice says why). Nothing is shown when `DCDASH_TLS_CERT` is unset. If the collector is not running, the stored
+answer is not trusted after three hours and no notice is shown.
+
+**Security headers.** Every answer of the `web` container (pages, the API, and the redirect from port 80), over HTTP and
+over HTTPS alike, carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY` and a
+`Content-Security-Policy-Report-Only`; Caddy's own `Server` header is removed (so is the API's). That includes the error answer
+Caddy gives while the `api` restarts (a short text body, `502 Bad Gateway`). They come from one file,
+`deploy/security-headers.caddy`, which both Caddyfiles import in every site block and again in each block's `handle_errors`
+(the part that gives Caddy's own error answers the headers). The content policy is **Report-Only on
+purpose**: a browser that finds a violation writes it to the console and blocks nothing, so a policy that is too tight cannot
+break a page. It allows scripts, connections (the live stream included), fonts and forms from the site's own origin only,
+images from the site, `data:` and `blob:`, inline styles (React and the charts write `style` attributes), and no plug-ins.
+It names no report address, because that would be a new unauthenticated route. To read violations, open the browser's developer
+tools on any page: a violation is a console message that starts with `[Report Only] Refused to ...` and names the directive.
+`frontend/e2e/headers.spec.ts` walks every page an administrator can open and fails on any such message. The policy has no
+`frame-ancestors` because `X-Frame-Options: DENY` already forbids framing. The redirect from port 80 is `https://<host><path>`
+and drops a non-standard port, so publish HTTPS on 443. Changes to the headers need `docker compose up -d --build web`.
+
+To enforce the policy later: rename `Content-Security-Policy-Report-Only` to `Content-Security-Policy` in
+`deploy/security-headers.caddy`, run the Playwright `headers` project first (it must stay at zero violations), then
+`docker compose up -d --build web`. `test_the_policy_is_report_only_on_purpose` in `backend/tests/test_caddy_headers.py` pins
+Report-Only and has to be changed in the same commit, and so does the header name that `frontend/e2e/headers.spec.ts` reads.
+
 Open `http://localhost/`. The first visit asks you to create the admin
 account. Then: Sources → Add source → Test → Points → Browse points → Map;
 Assets → open the asset to see live and historical values.
@@ -752,7 +785,8 @@ it deletes the database volume.
    pre-checks it names, how to verify it, and whether its downgrade is lossless.
 3. **Do the pre-checks the notes name**, and stop if one says to.
 4. **Apply.** Get the new code (`git pull`, or check out the commit you want), then `docker compose up -d --build` (add
-   `--profile dev` on a stack that has the simulator). Alembic prints nothing while it migrates, so watch
+   `--profile dev` on a stack that has the simulator; set `BUILDX_NO_DEFAULT_ATTESTATIONS` first, as "Upgrading images"
+   below explains). Alembic prints nothing while it migrates, so watch
    `docker compose logs -f api` until Uvicorn's start-up lines appear (`Application startup complete`); a migration that fails prints
    an error instead. If Compose reports `api` unhealthy, or a dependency failed, while a long migration was running, wait for Uvicorn
    to start and run the same `up -d` again (it is safe); `web` and `collector` start once `api` is healthy. Collection pauses while
@@ -800,6 +834,24 @@ Both options were run step by step as written, in a throwaway Compose project, o
 (schema `0005`). Option a was lossless: the asset made and the readings collected after the upgrade were still there, and
 `alembic current` printed `0004 (head)`. Option b refused without `--force` (exit 3), restored with it (exit 0,
 and the ignored message appeared as described), and lost what came after the dump.
+
+**Upgrading images.** The images the project builds on (`python`, `uv`, `node`, `caddy` and the TimescaleDB image of `db`) are pinned by
+digest in `backend/Dockerfile`, `frontend/Dockerfile` and `compose.yaml`. A rebuild therefore no longer changes the base layers by
+surprise, and a security fix in a base image only arrives when you re-pin. Run `scripts/pin_images.sh --update` before a release, or
+monthly: it asks the registry for the digest of each tag and prints a before and after table (`--check` needs no network and fails
+on an unpinned or malformed reference). Then rebuild, run the tests and commit the changed files. `backend/tests/conftest.py` pins
+`timescale/timescaledb:2.30.2-pg16` for the test database separately, and is re-pinned by hand with the others.
+
+The first `docker compose up -d` after the digests arrived recreates `db` as well as the other services, once: the `image:` line of
+`db` gained the digest, which changes its configuration although the image is the same. The database is unavailable for a short
+while, and `api` and `collector` restart too. The data volume is kept. Take a backup first, as for any upgrade (step 1 above, and
+"Backup and restore").
+
+`scripts/setup.sh` and `setup.ps1` set `BUILDX_NO_DEFAULT_ATTESTATIONS=1` before they build, so running them again when nothing changed
+keeps the running containers. A hand-typed `docker compose up -d --build` should set it first (bash: `export BUILDX_NO_DEFAULT_ATTESTATIONS=1`;
+PowerShell: `$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'`). Without it every build gives `api` and `web` a new image id, because the default
+attestation record is part of the id, and `up -d` recreates `api`, `collector`, `web` and `simulator` (about 12 s without service) even
+though nothing changed; `db` is kept after that first time (the one described above). The first run after adopting the variable recreates them once.
 
 ## Release notes
 

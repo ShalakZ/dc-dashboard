@@ -1,5 +1,7 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
+import { CertificateNotice } from "./CertificateNotice";
+import { RoleChangedNotice } from "./RoleChangedNotice";
 
 // Billing's day columns and a dashboard on a wall screen use the whole window; every other page keeps the 1200 px column.
 const WIDE = /^\/(billing|dashboards\/[^/]+)\/?$/;
@@ -39,6 +41,8 @@ export function Layout() {
         <button onClick={() => logout().then(() => navigate("/login"))}>Sign out</button>
       </nav>
       <main id="main" tabIndex={-1} className={WIDE.test(pathname) ? "wide" : undefined}>
+        <RoleChangedNotice />
+        {hasRole("admin") && <CertificateNotice />}
         <Outlet />
       </main>
     </>

@@ -23,6 +23,17 @@ export interface SecretKeyStatus {
   key_changed: boolean;
   unreadable: { id: number; name: string }[];
 }
+/** GET /api/tls/status (admin): the HTTPS certificate's expiry as the collector last published it. `state` is null when `enabled` is false. */
+export type TlsState = "ok" | "expiring" | "expired" | "unreadable" | "unknown";
+export interface TlsStatus {
+  enabled: boolean;
+  state: TlsState | null;
+  not_after: string | null;
+  days_left: number | null; // whole days, 0 once expired
+  subject: string | null;
+  checked_at: string | null;
+  error: string | null;
+}
 export interface SourceIn {
   name: string; connector_type: string; config: Record<string, unknown>; secret?: string | null; enabled: boolean;
 }

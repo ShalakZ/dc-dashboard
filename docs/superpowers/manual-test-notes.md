@@ -121,6 +121,7 @@ spot-checked against `App.tsx`, `app.css`, `SourcePointsPage.tsx` and then repla
   on every request (verified). After an admin changes someone's role, the nav and buttons keep the old role until a reload,
   and a demoted operator with a dashboard editor open gets a 403 only when pressing Save. Idea: refetch `/api/me` on window
   focus and after any 403, and say "your role changed, reload" instead of a bare error.
+  **Closed by W2 Part B (2026-10-10).** `AuthProvider` refetches `/api/me` when the window gains focus or the tab becomes visible and after any 403 (`setForbiddenHandler`; at most once every 10 s, only while signed in); when the role differs from the one the page loaded with, a notice in the app shell says "Your role changed from X to Y. Reload the page to continue." with a Reload button, and `user` is left alone so an open editor does not move. A 401 from `/api/me` signs out. Covered by 19 new frontend tests.
 - **S13-8 [gap] (Claude, code + measurement)** The dashboard editor's move and resize are pointer-only (known: backlog
   section E); with a keyboard you can add, edit, delete and save, but not arrange. It also cannot be used on a phone:
   fixed 12 columns (about 18 px each at 360 px).
@@ -243,11 +244,13 @@ OpenSSL, so it proves nothing); `check_tls.sh` as written (not run, see S12-5); 
   their browser. A key that does not match the certificate gives a clear Caddy error (`private key does not match
   public key`) and a crash loop, which is fine. Ideas: show the certificate's expiry in Settings or the future doctor
   script and warn 30 days before, and write the rotation steps in the README.
+  **Closed by W2 Part B (2026-10-10).** The collector reads the file named by `DCDASH_TLS_CERT` and publishes the expiry to `settings` every hour; `GET /api/tls/status` (admin only) answers `ok`, `expiring` (under 30 days), `expired`, `unreadable` or `unknown` (no check for over 3 hours); admins get a notice in the app shell and a Certificate line on Settings; the README has the rotation steps. Drilled in a throwaway project and a real browser, 14 of 14 checks: a 1-day certificate gives `expiring`, `days_left` 0 and the notice; an unreadable file (mode 600, the collector runs as uid 10001) gives `unreadable` and its notice; a 90-day certificate plus `restart web` and `restart collector` gives `ok` and no notice; with `DCDASH_TLS_CERT` unset, `enabled` is false, the settings row is removed and there is no notice.
 - **S12-7 [hardening, medium] (Claude)** The site sends no security headers except HSTS in TLS mode (no
   `X-Frame-Options` / `frame-ancestors`, `Content-Security-Policy`, `X-Content-Type-Options`, `Referrer-Policy`);
   `Server: Caddy` is shown. The HTTP to HTTPS redirect drops a non-standard HTTPS port (`https://localhost/...`),
   which only matters if 443 is not the public port. The session cookie is `HttpOnly; SameSite=strict` and gets
   `Secure` over TLS (verified).
+  **Closed by W2 Part B (2026-10-10).** `deploy/security-headers.caddy` is imported in every site block of both Caddyfiles: `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options: DENY` and a `Content-Security-Policy-Report-Only` (`script-src 'self'`), and `Server` is removed; Caddy's own error answers (`handle_errors`) carry them too. Measured: headers on `/`, `/api/health`, `/api/setup` and the SPA fallback; Playwright 5 of 5 including a walk over 16 routes with zero violations and a working live stream; `check_tls.sh` for real: HTTPS 200, HTTP 308, nosniff and no `Server` header on both. The redirect that drops a non-443 port stays as it is (the README says to publish HTTPS on 443).
 - **S12-8 [ux, medium] (Claude)** Re-running `scripts/setup.sh` is safe for the data and for `.env` (unchanged), but it
   recreates the api, collector, web and simulator every time (about 12 s without service): two consecutive fully
   cached builds produced different image ids (probably BuildKit's per-build attestation, not tested with
@@ -256,6 +259,7 @@ OpenSSL, so it proves nothing); `check_tls.sh` as written (not run, see S12-5); 
   for the e2e run). Lesson from this pass: do not remove images by id on this engine (containerd store: a container's
   `.Image` is not the id that `docker image inspect` prints); I removed the two tagged images by mistake and rebuilt
   them from cache; the dev containers still run their older images and will be recreated at the next `up -d`.
+  **Closed by W2 Part B (2026-10-10).** The five external images (`python`, `uv`, `node`, `caddy`, `timescale/timescaledb`) are pinned by digest; `scripts/pin_images.sh --check` / `--update` re-pins them (README "Upgrading images"). `setup.sh` and `setup.ps1` export `BUILDX_NO_DEFAULT_ATTESTATIONS=1`, which was the cause. Measured in a throwaway project: by default a cached rebuild changes the image id and `up -d` recreates api, collector, simulator and web; with the variable cached builds keep the id, and `up -d`, build + `up -d` and `up -d --build` keep every container; no shared-tag collision. The stack builds from the pinned references and is healthy. Upgrade drill (f74eed0 to this branch): `db` is recreated once too, because its `image:` line changed (same image id, the data volume is kept); the README says so. The variable was measured only on Docker Desktop (containerd store).
 - **S12-9 [gap, medium] (Claude)** A restore re-arms the retention policy at once. In the large drill the restored
   database lost, within 30 s, exactly the two chunks that lay wholly beyond `raw_retention_days` (14), because the
   retention job runs right after `timescaledb_post_restore()` (job 1026, success, 0 failures); the source had not run

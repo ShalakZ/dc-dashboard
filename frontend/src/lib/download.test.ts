@@ -1,4 +1,4 @@
-import { ApiError, setUnauthorizedHandler } from "../api/client";
+import { ApiError, setForbiddenHandler, setUnauthorizedHandler } from "../api/client";
 import { downloadCsv } from "./download";
 
 let clicks: { href: string; download: string }[];
@@ -106,6 +106,39 @@ describe("downloadCsv", () => {
       expect(handler).not.toHaveBeenCalled();
     } finally {
       setUnauthorizedHandler(null);
+    }
+  });
+
+  it("tells the app on a 403 so it can check the role, and still throws and saves nothing", async () => {
+    const forbidden = vi.fn();
+    const unauthorized = vi.fn();
+    setForbiddenHandler(forbidden);
+    setUnauthorizedHandler(unauthorized);
+    try {
+      stubFetch(new Response(JSON.stringify({ detail: "insufficient role" }), {
+        status: 403, headers: { "content-type": "application/json" },
+      }));
+      await expect(downloadCsv("/api/billing/costs.csv?month=2026-10")).rejects.toMatchObject({ status: 403, message: "insufficient role" });
+      expect(forbidden).toHaveBeenCalledTimes(1);
+      expect(unauthorized).not.toHaveBeenCalled();
+      expect(clicks).toEqual([]);
+    } finally {
+      setForbiddenHandler(null);
+      setUnauthorizedHandler(null);
+    }
+  });
+
+  it("does not tell the app about a 403 for other failures or a successful download", async () => {
+    const forbidden = vi.fn();
+    setForbiddenHandler(forbidden);
+    try {
+      stubFetch(new Response(JSON.stringify({ detail: "no such month" }), { status: 404, headers: { "content-type": "application/json" } }));
+      await expect(downloadCsv("/x.csv")).rejects.toMatchObject({ status: 404 });
+      stubFetch(csvResponse('attachment; filename="ok.csv"'));
+      await downloadCsv("/x.csv");
+      expect(forbidden).not.toHaveBeenCalled();
+    } finally {
+      setForbiddenHandler(null);
     }
   });
 

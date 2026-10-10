@@ -85,7 +85,7 @@ def test_the_precheck_query_that_test_schema_tiers_extracts_appears_exactly_once
 def test_every_script_the_readme_names_exists():
     names = {m.group(1).rstrip(".,;:").replace("\\", "/") for m in re.finditer(r"scripts[/\\]([A-Za-z0-9_./\\-]+)", README)}
     assert {"backup.sh", "backup.ps1", "restore.sh", "restore.ps1", "setup.sh", "setup.ps1", "backup_smoke.sh", "check_tls.sh",
-            "check_web.sh", "e2e.sh"} <= names, f"the README no longer names the scripts it documents: {sorted(names)}"
+            "check_web.sh", "e2e.sh", "pin_images.sh"} <= names, f"the README no longer names the scripts it documents: {sorted(names)}"
     missing = sorted(n for n in names if not (ROOT / "scripts" / n).exists())
     assert not missing, f"README.md names scripts that do not exist: {missing}"
 
@@ -94,3 +94,51 @@ def test_the_phase_2_commit_is_not_offered_as_a_place_to_go_back_to():
     assert "855cbf8" not in README
     assert "not a place to go back to" in README  # said in words instead: a 0004 or 0005 database fails on Phase 2 code
     assert "1ef27a2" in README  # the code to go back to from W1a (schema 0004)
+
+
+def test_the_upgrade_runbook_says_how_to_re_pin_the_images_and_how_to_keep_unchanged_containers():
+    runbook = section(2, "Upgrading and going back")
+    assert "scripts/pin_images.sh --update" in runbook
+    assert "monthly" in runbook and "release" in runbook  # the cadence
+    assert "backend/tests/conftest.py" in runbook  # its testcontainers pin is re-pinned by hand
+    # a hand-typed `up -d --build` needs the variable first, in both shells; the setup scripts set it themselves
+    assert "export BUILDX_NO_DEFAULT_ATTESTATIONS=1" in runbook
+    assert "$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'" in runbook
+    # step 4 (the hand-typed `up -d --build`) points at that paragraph
+    apply = runbook.split("4. **Apply.**")[1].split("5. **Verify.**")[0]
+    assert "BUILDX_NO_DEFAULT_ATTESTATIONS" in apply and "Upgrading images" in apply
+
+
+def flat(text: str) -> str:
+    """The text on one line, so a phrase may wrap across the README's hard line breaks."""
+    return " ".join(text.split())
+
+
+def test_the_runbook_says_the_first_start_after_the_pins_recreates_db():
+    # measured in a drill: the `image:` line of `db` gained the digest, so Compose recreated db (same image, data volume kept) once
+    runbook = flat(section(2, "Upgrading and going back"))
+    assert "The first `docker compose up -d` after the digests arrived recreates `db` as well as the other services, once" in runbook
+    assert "The database is unavailable for a short while" in runbook
+    assert "The data volume is kept" in runbook
+    assert 'Take a backup first, as for any upgrade (step 1 above, and "Backup and restore")' in runbook
+    assert "`db` is kept after that first time" in runbook  # the BUILDX paragraph no longer promises that db is never recreated
+
+
+def test_the_https_section_says_the_certificate_must_stay_readable_by_the_collector():
+    https = flat(section(3, "Optional HTTPS"))
+    assert "`fullchain.pem` must stay readable by everyone (mode 644)" in https
+    assert "the collector (uid 10001) reads the certificate" in https and "never reads the key" in https
+    assert "cannot be read" in https  # what the Settings page and the notice say when it is not
+
+
+def test_the_https_section_says_error_answers_carry_the_headers_and_how_to_enforce_the_policy_later():
+    https = flat(section(3, "Optional HTTPS"))
+    assert "That includes the error answer Caddy gives while the `api` restarts" in https and "`502 Bad Gateway`" in https
+    assert "`handle_errors`" in https
+    assert "rename `Content-Security-Policy-Report-Only` to `Content-Security-Policy` in `deploy/security-headers.caddy`" in https
+    assert "run the Playwright `headers` project first (it must stay at zero violations)" in https
+    assert "`docker compose up -d --build web`" in https
+    assert "`test_the_policy_is_report_only_on_purpose` in `backend/tests/test_caddy_headers.py`" in https
+    # the order: rename, then the Playwright project, then the rebuild
+    assert (https.index("rename `Content-Security-Policy-Report-Only`") < https.index("run the Playwright `headers` project")
+            < https.rindex("`docker compose up -d --build web`"))

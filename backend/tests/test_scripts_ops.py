@@ -100,6 +100,12 @@ exit 0
 """
 FAKE_CURL = r"""#!/usr/bin/env bash
 echo "curl $*" >> "$FAKE_LOG"
+case " $* " in *" -D "*)   # response headers (check_tls.sh): FAKE_HEADERS=none leaves the security headers out, =server adds Server: Caddy
+  case "$*" in *https*) printf 'HTTP/2 200\r\n' ;; *) printf 'HTTP/1.1 308 Permanent Redirect\r\n' ;; esac
+  [ "$FAKE_HEADERS" = none ] || printf 'X-Content-Type-Options: nosniff\r\n'
+  [ "$FAKE_HEADERS" = server ] && printf 'Server: Caddy\r\n'
+  printf '\r\n'; exit 0 ;;
+esac
 if [ -n "$FAKE_CURL_CODE" ]; then printf '%s' "$FAKE_CURL_CODE"
 else case "$*" in *https*) printf 200 ;; *) printf 308 ;; esac; fi
 """
@@ -310,10 +316,22 @@ def test_check_tls_fails_with_exit_1_when_the_missing_key_gives_no_clear_error(t
     assert "FAIL missing key" in result.stdout and "ok   https" in result.stdout
 
 
+@pytest.mark.parametrize("headers, failing", [("none", "x-content-type-options"), ("server", "server header")])
+def test_check_tls_fails_with_exit_1_when_a_response_lacks_the_security_headers(tmp_path, headers, failing):
+    result, _ = run("check_tls.sh", tmp_path, FAKE_HEADERS=headers)
+    assert result.returncode == 1
+    for scheme in ("https", "http"):  # the HTTPS answer and the port-80 redirect carry the headers alike
+        assert f"FAIL {scheme} {failing}" in result.stdout, result.stdout
+    assert "ok   https: 200" in result.stdout and "ok   http redirects: 308" in result.stdout
+
+
 def test_check_tls_exits_0_when_all_checks_pass(tmp_path):
     result, _ = run("check_tls.sh", tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ok   https: 200" in result.stdout and "ok   http redirects: 308" in result.stdout
+    for scheme in ("https", "http"):
+        assert f"ok   {scheme} x-content-type-options: nosniff" in result.stdout
+        assert f"ok   {scheme} server header (absent): " in result.stdout
     assert "ok   missing key: clear error" in result.stdout and "FAIL" not in result.stdout
 
 

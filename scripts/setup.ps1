@@ -53,4 +53,6 @@ if (Test-Path .env) {
 $ProjectName = "unknown"
 try { $ProjectName = Get-ComposeProject @args } catch { }
 Write-Host "starting Compose project: $ProjectName"
+# Without this, re-running on an unchanged tree recreates api, collector, web and simulator: default attestations change the image id on every build.
+$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'
 docker compose @args up -d --build

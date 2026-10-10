@@ -1,13 +1,20 @@
-:80
+:80 {
+	import /etc/caddy/security-headers.caddy
 
-handle /api/* {
-	reverse_proxy api:8000 {
-		flush_interval -1
+	handle_errors {
+		import /etc/caddy/security-headers.caddy
+		respond "{err.status_code} {err.status_text}"
 	}
-}
 
-handle {
-	root * /srv
-	try_files {path} /index.html
-	file_server
+	handle /api/* {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
 }
