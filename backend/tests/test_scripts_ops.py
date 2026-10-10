@@ -369,6 +369,7 @@ def test_a_refusal_inside_scratch_script_stops_the_smoke_test(tmp_path):
     assert "restore must" not in result.stdout + result.stderr
     nested = [c for c in compose_calls(calls) if c.project is None and c.sub in ("stop", "start")]
     assert nested == [] and restores(calls) == []
+    assert "restoring into Compose project" not in result.stderr  # restore.sh never started (its first stderr line)
     assert compose_calls(calls)[-1].sub == "down"  # and the scratch stack is still taken down
 
 
@@ -377,6 +378,7 @@ def test_a_refusal_before_the_backup_stops_the_smoke_test(tmp_path):
     assert result.returncode == 1
     assert result.stderr.count("scratch_script: Compose does not resolve to dcdash_e2e_smoke") == 1
     assert not any(c.has("pg_dump") for c in docker_calls(calls))  # backup.sh never ran
+    assert "restoring into Compose project" not in result.stderr  # nor did restore.sh (its first stderr line)
     assert compose_calls(calls)[-1].sub == "down"
 
 

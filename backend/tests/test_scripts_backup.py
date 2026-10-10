@@ -9,6 +9,7 @@ backup.ps1 cannot run here: it is parsed by PowerShell and its text is checked, 
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -28,7 +29,7 @@ case " $* " in
       fail) echo "pg_dump: error: connection to server failed" >&2; exit 1 ;;
       empty) exit 0 ;;
       short) printf 'DU'; exit 0 ;;
-      *) printf 'DUMPDUMP'; exit 0 ;;
+      *) printf '%s' "${FAKE_DUMP_HEAD-DUMP}"; [ -n "$FAKE_DUMP_SLEEP" ] && sleep "$FAKE_DUMP_SLEEP"; printf '%s' "${FAKE_DUMP_TAIL-DUMP}"; exit 0 ;;
     esac ;;
   *" pg_restore "*)
     n="$(wc -c | tr -d ' ')"   # reads ALL of stdin, like a full read of the archive
@@ -49,6 +50,16 @@ FAKE_DATE_PROGRAM = (
 )
 FAKE_CP_FAILS_ON_VERSION = '#!/usr/bin/env bash\ncase "$*" in *.version.partial) echo "cp: error writing" >&2; exit 1 ;; esac\nexec /bin/cp "$@"\n'
 FAKE_CMP_DIFFERS = "#!/usr/bin/env bash\nexit 1\n"
+FAKE_SYNC = '#!/usr/bin/env bash\necho "sync $*" >> "$FAKE_LOG"\n'  # the default: writes down how it was called, flushes nothing
+FAKE_SYNC_FAILS = "#!/usr/bin/env bash\nexit 1\n"
+# writes down every rm and fails for the calls that contain $FAKE_RM_FAILS (a removal that does not work); everything else is the real rm
+FAKE_RM = (
+    '#!/usr/bin/env bash\necho "rm $*" >> "$FAKE_LOG"\n'
+    'if [ -n "$FAKE_RM_FAILS" ]; then case "$*" in *"$FAKE_RM_FAILS"*) echo "rm: cannot remove: Permission denied" >&2; exit 1 ;; esac; fi\n'
+    'exec /bin/rm "$@"\n'
+)
+# what the scripts and the fakes use, for a PATH that has no flock
+TOOLS = ("bash", "env", "dirname", "basename", "sed", "head", "tr", "mkdir", "rm", "mv", "cp", "cmp", "wc", "cat", "sleep")
 
 NEW = "20260615-120000"  # what the fake date says; the old backups below are all older
 NEW_DUMP, NEW_VERSION = f"dcdash-{NEW}.dump", f"dcdash-{NEW}.dump.version"
@@ -76,8 +87,8 @@ def pair_names(*stamps: str) -> list[str]:
     return sorted(n for s in stamps for n in (f"dcdash-{s}.dump", f"dcdash-{s}.dump.version"))
 
 
-def run_script(script: str, tmp_path: Path, *args, fakes: dict[str, str] | None = None, **env: str):
-    """Run a COPY of scripts/<script> against the fakes; returns (result, docker call lines)."""
+def prepare_script(script: str, tmp_path: Path, *, fakes: dict[str, str] | None = None, without: tuple[str, ...] = (), **env: str):
+    """A COPY of scripts/<script>, the fakes first on PATH; returns (command, environment, log file)."""
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True, exist_ok=True)
     for name in (script, "restore_retention.sql") if script == "restore.sh" else (script,):
@@ -87,24 +98,45 @@ def run_script(script: str, tmp_path: Path, *args, fakes: dict[str, str] | None 
     work.mkdir(exist_ok=True)
     log = tmp_path / "calls.log"
     log.write_text("")
-    for name, body in {"docker": FAKE_DOCKER, "date": FAKE_DATE_PROGRAM, **(fakes or {})}.items():
+    programs = {"docker": FAKE_DOCKER, "date": FAKE_DATE_PROGRAM, "sync": FAKE_SYNC, **(fakes or {})}
+    for name, body in programs.items():
         path = bin_dir / name
         path.write_text(body)
         path.chmod(0o755)
     environment = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "DCDASH_", "FAKE_", "OPS_"))}
-    environment.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", FAKE_LOG=str(log), TMPDIR=str(work), FAKE_DATE=NEW)
+    if without:  # a PATH of its own: the fakes and the tools the scripts use, minus the ones named (e.g. flock is not installed)
+        for tool in TOOLS:
+            if tool not in without and not (bin_dir / tool).exists():
+                (bin_dir / tool).symlink_to(shutil.which(tool))
+        environment["PATH"] = str(bin_dir)
+        assert all(shutil.which(tool, path=environment["PATH"]) is None for tool in without)
+    else:
+        environment["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+    environment.update(FAKE_LOG=str(log), TMPDIR=str(work), FAKE_DATE=NEW)
     environment.update(env)
     assert shutil.which("docker", path=environment["PATH"]) == str(bin_dir / "docker"), "the real docker could be reached"
-    result = subprocess.run(["bash", str(root / "scripts" / script), *map(str, args)], capture_output=True, text=True,
-                            env=environment, timeout=60, cwd=tmp_path)
-    calls = log.read_text().splitlines()
+    return [shutil.which("bash"), str(root / "scripts" / script)], environment, log
+
+
+def check_calls(script: str, calls: list[str]):
     allowed = {"config", "exec"} | ({"stop", "start"} if script == "restore.sh" else set())
     assert all(c.startswith("docker compose ") and c.split()[2] in allowed for c in calls if c.startswith("docker ")), calls
+
+
+def run_script(script: str, tmp_path: Path, *args, fakes: dict[str, str] | None = None, without: tuple[str, ...] = (), **env: str):
+    """Run a COPY of scripts/<script> against the fakes; returns (result, the lines the fakes wrote down)."""
+    command, environment, log = prepare_script(script, tmp_path, fakes=fakes, without=without, **env)
+    result = subprocess.run([*command, *map(str, args)], capture_output=True, text=True, env=environment, timeout=60, cwd=tmp_path)
+    calls = log.read_text().splitlines()
+    check_calls(script, calls)
     return result, calls
 
 
-def run_backup(tmp_path: Path, *args, fakes: dict[str, str] | None = None, **env: str):
-    return run_script("backup.sh", tmp_path, *args, fakes=fakes, **env)
+def run_backup(tmp_path: Path, *args, fakes: dict[str, str] | None = None, without: tuple[str, ...] = (), **env: str):
+    return run_script("backup.sh", tmp_path, *args, fakes=fakes, without=without, **env)
+
+
+requires_flock = pytest.mark.skipif(os.name == "nt" or shutil.which("flock") is None, reason="needs flock(1) and a POSIX shell")
 
 
 @pytest.fixture
@@ -208,19 +240,49 @@ def test_files_with_other_names_are_never_touched(tmp_path, out):
         assert (out / name).read_bytes() == body
 
 
+FUTURE = "dcdash-20990101-000000.dump"
+LATER_MESSAGE = "is named later than this backup (is the clock right?)"
+
+
 def test_a_clock_that_jumped_back_cannot_delete_the_new_backup(tmp_path, out):
-    pairs(out, OLD[:2] + ["20990101-000000"])  # a dump from the future: the NEW file sorts before it
+    before = pairs(out, OLD[:2] + ["20990101-000000"])  # a dump from the future: the NEW file sorts before it
     result, _ = run_backup(tmp_path, out, "--keep", "1")
     assert result.returncode == 0, result.stderr
     assert (out / NEW_DUMP).read_bytes() == b"DUMPDUMP" and (out / NEW_VERSION).exists()
-    assert (out / "dcdash-20990101-000000.dump").exists()  # newest by name, kept
+    assert names(out) == sorted(before + [NEW_DUMP, NEW_VERSION])  # and nothing else is deleted either
+    assert f"not rotating {out}: {FUTURE} {LATER_MESSAGE}" in result.stderr
 
 
 def test_the_new_backup_survives_even_when_it_sorts_first_and_keep_would_have_evicted_it(tmp_path, out):
-    pairs(out, ["20990101-000000", "20990102-000000"])
+    before = pairs(out, ["20990101-000000", "20990102-000000"])
     result, _ = run_backup(tmp_path, out, "--keep", "1")
     assert result.returncode == 0, result.stderr
-    assert (out / NEW_DUMP).exists() and (out / NEW_VERSION).exists()
+    assert names(out) == sorted(before + [NEW_DUMP, NEW_VERSION])
+
+
+def test_a_clock_that_stays_wrong_for_three_nights_deletes_no_earlier_backup(tmp_path, out):
+    # the clock was reset to 2000 after three good nights: night 2 used to delete night 1's backup, night 3 night 2's
+    good = pairs(out, ["20261001-020000", "20261002-020000", "20261003-020000"])
+    made: list[str] = []
+    for night in ("20000101-020000", "20000102-020000", "20000103-020000"):
+        result, _ = run_backup(tmp_path, out, "--keep", "3", FAKE_DATE=night)
+        assert result.returncode == 0, result.stderr
+        assert f"not rotating {out}: dcdash-20261003-020000.dump {LATER_MESSAGE}" in result.stderr
+        assert "removed old backup" not in result.stderr
+        made += pair_names(night)
+    assert names(out) == sorted(good + made)  # six dumps, all of them
+
+
+def test_a_folder_with_a_later_dump_is_left_alone_but_the_other_folder_is_still_rotated(tmp_path, out):
+    copy = tmp_path / "offsite"
+    kept = pairs(out, OLD[:2] + ["20990101-000000"])
+    pairs(copy, ["20250201-000000", "20250202-000000"])
+    (copy / MARKER).write_text("dcdash\n")
+    result, _ = run_backup(tmp_path, out, "--keep", "1", "--copy-to", copy)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert names(out) == sorted(kept + [NEW_DUMP, NEW_VERSION])  # blocked
+    assert names(copy) == sorted([MARKER, *pair_names(NEW)])  # the copy folder has no later dump: rotated as usual
+    assert f"not rotating {out}:" in result.stderr and "not rotating " + str(copy) not in result.stderr
 
 
 def test_the_first_argument_is_the_output_folder_and_the_default_is_backups_next_to_the_scripts(tmp_path):
@@ -428,6 +490,192 @@ def test_paths_with_spaces_work(tmp_path):
     assert (copy / NEW_DUMP).read_bytes() == b"DUMPDUMP"
 
 
+# ---- one backup at a time per folder ---------------------------------------------------------------------------------------
+
+@requires_flock
+def test_a_free_folder_is_locked_without_a_warning_and_no_lock_file_appears(tmp_path, out):
+    result, _ = run_backup(tmp_path, out)
+    assert result.returncode == 0, result.stderr
+    assert "warning" not in result.stderr and "another backup" not in result.stderr
+    assert names(out) == sorted([NEW_DUMP, NEW_VERSION])  # the lock is on the folder itself: nothing but the pair is in it
+
+
+@requires_flock
+def test_a_run_refuses_while_another_backup_holds_the_folder(tmp_path, out):
+    import fcntl
+
+    before = pairs(out)
+    fd = os.open(out, os.O_RDONLY)  # what the other run holds: a lock on the folder
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result, calls = run_backup(tmp_path, out, "--keep", "1")
+    finally:
+        os.close(fd)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"another backup is running in {out}; nothing was changed" in result.stderr
+    assert names(out) == before and not any("pg_dump" in c for c in calls)  # not even a partial
+    again, _ = run_backup(tmp_path, out, "--keep", "1")  # the lock is gone with the other run
+    assert again.returncode == 0, again.stderr
+    assert names(out) == pair_names(NEW)
+
+
+@requires_flock
+def test_two_runs_started_in_the_same_second_cannot_share_one_partial(tmp_path, out):
+    pairs(out)
+    command, environment, log = prepare_script("backup.sh", tmp_path)
+    slow = {**environment, "FAKE_DUMP_HEAD": "AAAA", "FAKE_DUMP_TAIL": "aaaa", "FAKE_DUMP_SLEEP": "2"}  # A: AAAA, 2 s, aaaa
+    quick = {**environment, "FAKE_DUMP_HEAD": "BBBB", "FAKE_DUMP_TAIL": "bbbb"}
+    first = subprocess.Popen([*command, str(out), "--keep", "1"], env=slow, cwd=tmp_path, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 20
+        while "pg_dump" not in log.read_text():  # A is inside its dump; B starts only now, in the same second
+            assert time.monotonic() < deadline and first.poll() is None, "run A never reached pg_dump"
+            time.sleep(0.05)
+        second = subprocess.run([*command, str(out), "--keep", "1"], env=quick, cwd=tmp_path, capture_output=True, text=True, timeout=60)
+        _, first_stderr = first.communicate(timeout=60)
+    finally:
+        if first.poll() is None:
+            first.kill()
+            first.communicate()
+    assert second.returncode == 1 and f"another backup is running in {out}" in second.stderr
+    assert first.returncode == 0, first_stderr
+    assert (out / NEW_DUMP).read_bytes() == b"AAAAaaaa"  # the bytes A read back, not a mix with B's
+    assert names(out) == pair_names(NEW)  # A rotated the old pairs; B changed nothing and left no partial
+
+
+def test_without_flock_the_backup_goes_on_with_a_warning_that_does_not_blame_another_run(tmp_path, out):
+    pairs(out)
+    result, _ = run_backup(tmp_path, out, "--keep", "1", without=("flock",))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "flock is not installed" in result.stderr and "another backup is running" not in result.stderr
+    assert names(out) == pair_names(NEW)
+
+
+# ---- the copy is flushed before anything is deleted ---------------------------------------------------------------------------
+
+def test_the_copy_is_flushed_to_the_drive_before_either_folder_is_rotated(tmp_path, out):
+    copy = tmp_path / "offsite"
+    pairs(out)
+    pairs(copy, ["20250201-000000", "20250202-000000"])
+    (copy / MARKER).write_text("dcdash\n")
+    result, calls = run_backup(tmp_path, out, "--keep", "1", "--copy-to", copy, fakes={"rm": FAKE_RM})
+    assert result.returncode == 0, result.stdout + result.stderr
+    sync = f"sync {copy}/{NEW_DUMP} {copy}/{NEW_VERSION} {copy}"
+    assert sync in calls
+    removals = [i for i, c in enumerate(calls) if c.startswith("rm -f -- ") and "/dcdash-2025" in c]
+    assert len(removals) == (3 + 2) * 2 and calls.index(sync) < min(removals)  # a dump and a .version of every old pair, 3 in out_dir and 2 in the copy folder
+
+
+def test_a_sync_that_fails_does_not_fail_the_backup(tmp_path, out):
+    copy = tmp_path / "offsite"
+    copy.mkdir()
+    (copy / MARKER).write_text("dcdash\n")
+    result, _ = run_backup(tmp_path, out, "--copy-to", copy, fakes={"sync": FAKE_SYNC_FAILS})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"copied to {copy}" in result.stdout and (copy / NEW_DUMP).exists()
+
+
+# ---- a removal that fails is reported, and does not turn a good backup into exit 1 -------------------------------------------
+
+COPY_OLD = ["20250201-000000", "20250202-000000", "20250203-000000"]
+
+
+@pytest.mark.parametrize(
+    "fails, out_left, copy_left",
+    [
+        # the dump of the oldest pair in out_dir cannot be removed: that pair stays whole, the rest of out_dir and the copy folder are rotated
+        ("backups/dcdash-20250101-000000.dump", pair_names("20250101-000000", NEW), pair_names(NEW)),
+        ("offsite/dcdash-20250201-000000.dump", pair_names(NEW), pair_names("20250201-000000", NEW)),
+        # the dump went, its .version cannot: an orphan .version stays (rotation never counts it), the rest is rotated
+        ("backups/dcdash-20250102-000000.dump.version", ["dcdash-20250102-000000.dump.version", *pair_names(NEW)], pair_names(NEW)),
+    ],
+    ids=["dump-in-out_dir", "dump-in-the-copy-folder", "version-in-out_dir"],
+)
+def test_a_removal_that_fails_is_reported_and_the_backup_still_exits_0(tmp_path, out, fails, out_left, copy_left):
+    copy = tmp_path / "offsite"
+    pairs(out)
+    pairs(copy, COPY_OLD)
+    (copy / MARKER).write_text("dcdash\n")
+    result, _ = run_backup(tmp_path, out, "--keep", "1", "--copy-to", copy, fakes={"rm": FAKE_RM}, FAKE_RM_FAILS=fails)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"could not remove {tmp_path / fails}; the new backup is fine" in result.stderr
+    assert names(out) == sorted(out_left)
+    assert names(copy) == sorted([MARKER, *copy_left])
+    assert f"copied to {copy}" in result.stdout
+
+
+# ---- --copy-to when the project name cannot be read, a two-line marker, a byte order mark -----------------------------------
+
+@pytest.mark.parametrize("marker", ["other-site\n", "dcdash\n"], ids=["another-name", "the-right-name"])
+def test_when_the_project_name_cannot_be_read_the_marker_cannot_be_checked_so_nothing_is_copied(tmp_path, out, marker):
+    before = pairs(out)
+    copy = tmp_path / "offsite"
+    other_set = pairs(copy, ["20250201-000000", "20250202-000000"])
+    (copy / MARKER).write_text(marker)
+    result, _ = run_backup(tmp_path, out, "--keep", "1", "--copy-to", copy, FAKE_CONFIG_FAILS="1")
+    assert result.returncode == 5, result.stdout + result.stderr
+    assert result.stderr.splitlines()[0] == "backing up Compose project: unknown"
+    assert "cannot tell which Compose project this is" in result.stderr and "NOT copied" in result.stderr
+    assert names(copy) == sorted([MARKER, *other_set])  # nothing copied in, nothing rotated
+    assert names(out) == sorted(before + [NEW_DUMP, NEW_VERSION])
+
+
+@pytest.mark.parametrize(
+    "marker, accepted",
+    [(b"other\ndcdash\n", False), (b"dcdash\nother\n", True), (b"\xef\xbb\xbfdcdash\r\n", True), (b"\xef\xbb\xbfother\n", False),
+     (b" dcdash\n", False), (b"dcdash \n", False)],
+    ids=["right-name-on-line-2", "other-name-on-line-2", "with-a-byte-order-mark", "other-name-with-a-byte-order-mark",
+         "leading-space", "trailing-space"],
+)
+def test_only_the_first_line_of_the_marker_counts(tmp_path, out, marker, accepted):
+    pairs(out)
+    copy = tmp_path / "offsite"
+    copy.mkdir()
+    (copy / MARKER).write_bytes(marker)
+    result, _ = run_backup(tmp_path, out, "--copy-to", copy)
+    assert result.returncode == (0 if accepted else 5), result.stdout + result.stderr
+    assert (copy / NEW_DUMP).exists() == accepted and (copy / NEW_VERSION).exists() == accepted
+    assert (out / NEW_DUMP).exists()  # the local backup is made either way
+
+
+def test_a_directory_named_like_a_dump_is_never_counted_or_removed(tmp_path, out):
+    pairs(out, OLD[1:])
+    folder = out / "dcdash-20240102-000000.dump"
+    folder.mkdir()
+    (folder / "keep.txt").write_text("x")
+    (out / "dcdash-20240102-000000.dump.version").write_text("0005\n")
+    result, _ = run_backup(tmp_path, out, "--keep", "1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (folder / "keep.txt").read_text() == "x" and (out / "dcdash-20240102-000000.dump.version").exists()
+    assert "could not remove" not in result.stderr and "dcdash-20240102-000000" not in result.stderr  # it was not even tried
+    assert names(out) == sorted(["dcdash-20240102-000000.dump", "dcdash-20240102-000000.dump.version", *pair_names(NEW)])
+
+
+# ---- the copy folder is not the output folder; wording -----------------------------------------------------------------------
+
+@pytest.mark.parametrize("how", ["same-path", "symlink", "dot-segment"])
+def test_the_output_folder_is_not_a_copy_folder(tmp_path, out, how):
+    before = pairs(out)
+    (out / MARKER).write_text("dcdash\n")
+    link = tmp_path / "link-to-backups"
+    link.symlink_to(out)
+    target = {"same-path": out, "symlink": link, "dot-segment": out / "."}[how]
+    result, _ = run_backup(tmp_path, out, "--keep", "1", "--copy-to", target)
+    assert result.returncode == 5, result.stdout + result.stderr
+    assert "is the output folder" in result.stderr and "NOT copied" in result.stderr
+    assert names(out) == sorted(before + [MARKER, NEW_DUMP, NEW_VERSION])  # the local backup, nothing rotated, nothing copied over
+
+
+def test_a_dump_that_fails_exits_1_and_does_not_claim_a_local_backup_was_made(tmp_path, out):
+    before = pairs(out)
+    result, _ = run_backup(tmp_path, out, "--keep", "1", "--copy-to", tmp_path / "unplugged", FAKE_DUMP="fail")
+    assert result.returncode == 1, result.stdout + result.stderr  # not 5: there is no backup
+    assert "will still be attempted" in result.stderr and "still made" not in result.stderr
+    assert "no backup was made" in result.stderr and "local backup made" not in result.stderr
+    assert names(out) == before
+
+
 # ---- shell syntax ---------------------------------------------------------------------------------------------------------
 
 def test_backup_sh_parses():
@@ -438,6 +686,11 @@ def test_backup_sh_parses():
 
 POWERSHELL = shutil.which("powershell.exe") or shutil.which("pwsh")
 PS1 = SCRIPTS / "backup.ps1"
+
+
+def ps1_code() -> str:
+    """The script without its comment-only lines (the comments name cmd /c, --list, exit codes)."""
+    return "\n".join(line for line in PS1.read_text().splitlines() if not line.lstrip().startswith("#"))
 
 
 @pytest.mark.skipif(POWERSHELL is None, reason="no PowerShell on this machine")
@@ -472,15 +725,19 @@ def test_backup_ps1_reads_the_dump_back_in_full():
     text = PS1.read_text()
     code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))  # the comment names --list
     assert "pg_restore -f /dev/null" in code and "--list" not in code and "pg_restore -l" not in code
-    assert text.count("cmd /c") == 2  # binary in (pg_dump > file) and binary out (pg_restore < file) only through cmd
+    assert ps1_code().count("cmd /c") == 2  # binary in (pg_dump > file) and binary out (pg_restore < file) only through cmd
 
 
 def test_backup_ps1_moves_the_dump_into_place_before_it_writes_the_version_file():
     text = PS1.read_text()
-    move, version = text.index("Move-Item -LiteralPath $Partial -Destination $File"), text.index('Set-Content -Path "$File.version"')
-    assert move < version
+    move = text.index("Move-Item -LiteralPath $Partial -Destination $File")
+    write = text.index('Set-Content -LiteralPath "$File.version.partial" -Encoding ascii -NoNewline -Value $Version')
+    rename = text.index('Move-Item -LiteralPath "$File.version.partial" -Destination "$File.version"')
+    assert move < write < rename  # the .version appears under its final name in one step, like bash's mv; -LiteralPath survives [ ] in the folder
+    assert "Set-Content -Path" not in text
     assert text.index("could not read the schema revision") < move  # the revision is known before the dump gets its final name
     assert text.index("the new dump cannot be read back") < move
+    assert '"$File.version.partial"' in text[text.index("} finally {"):]  # and a leftover partial is removed
 
 
 def test_backup_ps1_checks_the_marker_and_exits_5_when_the_copy_did_not_happen():
@@ -514,3 +771,55 @@ def test_backup_ps1_copy_is_checked_by_hash_before_it_gets_its_final_name():
     text = PS1.read_text()
     assert text.index("Get-FileHash") < text.index("Move-Item -LiteralPath $v") < text.index("Move-Item -LiteralPath $p")
     assert 'throw "$Name already exists there"' in text  # an existing copy is never overwritten
+
+
+def test_backup_ps1_refuses_to_rotate_a_folder_with_a_dump_named_later_than_this_backup():
+    text = PS1.read_text()
+    function = text[text.index("function Invoke-Rotate"):]
+    guard = function.index("$all.Count -gt 0 -and $all[$all.Count - 1].Name -ne $Name")
+    assert guard < function.index("for ($i") < function.index("Remove-Item")  # before anything is removed
+    assert "return" in function[guard:function.index("for ($i")]
+    assert "not rotating ${Dir}: $($all[$all.Count - 1].Name) is named later than this backup (is the clock right?)" in function
+
+
+def test_backup_ps1_holds_a_lock_for_the_whole_run_and_releases_it_in_a_finally():
+    text = ps1_code()
+    lock = text.index("[IO.File]::Open((Join-Path $Out \".dcdash-backup.lock\"), 'OpenOrCreate', 'ReadWrite', 'None')")
+    assert lock < text.index("Test-Path -LiteralPath $File") < text.index("cmd /c")  # before the same-second check and the dump
+    assert lock < text.index("Invoke-Rotate $Out")  # rotation runs under the lock too
+    assert "another backup is running in $Out; nothing was changed" in text
+    assert "-band 0xFFFF) -eq 32" in text  # a sharing violation is "another backup"; any other failure has its own message
+    assert text.rstrip().endswith("} finally {\n  $Lock.Dispose()\n}")  # released also when the script runs inside an open console
+
+
+def test_backup_ps1_reports_a_removal_that_fails_and_goes_on():
+    text = ps1_code()
+    function = text[text.index("function Invoke-Rotate"):text.index("if ($KeepN -gt 0 -and -not $CopyProblem)")]
+    assert function.count("Remove-Item -Force -ErrorAction Stop") == 2 and function.count("try {") == 2  # terminating, so the catch sees it
+    assert function.count("could not remove") == 2 and "the new backup is fine" in function
+    assert "continue" in function[function.index("could not remove"):] and "exit" not in function  # the exit code is not touched
+
+
+def test_backup_ps1_will_not_copy_when_the_project_is_unknown_or_the_copy_folder_is_the_output_folder():
+    text = PS1.read_text()
+    assert "cannot tell which Compose project this is" in text and "is the output folder itself" in text
+    folder, unknown, marker = (text.index(s) for s in ("Resolve-Path -LiteralPath $CopyTo", "elseif (-not $Project)", "Test-Path -LiteralPath $Marker"))
+    assert folder < unknown < marker  # the marker is only read once the project name is known
+    assert "} elseif ((Resolve-Path -LiteralPath $CopyTo).ProviderPath.TrimEnd('\\') -ieq $Out.TrimEnd('\\')) {" in text  # the whole condition
+
+
+def test_backup_ps1_header_says_how_to_run_it_and_what_binding_errors_do():
+    text = PS1.read_text()
+    header = " ".join(line.lstrip("# ") for line in text.splitlines() if line.startswith("#"))
+    assert "Run it with powershell.exe -File: the exit code 5 does not reach the caller under -Command" in header
+    assert "parameter-binding errors (a missing value, a duplicate parameter) exit 1, not 2" in header
+    empty = next(line for line in text.splitlines() if "ContainsKey('CopyTo')" in line)
+    assert "-not $CopyTo" in empty and "exit 2" in empty  # an explicit empty -CopyTo is a usage error, like bash
+
+
+def test_backup_ps1_makes_out_absolute_and_refuses_a_percent_sign():
+    text = ps1_code()
+    absolute = text.index("$Out = (New-Item -ItemType Directory -Force -Path $Out).FullName")
+    percent = next(line for line in text.splitlines() if '$Out.Contains("%")' in line)
+    assert "exit 2" in percent
+    assert absolute < text.index('$Out.Contains("%")') < text.index("Resolve-Path -LiteralPath $CopyTo") < text.index("cmd /c")
