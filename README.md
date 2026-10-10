@@ -501,7 +501,7 @@ one with your data is `dcdash` unless you changed it.
 
 `backup.sh` writes the dump under a temporary name, reads the whole of it back (`pg_restore -f /dev/null`, because a dump cut off in
 its data section still passes a table-of-contents check), reads the schema revision, and only then gives the dump its name and
-writes the `.version` file next to it (the Alembic revision, for example `0005`; no newline). A failed, empty or cut-off dump
+writes the `.version` file next to it (the Alembic revision, for example `0005`; `backup.sh` ends it with a newline, `backup.ps1` does not, and both restore scripts trim it). A failed, empty or cut-off dump
 therefore never replaces or evicts a good backup. After every backup it says that `.env` and `certs/` are not in the dump (see "What the
 backup does not contain"). With Docker stopped it cannot reach the database: it prints `pg_dump failed; no backup was made and no old
 backup was touched` and exits 1 (read from the script; not tried with Docker stopped).
@@ -524,7 +524,7 @@ brings an older dump up to the current schema. Never force-restore a dump from a
 `restore.sh` reads the whole dump before it stops or drops anything. A dump that is missing, cut off or damaged is refused with exit 1
 and the message `nothing was changed`: the database and the containers are untouched. (The first version of the script dropped the
 database first, and the Windows drill showed that a cut-off dump then left the running database empty; this check is the fix, and it
-was run for real afterwards, with a dump cut to half its size, in bash and in PowerShell.) `restore.sh` keeps `pg_restore`'s messages in
+was run for real afterwards, with a dump cut to half its size in bash and one cut to 1,500 bytes in PowerShell.) `restore.sh` keeps `pg_restore`'s messages in
 `dcdash-restore-<stamp>.log` under `$TMPDIR` (default `/tmp`); every `restore.ps1` run leaves the same kind of log in `%TEMP%`, empty
 when nothing went wrong.
 
@@ -609,23 +609,26 @@ backups are made. The sequence for a new machine (or a machine whose stack you h
    runs; check the scan targets in a new scope before the first scan (see "After a restore").
 
 What the drills did and did not cover. Run for real, in throwaway Compose projects: on Windows `setup.ps1`, `backup.ps1` (with
-`-Keep` and `-CopyTo`), `restore.ps1` and a Task Scheduler task; on Linux `backup.sh` (without `--keep` and `--copy-to`) and
-`restore.sh` (with and without `--force`, with `--apply-retention`, with a cut-off dump), each restoring into the stack that had made
-its dump. The bash `--keep` and `--copy-to` are proved by the script tests, which run the scripts against a fake `docker`, and by
-the PowerShell runs. `setup.sh`, `backup_smoke.sh` and `check_tls.sh` were not run for real in these drills, and neither was a restore
-on a second machine from a dump and an `.env` that were carried over.
+`-Keep` and `-CopyTo`), `restore.ps1` and a Task Scheduler task; on Linux `backup.sh` (with `--keep` and `--copy-to`: rotation, the
+marker file, every exit 5 case, the usage errors, a second backup at the same time, a dump dated in the future, and the database
+stopped), `restore.sh` (with and without `--force`, with `--apply-retention`, with a cut-off dump and with a missing one), both
+"going back" options of "Upgrading and going back", and the two self-test scripts below. Not run for real: `setup.sh` (its Windows
+twin `setup.ps1` was), Docker Desktop stopped under `backup.ps1`, a cron or Task Scheduler trigger firing by itself, a copy drive
+pulled out in the middle of a copy, and a restore on a second machine from a dump and an `.env` that were carried over.
 
 **The self-test.** `OPS_COMPOSE_PROJECT=dcdash_e2e_drill scripts/backup_smoke.sh` builds a throwaway stack of its own, backs it up,
 deletes an asset, checks that a dump with a wrong `.version` is refused (exit 3), restores, checks that the asset is back, and then
 checks that a corrupted dump is refused with nothing changed (exit 1, `api` still running). It removes its project and its volume
-when it ends (this is what the script is written to do; see above for what was run for real). `scripts/check_tls.sh` is the same kind
+when it ends (run for real: it ended with `backup smoke OK` and `restore failure-path OK`, and left no container or volume). `scripts/check_tls.sh` is the same kind
 of script for HTTPS (see "Optional HTTPS"). Both:
 
 - need a project name that starts with `dcdash_e2e` (`OPS_COMPOSE_PROJECT` picks it; without it `backup_smoke.sh` uses
   `dcdash_e2e_smoke` and `check_tls.sh` uses `dcdash_e2e_tls`) and refuse any other name, so they cannot be pointed at the project with
   your data (`dcdash`, volume `dcdash_dbdata`);
 - build images of their own (`<project>-backend:scratch`, `<project>-web:scratch`) and make up a database password and a secret key
-  for the run, so `dcdash-backend:local`, `dcdash-web:local` and your `.env` are not used or changed;
+  for the run, so `dcdash-backend:local`, `dcdash-web:local` and your `.env` are not used or changed. They remove their containers,
+  network and volume when they end but leave those images behind (the drill left three); remove them with
+  `docker image rm <project>-backend:scratch <project>-web:scratch` when you do not need the build cache they hold;
 - publish what they publish (`check_tls.sh`: the `web` service) only on `127.0.0.1:18080` and `127.0.0.1:18443`
   (`SCRATCH_HTTP_PORT` and `SCRATCH_HTTPS_PORT` change the numbers, from 1024 to 65535), never on ports 80 and 443.
 
@@ -637,8 +640,8 @@ Nothing in the stack takes backups by itself. Run `scripts/backup.sh` (or `backu
 for the local copies, `--keep N` so that the folder does not fill the disk, and `--copy-to` a folder on another drive or share, so
 that a lost disk does not take the backups with it.
 
-**Linux (cron).** This is an example: the cron entry itself was not run, and `backup.sh` ran for real without `--keep` and
-`--copy-to` (see "Practise a restore" for what was proved how). The cron user must be
+**Linux (cron).** This is an example: the cron entry itself was not run (the script it calls, with `--keep` and `--copy-to`, was; see
+"Practise a restore" for what was proved how). The cron user must be
 allowed to run `docker`. cron keeps no exit code, so send the output to a file and look at it (an exit 5 shows as the line
 `local backup made, NOT copied; nothing was rotated (exit 5)`):
 
