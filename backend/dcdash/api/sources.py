@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import distinct, exists, func, or_, select
+from sqlalchemy import distinct, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +49,10 @@ class SourceOut(BaseModel):
     last_error: str | None
     has_secret: bool
     origin: str
+
+
+class SourceListOut(SourceOut):
+    last_reading_age_seconds: float | None = None  # newest stored reading of any of its points; None = none yet
 
 
 def validated_config(connector_type: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -107,11 +111,22 @@ async def list_connectors() -> list[dict[str, Any]]:
     ]
 
 
-@router.get("/sources", response_model=list[SourceOut], dependencies=[Operator])
-async def list_sources(db: AsyncSession = Depends(get_db)) -> list[Source]:
+@router.get("/sources", response_model=list[SourceListOut], dependencies=[Operator])
+async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut]:
     # Discovered sources stay out of the list until at least one of their points is mapped.
     query = select(Source).where(or_(Source.origin == "manual", _has_mapped_point())).order_by(Source.name)
-    return list((await db.scalars(query)).all())
+    sources = list((await db.scalars(query)).all())
+    # point_latest holds one row per polled point, so this is cheap; never aggregate the readings hypertable for this.
+    rows = await db.execute(
+        text(
+            "SELECT p.source_id, extract(epoch FROM now() - max(pl.ts)) FROM point_latest pl "
+            "JOIN points p ON p.id = pl.point_id GROUP BY p.source_id"
+        )
+    )
+    ages = {source_id: max(0.0, float(age)) for source_id, age in rows}
+    return [
+        SourceListOut.model_validate(s).model_copy(update={"last_reading_age_seconds": ages.get(s.id)}) for s in sources
+    ]
 
 
 @router.post("/sources", response_model=SourceOut, status_code=201, dependencies=[Admin])

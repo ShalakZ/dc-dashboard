@@ -1,12 +1,15 @@
 """Readiness: GET /api/health answers 200 only when the database answers a query in time."""
 import asyncio
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from dcdash.api.deps import get_db, require_role
 from dcdash.core.db import get_engine
+from dcdash.core.heartbeat import HEARTBEAT_KEY, STALE_AFTER_SECONDS
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -44,3 +47,20 @@ async def health() -> JSONResponse:
     if await database_answers(get_engine()):
         return JSONResponse({"status": "ok"})
     return JSONResponse({"status": "unavailable", "detail": "database unavailable"}, status_code=503)
+
+
+class CollectorStatus(BaseModel):
+    alive: bool
+    age_seconds: float | None  # seconds since the last beat by the database's clock; None = no beat on record
+
+
+@router.get("/collector/status", response_model=CollectorStatus, dependencies=[Depends(require_role("operator"))])
+async def collector_status(db: AsyncSession = Depends(get_db)) -> CollectorStatus:
+    age = await db.scalar(
+        text("SELECT extract(epoch FROM now() - (value->>'at')::timestamptz) FROM settings WHERE key = :key"),
+        {"key": HEARTBEAT_KEY},
+    )
+    if age is None:
+        return CollectorStatus(alive=False, age_seconds=None)
+    age = max(0.0, float(age))  # a beat stamped ahead of this clock is "just now", never a negative age
+    return CollectorStatus(alive=age <= STALE_AFTER_SECONDS, age_seconds=age)

@@ -1,5 +1,6 @@
 import asyncio
 
+from dcdash.connectors.base import GOOD
 from dcdash.core.crypto import decrypt
 from dcdash.core.pg import CONFIG_CHANNEL
 from helpers import listening, login_as, make_asset, make_mapping, make_point, make_source
@@ -274,3 +275,23 @@ async def test_a_clash_with_a_discovered_source_that_is_listed_is_generic_too(cl
     response = await client.post("/api/sources", json={**SIM, "name": "plc-1"})
     assert response.status_code == 409
     assert response.json()["detail"] == "a source with this name already exists"
+
+
+async def test_the_list_gives_the_age_of_each_sources_newest_reading(client, db):
+    await login_as(client, db, "operator")
+    await make_source(db, name="quiet")  # no points, so no reading
+    busy = await make_source(db, name="busy")
+    older, newer = await make_point(db, busy, "P1"), await make_point(db, busy, "P2")
+    await db.execute(
+        "INSERT INTO point_latest (point_id, ts, value, quality) VALUES ($1, now() - interval '90 seconds', 1.0, $3), "
+        "($2, now() - interval '12 seconds', 1.0, $3)", older, newer, GOOD,
+    )
+    rows = {s["name"]: s for s in (await client.get("/api/sources")).json()}
+    assert rows["quiet"]["last_reading_age_seconds"] is None
+    assert 11 <= rows["busy"]["last_reading_age_seconds"] < 25  # the newest of the two, not the older one
+
+
+async def test_only_the_list_carries_the_reading_age(client, db):
+    await login_as(client, db, "admin")
+    created = await create_sim(client)
+    assert "last_reading_age_seconds" not in created

@@ -230,3 +230,17 @@ async def test_stopping_writes_the_readings_still_in_the_buffer(db, monkeypatch)
     stop.set()
     await asyncio.wait_for(task, timeout=10)
     assert await db.fetchval("SELECT count(*) FROM readings WHERE point_id = $1", point) > 0
+
+
+async def test_the_collector_writes_its_heartbeat_as_soon_as_it_starts(db):
+    sim_app = create_sim_app(Simulator(), api_key="k")
+    stop = asyncio.Event()
+    task = asyncio.create_task(run(stop, sim_factory(sim_app)))
+    try:
+        async def beats() -> int:
+            return await db.fetchval("SELECT count(*) FROM settings WHERE key = 'collector_heartbeat'")
+
+        await wait_for(beats, 1)
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=10)

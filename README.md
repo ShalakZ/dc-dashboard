@@ -410,6 +410,12 @@ has no Docker health status. Compose never restarts an unhealthy container: an `
 database migration does not make `scripts/setup.sh` fail; a migration that takes longer than about 220 s needs
 `docker compose up -d` run again, which is safe.
 
+The collector writes a heartbeat to the database every 10 s. `GET /api/collector/status` (operators and admins) says
+whether a beat arrived within the last 30 s, measured by the database's clock. The Sources page shows a notice when it
+did not and, per source, the age of its newest stored reading (BAD-quality readings count, and the age stays after a
+point is unmapped; a source with no stored reading shows a dash). After a restore the old heartbeat reads as "silent"
+until the collector starts.
+
 ### Housekeeping
 
 The collector deletes expired sessions and finished jobs older than 7 days every hour

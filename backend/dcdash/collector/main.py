@@ -5,6 +5,7 @@ import signal
 import asyncpg
 
 from dcdash import connectors  # noqa: F401  (registers built-in connectors)
+from dcdash.collector.heartbeat import heartbeat_loop
 from dcdash.collector.housekeeping import housekeeping_loop
 from dcdash.collector.jobs import fail_stale_jobs, run_job_loop
 from dcdash.collector.logs import configure_logging
@@ -81,6 +82,7 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
         asyncio.create_task(reload_loop()),
         asyncio.create_task(run_job_loop(pool, factory, jobs_ready, stop)),
         asyncio.create_task(housekeeping_loop(pool, stop=stop)),
+        asyncio.create_task(heartbeat_loop(pool, stop=stop)),
     ]
     try:
         await stop.wait()
