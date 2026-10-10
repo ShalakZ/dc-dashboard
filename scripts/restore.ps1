@@ -19,6 +19,12 @@ foreach ($arg in ($args | Select-Object -Skip 1)) {
   elseif ($arg -eq "--apply-retention") { $ApplyRetention = 1 }
   else { [Console]::Error.WriteLine($Usage); exit 2 }
 }
+$Project = "unknown"
+try {
+  $Line = docker compose config --no-interpolate | Select-String -Pattern '^name:\s*(\S+)' | Select-Object -First 1
+  if ($Line) { $Project = $Line.Matches[0].Groups[1].Value }
+} catch { }
+Write-Host "restoring into Compose project: $Project"
 $RetentionSql = Join-Path $PSScriptRoot "restore_retention.sql"
 $Current = ""
 try { $Current = (docker compose exec -T db psql -U dcdash -d dcdash -tAc "SELECT version_num FROM alembic_version").Trim() } catch { }

@@ -24,6 +24,8 @@ for arg in "$@"; do
     *) echo "$USAGE" >&2; exit 2 ;;
   esac
 done
+PROJECT="$(docker compose config --no-interpolate 2>/dev/null | sed -n 's/^name: *//p' | head -n 1 || true)"
+echo "restoring into Compose project: ${PROJECT:-unknown}" >&2
 CURRENT="$(docker compose exec -T db psql -U dcdash -d dcdash -tAc 'SELECT version_num FROM alembic_version' || true)"
 WANTED="$(cat "$DUMP.version" 2>/dev/null || echo unknown)"
 if [[ "$CURRENT" != "$WANTED" && "$FORCE" != "--force" ]]; then

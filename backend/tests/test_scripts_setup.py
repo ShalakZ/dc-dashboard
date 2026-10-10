@@ -8,12 +8,16 @@ import shutil
 import subprocess
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "setup.sh"
+import pytest
+
+SCRIPT =Path(__file__).resolve().parents[2] / "scripts" / "setup.sh"
 
 FAKE_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$CALLS_LOG"
 case "$*" in
   *"config --no-interpolate")
+    if [ -n "$FAKE_CONFIG_FAILS" ]; then echo "no configuration file provided: not found" >&2; exit 1; fi
+    if [ -n "$FAKE_CONFIG_NAMELESS" ]; then printf 'services: {}\n'; exit 0; fi
     name="${COMPOSE_PROJECT_NAME:-dcdash}"
     # like Compose, -p NAME on the command line beats COMPOSE_PROJECT_NAME
     case "$*" in *" -p "*) name="$(printf '%s' "$*" | sed -n 's/.* -p \([^ ]*\).*/\1/p')" ;; esac
@@ -25,13 +29,15 @@ case "$*" in
   "volume ls"*)
     proj="$(printf '%s' "$*" | sed -n 's/.*label=com.docker.compose.project=\([^ ]*\).*/\1/p')"
     case " $FAKE_VOLUMES " in *" $proj "*) echo "${proj}_dbdata" ;; esac ;;
+  *" up "*) echo "fake docker: up called" >&2 ;;  # a marker, so a test can tell what came before it on stderr
 esac
 exit 0
 """
 
 
 def run_setup(tmp_path: Path, *, env_file: str | None = None, volumes: tuple[str, ...] = (),
-              docker_down: bool = False, project: str | None = None, args: tuple[str, ...] = ()):
+              docker_down: bool = False, project: str | None = None, args: tuple[str, ...] = (),
+              config_fails: bool = False, config_nameless: bool = False):
     """`volumes` are the Compose projects that have a database volume; `project` is COMPOSE_PROJECT_NAME, if any."""
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
@@ -47,7 +53,8 @@ def run_setup(tmp_path: Path, *, env_file: str | None = None, volumes: tuple[str
     docker.chmod(0o755)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "DCDASH_"))}
     env.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", CALLS_LOG=str(log),
-               FAKE_VOLUMES=" ".join(volumes), FAKE_DOCKER_DOWN="1" if docker_down else "")
+               FAKE_VOLUMES=" ".join(volumes), FAKE_DOCKER_DOWN="1" if docker_down else "",
+               FAKE_CONFIG_FAILS="1" if config_fails else "", FAKE_CONFIG_NAMELESS="1" if config_nameless else "")
     if project:
         env["COMPOSE_PROJECT_NAME"] = project
     result = subprocess.run(["bash", str(root / "scripts" / "setup.sh"), *args], capture_output=True, text=True,
@@ -147,3 +154,43 @@ def test_when_docker_cannot_list_volumes_nothing_is_written(tmp_path):
     assert not (root / ".env").exists()
     assert not started(calls)
     assert "cannot list Docker volumes" in result.stderr
+
+
+def test_the_compose_project_is_printed_before_the_stack_is_started(tmp_path):
+    result, _, calls = run_setup(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "starting Compose project: dcdash" in result.stderr.splitlines()
+    assert result.stderr.index("starting Compose project: ") < result.stderr.index("fake docker: up called")
+    assert "docker compose up -d --build" in calls
+
+
+def test_the_printed_project_is_the_one_a_project_name_flag_selects(tmp_path):
+    result, _, calls = run_setup(tmp_path, args=("-p", "x"))
+    assert result.returncode == 0, result.stderr
+    assert "starting Compose project: x" in result.stderr.splitlines()
+    assert "starting Compose project: dcdash" not in result.stderr.splitlines()
+    assert "docker compose -p x up -d --build" in calls
+
+
+def test_the_printed_project_follows_compose_project_name(tmp_path):
+    result, _, _ = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\n", project="dcdash_e2e_w2_probe")
+    assert result.returncode == 0, result.stderr
+    assert "starting Compose project: dcdash_e2e_w2_probe" in result.stderr.splitlines()
+
+
+@pytest.mark.parametrize("trouble", ["config_fails", "config_nameless"])
+def test_a_project_name_that_cannot_be_read_prints_unknown_and_the_stack_still_starts(tmp_path, trouble):
+    # with an .env in place the script never needs the project name, so only the informational line can see the failure
+    result, _, calls = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\n", **{trouble: True})
+    assert result.returncode == 0, result.stderr
+    assert "starting Compose project: unknown" in result.stderr.splitlines()
+    assert started(calls)
+
+
+def test_ps1_prints_the_project():
+    text = (SCRIPT.parent / "setup.ps1").read_text()
+    line = text.index('Write-Host "starting Compose project: $ProjectName"')
+    assert line < text.index("docker compose @args up")  # before the stack is started
+    before = text[:line]
+    # $project (the loop variable above) and $Project are one variable in PowerShell, so the line uses its own name
+    assert '$ProjectName = "unknown"' in before and "$ProjectName = Get-ComposeProject @args" in before and "catch { }" in before

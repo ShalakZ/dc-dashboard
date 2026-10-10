@@ -17,7 +17,11 @@ SCRIPTS = ROOT / "scripts"
 FAKE_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$CALLS_LOG"
 case "$*" in
+  *"config --no-interpolate"*)
+    if [ -n "$FAKE_CONFIG_FAILS" ]; then echo "no configuration file provided: not found" >&2; exit 1; fi
+    printf 'name: dcdash_e2e_w2_probe\nservices: {}\n'; exit 0 ;;
   *"SELECT version_num FROM alembic_version"*) echo "${FAKE_SCHEMA:-0005}"; exit 0 ;;
+  *"compose stop"*) echo "fake docker: stop called" >&2 ;;  # a marker, so a test can tell what came before it on stderr
   *" pg_restore "*) if [ -n "$FAKE_PGRESTORE_FAILS" ]; then echo "pg_restore: error: boom" >&2; exit 2; fi ;;
   *"apply_retention"*) echo "SQL-READ: $(head -c 40 | tr '\n' ' ')" >> "$CALLS_LOG" ;;
 esac
@@ -25,7 +29,7 @@ exit 0
 """
 
 
-def run_restore(tmp_path: Path, *args: str, schema: str = "0005", pg_restore_fails: bool = False):
+def run_restore(tmp_path: Path, *args: str, schema: str = "0005", pg_restore_fails: bool = False, config_fails: bool = False):
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
     for name in ("restore.sh", "restore_retention.sql"):
@@ -42,7 +46,8 @@ def run_restore(tmp_path: Path, *args: str, schema: str = "0005", pg_restore_fai
     log.touch()
     env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "DCDASH_"))}
     env.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", CALLS_LOG=str(log), FAKE_SCHEMA=schema,
-               FAKE_PGRESTORE_FAILS="1" if pg_restore_fails else "", TMPDIR=str(tmp_path))
+               FAKE_PGRESTORE_FAILS="1" if pg_restore_fails else "", FAKE_CONFIG_FAILS="1" if config_fails else "",
+               TMPDIR=str(tmp_path))
     result = subprocess.run(["bash", str(root / "scripts" / "restore.sh"), str(dump), *args],
                             capture_output=True, text=True, env=env, timeout=60, cwd=tmp_path)
     return result, log.read_text().splitlines()
@@ -162,3 +167,39 @@ def test_restore_ps1_parses():
     result = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", command],
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_the_compose_project_is_the_first_thing_printed_and_comes_before_the_first_stop(tmp_path):
+    result, calls = run_restore(tmp_path)
+    assert result.returncode == 0, result.stderr
+    line = "restoring into Compose project: dcdash_e2e_w2_probe"
+    assert result.stderr.splitlines()[0] == line
+    assert result.stderr.index(line) < result.stderr.index("fake docker: stop called")  # printed before anything is stopped
+    assert at(calls, "compose config --no-interpolate") < at(calls, "compose stop api collector")
+
+
+def test_an_unknown_flag_exits_2_with_no_docker_call_and_no_project_line(tmp_path):
+    result, calls = run_restore(tmp_path, "--force", "--aply-retention")  # the line is printed after the arguments are checked
+    assert result.returncode == 2 and "usage" in result.stderr and calls == []
+    assert "restoring into Compose project" not in result.stderr
+
+
+def test_a_config_call_that_fails_prints_unknown_and_the_restore_still_runs(tmp_path):
+    result, calls = run_restore(tmp_path, config_fails=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.splitlines()[0] == "restoring into Compose project: unknown"
+    order = [at(calls, f) for f in ("compose stop api collector", "timescaledb_pre_restore", " pg_restore ",
+                                    "apply_retention", "timescaledb_post_restore", "compose start api collector")]
+    assert order == sorted(order) and len(set(order)) == len(order)
+    assert "restored" in result.stdout
+
+
+def test_ps1_prints_the_project():
+    text = (SCRIPTS / "restore.ps1").read_text()
+    line = text.index('Write-Host "restoring into Compose project: $Project"')
+    assert text.rindex("exit 2", 0, line) > 0  # after the flag loop ...
+    assert line < text.index("$RetentionSql = ")
+    assert line < text.index("docker compose exec")  # ... and before the first docker call that acts on the stack
+    assert line < text.index("docker compose stop")
+    before = text[:line]
+    assert "docker compose config --no-interpolate" in before and '$Project = "unknown"' in before and "catch { }" in before

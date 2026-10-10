@@ -49,4 +49,8 @@ if (Test-Path .env) {
     )
     Write-Host "Created .env"
 }
+# Not $Project: PowerShell variable names ignore case, and $project is the loop variable above.
+$ProjectName = "unknown"
+try { $ProjectName = Get-ComposeProject @args } catch { }
+Write-Host "starting Compose project: $ProjectName"
 docker compose @args up -d --build
