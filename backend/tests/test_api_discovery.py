@@ -411,3 +411,25 @@ async def test_accept_refuses_a_scale_that_is_not_a_usable_number_with_a_422(cli
         r = await client.post("/api/discovery/accept", content=raw, headers={"content-type": "application/json"})
         assert r.status_code == 422, (scale, r.text)
     assert await db.fetchval("SELECT count(*) FROM mappings") == 0
+
+
+async def test_accept_refuses_a_new_asset_whose_name_exists_under_that_parent_and_stores_nothing(client, db):
+    await login_as(client, db)
+    source, ids = await seed_source(db)
+    site = await make_asset(db, "Site")
+    await make_asset(db, "LV Panel", site)
+    response = await client.post("/api/discovery/accept", json={
+        "source_id": source, "new_asset": {"name": " lv  panel ", "parent_id": site}, "points": [pt(ids["LVP01_kW"])],
+    })
+    assert response.status_code == 409
+    assert 'an asset named "LV Panel" already exists under "Site"' in response.json()["detail"]
+    assert await db.fetchval("SELECT count(*) FROM assets") == 2
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 0
+    assert await db.fetchval("SELECT enabled FROM sources WHERE id = $1", source) is False
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'discovery.accepted'") == 0
+    # the same name under another parent is fine
+    elsewhere = await make_asset(db, "Other room")
+    ok = await client.post("/api/discovery/accept", json={
+        "source_id": source, "new_asset": {"name": "LV Panel", "parent_id": elsewhere}, "points": [pt(ids["LVP01_kW"])],
+    })
+    assert ok.status_code == 201

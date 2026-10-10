@@ -2,10 +2,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dcdash.api.asset_names import AssetName, require_free_name
 from dcdash.api.deps import get_db, notify, require_role
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Asset, Mapping, Tariff, User
@@ -17,14 +18,14 @@ Viewer = Depends(require_role("viewer"))
 
 
 class AssetIn(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+    name: AssetName
     parent_id: int | None = None
     kind: str = "generic"
     sort_order: int = 0
 
 
 class AssetPatch(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=100)
+    name: AssetName | None = None
     parent_id: int | None = None
     kind: str | None = None
     sort_order: int | None = None
@@ -85,6 +86,7 @@ async def list_assets(db: AsyncSession = Depends(get_db)) -> list[Asset]:
 async def create_asset(body: AssetIn, db: AsyncSession = Depends(get_db), admin: User = Admin) -> Asset:
     if body.parent_id is not None:
         await get_asset(db, body.parent_id)
+    await require_free_name(db, body.parent_id, body.name)
     asset = Asset(**body.model_dump())
     db.add(asset)
     await db.flush()  # the row needs the new id
@@ -100,13 +102,17 @@ async def update_asset(
     asset = await get_asset(db, asset_id)
     before = _asset_values(asset)
     changes = body.model_dump(exclude_unset=True)
+    parent_id = asset.parent_id
     if "parent_id" in changes:
         parent_id = changes.pop("parent_id")
         if parent_id is not None:
             await get_asset(db, parent_id)
             if await _is_self_or_descendant(db, parent_id, asset_id):
                 raise HTTPException(422, "an asset cannot be moved under itself or its own descendants")
-        asset.parent_id = parent_id
+    name = changes.get("name") or asset.name  # an absent or null name leaves it as it is
+    if parent_id != asset.parent_id or name != asset.name:  # only a rename or a move is checked: old twins stay editable
+        await require_free_name(db, parent_id, name, exclude_id=asset.id)
+    asset.parent_id = parent_id
     for field, value in changes.items():
         if value is not None:
             setattr(asset, field, value)
