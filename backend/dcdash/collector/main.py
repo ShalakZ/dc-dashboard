@@ -1,10 +1,12 @@
 import asyncio
 import logging
+import os
 import signal
 
 import asyncpg
 
 from dcdash import connectors  # noqa: F401  (registers built-in connectors)
+from dcdash.collector.certificate import certificate_loop
 from dcdash.collector.heartbeat import heartbeat_loop
 from dcdash.collector.housekeeping import housekeeping_loop
 from dcdash.collector.jobs import fail_stale_jobs, run_job_loop
@@ -83,6 +85,7 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
         asyncio.create_task(run_job_loop(pool, factory, jobs_ready, stop)),
         asyncio.create_task(housekeeping_loop(pool, stop=stop)),
         asyncio.create_task(heartbeat_loop(pool, stop=stop)),
+        asyncio.create_task(certificate_loop(pool, os.environ.get("DCDASH_TLS_CERT", ""), stop)),
     ]
     try:
         await stop.wait()

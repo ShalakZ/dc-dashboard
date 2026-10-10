@@ -61,6 +61,16 @@ unset for plain HTTP. `scripts/check_tls.sh` exercises both paths in a throwaway
 and `127.0.0.1:18443`): it leaves `./certs`, your `.env`, the normal stack and ports 80 and 443 alone. See
 "Practise a restore" for the project-name guard it shares with `scripts/backup_smoke.sh`.
 
+**Renewing the certificate.** Write the new `fullchain.pem` and `privkey.pem` into `./certs` under the same names, keep
+`chown 10002:10002` and `chmod 640` on the key, then run `docker compose restart web`. A new certificate is not picked up
+without that restart (checked). The `collector` mounts `./certs` too and reads the certificate at the same path once an
+hour, so the Settings page shows the new expiry within the hour; `docker compose restart collector` shows it at once.
+While `DCDASH_TLS_CERT` is set, the Settings page has a read-only "Certificate" line with the expiry date, and
+administrators see a notice at the top of every page when the certificate has less than 30 days left (the notice names
+the date and the days left), when it has expired (browsers already warn your users then) or when the file cannot be read
+(the notice says why). Nothing is shown when `DCDASH_TLS_CERT` is unset. If the collector is not running, the stored
+answer is not trusted after three hours and no notice is shown.
+
 Open `http://localhost/`. The first visit asks you to create the admin
 account. Then: Sources → Add source → Test → Points → Browse points → Map;
 Assets → open the asset to see live and historical values.
