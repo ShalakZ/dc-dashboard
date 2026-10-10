@@ -7,6 +7,7 @@ programs that only write down how they were called; no container is touched and 
 backup.ps1 cannot run here: it is parsed by PowerShell and its text is checked, see the last section.
 """
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -25,6 +26,7 @@ case " $* " in
     if [ -n "$FAKE_CONFIG_FAILS" ]; then echo "no configuration file provided: not found" >&2; exit 1; fi
     echo "name: ${FAKE_PROJECT:-dcdash}"; exit 0 ;;
   *" pg_dump "*)
+    [ -n "$FAKE_DURING_PGDUMP" ] && eval "$FAKE_DURING_PGDUMP"   # the world changes while the dump runs (a drive is unmounted)
     case "$FAKE_DUMP" in
       fail) echo "pg_dump: error: connection to server failed" >&2; exit 1 ;;
       empty) exit 0 ;;
@@ -242,6 +244,7 @@ def test_files_with_other_names_are_never_touched(tmp_path, out):
 
 FUTURE = "dcdash-20990101-000000.dump"
 LATER_MESSAGE = "is named later than this backup (is the clock right?)"
+MOVE_HINT = "If the clock was wrong once, move or delete that file and its .version file so that rotation can resume."
 
 
 def test_a_clock_that_jumped_back_cannot_delete_the_new_backup(tmp_path, out):
@@ -251,6 +254,7 @@ def test_a_clock_that_jumped_back_cannot_delete_the_new_backup(tmp_path, out):
     assert (out / NEW_DUMP).read_bytes() == b"DUMPDUMP" and (out / NEW_VERSION).exists()
     assert names(out) == sorted(before + [NEW_DUMP, NEW_VERSION])  # and nothing else is deleted either
     assert f"not rotating {out}: {FUTURE} {LATER_MESSAGE}" in result.stderr
+    assert MOVE_HINT in result.stderr  # the operator is told what to do about the file
 
 
 def test_the_new_backup_survives_even_when_it_sorts_first_and_keep_would_have_evicted_it(tmp_path, out):
@@ -268,6 +272,7 @@ def test_a_clock_that_stays_wrong_for_three_nights_deletes_no_earlier_backup(tmp
         result, _ = run_backup(tmp_path, out, "--keep", "3", FAKE_DATE=night)
         assert result.returncode == 0, result.stderr
         assert f"not rotating {out}: dcdash-20261003-020000.dump {LATER_MESSAGE}" in result.stderr
+        assert MOVE_HINT in result.stderr
         assert "removed old backup" not in result.stderr
         made += pair_names(night)
     assert names(out) == sorted(good + made)  # six dumps, all of them
@@ -431,6 +436,40 @@ def test_a_dump_of_the_same_name_in_the_copy_folder_is_never_overwritten(tmp_pat
     assert result.returncode == 5, result.stdout + result.stderr
     assert (copy / NEW_DUMP).read_bytes() == b"ORIGINAL" and names(copy) == sorted([MARKER, NEW_DUMP])
     assert (out / NEW_DUMP).exists() and len(names(out)) == len(OLD) * 2 + 2  # nothing rotated
+
+
+COPY_RECHECK = "The local backup was made; it will NOT be copied"
+
+
+@pytest.mark.parametrize("how", ["marker-removed", "folder-removed", "folder-replaced-by-an-empty-one"])
+def test_a_copy_folder_that_goes_away_during_the_dump_is_not_copied_into(tmp_path, out, how):
+    # the marker is checked before the dump starts and the dump can take minutes: a drive unmounted meanwhile leaves an EMPTY mount
+    # point on the root disk (the last case), which used to get the copy and an exit 0
+    before = pairs(out)
+    copy = tmp_path / "offsite"
+    old_copy = pairs(copy, ["20250201-000000"])
+    (copy / MARKER).write_text("dcdash\n")
+    hook = {
+        "marker-removed": f"rm -f '{copy / MARKER}'",
+        "folder-removed": f"rm -rf '{copy}'",
+        "folder-replaced-by-an-empty-one": f"rm -rf '{copy}' && mkdir '{copy}'",
+    }[how]
+    result, _ = run_backup(tmp_path, out, "--keep", "1", "--copy-to", copy, FAKE_DURING_PGDUMP=hook)
+    assert result.returncode == 5, result.stdout + result.stderr
+    assert "will still be attempted" not in result.stderr  # the early check passed: it is the second one that refused
+    assert COPY_RECHECK in result.stderr and str(copy) in result.stderr  # and the message names the copy folder
+    assert "copied to" not in result.stdout and "the copy to" not in result.stderr  # not attempted, not a failed copy
+    assert "local backup made, NOT copied; nothing was rotated (exit 5)" in result.stderr
+    # nothing was written into the copy folder: no dump, no .version, no .partial
+    if how == "marker-removed":
+        assert names(copy) == sorted(old_copy)
+    elif how == "folder-removed":
+        assert not copy.exists()
+    else:
+        assert names(copy) == []
+    assert (out / NEW_DUMP).read_bytes() == b"DUMPDUMP" and (out / NEW_VERSION).read_bytes() == b"0005\n"
+    assert names(out) == sorted(before + [NEW_DUMP, NEW_VERSION])  # nothing rotated although --keep 1 was given
+    no_partials(out)
 
 
 # ---- 14. two backups in the same second -------------------------------------------------------------------------------------
@@ -759,6 +798,13 @@ def test_backup_ps1_rotation_touches_only_exact_names_with_a_version_and_never_t
     assert "if ($all[$i].Name -eq $Name) { continue }" in text
 
 
+def test_backup_ps1_rotation_deletes_the_oldest_stamp_first():
+    text = ps1_code()
+    function = text[text.index("function Invoke-Rotate"):]
+    pipeline = function[:function.index("for ($i")]
+    assert "Sort-Object Name)" in pipeline and "Sort-Object Length" not in pipeline  # by name (the stamp sorts like time), never by size
+
+
 def test_backup_ps1_prints_the_project_before_the_first_docker_call_that_acts_on_the_stack():
     text = PS1.read_text()
     line = text.index('Write-Host "backing up Compose project: $ProjectShown"')
@@ -780,6 +826,27 @@ def test_backup_ps1_refuses_to_rotate_a_folder_with_a_dump_named_later_than_this
     assert guard < function.index("for ($i") < function.index("Remove-Item")  # before anything is removed
     assert "return" in function[guard:function.index("for ($i")]
     assert "not rotating ${Dir}: $($all[$all.Count - 1].Name) is named later than this backup (is the clock right?)" in function
+    assert "If the clock was wrong once, move or delete that file and its .version file so that rotation can resume." in function
+
+
+def test_backup_ps1_checks_the_copy_folder_again_right_before_the_first_file_is_written():
+    text = ps1_code()
+    start = text.index("function Get-CopyProblem")
+    function = text[start:text.index("\n}\n", start)]
+    # the checks live in one function: folder exists, is not Out, project known, marker names this project
+    for needle in ("Test-Path -LiteralPath $CopyTo -PathType Container", "Resolve-Path -LiteralPath $CopyTo",
+                   "elseif (-not $Project)", "Test-Path -LiteralPath $Marker -PathType Leaf", "belongs to another installation"):
+        assert function.count(needle) == 1, needle
+    assert text.count("Test-Path -LiteralPath $Marker -PathType Leaf") == 1  # one copy of the check, called twice
+    calls = [m.start() for m in re.finditer(r"= Get-CopyProblem\b", text)]
+    assert len(calls) == 2 and text.count("Get-CopyProblem") == 3  # the definition and the two calls
+    early, again = calls
+    assert early < text.index("cmd /c") < again < text.index("Copy-Item")  # the second call: after the dump, before the first file is created
+    assert again < text.index("Test-Path -LiteralPath (Join-Path $CopyTo $Name)")
+    assert text.index("Get-ChildItem") > again  # and before anything is rotated
+    after = text[again:text.index("Copy-Item")]
+    assert "try {" in text[again - 20:again] and "catch" in after  # a folder that vanishes between two checks must not stop the script with exit 1
+    assert "The local backup was made; it will NOT be copied" in after and "-CopyTo: $CopyProblem" in after
 
 
 def test_backup_ps1_holds_a_lock_for_the_whole_run_and_releases_it_in_a_finally():

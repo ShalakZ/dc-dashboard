@@ -12,7 +12,8 @@
 #                  .dcdash-backup-target whose first line is the Compose project name (create it once on the drive:
 #                  echo dcdash > DIR/.dcdash-backup-target). That keeps a mount point with nothing mounted (an empty folder on the root
 #                  disk), and a drive that was set up for another Compose project, from being used by mistake. The marker holds only
-#                  the project name, so installations that share one drive need different Compose project names.
+#                  the project name, so installations that share one drive need different Compose project names. The checks run once
+#                  before the dump and again right before the first file is written there (a drive can go away during the dump).
 # Only one backup runs at a time per out_dir (a lock on the folder; skipped with a warning when flock is not installed).
 # Exit 1: the dump failed, was empty or cannot be read back, another backup is running, or a backup with this timestamp exists
 # (nothing was created, nothing deleted). Exit 2: bad usage. Exit 5: the local backup was made but NOT copied (the copy folder is
@@ -40,9 +41,12 @@ PROJECT="$(docker compose config --no-interpolate 2>/dev/null | sed -n 's/^name:
 echo "backing up Compose project: ${PROJECT:-unknown}" >&2
 
 # A bad copy folder does not stop the local backup: it is remembered and ends in exit 5.
+# The checks run twice: now, for the message before a long dump, and again right before the first file is created in the copy folder
+# (the dump can take minutes; a drive unmounted meanwhile leaves an empty mount point on the root disk that would get the copy).
 COPY_PROBLEM=""
 MARKER="$COPY_TO/.dcdash-backup-target"
-if [[ -n "$COPY_TO" ]]; then
+check_copy_to() {
+  COPY_PROBLEM=""
   if [[ ! -d "$COPY_TO" ]]; then
     COPY_PROBLEM="'$COPY_TO' is not an existing folder (is the drive mounted?)"
   elif [[ "$OUT" -ef "$COPY_TO" ]]; then
@@ -53,10 +57,15 @@ if [[ -n "$COPY_TO" ]]; then
     COPY_PROBLEM="'$COPY_TO' has no .dcdash-backup-target file (not the backup drive, or not set up yet; create it once on the drive: echo $PROJECT > '$MARKER')"
   else
     # first line only; a Windows editor may have added a carriage return or a UTF-8 byte order mark
-    MARKER_NAME="$(head -n 1 "$MARKER" 2>/dev/null | tr -d '\r' || true)"; MARKER_NAME="${MARKER_NAME#$'\xef\xbb\xbf'}"
-    [[ "$MARKER_NAME" == "$PROJECT" ]] \
-      || COPY_PROBLEM="'$COPY_TO' belongs to another installation (its .dcdash-backup-target names '$MARKER_NAME', this is '$PROJECT')"
+    local marker_name
+    marker_name="$(head -n 1 "$MARKER" 2>/dev/null | tr -d '\r' || true)"; marker_name="${marker_name#$'\xef\xbb\xbf'}"
+    [[ "$marker_name" == "$PROJECT" ]] \
+      || COPY_PROBLEM="'$COPY_TO' belongs to another installation (its .dcdash-backup-target names '$marker_name', this is '$PROJECT')"
   fi
+  return 0
+}
+if [[ -n "$COPY_TO" ]]; then
+  check_copy_to
   [[ -z "$COPY_PROBLEM" ]] || echo "--copy-to: $COPY_PROBLEM. The local backup will still be attempted; it will NOT be copied." >&2
 fi
 
@@ -108,7 +117,10 @@ copy_out() {
     && mv "$v" "$COPY_TO/$NAME.version" && mv "$p" "$COPY_TO/$NAME"
 }
 if [[ -n "$COPY_TO" && -z "$COPY_PROBLEM" ]]; then
-  if copy_out; then
+  check_copy_to   # again, right before the first file is created there (see above)
+  if [[ -n "$COPY_PROBLEM" ]]; then
+    echo "--copy-to: $COPY_PROBLEM. The local backup was made; it will NOT be copied." >&2
+  elif copy_out; then
     # cmp read the copy back from the page cache: push it to the drive before anything is deleted (best effort; older coreutils
     # only take no operand)
     sync "$COPY_TO/$NAME" "$COPY_TO/$NAME.version" "$COPY_TO" 2>/dev/null || sync 2>/dev/null || true
@@ -130,7 +142,7 @@ rotate() {
   if (( ${#all[@]} > 0 )); then
     last="$(basename "${all[${#all[@]}-1]}")"
     if [[ "$last" != "$NAME" ]]; then
-      echo "not rotating $dir: $last is named later than this backup (is the clock right?)" >&2
+      echo "not rotating $dir: $last is named later than this backup (is the clock right?) If the clock was wrong once, move or delete that file and its .version file so that rotation can resume." >&2
       return 0
     fi
   fi

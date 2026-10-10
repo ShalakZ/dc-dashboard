@@ -37,21 +37,28 @@ $Out = (New-Item -ItemType Directory -Force -Path $Out).FullName
 if ($Out.Contains("%")) { [Console]::Error.WriteLine("the output folder '$Out' contains a % that cmd would expand; use another folder"); exit 2 }
 
 # A bad copy folder does not stop the local backup: it is remembered and ends in exit 5.
-$CopyProblem = ""
-if ($CopyTo) {
+# The checks run twice: now, for the message before a long dump, and again right before the first file is created in the copy folder
+# (the dump can take minutes; a drive unmounted meanwhile leaves an empty mount point on the root disk that would get the copy).
+function Get-CopyProblem {
+  $Problem = ""
   $Marker = Join-Path $CopyTo ".dcdash-backup-target"
   if (-not (Test-Path -LiteralPath $CopyTo -PathType Container)) {
-    $CopyProblem = "'$CopyTo' is not an existing folder (is the drive connected?)"
+    $Problem = "'$CopyTo' is not an existing folder (is the drive connected?)"
   } elseif ((Resolve-Path -LiteralPath $CopyTo).ProviderPath.TrimEnd('\') -ieq $Out.TrimEnd('\')) {
-    $CopyProblem = "'$CopyTo' is the output folder itself (the copy folder is the output folder; -CopyTo must be another folder, on the backup drive)"
+    $Problem = "'$CopyTo' is the output folder itself (the copy folder is the output folder; -CopyTo must be another folder, on the backup drive)"
   } elseif (-not $Project) {
-    $CopyProblem = "cannot tell which Compose project this is (docker compose config failed), so the marker in '$CopyTo' cannot be checked"
+    $Problem = "cannot tell which Compose project this is (docker compose config failed), so the marker in '$CopyTo' cannot be checked"
   } elseif (-not (Test-Path -LiteralPath $Marker -PathType Leaf)) {
-    $CopyProblem = "'$CopyTo' has no .dcdash-backup-target file (not the backup drive, or not set up yet; create it once on the drive: Set-Content -Encoding ascii '$Marker' $Project)"
+    $Problem = "'$CopyTo' has no .dcdash-backup-target file (not the backup drive, or not set up yet; create it once on the drive: Set-Content -Encoding ascii '$Marker' $Project)"
   } else {
     $First = (Get-Content -LiteralPath $Marker -TotalCount 1)
-    if ("$First".Trim() -ne $Project) { $CopyProblem = "'$CopyTo' belongs to another installation (its .dcdash-backup-target names '$First', this is '$Project')" }
+    if ("$First".Trim() -ne $Project) { $Problem = "'$CopyTo' belongs to another installation (its .dcdash-backup-target names '$First', this is '$Project')" }
   }
+  return $Problem
+}
+$CopyProblem = ""
+if ($CopyTo) {
+  $CopyProblem = Get-CopyProblem
   if ($CopyProblem) { Write-Host "-CopyTo: $CopyProblem. The local backup will still be attempted; it will NOT be copied." }
 }
 
@@ -101,6 +108,11 @@ try {
   Write-Host "note: .env and certs/ are NOT in this dump. .env holds DCDASH_SECRET_KEY, the key that encrypts the stored source secrets: keep a copy of both with the dump, or the secrets cannot be decrypted after a restore."
 
   if ($CopyTo -and -not $CopyProblem) {
+    # again, right before the first file is created there (see above); a folder that vanishes between two lines must not end the script
+    try { $CopyProblem = Get-CopyProblem } catch { $CopyProblem = "'$CopyTo' cannot be checked ($_)" }
+    if ($CopyProblem) { Write-Host "-CopyTo: $CopyProblem. The local backup was made; it will NOT be copied." }
+  }
+  if ($CopyTo -and -not $CopyProblem) {
     $p = Join-Path $CopyTo ".$Name.partial"; $v = Join-Path $CopyTo ".$Name.version.partial"
     try {
       if (Test-Path -LiteralPath (Join-Path $CopyTo $Name)) { throw "$Name already exists there" }
@@ -125,7 +137,7 @@ try {
       Where-Object { $_.Name -cmatch '^dcdash-[0-9]{8}-[0-9]{6}\.dump$' -and (Test-Path -LiteralPath ($_.FullName + ".version")) } |
       Sort-Object Name)
     if ($all.Count -gt 0 -and $all[$all.Count - 1].Name -ne $Name) {
-      [Console]::Error.WriteLine("not rotating ${Dir}: $($all[$all.Count - 1].Name) is named later than this backup (is the clock right?)")
+      [Console]::Error.WriteLine("not rotating ${Dir}: $($all[$all.Count - 1].Name) is named later than this backup (is the clock right?) If the clock was wrong once, move or delete that file and its .version file so that rotation can resume.")
       return
     }
     for ($i = 0; $i -lt ($all.Count - $KeepN); $i++) {

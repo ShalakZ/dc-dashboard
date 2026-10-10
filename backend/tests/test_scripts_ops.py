@@ -222,6 +222,19 @@ def test_no_down_is_ever_bare_and_the_volume_flag_only_follows_the_scratch_proje
     assert compose_calls(calls)[-1].sub == "down" and compose_calls(calls)[-1].project == name
 
 
+@pytest.mark.parametrize("script", BOTH)
+def test_the_final_down_removes_the_scratch_volume_and_its_orphans(tmp_path, script):
+    # without -v every run would leave a dcdash_e2e_*_dbdata volume behind (the README says none is left)
+    name = DEFAULT_NAMES[script]
+    result, calls = run(script, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    last = compose_calls(calls)[-1]  # scratch_cleanup's call, made on exit
+    assert last.sub == "down" and last.args[:3] == ["compose", "-p", name], last.line
+    assert last.has("-v") and last.has("--remove-orphans"), last.line
+    first = next(c for c in compose_calls(calls) if c.sub == "down")  # scratch_init's call, for a fresh stack
+    assert first.args[:3] == ["compose", "-p", name] and first.has("-v") and first.has("--remove-orphans"), first.line
+
+
 # ---- 4. the environment cannot redirect the script --------------------------------------------------------------------
 
 @pytest.mark.parametrize("script", BOTH)

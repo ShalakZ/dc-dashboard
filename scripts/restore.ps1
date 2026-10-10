@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 $Usage = "usage: restore.ps1 <dump> [--force] [--apply-retention]"
 if ($args.Count -lt 1) { [Console]::Error.WriteLine($Usage); exit 2 }
-$Dump = $args[0]
+$Dump = [string]$args[0]
 $Force = ""
 $ApplyRetention = 0
 foreach ($arg in ($args | Select-Object -Skip 1)) {
@@ -21,12 +21,17 @@ foreach ($arg in ($args | Select-Object -Skip 1)) {
   elseif ($arg -eq "--apply-retention") { $ApplyRetention = 1 }
   else { [Console]::Error.WriteLine($Usage); exit 2 }
 }
+# cmd (which feeds the dump to docker below) expands a % in a path: refuse it before any docker call.
+if ($Dump.Contains("%")) { [Console]::Error.WriteLine("the dump path '$Dump' contains a % that cmd would expand; use another path"); exit 2 }
 $Project = "unknown"
 try {
   $Line = docker compose config --no-interpolate | Select-String -Pattern '^name:\s*(\S+)' | Select-Object -First 1
   if ($Line) { $Project = $Line.Matches[0].Groups[1].Value }
 } catch { }
 Write-Host "restoring into Compose project: $Project"
+# A mistyped path is named as such: it has no .version either, which would otherwise end in the schema refusal (exit 3) and its advice
+# to use --force. A damaged file is caught by the read check below.
+if (-not (Test-Path -LiteralPath $Dump -PathType Leaf)) { [Console]::Error.WriteLine("refusing: no such dump file '$Dump'; nothing was changed"); exit 1 }
 $RetentionSql = Join-Path $PSScriptRoot "restore_retention.sql"
 $Current = ""
 try { $Current = (docker compose exec -T db psql -U dcdash -d dcdash -tAc "SELECT version_num FROM alembic_version").Trim() } catch { }
@@ -39,9 +44,20 @@ if ($Current -ne $Wanted -and $Force -ne "--force") {
 # Binary through cmd, never text-decoded, like the real restore below. exit 1, not throw: no PowerShell error block on top of the message.
 cmd /c "docker compose exec -T db pg_restore -f /dev/null < `"$Dump`""
 if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("refusing: cannot read the dump '$Dump' (missing, cut off or damaged); nothing was changed"); exit 1 }
+# From the stop until the dump is loaded, a failed call must not leave api and collector stopped. Windows PowerShell 5.1 does not throw
+# when a native command fails, so the exit code of each call is checked. exit 1, not throw: no PowerShell error block on top of the
+# message, and never psql's own code (2 means usage). The database may be missing or empty after a failed DROP/CREATE.
+function Exit-BeforeLoad([int]$Code) {
+  docker compose start api collector | Out-Null
+  [Console]::Error.WriteLine("restore failed (exit $Code) before the dump was loaded: api and collector were started again; the database may be missing or empty. Run the restore again with the same dump.")
+  exit 1
+}
 docker compose stop api collector
+if ($LASTEXITCODE -ne 0) { Exit-BeforeLoad $LASTEXITCODE }
 docker compose exec -T db psql -U dcdash -d postgres -c "DROP DATABASE IF EXISTS dcdash WITH (FORCE)" -c "CREATE DATABASE dcdash OWNER dcdash"
+if ($LASTEXITCODE -ne 0) { Exit-BeforeLoad $LASTEXITCODE }
 docker compose exec -T db psql -U dcdash -d dcdash -c "CREATE EXTENSION IF NOT EXISTS timescaledb" -c "SELECT timescaledb_pre_restore()"
+if ($LASTEXITCODE -ne 0) { Exit-BeforeLoad $LASTEXITCODE }
 # Whatever happens from here on, run timescaledb_post_restore() and start api/collector again
 # so a failed restore never leaves the database stranded.
 $Log = Join-Path ([IO.Path]::GetTempPath()) ("dcdash-restore-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
