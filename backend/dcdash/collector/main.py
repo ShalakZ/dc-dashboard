@@ -4,6 +4,7 @@ import logging
 from dcdash import connectors  # noqa: F401  (registers built-in connectors)
 from dcdash.collector.housekeeping import housekeeping_loop
 from dcdash.collector.jobs import fail_stale_jobs, run_job_loop
+from dcdash.collector.logs import configure_logging
 from dcdash.collector.networks import publish_networks
 from dcdash.collector.scheduler import Scheduler
 from dcdash.collector.writer import Writer
@@ -64,7 +65,7 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_logging()
     asyncio.run(run())
 
 

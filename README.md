@@ -387,6 +387,11 @@ recreates `api`, which then runs the database migrations. Otherwise rebuild your
 (`docker compose --profile dev up -d --build`) to be sure it runs your own code. Either way, check with
 `docker volume ls` that `dcdash_dbdata` is still listed.
 
+### Logs
+
+Every container keeps at most 5 log files of 10 MB (50 MB per service, set in `compose.yaml`). The collector logs
+`asyncua`, `pymodbus` and `httpx` at WARNING and above only. Read it with `docker compose logs --since 10m collector`.
+
 ### Housekeeping
 
 The collector deletes expired sessions and finished jobs older than 7 days every hour
