@@ -17,6 +17,12 @@ export interface Source {
   last_reading_age_seconds?: number | null;
 }
 export interface CollectorStatus { alive: boolean; age_seconds: number | null }
+/** GET /api/secret-key/status: whether every stored source secret can be decrypted with the key in .env. */
+export interface SecretKeyStatus {
+  ok: boolean;
+  key_changed: boolean;
+  unreadable: { id: number; name: string }[];
+}
 export interface SourceIn {
   name: string; connector_type: string; config: Record<string, unknown>; secret?: string | null; enabled: boolean;
 }
