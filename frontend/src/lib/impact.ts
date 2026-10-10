@@ -26,3 +26,13 @@ export const assetLoss = (i: AssetImpact) =>
   `${counted(i.assets, "asset")}, ${counted(i.mappings, "mapping")} and ${counted(i.tariffs, "tariff")} will be deleted; their past energy and cost figures ${HISTORY}`;
 export const sourceLoss = (i: SourceImpact) =>
   `${counted(i.points, "mapped point")} and ${counted(i.mappings, "mapping")} will be deleted; the past energy and cost figures that depend on them ${HISTORY}`;
+
+/** PUT /api/settings/storage wants confirmation: the server's description of what saving would delete and whether anything is
+ * deleted now (false = the limit is only shorter), otherwise null. */
+export const storageLoss = (error: unknown): { detail: string; deletesNow: boolean } | null => {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  const body = error.body as { detail?: unknown; deletes_now?: unknown } | null | undefined;
+  return typeof body?.detail === "string" && typeof body.deletes_now === "boolean"
+    ? { detail: body.detail, deletesNow: body.deletes_now }
+    : null;
+};

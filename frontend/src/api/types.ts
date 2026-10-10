@@ -83,8 +83,8 @@ export interface StorageSettings {
   disk_capacity_gb: number;
   warn_threshold_pct: number;
 }
-/** What GET /api/settings/storage answers: the stored values plus the factory values; PUT takes and returns only the five. */
-export type StorageSettingsOut = StorageSettings & { factory: StorageSettings };
+/** What GET /api/settings/storage answers: the stored values, the factory values and this site's own default (null until one is set); PUT takes and returns only the five. */
+export type StorageSettingsOut = StorageSettings & { factory: StorageSettings; site_default: StorageSettings | null };
 export interface StorageStats {
   database_bytes: number;
   readings_bytes_uncompressed: number;
@@ -99,6 +99,7 @@ export interface StorageStats {
   days_until_full: number | null;
   warn: boolean;
   settings: StorageSettings;
+  retention_paused: boolean;
 }
 
 export type ScanStatus = "queued" | "running" | "done" | "failed";

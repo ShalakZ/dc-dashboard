@@ -67,4 +67,12 @@ describe("ConfirmDeleteDialog", () => {
       outside.remove();
     }
   });
+
+  it("labels the confirm button with confirmLabel and keeps 'Delete anyway' by default", () => {
+    const props = { title: "t", message: "m", onConfirm: async () => {}, onCancel: () => {} };
+    const { rerender } = render(<ConfirmDeleteDialog {...props} />);
+    expect(screen.getByRole("button", { name: "Delete anyway" })).toBeInTheDocument();
+    rerender(<ConfirmDeleteDialog {...props} confirmLabel="Save and delete" />);
+    expect(screen.getByRole("button", { name: "Save and delete" })).toBeInTheDocument();
+  });
 });
