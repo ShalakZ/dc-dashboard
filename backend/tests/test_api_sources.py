@@ -389,3 +389,30 @@ async def test_testing_and_browsing_sources_are_audited(client, db):
     assert by_action["source.browsed"] == {"source_id": source["id"], "name": "sim", "job_id": browsed["job_id"]}
     assert by_action["source.test_all"] == {"sources": 1, "job_ids": everything["job_ids"]}
     assert len(rows) == 3  # the 404 wrote nothing
+
+
+async def test_a_credential_only_config_change_is_audited_without_the_credentials(client, db):
+    await login_as(client, db)
+    created = await client.post(
+        "/api/sources", json={**SIM, "config": {"url": "http://svc:oldpass@simulator:9000"}}
+    )
+    assert created.status_code == 201
+    url = f"/api/sources/{created.json()['id']}"
+    rotated = {"config": {"url": "http://svc:newpass@simulator:9000"}}
+    assert (await client.patch(url, json=rotated)).status_code == 200
+    (_, row) = await source_rows(db)
+    assert row["action"] == "source.updated"
+    assert row["detail"]["before"] == {"config_credentials": "unchanged"}
+    assert row["detail"]["after"] == {"config_credentials": "changed"}
+    assert "oldpass" not in json.dumps(row["detail"]) and "newpass" not in json.dumps(row["detail"])
+    assert (await client.patch(url, json=rotated)).status_code == 200  # the same config again is a no-op
+    assert len(await source_rows(db)) == 2
+
+
+async def test_clearing_a_source_secret_with_an_empty_string_is_audited(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    assert (await client.patch(f"/api/sources/{source['id']}", json={"secret": ""})).status_code == 200
+    (_, row) = await source_rows(db)
+    assert row["action"] == "source.updated"
+    assert row["detail"]["before"] == {"secret": "set"} and row["detail"]["after"] == {"secret": "none"}

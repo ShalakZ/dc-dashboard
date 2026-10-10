@@ -1,3 +1,4 @@
+import copy
 import json
 from datetime import datetime
 from typing import Any
@@ -165,6 +166,7 @@ async def update_source(
 ) -> Source:
     source = await get_source(db, source_id)
     before = _values(source)
+    raw_config = copy.deepcopy(source.config)
     if body.name is not None:
         source.name = body.name
     if body.config is not None:
@@ -177,6 +179,9 @@ async def update_source(
     after = _values(source)
     if "secret" in body.model_fields_set and body.secret:
         after["secret"] = "changed"  # a supplied value always counts: the stored token cannot be compared
+    if after["config"] == before["config"] and source.config != raw_config:
+        # Only what safe_config hides changed (URL credentials, a masked key): record that, never the values.
+        before["config_credentials"], after["config_credentials"] = "unchanged", "changed"
     await audit_change(db, admin.id, "source.updated", {"source_id": source.id, "name": source.name}, before, after)
     await _publish(db)
     return source
