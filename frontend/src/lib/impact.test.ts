@@ -1,5 +1,5 @@
 import { ApiError } from "../api/client";
-import { assetImpact, assetLoss, sourceImpact, sourceLoss } from "./impact";
+import { assetImpact, assetLoss, sourceImpact, sourceLoss, storageLoss } from "./impact";
 
 const conflict = (body: unknown) => new ApiError(409, "needs confirmation", body);
 
@@ -39,5 +39,15 @@ describe("loss texts", () => {
   it("uses the singular for one", () => {
     expect(assetLoss({ assets: 1, mappings: 1, tariffs: 1 })).toContain("1 asset, 1 mapping and 1 tariff will be deleted");
     expect(sourceLoss({ points: 1, mappings: 1 })).toContain("1 mapped point and 1 mapping will be deleted");
+  });
+});
+
+describe("storageLoss", () => {
+  it("returns the detail of the storage confirmation 409 only", () => {
+    const storage = new ApiError(409, "text", { detail: "text", deletes_now: true, shorter: false });
+    expect(storageLoss(storage)).toEqual({ detail: "text", deletesNow: true });
+    expect(storageLoss(new ApiError(409, "x", { detail: "x" }))).toBeNull(); // another kind of 409
+    expect(storageLoss(new ApiError(422, "x", { detail: "x", deletes_now: true }))).toBeNull();
+    expect(storageLoss(new Error("boom"))).toBeNull();
   });
 });

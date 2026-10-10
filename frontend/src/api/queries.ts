@@ -119,8 +119,19 @@ export const useStorageSettings = () =>
 export function useSaveStorageSettings() {
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: (body: StorageSettings) => api.put<StorageSettings>("/api/settings/storage", body),
+    // `confirm` goes in the query string: the server asks for it when the save would delete readings (HTTP 409).
+    mutationFn: ({ values, confirm }: { values: StorageSettings; confirm: boolean }) =>
+      api.put<StorageSettings>(`/api/settings/storage${confirm ? "?confirm=true" : ""}`, values),
     onSuccess: () => invalidate(keys.storageSettings, keys.storage),
+  });
+}
+
+/** "Set as default": remembers the values as this site's default. Applies nothing. */
+export function useSetStorageDefault() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (values: StorageSettings) => api.put<StorageSettings>("/api/settings/storage/default", values),
+    onSuccess: () => invalidate(keys.storageSettings),
   });
 }
 
