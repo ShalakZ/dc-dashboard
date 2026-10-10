@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RequireRole } from "../auth/RequireAuth";
 import { mockFetch } from "../test/fetchMock";
@@ -149,5 +149,32 @@ describe("Layout skip link and page width", () => {
     renderWithProviders(<Layout />, { route, path: "*" });
     const main = await screen.findByRole("main");
     expect(main.classList.contains("wide")).toBe(wide);
+  });
+});
+
+describe("Layout certificate notice", () => {
+  const expiring = {
+    enabled: true, state: "expiring", not_after: "2026-11-09T11:03:11+00:00", days_left: 12, subject: "CN=dcdash.example",
+    checked_at: "2026-10-10T12:00:00+00:00", error: null,
+  };
+  const withTls = (role: string) => ({
+    ...routes(role),
+    "GET /api/site": { body: { timezone: "UTC", currency: null } },
+    "GET /api/tls/status": { body: expiring },
+  });
+
+  it("shows an admin the notice in the app shell", async () => {
+    mockFetch(withTls("admin"));
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    expect(await screen.findByRole("status")).toHaveTextContent("The HTTPS certificate expires on 2026-11-09 11:03:11 (12 days left)");
+  });
+
+  it.each(["operator", "viewer"])("does not even ask for the status as %s", async (role) => {
+    const calls = mockFetch(withTls(role));
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await screen.findByText(`u (${role})`);
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/me")).toBe(true));
+    expect(calls.some((c) => c.path === "/api/tls/status")).toBe(false);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });
