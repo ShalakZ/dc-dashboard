@@ -5,6 +5,8 @@ Two editors are told apart by `updated_at`: the row is locked, the request's sta
 one, and a later save sees the newer stamp and gets 409. A create takes an advisory lock before it counts, so
 the 50-dashboard cap holds when creates race. Dashboard changes never notify the collector.
 """
+import hashlib
+import json
 import math
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -17,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
-from dcdash.core.audit import audit
+from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Dashboard, User, Widget
 from dcdash.core.timeutil import RANGE_PRESETS
 from dcdash.core.widgets import validate_config
@@ -202,6 +204,17 @@ async def get_dashboard(dashboard_id: int, db: AsyncSession = Depends(get_db)) -
     return dashboard_out(dashboard, widgets)
 
 
+def widgets_fingerprint(widgets) -> str:
+    """A short digest of what a dashboard's widgets are (type, title, config, position, size), whatever their ids and order.
+
+    The save replaces every widget row, so the count alone cannot tell a moved widget from no change.
+    """
+    canon = sorted(
+        json.dumps([w.type, w.title, w.config, w.x, w.y, w.w, w.h], sort_keys=True, default=str) for w in widgets
+    )
+    return hashlib.sha256("\n".join(canon).encode()).hexdigest()[:12]
+
+
 @router.put("/dashboards/{dashboard_id}", response_model=DashboardOut)
 async def save_dashboard(
     dashboard_id: int, body: DashboardSave, user: User = Operator, db: AsyncSession = Depends(get_db)
@@ -216,6 +229,11 @@ async def save_dashboard(
         Widget(dashboard_id=dashboard.id, type=w.type, title=w.title, config=config, x=w.x, y=w.y, w=w.w, h=w.h)
         for w, config in zip(body.widgets, configs, strict=True)
     ]
+    old_widgets = (await db.scalars(select(Widget).where(Widget.dashboard_id == dashboard.id))).all()
+    before = {
+        "name": dashboard.name, "range": dashboard.range,
+        "widgets": len(old_widgets), "widgets_hash": widgets_fingerprint(old_widgets),
+    }
     try:
         dashboard.name = body.name
         dashboard.range = body.range
@@ -224,9 +242,13 @@ async def save_dashboard(
         await db.execute(delete(Widget).where(Widget.dashboard_id == dashboard.id))
         db.add_all(widgets)
         await db.flush()
-        await audit(
-            db, user.id, "dashboard.updated",
-            {"dashboard_id": dashboard.id, "name": dashboard.name, "widgets": len(widgets)},
+        await audit_change(
+            db, user.id, "dashboard.updated", {"dashboard_id": dashboard.id, "name": dashboard.name},
+            before,
+            {
+                "name": dashboard.name, "range": dashboard.range,
+                "widgets": len(widgets), "widgets_hash": widgets_fingerprint(widgets),
+            },
         )
         await db.commit()
     except IntegrityError:  # a rename raced another rename onto the same name

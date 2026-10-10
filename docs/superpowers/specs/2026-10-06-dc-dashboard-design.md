@@ -170,7 +170,7 @@ points are not collected.
 | `readings` | point_id, ts, value (double), quality — hypertable |
 | `point_latest` | point_id, ts, value, quality |
 | `jobs` | id, kind, params, status, result, requested_by, created_at, finished_at |
-| `audit_log` | id, user_id, action, detail, ts |
+| `audit_log` | id, user_id, action, detail, ts, actor_id, actor_name (snapshot of the actor, filled by a trigger, section 7.7) |
 | `settings` | key, value |
 
 Phase 2 adds `scan_scopes`, `scans`, `scan_findings`, `graph_layout`, and
@@ -404,13 +404,55 @@ the audit log. Operator: view the scans, the graph and its layout. Viewer: none.
 
 ### 7.7 Audit
 
-`audit_log` gains a small helper used by discovery. Actions recorded, each
-with the user and time: `scope.created`, `scope.updated`, `scope.deleted`,
-`scan.started` (scope snapshot and host count), `scan.finished` (counts of
-open endpoints, claimed sources, points found, unidentified services),
-`discovery.accepted` (source, asset, number of mappings). A read-only admin
-Audit screen lists entries newest first with paging. Phase 1 actions (user
-management, source edits and so on) are not audited yet.
+The audit helper (`audit`, and `audit_change` for updates in
+`dcdash/core/audit.py`) writes one row per action with the user (the name and
+id are snapshotted on the row by a database trigger, so who did it survives the
+deletion of the account), the time and a JSON detail. A route writes its row on
+the request's own session before its commit, so the change and its row commit
+or roll back together (the collector writes `scan.finished` itself). Created and deleted rows hold ids and names. An update
+stores `{<ids and the current name>, "before": {...}, "after": {...}}` with only
+the fields that changed, and writes nothing when nothing changed (a no-op is not
+an event); the one exception is `storage.changed`, which is written on every
+save, with all five settings on both sides, because a save re-applies the
+compression and retention policies even for equal values. Values are compared in
+their plain form (`Decimal('0.10')` and `0.1` are the same rate, a date and its
+ISO string are the same).
+
+Secrets are never stored: no password or hash, no source secret, no session
+token, no credentials inside a URL. A password or a source secret shows as a
+marker (`set`, `changed`, `none`); a source's config goes through `safe_config`
+(URL credentials removed, credential-named keys masked), and a change of the
+credentials inside a URL is recorded as `config_credentials: unchanged ->
+changed` (also next to a visible change of the same edit). A failed sign-in
+answers 401 and rolls its request back, so its row is written through a short
+session of its own; it is bounded (at most 30 failure rows, `login.failed` and
+`password.change_failed` sharing the cap, and, separately, 30 `login.locked`
+rows per 5 minutes; the next row carries the number suppressed) and never stores
+a typed username for an account that does not exist (the row has no user, only
+the reason and the client address).
+
+Actions recorded:
+
+| Subject | Actions |
+|---|---|
+| First-run setup | `setup.completed` |
+| Sign-in | `login.succeeded`, `login.failed`, `login.locked` |
+| Own password | `password.changed`, `password.change_failed` (a wrong current password; a lockout is `login.locked`) |
+| Users | `user.created`, `user.updated` (role, active, password reset) |
+| Site settings | `settings.timezone_changed`, `billing.currency_changed`, `storage.changed` |
+| Assets | `asset.created`, `asset.updated`, `asset.deleted` |
+| Mappings | `mapping.created`, `mapping.updated`, `mapping.deleted` |
+| Sources | `source.created`, `source.updated`, `source.deleted`, `source.tested`, `source.test_all`, `source.browsed` |
+| Tariffs | `tariff.created`, `tariff.updated`, `tariff.deleted` |
+| Dashboards | `dashboard.created`, `dashboard.updated`, `dashboard.deleted` |
+| Scopes and scans | `scope.created`, `scope.updated`, `scope.deleted`, `scan.started` (scope snapshot and host count), `scan.finished` (counts of open endpoints, claimed sources, points found, unidentified services) |
+| Discovery | `discovery.accepted` (source, asset, number of mappings) |
+
+Not audited by design: logout, and the discovery layout save (node positions are
+a picture, not configuration). `POST /api/widget-data` and its CSV export are
+reads sent as POST. A test (`tests/test_audit_coverage.py`) fails when a route
+that changes data neither calls the audit helper nor is listed with a reason.
+A read-only admin Audit screen lists entries newest first with paging.
 
 ## 8. Users and security
 
@@ -569,10 +611,11 @@ for each type.
 
 Admin: tariffs and currency (the Tariffs screen is admin-only; operators read
 tariffs through the API). Operator: create, edit and delete dashboards. Everyone: read dashboards, billing, widget data and CSV. Audited
-actions: `tariff.created`, `tariff.updated`, `tariff.deleted`,
-`billing.currency_changed`, `dashboard.created`, `dashboard.updated`,
-`dashboard.deleted`, and (spec section 6) `asset.deleted` and `source.deleted`.
-Reads and exports are not audited.
+actions: `tariff.created`, `tariff.updated` (with the values before and after),
+`tariff.deleted`, `billing.currency_changed`, `dashboard.created`,
+`dashboard.updated`, `dashboard.deleted`, and (spec section 6) `asset.deleted`
+and `source.deleted`; every other audited action and the rules for what a row
+holds are in section 7.7. Reads and exports are not audited.
 
 ### 10.8 Screens
 

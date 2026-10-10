@@ -165,12 +165,20 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
   const power = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "active_power_kw", exact: true }) });
   await expect(power.getByRole("cell").nth(1)).toHaveText(/^-?\d+\.\d{2}$/, { timeout: 30_000 });
 
-  // 8. The audit log: the scope, the scan and ten accepted mappings
+  // 8. The audit log: the scope, the scan and ten accepted mappings. The page shows only the newest 50 rows and every
+  // sign-in adds one, so the counts are read from the API instead.
   await page.getByRole("link", { name: "Audit", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Audit log" })).toBeVisible();
-  const action = (name: string) => page.getByRole("cell", { name, exact: true });
-  await expect(action("scope.created")).toHaveCount(1);
-  await expect(action("scan.started")).toHaveCount(1);
-  await expect(action("scan.finished")).toHaveCount(1);
-  await expect(action("discovery.accepted")).toHaveCount(10);
+  await expect(page.getByRole("row").nth(1)).toBeVisible(); // the header row and at least one entry
+  const auditCounts = async () => {
+    const body = (await (await page.request.get("/api/audit?limit=200")).json()) as { items: { action: string }[] };
+    const wanted = ["scope.created", "scan.started", "scan.finished", "discovery.accepted"];
+    return Object.fromEntries(wanted.map((name) => [name, body.items.filter((e) => e.action === name).length]));
+  };
+  await expect.poll(auditCounts, { message: "audit counts" }).toEqual({
+    "scope.created": 1,
+    "scan.started": 1,
+    "scan.finished": 1,
+    "discovery.accepted": 10,
+  });
 });

@@ -303,3 +303,18 @@ async def test_sources_list_hides_discovered_sources_until_they_are_mapped(clien
     names = {s["name"]: s["origin"] for s in (await client.get("/api/sources")).json()}
     assert names == {"manual": "manual", "found-2": "discovered"}
     assert manual and hidden
+
+
+async def test_scope_update_audits_before_and_after_and_skips_no_ops(client, db):
+    await login_as(client, db)
+    scope = (await client.post("/api/scopes", json={"name": "lab", "targets": ["127.0.0.1/30"], "ports": [9000]})).json()
+    url = f"/api/scopes/{scope['id']}"
+    for body in ({}, {"name": "lab"}, {"ports": [9000]}):  # PATCH {} (BL:48) and equal values change nothing
+        assert (await client.patch(url, json=body)).status_code == 200
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'scope.updated'") == 0
+    assert (await client.patch(url, json={"name": "lab 2", "ports": [9000, 4840]})).status_code == 200
+    detail = await db.fetchval("SELECT detail FROM audit_log WHERE action = 'scope.updated'")
+    assert detail == {
+        "scope_id": scope["id"], "name": "lab 2",
+        "before": {"name": "lab", "ports": [9000]}, "after": {"name": "lab 2", "ports": [9000, 4840]},
+    }

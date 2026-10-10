@@ -7,7 +7,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
-from dcdash.core.audit import audit
+from dcdash.core.audit import audit_change
 from dcdash.core.config import get_settings
 from dcdash.core.models import User
 from dcdash.core.settings_store import (
@@ -88,8 +88,16 @@ async def get_general(db: AsyncSession = Depends(get_db)) -> GeneralSettings:
 
 
 @router.put("/settings/general", response_model=GeneralSettings)
-async def put_general(body: GeneralSettingsIn, db: AsyncSession = Depends(get_db)) -> GeneralSettingsIn:
+async def put_general(
+    body: GeneralSettingsIn,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_role("admin")),
+) -> GeneralSettingsIn:
+    before = await current_timezone(db)
     await set_setting(db, GENERAL_KEY, body.model_dump())
+    await audit_change(
+        db, admin.id, "settings.timezone_changed", {}, {"timezone": before}, {"timezone": body.timezone}
+    )
     await db.commit()
     return body
 
@@ -107,7 +115,8 @@ async def put_billing(
 ) -> BillingSettings:
     before = await get_currency(db)
     await set_setting(db, BILLING_KEY, {"currency": body.currency})
-    if body.currency != before:
-        await audit(db, admin.id, "billing.currency_changed", {"from": before, "to": body.currency})
+    await audit_change(
+        db, admin.id, "billing.currency_changed", {}, {"currency": before}, {"currency": body.currency}
+    )
     await db.commit()
     return body

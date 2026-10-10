@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.security import hash_password
+from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import User, UserSession
 
 router = APIRouter(prefix="/api", tags=["users"], dependencies=[Depends(require_role("admin"))])
@@ -40,12 +41,21 @@ async def list_users(db: AsyncSession = Depends(get_db)) -> list[User]:
 
 
 @router.post("/users", response_model=UserRow, status_code=201)
-async def create_user(body: NewUser, db: AsyncSession = Depends(get_db)) -> User:
+async def create_user(
+    body: NewUser,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_role("admin")),
+) -> User:
     exists = await db.scalar(select(User.id).where(User.username == body.username))
     if exists is not None:
         raise HTTPException(409, "username already exists")
     user = User(username=body.username, password_hash=hash_password(body.password), role=body.role)
     db.add(user)
+    await db.flush()
+    await audit(
+        db, admin.id, "user.created",
+        {"user_id": user.id, "username": user.username, "role": user.role, "active": True},
+    )
     await db.commit()
     await db.refresh(user)
     return user
@@ -63,6 +73,7 @@ async def patch_user(
         raise HTTPException(404, "user not found")
     if user.id == admin.id and (body.active is False or (body.role is not None and body.role != "admin")):
         raise HTTPException(409, "cannot deactivate or demote yourself")
+    before = {"role": user.role, "active": user.active, "password": "set"}
     if body.role is not None:
         user.role = body.role
     if body.password is not None:
@@ -72,6 +83,8 @@ async def patch_user(
     if body.password is not None or body.active is False:
         # an admin-reset password or a deactivation signs the target out everywhere
         await db.execute(delete(UserSession).where(UserSession.user_id == user.id))
+    after = {"role": user.role, "active": user.active, "password": "changed" if body.password is not None else "set"}
+    await audit_change(db, admin.id, "user.updated", {"user_id": user.id, "username": user.username}, before, after)
     await db.commit()
     await db.refresh(user)
     return user

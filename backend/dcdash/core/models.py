@@ -179,4 +179,6 @@ class AuditLog(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     action: Mapped[str]
     detail: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    actor_id: Mapped[int | None]  # the user's id when the row was written; no foreign key, so it outlives the user
+    actor_name: Mapped[str | None]  # filled by the audit_log_snapshot_actor trigger (migration 0005)
     ts: Mapped[datetime] = mapped_column(TZ, server_default=func.now())

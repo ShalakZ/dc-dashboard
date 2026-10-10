@@ -163,3 +163,30 @@ async def test_a_stored_row_that_lacks_a_field_is_read_with_the_factory_value(cl
     )
     body = (await client.get("/api/settings/storage")).json()
     assert body["warn_threshold_pct"] == 80 and body["disk_capacity_gb"] == 100
+
+
+async def test_a_storage_save_is_audited_with_every_field_even_when_nothing_changed(client, db):
+    await login_as(client, db)
+    changed = {**FULL, "raw_retention_days": 60, "rollup_1m_retention_days": 900}  # FULL itself has 45 and 800
+    assert (await client.put("/api/settings/storage", json=changed)).status_code == 200
+    assert (await client.put("/api/settings/storage", json=changed)).status_code == 200  # same values again
+    rows = await db.fetch("SELECT actor_name, detail FROM audit_log WHERE action = 'storage.changed' ORDER BY id")
+    assert len(rows) == 2 and rows[0]["actor_name"] == "admin"
+    assert rows[0]["detail"]["policies_reapplied"] is True
+    seeded = {  # the storage row the db fixture seeds (conftest.py)
+        "raw_retention_days": 30, "compress_after_days": 7, "rollup_1m_retention_days": 730,
+        "disk_capacity_gb": 100, "warn_threshold_pct": 80,
+    }
+    assert rows[0]["detail"]["before"] == seeded  # disk_capacity_gb comes back as 100.0, equal to 100
+    assert rows[0]["detail"]["after"] == changed
+    assert rows[1]["detail"]["before"] == changed and rows[1]["detail"]["after"] == changed
+
+
+async def test_a_refused_storage_save_writes_no_row(client, db):
+    await login_as(client, db)
+    assert (await client.put("/api/settings/storage", json={**FULL, "raw_retention_days": 1})).status_code == 422
+    assert (await client.put("/api/settings/storage", json={})).status_code == 422
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'storage.changed'") == 0
+    await login_as(client, db, "operator")
+    assert (await client.put("/api/settings/storage", json=FULL)).status_code == 403
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'storage.changed'") == 0

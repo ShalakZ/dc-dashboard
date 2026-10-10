@@ -16,14 +16,17 @@ async def list_audit(
 ) -> dict[str, Any]:
     total = await db.scalar(select(func.count()).select_from(AuditLog))
     rows = await db.execute(
-        select(AuditLog, User.username)
+        select(AuditLog, func.coalesce(AuditLog.actor_name, User.username))
         .outerjoin(User, User.id == AuditLog.user_id)
         .order_by(AuditLog.id.desc())
         .limit(limit)
         .offset(offset)
     )
     items = [
-        {"id": e.id, "user_id": e.user_id, "username": username, "action": e.action, "detail": e.detail, "ts": e.ts}
+        {
+            "id": e.id, "user_id": e.user_id, "actor_id": e.actor_id, "username": username,
+            "action": e.action, "detail": e.detail, "ts": e.ts,
+        }
         for e, username in rows
     ]
     return {"total": total, "items": items}

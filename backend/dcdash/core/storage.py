@@ -91,10 +91,9 @@ async def apply_policies(db: AsyncSession, s: StorageSettings) -> None:
 
 
 async def save_storage_settings(db: AsyncSession, s: StorageSettings) -> None:
-    """Upsert the settings row, apply the policies and commit."""
+    """Upsert the settings row and apply the policies. Does not commit: the caller audits and commits."""
     await set_setting(db, STORAGE_KEY, s.model_dump())
     await apply_policies(db, s)
-    await db.commit()
 
 
 class DayRows(BaseModel):

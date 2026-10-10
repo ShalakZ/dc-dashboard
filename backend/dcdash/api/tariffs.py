@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
-from dcdash.core.audit import audit
+from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Asset, Tariff, User
 from dcdash.core.tree import AssetTree
 
@@ -115,6 +115,10 @@ def _detail(tariff: Tariff) -> dict[str, Any]:
     }
 
 
+def _values(tariff: Tariff) -> dict[str, Any]:
+    return {"rate_per_kwh": tariff.rate_per_kwh, "effective_from": tariff.effective_from}
+
+
 async def _get(db: AsyncSession, tariff_id: int) -> Tariff:
     tariff = await db.get(Tariff, tariff_id)
     if tariff is None:
@@ -199,12 +203,14 @@ async def update_tariff(
     changes = body.model_dump(exclude_unset=True)
     if "effective_from" in changes and await _taken(db, tariff.asset_id, changes["effective_from"], tariff.id):
         raise HTTPException(409, DUPLICATE)
-    if changes:
-        for field, value in changes.items():
-            setattr(tariff, field, value)
-        await _flush(db)
-        await audit(db, admin.id, "tariff.updated", _detail(tariff))
-        await db.commit()
+    before = _values(tariff)
+    for field, value in changes.items():
+        setattr(tariff, field, value)
+    await _flush(db)
+    await audit_change(
+        db, admin.id, "tariff.updated", {"tariff_id": tariff.id, "asset_id": tariff.asset_id}, before, _values(tariff)
+    )
+    await db.commit()
     return _out(tariff, *await _asset_name_and_path(db, tariff.asset_id))
 
 

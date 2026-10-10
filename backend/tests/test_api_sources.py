@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from dcdash.connectors.base import BAD, GOOD
 from dcdash.core.crypto import decrypt
@@ -324,3 +325,139 @@ async def test_only_the_list_carries_the_reading_age(client, db):
     await login_as(client, db, "admin")
     created = await create_sim(client)
     assert "last_reading_age_seconds" not in created
+
+
+async def source_rows(db, pattern: str = "source.%"):
+    return await db.fetch("SELECT actor_name, action, detail FROM audit_log WHERE action LIKE $1 ORDER BY id", pattern)
+
+
+async def test_source_create_is_audited_without_the_secret_or_url_credentials(client, db):
+    await login_as(client, db)
+    response = await client.post(
+        "/api/sources",
+        json={**SIM, "config": {"url": "http://svc:topsecret@simulator:9000"}, "secret": "hunter2"},
+    )
+    assert response.status_code == 201
+    (row,) = await source_rows(db)
+    assert row["action"] == "source.created" and row["actor_name"] == "admin"
+    detail = row["detail"]
+    assert detail["source_id"] == response.json()["id"] and detail["secret"] == "set"
+    assert detail["name"] == "sim" and detail["connector_type"] == "simulator" and detail["enabled"] is True
+    assert "topsecret" not in json.dumps(detail) and "hunter2" not in json.dumps(detail)
+    assert detail["config"]["url"].startswith("http://simulator:9000")
+
+
+async def test_source_update_records_before_after_and_markers(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    url = f"/api/sources/{source['id']}"
+    for patch in ({}, {"name": "sim"}, {"enabled": True}, {"config": {"url": "http://simulator:9000"}}):
+        assert (await client.patch(url, json=patch)).status_code == 200
+    assert [r["action"] for r in await source_rows(db)] == ["source.created"]  # all four were no-ops
+    assert (await client.patch(url, json={"name": "sim 2", "enabled": False, "secret": "new-key"})).status_code == 200
+    (_, row) = await source_rows(db)
+    assert row["detail"] == {
+        "source_id": source["id"], "name": "sim 2",
+        "before": {"name": "sim", "enabled": True, "secret": "set"},
+        "after": {"name": "sim 2", "enabled": False, "secret": "changed"},
+    }
+    assert "new-key" not in json.dumps(row["detail"])
+    assert (await client.patch(url, json={"secret": None})).status_code == 200
+    (_, _, cleared) = await source_rows(db)
+    assert cleared["detail"]["before"] == {"secret": "set"} and cleared["detail"]["after"] == {"secret": "none"}
+
+
+async def test_refused_source_writes_leave_no_row(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    assert (await client.post("/api/sources", json=SIM)).status_code == 409  # same name
+    assert (await client.patch(f"/api/sources/{source['id']}", json={"config": {"url": "nope"}})).status_code == 422
+    assert (await client.patch("/api/sources/999", json={"name": "x"})).status_code == 404
+    assert [r["action"] for r in await source_rows(db)] == ["source.created"]
+
+
+async def test_testing_and_browsing_sources_are_audited(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    tested = (await client.post(f"/api/sources/{source['id']}/test")).json()
+    browsed = (await client.post(f"/api/sources/{source['id']}/browse")).json()
+    everything = (await client.post("/api/sources/test-all")).json()
+    assert (await client.post("/api/sources/999/test")).status_code == 404
+    rows = await source_rows(db, "source.t%") + await source_rows(db, "source.browsed")
+    by_action = {r["action"]: r["detail"] for r in rows}
+    assert by_action["source.tested"] == {"source_id": source["id"], "name": "sim", "job_id": tested["job_id"]}
+    assert by_action["source.browsed"] == {"source_id": source["id"], "name": "sim", "job_id": browsed["job_id"]}
+    assert by_action["source.test_all"] == {"sources": 1, "job_ids": everything["job_ids"]}
+    assert len(rows) == 3  # the 404 wrote nothing
+
+
+async def test_a_credential_only_config_change_is_audited_without_the_credentials(client, db):
+    await login_as(client, db)
+    created = await client.post(
+        "/api/sources", json={**SIM, "config": {"url": "http://svc:oldpass@simulator:9000"}}
+    )
+    assert created.status_code == 201
+    url = f"/api/sources/{created.json()['id']}"
+    rotated = {"config": {"url": "http://svc:newpass@simulator:9000"}}
+    assert (await client.patch(url, json=rotated)).status_code == 200
+    (_, row) = await source_rows(db)
+    assert row["action"] == "source.updated"
+    assert row["detail"]["before"] == {"config_credentials": "unchanged"}
+    assert row["detail"]["after"] == {"config_credentials": "changed"}
+    assert "oldpass" not in json.dumps(row["detail"]) and "newpass" not in json.dumps(row["detail"])
+    assert (await client.patch(url, json=rotated)).status_code == 200  # the same config again is a no-op
+    assert len(await source_rows(db)) == 2
+
+
+async def test_url_credentials_with_a_slash_hash_or_question_mark_never_reach_the_audit_log(client, db):
+    await login_as(client, db)
+    plc = {"name": "plc", "connector_type": "opcua", "config": {"endpoint": "opc.tcp://user:p#ss@10.0.0.1:4840"}}
+    created = await client.post("/api/sources", json=plc)
+    assert created.status_code == 201, created.text
+    (row,) = await source_rows(db)
+    assert row["action"] == "source.created"
+    assert row["detail"]["config"]["endpoint"] == "opc.tcp://[hidden]@10.0.0.1:4840"
+    assert "p#ss" not in json.dumps(row["detail"]) and "user:" not in json.dumps(row["detail"])
+    moved = {"config": {"endpoint": "opc.tcp://user:n/ew?pw@10.0.0.1:4840"}}
+    patched = await client.patch(f"/api/sources/{created.json()['id']}", json=moved)
+    assert patched.status_code == 200
+    (_, updated) = await source_rows(db)
+    dumped = json.dumps(updated["detail"])
+    assert "p#ss" not in dumped and "n/ew" not in dumped and "user:" not in dumped
+    assert updated["detail"]["after"] == {"config_credentials": "changed"}  # the masked endpoint did not change
+
+
+async def test_a_host_change_together_with_a_credential_rotation_has_both_the_change_and_the_marker(client, db):
+    await login_as(client, db)
+    created = await client.post("/api/sources", json={**SIM, "config": {"url": "http://svc:oldpass@simulator:9000"}})
+    assert created.status_code == 201
+    url = f"/api/sources/{created.json()['id']}"
+    changed = {"config": {"url": "http://svc:newpass@other-host:9000"}}
+    assert (await client.patch(url, json=changed)).status_code == 200
+    (_, row) = await source_rows(db)  # one source.updated row for the one request
+    assert row["action"] == "source.updated"
+    detail = row["detail"]
+    assert detail["before"]["config"]["url"] == "http://simulator:9000/"
+    assert detail["after"]["config"]["url"] == "http://other-host:9000/"
+    assert detail["before"]["config_credentials"] == "unchanged" and detail["after"]["config_credentials"] == "changed"
+    assert "oldpass" not in json.dumps(detail) and "newpass" not in json.dumps(detail)
+
+
+async def test_a_host_change_with_the_same_credentials_has_no_marker(client, db):
+    await login_as(client, db)
+    created = await client.post("/api/sources", json={**SIM, "config": {"url": "http://svc:samepass@simulator:9000"}})
+    url = f"/api/sources/{created.json()['id']}"
+    assert (await client.patch(url, json={"config": {"url": "http://svc:samepass@other-host:9000"}})).status_code == 200
+    (_, row) = await source_rows(db)
+    assert "config_credentials" not in row["detail"]["after"] and "config_credentials" not in row["detail"]["before"]
+    assert row["detail"]["after"]["config"]["url"] == "http://other-host:9000/"
+    assert "samepass" not in json.dumps(row["detail"])
+
+
+async def test_clearing_a_source_secret_with_an_empty_string_is_audited(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    assert (await client.patch(f"/api/sources/{source['id']}", json={"secret": ""})).status_code == 200
+    (_, row) = await source_rows(db)
+    assert row["action"] == "source.updated"
+    assert row["detail"]["before"] == {"secret": "set"} and row["detail"]["after"] == {"secret": "none"}

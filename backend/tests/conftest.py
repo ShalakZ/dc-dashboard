@@ -96,8 +96,10 @@ async def db(pool):
 def app(db):
     from dcdash.api import auth
     from dcdash.api.main import create_app
+    from dcdash.api.security_events import sign_in_events
 
     auth.limiter.clear()
+    sign_in_events.clear()
     return create_app()
 
 

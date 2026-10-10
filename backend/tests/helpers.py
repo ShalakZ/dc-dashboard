@@ -1,7 +1,11 @@
 import asyncio
 import contextlib
+import os
 import socket
+import subprocess
+import sys
 from datetime import timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import asyncpg
@@ -89,6 +93,20 @@ async def login_as(client, db, role="admin", username=None, password="correct-ho
     )
     response = await client.post("/api/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
+    # The sign-in wrote a login.succeeded audit row. Tests that list or count audit rows are about other actions, so
+    # drop this user's rows here; the sign-in tests (test_security_events.py) call /api/login themselves and keep theirs.
+    await db.execute(
+        "DELETE FROM audit_log WHERE action = 'login.succeeded' AND user_id = (SELECT id FROM users WHERE username = $1)",
+        username,
+    )
+
+
+async def make_user(db, username: str, role: str = "viewer", active: bool = True) -> int:
+    """A user whose password is `correct-horse` (the one login_as uses)."""
+    return await db.fetchval(
+        "INSERT INTO users (username, password_hash, role, active) VALUES ($1, $2, $3, $4) RETURNING id",
+        username, hash_password("correct-horse"), role, active,
+    )
 
 
 def free_port() -> int:
@@ -257,3 +275,11 @@ async def freezable_proxy(database_url: str):
         server.close()
         for writer in writers:
             writer.close()
+
+
+def run_alembic(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run `alembic <args>` against the test database (the database_url fixture exports DCDASH_DATABASE_URL)."""
+    backend = Path(__file__).resolve().parents[1]
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", *args], cwd=backend, env=os.environ.copy(), capture_output=True, text=True
+    )

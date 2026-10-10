@@ -1,4 +1,6 @@
-from helpers import login_as
+import json
+
+from helpers import login_as, make_user
 
 
 async def test_users_are_admin_only(client, db):
@@ -71,3 +73,49 @@ async def test_admin_password_reset_revokes_sessions(app, client, db):
         assert await db.fetchval("SELECT count(*) FROM sessions WHERE user_id = $1", uid) == 0
         assert (await target.get("/api/me")).status_code == 401
         assert (await target.post("/api/login", json={"username": "ops", "password": "newpassword1"})).status_code == 200
+
+
+async def audit_rows(db, action: str):
+    return await db.fetch("SELECT user_id, actor_name, detail FROM audit_log WHERE action = $1 ORDER BY id", action)
+
+
+async def test_creating_a_user_is_audited_without_the_password(client, db):
+    await login_as(client, db)
+    created = await client.post("/api/users", json={"username": "ann", "password": "s3cret-pass-1", "role": "operator"})
+    assert created.status_code == 201
+    (row,) = await audit_rows(db, "user.created")
+    assert row["actor_name"] == "admin"
+    assert row["detail"] == {"user_id": created.json()["id"], "username": "ann", "role": "operator", "active": True}
+    assert "s3cret" not in json.dumps(row["detail"])
+    assert (await client.post("/api/users", json={"username": "ann", "password": "s3cret-pass-1", "role": "viewer"})).status_code == 409
+    assert len(await audit_rows(db, "user.created")) == 1  # the refused duplicate wrote nothing
+
+
+async def test_patching_a_user_records_before_and_after(client, db):
+    await login_as(client, db)
+    uid = await make_user(db, "ann", "operator")
+    assert (await client.patch(f"/api/users/{uid}", json={"role": "viewer", "active": False})).status_code == 200
+    (row,) = await audit_rows(db, "user.updated")
+    assert row["detail"] == {
+        "user_id": uid, "username": "ann",
+        "before": {"role": "operator", "active": True}, "after": {"role": "viewer", "active": False},
+    }
+
+
+async def test_a_password_reset_is_audited_as_a_marker_only(client, db):
+    await login_as(client, db)
+    uid = await make_user(db, "ann")
+    assert (await client.patch(f"/api/users/{uid}", json={"password": "brand-new-pass-9"})).status_code == 200
+    (row,) = await audit_rows(db, "user.updated")
+    assert row["detail"]["before"] == {"password": "set"} and row["detail"]["after"] == {"password": "changed"}
+    assert "brand-new-pass" not in json.dumps(row["detail"]) and "argon2" not in json.dumps(row["detail"])
+
+
+async def test_a_user_patch_that_changes_nothing_writes_no_row(client, db):
+    await login_as(client, db)
+    uid = await make_user(db, "ann", "operator")
+    for body in ({}, {"role": "operator"}, {"active": True}):
+        assert (await client.patch(f"/api/users/{uid}", json=body)).status_code == 200
+    assert await audit_rows(db, "user.updated") == []
+    assert (await client.patch("/api/users/999", json={"role": "viewer"})).status_code == 404
+    assert await audit_rows(db, "user.updated") == []

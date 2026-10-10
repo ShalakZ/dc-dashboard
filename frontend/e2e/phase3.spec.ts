@@ -365,8 +365,18 @@ test("phase 3 journey: currency and tariff, billing, cost tile, an operator's da
     await signIn(page, ADMIN);
     await navLink(page, "Audit").click();
     await expect(page.getByRole("heading", { name: "Audit log" })).toBeVisible();
-    for (const action of ["tariff.created", "billing.currency_changed", "dashboard.created", "dashboard.updated"]) {
-      await expect(page.getByRole("cell", { name: action, exact: true }), action).toHaveCount(1);
-    }
+    await expect(page.getByRole("row").nth(1)).toBeVisible(); // the header row and at least one entry
+    // The page shows only the newest 50 rows and every sign-in adds one, so the counts are read from the API.
+    const auditCounts = async () => {
+      const body = await getJson<{ items: { action: string }[] }>("/api/audit?limit=200");
+      const wanted = ["tariff.created", "billing.currency_changed", "dashboard.created", "dashboard.updated"];
+      return Object.fromEntries(wanted.map((name) => [name, body.items.filter((e) => e.action === name).length]));
+    };
+    await expect.poll(auditCounts, { message: "audit counts" }).toEqual({
+      "tariff.created": 1,
+      "billing.currency_changed": 1,
+      "dashboard.created": 1,
+      "dashboard.updated": 1,
+    });
   });
 });

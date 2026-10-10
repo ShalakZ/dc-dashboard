@@ -229,3 +229,34 @@ async def test_a_refused_delete_does_not_wake_the_collector_but_a_confirmed_one_
         assert await asyncio.wait_for(received.get(), timeout=5) == "sentinel"  # nothing came before it
         assert (await client.delete(f"/api/assets/{site['id']}?confirm=true")).status_code == 204
         assert await asyncio.wait_for(received.get(), timeout=5) == ""
+
+
+async def rows_for(db, pattern: str):
+    return await db.fetch("SELECT actor_name, action, detail FROM audit_log WHERE action LIKE $1 ORDER BY id", pattern)
+
+
+async def test_asset_create_and_update_are_audited(client, db):
+    await login_as(client, db)
+    parent = await add(client, "Hall")
+    child = await add(client, "LV Panel 1", parent["id"])
+    created = await rows_for(db, "asset.created")
+    assert created[1]["detail"] == {
+        "asset_id": child["id"], "name": "LV Panel 1", "parent_id": parent["id"], "kind": "generic", "sort_order": 0,
+    }
+    assert created[1]["actor_name"] == "admin"
+    assert (await client.patch(f"/api/assets/{child['id']}", json={"name": "Panel 1", "parent_id": None})).status_code == 200
+    (row,) = await rows_for(db, "asset.updated")
+    assert row["detail"] == {
+        "asset_id": child["id"], "name": "Panel 1",
+        "before": {"name": "LV Panel 1", "parent_id": parent["id"]}, "after": {"name": "Panel 1", "parent_id": None},
+    }
+
+
+async def test_asset_patches_that_change_nothing_or_fail_write_no_row(client, db):
+    await login_as(client, db)
+    asset = await add(client, "Hall")
+    for body in ({}, {"name": "Hall"}, {"kind": "generic"}):
+        assert (await client.patch(f"/api/assets/{asset['id']}", json=body)).status_code == 200
+    assert (await client.patch("/api/assets/999", json={"name": "x"})).status_code == 404
+    assert (await client.patch(f"/api/assets/{asset['id']}", json={"parent_id": asset["id"]})).status_code == 422
+    assert await rows_for(db, "asset.updated") == []

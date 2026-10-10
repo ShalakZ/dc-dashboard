@@ -216,9 +216,13 @@ async def test_changes_are_audited_with_the_tariff_details(client, db):
         "tariff_id": tariff["id"], "asset_id": panel, "rate_per_kwh": 0.12, "effective_from": "2026-10-01",
     }
     assert rows[1]["detail"] == {
+        "tariff_id": tariff["id"], "asset_id": panel,
+        "before": {"rate_per_kwh": 0.12, "effective_from": "2026-10-01"},
+        "after": {"rate_per_kwh": 0.2, "effective_from": "2026-10-05"},
+    }
+    assert rows[2]["detail"] == {
         "tariff_id": tariff["id"], "asset_id": panel, "rate_per_kwh": 0.2, "effective_from": "2026-10-05",
     }
-    assert rows[2]["detail"] == rows[1]["detail"]
 
 
 async def test_failed_requests_leave_no_audit_row(client, db):
@@ -251,3 +255,18 @@ async def test_deleting_an_asset_deletes_its_tariffs(client, db):
     assert (await client.delete(f"/api/assets/{panel}")).status_code == 409  # it has a tariff: needs confirmation
     assert (await client.delete(f"/api/assets/{panel}?confirm=true")).status_code == 204
     assert [r["asset_id"] for r in (await client.get("/api/tariffs")).json()] == [None]
+
+
+async def test_tariff_update_records_before_and_after_and_skips_a_no_op(client, db):
+    await login_as(client, db)
+    tariff = await create(client)  # rate 0.12 on the site
+    url = f"/api/tariffs/{tariff['id']}"
+    assert (await client.patch(url, json={"rate_per_kwh": 0.12})).status_code == 200  # same value as stored
+    assert (await client.patch(url, json={})).status_code == 200
+    assert [r["action"] for r in await tariff_audit(db)] == ["tariff.created"]
+    assert (await client.patch(url, json={"rate_per_kwh": 0.2})).status_code == 200
+    rows = await tariff_audit(db)
+    assert [r["action"] for r in rows] == ["tariff.created", "tariff.updated"]
+    assert rows[1]["detail"] == {
+        "tariff_id": tariff["id"], "asset_id": None, "before": {"rate_per_kwh": 0.12}, "after": {"rate_per_kwh": 0.2},
+    }

@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -5,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, notify, require_role
-from dcdash.core.audit import audit
+from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Asset, Mapping, Tariff, User
 from dcdash.core.pg import CONFIG_CHANNEL
 
@@ -66,6 +68,10 @@ async def _subtree_impact(db: AsyncSession, asset_id: int) -> dict[str, int]:
     }
 
 
+def _asset_values(asset: Asset) -> dict[str, Any]:
+    return {"name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind, "sort_order": asset.sort_order}
+
+
 def _counted(n: int, noun: str) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
@@ -76,18 +82,23 @@ async def list_assets(db: AsyncSession = Depends(get_db)) -> list[Asset]:
 
 
 @router.post("/assets", response_model=AssetOut, status_code=201, dependencies=[Admin])
-async def create_asset(body: AssetIn, db: AsyncSession = Depends(get_db)) -> Asset:
+async def create_asset(body: AssetIn, db: AsyncSession = Depends(get_db), admin: User = Admin) -> Asset:
     if body.parent_id is not None:
         await get_asset(db, body.parent_id)
     asset = Asset(**body.model_dump())
     db.add(asset)
+    await db.flush()  # the row needs the new id
+    await audit(db, admin.id, "asset.created", {"asset_id": asset.id, **_asset_values(asset)})
     await db.commit()
     return asset
 
 
 @router.patch("/assets/{asset_id}", response_model=AssetOut, dependencies=[Admin])
-async def update_asset(asset_id: int, body: AssetPatch, db: AsyncSession = Depends(get_db)) -> Asset:
+async def update_asset(
+    asset_id: int, body: AssetPatch, db: AsyncSession = Depends(get_db), admin: User = Admin
+) -> Asset:
     asset = await get_asset(db, asset_id)
+    before = _asset_values(asset)
     changes = body.model_dump(exclude_unset=True)
     if "parent_id" in changes:
         parent_id = changes.pop("parent_id")
@@ -99,6 +110,9 @@ async def update_asset(asset_id: int, body: AssetPatch, db: AsyncSession = Depen
     for field, value in changes.items():
         if value is not None:
             setattr(asset, field, value)
+    await audit_change(
+        db, admin.id, "asset.updated", {"asset_id": asset.id, "name": asset.name}, before, _asset_values(asset)
+    )
     await db.commit()
     return asset
 
