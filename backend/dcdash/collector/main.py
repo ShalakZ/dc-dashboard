@@ -1,5 +1,8 @@
 import asyncio
 import logging
+import signal
+
+import asyncpg
 
 from dcdash import connectors  # noqa: F401  (registers built-in connectors)
 from dcdash.collector.housekeeping import housekeeping_loop
@@ -15,6 +18,32 @@ from dcdash.core.pg import CONFIG_CHANNEL, JOBS_CHANNEL, create_pool, listen_for
 log = logging.getLogger(__name__)
 
 RETRY_SECONDS = 2
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+# The longest the collector spends on its own shutdown (cancel the tasks, stop the pollers, last flush, close the pool). compose.yaml gives the
+# service stop_grace_period 20 s before Docker sends SIGKILL; keep this well below it (a test pins the pair).
+SHUTDOWN_SECONDS = 10.0
+
+
+async def _close_down(tasks: list[asyncio.Task], scheduler: Scheduler, writer: Writer, pool: asyncpg.Pool) -> None:
+    async def steps() -> None:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await scheduler.stop()
+        await writer.flush()
+        await pool.close()
+
+    closing = asyncio.ensure_future(steps())
+    done, _ = await asyncio.wait({closing}, timeout=SHUTDOWN_SECONDS)
+    if not done:
+        # asyncpg waits, without a deadline, for a database that accepted the connection and never answers; a single
+        # cancellation does not end that wait, aborting the connections does.
+        log.warning("shutdown did not finish in %.0f s", SHUTDOWN_SECONDS)
+        pool.terminate()
+        closing.cancel()
+        stopping = asyncio.ensure_future(scheduler.stop())  # the groups were never cancelled if the gather hung
+        await asyncio.wait({closing, stopping}, timeout=1)
+    log.info("collector stopped, %d readings left unwritten", writer.pending)
 
 
 async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = create_connector) -> None:
@@ -56,17 +85,30 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
     try:
         await stop.wait()
     finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        await scheduler.stop()
-        await writer.flush()
-        await pool.close()
+        await _close_down(tasks, scheduler, writer, pool)
+
+
+async def serve() -> None:
+    """Run the collector until SIGTERM or SIGINT, then let run() shut down in an orderly way."""
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    installed: list[signal.Signals] = []
+    for sig in STOP_SIGNALS:
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:  # Windows event loops cannot; Ctrl+C then cancels run() through asyncio.run instead
+            break
+        installed.append(sig)
+    try:
+        await run(stop)
+    finally:
+        for sig in installed:
+            loop.remove_signal_handler(sig)
 
 
 def main() -> None:
     configure_logging()
-    asyncio.run(run())
+    asyncio.run(serve())
 
 
 if __name__ == "__main__":
