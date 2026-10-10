@@ -93,6 +93,12 @@ async def login_as(client, db, role="admin", username=None, password="correct-ho
     )
     response = await client.post("/api/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
+    # The sign-in wrote a login.succeeded audit row. Tests that list or count audit rows are about other actions, so
+    # drop this user's rows here; the sign-in tests (test_security_events.py) call /api/login themselves and keep theirs.
+    await db.execute(
+        "DELETE FROM audit_log WHERE action = 'login.succeeded' AND user_id = (SELECT id FROM users WHERE username = $1)",
+        username,
+    )
 
 
 async def make_user(db, username: str, role: str = "viewer", active: bool = True) -> int:

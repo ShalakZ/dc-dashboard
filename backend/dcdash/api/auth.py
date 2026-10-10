@@ -9,6 +9,7 @@ from dcdash.api.deps import COOKIE, current_user, get_db
 from dcdash.api.security import (
     DUMMY_HASH, LoginLimiter, hash_password, hash_token, new_session_token, verify_password,
 )
+from dcdash.api.security_events import client_address, sign_in_events
 from dcdash.core.audit import audit
 from dcdash.core.config import get_settings
 from dcdash.core.models import User, UserSession
@@ -87,15 +88,23 @@ async def login(
     key = f"{host}:{body.username.lower()}"
     if limiter.blocked(key):
         raise HTTPException(429, "too many failed attempts, try again later")
-    user = (
-        await db.execute(select(User).where(User.username == body.username, User.active))
-    ).scalar_one_or_none()
+    # Look the account up whether or not it is active, so a failed sign-in on a deactivated account can be attributed.
+    found = (await db.execute(select(User).where(User.username == body.username))).scalar_one_or_none()
+    user = found if found is not None and found.active else None
     stored_hash = user.password_hash if user is not None else DUMMY_HASH
     if not verify_password(stored_hash, body.password) or user is None:
         limiter.record_failure(key)
+        reason = "wrong_password" if user is not None else "account_inactive" if found is not None else "unknown_account"
+        found_id = found.id if found is not None else None  # read before the rollback expires the instances
+        locked = limiter.blocked(key)
+        await db.rollback()  # free this request's pooled connection before the failure row takes one of its own
+        await sign_in_events.audit_sign_in_failure(
+            via="login", user_id=found_id, reason=reason, client=client_address(request), locked=locked,
+        )
         raise HTTPException(401, "invalid username or password")
     limiter.reset(key)
     _start_session(db, user, response, _is_https(request))
+    await audit(db, user.id, "login.succeeded", {"client": client_address(request)})
     await db.commit()
     return user
 
@@ -127,6 +136,12 @@ async def change_my_password(
         raise HTTPException(429, "too many failed attempts, try again later")
     if not verify_password(user.password_hash, body.current_password):
         limiter.record_failure(key)
+        user_id = user.id  # read before the rollback expires the instance
+        locked = limiter.blocked(key)
+        await db.rollback()  # free this request's pooled connection before the failure row takes one of its own
+        await sign_in_events.audit_sign_in_failure(
+            via="password_change", user_id=user_id, reason=None, client=client_address(request), locked=locked,
+        )
         raise HTTPException(401, "current password is incorrect")
     limiter.reset(key)
     user.password_hash = hash_password(body.new_password)
