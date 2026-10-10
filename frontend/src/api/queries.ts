@@ -1,5 +1,5 @@
 import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { rangeToQuery, type Range } from "../lib/timeRange";
+import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { api } from "./client";
 import type {
   Asset, AuditPage, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
@@ -47,11 +47,12 @@ export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => 
 export const useSummary = (id: number) =>
   useQuery({ queryKey: keys.summary(id), queryFn: () => api.get<Summary>(`/api/assets/${id}/summary`), refetchInterval: 60_000 });
 
-export const useSeries = (id: number, metric: Metric | null, range: Range, mappingId?: number) =>
+/** `paused` stops the polling (the Trend chart pauses while a mouse rests on it: a refetch would close an open tooltip). */
+export const useSeries = (id: number, metric: Metric | null, range: Range, mappingId?: number, paused = false) =>
   useQuery({
     queryKey: keys.series(id, metric ?? "custom", range, mappingId),
     enabled: metric !== null,
-    refetchInterval: 30_000,
+    refetchInterval: paused ? false : trendRefetchMs(range),
     queryFn: () => {
       const q = rangeToQuery(range);
       const params = new URLSearchParams({ metric: metric!, start: q.start, end: q.end, buckets: String(q.buckets) });
