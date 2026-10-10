@@ -90,3 +90,40 @@ async def test_mapping_changes_notify_the_collector(client, db, database_url):
         await asyncio.wait_for(received.get(), timeout=5)
         await client.delete(f"/api/mappings/{mapping['id']}")
         await asyncio.wait_for(received.get(), timeout=5)
+
+
+async def mapping_rows(db):
+    return await db.fetch(
+        "SELECT actor_name, action, detail FROM audit_log WHERE action LIKE 'mapping.%' ORDER BY id"
+    )
+
+
+async def test_mapping_create_update_and_delete_are_audited(client, db):
+    asset, kw, _ = await setup(client, db)
+    created = (await client.post("/api/mappings", json=body(kw, asset, "active_power_kw"))).json()
+    assert (await client.patch(f"/api/mappings/{created['id']}", json={"scale": 0.5, "interval_seconds": 10})).status_code == 200
+    assert (await client.delete(f"/api/mappings/{created['id']}")).status_code == 204
+    created_row, updated_row, deleted_row = await mapping_rows(db)
+    assert created_row["detail"] == {
+        "mapping_id": created["id"], "point_id": kw, "asset_id": asset, "metric": "active_power_kw",
+        "scale": 1.0, "interval_seconds": 5, "custom_unit": None,
+    }
+    assert updated_row["detail"] == {
+        "mapping_id": created["id"], "point_id": kw,
+        "before": {"scale": 1.0, "interval_seconds": 5}, "after": {"scale": 0.5, "interval_seconds": 10},
+    }
+    assert deleted_row["detail"] == {
+        "mapping_id": created["id"], "point_id": kw, "asset_id": asset, "metric": "active_power_kw",
+    }
+    assert {r["actor_name"] for r in (created_row, updated_row, deleted_row)} == {"admin"}
+
+
+async def test_mapping_refusals_and_no_ops_write_no_row(client, db):
+    asset, kw, _ = await setup(client, db)
+    created = (await client.post("/api/mappings", json=body(kw, asset, "active_power_kw"))).json()
+    assert (await client.post("/api/mappings", json=body(kw, asset, "active_power_kw"))).status_code == 409
+    for patch in ({}, {"scale": 1.0}, {"metric": "active_power_kw"}):
+        assert (await client.patch(f"/api/mappings/{created['id']}", json=patch)).status_code == 200
+    assert (await client.patch("/api/mappings/999", json={"scale": 2})).status_code == 404
+    assert (await client.delete("/api/mappings/999")).status_code == 404
+    assert [r["action"] for r in await mapping_rows(db)] == ["mapping.created"]

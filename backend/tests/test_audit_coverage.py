@@ -31,11 +31,6 @@ EXEMPT: dict[str, str] = {
 
 # Routes not audited yet. Each task removes the routes it audits; Task 9 deletes this set.
 PENDING: set[str] = {
-    "POST /api/assets",
-    "PATCH /api/assets/{asset_id}",
-    "POST /api/mappings",
-    "PATCH /api/mappings/{mapping_id}",
-    "DELETE /api/mappings/{mapping_id}",
     "POST /api/sources",
     "PATCH /api/sources/{source_id}",
     "POST /api/sources/test-all",
