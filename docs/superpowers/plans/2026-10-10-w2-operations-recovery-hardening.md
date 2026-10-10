@@ -837,3 +837,5 @@ Branch `w2b-web-hardening` (cut from main `f74eed0`), merged into main with `--n
 - (f) The leftovers went to backlog section L, not K (K already holds Part A).
 
 **Open:** Step 6, the rebuild of the dev stack `dcdash` from the merged tree, waits for the owner's explicit go (a verified backup first; it recreates `db` once). The deferred items are in backlog section L.
+
+**Controller's note, final full suites on `8068970` (after the fix wave, before the merge):** backend `uv run pytest -q` = **1767 passed** in 9:27; frontend `npx vitest run` = 71 files, **861 passed**; `npm run typecheck` clean. Closing Playwright on the fixed tree (all four projects, in `dcdash_e2e_w2_err`): 5 of 5 passed. `check_tls.sh` on the changed `Caddyfile.tls`: all checks ok.
