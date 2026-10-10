@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Exercise backup.sh and restore.sh against a stack of their own: back up, delete an asset, check that a mismatched .version is
-# refused, restore, and verify the asset is back; then a corrupted dump must fail the restore and leave the database usable.
+# refused, restore, and verify the asset is back; then a corrupted dump must be refused and leave the database as it was.
 # It builds and removes its own throwaway project (OPS_COMPOSE_PROJECT, default dcdash_e2e_smoke); never touches the normal stack.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -22,17 +22,13 @@ scratch_script scripts/restore.sh "$DUMP"
 sleep 5
 AFTER="$(psql "SELECT count(*) FROM assets")"
 [[ "$BEFORE" == "$AFTER" ]] && echo "backup smoke OK ($AFTER assets)" || { echo "mismatch $BEFORE != $AFTER"; exit 1; }
-# Failure path: a corrupted dump must fail the restore (exit 1) yet leave the database
-# usable and api back up, because restore.sh recovers with timescaledb_post_restore() on exit.
+# Failure path: restore.sh reads the whole dump before it stops or drops anything, so a corrupted dump is refused (exit 1) with
+# nothing changed: the data is still there and api never stopped. (The recover() path of restore.sh, which runs once the database
+# is being replaced, is covered by the fake-docker tests only: a real dump that reads fine but fails to restore is hard to make.)
 head -c 100 "$DUMP" > "$DUMP.corrupt"; cp "$DUMP.version" "$DUMP.corrupt.version"
 rc=0; scratch_script scripts/restore.sh "$DUMP.corrupt" || rc=$?
-[[ "$rc" == 1 ]] || { echo "restore must fail on a corrupted dump with exit 1 (got $rc)"; exit 1; }
+[[ "$rc" == 1 ]] || { echo "restore must refuse a corrupted dump with exit 1 (got $rc)"; exit 1; }
 rm -f "$DUMP.corrupt" "$DUMP.corrupt.version"
-[[ "$(psql "SELECT 1")" == "1" ]] || { echo "database unusable after failed restore"; exit 1; }
-for _ in $(seq 1 30); do
-  compose ps --status running --format '{{.Service}}' | grep -qx api && break; sleep 1
-done
-compose ps --status running --format '{{.Service}}' | grep -qx api || { echo "api not running after failed restore"; exit 1; }
-scratch_script scripts/restore.sh "$DUMP"     # put the real data back
-sleep 5
-[[ "$(psql "SELECT count(*) FROM assets")" == "$BEFORE" ]] && echo "restore failure-path OK" || { echo "assets lost after recovery"; exit 1; }
+[[ "$(psql "SELECT count(*) FROM assets")" == "$BEFORE" ]] || { echo "assets lost: a refused restore must change nothing"; exit 1; }
+compose ps --status running --format '{{.Service}}' | grep -qx api || { echo "api not running after a refused restore"; exit 1; }
+echo "restore failure-path OK"

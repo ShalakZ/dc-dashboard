@@ -76,7 +76,8 @@ case "$line" in
           if [ -n "$FAKE_RESTORE_EXIT" ]; then echo "pg_restore: error: boom" >&2; exit "$FAKE_RESTORE_EXIT"; fi ;;
         esac
         if [ "$n" -ge 4 ] && [ "$n" -ge "$last" ]; then
-          case "$line" in *" -d "*) touch "$FAKE_LOG.restored" ;; esac
+          # a restore that succeeds with a warning: restore.sh then names its log (the log test needs one to look at)
+          case "$line" in *" -d "*) touch "$FAKE_LOG.restored"; echo "pg_restore: warning: ignorable (fake)" >&2 ;; esac
           exit 0
         fi
         echo "pg_restore: error: could not read the whole archive ($n bytes)" >&2; exit 1 ;;
@@ -313,9 +314,10 @@ def test_backup_smoke_runs_the_real_scripts_only_against_the_scratch_project(tmp
     kinds = {(c.sub, c.args[-2:] == ["api", "collector"]) for c in nested}
     assert ("stop", True) in kinds and ("start", True) in kinds and ("exec", False) in kinds
     assert any(c.has("pg_dump") for c in nested) and any(c.has("pg_restore") and c.has("-d") for c in nested)
-    # one `ps --format {{.Name}}` per nested script: 1 backup.sh + 4 restore.sh. A restore.sh call that lost its scratch_script
-    # wrapper still runs (the environment routes it) but would leave this count at 4.
-    assert len([c for c in nested if c.sub == "ps" and c.has("{{.Name}}")]) == 5
+    # one `ps --format {{.Name}}` per nested script: 1 backup.sh + 3 restore.sh (version mismatch, good restore, refused corrupt
+    # dump). A restore.sh call that lost its scratch_script wrapper still runs (the environment routes it) but would leave this
+    # count at 3.
+    assert len([c for c in nested if c.sub == "ps" and c.has("{{.Name}}")]) == 4
     for call in nested:
         assert call.cpn == "dcdash_e2e_smoke" and call.cf == SCRATCH_FILES, call.line
     for call in compose_calls(calls):
@@ -409,7 +411,7 @@ def test_a_corrupt_dump_restore_that_fails_with_another_code_is_reported_with_th
     result, _ = run("backup_smoke.sh", tmp_path, FAKE_SCHEMA_AFTER_RESTORE="0006")
     assert result.returncode == 1
     assert "backup smoke OK" in result.stdout  # the first half passed
-    assert "restore must fail on a corrupted dump with exit 1 (got 3)" in result.stdout
+    assert "restore must refuse a corrupted dump with exit 1 (got 3)" in result.stdout
     assert "restore failure-path OK" not in result.stdout
 
 
