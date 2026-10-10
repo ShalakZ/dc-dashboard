@@ -85,7 +85,7 @@ def test_the_precheck_query_that_test_schema_tiers_extracts_appears_exactly_once
 def test_every_script_the_readme_names_exists():
     names = {m.group(1).rstrip(".,;:").replace("\\", "/") for m in re.finditer(r"scripts[/\\]([A-Za-z0-9_./\\-]+)", README)}
     assert {"backup.sh", "backup.ps1", "restore.sh", "restore.ps1", "setup.sh", "setup.ps1", "backup_smoke.sh", "check_tls.sh",
-            "check_web.sh", "e2e.sh"} <= names, f"the README no longer names the scripts it documents: {sorted(names)}"
+            "check_web.sh", "e2e.sh", "pin_images.sh"} <= names, f"the README no longer names the scripts it documents: {sorted(names)}"
     missing = sorted(n for n in names if not (ROOT / "scripts" / n).exists())
     assert not missing, f"README.md names scripts that do not exist: {missing}"
 
@@ -94,3 +94,13 @@ def test_the_phase_2_commit_is_not_offered_as_a_place_to_go_back_to():
     assert "855cbf8" not in README
     assert "not a place to go back to" in README  # said in words instead: a 0004 or 0005 database fails on Phase 2 code
     assert "1ef27a2" in README  # the code to go back to from W1a (schema 0004)
+
+
+def test_the_upgrade_runbook_says_how_to_re_pin_the_images_and_how_to_keep_unchanged_containers():
+    runbook = section(2, "Upgrading and going back")
+    assert "scripts/pin_images.sh --update" in runbook
+    assert "monthly" in runbook and "release" in runbook  # the cadence
+    assert "backend/tests/conftest.py" in runbook  # its testcontainers pin is re-pinned by hand
+    # a hand-typed `up -d --build` needs the variable first, in both shells; the setup scripts set it themselves
+    assert "export BUILDX_NO_DEFAULT_ATTESTATIONS=1" in runbook
+    assert "$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'" in runbook

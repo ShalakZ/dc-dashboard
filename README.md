@@ -801,6 +801,19 @@ Both options were run step by step as written, in a throwaway Compose project, o
 `alembic current` printed `0004 (head)`. Option b refused without `--force` (exit 3), restored with it (exit 0,
 and the ignored message appeared as described), and lost what came after the dump.
 
+**Upgrading images.** The images the project builds on (`python`, `uv`, `node`, `caddy` and the TimescaleDB image of `db`) are pinned by
+digest in `backend/Dockerfile`, `frontend/Dockerfile` and `compose.yaml`. A rebuild therefore no longer changes the base layers by
+surprise, and a security fix in a base image only arrives when you re-pin. Run `scripts/pin_images.sh --update` before a release, or
+monthly: it asks the registry for the digest of each tag and prints a before and after table (`--check` needs no network and fails
+on an unpinned or malformed reference). Then rebuild, run the tests and commit the changed files. `backend/tests/conftest.py` pins
+`timescale/timescaledb:2.30.2-pg16` for the test database separately, and is re-pinned by hand with the others.
+
+`scripts/setup.sh` and `setup.ps1` set `BUILDX_NO_DEFAULT_ATTESTATIONS=1` before they build, so running them again when nothing changed
+keeps the running containers. A hand-typed `docker compose up -d --build` should set it first (bash: `export BUILDX_NO_DEFAULT_ATTESTATIONS=1`;
+PowerShell: `$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'`). Without it every build gives `api` and `web` a new image id, because the default
+attestation record is part of the id, and `up -d` recreates `api`, `collector`, `web` and `simulator` (about 12 s without service) even
+though nothing changed; `db` is kept. The first run after adopting the variable recreates them once.
+
 ## Release notes
 
 One entry for each release that changes the database: the revision it leads to, what it changes, the pre-checks to run before it,
