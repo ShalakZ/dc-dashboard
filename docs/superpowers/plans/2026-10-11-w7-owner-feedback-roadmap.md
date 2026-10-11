@@ -1,0 +1,43 @@
+# W7 roadmap: the owner's feedback after the W6 overhaul
+
+**Source:** the owner checked the new UI on 2026-10-11 and sent 11 numbered points plus four screenshots (kept in the git-ignored `.superpowers/sdd/2026-10-11-w7-owner-feedback/screens/`: an asset page that stops at 1200 px, the Dashboards list likewise, the crumb "Dashboards / Overview2" the owner wants as the model for navigation, and a source's Points page with a plain-text "Sources / sim-http" crumb). The sidebar ("works like a charm"), dialogs, the Billing look and Discovery are fine for now; the owner will test Discovery properly once connected to real data. They asked to plan the rest over "the next couple of sessions", assets first. Status: **planned 2026-10-11, nothing built yet.** Each wave gets its own plan plus ONE Opus plan review that runs the risky parts before any implementer (see [[opus-reviews-plans-and-specs]] in memory for the lighter process).
+
+## The items (O-n), what they mean, what they need
+
+| Id | Owner's point | What it means here | Needs |
+|---|---|---|---|
+| O-1 | Make the assets panel resizable with a minimum width so long names are not cut off | A drag handle on the tree column's right edge (also keyboard: arrow keys), min 220 px, max about 50 % of the window, width remembered; the 44 px collapsed strip stays | front end |
+| O-2 | A summary page for all assets: the Assets page is empty apart from the tree | The `/assets` landing (nothing selected) becomes a fleet summary: tiles (assets, live power of the top-level assets, energy today, cost today), counts by kind, and an "needs attention" list (assets with stale or bad readings) | a small read endpoint (aggregate) |
+| O-3 | Pressing an asset must show its details at once, no "Selected: ... (open page)" step | `/assets` and `/assets/:id` share ONE layout: the tree column stays on the left, the asset page (tiles, Trend, Metrics) renders in the right pane; selecting a node navigates to `/assets/:id`; the old two-step is gone. This also closes follow-up F-1 | front end; reworks journey.spec lines 63/64 and the AssetsPage/AssetPage tests |
+| O-4 | A breadcrumb trail like a directory path, navigable back and forth ("Assets / MV2 / Room-1 / ...") | On an asset: Assets > each ancestor > the asset, every part but the last a link; clickable crumbs everywhere there is one: Sources > source on Points, Dashboards > dashboard, Audit > entry, Scans. Today the W6 crumbs on Asset and Points are plain text (a reviewer found a crumb named "Assets" collides with the sidebar link in Playwright strict mode) | scope the e2e/unit link lookups to the navigation landmark |
+| O-5 | Always use the full width of the browser, on every page | Drop the `main` 1200 px cap for all pages (Billing and one dashboard are already wide); forms keep a readable width inside their card. One global rule plus a pass over the pages | front end, small |
+| O-6 | An admin-set default dashboard that people land on, so nobody has to click through | A site setting `default_dashboard` (admin sets it on the dashboard screen, audited); the sidebar's Dashboards entry and the post-sign-in landing open it directly, with a link to the list of all dashboards; none set = today's list | one settings key + endpoint, front end |
+| O-7 | Row actions as a three-dot "Actions" menu; Delete as a trash-can icon that animates open; reusable, not rebuilt per page | New shared pieces: `RowActions` (a "⋯" menu button in an Actions column: opens on click/Enter/Space and on hover, closes on Esc/outside click, `aria-haspopup`/`aria-expanded`, arrow-key navigation), `TrashButton` (SVG, lid lifts on hover and focus, off under reduced motion, confirm stays), CSS classes in `app.css`; applied to Sources, Source points, Scans, Users, Tariffs, Dashboards list, Assets | front end |
+| O-8 | Billing: pick the year, then the month, not Previous/Next ten times | A year select and a month select next to Previous/Next; years from the first month with data (or the first tariff) to now | maybe a read endpoint for the earliest billable month |
+| O-9 | Settings: switch sign-in protection on or off | `sign_in` setting gains `enabled` (default on; a missing, garbage or unreadable value stays ON); a clear warning and a confirm when switching off, an audit row, the README runbook updated. This reverses the W3d ruling "the limits cannot be switched off" at the owner's request | backend + front end, security-touching: per-task Opus review |
+| O-10 | Tariffs: icons or separators per section, explain the fields | Section headers with an icon and a one-line purpose, the `?` help bubbles of O-11 on the fields, clearer empty states | front end |
+| O-11 | Storage: a short explanation per retention/capacity item; summary panels at the top; "rows per day" navigable by date | `InfoTip` (a `?` button opening a small bubble; reusable on Tariffs and Settings); summary tiles for database size, readings, roll-ups, growth, projected full; rows per day with a date picker (or range) instead of the fixed last seven days | a range read endpoint for rows per day |
+| O-12 | "Administer or Administrator?" | The sidebar group heading is "Administer" (the verb); the role under the user name is "Administrator". Rename the group to "Administration" if the owner prefers | one word |
+
+Not now: Discovery (waits for real data), dialogs, the remaining dashboard items, the widgets restyle (own session), F-2 (status icons on tree nodes: needs a per-asset status field), the phone layout.
+
+## The split into sessions
+
+- **W7a: layout and the Assets workspace** (do first; the owner asked to start with assets). O-5 (full width), O-3 (one shared Assets layout with the tree on both routes, closes F-1), O-1 (resizable tree), O-2 (summary page + its endpoint), O-4 (breadcrumbs, e2e lookups scoped to the nav), O-12 if wanted. Effort L, risk Medium: the e2e specs that find the "Assets" link, the "Selected: ... (open page)" paragraph and the asset tiles need careful updates (journey, discovery, w3a, w3b, headers use them), and the page CSS guard test from W6 must stay green.
+- **W7b: reusable controls and the admin pages.** O-7 (RowActions, TrashButton), O-11 (InfoTip, Storage summary and date-navigable rows per day), O-10 (Tariffs), O-9 (the sign-in switch). Effort L, risk Medium; O-9 is a security boundary (per-task Opus), O-11 adds a read endpoint.
+- **W7c: dashboards and Billing.** O-6 (default dashboard), O-8 (year and month picker) plus whatever the owner finds while testing W7a and W7b. Effort M, risk Low.
+
+## Decisions (proposed defaults; the owner may overrule any of them)
+
+1. **O-2 summary content:** four tiles (assets, live power, energy today, cost today), counts by kind, and a "needs attention" list of assets with stale or bad readings.
+2. **O-6 behaviour:** both the sidebar Dashboards entry and the landing after sign-in open the default dashboard; the list stays one click away ("All dashboards").
+3. **O-11 help style:** one `?` bubble component (keeps pages clean, reusable); a plain one-line hint only where a field is truly obscure.
+4. **O-9:** allowed, default on, a warning and a confirm when switching off, audited. (Argon2 still slows guessing; the switch only removes the block after N failures.)
+5. **O-12:** keep "Administer" unless told otherwise; "Administration" is the alternative.
+6. **O-11 rows per day:** a date picker for one day plus a small range option; the table stays, a chart is optional later.
+7. **O-8:** two selects (year, month) beside Previous/Next; years from the earliest month with data.
+8. **O-5:** every page full width, forms 480 px inside their card; on very wide screens tables stretch (as asked).
+
+## Process for each wave
+
+Plan (short: interfaces, rules, the risky code, the key tests) + ONE Opus plan review that RUNS the risky parts (it caught real defects in W3d and W6 that reading alone missed), one fresh Sonnet implementer per task (parallel only in separate git worktrees with a symlinked `frontend/node_modules`), Opus per task only for security or data tasks (O-9), ONE whole-branch Opus review that LOOKS at every page in a browser AFTER merging parallel groups (the W6 review found two CSS collisions each worktree missed), the full frontend suite and the whole Playwright suite in a scratch project (`.superpowers/sdd/2026-10-11-w6-ui-overhaul/vis-rebuild.sh` rebuilds a fresh seeded stack from the current tree), merge `--no-ff`, backup, rebuild the dev stack. Lessons to carry: Playwright heading and link names match by substring (do not add headings or links with names that collide); new class names go in the group's page CSS file and the W6 guard test must pass; keep sessions small, hand over through git + the plan checkboxes.
