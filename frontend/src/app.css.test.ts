@@ -325,6 +325,68 @@ describe("the shell (W6 sidebar)", () => {
   });
 });
 
+describe("the resizable asset tree column (W7a)", () => {
+  const only = (selector: string) => {
+    const found = rules.filter((r) => r.selector === selector);
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0];
+  };
+  const classCount = (selector: string) => selector.match(/\./g)?.length ?? 0;
+
+  it("the column's width is --w, which takes the user's width (--tree-user-w) and falls back to --tree-w", () => {
+    const col = only(".tree-col");
+    expect(inLayer(col)).toBe(true);
+    expect(col.body).toMatch(/--w:\s*var\(--tree-user-w,\s*var\(--tree-w\)\)/);
+    expect(col.body).toMatch(/(?:^|[;\s])width:\s*var\(--w\)/);
+  });
+
+  it("a window that shrank after saving is guarded in the CSS: max-width of 220px or half the window", () => {
+    expect(only(".tree-col").body).toMatch(/max-width:\s*max\(220px,\s*50vw\)/);
+  });
+
+  it("the minimized column keeps its own --w and so ignores the user's width", () => {
+    const minimized = only('.tree-col[data-state="minimized"]');
+    expect(minimized.body).toMatch(/--w:\s*var\(--tree-w-closed\)/);
+    expect(minimized.body).not.toMatch(/--tree-user-w/);
+  });
+
+  it("while dragging the column does not animate or select text: .shell.ready .tree-col.is-resizing, after and heavier than the transition rule", () => {
+    const base = only(".shell.ready .tree-col");
+    expect(base.body).toMatch(/transition:\s*width/);
+    const dragging = only(".shell.ready .tree-col.is-resizing");
+    expect(inLayer(dragging)).toBe(true);
+    expect(dragging.body).toMatch(/transition:\s*none/);
+    expect(dragging.body).toMatch(/user-select:\s*none/);
+    expect(classCount(dragging.selector)).toBeGreaterThan(classCount(base.selector)); // (0,4,0) against (0,3,0)
+    expect(dragging.order).toBeGreaterThan(base.order);
+  });
+
+  it("the handle is a 6px strip on the column's right edge with the column-resize cursor and no touch panning", () => {
+    const handle = only(".tree-resize");
+    expect(inLayer(handle)).toBe(true);
+    expect(handle.body).toMatch(/position:\s*absolute/);
+    expect(handle.body).toMatch(/right:\s*0/);
+    expect(handle.body).toMatch(/(?:^|[;\s])width:\s*6px/);
+    expect(handle.body).toMatch(/cursor:\s*col-resize/);
+    expect(handle.body).toMatch(/touch-action:\s*none/);
+  });
+
+  it("hover, focus and a drag show the handle in --ring", () => {
+    const shown = rules.filter((r) => r.selector.split(",").map((part) => part.trim()).includes(".tree-resize:hover::after"));
+    expect(shown).toHaveLength(1);
+    expect(shown[0].selector).toContain(".tree-resize:focus-visible::after");
+    expect(shown[0].selector).toContain(".tree-col.is-resizing .tree-resize::after");
+    expect(shown[0].body).toMatch(/background:\s*var\(--ring\)/);
+  });
+
+  it("the focus ring of the handle is drawn inside it (negative offset), because the column is overflow: hidden and would clip an outside ring", () => {
+    expect(only(".tree-col").body).toMatch(/overflow:\s*hidden/);
+    const focus = only(".tree-resize:focus-visible");
+    expect(inLayer(focus)).toBe(true);
+    expect(focus.body).toMatch(/outline-offset:\s*-\d+px/);
+  });
+});
+
 describe("long asset names wrap, figures do not", () => {
   /** The selector list of the rule that sets `overflow-wrap: anywhere` in the widget block. */
   const wrapping = [...css.matchAll(/([^{}]+)\{([^{}]*overflow-wrap:\s*anywhere[^{}]*)\}/g)].map((m) => m[1].trim()).join(" | ");

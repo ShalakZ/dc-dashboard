@@ -263,9 +263,14 @@
      meets the sidebar; it is sticky, as tall as the window below the top bar, and the detail area beside it restores the page gutter. */
   .assets-layout { display: flex; align-items: flex-start; min-height: calc(100vh - var(--bar-h)); }
   .assets-detail { flex: 1; min-width: 0; padding: 0 var(--gutter) 48px; }
-  .tree-col { --w: var(--tree-w); position: sticky; top: var(--bar-h); align-self: flex-start; width: var(--w); height: calc(100vh - var(--bar-h)); flex: none; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border-strong); background: var(--bg); }
+  .tree-col { --w: var(--tree-user-w, var(--tree-w)); position: sticky; top: var(--bar-h); align-self: flex-start; width: var(--w); max-width: max(220px, 50vw); height: calc(100vh - var(--bar-h)); flex: none; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border-strong); background: var(--bg); } /* --tree-user-w is the width the user chose (inline, from the handle); the max-width is for a window that shrank after that, as treeMax() in lib/treeWidth.ts */
   .shell.ready .tree-col { transition: width var(--motion); } /* from the second frame on, so a remembered state does not animate in */
+  .shell.ready .tree-col.is-resizing { transition: none; user-select: none; } /* one class more than the rule above, which it must outrank: while dragging, the column follows the pointer */
   .tree-col[data-state="minimized"] { --w: var(--tree-w-closed); background: var(--surface); }
+  .tree-resize { position: absolute; top: 0; right: 0; bottom: 0; z-index: 1; width: 6px; cursor: col-resize; touch-action: none; }
+  .tree-resize::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 2px; }
+  .tree-resize:hover::after, .tree-resize:focus-visible::after, .tree-col.is-resizing .tree-resize::after { background: var(--ring); }
+  .tree-resize:focus-visible { outline-offset: -2px; } /* the column is overflow: hidden, so a ring outside the handle would be clipped */
   .tree-head { display: flex; align-items: center; gap: 4px; flex: none; height: 52px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--border); }
   .tree-col[data-state="minimized"] .tree-head { justify-content: center; padding: 0; border-bottom: 0; }
   .tree-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; font-size: var(--fs-md); font-weight: 600; white-space: nowrap; } /* a p, never a heading: the page's h1 is "Assets" */
@@ -274,7 +279,7 @@
   .tree-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .tree-body[hidden] { display: none; }
   .tree-filter { position: relative; flex: none; padding: 10px 12px 8px; }
-  .tree-filter input[type="search"] { width: 100%; min-height: 34px; padding: 0 10px 0 32px; font-size: var(--fs-sm); }
+  .tree-filter input[type="search"] { width: 100%; min-height: 34px; padding: 0 10px 0 32px; font-size: var(--fs-sm); text-overflow: ellipsis; }
   .tree-filter svg.i { position: absolute; left: 22px; top: 19px; width: 16px; height: 16px; color: var(--text-2); pointer-events: none; }
   .tree-scroll { flex: 1; min-height: 0; overflow: auto; padding: 2px 0 8px; }
   .tree-empty { margin: 0; padding: 8px 16px; font-size: var(--fs-sm); }

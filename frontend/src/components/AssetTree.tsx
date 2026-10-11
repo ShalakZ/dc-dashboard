@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { Link } from "react-router";
 import { readStored, writeStored } from "../lib/sidebarState";
 import { ancestorIds, type TreeNode } from "../lib/tree";
 import { foldableIds, readFolded, saveFolded } from "../lib/treeFold";
+import { TREE_MIN, TREE_STEP, TREE_STEP_BIG, clampTreeWidth, clearTreeWidth, readTreeWidth, saveTreeWidth, treeMax } from "../lib/treeWidth";
 
 const KEY = "dcdash.assetTree";
 type ColumnState = "expanded" | "minimized";
+const DEFAULT_WIDTH = 280; // --tree-w, for a column with no layout to measure (jsdom)
 
 // Inline SVG, 24-unit viewBox, drawn with the 1.7 stroke of `svg.i`; decoration only (the button's own label is its name).
 function Svg({ children }: { children: ReactNode }) {
@@ -99,9 +101,93 @@ function Nodes({ nodes, view }: { nodes: TreeNode[]; view: View }) {
 }
 
 /**
+ * The width the user chose for the column (null: the CSS default), and what changes it. The choice is kept as made; the width shown follows
+ * the window, so a smaller window shows less and a larger one brings the choice back. Only the user's own actions are saved.
+ */
+function useTreeWidth(column: RefObject<HTMLElement | null>) {
+  const [chosen, setChosen] = useState<number | null>(() => readTreeWidth(window.innerWidth));
+  const [viewport, setViewport] = useState(() => window.innerWidth);
+  const [measured, setMeasured] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef<{ left: number; width: number | null } | null>(null); // the column's left edge, and the last width of this drag (null: no move yet)
+
+  useEffect(() => {
+    const onResize = () => setViewport(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // The default width is a CSS token (248px in a narrow window), so it is read from the layout, also while the column animates.
+  useEffect(() => {
+    const el = column.current;
+    if (!el) return;
+    const measure = () => setMeasured(Math.round(el.getBoundingClientRect().width));
+    measure();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [column]);
+
+  const shown = chosen === null ? null : clampTreeWidth(chosen, viewport);
+  const now = clampTreeWidth(shown ?? (measured || DEFAULT_WIDTH), viewport) ?? TREE_MIN;
+  const choose = (px: number) => {
+    const next = clampTreeWidth(px, window.innerWidth);
+    if (next === null) return;
+    setChosen(next);
+    saveTreeWidth(next);
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return; // Alt+Left is the browser's Back
+    const step = e.shiftKey ? TREE_STEP_BIG : TREE_STEP;
+    let next: number;
+    if (e.key === "ArrowRight") next = now + step;
+    else if (e.key === "ArrowLeft") next = now - step;
+    else if (e.key === "Home") next = TREE_MIN;
+    else if (e.key === "End") next = treeMax(window.innerWidth);
+    else return;
+    e.preventDefault();
+    choose(next);
+  };
+  const onPointerDown = (e: PointerEvent<HTMLElement>) => {
+    const el = column.current;
+    if (e.button !== 0 || !el) return;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* a pointer that is already gone */ }
+    drag.current = { left: el.getBoundingClientRect().left, width: null };
+    setDragging(true);
+  };
+  const onPointerMove = (e: PointerEvent<HTMLElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    const next = clampTreeWidth(e.clientX - d.left, window.innerWidth);
+    if (next === null) return;
+    d.width = next;
+    setChosen(next);
+  };
+  const endDrag = (e: PointerEvent<HTMLElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    drag.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* released with the pointer */ }
+    setDragging(false);
+    if (d.width !== null) saveTreeWidth(d.width); // a click that moved nothing must not turn the default into a chosen width
+  };
+  const reset = () => {
+    clearTreeWidth();
+    setChosen(null);
+  };
+
+  return {
+    shown, now, max: treeMax(viewport), dragging,
+    handle: { onKeyDown, onPointerDown, onPointerMove, onPointerUp: endDrag, onPointerCancel: endDrag, onDoubleClick: reset },
+  };
+}
+
+/**
  * The asset tree as its own column (option B): a title, the top-level +, Collapse all / Expand all and a toggle, then a filter and the
  * tree. The column can be minimized to a strip with just the toggle (remembered in localStorage); the branches fold with a twisty each,
- * and which are folded is remembered too. Selecting an asset unfolds the way to it.
+ * and which are folded is remembered too. Selecting an asset unfolds the way to it. A handle on the right edge resizes the column
+ * (drag, arrow keys, double click for the default); the width is remembered too.
  */
 export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, disabled }: {
   nodes: TreeNode[]; selectedId: number | null; onSelect: (id: number) => void;
@@ -116,6 +202,8 @@ export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, d
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(readFolded);
   const minimized = state === "minimized";
+  const column = useRef<HTMLElement>(null);
+  const width = useTreeWidth(column);
   const needle = filter.trim().toLowerCase();
   const visible = useMemo(() => (needle ? matchingIds(nodes, needle) : null), [nodes, needle]);
   const foldable = useMemo(() => new Set(foldableIds(nodes)), [nodes]);
@@ -169,7 +257,13 @@ export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, d
   const toggleName = minimized ? "Expand asset tree" : "Minimize asset tree";
   const view: View = { selectedId, onSelect, onAddChild: addChild, disabled, collapsed, visible, toggle: toggleBranch };
   return (
-    <section className="tree-col" aria-label="Asset tree" data-state={state}>
+    <section
+      ref={column}
+      className={width.dragging ? "tree-col is-resizing" : "tree-col"}
+      aria-label="Asset tree"
+      data-state={state}
+      style={width.shown === null ? undefined : ({ "--tree-user-w": `${width.shown}px` } as CSSProperties)}
+    >
       <div className="tree-head">
         {!minimized && <p className="tree-title">Assets</p>}
         {!minimized && onAddTop && (
@@ -208,6 +302,19 @@ export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, d
           )}
         </div>
       </div>
+      {!minimized && (
+        <div
+          className="tree-resize"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the tree column"
+          aria-valuemin={TREE_MIN}
+          aria-valuemax={width.max}
+          aria-valuenow={width.now}
+          tabIndex={0}
+          {...width.handle}
+        />
+      )}
     </section>
   );
 }
