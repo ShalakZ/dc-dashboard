@@ -1,7 +1,9 @@
+import pytest
 from sqlalchemy.exc import OperationalError
 
 from dcdash.api.deps import get_db
-from helpers import login_as
+from dcdash.api import auth as auth_module
+from helpers import login_as, make_user
 
 ADMIN = {"username": "admin", "password": "correct-horse"}
 
@@ -134,3 +136,125 @@ async def test_first_run_setup_is_audited_once(client, db):
     assert row["detail"] == {"username": "boss", "role": "admin"}
     assert (await client.post("/api/setup", json={"username": "x", "password": "longenough"})).status_code == 409
     assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'setup.completed'") == 1
+
+
+BAD = {"password": "wrong-wrong"}
+GOOD = {"username": "viewer", "password": "correct-horse"}
+
+
+def _from(address: str) -> dict[str, str]:
+    return {"x-forwarded-for": address}
+
+
+async def _fail(client, username: str, times: int, address: str | None = None) -> None:
+    headers = _from(address) if address else {}
+    for _ in range(times):
+        bad = await client.post("/api/login", json={"username": username, **BAD}, headers=headers)
+        assert bad.status_code == 401
+
+
+async def test_the_429_says_how_long_and_carries_retry_after(client, db):
+    await make_user(db, "viewer")
+    await _fail(client, "viewer", 5)
+    blocked = await client.post("/api/login", json={"username": "viewer", "password": "correct-horse"})
+    assert blocked.status_code == 429
+    assert blocked.json() == {"detail": "too many failed attempts, try again in about 5 minutes"}
+    assert 295 <= int(blocked.headers["retry-after"]) <= 300
+
+
+@pytest.mark.parametrize(
+    "seconds,wording,retry_after",
+    [
+        (90.0, "about 2 minutes", "90"),
+        (60.0, "about 1 minute", "60"),
+        (0.2, "about 1 minute", "1"),  # the last fraction of a second still says a minute and waits one second
+        (300.0, "about 5 minutes", "300"),
+        (300.5, "about 6 minutes", "301"),  # both round up: a plain round() or int() would say 5 minutes and 300
+    ],
+)
+def test_the_429_rounds_the_minutes_and_the_seconds_up(seconds, wording, retry_after):
+    error = auth_module._too_many(seconds)
+    assert error.status_code == 429
+    assert error.detail == f"too many failed attempts, try again in {wording}"
+    assert error.headers == {"Retry-After": retry_after}
+
+
+async def test_the_429_for_a_one_minute_block_says_1_minute_in_the_singular(client, db):
+    await make_user(db, "viewer")
+    # The limiter's numbers come from the stored policy on every attempt, so a direct configure() would be overwritten.
+    await db.execute(
+        "INSERT INTO settings (key, value) VALUES ('sign_in', '{\"max_failures\": 5, \"block_minutes\": 1}'::jsonb)"
+    )
+    await _fail(client, "viewer", 5)
+    one = await client.post("/api/login", json={"username": "viewer", "password": "correct-horse"})
+    assert one.json()["detail"] == "too many failed attempts, try again in about 1 minute"
+    assert int(one.headers["retry-after"]) >= 1
+
+
+async def test_addresses_are_counted_separately(client, db):
+    await make_user(db, "viewer")
+    await _fail(client, "viewer", 5, "9.9.9.9")
+    blocked = await client.post("/api/login", json=GOOD, headers=_from("9.9.9.9"))
+    assert blocked.status_code == 429
+    other = await client.post("/api/login", json={"username": "viewer", **BAD}, headers=_from("8.8.8.8"))
+    assert other.status_code == 401  # reaches the password check, not the block
+    own = await client.post("/api/login", json=GOOD, headers=_from("8.8.8.8"))
+    assert own.status_code == 200
+
+
+async def test_a_client_sent_forwarded_for_counts_as_its_last_entry(client, db):
+    await make_user(db, "viewer")
+    await _fail(client, "viewer", 5, "1.1.1.1, 9.9.9.9")
+    assert (await client.post("/api/login", json={"username": "viewer", **BAD}, headers=_from("9.9.9.9"))).status_code == 429
+    assert (await client.post("/api/login", json={"username": "viewer", **BAD}, headers=_from("1.1.1.1"))).status_code == 401
+
+
+async def test_a_successful_sign_in_resets_only_its_own_key(client, db):
+    await make_user(db, "viewer")
+    await _fail(client, "viewer", 2, "9.9.9.9")
+    await _fail(client, "viewer", 2, "8.8.8.8")
+    ok = await client.post("/api/login", json=GOOD, headers=_from("9.9.9.9"))
+    assert ok.status_code == 200
+    await _fail(client, "viewer", 4, "9.9.9.9")  # its count started again, so 4 more do not block
+    await _fail(client, "viewer", 2, "8.8.8.8")  # 2 + 2 = 4 is still below 5
+    await _fail(client, "viewer", 1, "8.8.8.8")  # the fifth, never reset by the other address' sign-in
+    assert (await client.post("/api/login", json={"username": "viewer", **BAD}, headers=_from("8.8.8.8"))).status_code == 429
+
+
+async def test_password_change_and_sign_in_share_one_key(client, db):
+    await login_as(client, db, "viewer")
+    await _fail(client, "viewer", 3, "5.5.5.5")
+    body = {"current_password": "wrong-wrong", "new_password": "newpassword1"}
+    for _ in range(2):
+        assert (await client.post("/api/me/password", json=body, headers=_from("5.5.5.5"))).status_code == 401
+    blocked = await client.post("/api/login", json=GOOD, headers=_from("5.5.5.5"))
+    assert blocked.status_code == 429
+    elsewhere = await client.post("/api/me/password", json=body, headers=_from("6.6.6.6"))
+    assert elsewhere.status_code == 401
+
+
+async def test_user_names_are_not_folded_together_in_the_key(client, db):
+    await make_user(db, "bob")
+    await make_user(db, "Bob")
+    await _fail(client, "BOB", 5)  # an unknown name typed in capitals
+    assert (await client.post("/api/login", json={"username": "BOB", **BAD})).status_code == 429
+    for name in ("bob", "Bob"):
+        ok = await client.post("/api/login", json={"username": name, "password": "correct-horse"})
+        assert ok.status_code == 200, name
+    await _fail(client, "bob", 5)
+    assert (await client.post("/api/login", json={"username": "bob", "password": "correct-horse"})).status_code == 429
+    assert (await client.post("/api/login", json={"username": "Bob", "password": "correct-horse"})).status_code == 200
+
+
+def test_clear_on_the_shared_limiter_restores_the_constructor_numbers():
+    limiter = auth_module.limiter
+    limiter.configure(3, 60)
+    limiter.clear()
+    try:
+        for _ in range(4):
+            limiter.record_failure("k")
+        assert not limiter.blocked("k")  # 5 failures are needed again, not 3
+        limiter.record_failure("k")
+        assert limiter.blocked("k") and 299 < limiter.retry_after("k") <= 300
+    finally:
+        limiter.clear()

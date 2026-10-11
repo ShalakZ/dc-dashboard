@@ -14,7 +14,7 @@ from dcdash.collector.browse import browse_source
 from dcdash.collector.scheduler import mark_source
 from dcdash.collector.sweep import sweep
 from dcdash.connectors.base import Claim, Connector, ConnectorError, ConnectorFactory, connector_types, create_connector
-from dcdash.core.audit import audit_pool
+from dcdash.core.audit import audit_pool, clip_error
 from dcdash.core.config import get_settings
 from dcdash.core.discovery import expand_targets
 
@@ -250,10 +250,11 @@ async def _browse_one(pool: asyncpg.Pool, source_id: int, factory: ConnectorFact
         count = await browse_source(pool, source_id, factory)
     except Exception as exc:  # noqa: BLE001 - any failure is recorded against the source, never aborts the scan
         message = (exc.message or exc.status) if isinstance(exc, ConnectorError) else (str(exc) or type(exc).__name__)
+        message = clip_error(message)
         await mark_source(pool, source_id, False, message)
         if isinstance(exc, ConnectorError) and exc.status == "auth_failed":
             return _BrowseResult("needs_credentials", "credentials rejected")
-        return _BrowseResult("claimed", f"browse failed: {message}")
+        return _BrowseResult("claimed", clip_error(f"browse failed: {message}"))
     return _BrowseResult("claimed", f"{count} points", count)
 
 
@@ -311,7 +312,7 @@ async def _fail(
     exc: Exception,
 ) -> None:
     await writer.flush()
-    error = str(exc) or type(exc).__name__
+    error = clip_error(str(exc) or type(exc).__name__)
     await pool.execute(
         "UPDATE scans SET status = 'failed', error = $2, progress = $3, finished_at = now() WHERE id = $1",
         scan_id, error, progress,

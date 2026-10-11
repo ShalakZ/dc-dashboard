@@ -32,6 +32,20 @@ async def test_audit_pool_commits_immediately(db):
     assert await db.fetchval("SELECT detail FROM audit_log WHERE action = 'scan.finished'") == {"status": "done"}
 
 
+async def test_audit_pool_records_no_actor_for_a_user_that_no_longer_exists(db):
+    """A scan reads its starter once and finishes minutes later; the account may be gone by then."""
+    await audit_pool(db, 99_999, "scan.finished", {"status": "done"})
+    row = await db.fetchrow("SELECT user_id, actor_id, detail FROM audit_log WHERE action = 'scan.finished'")
+    assert row["user_id"] is None and row["actor_id"] is None and row["detail"] == {"status": "done"}
+
+
+async def test_audit_pool_still_records_the_actor_of_an_account_that_exists(db):
+    uid = await db.fetchval("INSERT INTO users (username, password_hash, role) VALUES ('a', 'x', 'admin') RETURNING id")
+    await audit_pool(db, uid, "scan.finished", {})
+    row = await db.fetchrow("SELECT user_id, actor_id, actor_name FROM audit_log WHERE action = 'scan.finished'")
+    assert (row["user_id"], row["actor_id"], row["actor_name"]) == (uid, uid, "a")
+
+
 async def test_audit_model_reads_the_row(db):
     await audit_pool(db, None, "a")
     async with get_sessionmaker()() as session:

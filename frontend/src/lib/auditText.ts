@@ -222,6 +222,8 @@ const RULES: Record<string, Rule> = {
   },
   "login.locked": { summary: ({ d }) => `Sign-in blocked after repeated failures${reasonSuffix(d)}` },
   "login.succeeded": { summary: () => "Signed in" },
+  // The User column is the admin who unblocked; user_id in the detail is the account that was unblocked.
+  "login.unblocked": { summary: (c) => `Unblocked sign-in for ${thing("user", c.d, "user_id")}`, link: usersPage },
 
   "mapping.created": {
     summary: ({ d }) => {
@@ -268,6 +270,10 @@ const RULES: Record<string, Rule> = {
   },
   "scope.deleted": { summary: (c) => `Deleted scan ${thing("scope", c.d, "scope_id")}` },
 
+  "settings.sign_in_changed": {
+    summary: (c) => withFields("Changed the sign-in protection", c.fields),
+    link: page("/settings", "Open Settings"),
+  },
   "settings.timezone_changed": {
     summary: ({ sides }) =>
       sides
@@ -313,6 +319,7 @@ const RULES: Record<string, Rule> = {
     },
     link: usersPage,
   },
+  "user.deleted": removed("user", "user_id"),
   "user.updated": {
     summary: (c) => userUpdate(c) ?? withFields(`Changed ${thing("user", c.d, "user_id")}`, c.fields),
     link: usersPage,
@@ -321,7 +328,7 @@ const RULES: Record<string, Rule> = {
 
 function factLabel(action: string, key: string): string {
   // In a user.* entry user_id is the account that was changed; the actor is the entry's own user.
-  return action.startsWith("user.") && key === "user_id" ? "Account id" : humanise(key);
+  return (action.startsWith("user.") || action === "login.unblocked") && key === "user_id" ? "Account id" : humanise(key);
 }
 
 function build(entry: AuditEntry): AuditView {

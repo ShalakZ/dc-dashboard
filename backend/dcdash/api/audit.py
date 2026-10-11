@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Annotated, Any
@@ -158,11 +159,24 @@ async def audit_options(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     newest = (
         select(func.max(AuditLog.id)).where(AuditLog.actor_id.is_not(None)).group_by(AuditLog.actor_id)
     )  # the newest entry of each actor carries the name to show
-    actors = await db.execute(select(AuditLog.actor_id, AuditLog.actor_name).where(AuditLog.id.in_(newest)))
-    users = sorted(
-        ({"id": actor_id, "name": name or f"#{actor_id}"} for actor_id, name in actors),
-        key=lambda u: (u["name"].casefold(), u["id"]),
+    actors = await db.execute(
+        select(AuditLog.actor_id, AuditLog.actor_name, User.id.is_(None))
+        .outerjoin(User, User.id == AuditLog.actor_id)
+        .where(AuditLog.id.in_(newest))
     )
+    named = sorted(
+        ((actor_id, name or f"#{actor_id}", gone) for actor_id, name, gone in actors),
+        key=lambda a: (a[1].casefold(), a[0]),
+    )
+    labels = [(actor_id, name, f"{name}{' (deleted)' if gone else ''}") for actor_id, name, gone in named]
+    # A deleted `bob` and a new `bob` would otherwise read alike, and a deleted `bob` and a live account that is
+    # literally called `bob (deleted)` end in the same label; both cases get the id.
+    same_name = Counter(name for _, name, _ in labels)
+    same_label = Counter(label for _, _, label in labels)
+    users = [
+        {"id": actor_id, "name": f"{label} #{actor_id}" if same_name[name] > 1 or same_label[label] > 1 else label}
+        for actor_id, name, label in labels
+    ]
     unattributed = await db.scalar(select(exists().where(AuditLog.actor_id.is_(None))))
     return {"actions": list(actions), "users": users, "unattributed": bool(unattributed)}
 

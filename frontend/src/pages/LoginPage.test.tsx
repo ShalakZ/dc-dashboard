@@ -28,11 +28,11 @@ describe("LoginPage", () => {
   });
 
   it("shows the lockout message on 429", async () => {
-    mockFetch({ ...base, "POST /api/login": { status: 429, body: { detail: "too many failed attempts, try again later" } } });
+    mockFetch({ ...base, "POST /api/login": { status: 429, body: { detail: "too many failed attempts, try again in about 5 minutes" } } });
     renderWithProviders(<LoginPage />, { route: "/login", path: "/login" });
     await userEvent.type(await screen.findByLabelText("Username"), "admin");
     await userEvent.type(screen.getByLabelText("Password"), "wrong");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByText("too many failed attempts, try again later")).toBeInTheDocument();
+    expect(await screen.findByText("too many failed attempts, try again in about 5 minutes")).toBeInTheDocument();
   });
 });

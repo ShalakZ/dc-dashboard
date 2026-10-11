@@ -1,12 +1,19 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { SettingsPage } from "./SettingsPage";
 
+const policy = (max_failures = 5, block_minutes = 5) => ({
+  max_failures, block_minutes,
+  limits: { max_failures: [3, 20], block_minutes: [1, 60] },
+  defaults: { max_failures: 5, block_minutes: 5 },
+});
+
 const base = {
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: { id: 1, username: "admin", role: "admin" } },
+  "GET /api/settings/sign-in": { body: policy() },
 };
 
 describe("SettingsPage", () => {
@@ -53,6 +60,94 @@ describe("SettingsPage", () => {
     await userEvent.type(input, "Mars/Olympus");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(/unknown timezone: Mars\/Olympus/)).toBeInTheDocument();
+  });
+});
+
+describe("SettingsPage sign-in protection", () => {
+  const section = () => screen.getByRole("form", { name: "Sign-in protection" });
+
+  it("shows the stored numbers with the bounds the API gave, and the sentence that says what they do", async () => {
+    mockFetch({ ...base, "GET /api/settings/general": { body: { timezone: "UTC" } }, "GET /api/settings/sign-in": { body: policy(7, 12) } });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    const failures = await screen.findByLabelText("Failed sign-ins before a block");
+    const minutes = screen.getByLabelText("Block time in minutes");
+    await waitFor(() => expect(failures).toHaveValue(7));
+    expect(minutes).toHaveValue(12);
+    expect(failures).toHaveAttribute("min", "3");
+    expect(failures).toHaveAttribute("max", "20");
+    expect(minutes).toHaveAttribute("min", "1");
+    expect(minutes).toHaveAttribute("max", "60");
+    expect(screen.getByRole("heading", { name: "Sign-in protection" })).toBeInTheDocument();
+    expect(section()).toHaveTextContent(
+      "After this many wrong passwords for one account from one computer, that account is blocked from that computer for this long. "
+      + "Restarting the api service clears every block; Unblock on the Users page lets one account in sooner.",
+    );
+  });
+
+  it("saves both numbers, shows saved, and leaves the timezone alone", async () => {
+    let stored = policy();
+    const calls = mockFetch({
+      ...base,
+      "GET /api/settings/general": { body: { timezone: "UTC" } },
+      "GET /api/settings/sign-in": () => ({ body: stored }),
+      "PUT /api/settings/sign-in": ({ body }) => {
+        const b = body as { max_failures: number; block_minutes: number };
+        stored = policy(b.max_failures, b.block_minutes);
+        return { body: stored };
+      },
+    });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    const failures = await screen.findByLabelText("Failed sign-ins before a block");
+    await waitFor(() => expect(failures).toHaveValue(5));
+    await userEvent.clear(failures);
+    await userEvent.type(failures, "8");
+    const minutes = screen.getByLabelText("Block time in minutes");
+    await userEvent.clear(minutes);
+    await userEvent.type(minutes, "15");
+    await userEvent.click(within(section()).getByRole("button", { name: "Save sign-in protection" }));
+    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([
+      ["/api/settings/sign-in", { max_failures: 8, block_minutes: 15 }],
+    ]);
+    await waitFor(() => expect(screen.getByLabelText("Failed sign-ins before a block")).toHaveValue(8));
+    expect(screen.getByLabelText("Timezone")).toHaveValue("UTC");
+  });
+
+  it("keeps the timezone form separate: its Save does not send the sign-in numbers", async () => {
+    const calls = mockFetch({
+      ...base,
+      "GET /api/settings/general": { body: { timezone: "UTC" } },
+      "PUT /api/settings/general": { body: { timezone: "Asia/Qatar" } },
+    });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    const input = await screen.findByLabelText("Timezone");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Asia/Qatar");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("saved")).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === "PUT").map((c) => c.path)).toEqual(["/api/settings/general"]);
+  });
+
+  it("shows the API's text when the save is refused", async () => {
+    mockFetch({
+      ...base,
+      "GET /api/settings/general": { body: { timezone: "UTC" } },
+      "PUT /api/settings/sign-in": { status: 422, body: { detail: "block_minutes must be between 1 and 60" } },
+    });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    const failures = await screen.findByLabelText("Failed sign-ins before a block");
+    await waitFor(() => expect(failures).toHaveValue(5));
+    await userEvent.click(within(section()).getByRole("button", { name: "Save sign-in protection" }));
+    expect(await within(section()).findByRole("alert")).toHaveTextContent("block_minutes must be between 1 and 60");
+    expect(within(section()).queryByText("saved")).not.toBeInTheDocument();
+  });
+
+  it("says so, in its own section, when the policy cannot be read; the timezone form still works", async () => {
+    mockFetch({ ...base, "GET /api/settings/general": { body: { timezone: "UTC" } }, "GET /api/settings/sign-in": { status: 500, body: { detail: "boom" } } });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    expect(await screen.findByLabelText("Timezone")).toHaveValue("UTC");
+    expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+    expect(screen.queryByLabelText("Failed sign-ins before a block")).not.toBeInTheDocument();
   });
 });
 

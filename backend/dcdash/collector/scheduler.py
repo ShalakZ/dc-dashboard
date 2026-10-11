@@ -10,6 +10,7 @@ import asyncpg
 
 from dcdash.collector.writer import Row, Writer
 from dcdash.connectors.base import BAD, Connector, ConnectorError, ConnectorFactory, create_connector
+from dcdash.core.audit import clip_error
 from dcdash.core.crypto import decrypt
 
 log = logging.getLogger(__name__)
@@ -53,7 +54,8 @@ async def mark_source(pool: asyncpg.Pool, source_id: int, online: bool, error: s
                 )
             else:
                 await pool.execute(
-                    "UPDATE sources SET status = 'offline', last_error = $2 WHERE id = $1", source_id, error
+                    "UPDATE sources SET status = 'offline', last_error = $2 WHERE id = $1",
+                    source_id, None if error is None else clip_error(error),
                 )
         return True
     except Exception as exc:

@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -13,9 +14,31 @@ from dcdash.api.security_events import client_address, sign_in_events
 from dcdash.core.audit import audit
 from dcdash.core.config import get_settings
 from dcdash.core.models import User, UserSession
+from dcdash.core.sign_in_policy import SignInPolicy, get_sign_in_policy
 
 router = APIRouter(prefix="/api", tags=["auth"])
 limiter = LoginLimiter()
+
+
+def limiter_key(request: Request, username: str) -> tuple[str, str]:
+    # The name exactly as typed: the account lookup is case-sensitive, so a folded key would tie `bob` to `Bob`.
+    return client_address(request), username
+
+
+async def apply_sign_in_policy(db: AsyncSession) -> SignInPolicy:
+    """Read the stored policy and give its numbers to the limiter, so a change applies to the very next attempt."""
+    policy = await get_sign_in_policy(db)
+    limiter.configure(policy.max_failures, policy.block_minutes * 60)
+    return policy
+
+
+def _too_many(seconds: float) -> HTTPException:
+    minutes = max(1, math.ceil(seconds / 60))
+    return HTTPException(
+        429,
+        f"too many failed attempts, try again in about {minutes} minute{'s' if minutes != 1 else ''}",
+        headers={"Retry-After": str(max(1, math.ceil(seconds)))},
+    )
 
 
 class NewAdmin(BaseModel):
@@ -84,12 +107,15 @@ async def setup(
 async def login(
     body: Credentials, request: Request, response: Response, db: AsyncSession = Depends(get_db)
 ) -> User:
-    host = request.client.host if request.client else "-"
-    key = f"{host}:{body.username.lower()}"
-    if limiter.blocked(key):
-        raise HTTPException(429, "too many failed attempts, try again later")
+    await apply_sign_in_policy(db)
+    key = limiter_key(request, body.username)
     # Look the account up whether or not it is active, so a failed sign-in on a deactivated account can be attributed.
+    # Before the block check, for every request (a 429 never depends on the account): from the check to the failure it
+    # records nothing may be awaited (verify_password is synchronous), or a burst of requests that all passed the check
+    # each get a password check.
     found = (await db.execute(select(User).where(User.username == body.username))).scalar_one_or_none()
+    if limiter.blocked(key):
+        raise _too_many(limiter.retry_after(key))
     user = found if found is not None and found.active else None
     stored_hash = user.password_hash if user is not None else DUMMY_HASH
     if not verify_password(stored_hash, body.password) or user is None:
@@ -132,10 +158,10 @@ async def change_my_password(
     user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    host = request.client.host if request.client else "-"
-    key = f"{host}:{user.username.lower()}"
+    await apply_sign_in_policy(db)
+    key = limiter_key(request, user.username)
     if limiter.blocked(key):
-        raise HTTPException(429, "too many failed attempts, try again later")
+        raise _too_many(limiter.retry_after(key))
     if not verify_password(user.password_hash, body.current_password):
         # No await between the two reads: only the failure that blocks the key is the lockout, not a concurrent one.
         was_blocked = limiter.blocked(key)

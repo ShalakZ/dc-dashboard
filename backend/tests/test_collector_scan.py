@@ -284,6 +284,26 @@ async def test_a_scope_that_finds_nothing_completes(db):
     assert await db.fetchval("SELECT count(*) FROM scan_findings") == 0
 
 
+async def test_a_scan_finishes_done_when_its_starting_user_is_deleted_mid_run(db, monkeypatch):
+    """run_scan reads started_by once at its start; deleting that account later must not turn the scan into a failure."""
+    user = await db.fetchval(
+        "INSERT INTO users (username, password_hash, role) VALUES ('a', 'x', 'admin') RETURNING id"
+    )
+    scan = await make_scan(db, ["127.0.0.1"], [free_port()], user)
+    real = scan_module._record_findings
+
+    async def delete_the_user_then_record(pool, scan_id, findings):
+        await db.execute("DELETE FROM users WHERE id = $1", user)
+        await real(pool, scan_id, findings)
+
+    monkeypatch.setattr(scan_module, "_record_findings", delete_the_user_then_record)
+    await run_scan(db, scan)
+    row = await db.fetchrow("SELECT status, error, started_by FROM scans WHERE id = $1", scan)
+    assert row["status"] == "done" and row["error"] is None and row["started_by"] is None
+    audit = await db.fetchrow("SELECT user_id, detail FROM audit_log WHERE action = 'scan.finished'")
+    assert audit["user_id"] is None and audit["detail"]["scan_id"] == scan and audit["detail"]["status"] == "done"
+
+
 async def test_an_invalid_snapshot_fails_the_scan_with_a_reason_and_audits_it(db):
     scan = await make_scan(db, ["not a host!"], [502])
     with pytest.raises(Exception):
@@ -355,3 +375,70 @@ def test_overlapping_quiet_sections_restore_the_original_levels_only_when_the_la
     assert (asyncua.level, pymodbus.level) == (logging.ERROR, logging.ERROR)
     second.__exit__(None, None, None)
     assert (asyncua.level, pymodbus.level) == (logging.INFO, logging.NOTSET)
+
+
+LEAKY = "connect failed: http://svc:Zq9-unique-pw@host:9000/x (timeout)"
+SCRUBBED = "connect failed: http://[hidden]@host:9000/x (timeout)"
+
+
+async def test_a_failed_scan_stores_its_error_and_audit_row_without_the_url_credentials(db, monkeypatch):
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError(LEAKY)
+
+    monkeypatch.setattr(scan_module, "_sweep_stage", boom)
+    scan = await make_scan(db, ["127.0.0.1"], [free_port()])
+    with pytest.raises(RuntimeError):
+        await run_scan(db, scan)
+    assert await db.fetchval("SELECT error FROM scans WHERE id = $1", scan) == SCRUBBED
+    detail = await db.fetchval("SELECT detail FROM audit_log WHERE action = 'scan.finished'")
+    assert detail["status"] == "failed" and detail["error"] == SCRUBBED
+
+
+async def test_a_browse_failure_is_stored_in_the_finding_and_the_source_without_the_url_credentials(
+    db, simulator_network
+):
+    def raising(*_args):
+        raise RuntimeError(LEAKY)
+
+    scan = await make_scan(db, ["127.0.0.1"], [simulator_network["modbus"]])
+    await run_scan(db, scan, raising)
+    assert await db.fetchval("SELECT status FROM scans WHERE id = $1", scan) == "done"
+    finding = await db.fetchrow("SELECT outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
+    assert finding["outcome"] == "claimed" and finding["detail"] == f"browse failed: {SCRUBBED}"
+    assert await db.fetchval("SELECT last_error FROM sources") == SCRUBBED
+
+
+# Error text of 5000 characters whose URL password starts at character 995: a cut at 1000 before the scrub would leave
+# half of it behind.
+HUGE = "a" * 984 + "http://svc:Zq9-unique-pw@host:9000/x " + "b" * 5000
+
+
+def assert_cut_and_scrubbed(text: str) -> None:
+    assert len(text) <= 1000 and text.startswith("a" * 984 + "http://[hidden]")
+    assert "Zq9" not in text and "unique" not in text
+
+
+async def test_a_failed_scan_stores_a_huge_error_scrubbed_and_cut_in_the_scan_and_the_audit_row(db, monkeypatch):
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError(HUGE)
+
+    monkeypatch.setattr(scan_module, "_sweep_stage", boom)
+    scan = await make_scan(db, ["127.0.0.1"], [free_port()])
+    with pytest.raises(RuntimeError):
+        await run_scan(db, scan)
+    assert_cut_and_scrubbed(await db.fetchval("SELECT error FROM scans WHERE id = $1", scan))
+    detail = await db.fetchval("SELECT detail FROM audit_log WHERE action = 'scan.finished'")
+    assert_cut_and_scrubbed(detail["error"])
+
+
+async def test_a_huge_browse_failure_is_scrubbed_and_cut_in_the_finding_and_the_source(db, simulator_network):
+    def raising(*_args):
+        raise RuntimeError(HUGE)
+
+    scan = await make_scan(db, ["127.0.0.1"], [simulator_network["modbus"]])
+    await run_scan(db, scan, raising)
+    finding = await db.fetchrow("SELECT outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
+    assert finding["outcome"] == "claimed"
+    assert len(finding["detail"]) <= 1000 and finding["detail"].startswith("browse failed: " + "a" * 900)
+    assert "Zq9" not in finding["detail"] and "unique" not in finding["detail"]
+    assert_cut_and_scrubbed(await db.fetchval("SELECT last_error FROM sources"))

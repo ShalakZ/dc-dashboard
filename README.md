@@ -125,11 +125,15 @@ the user `sim` with that password. Modbus needs none.
 
 UI screens, besides Assets, Sources and Points:
 
-- **Users** (admin): create users, change roles, deactivate / reactivate, reset a password.
-  Deactivating signs that user out everywhere. You cannot deactivate or demote yourself.
+- **Users** (admin): create users, change roles, deactivate / reactivate, reset a password, delete a user
+  (after a confirmation; never yourself and never the last administrator). Deactivating signs that user out
+  everywhere. You cannot deactivate, demote or delete yourself. An account that has been blocked after too many
+  failed sign-ins shows `blocked`, and **Unblock** lets it in at once; see "If you are blocked from signing in".
 - **Settings** (admin): site timezone (IANA name). It decides where a day and a month start for energy
   totals, Billing and dashboard ranges, and it must have a whole-hour UTC offset in both January and
   July (Settings refuses any other zone). `DCDASH_TIMEZONE` in `.env` only seeds this on first start.
+  **Sign-in protection** sets how many failed sign-ins block an account (3 to 20) and for how many minutes
+  (1 to 60); a change is applied at once. See "If you are blocked from signing in".
 - **Storage** (admin): database and per-tier sizes, compression ratio, rows per day, growth and a
   projected days-until-full figure. Free disk space is not visible from the API container, so disk
   capacity is a setting: set it to the size of the volume holding the database. The page also edits
@@ -267,9 +271,10 @@ data-retrieval requests the connectors already use, nothing else.
    so the name stays after the account is deleted) and the time, and an update records the values
    before and after (only the fields that changed; a save that changes nothing writes no row, except a
    storage save, which re-applies the compression and retention policies and is always recorded).
-   Audited: users (create, role, active, password reset), your own password changes, first-run
+   Audited: users (create, role, active, password reset, delete: `user.deleted`), your own password changes, first-run
    setup, sign-ins (success, failure, lockout; a wrong current password on a password change counts as
-   a failure), the site timezone, the currency, the storage settings (every save, `storage.changed`, whose
+   a failure), an admin unblocking an account (`login.unblocked`), a change to the sign-in protection numbers
+   (`settings.sign_in_changed`), the site timezone, the currency, the storage settings (every save, `storage.changed`, whose
    subject carries `origin`, and, for a save that needed confirmation, `confirmed_loss`; remembering a site
    default is `storage.default_set`), assets, mappings,
    sources (create, edit, delete, test, test all, browse), tariffs, dashboards, scopes, scans (start and
@@ -516,6 +521,24 @@ from the last answer. After a restore the old heartbeat reads as "silent" until 
 
 The collector deletes expired sessions and finished jobs older than 7 days every hour
 (`backend/dcdash/collector/housekeeping.py`). "Test all" runs at most 4 connector tests at once.
+
+### If you are blocked from signing in
+
+After too many wrong passwords for one account from one computer, that account is blocked from that computer and the sign-in page
+says `too many failed attempts, try again in about N minutes`. Other accounts are not affected. The block ends by itself. To get in
+sooner:
+
+1. **Another admin presses Unblock.** On the Users page a blocked account shows `blocked` and an `Unblock <name>` button; it clears
+   that account's blocks from every computer. Resetting the account's password or deleting it clears them too.
+2. **An admin changes the numbers** on the Settings page, section Sign-in protection: how many failed sign-ins block an account
+   (3 to 20, default 5) and for how many minutes (1 to 60, default 5). A change applies to the next sign-in attempt, also to a block
+   that is running: a shorter block time ends a block that has already lasted that long. The limits cannot be switched off.
+3. **If every admin is blocked,** run `docker compose restart api`. The blocks are held in the api's memory, so a restart clears
+   all of them (the stored numbers are kept).
+
+On this Docker setup every browser may look like one computer: Docker can present all browser connections to the stack as coming
+from the one Compose gateway address, so the wrong passwords typed on one machine can block that account for everyone who signs in
+the same way. Browsers on other computers of a network, behind a Linux server, are told apart.
 
 ## Backup and restore
 

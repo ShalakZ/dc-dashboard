@@ -1,7 +1,8 @@
 import copy
 import json
+import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Self
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -13,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.api.deps import get_db, notify, require_role
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
-from dcdash.core.audit import audit, audit_change, hidden_parts, safe_config
+from dcdash.core.audit import (
+    audit, audit_change, hidden_parts, reconcile_config, safe_config, scrub_url_credentials,
+)
 from dcdash.core.crypto import encrypt
 from dcdash.core.models import Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
@@ -36,6 +39,9 @@ class SourcePatch(BaseModel):
     config: dict[str, Any] | None = None
     secret: str | None = None
     enabled: bool | None = None
+    # Keys of `config` the admin wants stored without their hidden part (URL credentials) although the form sent the
+    # masked value back; see reconcile_config.
+    clear_config_credentials: list[str] = Field(default=[], max_length=20)
 
 
 class SourceOut(BaseModel):
@@ -43,13 +49,28 @@ class SourceOut(BaseModel):
     id: int
     name: str
     connector_type: str
-    config: dict[str, Any]
+    config: dict[str, Any]  # as safe_config shows it: never the user name and password of a URL
+    hidden_config_keys: list[str] = []  # the keys of `config` that have something hidden
     enabled: bool
     status: str
     last_seen: datetime | None
     last_error: str | None
     has_secret: bool
     origin: str
+
+    @classmethod
+    def of(cls, source: Source, **extra: Any) -> Self:
+        """The API view of `source`: its config masked, and no URL credentials in its last error."""
+        hidden = hidden_parts(source.config)
+        last_error = source.last_error
+        return cls.model_validate(source).model_copy(
+            update={
+                "config": safe_config(source.config),
+                "hidden_config_keys": sorted(hidden),
+                "last_error": None if last_error is None else scrub_url_credentials(last_error, hidden.values()),
+                **extra,
+            }
+        )
 
 
 class SourceListOut(SourceOut):
@@ -64,7 +85,27 @@ def validated_config(connector_type: str, config: dict[str, Any]) -> dict[str, A
     try:
         return types[connector_type].config_schema.model_validate(config).model_dump(mode="json")
     except ValidationError as exc:
-        raise HTTPException(422, json.loads(exc.json(include_url=False))) from exc
+        # No input: an edit puts the STORED config back into validation, so the input can be a password.
+        raise HTTPException(422, json.loads(exc.json(include_url=False, include_input=False))) from exc
+
+
+# What a form sends back for a user name it was not shown: `safe_config` writes "[hidden]@" where it removed them.
+_HIDDEN_MARKER = re.compile(r"\[hidden\]@|%5Bhidden%5D@", re.IGNORECASE)
+
+
+def reject_hidden_marker(config: dict[str, Any], stored: dict[str, Any]) -> None:
+    """422 for a submitted top-level string that carries the `[hidden]@` marker unless it is the stored value.
+
+    A masked URL comes back from the form with its host edited: without this, validation takes the marker for a user
+    name and stores it (`http://%5Bhidden%5D@host/`), and the real credentials are gone. `reconcile_config` has
+    already put back every masked value that came back unchanged, so what still carries the marker was edited. The
+    value is not echoed.
+    """
+    for key, value in config.items():
+        if isinstance(value, str) and _HIDDEN_MARKER.search(value) and value != stored.get(key):
+            raise HTTPException(
+                422, "the credentials stored in this address are hidden: retype them in the address, or remove them"
+            )
 
 
 async def get_source(db: AsyncSession, source_id: int) -> Source:
@@ -148,15 +189,14 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
         ).all()
     )
     return [
-        SourceListOut.model_validate(s).model_copy(
-            update={"last_reading_age_seconds": ages.get(s.id), "mapped_points": int(counts.get(s.id, 0))}
-        )
+        SourceListOut.of(s, last_reading_age_seconds=ages.get(s.id), mapped_points=int(counts.get(s.id, 0)))
         for s in sources
     ]
 
 
 @router.post("/sources", response_model=SourceOut, status_code=201, dependencies=[Admin])
-async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db), admin: User = Admin) -> Source:
+async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db), admin: User = Admin) -> SourceOut:
+    reject_hidden_marker(body.config, {})
     source = Source(
         name=body.name,
         connector_type=body.connector_type,
@@ -171,20 +211,24 @@ async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db), admi
         {"source_id": source.id, "connector_type": source.connector_type, **_values(source)},
     )
     await _publish(db)
-    return source
+    return SourceOut.of(source)
 
 
 @router.patch("/sources/{source_id}", response_model=SourceOut, dependencies=[Admin])
 async def update_source(
     source_id: int, body: SourcePatch, db: AsyncSession = Depends(get_db), admin: User = Admin
-) -> Source:
+) -> SourceOut:
     source = await get_source(db, source_id)
     before = _values(source)
     raw_config = copy.deepcopy(source.config)
     if body.name is not None:
         source.name = body.name
     if body.config is not None:
-        source.config = validated_config(source.connector_type, body.config)
+        # The form can only send back the masked config: put back what it did not see (before validation, which
+        # normalises URLs and would make the comparison fail).
+        submitted = reconcile_config(source.config, body.config, body.clear_config_credentials)
+        reject_hidden_marker(submitted, source.config)
+        source.config = validated_config(source.connector_type, submitted)
     if "secret" in body.model_fields_set:
         source.secret = encrypt(body.secret) if body.secret else None
     if body.enabled is not None:
@@ -199,7 +243,7 @@ async def update_source(
         before["config_credentials"], after["config_credentials"] = "unchanged", "changed"
     await audit_change(db, admin.id, "source.updated", {"source_id": source.id, "name": source.name}, before, after)
     await _publish(db)
-    return source
+    return SourceOut.of(source)
 
 
 @router.delete("/sources/{source_id}", status_code=204, response_model=None)

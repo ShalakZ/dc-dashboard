@@ -2,6 +2,8 @@ import json
 
 from helpers import login_as, make_user
 
+from dcdash.api import users as users_module
+
 
 async def test_users_are_admin_only(client, db):
     assert (await client.get("/api/users")).status_code == 401
@@ -119,3 +121,63 @@ async def test_a_user_patch_that_changes_nothing_writes_no_row(client, db):
     assert await audit_rows(db, "user.updated") == []
     assert (await client.patch("/api/users/999", json={"role": "viewer"})).status_code == 404
     assert await audit_rows(db, "user.updated") == []
+
+
+async def test_a_patch_that_demotes_or_deactivates_the_only_other_admin_is_allowed_and_takes_the_guard(
+    client, db, monkeypatch
+):
+    await login_as(client, db)
+    taken: list[tuple[int, bool]] = []
+    real = users_module.lock_admin_changes
+
+    async def spy(db_, acting, target_id, *, removes_admin):
+        taken.append((target_id, removes_admin))
+        return await real(db_, acting, target_id, removes_admin=removes_admin)
+
+    monkeypatch.setattr(users_module, "lock_admin_changes", spy)
+    first = await make_user(db, "first", "admin")
+    second = await make_user(db, "second", "admin")
+    assert (await client.patch(f"/api/users/{first}", json={"role": "operator"})).status_code == 200
+    assert (await client.patch(f"/api/users/{second}", json={"active": False})).status_code == 200
+    assert taken == [(first, True), (second, True)]
+    assert await db.fetchval("SELECT count(*) FROM users WHERE role = 'admin' AND active") == 1  # the acting admin
+
+
+async def test_a_patch_that_cannot_remove_an_admin_takes_the_lock_but_skips_the_last_admin_check(
+    client, db, monkeypatch
+):
+    await login_as(client, db)
+    uid = await make_user(db, "ann", "operator")
+    taken: list[tuple[int, bool]] = []
+    real = users_module.lock_admin_changes
+
+    async def spy(db_, acting, target_id, *, removes_admin):
+        taken.append((target_id, removes_admin))
+        return await real(db_, acting, target_id, removes_admin=removes_admin)
+
+    monkeypatch.setattr(users_module, "lock_admin_changes", spy)
+    bodies = ({"role": "admin"}, {"active": True}, {"password": "brand-new-pass-9"}, {})
+    for body in bodies:
+        assert (await client.patch(f"/api/users/{uid}", json=body)).status_code == 200, body
+    assert taken == [(uid, False)] * len(bodies)
+
+
+async def test_a_blocked_name_is_forgotten_when_an_admin_resets_the_password(client, db):
+    await login_as(client, db)
+    uid = await make_user(db, "bob")
+    for _ in range(5):
+        assert (await client.post("/api/login", json={"username": "bob", "password": "wrong-wrong"})).status_code == 401
+    assert (await client.post("/api/login", json={"username": "bob", "password": "correct-horse"})).status_code == 429
+    assert (await client.patch(f"/api/users/{uid}", json={"password": "newpassword1"})).status_code == 200
+    assert (await client.post("/api/login", json={"username": "bob", "password": "newpassword1"})).status_code == 200
+
+
+async def test_only_the_list_carries_the_blocked_mark(client, db):
+    await login_as(client, db)
+    created = await client.post("/api/users", json={"username": "ops", "password": "longenough", "role": "operator"})
+    uid = created.json()["id"]
+    assert set(created.json()) == {"id", "username", "role", "active"}
+    patched = await client.patch(f"/api/users/{uid}", json={"role": "viewer"})
+    assert set(patched.json()) == {"id", "username", "role", "active"}
+    rows = (await client.get("/api/users")).json()
+    assert all(set(row) == {"id", "username", "role", "active", "blocked"} and row["blocked"] is False for row in rows)

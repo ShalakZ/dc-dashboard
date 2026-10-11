@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
-from dcdash.core.audit import audit, audit_change
+from dcdash.core.audit import audit, audit_change, scrub_url_credentials
 from dcdash.core.config import get_settings
 from dcdash.core.discovery import Expansion, TargetError, expand_targets, scan_digest
 from dcdash.core.models import Scan, ScanFinding, ScanScope, User
@@ -84,7 +84,7 @@ def scan_summary(scan: Scan) -> dict[str, Any]:
         "progress": scan.progress,
         "created_at": scan.created_at,
         "finished_at": scan.finished_at,
-        "error": scan.error,
+        "error": None if scan.error is None else scrub_url_credentials(scan.error),
     }
 
 
@@ -202,7 +202,8 @@ async def get_scan(scan_id: int, db: AsyncSession = Depends(get_db)) -> dict[str
         "findings": [
             {
                 "host": f.host, "port": f.port, "source_id": f.source_id,
-                "connector_type": f.connector_type, "outcome": f.outcome, "detail": f.detail,
+                "connector_type": f.connector_type, "outcome": f.outcome,
+                "detail": scrub_url_credentials(f.detail),
             }
             for f in findings
         ],

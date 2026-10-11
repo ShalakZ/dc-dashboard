@@ -10,12 +10,12 @@ const entry = (action: string, detail: unknown, extra: Partial<AuditEntry> = {})
 const ALL_ACTIONS = [
   "asset.created", "asset.updated", "asset.deleted", "billing.currency_changed",
   "dashboard.created", "dashboard.updated", "dashboard.deleted", "discovery.accepted",
-  "login.failed", "login.locked", "login.succeeded", "mapping.created", "mapping.updated", "mapping.deleted",
+  "login.failed", "login.locked", "login.succeeded", "login.unblocked", "mapping.created", "mapping.updated", "mapping.deleted",
   "password.change_failed", "password.changed", "scan.finished", "scan.started",
-  "scope.created", "scope.updated", "scope.deleted", "settings.timezone_changed", "setup.completed",
+  "scope.created", "scope.updated", "scope.deleted", "settings.sign_in_changed", "settings.timezone_changed", "setup.completed",
   "source.browsed", "source.created", "source.deleted", "source.test_all", "source.tested", "source.updated",
   "storage.changed", "storage.default_set", "tariff.created", "tariff.updated", "tariff.deleted",
-  "user.created", "user.updated",
+  "user.created", "user.deleted", "user.updated",
 ];
 
 describe("humanise", () => {
@@ -120,6 +120,19 @@ describe("describeAudit: updates with before and after", () => {
     );
     expect(zone.summary).toBe("Changed the site time zone from UTC to Asia/Qatar");
     expect(zone.link).toEqual({ to: "/settings", label: "Open Settings" });
+  });
+
+  it("names the sign-in protection fields that changed and links to Settings", () => {
+    const view = describeAudit(
+      entry("settings.sign_in_changed", { before: { max_failures: 5, block_minutes: 5 }, after: { max_failures: 7, block_minutes: 10 } }),
+    );
+    expect(view.summary).toBe("Changed the sign-in protection: max failures, block minutes");
+    expect(view.changes).toEqual([
+      { field: "Max failures", before: "5", after: "7" },
+      { field: "Block minutes", before: "5", after: "10" },
+    ]);
+    expect(view.link).toEqual({ to: "/settings", label: "Open Settings" });
+    expect(describeAudit(entry("settings.sign_in_changed", {})).summary).toBe("Changed the sign-in protection");
   });
 
   it("names the field changed on an asset and links to it", () => {
@@ -268,6 +281,16 @@ describe("describeAudit: creations, deletions and events", () => {
     expect(describeAudit(entry("login.succeeded", { client: "10.0.0.5" })).facts).toEqual([{ label: "Client", value: "10.0.0.5" }]);
   });
 
+  it("says whose sign-in an admin unblocked, links to the Users page and labels the account id", () => {
+    const view = describeAudit(entry("login.unblocked", { user_id: 9, username: "bob", cleared: 2 }));
+    expect(view.summary).toBe("Unblocked sign-in for user bob");
+    expect(view.link).toEqual({ to: "/users", label: "Open Users" });
+    expect(view.facts).toContainEqual({ label: "Account id", value: "9" });
+    expect(view.facts).toContainEqual({ label: "Cleared", value: "2" });
+    expect(describeAudit(entry("login.unblocked", { user_id: 9, cleared: 1 })).summary).toBe("Unblocked sign-in for user #9");
+    expect(describeAudit(entry("login.unblocked", {})).summary).toBe("Unblocked sign-in for user");
+  });
+
   it("says a failed sign-in was made to an account, with the stored reason", () => {
     // For these rows the User column is the account that was attacked, not someone who did something.
     const failed = (reason?: string) =>
@@ -312,6 +335,11 @@ describe("describeAudit: creations, deletions and events", () => {
     expect(describeAudit(entry("user.created", { user_id: 3, username: "carol", role: "operator", active: true })).summary).toBe(
       "Created user carol (operator)",
     );
+    expect(describeAudit(entry("user.deleted", { user_id: 3, username: "carol", role: "operator", active: true })).summary).toBe(
+      "Deleted user carol",
+    );
+    expect(describeAudit(entry("user.deleted", { user_id: 3, username: "carol", role: "operator", active: true })).link).toBeNull();
+    expect(describeAudit(entry("user.deleted", { user_id: 3 })).summary).toBe("Deleted user #3");
     expect(describeAudit(entry("scope.created", { scope_id: 1, name: "Lab" })).summary).toBe("Created scan scope Lab");
     expect(describeAudit(entry("scope.deleted", { scope_id: 1, name: "Lab" })).link).toBeNull();
     expect(describeAudit(entry("setup.completed", { username: "admin", role: "admin" })).link).toBeNull();
@@ -412,7 +440,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(36);
+    expect(ALL_ACTIONS).toHaveLength(39);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }

@@ -12,7 +12,7 @@ from dcdash.api.asset_names import AssetName, require_free_name
 from dcdash.api.assets import get_asset
 from dcdash.api.deps import get_db, notify, require_role
 from dcdash.api.sources import get_source
-from dcdash.core.audit import audit
+from dcdash.core.audit import audit, hidden_parts, safe_config, scrub_url_credentials
 from dcdash.core.discovery import MappingGuess, PointInfo, guess_mapping, suggest_groups
 from dcdash.core.metrics import Metric, Scale, default_interval
 from dcdash.core.models import Asset, GraphLayout, Mapping, Point, Scan, ScanFinding, Source, User
@@ -99,6 +99,9 @@ def source_json(
     def render(point_id: int) -> dict[str, Any]:
         return point_json(by_id[point_id], mappings.get(point_id), guess_for[point_id])
 
+    last_error = source.last_error
+    if last_error is not None:
+        last_error = scrub_url_credentials(last_error, hidden_parts(source.config).values())
     return {
         "id": source.id,
         "name": source.name,
@@ -106,10 +109,10 @@ def source_json(
         "origin": source.origin,
         "enabled": source.enabled,
         "status": source.status,
-        "last_error": source.last_error,
+        "last_error": last_error,
         "has_secret": source.has_secret,
         "needs_credentials": not rows and latest_outcome == "needs_credentials",
-        "config": source.config,
+        "config": safe_config(source.config),  # never the user name and password of a URL
         "point_count": len(rows),
         "clusters": [{"key": g.key, "points": [render(pid) for pid in g.point_ids]} for g in groups],
         "ungrouped": [render(pid) for pid in ungrouped],

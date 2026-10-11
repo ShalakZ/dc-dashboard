@@ -5,7 +5,7 @@ import { api } from "./client";
 import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
   GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
-  Series, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
+  Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, SecretKeyStatus, TlsStatus,
 } from "./types";
 
@@ -19,6 +19,7 @@ export const keys = {
   points: (sourceId: number) => ["sources", sourceId, "points"] as const,
   users: ["users"] as const,
   general: ["settings", "general"] as const,
+  signInPolicy: ["settings", "sign-in"] as const,
   storage: ["storage"] as const,
   storageSettings: ["settings", "storage"] as const,
   scopes: ["scopes"] as const,
@@ -28,6 +29,8 @@ export const keys = {
   graph: ["graph"] as const,
   audit: (filters: AuditFilters, limit: number, offset: number) => ["audit", filters, limit, offset] as const,
   auditOptions: ["audit", "options"] as const,
+  /** Prefix of every audit query (list, options, entry): invalidate this after a change that writes an audit row. */
+  auditAll: ["audit"] as const,
   auditEntry: (id: number | null) => ["audit", "entry", id] as const,
   site: ["site"] as const,
   billingSettings: ["settings", "billing"] as const,
@@ -109,6 +112,24 @@ export function usePatchUser() {
   });
 }
 
+export function useDeleteUser() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (id: number) => api.del(`/api/users/${id}`),
+    // The audit options are cached for a minute and the delete adds "(deleted)" to the User filter.
+    onSuccess: () => invalidate(keys.users, keys.auditAll),
+  });
+}
+
+/** Clears every sign-in block on the account (any address); the Users list then shows it unblocked. */
+export function useUnblockUser() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (id: number) => api.post<{ cleared: number }>(`/api/users/${id}/unblock`, {}),
+    onSuccess: () => invalidate(keys.users, keys.auditAll),
+  });
+}
+
 export const useChangePassword = () =>
   useMutation({
     mutationFn: (body: { current_password: string; new_password: string }) => api.post<void>("/api/me/password", body),
@@ -122,6 +143,17 @@ export function usePutGeneralSettings() {
   return useMutation({
     mutationFn: (body: GeneralSettings) => api.put<GeneralSettings>("/api/settings/general", body),
     onSuccess: () => invalidate(keys.general, keys.site, ...COST_DEPENDENT),
+  });
+}
+
+export const useSignInPolicy = () =>
+  useQuery({ queryKey: keys.signInPolicy, queryFn: () => api.get<SignInPolicy>("/api/settings/sign-in") });
+
+export function usePutSignInPolicy() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: SignInValues) => api.put<SignInPolicy>("/api/settings/sign-in", body),
+    onSuccess: () => invalidate(keys.signInPolicy),
   });
 }
 
