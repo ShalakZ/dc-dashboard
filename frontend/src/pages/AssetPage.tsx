@@ -1,5 +1,6 @@
 import { lazy, Suspense, useMemo } from "react";
 import { useParams } from "react-router";
+import { ApiError } from "../api/client";
 import { useAssets, useSummary } from "../api/queries";
 import { CostTile } from "../components/CostTile";
 import type { Crumb } from "../components/Crumbs";
@@ -11,11 +12,13 @@ import { rollupNote, rollupPower } from "../lib/rollup";
 import { assetTrail, parseAssetId } from "../lib/tree";
 import { assetActions, useAssetsContext } from "./AssetsPage";
 
+const NOT_FOUND = "Asset not found."; // one sentence for an id that cannot be one and for an asset the API does not know
+
 const TrendChart = lazy(() => import("../components/TrendChart").then((m) => ({ default: m.TrendChart })));
 
 export function AssetPage() {
   const id = parseAssetId(useParams().id);
-  if (id === null) return <p className="error" role="alert">Asset not found.</p>; // no request goes out for an id that cannot be one
+  if (id === null) return <p className="error" role="alert">{NOT_FOUND}</p>; // no request goes out for an id that cannot be one
   // Keyed by the id: this one route element stays mounted from asset to asset, and the stream's values must not follow the user.
   return <AssetView key={id} id={id} />;
 }
@@ -34,6 +37,7 @@ function AssetView({ id }: { id: number }) {
   const { values: live, connected } = useStream(wanted);
 
   if (isLoading) return <p className="muted">loading…</p>;
+  if (error instanceof ApiError && error.status === 404) return <p className="error" role="alert">{NOT_FOUND}</p>;
   if (error || !data) return <p className="error" role="alert">{error?.message ?? "not found"}</p>;
   const power = data.metrics.find((m) => m.metric === "active_power_kw");
   // A stream entry wins even when its value is null (bad quality); only fall back when the stream has no entry yet.

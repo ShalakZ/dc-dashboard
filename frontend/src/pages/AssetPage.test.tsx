@@ -234,12 +234,19 @@ describe("AssetPage", () => {
       },
     );
 
-    it("shows the API's own message when the asset is unknown (404)", async () => {
-      mockFetch({ ...routes(null), "GET /api/assets/4/summary": { status: 404, body: { detail: "asset not found" } } });
+    it("answers an unknown asset (404) with the same sentence as an id that cannot be one, whatever the API's own text", async () => {
+      mockFetch({ ...routes(null), "GET /api/assets/4/summary": { status: 404, body: { detail: "no such thing here" } } });
       renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
       const alert = await screen.findByRole("alert");
-      expect(alert).toHaveTextContent(/^asset not found$/);
+      expect(alert).toHaveTextContent(/^Asset not found\.$/); // detected by the status, not by the words
+      expect(alert).toHaveClass("error");
       expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
+    });
+
+    it("keeps the API's message for a failure that is not a 404", async () => {
+      mockFetch({ ...routes(null), "GET /api/assets/4/summary": { status: 500, body: { detail: "summary unavailable" } } });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      expect(await screen.findByRole("alert")).toHaveTextContent(/^summary unavailable$/);
     });
   });
 
