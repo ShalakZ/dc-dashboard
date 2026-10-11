@@ -89,6 +89,63 @@ describe("AssetPage", () => {
     });
   });
 
+  it("opens with a page header: the crumb is plain text (the sidebar owns the Assets link), then the one h1", async () => {
+    mockFetch(routes(null));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    const h1 = await screen.findByRole("heading", { name: "Panel 1", level: 1 });
+    const head = h1.closest("header")!;
+    expect(head).toHaveClass("page-head");
+    const crumb = head.querySelector(".crumbs")!;
+    expect(crumb.tagName).toBe("P");
+    expect(crumb).toHaveTextContent("Assets");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("lays the three tiles out in one .tiles grid, in the order Live power, Energy today, Cost today", async () => {
+    mockFetch(routes({ kwh: 3.25, estimated: false, no_data: false }));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    await screen.findByText("Cost today");
+    const grid = screen.getByText("Live power").closest(".tiles")!;
+    expect(screen.getByText("Energy today").closest(".tiles")).toBe(grid);
+    expect(screen.getByText("Cost today").closest(".tiles")).toBe(grid);
+    expect([...grid.children].map((tile) => tile.firstElementChild?.textContent)).toEqual(["Live power", "Energy today", "Cost today"]);
+    expect([...grid.children].every((tile) => tile.classList.contains("tile"))).toBe(true);
+  });
+
+  it("draws the stream state as a status chip: live is ok, reconnecting is a warning, and the word stays in its own element", async () => {
+    mockFetch(routes(null));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    await screen.findByRole("heading", { name: "Panel 1" });
+    expect(screen.getByText("reconnecting…")).toHaveClass("chip", "chip-warn");
+    act(() => FakeEventSource.last!.onopen?.());
+    expect(screen.getByText("live")).toHaveClass("chip", "chip-ok");
+  });
+
+  it("puts the metrics in a .table-wrap, the value column right-aligned and a bad reading as a bad chip", async () => {
+    mockFetch(routes(null));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    const row = await screen.findByRole("row", { name: /^active_power_kw / });
+    expect(row.closest(".table-wrap")).not.toBeNull();
+    const cells = within(row).getAllByRole("cell");
+    expect(cells).toHaveLength(4);
+    expect(cells[0]).toHaveTextContent(/^active_power_kw$/);
+    expect(cells[1]).toHaveTextContent(/^10\.50$/);
+    expect(cells[1]).toHaveClass("num");
+    expect(screen.getByRole("columnheader", { name: "Value" })).toHaveClass("num");
+    act(() => FakeEventSource.last!.emit([[7, Date.now() / 1000, null, 1]]));
+    expect(screen.getByText("bad quality")).toHaveClass("chip", "chip-bad");
+  });
+
+  it("says in an .empty block that no metrics are mapped, without a heading (a heading with 'metrics' in it would clash with h2 Metrics in e2e)", async () => {
+    mockFetch({ ...routes(null), "GET /api/assets/4/summary": { body: { ...summary(null), metrics: [] } } });
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    const note = await screen.findByText("No metrics are mapped to this asset.");
+    expect(note.closest(".empty")).not.toBeNull();
+    expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["Panel 1", "Trend", "Metrics"]);
+  });
+
   it("shows the stream state next to the heading", async () => {
     mockFetch(routes(null));
     renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });

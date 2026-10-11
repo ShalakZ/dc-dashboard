@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { api } from "../api/client";
 import { keys, useAssets, useInvalidate } from "../api/queries";
@@ -12,6 +12,11 @@ import { PageHeader } from "../components/PageHeader";
 import { useAction } from "../hooks/useAction";
 import { assetImpact, assetLoss } from "../lib/impact";
 import { buildTree, descendantIds } from "../lib/tree";
+
+/** Inline SVG, 24-unit viewBox, drawn with the 1.7 stroke of `svg.i`; decoration only (the text beside it is the name). */
+function Icon({ children }: { children: ReactNode }) {
+  return <svg className="i" viewBox="0 0 24 24" aria-hidden="true">{children}</svg>;
+}
 
 export function AssetsPage() {
   const { hasRole } = useAuth();
@@ -56,6 +61,14 @@ export function AssetsPage() {
   if (error) return <p className="error" role="alert">{error.message}</p>;
   const admin = hasRole("admin");
   const parent = selected && assets.find((a) => a.id === selected.parent_id);
+  // The admin's buttons sit in the page header's actions slot, Add asset (the page's one primary) last.
+  const actions = admin ? (
+    <>
+      {selected && <button type="button" onClick={openEdit} disabled={locked}><Icon><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z" /><path d="m14 7 3 3" /></Icon>Edit</button>}
+      {selected && <button type="button" className="danger-quiet" onClick={remove} disabled={locked}>Delete</button>}
+      <button type="button" className="primary" onClick={() => openAdd(selectedId)} disabled={locked}><Icon><path d="M12 5v14M5 12h14" /></Icon>Add asset</button>
+    </>
+  ) : undefined;
   return (
     <>
       <div className="assets-layout">
@@ -68,8 +81,13 @@ export function AssetsPage() {
           disabled={locked}
         />
         <div className="assets-detail">
-          <PageHeader title="Assets" />
-          {assets.length === 0 && <p className="muted">No assets yet.</p>}
+          <PageHeader title="Assets" actions={actions} />
+          {assets.length === 0 && (
+            <div className="empty">
+              <span className="empty-icon"><Icon><path d="M12 3 3 7.5 12 12l9-4.5L12 3Z" /><path d="m3 12 9 4.5 9-4.5" /><path d="m3 16.5 9 4.5 9-4.5" /></Icon></span>
+              <p className="empty-title">No assets yet.</p>
+            </div>
+          )}
           {actionError && <p className="error" role="alert">{actionError}</p>}
           {selected && (
             <dl className="detail-meta">
@@ -78,14 +96,7 @@ export function AssetsPage() {
               <div><dt>Children</dt><dd>{assets.filter((a) => a.parent_id === selected.id).length}</dd></div>
             </dl>
           )}
-          {selected && <p>Selected: <Link to={`/assets/${selected.id}`}>{selected.name}</Link> (open page)</p>}
-          {admin && (
-            <div className="row">
-              <button onClick={() => openAdd(selectedId)} disabled={locked}>Add asset</button>
-              {selected && <button onClick={openEdit} disabled={locked}>Edit</button>}
-              {selected && <button onClick={remove} disabled={locked}>Delete</button>}
-            </div>
-          )}
+          {selected && <p className="detail-open">Selected: <Link to={`/assets/${selected.id}`}>{selected.name}</Link> (open page)</p>}
         </div>
       </div>
       {confirming && (
