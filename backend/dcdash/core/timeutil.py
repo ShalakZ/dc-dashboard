@@ -35,6 +35,11 @@ def _midnight(day: date, zone: ZoneInfo) -> datetime:
     return datetime.combine(day, time.min, tzinfo=zone).astimezone(timezone.utc)
 
 
+def local_midnight(day: date, tz_name: str) -> datetime:
+    """The instant (UTC) local `day` begins in the given timezone (see `_midnight` for the clock-change rule)."""
+    return _midnight(day, _zone(tz_name))
+
+
 def _shift_month(first: date, months: int) -> date:
     index = first.year * 12 + first.month - 1 + months
     return date(index // 12, index % 12 + 1, 1)

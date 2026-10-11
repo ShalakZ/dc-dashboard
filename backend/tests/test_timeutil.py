@@ -16,6 +16,7 @@ from dcdash.core.timeutil import (
     day_bounds,
     day_start,
     local_days,
+    local_midnight,
     month_bounds,
     month_start,
     resolve_range,
@@ -258,3 +259,26 @@ def test_local_days_use_the_zone_not_utc():
     # 22:30Z on the 6th is 01:30 on the 7th in Qatar: the first local day is the 7th, clipped at the start.
     days = local_days(utc(2026, 10, 6, 22, 30), utc(2026, 10, 7, 21), "Asia/Qatar")
     assert days == [(date(2026, 10, 7), utc(2026, 10, 6, 22, 30), utc(2026, 10, 7, 21))]
+
+
+# ---- local_midnight --------------------------------------------------------------------------
+
+
+def test_local_midnight_is_the_utc_instant_a_local_day_begins():
+    assert local_midnight(date(2026, 10, 6), "Asia/Qatar") == utc(2026, 10, 5, 21)
+    assert local_midnight(date(2026, 10, 6), "UTC") == utc(2026, 10, 6)
+    assert local_midnight(date(2026, 10, 25), "Europe/Berlin") == utc(2026, 10, 24, 22)
+
+
+def test_local_midnight_makes_a_clock_change_day_25_hours_long():
+    def length(day: date) -> timedelta:
+        return local_midnight(day + timedelta(days=1), "Europe/Berlin") - local_midnight(day, "Europe/Berlin")
+
+    assert length(date(2026, 10, 25)) == 25 * HOUR
+    assert length(date(2026, 3, 29)) == 23 * HOUR
+    assert length(date(2026, 6, 1)) == 24 * HOUR
+
+
+def test_local_midnight_refuses_an_unknown_zone():
+    with pytest.raises(ValueError, match="unknown timezone"):
+        local_midnight(date(2026, 10, 6), "Mars/Olympus")
