@@ -138,15 +138,25 @@ def test_blocked_keys_lists_only_the_blocked_ones():
     assert limiter.blocked_keys() == []
 
 
-def test_drop_removes_the_matching_keys_blocked_or_counting():
+def test_drop_removes_the_matching_keys_blocked_or_counting_and_counts_only_the_blocked():
     limiter, _ = _limiter(max_failures=2)
-    limiter.record_failure(("1.1.1.1", "bob"))
+    limiter.record_failure(("1.1.1.1", "bob"))  # a counter only
     limiter.record_failure(("2.2.2.2", "bob"))
     limiter.record_failure(("2.2.2.2", "bob"))  # blocked
     limiter.record_failure(("1.1.1.1", "alice"))
-    assert limiter.drop(lambda key: key[1] == "bob") == 2
+    assert limiter.drop(lambda key: key[1] == "bob") == 1
     assert not limiter.blocked(("2.2.2.2", "bob"))
-    assert limiter._failures.keys() == {("1.1.1.1", "alice")}
+    assert limiter._failures.keys() == {("1.1.1.1", "alice")}  # bob's plain counter went too, though it was not counted
+
+
+def test_drop_does_not_count_a_block_that_has_run_out_or_a_stale_counter():
+    limiter, now = _limiter(max_failures=2, window=60)
+    limiter.record_failure(("1.1.1.1", "bob"))
+    limiter.record_failure(("1.1.1.1", "bob"))  # blocked at t=0, but nobody asks about it again
+    limiter.record_failure(("2.2.2.2", "bob"))  # a counter only
+    now[0] = 61.0
+    assert limiter.drop(lambda key: key[1] == "bob") == 0
+    assert limiter._failures == {} and limiter._blocked_since == {}
 
 
 def test_the_cap_bounds_memory_and_keeps_blocks_over_counters():

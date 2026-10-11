@@ -168,10 +168,14 @@ async def audit_options(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
         ((actor_id, name or f"#{actor_id}", gone) for actor_id, name, gone in actors),
         key=lambda a: (a[1].casefold(), a[0]),
     )
-    namesakes = Counter(name for _, name, _ in named)  # a deleted `bob` and a new `bob` would otherwise read alike
+    labels = [(actor_id, name, f"{name}{' (deleted)' if gone else ''}") for actor_id, name, gone in named]
+    # A deleted `bob` and a new `bob` would otherwise read alike, and a deleted `bob` and a live account that is
+    # literally called `bob (deleted)` end in the same label; both cases get the id.
+    same_name = Counter(name for _, name, _ in labels)
+    same_label = Counter(label for _, _, label in labels)
     users = [
-        {"id": actor_id, "name": f"{name}{' (deleted)' if gone else ''}{f' #{actor_id}' if namesakes[name] > 1 else ''}"}
-        for actor_id, name, gone in named
+        {"id": actor_id, "name": f"{label} #{actor_id}" if same_name[name] > 1 or same_label[label] > 1 else label}
+        for actor_id, name, label in labels
     ]
     unattributed = await db.scalar(select(exists().where(AuditLog.actor_id.is_(None))))
     return {"actions": list(actions), "users": users, "unattributed": bool(unattributed)}

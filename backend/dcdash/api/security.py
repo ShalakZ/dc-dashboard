@@ -91,11 +91,14 @@ class LoginLimiter:
         return [key for key in list(self._blocked_since) if self.blocked(key)]
 
     def drop(self, match: Callable[[Hashable], bool]) -> int:
+        """Forget every matching key, plain failure counters too. Returns how many of them were BLOCKED at this moment:
+        a stale counter or a block that has already run out is forgotten but not counted."""
         gone = {k for k in (*self._failures, *self._blocked_since) if match(k)}
+        blocked = sum(1 for key in gone if self.blocked(key))
         for key in gone:
             self._failures.pop(key, None)
             self._blocked_since.pop(key, None)
-        return len(gone)
+        return blocked
 
     def reset(self, key: Hashable) -> None:
         self._failures.pop(key, None)

@@ -271,3 +271,27 @@ async def test_a_delete_racing_a_demotion_leaves_an_admin(app, db, monkeypatch):
             )
     assert sorted(r.status_code for r in responses) in ([200, 401], [204, 401])
     assert await active_admins(db) == 1
+
+
+# A PATCH that does not take the admin lock (a password reset, a reactivation, a promotion) must still wait for a DELETE
+# of the same account: the DELETE wins and the PATCH finds nothing (404), or the PATCH goes first and then the DELETE.
+# Never a 500 from "UPDATE statement ... expected to update 1 row(s); 0 were matched".
+
+
+@pytest.mark.parametrize(
+    ("body", "active"),
+    [({"password": "another-password"}, True), ({"active": True}, False), ({"role": "admin"}, True)],
+    ids=["password", "reactivate", "promote"],
+)
+async def test_a_patch_racing_a_delete_of_the_same_account_answers_404_never_500(app, db, monkeypatch, body, active):
+    async with two_admins(app, db) as (a, b, _a_id, _b_id):
+        victim = await make_user(db, "victim", "viewer", active=active)
+        with commits_meet(monkeypatch):
+            deleted, patched = await asyncio.gather(
+                a.delete(f"/api/users/{victim}"), b.patch(f"/api/users/{victim}", json=body), return_exceptions=True
+            )
+    assert not isinstance(deleted, BaseException), repr(deleted)
+    assert not isinstance(patched, BaseException), repr(patched)
+    assert deleted.status_code == 204
+    assert patched.status_code in (200, 404)
+    assert await db.fetchval("SELECT count(*) FROM users WHERE id = $1", victim) == 0

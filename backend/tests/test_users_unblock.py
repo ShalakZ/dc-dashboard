@@ -68,6 +68,37 @@ async def test_unblock_clears_every_address_of_the_account_and_is_audited_once(c
         assert (await client.post("/api/login", json={"username": "bob", **GOOD}, headers=headers)).status_code == 200
 
 
+async def test_one_stale_wrong_password_is_forgotten_but_is_not_a_cleared_block(client, db):
+    uid = await make_user(db, "bob")
+    await login_as(client, db)
+    await short_policy(client)
+    await block(client, "bob", failures=1)  # a counter only: 1 of the 3 failures
+    assert (await blocked_by_name(client))["bob"] is False
+
+    nothing = await client.post(f"/api/users/{uid}/unblock")
+    assert nothing.status_code == 200 and nothing.json() == {"cleared": 0}
+    assert await unblocked_rows(db) == []  # no block was lifted, so nothing is written
+
+    # the counter is gone too: 1 + 2 failures would have blocked the key, 2 do not
+    await block(client, "bob", failures=2)
+    assert (await blocked_by_name(client))["bob"] is False
+    # last: a successful sign-in replaces the admin cookie
+    assert (await client.post("/api/login", json={"username": "bob", **GOOD})).status_code == 200
+
+
+async def test_a_block_that_has_run_out_is_not_a_cleared_block(client, db, monkeypatch):
+    uid = await make_user(db, "bob")
+    await login_as(client, db)
+    await short_policy(client)
+    await block(client, "bob")  # blocked; nobody has asked about the key since, so it is still stored
+
+    now = auth_module.limiter._clock
+    monkeypatch.setattr(auth_module.limiter, "_clock", lambda: now() + 301)  # five minutes and a second later
+    over = await client.post(f"/api/users/{uid}/unblock")
+    assert over.status_code == 200 and over.json() == {"cleared": 0}
+    assert await unblocked_rows(db) == []
+
+
 async def test_a_blocked_account_signs_in_again_only_after_the_unblock(client, db):
     uid = await make_user(db, "bob")
     await login_as(client, db)
