@@ -7,6 +7,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { JobStatus } from "../components/JobStatus";
 import { Modal } from "../components/Modal";
+import { PageHeader } from "../components/PageHeader";
 import { SourceForm } from "../components/SourceForm";
 import { useAction } from "../hooks/useAction";
 import { useNow } from "../hooks/useNow";
@@ -19,6 +20,16 @@ import { sourceStatusText } from "../lib/sourceStatus";
 const COLLECTOR_STATUS_STALE_SECONDS = 30;
 /** How often the ages on the page are brought up to date between answers. */
 const TICK_MS = 5_000;
+/** The chip of a polled source's stored status; anything else the collector may write reads as unknown (hollow dot). */
+const STATUS_CHIP: Record<string, string> = { online: "chip-ok", offline: "chip-bad" };
+
+// Inline SVG, 24-unit viewBox, decoration only (the text next to it says everything).
+const WarnIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z" /><path d="M12 10v4.5M12 17.5h.01" /></svg>
+);
+const SourcesIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5M15 3v5" /><path d="M6 8h12v3a6 6 0 0 1-12 0V8Z" /><path d="M12 17v4" /></svg>
+);
 
 export function SourcesPage() {
   const { hasRole } = useAuth();
@@ -77,30 +88,39 @@ export function SourcesPage() {
   if (error && data === undefined) return <p className="error" role="alert">{error.message}</p>;
   return (
     <>
-      <h1>Sources</h1>
-      <div className="row">
-        <button onClick={testAll} disabled={sources.length === 0 || busy}>Test all</button>
-        {hasRole("admin") && <button onClick={openAdd} disabled={locked}>Add source</button>}
-      </div>
+      <PageHeader
+        title="Sources"
+        actions={<>
+          <button onClick={testAll} disabled={sources.length === 0 || busy}>Test all</button>
+          {hasRole("admin") && <button className="primary" onClick={openAdd} disabled={locked}>Add source</button>}
+        </>}
+      />
       {error && <p className="error" role="alert">{error.message}</p>}
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {secretKey.data && !secretKey.data.ok && (
-        <p className="error" role="alert">
-          {`The DCDASH_SECRET_KEY in .env ${secretKey.data.key_changed ? "is different from the one this database was set up with" : "does not open the stored secrets"}: `}
-          {`the secrets of ${secretKey.data.unreadable.map((s) => s.name).join(", ")} cannot be decrypted, so those sources stay offline. `}
-          Put the original .env back, or have an admin type each source's secret in again.
-        </p>
+        <div className="banner banner-bad error" role="alert">
+          <WarnIcon />
+          <span>
+            {`The DCDASH_SECRET_KEY in .env ${secretKey.data.key_changed ? "is different from the one this database was set up with" : "does not open the stored secrets"}: `}
+            {`the secrets of ${secretKey.data.unreadable.map((s) => s.name).join(", ")} cannot be decrypted, so those sources stay offline. `}
+            Put the original .env back, or have an admin type each source's secret in again.
+          </span>
+        </div>
       )}
       {statusUnreadable ? (
-        <p className="error" role="alert">
-          {`Collector status cannot be read (no answer for ${formatSpan(statusSilentFor)}). Last-reading ages are counted from the last answer.`}
-        </p>
+        <div className="banner banner-warn warning" role="alert">
+          <WarnIcon />
+          <span>{`Collector status cannot be read (no answer for ${formatSpan(statusSilentFor)}). Last-reading ages are counted from the last answer.`}</span>
+        </div>
       ) : collector.data && !collector.data.alive && (
-        <p className="error" role="alert">
-          {collector.data.age_seconds === null
-            ? "The collector has not reported yet. No readings are collected until it does."
-            : `The collector has not reported for ${formatSpan(ageNow(collector.data.age_seconds, collector.dataUpdatedAt, now))}. No readings are collected while it is silent.`}
-        </p>
+        <div className="banner banner-warn warning" role="alert">
+          <WarnIcon />
+          <span>
+            {collector.data.age_seconds === null
+              ? "The collector has not reported yet. No readings are collected until it does."
+              : `The collector has not reported for ${formatSpan(ageNow(collector.data.age_seconds, collector.dataUpdatedAt, now))}. No readings are collected while it is silent.`}
+          </span>
+        </div>
       )}
       {showAdd && (
         <Modal title="Add source" onClose={() => setShowAdd(false)}>
@@ -120,30 +140,36 @@ export function SourcesPage() {
           onCancel={() => setConfirming(null)}
         />
       )}
-      <table>
-        <thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th>Status</th><th>Last seen</th><th>Last reading</th><th>Last error</th><th>Test result</th><th></th></tr></thead>
-        <tbody>
-          {sources.map((s) => {
-            const status = sourceStatusText(s);
-            return (
-              <tr key={s.id}>
-                <td>{s.name}</td><td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
-                <td>{status.polled ? status.text : <span className="muted">{status.text}</span>}</td>
-                <td>{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
-                <td>{formatAge(ageNow(s.last_reading_age_seconds, sourcesAnsweredAt, now))}</td>
-                <td className="error">{s.last_error ?? ""}</td>
-                <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
-                <td className="row">
-                  <button onClick={() => testOne(s.id)} disabled={locked}>Test</button>
-                  {hasRole("admin") && <button onClick={() => openEdit(s)} disabled={locked}>Edit</button>}
-                  {hasRole("admin") && <Link to={`/sources/${s.id}/points`}>Points</Link>}
-                  {hasRole("admin") && <button onClick={() => remove(s.id, s.name)} disabled={locked}>Delete</button>}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      {sources.length === 0 ? (
+        <div className="empty"><div className="empty-icon"><SourcesIcon /></div><p>No sources yet.</p></div>
+      ) : (
+        <div className="table-wrap dense">
+          <table>
+            <thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th>Status</th><th>Last seen</th><th className="num">Last reading</th><th>Last error</th><th>Test result</th><th className="row-actions"></th></tr></thead>
+            <tbody>
+              {sources.map((s) => {
+                const status = sourceStatusText(s);
+                return (
+                  <tr key={s.id}>
+                    <td><span className="cell-name" title={s.name}>{s.name}</span></td><td>{s.connector_type}</td><td>{s.enabled ? "yes" : "no"}</td>
+                    <td>{status.polled ? <span className={`chip ${STATUS_CHIP[status.text] ?? "chip-stale"}`}>{status.text}</span> : <span className="muted st st-off note">{status.text}</span>}</td>
+                    <td className="nowrap">{s.last_seen && site.data ? formatSiteDateTime(s.last_seen, site.data.timezone) : "—"}</td>
+                    <td className="num">{formatAge(ageNow(s.last_reading_age_seconds, sourcesAnsweredAt, now))}</td>
+                    <td className="error">{s.last_error ?? ""}</td>
+                    <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
+                    <td className="row-actions">
+                      <button className="quiet" onClick={() => testOne(s.id)} disabled={locked}>Test</button>
+                      {hasRole("admin") && <button className="quiet" onClick={() => openEdit(s)} disabled={locked}>Edit</button>}
+                      {hasRole("admin") && <Link className="quiet-link" to={`/sources/${s.id}/points`}>Points</Link>}
+                      {hasRole("admin") && <button className="danger-quiet" onClick={() => remove(s.id, s.name)} disabled={locked}>Delete</button>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }

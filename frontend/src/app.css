@@ -288,7 +288,7 @@
      the header leaves, so nothing scrolls and nothing at the canvas edge is clipped. A canvas is never shorter than 320px (the
      page scrolls then). */
   .shell:has(.graph-page) { height: 100vh; }
-  main:has(.graph-page) { max-width: none; padding-top: 16px; display: flex; flex-direction: column; min-height: 0; } /* the h1 has no margin; 4b drops the padding when the page gets a PageHeader */
+  main:has(.graph-page) { max-width: none; display: flex; flex-direction: column; min-height: 0; }
   .graph-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .graph-page h1 { margin: 0; }
   .graph-page > .row { flex: none; margin-bottom: 8px; }

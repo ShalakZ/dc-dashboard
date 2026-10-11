@@ -595,3 +595,78 @@ describe("SourcesPage", () => {
     });
   });
 });
+
+describe("SourcesPage look (W6)", () => {
+  it("shows each polled status as a chip with its own shape class, and a note (not a chip) for a source that is not polled", async () => {
+    mockFetch({
+      ...routes("operator"),
+      "GET /api/sources": { body: [
+        { ...source, id: 1, name: "up", mapped_points: 2, status: "online" },
+        { ...source, id: 3, name: "down", mapped_points: 2, status: "offline" },
+        { ...source, id: 4, name: "fresh", mapped_points: 2, status: "unknown" },
+        { ...source, id: 5, name: "empty", mapped_points: 0, status: "unknown" },
+      ] },
+    });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    const row = async (name: string) => within((await screen.findByText(name)).closest("tr")!);
+    expect((await row("up")).getByText("online")).toHaveClass("chip", "chip-ok");
+    expect((await row("down")).getByText("offline")).toHaveClass("chip", "chip-bad");
+    expect((await row("fresh")).getByText("unknown")).toHaveClass("chip", "chip-stale");
+    const note = (await row("empty")).getByText("not polled (no mapped points)");
+    expect(note).toHaveClass("muted", "st", "st-off");
+    expect(note).not.toHaveClass("chip");
+  });
+
+  it("gives a test result a shape class: ok and failed", async () => {
+    mockFetch(routes("operator"));
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    await userEvent.click(await screen.findByRole("button", { name: "Test" }));
+    expect(await screen.findByText(/no reply/)).toHaveClass("job", "st", "st-bad", "error");
+  });
+
+  it("puts Test all and Add source in the page header, Add source being the one primary button", async () => {
+    mockFetch(routes("admin"));
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    const header = (await screen.findByRole("heading", { level: 1, name: "Sources" })).closest("header")!;
+    expect(within(header).getByRole("button", { name: "Test all" })).toBeInTheDocument();
+    expect(within(header).getByRole("button", { name: "Add source" })).toHaveClass("primary");
+    expect(document.querySelectorAll("button.primary")).toHaveLength(1);
+  });
+
+  it("row actions are quiet buttons, Delete the red one, in a cell that stays a table cell", async () => {
+    mockFetch(routes("admin"));
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    const row = (await screen.findByText("sim")).closest("tr")!;
+    expect(within(row).getByRole("button", { name: "Edit" })).toHaveClass("quiet");
+    expect(within(row).getByRole("button", { name: "Delete" })).toHaveClass("danger-quiet");
+    expect(within(row).getByRole("button", { name: "Delete" }).closest("td")).toHaveClass("row-actions");
+  });
+
+  it("writes the collector and secret-key problems as banners that keep role alert", async () => {
+    mockFetch({
+      ...routes("operator"),
+      "GET /api/collector/status": { body: { alive: false, age_seconds: null } },
+      "GET /api/secret-key/status": { body: { ok: false, key_changed: false, unreadable: [{ id: 2, name: "sim" }] } },
+    });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    const collector = (await screen.findByText(/The collector has not reported yet/)).closest("[role=alert]")!;
+    expect(collector).toHaveClass("banner", "banner-warn");
+    const secrets = screen.getByText(/does not open the stored secrets/).closest("[role=alert]")!;
+    expect(secrets).toHaveClass("banner", "banner-bad");
+  });
+
+  it("says so, in the empty look, when there are no sources", async () => {
+    mockFetch({ ...routes("admin"), "GET /api/sources": { body: [] } });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    expect(await screen.findByText("No sources yet.")).toBeInTheDocument();
+    expect(screen.getByText("No sources yet.").closest(".empty")).not.toBeNull();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("keeps a long source name to one line and puts the full name in its title", async () => {
+    const long = "Chiller plant BMS with a very long source name";
+    mockFetch({ ...routes("operator"), "GET /api/sources": { body: [{ ...source, name: long }] } });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    expect(await screen.findByText(long)).toHaveAttribute("title", long);
+  });
+});

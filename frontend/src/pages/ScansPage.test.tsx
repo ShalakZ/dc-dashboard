@@ -268,3 +268,61 @@ describe("ScansPage", () => {
     });
   });
 });
+
+describe("ScansPage look (W6)", () => {
+  it("shows a scan's status as a chip: done ok, failed bad, running the hollow one", async () => {
+    mockFetch({
+      ...base("operator"),
+      "GET /api/scans": { body: [
+        { ...done, id: 7, scope_name: "a", status: "done", findings: undefined },
+        { ...done, id: 8, scope_name: "b", status: "failed", findings: undefined },
+        { ...done, id: 9, scope_name: "c", status: "running", findings: undefined },
+      ] },
+    });
+    open();
+    expect(within(await screen.findByRole("row", { name: /^a done/ })).getByText("done")).toHaveClass("chip", "chip-ok");
+    expect(within(screen.getByRole("row", { name: /^b failed/ })).getByText("failed")).toHaveClass("chip", "chip-bad");
+    expect(within(screen.getByRole("row", { name: /^c running/ })).getByText("running")).toHaveClass("chip", "chip-stale");
+  });
+
+  it("writes each finding outcome as a chip: claimed ok, needs credentials warning, unidentified hollow", async () => {
+    const findings = [...done.findings, { host: "simulator", port: 8080, source_id: null, connector_type: null, outcome: "unclaimed", detail: "" }];
+    mockFetch({ ...base("operator"), "GET /api/scans/7": { body: { ...done, findings } } });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Details" }));
+    const outcome = async (prefix: RegExp, word: string) => within(await screen.findByRole("row", { name: prefix })).getByText(word);
+    expect(await outcome(/^simulator 4840 /, "claimed")).toHaveClass("chip", "chip-ok");
+    expect(await outcome(/^simulator 9000 /, "needs credentials")).toHaveClass("chip", "chip-warn");
+    expect(await outcome(/^simulator 8080 /, "unidentified")).toHaveClass("chip", "chip-stale");
+  });
+
+  it("New scope is the one primary button; while a scan waits for its confirmation, Start scan is", async () => {
+    mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } } });
+    open();
+    expect(await screen.findByRole("button", { name: "New scope" })).toHaveClass("primary");
+    expect(document.querySelectorAll("button.primary")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Scan" }));
+    const start = await screen.findByRole("button", { name: "Start scan" });
+    expect(start).toHaveClass("primary");
+    expect(screen.getByRole("button", { name: "New scope" })).not.toHaveClass("primary");
+    expect(document.querySelectorAll("button.primary")).toHaveLength(1);
+    // Cancel sits before the primary in the DOM, so the focus order is what is seen
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(cancel.compareDocumentPosition(start) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("puts the scope form in a card and keeps New scope out of the header while it is open", async () => {
+    mockFetch(base("admin"));
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "New scope" }));
+    expect((await screen.findByLabelText("Targets")).closest(".scope-card")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "New scope" })).not.toBeInTheDocument();
+  });
+
+  it("shows the empty look when there are no scopes and no scans", async () => {
+    mockFetch({ ...base("admin"), "GET /api/scopes": { body: [] }, "GET /api/scans": { body: [] } });
+    open();
+    expect((await screen.findByText(/No scopes yet/)).closest(".empty")).not.toBeNull();
+    expect((await screen.findByText("No scans yet.")).closest(".empty")).not.toBeNull();
+  });
+});

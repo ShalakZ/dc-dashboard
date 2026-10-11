@@ -192,3 +192,12 @@ describe("SourcePanel", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("SourcePanel look (W6)", () => {
+  it("Close is a quiet button and Save and browse the primary one", () => {
+    mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+    open(source({ needs_credentials: true }), true);
+    expect(screen.getByRole("button", { name: "Close" })).toHaveClass("quiet");
+    expect(screen.getByRole("button", { name: "Save and browse" })).toHaveClass("primary");
+  });
+});

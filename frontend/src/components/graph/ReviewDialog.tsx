@@ -251,8 +251,8 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
         {reason && <p className="muted">{reason}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         <div className="row">
-          <button onClick={commit} disabled={busy || reason !== null}>Create mappings</button>
           <button onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary" onClick={commit} disabled={busy || reason !== null}>Create mappings</button>
         </div>
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
+import { useParams } from "react-router";
 import { api } from "../api/client";
 import { keys, useAssets, useInvalidate, usePoints, useSources } from "../api/queries";
 import type { PointRow } from "../api/types";
@@ -7,6 +7,7 @@ import { assetLabels } from "../components/dashboard/AssetPicker";
 import { JobStatus } from "../components/JobStatus";
 import { MappingForm, type MappingBody } from "../components/MappingForm";
 import { Modal } from "../components/Modal";
+import { PageHeader } from "../components/PageHeader";
 import { useAction } from "../hooks/useAction";
 import { DEFAULT_POINT_VIEW, sortBy, viewPoints, type PointSortKey } from "../lib/points";
 
@@ -14,9 +15,11 @@ const NO_POINTS: PointRow[] = [];
 const COLUMNS: ReadonlyArray<readonly [PointSortKey, string]> = [
   ["address", "Address"], ["name", "Name"], ["data_type", "Type"], ["unit_hint", "Unit hint"], ["mapped", "Mapped to"],
 ];
-// A header that sorts is a plain button that looks like the header text.
-const HEADER_BUTTON = { border: "none", background: "none", padding: 0, font: "inherit", fontWeight: 700, textAlign: "left" } as const;
-const CHECK_LABEL = { display: "flex", gap: 6, alignItems: "center" } as const;
+
+// Inline SVG, 24-unit viewBox, decoration only.
+const PointsIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.2" /><circle cx="19" cy="5" r="2.2" /><circle cx="19" cy="19" r="2.2" /><path d="M7 11 17 6M7 13l10 5" /></svg>
+);
 
 export function SourcePointsPage() {
   const sourceId = Number(useParams().id);
@@ -51,19 +54,26 @@ export function SourcePointsPage() {
   if (error && !data) return <p className="error" role="alert">{error.message}</p>;
   return (
     <>
-      <p><Link to="/sources">Sources</Link> / {sourceName}</p>
-      <h1>Points</h1>
-      <div className="row">
-        <button onClick={browse}>Browse points</button>
-        <JobStatus jobId={browseJob} />
-        {browseJob !== null && <button onClick={() => invalidate(keys.points(sourceId))}>Refresh list</button>}
-      </div>
+      {/* The crumb is plain text: a link named "Sources" would sit next to the sidebar's (the sidebar is one click away). */}
+      <PageHeader
+        title="Points"
+        crumbs={<><span>Sources</span> / {sourceName}</>}
+        actions={<button className="primary" onClick={browse}>Browse points</button>}
+      />
+      {browseJob !== null && (
+        <div className="row job-line">
+          <JobStatus jobId={browseJob} />
+          <button onClick={() => invalidate(keys.points(sourceId))}>Refresh list</button>
+        </div>
+      )}
       {error && <p className="error" role="alert">{error.message}</p>}
       {actionError && <p className="error" role="alert">{actionError}</p>}
-      {points.length === 0 && <p className="muted">No points yet. Browse the source to discover them.</p>}
+      {points.length === 0 && (
+        <div className="empty"><div className="empty-icon"><PointsIcon /></div><p className="muted">No points yet. Browse the source to discover them.</p></div>
+      )}
       {points.length > 0 && (
-        <div className="row">
-          <label style={CHECK_LABEL}>
+        <div className="row toolbar">
+          <label>
             <input type="checkbox" checked={view.unmappedOnly} onChange={(e) => setView({ ...view, unmappedOnly: e.target.checked })} />
             Unmapped only
           </label>
@@ -73,32 +83,39 @@ export function SourcePointsPage() {
         </div>
       )}
       {points.length > 0 && rows.length === 0 && <p className="muted">No points match the filters.</p>}
-      <table>
-        <thead>
-          <tr>
-            {COLUMNS.map(([key, label]) => (
-              <th key={key} aria-sort={view.sort === key ? (view.dir === "asc" ? "ascending" : "descending") : undefined}>
-                <button type="button" style={HEADER_BUTTON} onClick={() => setView(sortBy(view, key))}>
-                  {label}{view.sort === key && <span aria-hidden="true"> {view.dir === "asc" ? "▲" : "▼"}</span>}
-                </button>
-              </th>
-            ))}
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((p) => (
-            <tr key={p.id}>
-              <td>{p.address}</td><td>{p.name}</td><td>{p.data_type}</td><td>{p.unit_hint ?? ""}</td>
-              <td>{p.mapping ? `${assetName(p.mapping.asset_id)} · ${p.mapping.metric} · every ${p.mapping.interval_seconds}s · ×${p.mapping.scale}` : <span className="muted">unmapped</span>}</td>
-              <td className="row">
-                <button onClick={() => setEditing(p)}>{p.mapping ? "Edit" : "Map"}</button>
-                {p.mapping && <button onClick={() => unmap(p.mapping!.id)}>Unmap</button>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {points.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                {COLUMNS.map(([key, label]) => (
+                  <th key={key} aria-sort={view.sort === key ? (view.dir === "asc" ? "ascending" : "descending") : undefined}>
+                    <button type="button" className="th-sort" onClick={() => setView(sortBy(view, key))}>
+                      {label}
+                      {view.sort === key && (
+                        <svg className={`i sort-mark ${view.dir}`} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6" /></svg>
+                      )}
+                    </button>
+                  </th>
+                ))}
+                <th className="row-actions"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((p) => (
+                <tr key={p.id}>
+                  <td><span className="cell-trunc" title={p.address}>{p.address}</span></td><td>{p.name}</td><td>{p.data_type}</td><td>{p.unit_hint ?? ""}</td>
+                  <td>{p.mapping ? `${assetName(p.mapping.asset_id)} · ${p.mapping.metric} · every ${p.mapping.interval_seconds}s · ×${p.mapping.scale}` : <span className="muted st st-off plain">unmapped</span>}</td>
+                  <td className="row-actions">
+                    <button className="quiet" onClick={() => setEditing(p)}>{p.mapping ? "Edit" : "Map"}</button>
+                    {p.mapping && <button className="danger-quiet" onClick={() => unmap(p.mapping!.id)}>Unmap</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       {editing && (
         <Modal title={`${editing.mapping ? "Edit mapping" : "Map"} ${editing.address}`} onClose={() => setEditing(null)}>
           <MappingForm key={editing.id} assets={assets} initial={editing.mapping ?? undefined} unitHint={editing.unit_hint}
