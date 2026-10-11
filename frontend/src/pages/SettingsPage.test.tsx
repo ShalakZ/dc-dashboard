@@ -199,3 +199,28 @@ describe("SettingsPage certificate line", () => {
   });
 });
 
+describe("SettingsPage version line", () => {
+  async function open(version: { status?: number; body: unknown }, timezone = "UTC") {
+    mockFetch({ ...base, "GET /api/settings/general": { body: { timezone } }, "GET /api/version": version });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    await screen.findByLabelText("Timezone");
+  }
+
+  it("shows the build id and the commit time on the site clock, as plain text", async () => {
+    await open({ body: { build_id: "227bd6a", build_time: "2026-10-12T14:03:11+02:00", uptime_seconds: 5.2 } }, "Asia/Qatar");
+    const line = await screen.findByText(/^Version /);
+    expect(line).toHaveTextContent("Version 227bd6a, built 2026-10-12 15:03:11");
+    expect(line.querySelector("input, button")).toBeNull();
+  });
+
+  it("says dev and unknown for an image built without a build id", async () => {
+    await open({ body: { build_id: "dev", build_time: "unknown", uptime_seconds: 1 } });
+    expect(await screen.findByText(/^Version /)).toHaveTextContent("Version dev, built unknown");
+  });
+
+  it("shows no version line when the version cannot be read, and the rest of the page works", async () => {
+    await open({ status: 500, body: { detail: "boom" } });
+    expect(screen.queryByText(/^Version /)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Timezone")).toHaveValue("UTC");
+  });
+});

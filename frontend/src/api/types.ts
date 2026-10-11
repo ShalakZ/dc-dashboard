@@ -43,6 +43,12 @@ export interface TlsStatus {
   checked_at: string | null;
   error: string | null;
 }
+/** GET /api/version (any signed-in user): the build the api runs. `dev` / `unknown` when the image was built without the build id. */
+export interface VersionInfo {
+  build_id: string;
+  build_time: string;
+  uptime_seconds: number;
+}
 export interface SourceIn {
   name: string; connector_type: string; config: Record<string, unknown>; secret?: string | null; enabled: boolean;
 }

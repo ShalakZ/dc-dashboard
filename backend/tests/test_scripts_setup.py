@@ -29,19 +29,47 @@ case "$*" in
   "volume ls"*)
     proj="$(printf '%s' "$*" | sed -n 's/.*label=com.docker.compose.project=\([^ ]*\).*/\1/p')"
     case " $FAKE_VOLUMES " in *" $proj "*) echo "${proj}_dbdata" ;; esac ;;
-  *" up "*) echo "fake docker: up called" >&2 ;;  # a marker, so a test can tell what came before it on stderr
+  *" up "*)  # a marker, so a test can tell what came before it on stderr; and the build id the images would be built with
+    echo "fake docker: up called" >&2
+    echo "DCDASH_BUILD_ID=$DCDASH_BUILD_ID DCDASH_BUILD_TIME=$DCDASH_BUILD_TIME" >> "$UP_ENV_LOG" ;;
 esac
 exit 0
 """
 
 
+COMMIT_TIME = "2026-01-02T03:04:05+00:00"
+
+
+def git(root: Path, *cmd: str) -> str:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t",
+               GIT_COMMITTER_EMAIL="t@example.invalid", GIT_AUTHOR_DATE=COMMIT_TIME, GIT_COMMITTER_DATE=COMMIT_TIME)
+    return subprocess.run(["git", "-c", "commit.gpgsign=false", *cmd], cwd=root, env=env, check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def make_git_repo(root: Path, *, dirty: bool) -> None:
+    """Commit everything under `root` at COMMIT_TIME; with `dirty`, change a tracked file afterwards."""
+    (root / "notes.txt").write_text("one\n")
+    git(root, "init", "-q")
+    git(root, "add", ".")
+    git(root, "commit", "-q", "-m", "first")
+    if dirty:
+        (root / "notes.txt").write_text("two\n")
+
+
 def run_setup(tmp_path: Path, *, env_file: str | None = None, volumes: tuple[str, ...] = (),
               docker_down: bool = False, project: str | None = None, args: tuple[str, ...] = (),
-              config_fails: bool = False, config_nameless: bool = False):
-    """`volumes` are the Compose projects that have a database volume; `project` is COMPOSE_PROJECT_NAME, if any."""
+              config_fails: bool = False, config_nameless: bool = False, git_repo: bool | str = False,
+              broken_git: bool = False):
+    """`volumes` are the Compose projects that have a database volume; `project` is COMPOSE_PROJECT_NAME, if any.
+    `git_repo` makes the copy a git repository with one commit ("dirty": with an uncommitted change); `broken_git` puts a git on
+    PATH that fails. Neither: the copy is not in a repository at all. What `docker compose up` saw as build id: `up_env(tmp_path)`."""
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
     shutil.copy(SCRIPT, root / "scripts" / "setup.sh")
+    if git_repo:
+        make_git_repo(root, dirty=git_repo == "dirty")
     if env_file is not None:
         (root / ".env").write_text(env_file)
     bin_dir = tmp_path / "bin"
@@ -51,8 +79,13 @@ def run_setup(tmp_path: Path, *, env_file: str | None = None, volumes: tuple[str
     docker = bin_dir / "docker"
     docker.write_text(FAKE_DOCKER)
     docker.chmod(0o755)
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "DCDASH_"))}
-    env.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", CALLS_LOG=str(log),
+    if broken_git:
+        (bin_dir / "git").write_text("#!/usr/bin/env bash\necho 'fatal: git is broken' >&2\nexit 128\n")
+        (bin_dir / "git").chmod(0o755)
+    # GIT_*: the harness must not inherit a repository from the environment; the ceiling keeps git from finding one above tmp_path
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "DCDASH_", "GIT_"))}
+    env.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", CALLS_LOG=str(log), UP_ENV_LOG=str(tmp_path / "up-env.log"),
+               GIT_CEILING_DIRECTORIES=str(tmp_path),
                FAKE_VOLUMES=" ".join(volumes), FAKE_DOCKER_DOWN="1" if docker_down else "",
                FAKE_CONFIG_FAILS="1" if config_fails else "", FAKE_CONFIG_NAMELESS="1" if config_nameless else "")
     if project:
@@ -60,6 +93,12 @@ def run_setup(tmp_path: Path, *, env_file: str | None = None, volumes: tuple[str
     result = subprocess.run(["bash", str(root / "scripts" / "setup.sh"), *args], capture_output=True, text=True,
                             env=env, timeout=60, cwd=tmp_path)
     return result, root, log.read_text().splitlines()
+
+
+def up_env(tmp_path: Path) -> list[str]:
+    """One `DCDASH_BUILD_ID=... DCDASH_BUILD_TIME=...` line for each `docker compose ... up` the script ran."""
+    log = tmp_path / "up-env.log"
+    return log.read_text().splitlines() if log.exists() else []
 
 
 def looked_up(calls: list[str], project: str) -> bool:
@@ -210,3 +249,64 @@ def test_ps1_switches_off_default_attestations_before_the_stack_is_started():
     setting = lines.index("$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'")
     up = next(i for i, line in enumerate(lines) if line == "docker compose @args up -d --build")
     assert setting < up
+
+
+# ---- the build id the images carry (W8, part G / amendment M10) -------------------------------------------------------------
+
+def test_outside_a_repository_the_build_is_dev_and_unknown(tmp_path):
+    result, _, _ = run_setup(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert up_env(tmp_path) == ["DCDASH_BUILD_ID=dev DCDASH_BUILD_TIME=unknown"]
+
+
+def test_a_git_that_fails_leaves_dev_and_unknown_and_the_stack_still_starts(tmp_path):
+    result, _, calls = run_setup(tmp_path, broken_git=True)
+    assert result.returncode == 0, result.stderr
+    assert up_env(tmp_path) == ["DCDASH_BUILD_ID=dev DCDASH_BUILD_TIME=unknown"]
+    assert "git is broken" not in result.stderr  # no noise from the lookup
+    assert started(calls)
+
+
+def test_in_a_repository_the_build_is_the_commit_and_its_commit_time_not_the_clock(tmp_path):
+    result, root, _ = run_setup(tmp_path, git_repo=True)
+    assert result.returncode == 0, result.stderr
+    (line,) = up_env(tmp_path)
+    build_id, build_time = (part.split("=", 1)[1] for part in line.split(" "))
+    assert git(root, "rev-parse", "HEAD").startswith(build_id) and len(build_id) >= 7  # the abbreviated id, clean tree: no suffix
+    assert build_time == COMMIT_TIME  # the time of the commit: stable for an unchanged tree, so a re-run recreates nothing
+
+
+def test_an_uncommitted_change_to_a_tracked_file_marks_the_build_dirty(tmp_path):
+    result, root, _ = run_setup(tmp_path, git_repo="dirty")
+    assert result.returncode == 0, result.stderr
+    (line,) = up_env(tmp_path)
+    build_id = line.split(" ")[0].split("=", 1)[1]
+    assert build_id.endswith("-dirty") and git(root, "rev-parse", "HEAD").startswith(build_id.removesuffix("-dirty"))
+
+
+def test_the_new_env_file_does_not_make_the_build_dirty(tmp_path):
+    # the first run writes .env before the build id is read; it is untracked, so `git describe --dirty` must not see it
+    result, root, _ = run_setup(tmp_path, git_repo=True)
+    assert result.returncode == 0 and (root / ".env").exists()
+    assert not up_env(tmp_path)[0].split(" ")[0].endswith("-dirty")
+
+
+def test_sh_exports_the_build_id_before_the_stack_is_started():
+    lines = SCRIPT.read_text().splitlines()
+    up = next(i for i, line in enumerate(lines) if line == 'docker compose "$@" up -d --build')
+    assert any(line.startswith("export DCDASH_BUILD_ID=") for line in lines[:up])
+    text = "\n".join(lines[:up])
+    assert "git describe --always --dirty" in text and "git log -1 --format=%cI" in text  # the commit time ...
+    assert "$(date" not in text and "date -u" not in text  # ... never the clock
+    assert "dev" in text and "unknown" in text  # the fallbacks
+
+
+def test_ps1_sets_the_build_id_before_the_stack_is_started():
+    lines = (SCRIPT.parent / "setup.ps1").read_text().splitlines()
+    up = next(i for i, line in enumerate(lines) if line == "docker compose @args up -d --build")
+    before = "\n".join(lines[:up])
+    assert '$env:DCDASH_BUILD_ID = "dev"' in before and '$env:DCDASH_BUILD_TIME = "unknown"' in before  # the fallbacks come first
+    assert before.index('$env:DCDASH_BUILD_ID = "dev"') < before.index("git describe --always --dirty")
+    assert "git describe --always --dirty" in before and "git log -1 --format=%cI" in before
+    assert "$env:DCDASH_BUILD_ID = " in before.split("git describe --always --dirty", 1)[1]  # and git's answer replaces them
+    assert "Get-Date" not in before  # never the wall clock

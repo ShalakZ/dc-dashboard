@@ -893,6 +893,15 @@ PowerShell: `$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'`). Without it every build
 attestation record is part of the id, and `up -d` recreates `api`, `collector`, `web` and `simulator` (about 12 s without service) even
 though nothing changed; `db` is kept after that first time (the one described above). The first run after adopting the variable recreates them once.
 
+**Build id.** The backend images carry the commit they were built from, so a diagnostics report (and Settings, and `GET /api/version`)
+proves which code produced it. `scripts/setup.sh`, `setup.ps1` and `e2e.sh` pass it on by themselves. For a hand-typed
+`docker compose build` or `up -d --build`, set the two variables first (bash:
+`export DCDASH_BUILD_ID=$(git describe --always --dirty) DCDASH_BUILD_TIME=$(git log -1 --format=%cI)`; PowerShell:
+`$env:DCDASH_BUILD_ID = git describe --always --dirty; $env:DCDASH_BUILD_TIME = git log -1 --format=%cI`); without them the images say
+`dev` / `unknown`. The id is the commit, with `-dirty` while tracked files differ from it, and the time is the commit's, never the
+clock of the build, so building the same tree again changes nothing. A new id (a new commit, or `-dirty` appearing) rebuilds the
+last image layer and recreates `api`, `collector` and `simulator` once. The `web` image carries no build id.
+
 ## Release notes
 
 One entry for each release that changes the database: the revision it leads to, what it changes, the pre-checks to run before it,

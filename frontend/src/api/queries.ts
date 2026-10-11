@@ -6,7 +6,7 @@ import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
   FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
-  WidgetData, WidgetType, CollectorStatus, LiveStatus, SecretKeyStatus, TlsStatus,
+  WidgetData, WidgetType, CollectorStatus, LiveStatus, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
 
 export const keys = {
@@ -45,6 +45,7 @@ export const keys = {
   status: ["status"] as const,
   secretKey: ["secret-key"] as const,
   tlsStatus: ["tls-status"] as const,
+  version: ["version"] as const,
 };
 
 /** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today), `fleet` the Assets landing page's figures. */
@@ -90,6 +91,10 @@ export const useSecretKeyStatus = () =>
 /** Admins only (the app shell's notice and the Settings page). The collector checks the certificate hourly, so ten minutes is plenty. */
 export const useTlsStatus = () =>
   useQuery({ queryKey: keys.tlsStatus, queryFn: () => api.get<TlsStatus>("/api/tls/status"), refetchInterval: 600_000 });
+
+/** The build the api runs. It changes only when the image is rebuilt, which reloads the page, so it is read once. */
+export const useVersion = () =>
+  useQuery({ queryKey: keys.version, queryFn: () => api.get<VersionInfo>("/api/version"), staleTime: Infinity });
 
 export const useConnectors = (enabled: boolean) =>
   useQuery({ queryKey: keys.connectors, queryFn: () => api.get<Connector[]>("/api/connectors"), enabled, staleTime: Infinity });

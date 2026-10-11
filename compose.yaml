@@ -8,6 +8,14 @@ x-backend-env: &backend-env
   DCDASH_SCAN_EXTRA_PORTS: ${DCDASH_SCAN_EXTRA_PORTS:-}
   DCDASH_TLS_CERT: ${DCDASH_TLS_CERT:-}
 
+# api, collector and simulator build the same image (dcdash-backend:local), so they must pass the same arguments. The build id comes from
+# scripts/setup.sh, setup.ps1 and e2e.sh (the commit and its commit time); a hand-typed build without them says dev / unknown.
+x-backend-build: &backend-build
+  context: ./backend
+  args:
+    DCDASH_BUILD_ID: ${DCDASH_BUILD_ID:-dev}
+    DCDASH_BUILD_TIME: ${DCDASH_BUILD_TIME:-unknown}
+
 x-logging: &default-logging
   driver: json-file
   options:
@@ -32,7 +40,7 @@ services:
       retries: 20
 
   api:
-    build: ./backend
+    build: *backend-build
     image: dcdash-backend:local
     restart: unless-stopped
     logging: *default-logging
@@ -76,7 +84,7 @@ services:
       start_period: 10s
 
   collector:
-    build: ./backend
+    build: *backend-build
     image: dcdash-backend:local
     restart: unless-stopped
     logging: *default-logging
@@ -90,7 +98,7 @@ services:
         condition: service_healthy
 
   simulator:
-    build: ./backend
+    build: *backend-build
     image: dcdash-backend:local
     profiles: [dev]
     restart: unless-stopped

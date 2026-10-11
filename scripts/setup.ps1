@@ -53,6 +53,19 @@ if (Test-Path .env) {
 $ProjectName = "unknown"
 try { $ProjectName = Get-ComposeProject @args } catch { }
 Write-Host "starting Compose project: $ProjectName"
+# The build id the backend images carry (Settings, GET /api/version and every diagnostics report show it): the commit and that commit's
+# time, never the clock of this run, so an unchanged tree builds the same image and nothing is recreated. Without git, or outside a
+# repository, it stays dev / unknown. Native stderr is not redirected here (see Get-ComposeProject); a failing git changes nothing.
+$env:DCDASH_BUILD_ID = "dev"
+$env:DCDASH_BUILD_TIME = "unknown"
+try {
+    if ((Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path .git)) {
+        $commit = git describe --always --dirty
+        if ($LASTEXITCODE -eq 0 -and $commit) { $env:DCDASH_BUILD_ID = "$commit".Trim() }
+        $committed = git log -1 --format=%cI
+        if ($LASTEXITCODE -eq 0 -and $committed) { $env:DCDASH_BUILD_TIME = "$committed".Trim() }
+    }
+} catch { }
 # Without this, re-running on an unchanged tree recreates api, collector, web and simulator: default attestations change the image id on every build.
 $env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'
 docker compose @args up -d --build

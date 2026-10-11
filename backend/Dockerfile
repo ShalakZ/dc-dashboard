@@ -8,4 +8,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY . .
 RUN uv sync --frozen --no-dev && chown -R dcdash:dcdash /app
 USER dcdash
+# Last, so a new build id invalidates no layer above it. Passed by compose.yaml (build.args) from the scripts' DCDASH_BUILD_ID/TIME.
+ARG DCDASH_BUILD_ID=dev
+ARG DCDASH_BUILD_TIME=unknown
+ENV DCDASH_BUILD_ID=$DCDASH_BUILD_ID DCDASH_BUILD_TIME=$DCDASH_BUILD_TIME
 CMD ["uvicorn", "dcdash.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

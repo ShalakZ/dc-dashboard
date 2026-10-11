@@ -43,6 +43,12 @@ else
 fi
 PROJECT="$(project_name docker compose "$@" 2>/dev/null || true)"
 echo "starting Compose project: ${PROJECT:-unknown}" >&2
+# The build id the backend images carry (Settings, GET /api/version and every diagnostics report show it): the commit and that commit's
+# time, never the clock of this run, so an unchanged tree builds the same image and nothing is recreated. Without git, or outside a
+# repository, it stays dev / unknown.
+DCDASH_BUILD_ID="$(git describe --always --dirty 2>/dev/null || true)"
+DCDASH_BUILD_TIME="$(git log -1 --format=%cI 2>/dev/null || true)"
+export DCDASH_BUILD_ID="${DCDASH_BUILD_ID:-dev}" DCDASH_BUILD_TIME="${DCDASH_BUILD_TIME:-unknown}"
 # Without this, re-running on an unchanged tree recreates api, collector, web and simulator: default attestations change the image id on every build.
 export BUILDX_NO_DEFAULT_ATTESTATIONS=1
 docker compose "$@" up -d --build
