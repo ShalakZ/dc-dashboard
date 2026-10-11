@@ -151,9 +151,12 @@ describe("AuditPage", () => {
     // the unfiltered answer is still on its way: the old "0 matches" must not turn into "the log is empty"
     expect(screen.queryByText("No audit entries yet.")).not.toBeInTheDocument();
     expect(screen.queryByText("No entries match these filters.")).not.toBeInTheDocument();
+    // not blank either: there are no old rows to carry the "Updating…" line, so the page says it on its own
+    expect(screen.getByText("Updating…")).toBeInTheDocument();
     await act(async () => { release(); });
     expect(await screen.findByText("Scan #51 finished (done)")).toBeInTheDocument();
     expect(screen.queryByText("No audit entries yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Updating…")).not.toBeInTheDocument();
   });
 
   it("does not flash the past-the-end message for an old page while the next one loads", async () => {

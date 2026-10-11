@@ -133,6 +133,7 @@ export function AuditPage() {
         <p className="muted">{isFiltered(filters) ? "No entries match these filters." : "No audit entries yet."}</p>
       )}
       {fresh && fresh.total > 0 && rows.length === 0 && <p className="muted">This page is past the end of the log.</p>}
+      {isPlaceholderData && rows.length === 0 && <p className="muted">Updating…</p>}
       {rows.length > 0 && (
         <>
           <div className="row" role="group" aria-label="View">

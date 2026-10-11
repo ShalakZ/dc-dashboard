@@ -167,9 +167,10 @@ describe("describeAudit: user.updated reads as what was done to the account", ()
     expect(update({}, { role: "admin" }).summary).toBe("Changed the role of bob to admin");
   });
 
-  it("says a password reset, whether the stored word is changed or set", () => {
+  it("says a password reset only for the stored word changed", () => {
     expect(update({ password: "set" }, { password: "changed" }).summary).toBe("Reset the password of bob");
-    expect(update({}, { password: "set" }).summary).toBe("Reset the password of bob");
+    // "set" on the after side means unchanged (the backend never stores it); it must not read as a reset.
+    expect(update({}, { password: "set" }).summary).not.toContain("Reset the password");
   });
 
   it("joins several in the order role, active, password", () => {
@@ -273,7 +274,9 @@ describe("describeAudit: creations, deletions and events", () => {
       describeAudit(entry("login.failed", { via: "login", client: "10.0.0.5", ...(reason ? { reason } : {}) }, { actor_id: 7, username: "bob" }));
     expect(failed("wrong_password").summary).toBe("Failed sign-in to this account (wrong password)");
     expect(failed("account_inactive").summary).toBe("Failed sign-in to this account (account inactive)");
-    expect(failed("unknown_account").summary).toBe("Failed sign-in to this account (unknown account)");
+    // No account was found for the typed name, so the sentence does not point at "this account".
+    expect(failed("unknown_account").summary).toBe("Failed sign-in to an unknown account");
+    expect(describeAudit(entry("login.failed", { via: "login", reason: "unknown_account" })).summary).toBe("Failed sign-in to an unknown account");
     expect(failed().summary).toBe("Failed sign-in to this account");
     expect(failed("some_new_reason").summary).toBe("Failed sign-in to this account (some new reason)");
     expect(describeAudit(entry("login.failed", { via: "login", reason: "" })).summary).toBe("Failed sign-in to this account");

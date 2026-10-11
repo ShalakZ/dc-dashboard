@@ -154,7 +154,8 @@ function userUpdate({ d, sides }: Context): string | null {
     if (now === false) parts.push(`Deactivated user${name ? ` ${name}` : ""}`);
     else if (now === true && get(sides.before, "active") === false) parts.push(`Reactivated user${name ? ` ${name}` : ""}`);
   }
-  if (changedKey("password") && ["changed", "set"].includes(String(get(sides.after, "password")))) {
+  // `before.password` is always "set"; `after.password` is "changed" when an admin set a new one ("set" would mean unchanged and is never kept).
+  if (changedKey("password") && get(sides.after, "password") === "changed") {
     parts.push(`Reset the password of ${name ?? "a user"}`);
   }
   return parts.length > 0 ? parts.join("; ") : null;
@@ -215,7 +216,10 @@ const RULES: Record<string, Rule> = {
   },
 
   // In these rows the User column is the account that was attacked (unknown when the name did not exist), not someone who acted.
-  "login.failed": { summary: ({ d }) => `Failed sign-in to this account${reasonSuffix(d)}` },
+  "login.failed": {
+    // A typed name that matches no account is stored without an account, so the sentence must not say "this account".
+    summary: ({ d }) => (text(d.reason) === "unknown_account" ? "Failed sign-in to an unknown account" : `Failed sign-in to this account${reasonSuffix(d)}`),
+  },
   "login.locked": { summary: ({ d }) => `Sign-in blocked after repeated failures${reasonSuffix(d)}` },
   "login.succeeded": { summary: () => "Signed in" },
 
