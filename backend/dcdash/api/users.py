@@ -6,7 +6,7 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.auth import apply_sign_in_policy, limiter
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import account_vanished_is_401, get_db, require_role
 from dcdash.api.security import hash_password
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import User, UserSession
@@ -67,13 +67,14 @@ async def create_user(
     if exists is not None:
         raise HTTPException(409, "username already exists")
     user = User(username=body.username, password_hash=hash_password(body.password), role=body.role)
-    db.add(user)
-    await db.flush()
-    await audit(
-        db, admin.id, "user.created",
-        {"user_id": user.id, "username": user.username, "role": user.role, "active": True},
-    )
-    await db.commit()
+    async with account_vanished_is_401(db):  # the audit row needs the acting admin
+        db.add(user)
+        await db.flush()
+        await audit(
+            db, admin.id, "user.created",
+            {"user_id": user.id, "username": user.username, "role": user.role, "active": True},
+        )
+        await db.commit()
     await db.refresh(user)
     return user
 
@@ -87,6 +88,9 @@ async def lock_admin_changes(db: AsyncSession, acting: User, target_id: int, *, 
     admin deleted mid-request would break the audit insert's foreign key (a 500). Under the lock the acting admin is
     read again: a request that lost the race finds itself changed or gone and gets a 401. Nothing takes a row lock
     before the advisory lock. Returns the target, freshly read.
+
+    The last-administrator 409 is defence in depth: the acting admin re-read above is always another account than the
+    target (a change to oneself that removes an admin is refused earlier), so the count cannot be zero today.
     """
     await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ADMIN_CHANGES_LOCK})
     current = await db.get(User, acting.id, populate_existing=True)
@@ -119,13 +123,14 @@ async def patch_user(
     removes_admin = body.active is False or body.role not in (None, "admin")
     if user_id == admin.id and (body.active is False or (body.role is not None and body.role != "admin")):
         raise HTTPException(409, "cannot deactivate or demote yourself")
+    new_hash = hash_password(body.password) if body.password is not None else None  # argon2 is slow: not under the lock
     # One path for every change: under the admin lock a DELETE of the same account has either finished (404) or waits.
     user = await lock_admin_changes(db, admin, user_id, removes_admin=removes_admin)
     before = {"role": user.role, "active": user.active, "password": "set"}
     if body.role is not None:
         user.role = body.role
-    if body.password is not None:
-        user.password_hash = hash_password(body.password)
+    if new_hash is not None:
+        user.password_hash = new_hash
     if body.active is not None:
         user.active = body.active
     if body.password is not None or body.active is False:
@@ -169,7 +174,8 @@ async def unblock_user(
     await apply_sign_in_policy(db)
     name = user.username
     cleared = limiter.drop(lambda key: isinstance(key, tuple) and key[1] == name)  # every address, this exact name
-    if cleared:
-        await audit(db, admin.id, "login.unblocked", {"user_id": user.id, "username": name, "cleared": cleared})
-    await db.commit()
+    async with account_vanished_is_401(db):  # the audit row needs the acting admin
+        if cleared:
+            await audit(db, admin.id, "login.unblocked", {"user_id": user.id, "username": name, "cleared": cleared})
+        await db.commit()
     return Unblocked(cleared=cleared)

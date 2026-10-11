@@ -1,5 +1,7 @@
 import logging
 
+from dcdash.core.logscrub import install_log_scrub
+
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 # Per-read chatter: asyncua logs a session open, activate, read and close (and a 1.4 kB endpoint line) at INFO for every
 # OPC UA read, httpx one line per HTTP request. At WARNING the real problems stay and about 760 lines an hour per source go.
@@ -11,3 +13,4 @@ def configure_logging() -> None:
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     for name in QUIET_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
+    install_log_scrub()  # after basicConfig: the filter goes on the handlers that exist now

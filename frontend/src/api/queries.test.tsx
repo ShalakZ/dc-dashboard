@@ -5,7 +5,7 @@ import { NO_FILTERS } from "../lib/auditFilters";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
-  auditPosition, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useDashboard, useDashboards, useDeleteUser, useGraph, usePatchUser,
+  auditPosition, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useGraph, usePatchUser,
   usePutGeneralSettings, usePutSignInPolicy, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useTariffs, useUnblockUser, useUsers, useWidgetData,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
@@ -81,6 +81,51 @@ describe("user delete and unblock", () => {
     const { result } = renderHook(() => ({ options: useAuditOptions(), unblock: useUnblockUser() }), { wrapper: stableWrapper() });
     await waitFor(() => expect(result.current.options.data).toBeDefined());
     await result.current.unblock.mutateAsync(2);
+    await waitFor(() => expect(calls.filter((c) => c.path === "/api/audit/options")).toHaveLength(2));
+  });
+});
+
+// user.created, user.updated and settings.sign_in_policy_changed each write an audit row and may add a name or an action to
+// the Audit filters, which are cached for a minute.
+describe("audit filter options refresh", () => {
+  const options = { body: { actions: [], users: [], unattributed: false } };
+
+  it("refetches the audit filter options after creating a user", async () => {
+    const calls = mockFetch({
+      "GET /api/audit/options": options,
+      "POST /api/users": { body: { id: 5, username: "new", role: "viewer", active: true, blocked: false } },
+    });
+    const { result } = renderHook(() => ({ options: useAuditOptions(), create: useCreateUser() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.options.data).toBeDefined());
+    await result.current.create.mutateAsync({ username: "new", password: "a-long-password", role: "viewer" });
+    await waitFor(() => expect(calls.filter((c) => c.path === "/api/audit/options")).toHaveLength(2));
+  });
+
+  it("refetches the audit filter options after editing a user", async () => {
+    const calls = mockFetch({
+      "GET /api/audit/options": options,
+      "PATCH /api/users/2": { body: { id: 2, username: "ops", role: "viewer", active: true, blocked: false } },
+    });
+    const { result } = renderHook(() => ({ options: useAuditOptions(), patch: usePatchUser() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.options.data).toBeDefined());
+    await result.current.patch.mutateAsync({ id: 2, body: { role: "viewer" } });
+    await waitFor(() => expect(calls.filter((c) => c.path === "/api/audit/options")).toHaveLength(2));
+  });
+
+  it("refetches the audit filter options after saving the sign-in policy", async () => {
+    const calls = mockFetch({
+      "GET /api/audit/options": options,
+      "PUT /api/settings/sign-in": {
+        body: {
+          max_failures: 8, block_minutes: 15,
+          limits: { max_failures: [3, 20], block_minutes: [1, 60] },
+          defaults: { max_failures: 5, block_minutes: 5 },
+        },
+      },
+    });
+    const { result } = renderHook(() => ({ options: useAuditOptions(), put: usePutSignInPolicy() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.options.data).toBeDefined());
+    await result.current.put.mutateAsync({ max_failures: 8, block_minutes: 15 });
     await waitFor(() => expect(calls.filter((c) => c.path === "/api/audit/options")).toHaveLength(2));
   });
 });
