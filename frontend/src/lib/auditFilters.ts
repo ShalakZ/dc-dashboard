@@ -12,20 +12,33 @@ export interface AuditUrlState { filters: AuditFilters; offset: number; size: nu
 
 const hasText = (q: string) => q.trim() !== "";
 
+// What the API accepts (backend/dcdash/api/audit.py); anything else in an address is dropped instead of becoming an error page.
+const USER_VALUE = /^(none|\d{1,9})$/;
+const ACTION_VALUE = /^\*?[a-z0-9_.]+\*?$/;
+const MAX_ACTION_LENGTH = 60;
+const MAX_ACTIONS = 20;
+/** The API refuses days outside these years (a browser date box accepts year 275760). */
+export const FIRST_DAY = "1970-01-01";
+export const LAST_DAY = "2100-12-31";
+
 /** The state held in the page's URL. Anything unusable falls back to its default instead of failing. */
 export function readUrl(params: URLSearchParams): AuditUrlState {
   const day = (key: string) => {
     const value = params.get(key) ?? "";
-    return isSiteDay(value) ? value : "";
+    return isSiteDay(value) && value >= FIRST_DAY && value <= LAST_DAY ? value : "";
   };
   const rawOffset = params.get("offset") ?? "";
   const offset = /^\d+$/.test(rawOffset) && Number.isSafeInteger(Number(rawOffset)) ? Number(rawOffset) : 0;
   const rawSize = Number(params.get("size"));
   const q = params.get("q") ?? "";
+  const user = params.get("user") ?? "";
   return {
     filters: {
-      user: params.get("user") ?? "",
-      actions: params.getAll("action").filter((action) => action !== ""),
+      user: USER_VALUE.test(user) ? user : "",
+      actions: params
+        .getAll("action")
+        .filter((action) => action.length <= MAX_ACTION_LENGTH && ACTION_VALUE.test(action))
+        .slice(0, MAX_ACTIONS),
       from: day("from"),
       to: day("to"),
       q: hasText(q) ? q : "",

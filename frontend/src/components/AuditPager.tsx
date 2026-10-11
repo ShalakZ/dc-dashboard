@@ -22,7 +22,8 @@ export function AuditPager({ total, offset, size, onOffset, onSize }: Props) {
   const pastEnd = offset >= total;
   const atStart = offset === 0;
   const atEnd = next === null && !pastEnd; // the rows shown already reach the last entry; past the end, Last is the way back
-  const shown = draft && draft.at === position ? draft.text : String(pageOf(offset, size));
+  // Past the end there is no page to name: an en dash, never "Page 4 of 2" (the box is empty then).
+  const shown = draft && draft.at === position ? draft.text : pastEnd ? "" : String(pageOf(offset, size));
 
   function applyDraft() {
     if (draft === null || draft.at !== position) return;
@@ -48,7 +49,7 @@ export function AuditPager({ total, offset, size, onOffset, onSize }: Props) {
         onBlur={applyDraft}
         onKeyDown={(e) => { if (e.key === "Enter") applyDraft(); }}
       />
-      <span className="muted">{`Page ${pageOf(offset, size)} of ${pages}`}</span>
+      <span className="muted">{`Page ${pastEnd ? "–" : pageOf(offset, size)} of ${pages}`}</span>
       <label htmlFor={sizeId}>Rows per page</label>
       <select id={sizeId} value={size} onChange={(e) => onSize(Number(e.target.value))}>
         {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}

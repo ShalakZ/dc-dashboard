@@ -131,6 +131,35 @@ const assetOfAfter = ({ sides }: Context): AuditLink | null => {
   return id === null ? null : assetLink(id);
 };
 
+/** " (wrong password)" from the stored reason ("wrong_password"), or "" when there is none. */
+function reasonSuffix(d: Detail): string {
+  const reason = text(d.reason);
+  return reason ? ` (${reason.replace(/_/g, " ")})` : "";
+}
+
+/** What a user.updated entry did to the account, as one sentence; null when it changed none of role, active and password. */
+function userUpdate({ d, sides }: Context): string | null {
+  if (!sides) return null;
+  // audit_change keeps only the fields that changed; a side that shows no difference is not claimed as a change.
+  const changedKey = (key: string) => has(sides.after, key) && stable(get(sides.before, key)) !== stable(get(sides.after, key));
+  const name = text(d.username) ?? (idOf(d.user_id) !== null ? `#${idOf(d.user_id)}` : null);
+  const parts: string[] = [];
+  if (changedKey("role")) {
+    const from = text(get(sides.before, "role"));
+    const to = formatValue(get(sides.after, "role"));
+    parts.push(`Changed the role of ${name ?? "a user"}${from ? ` from ${from}` : ""} to ${to}`);
+  }
+  if (changedKey("active")) {
+    const now = get(sides.after, "active");
+    if (now === false) parts.push(`Deactivated user${name ? ` ${name}` : ""}`);
+    else if (now === true && get(sides.before, "active") === false) parts.push(`Reactivated user${name ? ` ${name}` : ""}`);
+  }
+  if (changedKey("password") && ["changed", "set"].includes(String(get(sides.after, "password")))) {
+    parts.push(`Reset the password of ${name ?? "a user"}`);
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 const sourcesPage = page("/sources", "Open Sources");
 const scansPage = page("/scans", "Open Scans");
 const usersPage = page("/users", "Open Users");
@@ -185,8 +214,9 @@ const RULES: Record<string, Rule> = {
     link: assetOfDetail,
   },
 
-  "login.failed": { summary: () => "Failed sign-in attempt" },
-  "login.locked": { summary: () => "Sign-in blocked after repeated failures" },
+  // In these rows the User column is the account that was attacked (unknown when the name did not exist), not someone who acted.
+  "login.failed": { summary: ({ d }) => `Failed sign-in to this account${reasonSuffix(d)}` },
+  "login.locked": { summary: ({ d }) => `Sign-in blocked after repeated failures${reasonSuffix(d)}` },
   "login.succeeded": { summary: () => "Signed in" },
 
   "mapping.created": {
@@ -279,7 +309,10 @@ const RULES: Record<string, Rule> = {
     },
     link: usersPage,
   },
-  "user.updated": changed("user", "user_id", usersPage),
+  "user.updated": {
+    summary: (c) => userUpdate(c) ?? withFields(`Changed ${thing("user", c.d, "user_id")}`, c.fields),
+    link: usersPage,
+  },
 };
 
 function factLabel(action: string, key: string): string {

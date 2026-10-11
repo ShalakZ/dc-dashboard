@@ -72,6 +72,41 @@ describe("readUrl", () => {
     expect(filters.to).toBe("");
   });
 
+  it.each([["user=bob"], ["user=1234567890"], ["user=-1"], ["user=1.5"], ["user=None"], ["user=%201"]])(
+    "%s is not a user the API accepts and becomes unset",
+    (query) => {
+      expect(readUrl(new URLSearchParams(query)).filters.user).toBe("");
+    },
+  );
+  it.each([["none"], ["0"], ["12"], ["123456789"]])("keeps user=%s", (user) => {
+    expect(readUrl(new URLSearchParams(`user=${user}`)).filters.user).toBe(user);
+  });
+
+  it.each([
+    ["action=Bad%20Action"], ["action=a*b"], ["action=*"], ["action=**"], ["action=UPPER"], ["action=a-b"], ["action=%2A%2Aa"],
+    [`action=${"a".repeat(61)}`],
+  ])("%s is dropped", (query) => {
+    expect(readUrl(new URLSearchParams(query)).filters.actions).toEqual([]);
+  });
+  it("keeps exact, prefix and suffix actions and drops only the bad ones, in order", () => {
+    const { filters } = readUrl(new URLSearchParams("action=login.*&action=Bad&action=*.deleted&action=a*b&action=source.test_all&action=*x*"));
+    expect(filters.actions).toEqual(["login.*", "*.deleted", "source.test_all", "*x*"]);
+    expect(readUrl(new URLSearchParams(`action=${"a".repeat(60)}`)).filters.actions).toEqual(["a".repeat(60)]);
+  });
+  it("keeps at most 20 actions", () => {
+    const many = Array.from({ length: 25 }, (_, i) => `action=a.b${i}`).join("&");
+    expect(readUrl(new URLSearchParams(many)).filters.actions).toEqual(Array.from({ length: 20 }, (_, i) => `a.b${i}`));
+  });
+
+  it.each([["from=1969-12-31"], ["to=2101-01-01"], ["from=0001-01-01"], ["to=9999-12-31"]])("%s is outside 1970..2100 and becomes unset", (query) => {
+    const { filters } = readUrl(new URLSearchParams(query));
+    expect([filters.from, filters.to]).toEqual(["", ""]);
+  });
+  it("keeps the edges of 1970..2100", () => {
+    const { filters } = readUrl(new URLSearchParams("from=1970-01-01&to=2100-12-31"));
+    expect([filters.from, filters.to]).toEqual(["1970-01-01", "2100-12-31"]);
+  });
+
   it("drops empty user, action and q values", () => {
     const { filters } = readUrl(new URLSearchParams("user=&action=&action=login.*&action=&q="));
     expect(filters).toEqual({ ...NO_FILTERS, actions: ["login.*"] });

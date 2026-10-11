@@ -20,8 +20,8 @@ export function AuditEntryDetail({ entry, view }: { entry: AuditEntry; view: "fr
         <table>
           <thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead>
           <tbody>
-            {changes.map((change) => (
-              <tr key={change.field}>
+            {changes.map((change, i) => (
+              <tr key={`${change.field}-${i}`}>
                 <td>{change.field}</td>
                 <td>{change.before}</td>
                 <td>{change.after}</td>

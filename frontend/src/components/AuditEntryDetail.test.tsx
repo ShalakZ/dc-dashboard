@@ -21,6 +21,18 @@ describe("AuditEntryDetail", () => {
     expect(screen.getByText("Tariff id")).toBeInTheDocument(); // the subject fields
   });
 
+  it("lists two changed fields that read the same once humanised, with no repeated-key warning", () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    show(entry("foo.bar", { before: { a_b: 1, "a.b": 2 }, after: { a_b: 3, "a.b": 4 } }));
+    const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
+    expect(rows.map((row) => Array.from(row.querySelectorAll("td")).map((c) => c.textContent))).toEqual([
+      ["A b", "1", "3"],
+      ["A b", "2", "4"],
+    ]);
+    expect(warn.mock.calls.flat().join(" ")).not.toContain("same key");
+    warn.mockRestore();
+  });
+
   it("counts the unchanged values instead of listing them", () => {
     show(entry("storage.changed", {
       before: { raw_retention_days: 30, compress_after_days: 7 }, after: { raw_retention_days: 60, compress_after_days: 7 },

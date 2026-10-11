@@ -85,6 +85,20 @@ describe("AuditFilterBar selects and dates", () => {
     expect(last(onChange)).toEqual({ ...NO_FILTERS, from: "2026-10-01", to: "2026-10-05" });
   });
 
+  it("bounds the date boxes to 1970..2100 and keeps From and To in order", () => {
+    setup();
+    expect(screen.getByLabelText("From")).toHaveAttribute("min", "1970-01-01");
+    expect(screen.getByLabelText("From")).toHaveAttribute("max", "2100-12-31");
+    expect(screen.getByLabelText("To")).toHaveAttribute("min", "1970-01-01");
+    expect(screen.getByLabelText("To")).toHaveAttribute("max", "2100-12-31");
+    expect(screen.getByLabelText("Go to date")).toHaveAttribute("min", "1970-01-01");
+    expect(screen.getByLabelText("Go to date")).toHaveAttribute("max", "2100-12-31");
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-10-01" } });
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2026-10-05" } });
+    expect(screen.getByLabelText("From")).toHaveAttribute("max", "2026-10-05"); // From cannot pass To
+    expect(screen.getByLabelText("To")).toHaveAttribute("min", "2026-10-01"); // To cannot precede From
+  });
+
   it("shows an action from the address that the list does not hold, so the select is never blank", () => {
     setup({ ...NO_FILTERS, actions: ["old.action"] });
     expect(screen.getByRole("combobox", { name: "Action" })).toHaveValue("old.action");
@@ -183,9 +197,9 @@ describe("AuditFilterBar Clear filters, Go to date, Export CSV and messages", ()
   });
 
   it("shows an error as an alert and a notice as plain status text", () => {
-    setup(NO_FILTERS, { error: "1234 entries match; narrow the date range", notice: "No entries on 2026-10-05; showing the nearest older ones." });
+    setup(NO_FILTERS, { error: "1234 entries match; narrow the date range", notice: "No entries on 2026-10-05; showing the nearest ones." });
     expect(screen.getByRole("alert")).toHaveTextContent("1234 entries match; narrow the date range");
-    expect(screen.getByRole("status")).toHaveTextContent("No entries on 2026-10-05; showing the nearest older ones.");
+    expect(screen.getByRole("status")).toHaveTextContent("No entries on 2026-10-05; showing the nearest ones.");
   });
 
   it("shows neither an alert nor a status when there is nothing to say", () => {

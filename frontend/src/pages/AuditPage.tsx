@@ -12,13 +12,19 @@ import { formatSiteDateTime, siteDay } from "../lib/siteTime";
 
 const messageOf = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback);
 
+/** The time of an entry, linked to its page; the link's name says which entry it opens. */
+function TimeLink({ id, ts, timezone }: { id: number; ts: string; timezone: string }) {
+  const time = formatSiteDateTime(ts, timezone);
+  return <Link to={`/audit/${id}`} aria-label={`Entry #${id}, ${time}`}>{time}</Link>;
+}
+
 /** One friendly row: the sentence and the link to the thing, with the full account one click away (drawn only when opened). */
 function FriendlyRow({ entry, timezone }: { entry: AuditEntry; timezone: string }) {
   const [open, setOpen] = useState(false);
   const { summary, link } = describeAudit(entry);
   return (
     <tr>
-      <td><Link to={`/audit/${entry.id}`}>{formatSiteDateTime(entry.ts, timezone)}</Link></td>
+      <td><TimeLink id={entry.id} ts={entry.ts} timezone={timezone} /></td>
       <td>{entry.username ?? "—"}</td>
       <td>
         <div>{summary}</div>
@@ -53,6 +59,12 @@ export function AuditPage() {
   // "Go" is answered later; the answer is used only if the filters are still the ones it was asked for.
   const latest = useRef(state);
   useEffect(() => { latest.current = state; });
+  // A late answer must not rewrite the address of the page the user has moved to since.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   function go(next: AuditUrlState, replace = false) {
     setParams(writeUrl(next), { replace });
@@ -72,12 +84,12 @@ export function AuditPage() {
     setJumping(true);
     try {
       const answer = await auditPosition(filters, date);
-      if (apiQuery(latest.current.filters) !== asked) return;
+      if (!mounted.current || apiQuery(latest.current.filters) !== asked) return;
       const next = { ...latest.current, offset: answer.offset };
       go(next);
-      if (!answer.on_day) setHint({ text: `No entries on ${date}; showing the nearest older ones.`, at: writeUrl(next).toString() });
+      if (!answer.on_day) setHint({ text: `No entries on ${date}; showing the nearest ones.`, at: writeUrl(next).toString() });
     } catch (e) {
-      if (apiQuery(latest.current.filters) === asked) setProblem(messageOf(e, "could not find that date"));
+      if (mounted.current && apiQuery(latest.current.filters) === asked) setProblem(messageOf(e, "could not find that date"));
     } finally {
       setJumping(false);
     }
@@ -96,6 +108,8 @@ export function AuditPage() {
   }
 
   const rows = ready && data ? data.items : [];
+  // While the next query loads the old rows stay (data is a placeholder); its total says nothing about the new query.
+  const fresh = ready && !isPlaceholderData ? data : undefined;
   const raw = view === "raw";
 
   return (
@@ -111,19 +125,14 @@ export function AuditPage() {
         onExport={exportCsv}
         exporting={exporting}
         error={problem}
-        notice={hint && hint.at === current ? hint.text : null}
+        notice={hint && hint.at === current && data && data.total > 0 ? hint.text : null}
       />
       {(isLoading || site.isPending) && <p className="muted">loading…</p>}
       {error && <p className="error" role="alert">{error.message}</p>}
-      {ready && data && data.total === 0 && (
+      {fresh && fresh.total === 0 && (
         <p className="muted">{isFiltered(filters) ? "No entries match these filters." : "No audit entries yet."}</p>
       )}
-      {ready && data && data.total > 0 && rows.length === 0 && (
-        <div className="row">
-          <span className="muted">This page is past the end of the log.</span>
-          <button type="button" onClick={() => go({ ...state, offset: 0 })}>First</button>
-        </div>
-      )}
+      {fresh && fresh.total > 0 && rows.length === 0 && <p className="muted">This page is past the end of the log.</p>}
       {rows.length > 0 && (
         <>
           <div className="row" role="group" aria-label="View">
@@ -142,7 +151,7 @@ export function AuditPage() {
               {rows.map((e) =>
                 raw ? (
                   <tr key={e.id}>
-                    <td><Link to={`/audit/${e.id}`}>{formatSiteDateTime(e.ts, timezone)}</Link></td>
+                    <td><TimeLink id={e.id} ts={e.ts} timezone={timezone} /></td>
                     <td>{e.username ?? "—"}</td>
                     <td>{e.action}</td>
                     <td><code>{JSON.stringify(e.detail)}</code></td>

@@ -46,7 +46,7 @@ def audit_filter(
     action: Annotated[list[ACTION], Query(max_length=20)] = [],
     date_from: Annotated[date | None, Query(alias="from")] = None,
     date_to: Annotated[date | None, Query(alias="to")] = None,
-    q: Annotated[str | None, Query(max_length=200)] = None,
+    q: Annotated[str | None, Query(max_length=200, pattern=r"^[^\x00]*$")] = None,  # Postgres text cannot hold a NUL
 ) -> AuditFilter:
     if date_from is not None:
         _check_day(date_from)
@@ -110,7 +110,7 @@ def _item(entry: AuditLog, username: str | None) -> dict[str, Any]:
 @router.get("/audit")
 async def list_audit(
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=2_147_483_647),  # the database takes a 32-bit offset
     f: AuditFilter = Depends(audit_filter),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:

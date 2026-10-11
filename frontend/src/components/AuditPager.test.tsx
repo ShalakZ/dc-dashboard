@@ -99,6 +99,9 @@ describe("AuditPager", () => {
   it("past the end of the log it keeps the controls, does not claim a range, and offers the way back", async () => {
     const { onOffset } = pager({ offset: 200 });
     expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
+    expect(screen.getByText("Page – of 3")).toBeInTheDocument(); // never "Page 5 of 3"
+    expect(screen.queryByText(/Page 5/)).not.toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Page" })).toHaveValue(null);
     expect(button("Next")).toBeDisabled();
     await userEvent.click(button("First"));
     expect(onOffset).toHaveBeenLastCalledWith(0);

@@ -77,9 +77,11 @@ describe("AuditPage", () => {
 
   it("shows times in the site timezone, not the browser's, and links each time to its entry", async () => {
     setup("/audit");
-    const time = await screen.findAllByRole("link", { name: "2026-10-07 13:00:00" }); // 10:00Z in Asia/Qatar (UTC+3)
-    expect(time[0]).toHaveAttribute("href", "/audit/51");
-    expect(time[1]).toHaveAttribute("href", "/audit/50");
+    // 10:00Z in Asia/Qatar (UTC+3); the link's name says which entry it opens, the visible text stays the time
+    const first = await screen.findByRole("link", { name: "Entry #51, 2026-10-07 13:00:00" });
+    expect(first).toHaveAttribute("href", "/audit/51");
+    expect(first).toHaveTextContent("2026-10-07 13:00:00");
+    expect(screen.getByRole("link", { name: "Entry #50, 2026-10-07 13:00:00" })).toHaveAttribute("href", "/audit/50");
     expect(screen.getByRole("columnheader", { name: "Time (Asia/Qatar)" })).toBeInTheDocument();
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Time (Asia/Qatar)", "User", "What happened"]);
   });
@@ -116,6 +118,13 @@ describe("AuditPage", () => {
     expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("names the time link of a raw row by its entry too", async () => {
+    setup("/audit?view=raw");
+    const link = await screen.findByRole("link", { name: "Entry #51, 2026-10-07 13:00:00" });
+    expect(link).toHaveAttribute("href", "/audit/51");
+    expect(link).toHaveTextContent("2026-10-07 13:00:00");
+  });
+
   it("says so when there is nothing yet", async () => {
     setup("/audit", list(0, []));
     expect(await screen.findByText("No audit entries yet.")).toBeInTheDocument();
@@ -133,13 +142,38 @@ describe("AuditPage", () => {
     expect(urls.at(-1)).not.toContain("action=");
   });
 
-  it("an offset past the end says so, with a First button, and never claims the log is empty", async () => {
+  it("does not use the old query's total for the empty-state messages while the next query loads", async () => {
+    const { search } = setup("/audit?action=a.b", (req) => (req.url.includes("action=") ? list(0, []) : twoRows));
+    expect(await screen.findByText("No entries match these filters.")).toBeInTheDocument();
+    const release = hold((url) => url.startsWith("/api/audit?") && !url.includes("action="));
+    await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    await waitFor(() => expect(search()).toBe(""));
+    // the unfiltered answer is still on its way: the old "0 matches" must not turn into "the log is empty"
+    expect(screen.queryByText("No audit entries yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No entries match these filters.")).not.toBeInTheDocument();
+    await act(async () => { release(); });
+    expect(await screen.findByText("Scan #51 finished (done)")).toBeInTheDocument();
+    expect(screen.queryByText("No audit entries yet.")).not.toBeInTheDocument();
+  });
+
+  it("does not flash the past-the-end message for an old page while the next one loads", async () => {
+    setup("/audit?offset=100", (req) => (req.url.includes("offset=100") ? list(51, [], 100) : twoRows));
+    expect(await screen.findByText("This page is past the end of the log.")).toBeInTheDocument();
+    const release = hold((url) => url.startsWith("/api/audit?") && url.includes("offset=0"));
+    await userEvent.click(screen.getAllByRole("button", { name: "First" })[0]);
+    expect(screen.queryByText("This page is past the end of the log.")).not.toBeInTheDocument();
+    await act(async () => { release(); });
+    expect(await screen.findByText("Scan #51 finished (done)")).toBeInTheDocument();
+  });
+
+  it("an offset past the end says so, goes back with the pager's First, and never claims the log is empty", async () => {
     const { urls, search } = setup("/audit?offset=100", (req) => (req.url.includes("offset=100") ? list(51, [], 100) : twoRows));
     expect(await screen.findByText("This page is past the end of the log.")).toBeInTheDocument();
     expect(screen.queryByText("No audit entries yet.")).not.toBeInTheDocument();
     expect(screen.queryByText(/^Showing /)).not.toBeInTheDocument();
-    const message = screen.getByText("This page is past the end of the log.").parentElement!;
-    await userEvent.click(within(message).getByRole("button", { name: "First" }));
+    expect(screen.getByText("Page – of 2")).toBeInTheDocument(); // never "Page 3 of 2"
+    expect(screen.getAllByRole("button", { name: "First" })).toHaveLength(1); // the pager's own; the message has none
+    await userEvent.click(screen.getByRole("button", { name: "First" }));
     expect(await screen.findByText("Scan #51 finished (done)")).toBeInTheDocument();
     expect(search()).toBe("");
     expect(urls.at(-1)).toContain("offset=0");
@@ -231,11 +265,33 @@ describe("AuditPage", () => {
       const { search } = setup("/audit", twoRows, position({ body: { offset: 73, total: 120, on_day: false } }));
       expect(await screen.findByText("Scan #51 finished (done)")).toBeInTheDocument();
       await jump();
-      expect(await screen.findByText("No entries on 2026-10-05; showing the nearest older ones.")).toBeInTheDocument();
+      expect(await screen.findByText("No entries on 2026-10-05; showing the nearest ones.")).toBeInTheDocument();
       expect(search()).toBe("?offset=73");
       await userEvent.click(screen.getByRole("button", { name: "Previous" }));
       await waitFor(() => expect(search()).toBe("?offset=23"));
       expect(screen.queryByText(/^No entries on /)).not.toBeInTheDocument();
+    });
+
+    it("does not show the nothing-on-that-day hint when the log has no entries at all", async () => {
+      setup("/audit", list(0, []), position({ body: { offset: 0, total: 0, on_day: false } }));
+      expect(await screen.findByText("No audit entries yet.")).toBeInTheDocument();
+      await jump();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Go" })).toBeEnabled());
+      expect(screen.queryByText(/^No entries on /)).not.toBeInTheDocument();
+    });
+
+    it("does not rewrite the address of the page the user has moved to before the answer came", async () => {
+      const { router } = setup("/audit", twoRows, position({ body: { offset: 73, total: 120, on_day: false } }));
+      expect(await screen.findByText("Scan #51 finished (done)")).toBeInTheDocument();
+      const release = hold((url) => url.startsWith("/api/audit/position"));
+      await jump();
+      await act(async () => { await router.navigate("/assets"); });
+      expect(await screen.findByText("assets page")).toBeInTheDocument();
+      await act(async () => {
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 50)); // let the late answer land
+      });
+      expect(router.state.location.pathname + router.state.location.search).toBe("/assets");
     });
 
     it("drops an answer that arrives after the filters changed", async () => {

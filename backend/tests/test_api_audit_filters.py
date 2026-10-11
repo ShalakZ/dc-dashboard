@@ -301,9 +301,19 @@ async def test_every_audit_read_is_admin_only(client, db, role, status, path):
     [
         "user=abc", "user=", "user=1234567890", "action=Bad%20Action", "action=a*b", "action=", "action=*",
         pytest.param("q=" + "x" * 201, id="q-too-long"),
+        pytest.param("q=%00", id="q-nul"),
+        pytest.param("q=a%00b", id="q-nul-inside"),
         pytest.param("action=a&" * 21 + "action=b", id="22-actions"),
+        pytest.param("offset=99999999999999999999", id="offset-overflow"),
+        pytest.param("offset=2147483648", id="offset-just-over"),
     ],
 )
 async def test_bad_filter_values_are_422(client, db, query):
     await login_as(client, db, "admin")
     assert (await client.get(f"/api/audit?{query}")).status_code == 422
+
+
+@pytest.mark.parametrize("path", ["/api/audit/position?date=2026-10-05&q=%00", "/api/audit.csv?q=%00"])
+async def test_a_nul_in_the_search_text_is_422_on_every_filtered_route(client, db, path):
+    await login_as(client, db, "admin")
+    assert (await client.get(path)).status_code == 422

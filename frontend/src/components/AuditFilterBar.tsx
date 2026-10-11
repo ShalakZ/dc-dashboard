@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { AuditOptions } from "../api/types";
-import { isFiltered, NO_FILTERS, QUICK_FILTERS, quickActive, type AuditFilters } from "../lib/auditFilters";
+import { FIRST_DAY, isFiltered, LAST_DAY, NO_FILTERS, QUICK_FILTERS, quickActive, type AuditFilters } from "../lib/auditFilters";
 
 const SEARCH_PAUSE_MS = 400;
 // The value of the Action select's disabled option, shown while the filter is a pattern or several actions.
@@ -112,9 +112,23 @@ export function AuditFilterBar({ filters, onChange, today, options, onJump, jump
           {actions.map((action) => <option key={action} value={action}>{action}</option>)}
         </select>
         <label htmlFor={ids.from}>From</label>
-        <input id={ids.from} type="date" value={filters.from} onChange={(e) => onChange({ ...filters, from: e.target.value })} />
+        <input
+          id={ids.from}
+          type="date"
+          min={FIRST_DAY}
+          max={filters.to || LAST_DAY}
+          value={filters.from}
+          onChange={(e) => onChange({ ...filters, from: e.target.value })}
+        />
         <label htmlFor={ids.to}>To</label>
-        <input id={ids.to} type="date" value={filters.to} onChange={(e) => onChange({ ...filters, to: e.target.value })} />
+        <input
+          id={ids.to}
+          type="date"
+          min={filters.from || FIRST_DAY}
+          max={LAST_DAY}
+          value={filters.to}
+          onChange={(e) => onChange({ ...filters, to: e.target.value })}
+        />
         <label htmlFor={ids.search}>Search</label>
         <input
           id={ids.search}
@@ -135,7 +149,7 @@ export function AuditFilterBar({ filters, onChange, today, options, onJump, jump
       </div>
       <div className="row">
         <label htmlFor={ids.jump}>Go to date</label>
-        <input id={ids.jump} type="date" value={jumpDate} onChange={(e) => setJumpDate(e.target.value)} />
+        <input id={ids.jump} type="date" min={FIRST_DAY} max={LAST_DAY} value={jumpDate} onChange={(e) => setJumpDate(e.target.value)} />
         <button type="button" onClick={() => onJump(jumpDate)} disabled={jumpDate === "" || jumping}>Go</button>
         <button type="button" onClick={onExport} disabled={exporting}>Export CSV</button>
       </div>

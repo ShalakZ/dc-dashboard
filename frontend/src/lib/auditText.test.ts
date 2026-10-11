@@ -143,12 +143,67 @@ describe("describeAudit: updates with before and after", () => {
     const view = describeAudit(
       entry("user.updated", { user_id: 9, username: "bob", before: { role: "viewer" }, after: { role: "operator" } }),
     );
-    expect(view.summary).toBe("Changed user bob: role");
+    expect(view.summary).toBe("Changed the role of bob from viewer to operator");
     expect(view.facts).toEqual([
       { label: "Account id", value: "9" },
       { label: "Username", value: "bob" },
     ]);
     expect(view.link).toEqual({ to: "/users", label: "Open Users" });
+  });
+});
+
+describe("describeAudit: user.updated reads as what was done to the account", () => {
+  const update = (before: Record<string, unknown>, after: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    describeAudit(entry("user.updated", { user_id: 9, username: "bob", before, after, ...extra }));
+
+  it("says a deactivation and a reactivation", () => {
+    expect(update({ active: true }, { active: false }).summary).toBe("Deactivated user bob");
+    expect(update({ active: false }, { active: true }).summary).toBe("Reactivated user bob");
+    expect(update({}, { active: false }).summary).toBe("Deactivated user bob");
+  });
+
+  it("says a role change with both roles", () => {
+    expect(update({ role: "viewer" }, { role: "admin" }).summary).toBe("Changed the role of bob from viewer to admin");
+    expect(update({}, { role: "admin" }).summary).toBe("Changed the role of bob to admin");
+  });
+
+  it("says a password reset, whether the stored word is changed or set", () => {
+    expect(update({ password: "set" }, { password: "changed" }).summary).toBe("Reset the password of bob");
+    expect(update({}, { password: "set" }).summary).toBe("Reset the password of bob");
+  });
+
+  it("joins several in the order role, active, password", () => {
+    expect(
+      update({ role: "operator", active: true, password: "set" }, { role: "viewer", active: false, password: "changed" }).summary,
+    ).toBe("Changed the role of bob from operator to viewer; Deactivated user bob; Reset the password of bob");
+    expect(update({ active: false, password: "set" }, { active: true, password: "changed" }).summary).toBe(
+      "Reactivated user bob; Reset the password of bob",
+    );
+  });
+
+  it("names the account by id when the stored name is missing, and falls back to a generic sentence", () => {
+    expect(describeAudit(entry("user.updated", { user_id: 9, before: { active: true }, after: { active: false } })).summary).toBe(
+      "Deactivated user #9",
+    );
+    expect(describeAudit(entry("user.updated", { before: { role: "viewer" }, after: { role: "admin" } })).summary).toBe(
+      "Changed the role of a user from viewer to admin",
+    );
+  });
+
+  it("keeps the generic sentence when none of the three applies, and the change table in every case", () => {
+    const other = update({ nickname: "a" }, { nickname: "b" });
+    expect(other.summary).toBe("Changed user bob: nickname");
+    expect(update({ active: true }, { active: true, role: "x" }).summary).toBe("Changed the role of bob to x");
+    expect(update({ role: "viewer", password: "set" }, { role: "viewer", password: "set" }).summary).toBe("Changed user bob");
+    const full = update({ role: "viewer", active: true }, { role: "admin", active: false });
+    expect(full.changes).toEqual([
+      { field: "Role", before: "viewer", after: "admin" },
+      { field: "Active", before: "yes", after: "no" },
+    ]);
+  });
+
+  it("does not claim a change that the stored sides do not show", () => {
+    expect(update({ active: false, role: "viewer" }, { active: false, role: "viewer" }).summary).toBe("Changed user bob");
   });
 });
 
@@ -210,6 +265,34 @@ describe("describeAudit: creations, deletions and events", () => {
       expect(view.summary).not.toBe(humanise(action));
     }
     expect(describeAudit(entry("login.succeeded", { client: "10.0.0.5" })).facts).toEqual([{ label: "Client", value: "10.0.0.5" }]);
+  });
+
+  it("says a failed sign-in was made to an account, with the stored reason", () => {
+    // For these rows the User column is the account that was attacked, not someone who did something.
+    const failed = (reason?: string) =>
+      describeAudit(entry("login.failed", { via: "login", client: "10.0.0.5", ...(reason ? { reason } : {}) }, { actor_id: 7, username: "bob" }));
+    expect(failed("wrong_password").summary).toBe("Failed sign-in to this account (wrong password)");
+    expect(failed("account_inactive").summary).toBe("Failed sign-in to this account (account inactive)");
+    expect(failed("unknown_account").summary).toBe("Failed sign-in to this account (unknown account)");
+    expect(failed().summary).toBe("Failed sign-in to this account");
+    expect(failed("some_new_reason").summary).toBe("Failed sign-in to this account (some new reason)");
+    expect(describeAudit(entry("login.failed", { via: "login", reason: "" })).summary).toBe("Failed sign-in to this account");
+    expect(describeAudit(entry("login.failed", { via: "login", reason: 5 })).summary).toBe("Failed sign-in to this account");
+    expect(failed("wrong_password").link).toBeNull();
+    expect(failed("wrong_password").facts).toContainEqual({ label: "Reason", value: "wrong_password" });
+  });
+
+  it("keeps the lockout wording and adds the reason when there is one", () => {
+    const locked = (detail: Record<string, unknown>) => describeAudit(entry("login.locked", detail, { actor_id: 7, username: "bob" })).summary;
+    expect(locked({ via: "login", reason: "wrong_password" })).toBe("Sign-in blocked after repeated failures (wrong password)");
+    expect(locked({ via: "login", reason: "unknown_account" })).toBe("Sign-in blocked after repeated failures (unknown account)");
+    expect(locked({ via: "login" })).toBe("Sign-in blocked after repeated failures");
+  });
+
+  it("leaves the failed password change as it was", () => {
+    expect(describeAudit(entry("password.change_failed", { via: "password_change", client: "10.0.0.5" }, { actor_id: 7, username: "bob" })).summary).toBe(
+      "Failed password change (wrong current password)",
+    );
   });
 
   it("describes the source jobs and the user and scope families", () => {

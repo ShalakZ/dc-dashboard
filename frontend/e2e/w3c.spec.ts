@@ -143,7 +143,7 @@ test("W3c: the audit screen filters, links, exports and pages, and is for admins
 
     await filterBy("Go to date").fill("2001-01-01");
     await page.getByRole("button", { name: "Go", exact: true }).click();
-    await expect(page.getByText("No entries on 2001-01-01; showing the nearest older ones.")).toBeVisible();
+    await expect(page.getByText("No entries on 2001-01-01; showing the nearest ones.")).toBeVisible();
   });
 
   await test.step("a page size of 25 pages the log, and the controls move through it", async () => {
