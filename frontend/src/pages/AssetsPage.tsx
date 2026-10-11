@@ -53,26 +53,40 @@ export function AssetsPage() {
 
   if (isLoading) return <p className="muted">loading…</p>;
   if (error) return <p className="error" role="alert">{error.message}</p>;
+  const admin = hasRole("admin");
+  const parent = selected && assets.find((a) => a.id === selected.parent_id);
   return (
     <>
-      <h1>Assets</h1>
-      {assets.length === 0 && <p className="muted">No assets yet.</p>}
-      <AssetTree
-        nodes={tree}
-        selectedId={selectedId}
-        onSelect={(id) => setParams({ selected: String(id) })}
-        onAddChild={hasRole("admin") ? openAdd : undefined}
-        disabled={locked}
-      />
-      {actionError && <p className="error" role="alert">{actionError}</p>}
-      {selected && <p>Selected: <Link to={`/assets/${selected.id}`}>{selected.name}</Link> (open page)</p>}
-      {hasRole("admin") && (
-        <div className="row">
-          <button onClick={() => openAdd(selectedId)} disabled={locked}>Add asset</button>
-          {selected && <button onClick={openEdit} disabled={locked}>Edit</button>}
-          {selected && <button onClick={remove} disabled={locked}>Delete</button>}
+      <div className="assets-layout">
+        <AssetTree
+          nodes={tree}
+          selectedId={selectedId}
+          onSelect={(id) => setParams({ selected: String(id) })}
+          onAddChild={admin ? openAdd : undefined}
+          onAddTop={admin ? () => openAdd(null) : undefined}
+          disabled={locked}
+        />
+        <div className="assets-detail">
+          <header className="page-head"><h1>Assets</h1></header>
+          {assets.length === 0 && <p className="muted">No assets yet.</p>}
+          {actionError && <p className="error" role="alert">{actionError}</p>}
+          {selected && (
+            <dl className="detail-meta">
+              <div><dt>Kind</dt><dd>{selected.kind}</dd></div>
+              <div><dt>Parent</dt><dd>{parent ? parent.name : "None"}</dd></div>
+              <div><dt>Children</dt><dd>{assets.filter((a) => a.parent_id === selected.id).length}</dd></div>
+            </dl>
+          )}
+          {selected && <p>Selected: <Link to={`/assets/${selected.id}`}>{selected.name}</Link> (open page)</p>}
+          {admin && (
+            <div className="row">
+              <button onClick={() => openAdd(selectedId)} disabled={locked}>Add asset</button>
+              {selected && <button onClick={openEdit} disabled={locked}>Edit</button>}
+              {selected && <button onClick={remove} disabled={locked}>Delete</button>}
+            </div>
+          )}
         </div>
-      )}
+      </div>
       {confirming && (
         <ConfirmDeleteDialog
           title={`Delete "${confirming.asset.name}"?`}

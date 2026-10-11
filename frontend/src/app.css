@@ -163,10 +163,48 @@
   .tiles > .tile { min-width: 0; margin: 0; }
   .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 12px; margin: 8px 0; max-width: 480px; display: grid; gap: 8px; }
 
-  /* Asset tree (replaced by the tree column in B2b) */
-  ul.tree, ul.tree ul { list-style: none; padding-left: 20px; margin: 0; }
-  ul.tree li { margin: 2px 0; }
-  .selected { font-weight: bold; }
+  /* Asset tree column (Assets list page, option B). main is flush on this page (main:has(.assets-layout) above), so the column
+     meets the sidebar; it is sticky and one window tall, and the detail area beside it restores the page gutter. */
+  .assets-layout { display: flex; align-items: flex-start; min-height: 100vh; }
+  .assets-detail { flex: 1; min-width: 0; padding: 0 var(--gutter) 48px; }
+  .tree-col { --w: var(--tree-w); position: sticky; top: 0; align-self: flex-start; width: var(--w); height: 100vh; flex: none; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border-strong); background: var(--bg); }
+  .shell.ready .tree-col { transition: width var(--motion); } /* from the second frame on, so a remembered state does not animate in */
+  .tree-col[data-state="minimized"] { --w: var(--tree-w-closed); background: var(--surface); }
+  .tree-head { display: flex; align-items: center; gap: 4px; flex: none; height: 52px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--border); }
+  .tree-col[data-state="minimized"] .tree-head { justify-content: center; padding: 0; border-bottom: 0; }
+  .tree-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; font-size: var(--fs-md); font-weight: 600; white-space: nowrap; } /* a p, never a heading: the page's h1 is "Assets" */
+  .tree-toggle svg.i { transition: transform var(--motion); }
+  .tree-col[data-state="minimized"] .tree-toggle svg.i { transform: rotate(180deg); }
+  .tree-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .tree-body[hidden] { display: none; }
+  .tree-filter { position: relative; flex: none; padding: 10px 12px 8px; }
+  .tree-filter input[type="search"] { width: 100%; min-height: 34px; padding: 0 10px 0 32px; font-size: var(--fs-sm); }
+  .tree-filter svg.i { position: absolute; left: 22px; top: 19px; width: 16px; height: 16px; color: var(--text-2); pointer-events: none; }
+  .tree-scroll { flex: 1; min-height: 0; overflow: auto; padding: 2px 0 8px; }
+  .tree-empty { margin: 0; padding: 8px 16px; font-size: var(--fs-sm); }
+  ul.tree, ul.tree ul { list-style: none; margin: 0; padding: 0; }
+  ul.tree ul { margin-left: 21px; border-left: 1px solid var(--border); }
+  ul.tree ul[hidden] { display: none; }
+  .node { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 6px; }
+  ul.tree ul > li > .node { padding-left: 8px; }
+  .node:hover { background: var(--surface); }
+  .node a { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .node a:hover { text-decoration: none; }
+  .node .kind { flex: none; max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--text-2); }
+  .twisty { flex: none; display: grid; place-items: center; width: 20px; height: 20px; min-height: 0; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
+  .twisty:hover:not(:disabled) { background: var(--border); color: var(--text); }
+  .twisty svg.i { width: 16px; height: 16px; transition: transform var(--motion); }
+  .twisty[aria-expanded="false"] svg.i { transform: rotate(-90deg); }
+  .twisty-sp { flex: none; width: 20px; }
+  .node .add { flex: none; display: grid; place-items: center; width: 24px; height: 24px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
+  .node .add:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg); color: var(--accent); }
+  .node .add svg.i { width: 14px; height: 14px; }
+  .node.is-selected { background: var(--accent-tint); box-shadow: inset 3px 0 0 var(--accent); }
+  .node.is-selected a { color: var(--accent-ink); font-weight: 600; }
+  .detail-meta { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 0 0 18px; font-size: var(--fs-sm); }
+  .detail-meta div { display: flex; gap: 8px; }
+  .detail-meta dt { color: var(--text-2); }
+  .detail-meta dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
 
   /* Page header: crumbs, the one h1, a sub line and the actions on the right */
   .page-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; align-items: end; margin: 0 0 22px; padding: 22px 0 18px; border-bottom: 1px solid var(--border); }
@@ -290,6 +328,7 @@
      var() ambiguous for the contrast test). */
   @media (max-width: 1179.98px) {
     #root { --gutter: 22px; --tree-w: 248px; }
+    .node .kind { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; }
