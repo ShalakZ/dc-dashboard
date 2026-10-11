@@ -254,3 +254,21 @@ The plan names section K for these; K already holds Part A, so they are here.
 - **Output outside `logging` bypasses the credential scrub:** an uncaught top-level traceback (`sys.excepthook`), `warnings` written to stderr and the `alembic upgrade head` output that runs before uvicorn. None normally quotes a source URL. Fix if it ever matters: a `sys.excepthook` and `warnings.showwarning` wrapper that scrubs.
 - **The log scrub is positional:** it calls `scrub_url_credentials` without `known`, so a password that contains whitespace or is quoted on its own is not caught (a documented limit of the function). Source secrets are stored encrypted, so a statement parameter shows ciphertext.
 - **`account_vanished_is_401` is exported and general:** a future caller wrapping a write to an asset, source or mapping would turn a real foreign-key error into 401. The docstring now says when to use it; narrow it (match the constraint name) if a second caller appears.
+
+## Q. W6 UI overhaul leftovers (final review and fix wave, 2026-10-11; none of these blocks)
+
+- **F-1: the asset tree column on `/assets/:id`** (the owner wants it "e2e eventually"): today it is on the Assets list page only; the Assets detail area is small and the asset page has no tree.
+- **F-2: status icons and a legend on tree nodes** (owner decision 4 of W6, dropped for lack of data): needs a per-asset status in `GET /api/assets` (worst status of its mapped points, rolled up from children) plus a backend test; the shapes (`.st-*`) already exist.
+- **The dashboard widgets and the editor grid** keep their old plain look (their own dedicated session, see the roadmap W6 paragraph); the page frame, dialogs and controls around them are new.
+- **Phone layout** is still parked (the sidebar starts minimized below 1180 px, which helps, but nothing else was designed for a phone).
+- **Settings has two Save buttons that look different** (General primary, Sign-in protection plain): a side effect of "one primary per page"; **Tariffs has no primary button** (three submit buttons, two named "Add rate").
+- **Crumb styles differ:** Asset, Points and Audit entry use grey plain-text crumbs; the dashboard page keeps the old blue underlined link and has no bottom rule (`.dash-head` is not a `PageHeader`).
+- **Tooltip after minimizing:** the pointer is still on the toggle, so its tooltip shows only after leaving and re-entering it.
+- **Focus order changed in two places** (no test pins either): Assets admin buttons now in the header as Edit, Delete, Add asset; Billing's Download CSV before Previous/Next month.
+- **New copy the spec did not name:** a sub line under the titles of Users, Audit, Settings, Storage, Tariffs and Discovery, an `h2` "General" on Settings, "No sources yet.", Discovery's empty state h1, "No assets match the filter.", the Assets meta labels (Kind, Parent, Children), "Select an asset in the tree.". An opened Audit row hides its duplicate summary sentence with CSS.
+- **Dead or unhooked CSS:** `.field-help`, `td .strong`, the old `.graph-page > .row` and `.graph-page h1` rules; `date-cell` and `scan-link` are used but have no rule.
+- **A page grows by a notice's height on `/assets`** (the tree is `100vh` sticky): make that `main` a flex column.
+- **`UsersPage` uses inline page-header markup** because `PageHeader` has no ref prop (its test needs `h1[tabindex=-1]` to take focus): add a `headingRef` prop.
+- **`vite.config.ts` reads `.env` files** through `loadEnv` (dev only).
+- **The page-CSS guard test is CSS-only:** it cannot see a TSX file that reuses another group's class; a page-root class on Sources, Points and Scans would allow the stricter "every rule starts with the page root" check.
+- **Not verified live by the final review:** the role-changed and certificate banners on the flush Assets page, the review-mappings dialog, a widget `table`; the first two were checked by eye in Task 3, the third is unchanged by construction (the frozen island).
