@@ -21,6 +21,11 @@ export interface Source {
   hidden_config_keys?: string[];
 }
 export interface CollectorStatus { alive: boolean; age_seconds: number | null }
+/**
+ * GET /api/status (any signed-in user), the top bar's chip. `readings_fresh` is the server's verdict (each mapping judged against its
+ * own poll interval; null when no mapped point has ever been read), `last_reading_age_seconds` only a caption.
+ */
+export interface LiveStatus { collector_alive: boolean; readings_fresh: boolean | null; last_reading_age_seconds: number | null }
 /** GET /api/secret-key/status: whether every stored source secret can be decrypted with the key in .env. */
 export interface SecretKeyStatus {
   ok: boolean;

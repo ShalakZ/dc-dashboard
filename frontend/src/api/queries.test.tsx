@@ -6,7 +6,7 @@ import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
   auditPosition, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useGraph, usePatchUser,
-  usePutGeneralSettings, usePutSignInPolicy, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useTariffs, useUnblockUser, useUsers, useWidgetData,
+  usePutGeneralSettings, usePutSignInPolicy, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
 
@@ -420,5 +420,14 @@ describe("audit queries", () => {
     const answer = await auditPosition({ ...NO_FILTERS, actions: ["*.deleted"], q: "a b" }, "2026-10-05");
     expect(answer).toEqual({ offset: 73, total: 120, on_day: true });
     expect(new URL(url, "http://x").searchParams.toString()).toBe("action=*.deleted&q=a+b&date=2026-10-05");
+  });
+});
+
+describe("useStatus", () => {
+  it("asks /api/status for the collector and reading state", async () => {
+    const calls = mockFetch({ "GET /api/status": { body: { collector_alive: true, readings_fresh: false, last_reading_age_seconds: 300 } } });
+    const { result } = renderHook(() => useStatus(), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.data).toEqual({ collector_alive: true, readings_fresh: false, last_reading_age_seconds: 300 }));
+    expect(calls.filter((c) => c.path === "/api/status")).toHaveLength(1);
   });
 });

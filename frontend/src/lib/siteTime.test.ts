@@ -1,4 +1,4 @@
-import { addDays, formatSiteClock, formatSiteDateTime, formatSiteDay, formatSiteTick, isSiteDay, siteDay, siteMonth } from "./siteTime";
+import { addDays, formatSiteClock, formatSiteDateTime, formatSiteDay, formatSiteHourMinute, formatSiteTick, isSiteDay, siteDay, siteMonth } from "./siteTime";
 
 describe("formatSiteDateTime", () => {
   // Every case names its zone, so the result never depends on the machine running the tests.
@@ -28,6 +28,20 @@ describe("formatSiteClock", () => {
   it("returns the input when it cannot be formatted", () => {
     expect(formatSiteClock("not a date", "Asia/Qatar")).toBe("not a date");
     expect(formatSiteClock("2026-10-07T10:00:05Z", "Not/AZone")).toBe("2026-10-07T10:00:05Z");
+  });
+});
+
+describe("formatSiteHourMinute", () => {
+  it("prints HH:MM on the wall clock of the site zone", () => {
+    expect(formatSiteHourMinute(new Date("2026-10-11T16:42:55Z"), "Asia/Qatar")).toBe("19:42");
+    expect(formatSiteHourMinute(new Date("2026-10-11T16:42:55Z"), "UTC")).toBe("16:42");
+  });
+  it("reads midnight as 00:05, never 24:05", () => {
+    expect(formatSiteHourMinute(new Date("2026-10-11T21:05:00Z"), "Asia/Qatar")).toBe("00:05");
+  });
+  it("is null for an unknown zone or an invalid date", () => {
+    expect(formatSiteHourMinute(new Date("2026-10-11T16:42:55Z"), "Mars/Olympus")).toBeNull();
+    expect(formatSiteHourMinute(new Date("nope"), "Asia/Qatar")).toBeNull();
   });
 });
 

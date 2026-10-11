@@ -6,7 +6,7 @@ import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
   GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
-  WidgetData, WidgetType, CollectorStatus, SecretKeyStatus, TlsStatus,
+  WidgetData, WidgetType, CollectorStatus, LiveStatus, SecretKeyStatus, TlsStatus,
 } from "./types";
 
 export const keys = {
@@ -41,6 +41,7 @@ export const keys = {
   dashboard: (id: number) => ["dashboards", "detail", id] as const,
   widgetData: ["widget-data"] as const,
   collectorStatus: ["collector-status"] as const,
+  status: ["status"] as const,
   secretKey: ["secret-key"] as const,
   tlsStatus: ["tls-status"] as const,
 };
@@ -72,6 +73,10 @@ export const useSources = () =>
 
 export const useCollectorStatus = () =>
   useQuery({ queryKey: keys.collectorStatus, queryFn: () => api.get<CollectorStatus>("/api/collector/status"), refetchInterval: 10_000 });
+
+/** The top bar's live chip; any signed-in user. */
+export const useStatus = () =>
+  useQuery({ queryKey: keys.status, queryFn: () => api.get<LiveStatus>("/api/status"), refetchInterval: 10_000 });
 
 /** Operators and admins only (the Sources page). A fetch error shows nothing: the warning is an extra, not a gate. */
 export const useSecretKeyStatus = () =>
