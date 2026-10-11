@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import type { Asset } from "../api/types";
@@ -251,6 +251,7 @@ describe("AssetTree fold state", () => {
 describe("AssetTree width", () => {
   const WIDTH_KEY = "dcdash.assetTreeWidth";
   const realViewport = window.innerWidth;
+  const RealResizeObserver = globalThis.ResizeObserver; // the no-op stub of src/test/setup.ts, put back after a test that records
   const setViewport = (px: number) => { Object.defineProperty(window, "innerWidth", { value: px, configurable: true, writable: true }); };
   const max = () => Math.floor(window.innerWidth / 2);
   const rect = (left: number, width: number) => ({ left, width, right: left + width, top: 0, bottom: 0, height: 0, x: left, y: 0, toJSON: () => ({}) }) as DOMRect;
@@ -260,6 +261,9 @@ describe("AssetTree width", () => {
   const userWidth = () => column().style.getPropertyValue("--tree-user-w");
   const stored = () => localStorage.getItem(WIDTH_KEY);
   const valueNow = () => separator().getAttribute("aria-valuenow");
+  // The width right of the sidebar is the column's parent (jsdom has no layout, so it is 0 until a test gives it one).
+  const layout = (px: number) => Object.defineProperty(column().parentElement!, "clientWidth", { value: px, configurable: true });
+  const resized = () => fireEvent(window, new Event("resize"));
 
   // jsdom has no PointerEvent, so these are MouseEvents with a pointer type name: React routes by the type and reads clientX from them.
   const point = (type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel", clientX: number) => {
@@ -271,7 +275,7 @@ describe("AssetTree width", () => {
   let setCapture: ReturnType<typeof vi.fn>;
   let releaseCapture: ReturnType<typeof vi.fn>;
   beforeEach(() => {
-    setViewport(1000);
+    setViewport(1200); // half of it (600) is under what leaves the pane 560 px (640), so "half the window" below holds
     setCapture = vi.fn();
     releaseCapture = vi.fn();
     Object.defineProperty(HTMLElement.prototype, "setPointerCapture", { value: setCapture, configurable: true, writable: true });
@@ -371,20 +375,95 @@ describe("AssetTree width", () => {
     });
 
     it("follows the window: a smaller window shows less, the stored width is kept, and a larger one brings it back", () => {
-      setViewport(1000);
-      localStorage.setItem(WIDTH_KEY, "400");
+      setViewport(1400);
+      localStorage.setItem(WIDTH_KEY, "600");
       render(ui());
-      expect(valueNow()).toBe("400");
-      setViewport(600);
-      fireEvent(window, new Event("resize"));
-      expect(userWidth()).toBe("300px");
-      expect(valueNow()).toBe("300");
-      expect(separator()).toHaveAttribute("aria-valuemax", "300");
-      expect(stored()).toBe("400"); // a window resize is not a choice of the user
+      expect(valueNow()).toBe("600");
       setViewport(1000);
-      fireEvent(window, new Event("resize"));
-      expect(userWidth()).toBe("400px");
-      expect(separator()).toHaveAttribute("aria-valuemax", "500");
+      resized();
+      expect(userWidth()).toBe("440px"); // the pane keeps 560 of the 1000
+      expect(valueNow()).toBe("440");
+      expect(separator()).toHaveAttribute("aria-valuemax", "440");
+      expect(stored()).toBe("600"); // a window resize is not a choice of the user
+      setViewport(1400);
+      resized();
+      expect(userWidth()).toBe("600px");
+      expect(separator()).toHaveAttribute("aria-valuemax", "700");
+    });
+
+    it("a width saved on a wide screen survives a visit at a small window: opened at 1024, enlarged to 1440, 720 is back (review M-4)", () => {
+      setViewport(1024);
+      localStorage.setItem(WIDTH_KEY, "720");
+      render(ui());
+      expect(valueNow()).toBe("464"); // 1024 - 560
+      expect(stored()).toBe("720"); // reading is not choosing
+      setViewport(1440);
+      resized();
+      expect(valueNow()).toBe("720");
+      expect(userWidth()).toBe("720px");
+    });
+
+    it("follows the layout, not the window: the area right of the sidebar sets the limit, and a smaller one shows the clamped width (review I-1, M-4)", () => {
+      localStorage.setItem(WIDTH_KEY, "720");
+      setViewport(1600);
+      render(ui());
+      layout(1000); // the sidebar and whatever else takes room: 1000 px are left for the columns
+      resized();
+      expect(valueNow()).toBe("440");
+      expect(userWidth()).toBe("440px");
+      expect(separator()).toHaveAttribute("aria-valuemax", "440");
+      expect(stored()).toBe("720");
+      layout(1500);
+      resized();
+      expect(valueNow()).toBe("720");
+      expect(userWidth()).toBe("720px");
+      expect(separator()).toHaveAttribute("aria-valuemax", "750");
+    });
+
+    it("a layout width of 0 (no layout at all) falls back to the window", () => {
+      localStorage.setItem(WIDTH_KEY, "700");
+      render(ui());
+      layout(0);
+      resized();
+      expect(valueNow()).toBe("600"); // viewport 1200
+      expect(separator()).toHaveAttribute("aria-valuemax", "600");
+    });
+
+    it("watches the column's parent: when a sidebar toggle changes its width without a window resize, the limit follows", () => {
+      const watched: Array<{ callback: () => void; targets: Element[] }> = [];
+      vi.stubGlobal("ResizeObserver", class {
+        entry = { callback: () => {}, targets: [] as Element[] };
+        constructor(callback: () => void) { this.entry.callback = callback; watched.push(this.entry); }
+        observe(el: Element) { this.entry.targets.push(el); }
+        unobserve() {}
+        disconnect() {}
+      });
+      try {
+        localStorage.setItem(WIDTH_KEY, "700");
+        render(ui());
+        const watcher = watched.find((w) => w.targets.includes(column().parentElement!));
+        expect(watcher, "an observer on the column's parent").toBeDefined();
+        layout(960);
+        act(() => watcher!.callback());
+        expect(separator()).toHaveAttribute("aria-valuemax", "400");
+        expect(valueNow()).toBe("400");
+        expect(stored()).toBe("700");
+      } finally {
+        vi.stubGlobal("ResizeObserver", RealResizeObserver);
+      }
+    });
+
+    it("stops listening to the window and to the parent when it unmounts", () => {
+      const removed = vi.spyOn(window, "removeEventListener");
+      const disconnect = vi.fn();
+      vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect = disconnect; });
+      try {
+        render(ui()).unmount();
+        expect(removed).toHaveBeenCalledWith("resize", expect.any(Function));
+        expect(disconnect.mock.calls.length).toBeGreaterThanOrEqual(2); // the column's own observer and the parent's
+      } finally {
+        vi.stubGlobal("ResizeObserver", RealResizeObserver);
+      }
     });
   });
 
@@ -426,6 +505,30 @@ describe("AssetTree width", () => {
       await press("{End}");
       expect(valueNow()).toBe(String(max()));
       expect(stored()).toBe(String(max()));
+    });
+
+    it("End goes to what leaves the pane 560 px: with 960 right of the sidebar, 400 (review I-1)", async () => {
+      render(ui());
+      layout(960);
+      resized();
+      await press("{End}");
+      expect(separator()).toHaveAttribute("aria-valuemax", "400");
+      expect(valueNow()).toBe("400");
+      expect(userWidth()).toBe("400px");
+      expect(stored()).toBe("400");
+      await press("{ArrowRight}");
+      expect(valueNow()).toBe("400"); // at the maximum it stays
+      await press("{Shift>}{ArrowRight}{/Shift}");
+      expect(valueNow()).toBe("400");
+      expect(stored()).toBe("400");
+    });
+
+    it("End reads the layout when it is pressed, also when no resize event came before", async () => {
+      render(ui());
+      layout(960);
+      await press("{End}");
+      expect(valueNow()).toBe("400");
+      expect(stored()).toBe("400");
     });
 
     it("stops at both ends", async () => {
@@ -494,6 +597,17 @@ describe("AssetTree width", () => {
       expect(userWidth()).toBe("220px");
       point("pointerup", 5);
       expect(stored()).toBe("220");
+    });
+
+    it("keeps the pane 560 px: with 960 right of the sidebar the column stops at 400, however far the pointer goes (review I-1)", () => {
+      render(ui());
+      layout(960);
+      resized();
+      point("pointerdown", 300);
+      point("pointermove", 5000);
+      expect(userWidth()).toBe("400px");
+      point("pointerup", 5000);
+      expect(stored()).toBe("400");
     });
 
     it("pointercancel releases and saves as pointerup does", () => {

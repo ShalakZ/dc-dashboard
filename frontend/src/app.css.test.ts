@@ -340,8 +340,15 @@ describe("the resizable asset tree column (W7a)", () => {
     expect(col.body).toMatch(/(?:^|[;\s])width:\s*var\(--w\)/);
   });
 
-  it("a window that shrank after saving is guarded in the CSS: max-width of 220px or half the window", () => {
-    expect(only(".tree-col").body).toMatch(/max-width:\s*max\(220px,\s*50vw\)/);
+  it("a window or sidebar that shrank after saving is guarded in the CSS: 220px at least, else half of the flex container, but leaving 560px to the pane", () => {
+    expect(only(".tree-col").body).toMatch(/max-width:\s*max\(220px,\s*min\(50%,\s*calc\(100%\s*-\s*560px\)\)\)/);
+    expect(only(".tree-col").body).not.toMatch(/50vw/); // the window is not the area right of the sidebar
+  });
+
+  it("the asset pane takes what the column leaves and may shrink below its content", () => {
+    const pane = only(".assets-detail");
+    expect(pane.body).toMatch(/flex:\s*1[;\s]/);
+    expect(pane.body).toMatch(/min-width:\s*0/);
   });
 
   it("the minimized column keeps its own --w and so ignores the user's width", () => {

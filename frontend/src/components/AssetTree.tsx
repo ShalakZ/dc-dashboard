@@ -94,22 +94,38 @@ function Nodes({ nodes, view }: { nodes: TreeNode[]; view: View }) {
   });
 }
 
+/** The width right of the sidebar: the column's flex container. A container with no layout (jsdom) or no element yet gives the window's. */
+const availableWidth = (column: HTMLElement | null) => column?.parentElement?.clientWidth || window.innerWidth;
+
 /**
  * The width the user chose for the column (null: the CSS default), and what changes it. The choice is kept as made; the width shown follows
- * the window, so a smaller window shows less and a larger one brings the choice back. Only the user's own actions are saved.
+ * the room right of the sidebar, so a smaller window or a wider sidebar shows less and more room brings the choice back. Only the user's own
+ * actions are saved.
  */
 function useTreeWidth(column: RefObject<HTMLElement | null>) {
-  const [chosen, setChosen] = useState<number | null>(() => readTreeWidth(window.innerWidth));
-  const [viewport, setViewport] = useState(() => window.innerWidth);
+  const [chosen, setChosen] = useState<number | null>(readTreeWidth);
+  const [available, setAvailable] = useState(() => availableWidth(column.current));
   const [measured, setMeasured] = useState(0);
   const [dragging, setDragging] = useState(false);
   const drag = useRef<{ left: number; width: number | null } | null>(null); // the column's left edge, and the last width of this drag (null: no move yet)
+  const room = () => availableWidth(column.current); // for the event handlers: the width as it is now, not as of the last render
 
   useEffect(() => {
-    const onResize = () => setViewport(window.innerWidth);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
+    const update = () => setAvailable(availableWidth(column.current));
+    update();
+    window.addEventListener("resize", update);
+    // A sidebar that is minimized or expanded changes the parent's width without a window resize.
+    const parent = column.current?.parentElement;
+    let observer: ResizeObserver | null = null;
+    if (parent && typeof ResizeObserver === "function") {
+      observer = new ResizeObserver(update);
+      observer.observe(parent);
+    }
+    return () => {
+      window.removeEventListener("resize", update);
+      observer?.disconnect();
+    };
+  }, [column]);
   // The default width is a CSS token (248px in a narrow window), so it is read from the layout, also while the column animates.
   useEffect(() => {
     const el = column.current;
@@ -122,10 +138,10 @@ function useTreeWidth(column: RefObject<HTMLElement | null>) {
     return () => observer.disconnect();
   }, [column]);
 
-  const shown = chosen === null ? null : clampTreeWidth(chosen, viewport);
-  const now = clampTreeWidth(shown ?? (measured || DEFAULT_WIDTH), viewport) ?? TREE_MIN;
+  const shown = chosen === null ? null : clampTreeWidth(chosen, available);
+  const now = clampTreeWidth(shown ?? (measured || DEFAULT_WIDTH), available) ?? TREE_MIN;
   const choose = (px: number) => {
-    const next = clampTreeWidth(px, window.innerWidth);
+    const next = clampTreeWidth(px, room());
     if (next === null) return;
     setChosen(next);
     saveTreeWidth(next);
@@ -138,7 +154,7 @@ function useTreeWidth(column: RefObject<HTMLElement | null>) {
     if (e.key === "ArrowRight") next = now + step;
     else if (e.key === "ArrowLeft") next = now - step;
     else if (e.key === "Home") next = TREE_MIN;
-    else if (e.key === "End") next = treeMax(window.innerWidth);
+    else if (e.key === "End") next = treeMax(room());
     else return;
     e.preventDefault();
     choose(next);
@@ -153,7 +169,7 @@ function useTreeWidth(column: RefObject<HTMLElement | null>) {
   const onPointerMove = (e: PointerEvent<HTMLElement>) => {
     const d = drag.current;
     if (!d) return;
-    const next = clampTreeWidth(e.clientX - d.left, window.innerWidth);
+    const next = clampTreeWidth(e.clientX - d.left, room());
     if (next === null) return;
     d.width = next;
     setChosen(next);
@@ -172,7 +188,7 @@ function useTreeWidth(column: RefObject<HTMLElement | null>) {
   };
 
   return {
-    shown, now, max: treeMax(viewport), dragging,
+    shown, now, max: treeMax(available), dragging,
     handle: { onKeyDown, onPointerDown, onPointerMove, onPointerUp: endDrag, onPointerCancel: endDrag, onDoubleClick: reset },
   };
 }
