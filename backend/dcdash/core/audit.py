@@ -167,7 +167,7 @@ def scrub_url_credentials(text: str, known: Iterable[str] = ()) -> str:
     changes nothing. Over-masks an "@" later in the same run of non-space text (a query string with an e-mail address),
     the safe direction.
 
-    The result is what `re.sub(r"://\S*@", "://[hidden]@", text)` gives, in linear time: that pattern rescans the rest
+    The result is what `re.sub(r"://\\S*@", "://[hidden]@", text)` gives, in linear time: that pattern rescans the rest
     of the run at every "://", so a hostile string of 100,000 of them took 20 seconds.
     """
     for value in _known_values(known):
