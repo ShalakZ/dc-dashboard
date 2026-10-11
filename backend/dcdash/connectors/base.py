@@ -25,6 +25,7 @@ class PointValue:
     ts: datetime
     value: float | None
     quality: int = GOOD
+    status: str | None = None  # why a reading is bad, when the source says (OPC UA: "BadNodeIdUnknown (0x80340000)")
 
 
 @dataclass(frozen=True)

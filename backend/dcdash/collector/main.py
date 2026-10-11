@@ -15,6 +15,8 @@ from dcdash.collector.networks import publish_networks
 from dcdash.collector.scheduler import Scheduler
 from dcdash.collector.writer import Writer
 from dcdash.connectors.base import ConnectorFactory, create_connector
+from dcdash.core import journal
+from dcdash.core.build import build_info
 from dcdash.core.config import get_settings
 from dcdash.core.pg import CONFIG_CHANNEL, JOBS_CHANNEL, create_pool, listen_forever
 
@@ -33,6 +35,7 @@ async def _close_down(tasks: list[asyncio.Task], scheduler: Scheduler, writer: W
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await scheduler.stop()
+        await journal.cancel_pending()  # before the pool closes: a write still in flight would fail on a closed pool
         await writer.flush()
         await pool.close()
 
@@ -58,6 +61,11 @@ async def run(stop: asyncio.Event | None = None, factory: ConnectorFactory = cre
     jobs_ready = asyncio.Event()
     await fail_stale_jobs(pool)
     await publish_networks(pool)
+    build = build_info()
+    await journal.record(
+        pool, "collector", journal.COLLECTOR_STARTED, f"collector started, build {build.build_id}",
+        detail={"build_id": build.build_id, "build_time": build.build_time},
+    )
 
     def catch_up() -> None:
         reload_needed.set()

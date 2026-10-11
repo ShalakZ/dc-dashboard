@@ -39,6 +39,8 @@ class _Pool:
         self.delays, self.lose_answer = delays or {}, lose_answer
 
     async def execute(self, sql, *args):
+        if "diag_events" in sql:  # the journal's writes are not status writes (tests/test_scheduler_journal.py covers them)
+            return
         self.calls += 1
         if self.hang:
             try:

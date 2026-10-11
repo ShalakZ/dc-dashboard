@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Iterable
 from dataclasses import asdict
 from typing import Any
 
@@ -9,7 +10,9 @@ from dcdash.collector.browse import browse_source, connector_for
 from dcdash.collector.scan import run_scan
 from dcdash.collector.scheduler import mark_source
 from dcdash.connectors.base import ConnectorFactory, create_connector
+from dcdash.core import journal
 from dcdash.core.audit import audit_pool, clip_error, scrub_strings
+from dcdash.core.crypto import decrypt
 
 log = logging.getLogger(__name__)
 
@@ -49,9 +52,10 @@ async def _scan(pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFa
 _HANDLERS = {"test_source": _test_source, "browse_source": _browse_source, "scan": _scan}
 
 
-def _stored_result(result: Any) -> Any:
-    """A job's result as it is stored: no URL credentials in any string, and the error or message cut to a sane size."""
-    result = scrub_strings(result)  # an error or a check's message may quote the URL
+def _stored_result(result: Any, known: Iterable[str] = ()) -> Any:
+    """A job's result as it is stored: no URL credentials and none of `known` in any string, and the error or message cut to a
+    sane size."""
+    result = scrub_strings(result, known)  # an error or a check's message may quote the URL, or the source's password
     if isinstance(result, dict):
         for key in ("error", "message"):
             if isinstance(result.get(key), str):
@@ -59,7 +63,46 @@ def _stored_result(result: Any) -> Any:
     return result
 
 
+async def _known_for_job(pool: asyncpg.Pool, params: Any) -> list[str]:
+    """What must not reach the stored result or the journal when the job is about a source: the credentials in its config and
+    its decrypted secret. A job without a source, a missing source or an undecryptable secret just means fewer values."""
+    if not isinstance(params, dict) or "source_id" not in params:
+        return []
+    try:
+        row = await pool.fetchrow("SELECT config, secret FROM sources WHERE id = $1", params["source_id"])
+        if row is None:
+            return []
+        try:
+            secret = decrypt(row["secret"]) if row["secret"] else None
+        except Exception:
+            secret = None
+        return journal.known_for(row["config"], secret)
+    except Exception:
+        return []
+
+
+def _finished_event(job: asyncpg.Record, status: str, result: Any) -> dict[str, Any]:
+    """The journal event (level, source_id, code, message, detail) for a job that ended with `status` and `result`."""
+    ok = status == "done" and not (isinstance(result, dict) and result.get("ok") is False)
+    fields = result if isinstance(result, dict) else {}
+    reason = next((fields[key] for key in ("error", "message") if isinstance(fields.get(key), str) and fields[key]), None)
+    params = job["params"] if isinstance(job["params"], dict) else {}
+    source_id = params.get("source_id")
+    detail: dict[str, Any] = {"job_id": job["id"], "kind": job["kind"], "ok": ok, "status": status}
+    if reason is not None:
+        detail["error"] = reason[:200]
+    text = f"{job['kind']} job {job['id']} " + ("finished" if ok else "failed") + (f": {reason[:200]}" if reason else "")
+    return {
+        "level": "info" if ok else ("error" if status == "failed" else "warning"),
+        "source_id": source_id if isinstance(source_id, int) and not isinstance(source_id, bool) else None,
+        "code": None if ok or not isinstance(fields.get("status"), str) else fields["status"],
+        "message": text,
+        "detail": detail,
+    }
+
+
 async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFactory) -> None:
+    known = await _known_for_job(pool, job["params"])
     try:
         handler = _HANDLERS.get(job["kind"])
         if handler is None:
@@ -72,8 +115,11 @@ async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFa
         status = "failed"
     await pool.execute(
         "UPDATE jobs SET status = $2, result = $3, finished_at = now() WHERE id = $1",
-        job["id"], status, _stored_result(result),
+        job["id"], status, _stored_result(result, known),
     )
+    # After the result is stored, so that a slow journal can never leave a finished job looking like it is still running.
+    event = _finished_event(job, status, result)
+    await journal.record(pool, "job", journal.JOB_FINISHED, event.pop("message"), known=known, **event)
 
 
 async def run_pending_jobs(

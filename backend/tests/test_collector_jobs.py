@@ -495,3 +495,120 @@ async def test_a_huge_connection_check_message_is_scrubbed_and_cut_in_the_result
     assert row["status"] == "done" and row["result"]["status"] == "unreachable"
     assert_cut_and_scrubbed(row["result"]["message"])
     assert_cut_and_scrubbed(await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source))
+
+
+# --- the journal: job.finished ------------------------------------------------------------------------------------------
+
+
+async def finished_events(db):
+    return await db.fetch("SELECT * FROM diag_events WHERE kind = 'job.finished' ORDER BY id")
+
+
+async def test_a_finished_job_is_journaled_with_its_source_and_outcome(db):
+    source = await make_source(db, secret="k")
+    job_id = await add_job(db, "test_source", source)
+    await run_pending_jobs(db, factory())
+    [event] = await finished_events(db)
+    assert (event["level"], event["component"], event["source_id"], event["code"]) == ("info", "job", source, None)
+    assert event["message"] == f"test_source job {job_id} finished"
+    assert event["detail"] == {"job_id": job_id, "kind": "test_source", "ok": True, "status": "done"}
+
+
+async def test_a_connection_check_that_says_no_is_a_warning_with_its_status_as_the_code(db):
+    source = await make_source(db, secret="wrong")
+    job_id = await add_job(db, "test_source", source)
+    await run_pending_jobs(db, factory())
+    [event] = await finished_events(db)
+    assert (event["level"], event["code"]) == ("warning", "auth_failed")
+    assert event["detail"] == {
+        "job_id": job_id, "kind": "test_source", "ok": False, "status": "done", "error": "credentials rejected",
+    }
+    assert event["message"] == f"test_source job {job_id} failed: credentials rejected"
+
+
+async def test_a_job_that_raised_is_an_error_event_and_odd_jobs_still_finish(db):
+    failing = await add_job(db, "browse_source", await make_source(db, secret="wrong"))
+    unknown = await db.fetchval("INSERT INTO jobs (kind) VALUES ('nope') RETURNING id")  # no params at all
+    missing = await add_job(db, "test_source", 999)
+    assert await run_pending_jobs(db, factory()) == 3
+    by_job = {event["detail"]["job_id"]: event for event in await finished_events(db)}
+    assert by_job[failing]["level"] == "error" and by_job[failing]["detail"]["error"] == "credentials rejected"
+    assert (by_job[unknown]["level"], by_job[unknown]["source_id"]) == ("error", None)
+    assert by_job[unknown]["detail"]["error"] == "unknown job kind: nope"
+    assert by_job[missing]["source_id"] == 999 and by_job[missing]["detail"]["error"] == "source 999 not found"
+    for finished in (failing, unknown, missing):
+        assert (await job(db, finished))["finished_at"] is not None
+
+
+async def test_a_scan_job_is_journaled_without_a_source(db, monkeypatch):
+    async def quick_scan(pool, scan_id, factory) -> None:
+        return None
+
+    monkeypatch.setattr(jobs_module, "run_scan", quick_scan)
+    scan_id = await db.fetchval("INSERT INTO scans (scope_snapshot) VALUES ('{}') RETURNING id")
+    job_id = await db.fetchval("INSERT INTO jobs (kind, params) VALUES ('scan', $1) RETURNING id", {"scan_id": scan_id})
+    await run_pending_jobs(db, factory())
+    [event] = await finished_events(db)
+    assert event["source_id"] is None and event["detail"]["job_id"] == job_id and event["detail"]["kind"] == "scan"
+
+
+SOURCE_SECRET = "only-in-the-secret-column-91"
+URL_PASSWORD = "pw-in-the-url-4821"
+
+
+async def test_a_password_that_only_the_source_knows_never_reaches_the_job_result_or_the_journal(db):
+    """M9: the secret is encrypted in sources.secret and the URL password is not in a pattern the scrub can find in this text."""
+    source = await make_source(
+        db, config={"endpoint": f"opc.tcp://svc:{URL_PASSWORD}@10.9.8.7:4840"}, secret=SOURCE_SECRET,
+    )
+
+    class Leaky:
+        async def test(self):
+            return ConnectionCheck(
+                ok=False, status="auth_failed", message=f"server rejected {SOURCE_SECRET} for svc:{URL_PASSWORD}"
+            )
+
+        async def browse(self):
+            raise RuntimeError(f"cannot browse as {SOURCE_SECRET}: {URL_PASSWORD} was refused")
+
+        async def close(self):
+            pass
+
+    checked = await add_job(db, "test_source", source)
+    browsed = await add_job(db, "browse_source", source)
+    await run_pending_jobs(db, lambda *_args: Leaky())
+    stored = [dict(row) for row in await db.fetch("SELECT result FROM jobs")] + [dict(r) for r in await finished_events(db)]
+    text = str(stored)
+    assert SOURCE_SECRET not in text and URL_PASSWORD not in text
+    assert (await job(db, checked))["result"]["message"] == "server rejected [hidden] for [hidden]"
+    assert (await job(db, browsed))["result"] == {"error": "cannot browse as [hidden]: [hidden] was refused"}
+
+
+async def test_a_source_whose_secret_cannot_be_decrypted_still_gets_its_job_finished_and_journaled(db):
+    source = await make_source(db, config={"endpoint": f"opc.tcp://svc:{URL_PASSWORD}@h:4840"})
+    await db.execute("UPDATE sources SET secret = 'garbage' WHERE id = $1", source)
+    job_id = await add_job(db, "browse_source", source)
+    await run_pending_jobs(db, factory())
+    assert (await job(db, job_id))["status"] == "failed"
+    [event] = await finished_events(db)
+    assert event["source_id"] == source and event["level"] == "error"
+
+
+def test_stored_result_hides_the_known_values_too():
+    stored = jobs_module._stored_result({"message": "bad pw plain-pw-12345", "nested": ["x plain-pw-12345"]}, ["plain-pw-12345"])
+    assert stored == {"message": "bad pw [hidden]", "nested": ["x [hidden]"]}
+    assert jobs_module._stored_result({"message": "bad pw plain-pw-12345"}) == {"message": "bad pw plain-pw-12345"}
+
+
+async def test_a_journal_that_never_answers_cannot_leave_a_finished_job_looking_unfinished(db, monkeypatch):
+    async def hang(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(jobs_module.journal, "record", hang)
+    source = await make_source(db, secret="k")
+    job_id = await add_job(db, "test_source", source)
+    claimed = await db.fetchrow(jobs_module._CLAIM)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(jobs_module._run_one(db, claimed, factory()), timeout=1)
+    row = await job(db, job_id)
+    assert row["status"] == "done" and row["finished_at"] is not None

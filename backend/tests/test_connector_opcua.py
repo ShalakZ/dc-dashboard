@@ -88,3 +88,47 @@ def test_opcua_defaults_point_at_mounted_certs():
     from dcdash.connectors.opcua import OpcUaConfig
     cfg = OpcUaConfig(endpoint="opc.tcp://h:4840")
     assert cfg.client_cert == "/certs/opcua-client.pem" and cfg.client_key == "/certs/opcua-client-key.pem"
+
+
+async def test_a_bad_reading_says_why_in_its_status_and_a_good_one_has_none():
+    async with opcua_server() as srv:
+        c = create_connector("opcua", _cfg(srv))
+        points = {p.name: p.address for p in await c.browse()}
+        values = await c.read([points["LVP01 V"], "ns=2;i=999999"])
+        assert values[0].status is None
+        assert values[1].quality == BAD and values[1].status == "BadNodeIdUnknown (0x80340000)"
+
+
+def _data_value(value=None, code=None, variant_type=None):
+    from asyncua import ua
+
+    variant = None if variant_type is None else ua.Variant(value, variant_type)
+    return ua.DataValue(Value=variant, StatusCode_=None if code is None else ua.StatusCode(code))
+
+
+def test_point_value_turns_a_data_value_into_a_reading_with_the_reason_when_it_is_bad():
+    from datetime import datetime, timezone
+
+    from asyncua import ua
+
+    from dcdash.connectors.opcua import _point_value
+
+    ts = datetime(2026, 10, 12, tzinfo=timezone.utc)
+
+    def read(**kwargs):
+        value = _point_value("ns=2;i=1", ts, _data_value(**kwargs))
+        return value.value, value.quality, value.status
+
+    assert read(value=7, variant_type=ua.VariantType.Int32) == (7.0, GOOD, None)
+    assert read(value=2.5, variant_type=ua.VariantType.Double, code=ua.StatusCodes.Good) == (2.5, GOOD, None)
+    assert read(value=2.5, variant_type=ua.VariantType.Double, code=ua.StatusCodes.GoodLocalOverride) == (2.5, GOOD, None)
+    assert read(code=ua.StatusCodes.BadNodeIdUnknown) == (None, BAD, "BadNodeIdUnknown (0x80340000)")
+    assert read(value=1.0, variant_type=ua.VariantType.Double, code=ua.StatusCodes.BadSensorFailure) == (
+        None, BAD, "BadSensorFailure (0x808C0000)")
+    assert read(value=1.0, variant_type=ua.VariantType.Double, code=ua.StatusCodes.UncertainInitialValue) == (
+        None, BAD, "UncertainInitialValue (0x40920000)")
+    assert read(value=True, variant_type=ua.VariantType.Boolean) == (None, BAD, "Good, non-numeric (Boolean)")
+    assert read(value="on", variant_type=ua.VariantType.String) == (None, BAD, "Good, non-numeric (String)")
+    assert read() == (None, BAD, "Good, non-numeric (Null)")
+    unknown = _point_value("a", ts, ua.DataValue(StatusCode_=ua.StatusCode(0x80ABCDEF)))
+    assert unknown.status == "Bad (0x80ABCDEF)"  # asyncua names an unknown code only "Bad": the hex tells which

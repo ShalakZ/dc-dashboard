@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,7 +10,8 @@ from typing import Any
 import asyncpg
 
 from dcdash.collector.writer import Row, Writer
-from dcdash.connectors.base import BAD, Connector, ConnectorError, ConnectorFactory, create_connector
+from dcdash.connectors.base import BAD, Connector, ConnectorError, ConnectorFactory, PointValue, create_connector
+from dcdash.core import journal
 from dcdash.core.audit import clip_error
 from dcdash.core.crypto import decrypt
 
@@ -18,6 +20,11 @@ log = logging.getLogger(__name__)
 MAX_BACKOFF_SECONDS = 60
 LAST_SEEN_REFRESH_SECONDS = 10
 STATUS_WRITE_TIMEOUT_SECONDS = 5.0
+BAD_POINTS_REFRESH_SECONDS = 600  # while points stay bad, the journal repeats points.bad at most this often
+SILENT_FAILURE_REPEAT_SECONDS = 600  # a source whose configuration or secret is unusable is journaled once per period
+NO_VALUE = "no value returned"
+MAX_STATUSES_LISTED = 10
+MAX_SAMPLE_ADDRESSES = 5
 
 _MAPPED_POINTS = """
     SELECT s.id AS source_id, s.connector_type, s.config, s.secret,
@@ -79,6 +86,12 @@ async def load_groups(pool: asyncpg.Pool) -> list[PollGroup]:
         except Exception:
             undecryptable.add(source_id)
             await mark_source(pool, source_id, False, "stored secret cannot be decrypted")
+            if journal.allow(("secret_undecryptable", source_id), SILENT_FAILURE_REPEAT_SECONDS):
+                journal.record_soon(
+                    pool, "collector", journal.SOURCE_OFFLINE, "stored secret cannot be decrypted", level="warning",
+                    source_id=source_id, code="secret_undecryptable", known=journal.known_for(first["config"], None),
+                    detail={"interval": interval},
+                )
             continue
         groups.append(
             PollGroup(
@@ -93,18 +106,24 @@ async def load_groups(pool: asyncpg.Pool) -> list[PollGroup]:
     return groups
 
 
-async def poll_once(group: PollGroup, connector: Connector, writer: Writer) -> None:
+async def poll_once(group: PollGroup, connector: Connector, writer: Writer) -> list[PointValue]:
+    """Read the group's points and queue the rows. Returns one value per point of the group, in the group's order; an address
+    the connector did not answer for comes back as a BAD value with the status NO_VALUE (it is written as BAD too)."""
     values = await connector.read([address for _, address in group.points])
     by_address = {value.address: value for value in values}
     now = datetime.now(timezone.utc)
     rows: list[Row] = []
+    answered: list[PointValue] = []
     for point_id, address in group.points:
         value = by_address.get(address)
         if value is None:
             rows.append((point_id, now, None, BAD))
+            answered.append(PointValue(address, now, None, BAD, NO_VALUE))
         else:
             rows.append((point_id, value.ts, value.value, value.quality))
+            answered.append(value)
     writer.add(rows)
+    return answered
 
 
 def backoff_delay(interval: int, failures: int) -> float:
@@ -161,39 +180,98 @@ class _StatusWriter:
                 self._written = None
 
 
+def _bad_points(bad: list[PointValue], total: int, first: datetime) -> tuple[str, str, dict[str, Any]]:
+    """(code, message, detail) of a points.bad event: how many points are bad and with which statuses."""
+    counts = Counter(value.status or "no status" for value in bad)
+    top = counts.most_common(MAX_STATUSES_LISTED)
+    listed = ", ".join(f"{name} x{count}" for name, count in top[:3])
+    detail = {
+        "bad": len(bad),
+        "total": total,
+        "statuses": dict(top),
+        "sample": [value.address[:100] for value in bad[:MAX_SAMPLE_ADDRESSES]],
+        "first": first.isoformat(),
+        "last": datetime.now(timezone.utc).isoformat(),
+    }
+    return top[0][0].split(" (")[0], f"{len(bad)} of {total} points have a bad reading: {listed}", detail
+
+
 async def run_group(
     group: PollGroup,
     pool: asyncpg.Pool,
     writer: Writer,
     factory: ConnectorFactory = create_connector,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
+    known = journal.known_for(group.config, group.secret)
+
+    def note(kind: str, message: str, *, level: str = "info", code: str | None = None, **detail: Any) -> None:
+        # Scheduled, never awaited: a slow or frozen journal must not delay the next poll.
+        journal.record_soon(
+            pool, "collector", kind, message, level=level, source_id=group.source_id, code=code, known=known,
+            detail={**detail, "interval": group.interval},
+        )
+
     try:
         connector = factory(group.connector_type, group.config, group.secret)
     except Exception as exc:
-        await mark_source(pool, group.source_id, False, f"invalid configuration: {exc}")
+        text = f"invalid configuration: {exc}"
+        await mark_source(pool, group.source_id, False, text)
+        if journal.allow(("config_invalid", group.source_id), SILENT_FAILURE_REPEAT_SECONDS):
+            note(journal.SOURCE_OFFLINE, text, level="warning", code="config_invalid")
         return
     status = _StatusWriter(pool, group.source_id)
     failures = 0
-    polled_ok: bool | None = None  # outcome of the previous poll, so that only changes are logged
+    polled_ok: bool | None = None  # outcome of the previous poll, so that only changes are logged and journaled
+    offline_since: float | None = None
+    bad_since: float | None = None  # when the points of this group last turned bad (None: they are not)
+    bad_first = datetime.now(timezone.utc)
+    bad_noted = 0.0  # when points.bad was last journaled
     try:
         while True:
             try:
-                await poll_once(group, connector, writer)
+                values = await poll_once(group, connector, writer)
             except Exception as exc:
                 failures += 1
+                if isinstance(exc, ConnectorError):
+                    message, code = f"{exc.status}: {exc.message}", exc.status
+                else:
+                    message, code = str(exc) or type(exc).__name__, "exception"
                 if polled_ok is not False:
                     log.warning("source %s went offline: %s", group.source_id, exc)
+                    offline_since = clock()
+                    note(
+                        journal.SOURCE_OFFLINE, message, level="warning", code=code, failures=failures, error=message,
+                        backoff_seconds=backoff_delay(group.interval, failures),
+                    )
                 polled_ok = False
-                if isinstance(exc, ConnectorError):
-                    message = f"{exc.status}: {exc.message}"
-                else:
-                    message = str(exc) or type(exc).__name__
                 status.request(False, message)
             else:
+                now = clock()
+                if polled_ok is not True:  # the first success since the start, or after an outage
+                    offline_for = None if offline_since is None else round(now - offline_since, 1)
+                    text = "source is online" if offline_for is None else f"source is back online after {offline_for:g} s"
+                    note(journal.SOURCE_ONLINE, text, offline_seconds=offline_for, failures=failures)
+                    offline_since = None
                 failures = 0
                 polled_ok = True
                 status.request(True)
+                bad = [value for value in values if value.quality == BAD]
+                if bad:
+                    entering = bad_since is None
+                    if entering:
+                        bad_since, bad_first = now, datetime.now(timezone.utc)
+                    if entering or now - bad_noted >= BAD_POINTS_REFRESH_SECONDS:
+                        code, text, detail = _bad_points(bad, len(values), bad_first)
+                        note(journal.POINTS_BAD, text, level="warning", code=code, **detail)
+                        bad_noted = now
+                elif bad_since is not None:
+                    note(
+                        journal.POINTS_RECOVERED, f"all {len(values)} points read good again", total=len(values),
+                        bad_seconds=round(now - bad_since, 1), first=bad_first.isoformat(),
+                    )
+                    bad_since = None
             await sleep(backoff_delay(group.interval, failures))
     finally:
         try:

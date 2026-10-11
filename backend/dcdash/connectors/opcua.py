@@ -167,15 +167,24 @@ class OpcUaConnector(Connector):
         async with self._session() as client:
             nodes = [client.get_node(a) for a in addresses]
             results = await client.read_attributes(nodes, ua.AttributeIds.Value)
-        out: list[PointValue] = []
-        for address, dv in zip(addresses, results, strict=True):
-            good = dv.StatusCode_ is None or dv.StatusCode_.is_good()
-            value = dv.Value.Value if good and dv.Value is not None else None
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                out.append(PointValue(address=address, ts=ts, value=float(value), quality=GOOD))
-            else:
-                out.append(PointValue(address=address, ts=ts, value=None, quality=BAD))
-        return out
+        return [_point_value(address, ts, dv) for address, dv in zip(addresses, results, strict=True)]
+
+
+def _status_text(code: ua.StatusCode) -> str:
+    """"BadNodeIdUnknown (0x80340000)": the name, and the hex because a code this asyncua does not know is only named "Bad"."""
+    return f"{code.name} (0x{code.value:08X})"
+
+
+def _point_value(address: str, ts: datetime, dv: ua.DataValue) -> PointValue:
+    """A DataValue as a PointValue. A reading that is not good, or good but not a number, is BAD and says why in `status`."""
+    code = dv.StatusCode_
+    if code is not None and not code.is_good():
+        return PointValue(address=address, ts=ts, value=None, quality=BAD, status=_status_text(code))
+    value = dv.Value.Value if dv.Value is not None else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return PointValue(address=address, ts=ts, value=float(value), quality=GOOD)
+    kind = dv.Value.VariantType.name if dv.Value is not None else "no value"
+    return PointValue(address=address, ts=ts, value=None, quality=BAD, status=f"Good, non-numeric ({kind})")
 
 
 async def _unit(var: Node) -> str | None:
