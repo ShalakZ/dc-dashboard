@@ -289,9 +289,9 @@
   .node { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 6px; }
   ul.tree ul > li > .node { padding-left: 8px; }
   .node:hover { background: var(--surface); }
-  .node a { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .node a { flex: 1; min-width: 6ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); } /* a deep row keeps the start of its name: the kind label shrinks first */
   .node a:hover { text-decoration: none; }
-  .node .kind { flex: none; max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--text-2); }
+  .node .kind { flex: 0 100000 auto; min-width: 0; max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--text-2); }
   .twisty { flex: none; display: grid; place-items: center; width: 20px; height: 20px; min-height: 0; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
   .twisty:hover:not(:disabled) { background: var(--border); color: var(--text); }
   .twisty svg.i { width: 16px; height: 16px; transition: transform var(--motion); }

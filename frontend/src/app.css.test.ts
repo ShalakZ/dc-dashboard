@@ -394,6 +394,30 @@ describe("the resizable asset tree column (W7a)", () => {
   });
 });
 
+describe("a deep row of the asset tree keeps a readable name (review M-1)", () => {
+  const unconditional = (selector: string) => {
+    const found = rules.filter((r) => r.selector === selector && !r.at.some((a) => a.startsWith("@media")));
+    expect(found, `exactly one unconditional rule for "${selector}"`).toHaveLength(1);
+    return found[0];
+  };
+
+  it("the kind label gives way first: it shrinks (a very large shrink factor, no minimum) and ends in an ellipsis", () => {
+    const kind = unconditional(".node .kind");
+    expect(inLayer(kind)).toBe(true);
+    expect(kind.body).toMatch(/flex:\s*0\s+100000\s+auto/);
+    expect(kind.body).toMatch(/min-width:\s*0/);
+    expect(kind.body).toMatch(/overflow:\s*hidden/);
+    expect(kind.body).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it("the name link keeps at least 6 characters before its ellipsis, whatever the depth", () => {
+    const name = unconditional(".node a");
+    expect(inLayer(name)).toBe(true);
+    expect(name.body).toMatch(/min-width:\s*6ch/);
+    expect(name.body).toMatch(/text-overflow:\s*ellipsis/);
+  });
+});
+
 describe("long asset names wrap, figures do not", () => {
   /** The selector list of the rule that sets `overflow-wrap: anywhere` in the widget block. */
   const wrapping = [...css.matchAll(/([^{}]+)\{([^{}]*overflow-wrap:\s*anywhere[^{}]*)\}/g)].map((m) => m[1].trim()).join(" | ");
