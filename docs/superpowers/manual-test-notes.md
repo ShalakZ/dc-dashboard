@@ -59,16 +59,18 @@ behaviour), `ux` (works but confusing), `idea` (a wish), `question` (I do not un
 ### Section 1: Getting in and who can do what (done)
 
 - **S1-1 [idea] (owner)** The sign-in block timer should be configurable by an admin in Settings.
-  Today it is fixed in code: 5 failed sign-ins for one `host:username` inside a sliding 5-minute window
+  Until W3d it was fixed in code (it is now configurable, see the Closed line below): 5 failed sign-ins for one `host:username` inside a sliding 5-minute window
   block that pair until the window empties (`LoginLimiter(max_failures=5, window_seconds=300)` in
   `backend/dcdash/api/security.py`). The counter lives in memory, so restarting the `api` container
   clears it. To design later: an admin sets the number of failures and the block time in Settings (stored
   in the `settings` table, applied without a restart), and whether an admin can clear a block from the UI.
+  **Closed by W3d (2026-10-11).** Settings has a section Sign-in protection with the failed sign-ins before a block (3 to 20, default 5) and the block time (1 to 60 minutes, default 5), stored in the `settings` table and applied to the next sign-in attempt without a restart (a stored value outside the bounds, or garbage, makes the whole policy fall back to the defaults, so the protection cannot be switched off). A blocked account shows `blocked` on the Users page and an admin clears it with `Unblock <name>`; `docker compose restart api` clears every block (README, "If you are blocked from signing in"). The limiter is now "block for B minutes after the Nth failure" and keys on the client address and the user name as typed (it keyed on Caddy's own address before, so the lock was effectively per user name); on this Docker setup every browser still reaches the stack as one address (the Compose gateway).
 - **S1-2 [idea] (owner)** An admin should be able to delete accounts; today the Users page can only
   deactivate. To design later: what happens to the audit entries that name the user (keep the name, or
   anonymise), refuse deleting yourself and the last active admin, remove the user's sessions, ask for
   confirmation like the asset and source deletes do, and write an audit entry (`user.deleted`).
   **Prerequisite built in W1a (2026-10-10):** audit entries now carry a snapshot of the actor's name and id (migration 0005), so deleting an account keeps its name in old entries (D11). The deletion itself is still W3d.
+  **Closed by W3d (2026-10-11).** The Users page has `Delete <name>` on every row except your own, behind a confirm dialog; you cannot delete, deactivate or demote your own account (409), the last active administrator is always kept (409), and one advisory lock stops two admins from removing each other in the same instant. The account's sessions go with it, its past audit entries keep its name and id, the Audit User filter lists it as `name (deleted)`, and the deletion is audited as `user.deleted`.
 
 ### Section 13: Cross-cutting: roles, phone width, keyboard (done; Claude's measured pre-checks, then the owner's pass)
 
