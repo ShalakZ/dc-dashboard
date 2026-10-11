@@ -133,6 +133,7 @@ test.describe("W7a: the Assets workspace and the shell", () => {
   test("quick find: Ctrl+K, type, choose with the arrows and Enter", async ({ page }) => {
     await page.goto("/assets");
     const find = page.getByRole("combobox", { name: "Quick find" });
+    await expect(find).toBeVisible(); // the shortcut is registered when the shell mounts; a key pressed before that goes nowhere
     await page.keyboard.press("Control+k");
     await expect(find).toBeFocused();
     await page.keyboard.type("LVP05");
@@ -153,7 +154,9 @@ test.describe("W7a: the Assets workspace and the shell", () => {
     await page.goto("/assets");
     const find = page.getByRole("combobox", { name: "Quick find" });
     const list = page.getByRole("listbox", { name: "Suggestions" });
+    await expect(find).toBeVisible();
     await page.keyboard.press("Control+k");
+    await expect(find).toBeFocused();
     await page.keyboard.type("LVP05");
     await expect(list).toBeVisible();
 
