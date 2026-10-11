@@ -20,6 +20,16 @@ TABLES = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _journal_state():
+    """The journal keeps process-wide state (its rate limiter, its background writes); no test may inherit another's."""
+    from dcdash.core import journal
+
+    journal.reset_limits()
+    yield
+    journal.reset_limits()
+
+
 @pytest.fixture(scope="session")
 def database_url():
     container = PostgresContainer(
