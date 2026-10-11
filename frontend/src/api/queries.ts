@@ -1,8 +1,9 @@
-import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiQuery, type AuditFilters } from "../lib/auditFilters";
 import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { api } from "./client";
 import type {
-  Asset, AuditPage, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
+  Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
   GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   Series, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, SecretKeyStatus, TlsStatus,
@@ -25,7 +26,9 @@ export const keys = {
   scans: ["scans"] as const,
   scan: (id: number) => ["scans", id] as const,
   graph: ["graph"] as const,
-  audit: (limit: number, offset: number) => ["audit", limit, offset] as const,
+  audit: (filters: AuditFilters, limit: number, offset: number) => ["audit", filters, limit, offset] as const,
+  auditOptions: ["audit", "options"] as const,
+  auditEntry: (id: number | null) => ["audit", "entry", id] as const,
   site: ["site"] as const,
   billingSettings: ["settings", "billing"] as const,
   tariffs: ["tariffs"] as const,
@@ -178,11 +181,32 @@ export const useScan = (scanId: number | null) =>
 /** The discovery graph. No polling: refresh it by invalidating `keys.graph`. */
 export const useGraph = () => useQuery({ queryKey: keys.graph, queryFn: () => api.get<GraphModel>("/api/discovery/graph") });
 
-export const useAudit = (limit: number, offset: number) =>
+/** One page of the filtered audit log. The previous page stays on screen while the next loads (`isPlaceholderData` says so). */
+export const useAudit = (filters: AuditFilters, limit: number, offset: number) =>
   useQuery({
-    queryKey: keys.audit(limit, offset),
-    queryFn: () => api.get<AuditPage>(`/api/audit?${new URLSearchParams({ limit: String(limit), offset: String(offset) })}`),
+    queryKey: keys.audit(filters, limit, offset),
+    queryFn: () => api.get<AuditList>(`/api/audit?${apiQuery(filters, { limit, offset })}`),
+    placeholderData: keepPreviousData,
   });
+
+/** The actions and users the audit filters offer. */
+export const useAuditOptions = () =>
+  useQuery({ queryKey: keys.auditOptions, queryFn: () => api.get<AuditOptions>("/api/audit/options"), staleTime: 60_000 });
+
+const isEntryId = (id: number | null): id is number => id !== null && Number.isInteger(id) && id >= 1 && id <= 2_147_483_647;
+
+/** One entry by id; no request for an id the API cannot hold. */
+export const useAuditEntry = (id: number | null) =>
+  useQuery({
+    queryKey: keys.auditEntry(id),
+    enabled: isEntryId(id),
+    queryFn: () => api.get<AuditEntry>(`/api/audit/${id}`),
+  });
+
+/** Where the first entry on or before `date` (a site day) sits in the filtered log. */
+export function auditPosition(filters: AuditFilters, date: string): Promise<AuditPosition> {
+  return api.get<AuditPosition>(`/api/audit/position?${apiQuery(filters, { date })}`);
+}
 
 export const useSite = () =>
   useQuery({ queryKey: keys.site, queryFn: () => api.get<Site>("/api/site"), staleTime: 60_000 });

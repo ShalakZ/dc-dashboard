@@ -367,15 +367,20 @@ container restarts (operational log, not the app's).
   **Closed by W1a (2026-10-10).** Every write route on the agreed list now writes its audit row as part of the route (users, own password, first-run setup, sign-in success, failure and lockout, site timezone, storage saves, assets, mappings, sources including test, test-all and browse); a gate test fails for any write route without an audit call (explicit exempt list: logout, the discovery layout save, two reads sent as POST). Updates store `{before, after}` and skip no-ops. Passwords, source secrets and credentials inside URLs are never recorded; a typed username for an account that does not exist is never stored.
 - **S10-2 [idea] (owner)** Filtering and searching: by user, action, date range, and text inside the detail,
   plus quick filters (for example "only deletions", "only today").
+  **Closed by W3c (2026-10-11).** The Audit screen has a filter bar: User (the accounts found in the log, so a deleted account stays filterable), Action (exact, or a pattern such as `*.deleted` or `login.*`), From and To (days in the site time zone, both inclusive), a Search box over the action, the user name and the detail text, and the quick filters Today, Last 7 days, Deletions and Sign-in problems, with Clear filters. The filtering is done by the server, so it covers the whole log, not just the 200 rows on screen; the filters are part of the address.
 - **S10-3 [idea] (owner)** Export: CSV (and perhaps JSON) of the filtered view, with timestamps in the site
   zone with offset, the same CSV safety rules as the other exports (BOM, formula-injection prefix).
+  **Closed by W3c (2026-10-11).** Export CSV downloads the filtered log (columns id, time with the site zone offset, user, action and detail as JSON text; newest first; BOM and formula-safe cells, like the billing export). It is capped at 20,000 rows: a bigger answer is refused with "narrow the date range". No JSON export (the API is the JSON), and an export is a read, so it is not itself audited.
 - **S10-4 [idea] (owner)** Navigation: jump to a date, page controls that scale, and entries that link to the
   object they are about (asset, dashboard, tariff, source), with permanent links to one entry.
+  **Closed by W3c (2026-10-11).** Go to date jumps to the entries of a day (and says "No entries on <date>" when there are none); the pager has First, Previous, Next, Last, a page box and Rows per page (25, 50, 100, 200), and it stays on screen while a page loads. Each row's time is a permanent link to `/audit/<id>`, and a row links to the thing it is about: an asset or a dashboard, or the list page of sources, tariffs, users, scans, storage or settings (none for deletions and sign-in rows).
 - **S10-5 [ux] (owner)** The screen itself needs a UI and UX pass.
+  **Closed by W3c (2026-10-11).** The Audit screen was rebuilt in today's plain style: one filter bar, a table with a friendly sentence per row, a pager that scales, and an entry page. The full look-and-feel overhaul is still W6.
 - **S10-6 [idea] (owner)** Two views of an entry: the raw log (exactly what is stored, the detail as JSON)
   and a friendly one ("admin changed the site currency from QAR to USD", with before and after shown side by
   side). The friendly view needs the old values stored too: today `tariff.updated` keeps only the new values
   (final review finding F6).
+  **Closed by W3c (2026-10-11).** Friendly is the default view: one sentence per entry ("Changed the site currency from QAR to USD", "Deactivated user bob", "Failed sign-in to this account (wrong password)"), and the entry page adds a before and after table built from the values W1a stores. Raw is one click away and shows exactly what is stored (the action code and the JSON). Older rows without before and after list their stored fields instead.
 - **S10-7 [idea] (Claude, enterprise)** Decide the audit log's own policy: how long entries are kept, that
   nobody can edit or delete them from the app (true today: the screen is read-only, but a database
   administrator can), and optional forwarding to a central log (syslog or a SIEM) for sites that need
