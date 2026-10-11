@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 
 // W3d (sign-in protection and Users: the admin sets how many failed sign-ins block an account and for how long, a blocked account shows
 // on the Users page and can be unblocked, an account can be deleted and its past audit entries keep its name; and no screen or API answer
@@ -6,8 +6,8 @@ import { expect, test, type Page } from "@playwright/test";
 // `correct-horse`. The spec creates the account `w3d-victim` and the source `w3d-cred` itself and removes both before it ends.
 //
 // Every browser of the scratch stack reaches the api through one gateway address, so the only block this spec creates is the one on
-// (that address, `w3d-victim`): the admin's own sign-ins are not touched. The policy is lowered to 3 failures / 1 minute for the test
-// and put back to 5 / 5 in afterAll, whatever happens.
+// (that address, `w3d-victim`): the admin's own sign-ins are not touched. The policy is lowered to 3 failures / 1 minute for the test;
+// beforeAll reads the two numbers it finds and afterAll puts exactly those back, whatever happens.
 //
 // Playwright's getByLabel / getByRole(name) match substrings, case-insensitively: labels and buttons that are prefixes or parts of
 // others (Name, Url, Save, Delete admin, saved) are matched with `exact: true`.
@@ -101,17 +101,38 @@ async function sourceUpdates(page: Page, name: string): Promise<ApiAuditEntry[]>
   return log.items;
 }
 
-test.afterAll(async ({ browser }) => {
-  // Put the policy back to the defaults even when the test failed half way.
+/** The two numbers of the sign-in policy as they were before the spec touched them (undefined until beforeAll has read them). */
+let foundPolicy: { max_failures: number; block_minutes: number } | undefined;
+
+/** Runs `use` with the request context of a fresh browser context in which the admin is signed in. */
+async function asAdmin<T>(browser: Browser, use: (request: APIRequestContext) => Promise<T>): Promise<T> {
   const context = await browser.newContext({ baseURL: BASE_URL });
   try {
     const login = await context.request.post("/api/login", { data: { username: ADMIN.username, password: ADMIN.password } });
-    expect(login.ok(), "the admin signs in to restore the policy").toBe(true);
-    const put = await context.request.put("/api/settings/sign-in", { data: { max_failures: 5, block_minutes: 5 } });
-    expect(put.ok(), `restoring 5 / 5: ${put.status()} ${await put.text()}`).toBe(true);
+    expect(login.ok(), "the admin signs in").toBe(true);
+    return await use(context.request);
   } finally {
     await context.close();
   }
+}
+
+test.beforeAll(async ({ browser }) => {
+  foundPolicy = await asAdmin(browser, async (request) => {
+    const got = await request.get("/api/settings/sign-in");
+    expect(got.ok(), `reading the policy: ${got.status()} ${await got.text()}`).toBe(true);
+    const { max_failures, block_minutes } = (await got.json()) as { max_failures: number; block_minutes: number };
+    return { max_failures, block_minutes };
+  });
+});
+
+test.afterAll(async ({ browser }) => {
+  // Put the policy back to what beforeAll found, even when the test failed half way. Nothing to restore if it was never read.
+  if (!foundPolicy) return;
+  const restore = foundPolicy;
+  await asAdmin(browser, async (request) => {
+    const put = await request.put("/api/settings/sign-in", { data: restore });
+    expect(put.ok(), `restoring ${restore.max_failures} / ${restore.block_minutes}: ${put.status()} ${await put.text()}`).toBe(true);
+  });
 });
 
 test("W3d: block, unblock and delete an account, and a source never shows the credentials stored in its URL", async ({ page, browser }) => {

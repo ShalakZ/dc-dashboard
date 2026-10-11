@@ -66,6 +66,19 @@ def test_the_blocked_sign_in_section_names_every_way_out_and_the_docker_caveat()
         assert needle in text, f"the blocked sign-in section does not mention {needle!r}"
 
 
+def test_the_feature_lists_name_delete_unblock_the_sign_in_protection_and_what_is_audited():
+    users = re.search(r"^- \*\*Users\*\* \(admin\):(.*?)(?=^- \*\*)", README, flags=re.M | re.S)
+    settings = re.search(r"^- \*\*Settings\*\* \(admin\):(.*?)(?=^- \*\*)", README, flags=re.M | re.S)
+    audited = re.search(r"^   Audited:(.*?)Never recorded:", README, flags=re.M | re.S)
+    assert users and settings and audited, "a feature list moved: the Users or Settings bullet or the Audited list"
+    for needle in ("delete", "last administrator", "blocked", "Unblock", "If you are blocked from signing in"):
+        assert needle in users.group(1), f"the Users bullet does not mention {needle!r}"
+    for needle in ("Sign-in protection", "3 to 20", "1 to 60", "applied at once", "If you are blocked from signing in"):
+        assert needle in settings.group(1), f"the Settings bullet does not mention {needle!r}"
+    for needle in ("`user.deleted`", "`login.unblocked`", "`settings.sign_in_changed`"):
+        assert needle in audited.group(1), f"the Audited list does not mention {needle}"
+
+
 def test_the_release_specific_upgrade_sections_are_no_longer_top_level():
     assert not re.search(r"^## Upgrading an existing database to Phase 3", README, flags=re.M)
     assert not re.search(r"^## Upgrading to W1a", README, flags=re.M)

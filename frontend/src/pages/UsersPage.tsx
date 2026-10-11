@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { useCreateUser, useDeleteUser, usePatchUser, useUnblockUser, useUsers } from "../api/queries";
 import type { Role, UserRow } from "../api/types";
@@ -13,7 +13,7 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "request failed";
 }
 
-function UserRowView({ user, self }: { user: UserRow; self: boolean }) {
+function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; onDeleted: () => void }) {
   const patch = usePatchUser();
   const remove = useDeleteUser();
   const unblock = useUnblockUser();
@@ -84,6 +84,7 @@ function UserRowView({ user, self }: { user: UserRow; self: boolean }) {
             onConfirm={async () => {
               await remove.mutateAsync(user.id);
               setDeleting(false);
+              onDeleted();
             }}
             onCancel={() => setDeleting(false)}
           />
@@ -98,17 +99,21 @@ export function UsersPage() {
   const users = useUsers();
   const create = useCreateUser();
   const [form, setForm] = useState({ username: "", password: "", role: "viewer" as Role });
+  // The deleted row and its Delete button are gone, so the dialog has nowhere to give focus back to: keep the keyboard user on the page.
+  const heading = useRef<HTMLHeadingElement>(null);
+  const [deletions, setDeletions] = useState(0);
+  useEffect(() => { if (deletions > 0) heading.current?.focus(); }, [deletions]);
   if (users.isPending) return <p>loading…</p>;
   if (users.isError) return <p className="error" role="alert">{errorText(users.error)}</p>;
   return (
     <section>
-      <h1>Users</h1>
+      <h1 ref={heading} tabIndex={-1}>Users</h1>
       <table>
         <thead>
           <tr><th>Username</th><th>Role</th><th>Status</th><th></th></tr>
         </thead>
         <tbody>
-          {users.data.map((u) => <UserRowView key={u.id} user={u} self={u.id === me?.id} />)}
+          {users.data.map((u) => <UserRowView key={u.id} user={u} self={u.id === me?.id} onDeleted={() => setDeletions((n) => n + 1)} />)}
         </tbody>
       </table>
       <h2>Create user</h2>

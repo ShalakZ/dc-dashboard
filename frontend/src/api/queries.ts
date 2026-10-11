@@ -29,6 +29,8 @@ export const keys = {
   graph: ["graph"] as const,
   audit: (filters: AuditFilters, limit: number, offset: number) => ["audit", filters, limit, offset] as const,
   auditOptions: ["audit", "options"] as const,
+  /** Prefix of every audit query (list, options, entry): invalidate this after a change that writes an audit row. */
+  auditAll: ["audit"] as const,
   auditEntry: (id: number | null) => ["audit", "entry", id] as const,
   site: ["site"] as const,
   billingSettings: ["settings", "billing"] as const,
@@ -114,7 +116,8 @@ export function useDeleteUser() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (id: number) => api.del(`/api/users/${id}`),
-    onSuccess: () => invalidate(keys.users),
+    // The audit options are cached for a minute and the delete adds "(deleted)" to the User filter.
+    onSuccess: () => invalidate(keys.users, keys.auditAll),
   });
 }
 
@@ -123,7 +126,7 @@ export function useUnblockUser() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (id: number) => api.post<{ cleared: number }>(`/api/users/${id}/unblock`, {}),
-    onSuccess: () => invalidate(keys.users),
+    onSuccess: () => invalidate(keys.users, keys.auditAll),
   });
 }
 

@@ -121,6 +121,17 @@ describe("UsersPage delete and unblock", () => {
     expect(screen.getByText("locked", { selector: "td" })).toBeInTheDocument();
   });
 
+  it("moves keyboard focus to the page heading after a delete (the row and its button are gone)", async () => {
+    open();
+    await screen.findByText("ops", { selector: "td" });
+    await userEvent.click(within(rowOf("ops")).getByRole("button", { name: "Delete ops" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete user" }));
+    await waitFor(() => expect(screen.queryByText("ops", { selector: "td" })).not.toBeInTheDocument());
+    const heading = screen.getByRole("heading", { level: 1, name: "Users" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(heading).toHaveAttribute("tabindex", "-1");
+  });
+
   it("keeps the dialog open and shows the API's refusal (last admin) as an alert", async () => {
     const { calls } = open({ "DELETE /api/users/2": { status: 409, body: { detail: "cannot remove the last active admin" } } });
     await screen.findByText("ops", { selector: "td" });

@@ -58,6 +58,31 @@ describe("user delete and unblock", () => {
     await waitFor(() => expect(result.current.users.data?.[0].blocked).toBe(false));
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({});
   });
+
+  // Both write an audit row (user.deleted, login.unblocked), and the Audit "User" filter is cached for a minute: without
+  // an invalidation it would lack "(deleted)" for that long.
+  it("refetches the audit filter options after a delete", async () => {
+    const calls = mockFetch({
+      "GET /api/users": { body: [row(2, false)] },
+      "GET /api/audit/options": { body: { actions: [], users: [], unattributed: false } },
+      "DELETE /api/users/2": { status: 204 },
+    });
+    const { result } = renderHook(() => ({ options: useAuditOptions(), del: useDeleteUser() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.options.data).toBeDefined());
+    await result.current.del.mutateAsync(2);
+    await waitFor(() => expect(calls.filter((c) => c.path === "/api/audit/options")).toHaveLength(2));
+  });
+
+  it("refetches the audit filter options after an unblock", async () => {
+    const calls = mockFetch({
+      "GET /api/audit/options": { body: { actions: [], users: [], unattributed: false } },
+      "POST /api/users/2/unblock": { body: { cleared: 1 } },
+    });
+    const { result } = renderHook(() => ({ options: useAuditOptions(), unblock: useUnblockUser() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.options.data).toBeDefined());
+    await result.current.unblock.mutateAsync(2);
+    await waitFor(() => expect(calls.filter((c) => c.path === "/api/audit/options")).toHaveLength(2));
+  });
 });
 
 describe("sign-in policy queries", () => {
