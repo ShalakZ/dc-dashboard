@@ -91,8 +91,8 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
   const option = useMemo(() => (data && timezone ? seriesToOption(data, range, undefined, timezone) : null), [data, range, timezone]);
   if (metric === null) return <p className="muted">No metric to chart.</p>;
   return (
-    <section aria-label="Trend" onPointerEnter={(e) => { if (e.pointerType === "mouse") setHover(true); }} onPointerLeave={() => setHover(false)}>
-      <div className="row">
+    <section className="trend-frame" aria-label="Trend" onPointerEnter={(e) => { if (e.pointerType === "mouse") setHover(true); }} onPointerLeave={() => setHover(false)}>
+      <div className="row trend-bar">
         <label>Metric
           <select value={metric} onChange={(e) => setMetric(e.target.value as Metric)}>
             {available.map((m) => <option key={m} value={m}>{m}</option>)}

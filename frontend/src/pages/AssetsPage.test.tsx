@@ -552,3 +552,50 @@ describe("AssetsPage", () => {
     });
   });
 });
+
+describe("AssetsPage detail area", () => {
+  const show = async (role: string, route: string, body: unknown = assets) => {
+    mockFetch({ ...authed(role), "GET /api/assets": { body } });
+    renderWithProviders(<AssetsPage />, { route, path: "/assets" });
+    await screen.findByRole("heading", { name: "Assets", level: 1 });
+  };
+  const header = () => screen.getByRole("heading", { name: "Assets", level: 1 }).closest("header")!;
+
+  it("puts an admin's buttons in the page header, with Add asset as the page's only primary and Delete quiet", async () => {
+    await show("admin", "/assets?selected=2");
+    for (const name of ["Add asset", "Edit", "Delete"]) expect(header()).toContainElement(screen.getByRole("button", { name }));
+    expect(document.querySelectorAll("button.primary")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Add asset" })).toHaveClass("primary");
+    expect(screen.getByRole("button", { name: "Delete" })).toHaveClass("danger-quiet");
+    expect(screen.getByRole("button", { name: "Edit" })).not.toHaveClass("primary");
+    for (const name of ["Add asset", "Edit", "Delete"]) expect(screen.getByRole("button", { name })).toHaveAttribute("type", "button");
+  });
+
+  it("nothing selected: the admin has Add asset only in the header", async () => {
+    await show("admin", "/assets");
+    expect(within(header()).getAllByRole("button").map((b) => b.textContent)).toEqual(["Add asset"]);
+  });
+
+  it.each(["viewer", "operator"])("a %s gets no actions in the header", async (role) => {
+    await show(role, "/assets?selected=2");
+    expect(header().querySelector(".actions")).toBeNull();
+    expect(within(header()).queryAllByRole("button")).toHaveLength(0);
+  });
+
+  it("keeps the Selected line a paragraph holding one link to the asset's page, with the words around it", async () => {
+    await show("viewer", "/assets?selected=2");
+    const line = screen.getByText(/\(open page\)/);
+    expect(line.tagName).toBe("P");
+    expect(line).toHaveTextContent("Selected: Room A (open page)");
+    expect(within(line).getAllByRole("link")).toHaveLength(1);
+    expect(within(line).getByRole("link", { name: "Room A" })).toHaveAttribute("href", "/assets/2");
+  });
+
+  it("an empty list says so in an .empty block and adds no heading (a heading with 'assets' in it would clash with the h1 in e2e)", async () => {
+    await show("admin", "/assets", []);
+    const note = screen.getByText("No assets yet.");
+    expect(note.closest(".empty")).not.toBeNull();
+    expect(screen.getAllByRole("heading")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Add asset" })).toHaveLength(1);
+  });
+});
