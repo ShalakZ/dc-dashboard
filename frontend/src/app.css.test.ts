@@ -282,6 +282,13 @@ describe("the shell (W6 sidebar)", () => {
         expect(bodyOf(field)).toMatch(/height:\s*34px/);
       });
 
+      it("gives the field the border that reaches 3:1, and keeps the quieter ring for the chip and the shortcut hint beside it", () => {
+        expect(tok("top-find-border")).not.toBe(tok("top-chip-border"));
+        expect(bodyOf(".qf kbd")).toMatch(/border:\s*1px solid var\(--top-chip-border\)/);
+        expect(bodyOf(".live")).toMatch(/box-shadow:\s*inset 0 0 0 1px var\(--top-chip-border\)/);
+        expect(contrast(tok("top-chip-border"), tok("top-bg"))).toBeLessThan(NON_TEXT); // decoration: why it must not be the field's
+      });
+
       it("draws the shortcut hint in the page's font: the browser's own kbd font is monospace", () => {
         expect(bodyOf(".qf kbd")).toMatch(/font-family:\s*inherit/);
         expect(bodyOf(".qf kbd")).toMatch(/color:\s*var\(--top-find-ph\)/);
@@ -504,6 +511,8 @@ describe("the design tokens (W6)", () => {
     ["top bar: the live dot on the chip ground", () => tok("top-live"), () => tok("top-find-bg")],
     ["top bar: the stale ring and offline diamond on the chip ground", () => tok("top-stale"), () => tok("top-find-bg")],
     ["top bar: white on the bar, as a mark rather than text", () => tok("side-text-strong"), () => tok("top-bg")],
+    ["top bar: the quick find's border on the bar (its outer edge)", () => tok("top-find-border"), () => tok("top-bg")],
+    ["top bar: the quick find's border on the field ground (its inner edge)", () => tok("top-find-border"), () => tok("top-find-bg")],
     ["quick find: the active option's ring on the popup", () => tok("accent"), () => tok("bg")],
   ];
   it.each(nonTextPairs)("%s reads at 3:1", (_name, fg, bg) => {
