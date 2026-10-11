@@ -1,18 +1,13 @@
 @layer w6 {
-  /* W6 assets: the Assets list's detail area and the asset page. main.tsx loads this file on every route, so every rule below
+  /* W6 assets: the Assets workspace's pane (index and asset page). main.tsx loads this file on every route, so every rule below
      is scoped to a class that only these two pages (and TrendChart, which only the asset page renders) carry. Tokens only. */
 
-  /* Assets list: the detail area beside the tree column */
-  /* The header is as tall as the tree column's (52px), so the two rules under them meet across the page. */
-  .assets-detail .page-head { align-items: center; min-height: 52px; margin-bottom: 22px; padding: 0; }
-  .assets-detail .page-head > .actions { grid-row: 1; align-self: center; } /* this header has no crumbs or sub line, so the actions take the one row */
+  /* Assets workspace: the pane beside the tree column */
+  /* The index page's header (no crumbs) is as tall as the tree column's (52px), so the two rules under them meet across the page.
+     An asset's header has crumbs and keeps the standard page header. */
+  .assets-detail .page-head:not(:has(.crumbs)) { align-items: center; min-height: 52px; margin-bottom: 22px; padding: 0; }
+  .assets-detail .page-head:not(:has(.crumbs)) > .actions { grid-row: 1; align-self: center; } /* no crumbs or sub line, so the actions take the one row */
   .assets-detail .page-head .actions .danger-quiet { min-height: 34px; } /* as tall as the buttons beside it */
-  .assets-detail .detail-meta { width: fit-content; max-width: 100%; gap: 14px 40px; margin: 0 0 16px; padding: 14px 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
-  .assets-detail .detail-meta div { display: grid; gap: 2px; min-width: 0; }
-  .assets-detail .detail-meta dt { font-size: var(--fs-xs); font-weight: 600; }
-  .assets-detail .detail-meta dd { font-size: var(--fs-base); }
-  .assets-detail .detail-open { margin: 0; font-size: var(--fs-base); overflow-wrap: anywhere; }
-  .assets-detail .detail-open a { font-weight: 600; }
   .assets-detail .empty { margin-top: 4px; }
   .assets-detail .empty .empty-title { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
 

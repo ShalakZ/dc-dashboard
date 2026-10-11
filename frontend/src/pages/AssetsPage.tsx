@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Outlet, useMatch, useNavigate, useOutletContext } from "react-router";
 import { api } from "../api/client";
 import { keys, useAssets, useInvalidate } from "../api/queries";
 import type { Asset, AssetImpact, AssetIn } from "../api/types";
@@ -18,12 +18,70 @@ function Icon({ children }: { children: ReactNode }) {
   return <svg className="i" viewBox="0 0 24 24" aria-hidden="true">{children}</svg>;
 }
 
+/** What the workspace layout hands to the page in its pane (the index page and the asset page). */
+export interface AssetsContext {
+  admin: boolean;
+  /** A delete is running or awaiting its confirmation: no form may open next to it. */
+  locked: boolean;
+  /** The Add asset dialog; null = top level. */
+  openAdd: (parentId: number | null) => void;
+  /** Edits the asset in the URL. */
+  openEdit: () => void;
+  /** Deletes the asset in the URL: the confirmation, the API's impact check, then back to /assets. */
+  remove: () => void;
+}
+
+/** Null when a page renders outside the workspace (a test that mounts it alone). */
+export function useAssetsContext(): AssetsContext | null {
+  return useOutletContext<AssetsContext | null>() ?? null;
+}
+
+/**
+ * The admin's buttons for a page header, Add asset (the page's one primary) last; nothing for anyone else. `assetId` is the asset the
+ * page shows: Edit and Delete exist only then, and Add asset adds under it. Null on the index page: Add asset adds a top-level asset.
+ */
+export function assetActions(ctx: AssetsContext | null, assetId: number | null): ReactNode {
+  if (!ctx?.admin) return undefined;
+  return (
+    <>
+      {assetId !== null && <button type="button" onClick={ctx.openEdit} disabled={ctx.locked}><Icon><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z" /><path d="m14 7 3 3" /></Icon>Edit</button>}
+      {assetId !== null && <button type="button" className="danger-quiet" onClick={ctx.remove} disabled={ctx.locked}>Delete</button>}
+      <button type="button" className="primary" onClick={() => ctx.openAdd(assetId)} disabled={ctx.locked}><Icon><path d="M12 5v14M5 12h14" /></Icon>Add asset</button>
+    </>
+  );
+}
+
+/** `/assets` itself, until the fleet summary takes its place: the page header, the empty state, or a hint to pick an asset. */
+export function AssetsHome() {
+  const { data: assets = [] } = useAssets();
+  const ctx = useAssetsContext();
+  return (
+    <>
+      <PageHeader title="Assets" actions={assetActions(ctx, null)} />
+      {assets.length === 0 ? (
+        <div className="empty">
+          <span className="empty-icon"><Icon><path d="M12 3 3 7.5 12 12l9-4.5L12 3Z" /><path d="m3 12 9 4.5 9-4.5" /><path d="m3 16.5 9 4.5 9-4.5" /></Icon></span>
+          <p className="empty-title">No assets yet.</p>
+        </div>
+      ) : (
+        <p className="muted">Select an asset in the tree.</p>
+      )}
+    </>
+  );
+}
+
+/**
+ * The layout route of the Assets workspace: the tree column beside the pane, which shows `/assets` (the index) or `/assets/:id` (an
+ * asset). The selected asset is the one in the URL, so a click in the tree is a navigation and the tree never remounts between pages.
+ * The dialogs live here, and the pages open them through the outlet context.
+ */
 export function AssetsPage() {
   const { hasRole } = useAuth();
   const { data: assets = [], error, isLoading } = useAssets();
   const invalidate = useInvalidate();
-  const [params, setParams] = useSearchParams();
-  const selectedId = params.get("selected") ? Number(params.get("selected")) : null;
+  const navigate = useNavigate();
+  const urlId = useMatch("/assets/:id")?.params.id;
+  const selectedId = urlId !== undefined && /^\d+$/.test(urlId) ? Number(urlId) : null; // digits only; the asset page's id check is stricter
   const [dialog, setDialog] = useState<{ kind: "add"; parentId: number | null } | { kind: "edit" } | null>(null);
   const [confirming, setConfirming] = useState<{ asset: Asset; impact: AssetImpact } | null>(null);
   const tree = useMemo(() => buildTree(assets), [assets]);
@@ -35,13 +93,15 @@ export function AssetsPage() {
   const openEdit = () => { if (!locked) setDialog({ kind: "edit" }); };
 
   const closeDialog = () => setDialog(null);
-  const finish = async () => { await invalidate(keys.assets); setDialog(null); };
+  // The fleet figures (counts, sums, the attention list) change with every asset change.
+  const finish = async () => { await invalidate(keys.assets, keys.fleet); setDialog(null); };
   const create = async (body: AssetIn) => { await api.post("/api/assets", body); await finish(); };
   const update = async (body: AssetIn) => { await api.patch(`/api/assets/${selected!.id}`, body); await finish(); };
   const removed = async (asset: Asset, confirm: boolean) => {
     await api.del(`/api/assets/${asset.id}${confirm ? "?confirm=true" : ""}`);
     setConfirming(null);
-    setParams({});
+    // Leave the page first: refreshing the asset list refetches every asset query that is still mounted, including this asset's summary, which would flash a 404.
+    navigate("/assets");
     // Its sums, its widgets' figures and its rate overrides (deleted with it) are on other pages' caches too.
     await Promise.all([finish(), invalidate(keys.billing, keys.widgetData, keys.tariffs)]);
   };
@@ -60,44 +120,20 @@ export function AssetsPage() {
   if (isLoading) return <p className="muted">loading…</p>;
   if (error) return <p className="error" role="alert">{error.message}</p>;
   const admin = hasRole("admin");
-  const parent = selected && assets.find((a) => a.id === selected.parent_id);
-  // The admin's buttons sit in the page header's actions slot, Add asset (the page's one primary) last.
-  const actions = admin ? (
-    <>
-      {selected && <button type="button" onClick={openEdit} disabled={locked}><Icon><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z" /><path d="m14 7 3 3" /></Icon>Edit</button>}
-      {selected && <button type="button" className="danger-quiet" onClick={remove} disabled={locked}>Delete</button>}
-      <button type="button" className="primary" onClick={() => openAdd(selectedId)} disabled={locked}><Icon><path d="M12 5v14M5 12h14" /></Icon>Add asset</button>
-    </>
-  ) : undefined;
+  const context: AssetsContext = { admin, locked, openAdd, openEdit, remove };
   return (
     <>
       <div className="assets-layout">
         <AssetTree
           nodes={tree}
           selectedId={selectedId}
-          onSelect={(id) => setParams({ selected: String(id) })}
           onAddChild={admin ? openAdd : undefined}
           onAddTop={admin ? () => openAdd(null) : undefined}
           disabled={locked}
         />
         <div className="assets-detail">
-          <PageHeader title="Assets" actions={actions} />
-          {assets.length === 0 && (
-            <div className="empty">
-              <span className="empty-icon"><Icon><path d="M12 3 3 7.5 12 12l9-4.5L12 3Z" /><path d="m3 12 9 4.5 9-4.5" /><path d="m3 16.5 9 4.5 9-4.5" /></Icon></span>
-              <p className="empty-title">No assets yet.</p>
-            </div>
-          )}
           {actionError && <p className="error" role="alert">{actionError}</p>}
-          {!selected && assets.length > 0 && <p className="muted">Select an asset in the tree.</p>}
-          {selected && (
-            <dl className="detail-meta">
-              <div><dt>Kind</dt><dd>{selected.kind}</dd></div>
-              <div><dt>Parent</dt><dd>{parent ? parent.name : "None"}</dd></div>
-              <div><dt>Children</dt><dd>{assets.filter((a) => a.parent_id === selected.id).length}</dd></div>
-            </dl>
-          )}
-          {selected && <p className="detail-open">Selected: <Link to={`/assets/${selected.id}`}>{selected.name}</Link> (open page)</p>}
+          <Outlet context={context} />
         </div>
       </div>
       {confirming && (

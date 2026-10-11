@@ -35,6 +35,7 @@ export const keys = {
   site: ["site"] as const,
   billingSettings: ["settings", "billing"] as const,
   tariffs: ["tariffs"] as const,
+  fleet: ["fleet-summary"] as const,
   billing: ["billing"] as const,
   billingCosts: (month: string | null) => ["billing", "costs", month] as const,
   dashboardList: ["dashboards", "list"] as const,

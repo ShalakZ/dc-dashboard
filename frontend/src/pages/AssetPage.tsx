@@ -7,11 +7,13 @@ import { fmt, MetricsTable } from "../components/MetricsTable";
 import { PageHeader } from "../components/PageHeader";
 import { useStream } from "../hooks/useStream";
 import { rollupNote, rollupPower } from "../lib/rollup";
+import { assetActions, useAssetsContext } from "./AssetsPage";
 
 const TrendChart = lazy(() => import("../components/TrendChart").then((m) => ({ default: m.TrendChart })));
 
 export function AssetPage() {
   const id = Number(useParams().id);
+  const workspace = useAssetsContext(); // null when the page is mounted alone: then it has no admin buttons
   const { data, error, isLoading } = useSummary(id);
   const wanted = useMemo(() => {
     const ids = (data?.metrics ?? []).map((m) => m.point_id);
@@ -29,12 +31,14 @@ export function AssetPage() {
   const sources = power ? [] : data.power_rollup?.sources ?? [];
   const rollup = sources.length > 0 ? rollupPower(sources, live) : null;
   const note = rollup && rollupNote(rollup, sources);
+  const chip = wanted.size > 0 ? <span className={connected ? "chip chip-ok" : "chip chip-warn"}>{connected ? "live" : "reconnecting…"}</span> : null;
+  const buttons = assetActions(workspace, id);
   return (
     <div className="asset-page">
       <PageHeader
         title={data.asset.name}
         crumbs={[{ label: "Assets", to: "/assets" }, { label: data.asset.name }]}
-        actions={wanted.size > 0 ? <span className={connected ? "chip chip-ok" : "chip chip-warn"}>{connected ? "live" : "reconnecting…"}</span> : undefined}
+        actions={chip || buttons ? <>{chip}{buttons}</> : undefined}
       />
       <div className="tiles">
         <div className="tile">

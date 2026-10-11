@@ -38,7 +38,6 @@ const only = (list: TreeNode[], visible: ReadonlySet<number> | null) => (visible
 
 interface View {
   selectedId: number | null;
-  onSelect: (id: number) => void;
   onAddChild?: (id: number) => void;
   disabled?: boolean;
   /** Branches the user folded; a branch is open unless it is in here, so a node that gains its first child starts open. */
@@ -74,12 +73,7 @@ function Nodes({ nodes, view }: { nodes: TreeNode[]; view: View }) {
           ) : (
             <span className="twisty-sp" />
           )}
-          <Link
-            to={`/assets/${node.id}`}
-            title={node.name}
-            aria-current={selected ? "true" : undefined}
-            onClick={(e) => { e.preventDefault(); view.onSelect(node.id); }}
-          >
+          <Link to={`/assets/${node.id}`} title={node.name} aria-current={selected ? "true" : undefined}>
             {node.name}
           </Link>
           <span className="kind">{node.kind}</span>
@@ -189,8 +183,10 @@ function useTreeWidth(column: RefObject<HTMLElement | null>) {
  * and which are folded is remembered too. Selecting an asset unfolds the way to it. A handle on the right edge resizes the column
  * (drag, arrow keys, double click for the default); the width is remembered too.
  */
-export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, disabled }: {
-  nodes: TreeNode[]; selectedId: number | null; onSelect: (id: number) => void;
+export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled }: {
+  nodes: TreeNode[];
+  /** The asset in the URL (null: none). A node is a link to its page, so there is no select callback. */
+  selectedId: number | null;
   /** Present for an admin: a + on every node. */
   onAddChild?: (id: number) => void;
   /** Present for an admin: a + in the header that adds a top-level asset. */
@@ -255,7 +251,7 @@ export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, d
 
   const noFold = visible !== null || foldable.size === 0; // a filter has its own view of the tree
   const toggleName = minimized ? "Expand asset tree" : "Minimize asset tree";
-  const view: View = { selectedId, onSelect, onAddChild: addChild, disabled, collapsed, visible, toggle: toggleBranch };
+  const view: View = { selectedId, onAddChild: addChild, disabled, collapsed, visible, toggle: toggleBranch };
   return (
     <section
       ref={column}

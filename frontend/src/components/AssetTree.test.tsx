@@ -15,7 +15,7 @@ const nodes = () => buildTree(flat);
 type Props = Partial<Parameters<typeof AssetTree>[0]>;
 const ui = (props: Props = {}) => (
   <MemoryRouter>
-    <AssetTree nodes={nodes()} selectedId={null} onSelect={() => {}} {...props} />
+    <AssetTree nodes={nodes()} selectedId={null} {...props} />
   </MemoryRouter>
 );
 

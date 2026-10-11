@@ -259,7 +259,7 @@
   .tiles > .tile { min-width: 0; max-width: none; margin: 0; }
   .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 12px; margin: 8px 0; max-width: 480px; display: grid; gap: 8px; }
 
-  /* Asset tree column (Assets list page, option B). main is flush on this page (main:has(.assets-layout) above), so the column
+  /* Asset tree column (the Assets workspace, option B). main is flush on these pages (main:has(.assets-layout) above), so the column
      meets the sidebar; it is sticky, as tall as the window below the top bar, and the detail area beside it restores the page gutter. */
   .assets-layout { display: flex; align-items: flex-start; min-height: calc(100vh - var(--bar-h)); }
   .assets-detail { flex: 1; min-width: 0; padding: 0 var(--gutter) 48px; }
@@ -302,10 +302,6 @@
   .node .add svg.i { width: 14px; height: 14px; }
   .node.is-selected { background: var(--accent-tint); box-shadow: inset 3px 0 0 var(--accent); }
   .node.is-selected a { color: var(--accent-ink); font-weight: 600; }
-  .detail-meta { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 0 0 18px; font-size: var(--fs-sm); }
-  .detail-meta div { display: flex; gap: 8px; }
-  .detail-meta dt { color: var(--text-2); }
-  .detail-meta dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
 
   /* Breadcrumb trail (Crumbs): links in the accent, the current page bold, a "/" between; a long label wraps instead of widening the page */
   .crumbs { font-size: var(--fs-sm); color: var(--text-2); }

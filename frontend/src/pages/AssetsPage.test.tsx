@@ -1,25 +1,82 @@
+import { useQuery } from "@tanstack/react-query";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
+import { Route, Routes, useLocation } from "react-router";
+import { api } from "../api/client";
+import { keys } from "../api/queries";
 import { mockFetch } from "../test/fetchMock";
 import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
+import { FakeEventSource } from "../test/fakeEventSource";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
-import { AssetsPage } from "./AssetsPage";
+import { AssetPage } from "./AssetPage";
+import { AssetsHome, AssetsPage } from "./AssetsPage";
 
 const assets = [
   { id: 1, parent_id: null, name: "Site", kind: "site", sort_order: 0 },
   { id: 2, parent_id: 1, name: "Room A", kind: "room", sort_order: 0 },
 ];
-const authed = (role: string) => ({
+type Fixture = typeof assets;
+
+/** The asset page's summary. No mapped metric by default, so no stream opens and no live chip joins the header's actions. */
+const summaryOf = (asset: Fixture[number], metrics: unknown[] = []) => ({ asset, metrics, energy_today: null, cost_today: null, currency: "QAR" });
+/** What every asset page asks for besides the list: its summary, the trend's series and the site zone. */
+const pageRoutes = (list: Fixture) => ({
+  "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
+  ...Object.fromEntries(list.flatMap((a) => [
+    [`GET /api/assets/${a.id}/summary`, { body: summaryOf(a) }],
+    [`GET /api/assets/${a.id}/series`, { body: { metric: "active_power_kw", unit: "kW", points: [] } }],
+  ])),
+});
+const authed = (role: string, list: Fixture = assets) => ({
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: { id: 1, username: "u", role } },
-  "GET /api/assets": { body: assets },
+  "GET /api/assets": { body: list },
+  ...pageRoutes(list),
+});
+
+/** The location, as text, so that a test can say where a click or a delete landed. */
+function Where() {
+  return <span data-testid="where">{useLocation().pathname}</span>;
+}
+const where = () => screen.getByTestId("where").textContent;
+
+/** keys.fleet has no hook until the summary page exists: a probe that is fetched again only when something invalidates the key. */
+function FleetProbe() {
+  useQuery({ queryKey: keys.fleet, queryFn: () => api.get("/api/probe/fleet"), staleTime: Infinity });
+  return null;
+}
+const fleetRoutes = { "GET /api/probe/fleet": { body: {} } };
+const cacheCounts = (calls: { path: string }[]) => ({ ...probeFetches(calls), fleet: calls.filter((c) => c.path === "/api/probe/fleet").length });
+
+/** The Assets workspace as App mounts it: the layout with the real index page and the real asset page. `extra` renders outside the routes. */
+function renderWorkspace(route: string, { extra }: { extra?: ReactElement } = {}) {
+  return renderWithProviders(
+    <>
+      <Routes>
+        <Route path="/assets" element={<AssetsPage />}>
+          <Route index element={<AssetsHome />} />
+          <Route path=":id" element={<AssetPage />} />
+        </Route>
+      </Routes>
+      <Where />
+      {extra}
+    </>,
+    { route, path: "*" },
+  );
+}
+
+// The real asset page opens a stream when its asset has points; jsdom has no EventSource.
+beforeEach(() => {
+  FakeEventSource.reset();
+  vi.stubGlobal("EventSource", FakeEventSource);
 });
 
 describe("AssetsPage", () => {
   it("renders the hierarchy as a nested tree", async () => {
     mockFetch(authed("viewer"));
-    renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+    renderWorkspace("/assets");
     const site = await screen.findByRole("link", { name: "Site" });
     expect(within(site.closest("li")!).getByRole("link", { name: "Room A" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add asset" })).not.toBeInTheDocument();
@@ -30,7 +87,7 @@ describe("AssetsPage", () => {
       ...authed("admin"),
       "POST /api/assets": { status: 201, body: { id: 3, parent_id: 1, name: "Room B", kind: "generic", sort_order: 0 } },
     });
-    renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+    renderWorkspace("/assets");
     await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
     await userEvent.type(screen.getByLabelText("Name"), "Room B");
     await userEvent.selectOptions(screen.getByLabelText("Parent"), "1");
@@ -44,7 +101,7 @@ describe("AssetsPage", () => {
 
     it("shows a + on every node for an admin, named after the node", async () => {
       mockFetch(authed("admin"));
-      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      renderWorkspace("/assets");
       const plus = await screen.findByRole("button", { name: "Add child of Site" });
       expect(plus).toHaveAttribute("type", "button");
       expect(plus.textContent).toBe(""); // an icon button: the name comes from aria-label, the svg is decoration
@@ -54,14 +111,14 @@ describe("AssetsPage", () => {
 
     it.each(["viewer", "operator"])("shows no + to a %s", async (role) => {
       mockFetch(authed(role));
-      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      renderWorkspace("/assets");
       await screen.findByRole("link", { name: "Site" });
       expect(screen.queryByRole("button", { name: /Add child of/ })).not.toBeInTheDocument();
     });
 
     it("the + opens one dialog titled Add asset with that node as the parent, and Save posts it and closes", async () => {
       const calls = mockFetch({ ...authed("admin"), "POST /api/assets": created });
-      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      renderWorkspace("/assets");
       await userEvent.click(await screen.findByRole("button", { name: "Add child of Site" }));
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
       const dialog = screen.getByRole("dialog", { name: "Add asset" });
@@ -77,7 +134,7 @@ describe("AssetsPage", () => {
       ["Escape", async () => userEvent.keyboard("{Escape}")],
     ])("%s closes the dialog without a request", async (_how, close) => {
       const calls = mockFetch({ ...authed("admin"), "POST /api/assets": created });
-      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      renderWorkspace("/assets");
       await userEvent.click(await screen.findByRole("button", { name: "Add child of Room A" }));
       expect(screen.getByRole("dialog", { name: "Add asset" })).toBeInTheDocument();
       await close();
@@ -87,7 +144,7 @@ describe("AssetsPage", () => {
 
     it("the Add asset button opens the dialog with no parent when nothing is selected", async () => {
       mockFetch(authed("admin"));
-      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      renderWorkspace("/assets");
       await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
       const dialog = screen.getByRole("dialog", { name: "Add asset" });
       expect(within(dialog).getByLabelText("Parent")).toHaveValue("");
@@ -95,14 +152,14 @@ describe("AssetsPage", () => {
 
     it("the Add asset button opens the dialog with the selected asset as the parent", async () => {
       mockFetch(authed("admin"));
-      renderWithProviders(<AssetsPage />, { route: "/assets?selected=2", path: "/assets" });
+      renderWorkspace("/assets/2");
       await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
       expect(within(screen.getByRole("dialog", { name: "Add asset" })).getByLabelText("Parent")).toHaveValue("2");
     });
 
     it("Edit opens the same form, titled Edit asset, with the asset's values", async () => {
       mockFetch(authed("admin"));
-      renderWithProviders(<AssetsPage />, { route: "/assets?selected=2", path: "/assets" });
+      renderWorkspace("/assets/2");
       await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
       const dialog = screen.getByRole("dialog", { name: "Edit asset" });
@@ -113,7 +170,7 @@ describe("AssetsPage", () => {
 
     it("Escape on a dialog opened by Add asset puts focus back on the Add asset button", async () => {
       mockFetch(authed("admin"));
-      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      renderWorkspace("/assets");
       const add = await screen.findByRole("button", { name: "Add asset" });
       await userEvent.click(add);
       expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -124,7 +181,7 @@ describe("AssetsPage", () => {
 
     it("Cancel on a dialog opened by Edit puts focus back on the Edit button", async () => {
       mockFetch(authed("admin"));
-      renderWithProviders(<AssetsPage />, { route: "/assets?selected=2", path: "/assets" });
+      renderWorkspace("/assets/2");
       const edit = await screen.findByRole("button", { name: "Edit" });
       await userEvent.click(edit);
       await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -141,11 +198,10 @@ describe("AssetsPage", () => {
       { id: 4, parent_id: 1, name: "Room B", kind: "room", sort_order: 1 },
       { id: 5, parent_id: null, name: "Yard", kind: "outdoor", sort_order: 1 },
     ];
-    const deepRoutes = (role: string) => ({ ...authed(role), "GET /api/assets": { body: deep } });
     const show = async (role = "viewer", route = "/assets") => {
-      mockFetch(deepRoutes(role));
-      renderWithProviders(<AssetsPage />, { route, path: "/assets" });
-      await screen.findAllByRole("link", { name: "Site" }); // two when Site itself is selected (the tree and the Selected line)
+      mockFetch(authed(role, deep));
+      renderWorkspace(route);
+      await screen.findByRole("link", { name: "Site" });
     };
     const column = () => screen.getByRole("region", { name: "Asset tree" });
     const link = (name: string) => screen.queryByRole("link", { name });
@@ -216,8 +272,8 @@ describe("AssetsPage", () => {
 
     it("starts minimized when minimized was remembered", async () => {
       localStorage.setItem("dcdash.assetTree", "minimized");
-      mockFetch(deepRoutes("viewer"));
-      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      mockFetch(authed("viewer", deep));
+      renderWorkspace("/assets");
       expect(await screen.findByRole("button", { name: "Expand asset tree" })).toHaveAttribute("aria-expanded", "false");
       expect(link("Site")).not.toBeInTheDocument();
     });
@@ -266,18 +322,11 @@ describe("AssetsPage", () => {
       expect(screen.queryAllByRole("link")).toHaveLength(0);
     });
 
-    it("gives each name a title with the full name; the selected one carries aria-current", async () => {
-      await show("viewer", "/assets?selected=3");
+    it("gives each name a title with the full name; the selected one (the asset in the URL) carries aria-current", async () => {
+      await show("viewer", "/assets/3");
       expect(within(column()).getByRole("link", { name: "Panel 1" })).toHaveAttribute("title", "Panel 1");
       expect(within(column()).getByRole("link", { name: "Panel 1" })).toHaveAttribute("aria-current", "true");
       expect(within(column()).getByRole("link", { name: "Room A" })).not.toHaveAttribute("aria-current");
-    });
-
-    it("clicking a name selects it without leaving the page", async () => {
-      await show();
-      await userEvent.click(within(column()).getByRole("link", { name: "Room B" }));
-      expect(within(column()).getByRole("link", { name: "Room B" })).toHaveAttribute("aria-current", "true");
-      expect(screen.getByText(/Selected:/)).toHaveTextContent("Selected: Room B (open page)");
     });
 
     it("a + on a collapsed branch opens it again", async () => {
@@ -290,7 +339,7 @@ describe("AssetsPage", () => {
     });
 
     it("the top-level + (admin only) opens Add asset with no parent, even with an asset selected", async () => {
-      await show("admin", "/assets?selected=2");
+      await show("admin", "/assets/2");
       await userEvent.click(screen.getByRole("button", { name: "Add a top-level asset" }));
       expect(within(screen.getByRole("dialog", { name: "Add asset" })).getByLabelText("Parent")).toHaveValue("");
     });
@@ -300,26 +349,91 @@ describe("AssetsPage", () => {
       expect(screen.queryByRole("button", { name: "Add a top-level asset" })).not.toBeInTheDocument();
     });
 
-    it("the detail area gives the selection's kind, parent and number of children, from the list", async () => {
-      await show("viewer", "/assets?selected=2");
-      const value = (label: string) => screen.getByText(label, { selector: "dt" }).nextElementSibling;
-      expect(value("Kind")).toHaveTextContent("room");
-      expect(value("Parent")).toHaveTextContent("Site");
-      expect(value("Children")).toHaveTextContent("1");
-      expect(screen.getByText(/Selected:/)).toHaveTextContent("Selected: Room A (open page)");
-      expect(screen.getAllByRole("link", { name: "Room A" })).toHaveLength(2); // the tree and the Selected line, no third link
-    });
-
-    it("a top-level selection says None for its parent; nothing selected shows no details", async () => {
-      await show("viewer", "/assets?selected=1");
-      expect(screen.getByText("Parent", { selector: "dt" }).nextElementSibling).toHaveTextContent("None");
-      expect(screen.getByText("Children", { selector: "dt" }).nextElementSibling).toHaveTextContent("2");
-    });
-
     it("nothing selected: the h1 and no details, no Selected line", async () => {
       await show();
       expect(screen.queryByText("Kind", { selector: "dt" })).not.toBeInTheDocument();
       expect(screen.queryByText(/Selected:/)).not.toBeInTheDocument();
+    });
+
+    describe("the tree and the pane are one workspace", () => {
+      it("clicking a node navigates and the asset's tiles, Trend and Metrics appear in the pane, with no second click", async () => {
+        await show();
+        expect(where()).toBe("/assets");
+        expect(screen.getByText("Select an asset in the tree.")).toBeInTheDocument();
+        await userEvent.click(within(column()).getByRole("link", { name: "Room B" }));
+        expect(await screen.findByRole("heading", { name: "Room B", level: 1 })).toBeInTheDocument();
+        expect(where()).toBe("/assets/4");
+        expect(screen.getByText("Live power")).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Trend", level: 2 })).toBeInTheDocument();
+        expect(screen.getByRole("heading", { name: "Metrics", level: 2 })).toBeInTheDocument();
+        expect(screen.queryByText("Select an asset in the tree.")).not.toBeInTheDocument();
+      });
+
+      it("selecting highlights the node: aria-current follows the URL from one asset to the next", async () => {
+        await show();
+        expect(within(column()).getByRole("link", { name: "Room A" })).not.toHaveAttribute("aria-current");
+        await userEvent.click(within(column()).getByRole("link", { name: "Room A" }));
+        await screen.findByRole("heading", { name: "Room A", level: 1 });
+        expect(within(column()).getByRole("link", { name: "Room A" })).toHaveAttribute("aria-current", "true");
+        await userEvent.click(within(column()).getByRole("link", { name: "Room B" }));
+        await screen.findByRole("heading", { name: "Room B", level: 1 });
+        expect(within(column()).getByRole("link", { name: "Room B" })).toHaveAttribute("aria-current", "true");
+        expect(within(column()).getByRole("link", { name: "Room A" })).not.toHaveAttribute("aria-current");
+        expect(within(column()).getAllByRole("link").filter((a) => a.hasAttribute("aria-current"))).toHaveLength(1);
+      });
+
+      it("the column stays mounted and keeps its folds when you move between two assets", async () => {
+        await show();
+        const before = column();
+        await userEvent.click(screen.getByRole("button", { name: "Children of Room A" })); // folds Panel 1 away
+        await userEvent.click(within(column()).getByRole("link", { name: "Site" }));
+        await screen.findByRole("heading", { name: "Site", level: 1 });
+        await userEvent.click(within(column()).getByRole("link", { name: "Room B" }));
+        await screen.findByRole("heading", { name: "Room B", level: 1 });
+        expect(column()).toBe(before);
+        expect(before.isConnected).toBe(true);
+        expect(screen.getByRole("button", { name: "Children of Room A" })).toHaveAttribute("aria-expanded", "false");
+        expect(link("Panel 1")).not.toBeInTheDocument();
+      });
+
+      it("the column keeps the filter text (and the input itself) when you move between two assets", async () => {
+        await show();
+        await typeFilter("room");
+        const filter = screen.getByLabelText("Filter assets");
+        await userEvent.click(within(column()).getByRole("link", { name: "Room A" }));
+        await screen.findByRole("heading", { name: "Room A", level: 1 });
+        await userEvent.click(within(column()).getByRole("link", { name: "Room B" }));
+        await screen.findByRole("heading", { name: "Room B", level: 1 });
+        expect(screen.getByLabelText("Filter assets")).toBe(filter);
+        expect(filter).toHaveValue("room");
+        expect(link("Yard")).not.toBeInTheDocument(); // still filtered
+      });
+
+      it("a viewer sees no Edit, Delete or Add asset on an asset's page, and no + in the tree", async () => {
+        await show("viewer", "/assets/2");
+        await screen.findByRole("heading", { name: "Room A", level: 1 });
+        for (const name of ["Edit", "Delete", "Add asset", "Add a top-level asset"]) expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /Add child of/ })).not.toBeInTheDocument();
+      });
+
+      it("the asset page has no Kind/Parent/Children block and no Selected line: the tree link is the only link to the asset in the list", async () => {
+        await show("viewer", "/assets/2");
+        await screen.findByRole("heading", { name: "Room A", level: 1 });
+        for (const label of ["Kind", "Parent", "Children"]) expect(screen.queryByText(label, { selector: "dt" })).not.toBeInTheDocument();
+        expect(screen.queryByText(/Selected:/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/open page/)).not.toBeInTheDocument();
+        expect(screen.getAllByRole("link", { name: "Room A" })).toHaveLength(1);
+      });
+
+      it("an asset with points puts the live chip first in the header's actions, then the admin's Edit, Delete and Add asset", async () => {
+        const point = { mapping_id: 1, point_id: 7, metric: "active_power_kw", unit: "kW", value: 10.5, ts: "2026-10-07T10:00:00+00:00", quality: 0 };
+        mockFetch({ ...authed("admin", deep), "GET /api/assets/2/summary": { body: summaryOf(deep[1], [point]) } });
+        renderWorkspace("/assets/2");
+        const head = (await screen.findByRole("heading", { name: "Room A", level: 1 })).closest("header")!;
+        const actions = head.querySelector(".actions")!;
+        expect([...actions.children].map((c) => c.textContent)).toEqual(["reconnecting…", "Edit", "Delete", "Add asset"]);
+        expect(actions.children[0]).toHaveClass("chip");
+      });
     });
   });
 
@@ -333,9 +447,9 @@ describe("AssetsPage", () => {
         { id: 4, parent_id: 2, name: "LV Panel", kind: "panel", sort_order: 0 },
       ] },
     });
-    renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+    renderWorkspace("/assets");
     await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
-    const texts = within(screen.getByLabelText("Parent")).getAllByRole("option").map((o) => o.textContent!.replace(/\u00a0/g, "").trim());
+    const texts = within(screen.getByLabelText("Parent")).getAllByRole("option").map((o) => o.textContent!.replace(/ /g, "").trim());
     expect(texts).toEqual(["(none)", "Room 1", "LV Panel (Room 1)", "Room 2", "LV Panel (Room 2)"]);
   });
 
@@ -344,7 +458,7 @@ describe("AssetsPage", () => {
       ...authed("admin"),
       "PATCH /api/assets/1": { status: 422, body: { detail: "an asset cannot be moved under itself or its own descendants" } },
     });
-    renderWithProviders(<AssetsPage />, { route: "/assets?selected=1", path: "/assets" });
+    renderWorkspace("/assets/1");
     await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("cannot be moved under itself");
@@ -355,13 +469,34 @@ describe("AssetsPage", () => {
       ...authed("admin"),
       "POST /api/assets": { status: 409, body: { detail: 'an asset named "Room A" already exists under "Site"; choose another name' } },
     });
-    renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+    renderWorkspace("/assets");
     await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
     await userEvent.type(screen.getByLabelText("Name"), "Room A");
     await userEvent.selectOptions(screen.getByLabelText("Parent"), "1");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent('an asset named "Room A" already exists under "Site"');
     expect(screen.getByLabelText("Name")).toHaveValue("Room A"); // the form stays open with what was typed
+  });
+
+  describe("saving refreshes the fleet figures too", () => {
+    it("a new asset and an edited one each fetch the fleet summary again", async () => {
+      const calls = mockFetch({
+        ...authed("admin"), ...fleetRoutes,
+        "POST /api/assets": { status: 201, body: { id: 3, parent_id: 1, name: "Room B", kind: "generic", sort_order: 0 } },
+        "PATCH /api/assets/2": { body: { ...assets[1], name: "Room A2" } },
+      });
+      renderWorkspace("/assets/2", { extra: <FleetProbe /> });
+      const fleet = () => cacheCounts(calls).fleet;
+      await waitFor(() => expect(fleet()).toBe(1));
+      await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+      await userEvent.type(screen.getByLabelText("Name"), "Room B");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(fleet()).toBe(2));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(fleet()).toBe(3));
+    });
   });
 
   describe("deleting", () => {
@@ -372,7 +507,7 @@ describe("AssetsPage", () => {
       let removed = false;
       const calls = mockFetch({
         ...authed("admin"),
-        ...(probes ? probeRoutes : {}),
+        ...(probes ? { ...probeRoutes, ...fleetRoutes } : {}),
         "GET /api/assets": () => ({ body: removed ? [assets[0]] : assets }),
         "DELETE /api/assets/2": ({ url }) => {
           urls.push(url);
@@ -381,7 +516,7 @@ describe("AssetsPage", () => {
           return confirmed;
         },
       });
-      renderWithProviders(<><AssetsPage />{probes && <CacheProbes />}</>, { route: "/assets?selected=2", path: "/assets" });
+      renderWorkspace("/assets/2", { extra: probes ? <><CacheProbes /><FleetProbe /></> : undefined });
       return { calls, urls };
     }
     const deletes = (calls: { method: string }[]) => calls.filter((c) => c.method === "DELETE").length;
@@ -389,23 +524,26 @@ describe("AssetsPage", () => {
 
     beforeEach(() => { vi.spyOn(window, "confirm").mockReturnValue(true); });
 
-    it("deletes a plain asset as before: one request, no dialog", async () => {
+    it("deletes a plain asset as before: one request, no dialog, and the page lands on /assets", async () => {
       const { calls, urls } = setup(false);
       await click("Delete");
       await waitFor(() => expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument());
       expect(urls).toEqual(["/api/assets/2"]);
       expect(deletes(calls)).toBe(1);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(where()).toBe("/assets"); // not a dead /assets/2
+      expect(await screen.findByText("Select an asset in the tree.")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
     });
 
     it.each([["a plain asset", false], ["an asset with mappings, after Delete anyway", true]])(
-      "refreshes billing, the dashboards' widget data and the tariff list too, because they depend on the asset: %s",
+      "refreshes billing, the dashboards' widget data, the tariff list and the fleet summary too, because they depend on the asset: %s",
       async (_case, needsConfirm) => {
         const { calls } = setup(needsConfirm, undefined, true);
-        await waitFor(() => expect(probeFetches(calls)).toEqual({ billing: 1, widgetData: 1, tariffs: 1 }));
+        await waitFor(() => expect(cacheCounts(calls)).toEqual({ billing: 1, widgetData: 1, tariffs: 1, fleet: 1 }));
         await click("Delete");
         if (needsConfirm) await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
-        await waitFor(() => expect(probeFetches(calls)).toEqual({ billing: 2, widgetData: 2, tariffs: 2 }));
+        await waitFor(() => expect(cacheCounts(calls)).toEqual({ billing: 2, widgetData: 2, tariffs: 2, fleet: 2 }));
       },
     );
 
@@ -435,19 +573,21 @@ describe("AssetsPage", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(urls).toEqual(["/api/assets/2"]); // only the first, refused request
       expect(deletes(calls)).toBe(1);
-      expect(screen.getByText(/Selected:/)).toBeInTheDocument(); // still selected, still in the tree
-      expect(screen.getAllByRole("link", { name: "Room A" })).toHaveLength(2);
+      expect(where()).toBe("/assets/2"); // still on the asset, still in the tree
+      expect(screen.getByRole("heading", { name: "Room A", level: 1 })).toBeInTheDocument();
+      expect(within(screen.getByRole("region", { name: "Asset tree" })).getByRole("link", { name: "Room A" })).toHaveAttribute("aria-current", "true");
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
-    it("Delete anyway repeats the request with confirm=true, then closes and refreshes the tree", async () => {
+    it("Delete anyway repeats the request with confirm=true, then closes, refreshes the tree and lands on /assets", async () => {
       const { urls } = setup(true);
       await click("Delete");
       await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(urls).toEqual(["/api/assets/2", "/api/assets/2?confirm=true"]);
       await waitFor(() => expect(screen.queryByRole("link", { name: "Room A" })).not.toBeInTheDocument());
-      expect(screen.queryByText(/Selected:/)).not.toBeInTheDocument();
+      expect(where()).toBe("/assets");
+      expect(screen.getByText("Select an asset in the tree.")).toBeInTheDocument();
     });
 
     it("keeps the dialog open and says why when the confirmed request fails", async () => {
@@ -456,14 +596,16 @@ describe("AssetsPage", () => {
       await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
       const dialog = await screen.findByRole("dialog");
       expect(await within(dialog).findByRole("alert")).toHaveTextContent("admin role required");
+      expect(where()).toBe("/assets/2"); // a failed delete does not leave the asset
     });
 
-    it("shows any other 409 as a plain alert, not as a confirmation", async () => {
+    it("shows any other 409 as a plain alert above the page, not as a confirmation", async () => {
       mockFetch({ ...authed("admin"), "DELETE /api/assets/2": { status: 409, body: { detail: "something else" } } });
-      renderWithProviders(<AssetsPage />, { route: "/assets?selected=2", path: "/assets" });
+      renderWorkspace("/assets/2");
       await click("Delete");
       expect(await screen.findByRole("alert")).toHaveTextContent("something else");
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(where()).toBe("/assets/2");
     });
   });
 
@@ -474,7 +616,7 @@ describe("AssetsPage", () => {
         "POST /api/assets": { status: 201, body: { id: 3, parent_id: 1, name: "Room B", kind: "generic", sort_order: 0 } },
       });
       const hold = holdFetch((method, path) => method === "POST" && path === "/api/assets");
-      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      renderWorkspace("/assets");
       await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
       await userEvent.type(screen.getByLabelText("Name"), "Room B");
       await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -495,7 +637,7 @@ describe("AssetsPage", () => {
         "POST /api/assets": { status: 201, body: { id: 3, parent_id: 1, name: "Room B", kind: "generic", sort_order: 0 } },
       });
       const hold = holdFetch((method, path) => method === "POST" && path === "/api/assets");
-      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      renderWorkspace("/assets");
       await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
       await userEvent.type(screen.getByLabelText("Name"), "Room B");
       await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -511,7 +653,7 @@ describe("AssetsPage", () => {
       function startDelete() {
         mockFetch({ ...authed("admin"), "DELETE /api/assets/2": { status: 409, body: impact } });
         const hold = holdFetch((method, path) => method === "DELETE" && path === "/api/assets/2");
-        renderWithProviders(<AssetsPage />, { route: "/assets?selected=2", path: "/assets" });
+        renderWorkspace("/assets/2");
         return hold;
       }
       beforeEach(() => { vi.spyOn(window, "confirm").mockReturnValue(true); });
@@ -553,17 +695,18 @@ describe("AssetsPage", () => {
   });
 });
 
-describe("AssetsPage detail area", () => {
-  const show = async (role: string, route: string, body: unknown = assets) => {
-    mockFetch({ ...authed(role), "GET /api/assets": { body } });
-    renderWithProviders(<AssetsPage />, { route, path: "/assets" });
-    await screen.findByRole("heading", { name: "Assets", level: 1 });
+describe("AssetsPage header", () => {
+  /** `title` is the h1 to wait for: "Assets" on the index page, the asset's name on its own page. */
+  const show = async (role: string, route: string, body: Fixture = assets, title = "Assets") => {
+    mockFetch(authed(role, body));
+    renderWorkspace(route);
+    await screen.findByRole("heading", { name: title, level: 1 });
   };
-  const header = () => screen.getByRole("heading", { name: "Assets", level: 1 }).closest("header")!;
+  const header = (title = "Assets") => screen.getByRole("heading", { name: title, level: 1 }).closest("header")!;
 
-  it("puts an admin's buttons in the page header, with Add asset as the page's only primary and Delete quiet", async () => {
-    await show("admin", "/assets?selected=2");
-    for (const name of ["Add asset", "Edit", "Delete"]) expect(header()).toContainElement(screen.getByRole("button", { name }));
+  it("puts an admin's buttons in the asset page's header, with Add asset as the page's only primary and Delete quiet", async () => {
+    await show("admin", "/assets/2", assets, "Room A");
+    for (const name of ["Add asset", "Edit", "Delete"]) expect(header("Room A")).toContainElement(screen.getByRole("button", { name }));
     expect(document.querySelectorAll("button.primary")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Add asset" })).toHaveClass("primary");
     expect(screen.getByRole("button", { name: "Delete" })).toHaveClass("danger-quiet");
@@ -571,24 +714,21 @@ describe("AssetsPage detail area", () => {
     for (const name of ["Add asset", "Edit", "Delete"]) expect(screen.getByRole("button", { name })).toHaveAttribute("type", "button");
   });
 
-  it("nothing selected: the admin has Add asset only in the header", async () => {
+  it("nothing selected: the admin has Add asset only in the header, as the page's only primary", async () => {
     await show("admin", "/assets");
     expect(within(header()).getAllByRole("button").map((b) => b.textContent)).toEqual(["Add asset"]);
+    expect(document.querySelectorAll("button.primary")).toHaveLength(1);
   });
 
-  it.each(["viewer", "operator"])("a %s gets no actions in the header", async (role) => {
-    await show(role, "/assets?selected=2");
+  it.each(["viewer", "operator"])("a %s gets no actions in the index header", async (role) => {
+    await show(role, "/assets");
     expect(header().querySelector(".actions")).toBeNull();
     expect(within(header()).queryAllByRole("button")).toHaveLength(0);
   });
 
-  it("keeps the Selected line a paragraph holding one link to the asset's page, with the words around it", async () => {
-    await show("viewer", "/assets?selected=2");
-    const line = screen.getByText(/\(open page\)/);
-    expect(line.tagName).toBe("P");
-    expect(line).toHaveTextContent("Selected: Room A (open page)");
-    expect(within(line).getAllByRole("link")).toHaveLength(1);
-    expect(within(line).getByRole("link", { name: "Room A" })).toHaveAttribute("href", "/assets/2");
+  it.each(["viewer", "operator"])("a %s gets no buttons in an asset page's header", async (role) => {
+    await show(role, "/assets/2", assets, "Room A");
+    expect(within(header("Room A")).queryAllByRole("button")).toHaveLength(0);
   });
 
   it("nothing selected: one muted line under the header says what to do; a selection or an empty list has none", async () => {
@@ -600,7 +740,7 @@ describe("AssetsPage detail area", () => {
   });
 
   it("a selected asset has no such line", async () => {
-    await show("viewer", "/assets?selected=2");
+    await show("viewer", "/assets/2", assets, "Room A");
     expect(screen.queryByText("Select an asset in the tree.")).not.toBeInTheDocument();
   });
 
