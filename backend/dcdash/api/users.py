@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api", tags=["users"], dependencies=[Depends(require_
 
 Role = Literal["viewer", "operator", "admin"]
 
-ADMIN_CHANGES_LOCK = 7_300_001  # any constant; one lock serialises every change that can remove an administrator
+ADMIN_CHANGES_LOCK = 7_300_001  # any constant; one lock serialises every change to a user account (PATCH and DELETE)
 
 
 class UserRow(BaseModel):
@@ -78,12 +78,15 @@ async def create_user(
     return user
 
 
-async def lock_admin_changes(db: AsyncSession, acting: User, target_id: int) -> User:
-    """Serialise the changes that can remove an administrator, then check that one will remain.
+async def lock_admin_changes(db: AsyncSession, acting: User, target_id: int, *, removes_admin: bool) -> User:
+    """Serialise every change to a user account; if it can remove an administrator, check that one will remain.
 
     Without the lock two admins could demote, deactivate or delete each other in the same instant and leave none (and
-    with no active administrator nobody can administer the system). Under the lock the acting admin is read again: a
-    request that lost the race finds itself changed or gone and gets a 401. Returns the target, freshly read.
+    with no active administrator nobody can administer the system). Every change takes it, not only those: a row lock
+    on the target would deadlock two admins who reset each other (each audit insert needs the other's row), and an
+    admin deleted mid-request would break the audit insert's foreign key (a 500). Under the lock the acting admin is
+    read again: a request that lost the race finds itself changed or gone and gets a 401. Nothing takes a row lock
+    before the advisory lock. Returns the target, freshly read.
     """
     await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ADMIN_CHANGES_LOCK})
     current = await db.get(User, acting.id, populate_existing=True)
@@ -92,11 +95,12 @@ async def lock_admin_changes(db: AsyncSession, acting: User, target_id: int) -> 
     target = await db.get(User, target_id, populate_existing=True)
     if target is None:
         raise HTTPException(404, "user not found")
-    others = await db.scalar(
-        select(func.count()).select_from(User).where(User.role == "admin", User.active, User.id != target.id)
-    )
-    if not others:
-        raise HTTPException(409, "cannot remove the last active administrator")
+    if removes_admin:
+        others = await db.scalar(
+            select(func.count()).select_from(User).where(User.role == "admin", User.active, User.id != target.id)
+        )
+        if not others:
+            raise HTTPException(409, "cannot remove the last active administrator")
     return target
 
 
@@ -113,17 +117,10 @@ async def patch_user(
     admin: User = Depends(require_role("admin")),
 ) -> User:
     removes_admin = body.active is False or body.role not in (None, "admin")
-    if removes_admin:
-        user = await db.get(User, user_id)  # no row lock yet: the admin lock below comes first, then the rows
-    else:
-        # Lock the row, so a DELETE of the same account either waits for this change or has already gone (404).
-        user = await db.get(User, user_id, with_for_update=True, populate_existing=True)
-    if user is None:
-        raise HTTPException(404, "user not found")
-    if user.id == admin.id and (body.active is False or (body.role is not None and body.role != "admin")):
+    if user_id == admin.id and (body.active is False or (body.role is not None and body.role != "admin")):
         raise HTTPException(409, "cannot deactivate or demote yourself")
-    if removes_admin:
-        user = await lock_admin_changes(db, admin, user_id)
+    # One path for every change: under the admin lock a DELETE of the same account has either finished (404) or waits.
+    user = await lock_admin_changes(db, admin, user_id, removes_admin=removes_admin)
     before = {"role": user.role, "active": user.active, "password": "set"}
     if body.role is not None:
         user.role = body.role
@@ -140,8 +137,7 @@ async def patch_user(
     await db.commit()
     if body.password is not None:
         forget_sign_in_failures(name)
-    await db.refresh(user)
-    return user
+    return user  # no refresh: the fields stay loaded (expire_on_commit=False), so a DELETE after the commit cannot fail it
 
 
 @router.delete("/users/{user_id}", status_code=204, response_model=None)
@@ -152,7 +148,7 @@ async def delete_user(
 ) -> None:
     if user_id == admin.id:
         raise HTTPException(409, "cannot delete yourself")
-    user = await lock_admin_changes(db, admin, user_id)
+    user = await lock_admin_changes(db, admin, user_id, removes_admin=True)
     name = user.username  # kept for the limiter below: the row is deleted
     await audit(db, admin.id, "user.deleted", {"user_id": user.id, "username": name, "role": user.role, "active": user.active})
     # The database does the rest: sessions go with the account, every other row keeps its owner field as NULL.

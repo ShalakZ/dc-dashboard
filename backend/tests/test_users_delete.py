@@ -7,7 +7,8 @@ from decimal import Decimal
 import httpx
 import pytest
 from fastapi import HTTPException
-from helpers import login_as, make_user
+from helpers import login_as, make_user, wait_for
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api import users as users_module
@@ -57,6 +58,50 @@ def commits_meet(monkeypatch: pytest.MonkeyPatch, wait: float = 0.5):
 
 async def active_admins(db) -> int:
     return await db.fetchval("SELECT count(*) FROM users WHERE role = 'admin' AND active")
+
+
+@contextlib.contextmanager
+def audits_meet(monkeypatch: pytest.MonkeyPatch, wait: float = 1.0):
+    """Hold every user-change audit write until the other request has also reached its own (or `wait` seconds passed).
+
+    The audit insert checks the foreign key to the acting admin's row. With a row lock on the target, two admins who
+    change each other each hold the row the other one's insert needs: a deadlock. Under the admin lock the second
+    request never arrives (it waits for the lock), and the first goes on after `wait` seconds.
+    """
+    arrived: list[int] = []
+    both = asyncio.Event()
+    real_audit_change = users_module.audit_change
+
+    async def audit_change(*args, **kwargs):
+        arrived.append(1)
+        if len(arrived) >= 2:
+            both.set()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(both.wait(), wait)
+        return await real_audit_change(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(users_module, "audit_change", audit_change)
+        yield
+
+
+@contextlib.asynccontextmanager
+async def request_stuck_at_the_lock(pool, send):
+    """Hold the admin lock in a transaction of its own, start `send()`, and yield (that connection, the request's task)
+    once the request is waiting for the lock. Leaving the block ends the transaction: the lock is released and the
+    request goes on (await its task afterwards). Fails if the request never waits, i.e. never asks for the lock."""
+    async with pool.acquire() as holder:
+        async with holder.transaction():
+            await holder.execute("SELECT pg_advisory_xact_lock($1)", users_module.ADMIN_CHANGES_LOCK)
+            task = asyncio.ensure_future(send())
+            try:
+                waiting = "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+                await wait_for(lambda: pool.fetchval(waiting), 1, timeout=3.0)
+                assert not task.done()
+                yield holder, task
+            except BaseException:
+                task.cancel()
+                raise
 
 
 async def test_deleting_an_account_is_admin_only(client, db):
@@ -127,11 +172,20 @@ async def test_the_guard_refuses_to_remove_the_last_active_admin(db):
     async with get_sessionmaker()() as session:
         acting = await session.get(User, only)
         try:
-            await users_module.lock_admin_changes(session, acting, only)
+            await users_module.lock_admin_changes(session, acting, only, removes_admin=True)
         except HTTPException as refusal:
             assert refusal.status_code == 409 and "last active administrator" in refusal.detail
         else:
             raise AssertionError("the last active admin was allowed to be removed")
+
+
+async def test_a_change_that_removes_no_administrator_needs_no_other_one(db):
+    """The count of the other active administrators runs only when the change can remove one."""
+    only = await make_user(db, "only", "admin")
+    async with get_sessionmaker()() as session:
+        acting = await session.get(User, only)
+        target = await users_module.lock_admin_changes(session, acting, only, removes_admin=False)
+        assert target.id == only
 
 
 async def test_the_guard_signs_out_an_acting_admin_who_is_no_longer_one(db):
@@ -141,7 +195,7 @@ async def test_the_guard_signs_out_an_acting_admin_who_is_no_longer_one(db):
         acting = await session.get(User, acting_id)
         await db.execute("UPDATE users SET role = 'viewer' WHERE id = $1", acting_id)  # changed behind the loaded copy
         try:
-            await users_module.lock_admin_changes(session, acting, target)
+            await users_module.lock_admin_changes(session, acting, target, removes_admin=True)
         except HTTPException as refusal:
             assert refusal.status_code == 401
         else:
@@ -295,3 +349,95 @@ async def test_a_patch_racing_a_delete_of_the_same_account_answers_404_never_500
     assert deleted.status_code == 204
     assert patched.status_code in (200, 404)
     assert await db.fetchval("SELECT count(*) FROM users WHERE id = $1", victim) == 0
+
+
+# The admin lock covers EVERY change to an account, not only the ones that can remove an administrator. A row lock on the
+# target instead deadlocks when two admins change each other (see audits_meet), and does nothing for an acting admin who
+# is deleted while their request is running (the audit insert then breaks on the foreign key: a 500).
+
+
+@pytest.mark.parametrize(
+    ("body", "role", "active"),
+    [
+        ({"password": "another-password"}, "viewer", True),
+        ({"active": True}, "viewer", False),
+        ({"role": "admin"}, "viewer", True),
+        ({"role": "viewer"}, "operator", True),
+        ({"active": False}, "viewer", True),
+    ],
+    ids=["password", "reactivate", "promote", "demote", "deactivate"],
+)
+async def test_every_kind_of_patch_waits_for_the_admin_lock(client, db, body, role, active):
+    await login_as(client, db)
+    victim = await make_user(db, "victim", role, active=active)
+    async with request_stuck_at_the_lock(db, lambda: client.patch(f"/api/users/{victim}", json=body)) as (_, patching):
+        pass
+    response = await asyncio.wait_for(patching, 10)
+    assert response.status_code == 200, response.text
+    row = await db.fetchrow("SELECT role, active FROM users WHERE id = $1", victim)
+    for field in ("role", "active"):
+        if field in body:
+            assert row[field] == body[field]
+
+
+async def test_a_patch_by_an_admin_who_is_deleted_meanwhile_answers_401(app, db):
+    async with two_admins(app, db) as (_a, b, _a_id, b_id):
+        victim = await make_user(db, "victim")
+        before = await db.fetchval("SELECT password_hash FROM users WHERE id = $1", victim)
+
+        def send():
+            return b.patch(f"/api/users/{victim}", json={"password": "another-password"})
+
+        async with request_stuck_at_the_lock(db, send) as (holder, patching):
+            await holder.execute("DELETE FROM users WHERE id = $1", b_id)  # what another admin's DELETE commits
+        response = await asyncio.wait_for(patching, 10)
+    assert response.status_code == 401, response.text
+    assert await db.fetchval("SELECT password_hash FROM users WHERE id = $1", victim) == before
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'user.updated'") == 0
+
+
+async def test_an_admin_deleted_while_patching_never_gets_a_500(app, db, monkeypatch):
+    async with two_admins(app, db) as (a, b, _a_id, b_id):
+        victim = await make_user(db, "victim")
+        with commits_meet(monkeypatch):
+            deleted, patched = await asyncio.gather(
+                a.delete(f"/api/users/{b_id}"),
+                b.patch(f"/api/users/{victim}", json={"password": "another-password"}),
+                return_exceptions=True,
+            )
+    assert not isinstance(deleted, BaseException), repr(deleted)
+    assert not isinstance(patched, BaseException), repr(patched)
+    assert deleted.status_code == 204
+    assert patched.status_code in (200, 401), patched.text
+    assert await db.fetchval("SELECT count(*) FROM users WHERE id = $1", b_id) == 0
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'user.updated'") == (
+        1 if patched.status_code == 200 else 0
+    )
+
+
+async def test_two_admins_resetting_each_others_password_at_once_do_not_deadlock(app, db, monkeypatch):
+    """Both are inside `audit_change` at the same moment: with a row lock on the target each holds what the other needs."""
+    body = {"password": "another-password"}
+    async with two_admins(app, db) as (a, b, a_id, b_id):
+        with audits_meet(monkeypatch):
+            responses = await asyncio.gather(
+                a.patch(f"/api/users/{b_id}", json=body), b.patch(f"/api/users/{a_id}", json=body), return_exceptions=True
+            )
+    failed = [r for r in responses if isinstance(r, BaseException)]
+    assert not failed, repr(failed)
+    assert outcome(responses) == [200, 200]
+    assert await active_admins(db) == 2
+
+
+async def test_a_patch_answers_200_even_if_the_row_is_gone_after_the_commit(client, db, monkeypatch):
+    """The response is built from what is in memory: a DELETE landing right after the commit must not turn it into a 500."""
+
+    async def gone(self, *args, **kwargs):
+        raise InvalidRequestError("Could not refresh instance")
+
+    await login_as(client, db)
+    victim = await make_user(db, "victim", "viewer")
+    monkeypatch.setattr(AsyncSession, "refresh", gone)
+    response = await client.patch(f"/api/users/{victim}", json={"role": "operator"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"id": victim, "username": "victim", "role": "operator", "active": True}

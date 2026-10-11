@@ -109,10 +109,13 @@ async def login(
 ) -> User:
     await apply_sign_in_policy(db)
     key = limiter_key(request, body.username)
+    # Look the account up whether or not it is active, so a failed sign-in on a deactivated account can be attributed.
+    # Before the block check, for every request (a 429 never depends on the account): from the check to the failure it
+    # records nothing may be awaited (verify_password is synchronous), or a burst of requests that all passed the check
+    # each get a password check.
+    found = (await db.execute(select(User).where(User.username == body.username))).scalar_one_or_none()
     if limiter.blocked(key):
         raise _too_many(limiter.retry_after(key))
-    # Look the account up whether or not it is active, so a failed sign-in on a deactivated account can be attributed.
-    found = (await db.execute(select(User).where(User.username == body.username))).scalar_one_or_none()
     user = found if found is not None and found.active else None
     stored_hash = user.password_hash if user is not None else DUMMY_HASH
     if not verify_password(stored_hash, body.password) or user is None:

@@ -127,32 +127,39 @@ async def test_a_patch_that_demotes_or_deactivates_the_only_other_admin_is_allow
     client, db, monkeypatch
 ):
     await login_as(client, db)
-    taken: list[int] = []
+    taken: list[tuple[int, bool]] = []
     real = users_module.lock_admin_changes
 
-    async def spy(db_, acting, target_id):
-        taken.append(target_id)
-        return await real(db_, acting, target_id)
+    async def spy(db_, acting, target_id, *, removes_admin):
+        taken.append((target_id, removes_admin))
+        return await real(db_, acting, target_id, removes_admin=removes_admin)
 
     monkeypatch.setattr(users_module, "lock_admin_changes", spy)
     first = await make_user(db, "first", "admin")
     second = await make_user(db, "second", "admin")
     assert (await client.patch(f"/api/users/{first}", json={"role": "operator"})).status_code == 200
     assert (await client.patch(f"/api/users/{second}", json={"active": False})).status_code == 200
-    assert taken == [first, second]
+    assert taken == [(first, True), (second, True)]
     assert await db.fetchval("SELECT count(*) FROM users WHERE role = 'admin' AND active") == 1  # the acting admin
 
 
-async def test_a_patch_that_cannot_remove_an_admin_does_not_take_the_guard(client, db, monkeypatch):
+async def test_a_patch_that_cannot_remove_an_admin_takes_the_lock_but_skips_the_last_admin_check(
+    client, db, monkeypatch
+):
     await login_as(client, db)
     uid = await make_user(db, "ann", "operator")
+    taken: list[tuple[int, bool]] = []
+    real = users_module.lock_admin_changes
 
-    async def refuse(*args, **kwargs):
-        raise AssertionError("the guard ran for a change that cannot remove an administrator")
+    async def spy(db_, acting, target_id, *, removes_admin):
+        taken.append((target_id, removes_admin))
+        return await real(db_, acting, target_id, removes_admin=removes_admin)
 
-    monkeypatch.setattr(users_module, "lock_admin_changes", refuse)
-    for body in ({"role": "admin"}, {"active": True}, {"password": "brand-new-pass-9"}, {}):
+    monkeypatch.setattr(users_module, "lock_admin_changes", spy)
+    bodies = ({"role": "admin"}, {"active": True}, {"password": "brand-new-pass-9"}, {})
+    for body in bodies:
         assert (await client.patch(f"/api/users/{uid}", json=body)).status_code == 200, body
+    assert taken == [(uid, False)] * len(bodies)
 
 
 async def test_a_blocked_name_is_forgotten_when_an_admin_resets_the_password(client, db):

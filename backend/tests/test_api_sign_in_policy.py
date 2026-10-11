@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from collections import Counter
 
 import pytest
 from helpers import login_as, make_user
@@ -156,6 +158,28 @@ async def test_a_password_change_reads_the_policy_before_it_checks_the_block(cli
     blocked = await client.post("/api/me/password", json=body)
     assert blocked.status_code == 429
     assert int(blocked.headers["retry-after"]) > 500
+
+
+# A burst of simultaneous wrong passwords gets exactly the checks the policy allows and no more. This holds only because
+# nothing is awaited between the block check, the (synchronous) argon2 verify and the failure it records: if the verify
+# ever moves to a thread, or an await slips in between, requests that already passed the check all get their own
+# password check and the counts below grow. These tests are what catch that.
+
+
+@pytest.mark.parametrize("username", ["bob", "ghost"], ids=["existing-account", "unknown-account"])
+async def test_a_burst_of_wrong_passwords_at_sign_in_gets_exactly_the_allowed_checks(client, db, username):
+    await make_user(db, "bob")
+    await _store(db, '{"max_failures": 3, "block_minutes": 60}')
+    burst = await asyncio.gather(*(client.post("/api/login", json={"username": username, **WRONG}) for _ in range(40)))
+    assert Counter(r.status_code for r in burst) == {401: 3, 429: 37}
+
+
+async def test_a_burst_of_wrong_current_passwords_gets_exactly_the_allowed_checks(client, db):
+    await login_as(client, db, "viewer")
+    await _store(db, '{"max_failures": 3, "block_minutes": 60}')
+    body = {"current_password": "wrong-wrong", "new_password": "newpassword1"}
+    burst = await asyncio.gather(*(client.post("/api/me/password", json=body) for _ in range(40)))
+    assert Counter(r.status_code for r in burst) == {401: 3, 429: 37}
 
 
 async def test_the_password_change_follows_the_stored_policy_too(client, db):
