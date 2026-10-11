@@ -1,5 +1,5 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
@@ -85,13 +85,14 @@ async def audit_change(
     return True
 
 
-def _split_credentials(url: str) -> tuple[str, str]:
-    """(the credentials in `url`, `url` without them); ("", url) when there is nothing to remove.
+def _split(url: str) -> tuple[str, str, str]:
+    """(the credentials in `url`, `url` truly without them, `url` masked); ("", url, url) with nothing to remove.
 
     Two rules. When every "@" sits inside the netloc that urlsplit finds, the text before the last "@" of the netloc
     goes. Otherwise (an unencoded "/", "?" or "#" in the password ended the netloc early, a "[" made urlsplit raise, or
-    an "@" in the user name) the text between "://" and the last "@" goes, and the URL comes back as
-    `<scheme>://[hidden]@<what follows the last "@">`. The second rule over-masks: an "@" in a path hides the host too
+    an "@" in the user name) the text between "://" and the last "@" goes. The truly clean URL is then
+    `<scheme>://<what follows the last "@">`; the masked one keeps a marker, `<scheme>://[hidden]@<...>`, so that a
+    reader can tell something was removed. The second rule over-masks: an "@" in a path hides the host too
     (`http://host/a@b` becomes `http://[hidden]@b`), which is the safe direction for an audit log.
     """
     scheme, separator, rest = url.partition("://")
@@ -101,19 +102,20 @@ def _split_credentials(url: str) -> tuple[str, str]:
         parts = None
     if separator and "@" in rest and (parts is None or rest.count("@") > parts.netloc.count("@")):
         credentials, _, tail = rest.rpartition("@")
-        return credentials, f"{scheme}://[hidden]@{tail}"
+        return credentials, f"{scheme}://{tail}", f"{scheme}://[hidden]@{tail}"
     if parts is not None and "@" in parts.netloc:
         credentials, _, host = parts.netloc.rpartition("@")
-        return credentials, urlunsplit(parts._replace(netloc=host))
-    return "", url
+        clean = urlunsplit(parts._replace(netloc=host))
+        return credentials, clean, clean
+    return "", url, url
 
 
 def without_credentials(url: str) -> str:
     """`url` without the user name and password in front of its host; anything else comes back unchanged.
 
-    A URL whose credentials urlsplit cannot isolate (see `_split_credentials`) is masked up to its last "@".
+    A URL whose credentials urlsplit cannot isolate (see `_split`) is masked up to its last "@".
     """
-    return _split_credentials(url)[1]
+    return _split(url)[2]
 
 
 def credentials_in(url: str) -> str:
@@ -121,7 +123,31 @@ def credentials_in(url: str) -> str:
 
     Only for comparing two configs in memory: the value must never be written anywhere.
     """
-    return _split_credentials(url)[0]
+    return _split(url)[0]
+
+
+def strip_credentials(url: str) -> str:
+    """`url` truly without the user name and password: what `without_credentials` shows, minus its `[hidden]` marker.
+
+    For storing a URL the admin asked to keep without credentials, never for display.
+    """
+    return _split(url)[1]
+
+
+_URL_CREDENTIALS = re.compile(r"://\S*@")
+
+
+def scrub_url_credentials(text: str, known: Iterable[str] = ()) -> str:
+    """`text` with every "://user:password@" turned into "://[hidden]@", and every value in `known` into "[hidden]".
+
+    For error text that quotes a URL (an exception message, a log line). `known` catches what the pattern cannot: a
+    password with a space inside, or a credential that is quoted on its own. Text with neither comes back unchanged,
+    and scrubbing scrubbed text changes nothing. Over-masks an "@" later in the same run of non-space text (a query
+    string with an e-mail address), the safe direction.
+    """
+    for value in sorted({value for value in known if value}, key=len, reverse=True):
+        text = text.replace(value, "[hidden]")
+    return _URL_CREDENTIALS.sub("://[hidden]@", text)
 
 
 def hidden_parts(config: Mapping[str, Any]) -> dict[str, str]:
@@ -157,3 +183,28 @@ def safe_config(config: Mapping[str, Any]) -> dict[str, Any]:
         else:
             safe[key] = value
     return safe
+
+
+def reconcile_config(stored: Mapping[str, Any], submitted: Mapping[str, Any], clear: Iterable[str]) -> dict[str, Any]:
+    """`submitted` (an edited config) with the hidden parts of `stored` put back where the form sent them back masked.
+
+    The API shows a config through `safe_config`, so an edit form can only send the masked value. A top-level value
+    equal to the masked stored value means "unchanged" and keeps the stored one; any other value replaces it. A key in
+    `clear` that is sent back masked says "keep it, without the credentials": a URL is stored truly without them
+    (`strip_credentials`, never the `[hidden]` marker) and a credential-named key becomes empty. A key in `clear` with
+    nothing hidden is ignored; a key absent from `submitted` stays absent. Compare on the RAW request body, before
+    validation normalises the URLs.
+    """
+    clear = set(clear)
+    masked = safe_config(stored)
+    result = dict(submitted)
+    for key, value in stored.items():
+        if key not in submitted or masked[key] == value or submitted[key] != masked[key]:
+            continue
+        if key not in clear:
+            result[key] = value
+        elif SENSITIVE_KEYS.search(key):
+            result[key] = ""
+        else:
+            result[key] = strip_credentials(value)
+    return result
