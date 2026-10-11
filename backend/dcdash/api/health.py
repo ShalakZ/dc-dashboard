@@ -1,5 +1,5 @@
 """Readiness: GET /api/health answers 200 only when the database answers a query in time.
-Also holds the authenticated collector status route."""
+Also holds the collector status routes (the operator's detail and the top bar's live chip)."""
 import asyncio
 
 from fastapi import APIRouter, Depends
@@ -12,6 +12,7 @@ from dcdash.api.deps import get_db, require_role
 from dcdash.core.db import get_engine
 from dcdash.core.heartbeat import HEARTBEAT_KEY, STALE_AFTER_SECONDS
 from dcdash.core.secret_key import SecretKeyStatus, secret_key_status
+from dcdash.core.widgets import STALE_AFTER_INTERVALS, STALE_MINIMUM
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -56,16 +57,53 @@ class CollectorStatus(BaseModel):
     age_seconds: float | None  # seconds since the last beat by the database's clock; None = no beat on record
 
 
-@router.get("/collector/status", response_model=CollectorStatus, dependencies=[Depends(require_role("operator"))])
-async def collector_status(db: AsyncSession = Depends(get_db)) -> CollectorStatus:
+async def _heartbeat_age(db: AsyncSession) -> float | None:
     age = await db.scalar(
         text("SELECT extract(epoch FROM now() - (value->>'at')::timestamptz) FROM settings WHERE key = :key"),
         {"key": HEARTBEAT_KEY},
     )
+    return None if age is None else max(0.0, float(age))  # a beat stamped ahead of this clock is "just now", never a negative age
+
+
+@router.get("/collector/status", response_model=CollectorStatus, dependencies=[Depends(require_role("operator"))])
+async def collector_status(db: AsyncSession = Depends(get_db)) -> CollectorStatus:
+    age = await _heartbeat_age(db)
     if age is None:
         return CollectorStatus(alive=False, age_seconds=None)
-    age = max(0.0, float(age))  # a beat stamped ahead of this clock is "just now", never a negative age
     return CollectorStatus(alive=age <= STALE_AFTER_SECONDS, age_seconds=age)
+
+
+class LiveStatus(BaseModel):
+    collector_alive: bool
+    readings_fresh: bool | None  # None = no mapped point of an enabled source has been read yet
+    last_reading_age_seconds: float | None  # now() - the newest point_latest.ts by the database's clock; None = no reading on record
+
+
+# Same rule as core.widgets.is_stale, evaluated by the database's clock; the two constants are passed in, never repeated here.
+_FRESH = text(
+    """
+    SELECT count(*) AS read_points,
+           coalesce(bool_or(l.ts >= now() - greatest(m.interval_seconds * :k * interval '1 second',
+                                                     :floor * interval '1 second')), false) AS fresh
+    FROM mappings m
+    JOIN points p ON p.id = m.point_id
+    JOIN sources s ON s.id = p.source_id AND s.enabled
+    JOIN point_latest l ON l.point_id = m.point_id
+    """
+)
+
+
+@router.get("/status", response_model=LiveStatus, dependencies=[Depends(require_role("viewer"))])
+async def live_status(db: AsyncSession = Depends(get_db)) -> LiveStatus:
+    """What the top bar's chip shows. Freshness only, no names or values, so every signed-in user may read it."""
+    beat = await _heartbeat_age(db)
+    newest = await db.scalar(text("SELECT extract(epoch FROM now() - max(ts)) FROM point_latest"))
+    row = (await db.execute(_FRESH, {"k": STALE_AFTER_INTERVALS, "floor": STALE_MINIMUM.total_seconds()})).one()
+    return LiveStatus(
+        collector_alive=beat is not None and beat <= STALE_AFTER_SECONDS,
+        readings_fresh=None if row.read_points == 0 else bool(row.fresh),
+        last_reading_age_seconds=None if newest is None else max(0.0, float(newest)),
+    )
 
 
 @router.get("/secret-key/status", response_model=SecretKeyStatus, dependencies=[Depends(require_role("operator"))])
