@@ -1,3 +1,59 @@
 @layer w6 {
   /* W6 billing */
+
+  /* Billing: the month bar under the page header */
+  .billing-page .billing-bar { gap: 8px; margin: 0 0 16px; }
+  .billing-page .month-label { min-width: 9.5em; text-align: center; font-size: var(--fs-md); font-weight: 600; }
+  .billing-page .banner { margin: 0 0 16px; }
+  .billing-page .banner a { color: inherit; font-weight: 600; text-decoration: underline; }
+  .billing-page .empty { margin-top: 8px; }
+
+  /* The day table scrolls sideways inside main (.table-scroll on the wrap), never the page. The caption is the how-to-read line;
+     the sticky first column and its header corner stay while the days scroll under them. */
+  table.billing caption { caption-side: top; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: var(--fs-xs); text-align: left; }
+  table.billing :is(th, td) { padding-inline: 10px; }
+  table.billing td { padding-block: 7px; line-height: 1.3; }
+  table.billing td.num { min-width: 52px; }
+  table.billing td > div:last-child { font-size: var(--fs-xs); }
+  table.billing :is(th, td):nth-child(3) { border-right: 1px solid var(--border-strong); }
+  table.billing td:nth-child(3) { font-weight: 600; }
+  table.billing thead th:first-child { position: sticky; left: 0; z-index: 2; padding-left: 8px; border-right: 1px solid var(--border); }
+  table.billing tbody th[scope="row"] { z-index: 1; min-width: 150px; max-width: 260px; overflow: hidden; border-right: 1px solid var(--border); text-overflow: ellipsis; } /* the title carries the full path */
+  table.billing tbody tr:hover > th[scope="row"] { background: var(--row-hover); }
+
+  /* The key under the table: one wrapping row, each mark in a small tile */
+  .billing-page ul.legend { gap: 6px 22px; margin: 14px 0 0; font-size: var(--fs-xs); }
+  .billing-page ul.legend li { display: flex; align-items: center; gap: 6px; }
+  .billing-page ul.legend abbr { display: inline-grid; place-items: center; min-width: 20px; height: 20px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-weight: 600; }
+
+  /* Tariffs: one column of sections, each a table (or its empty note) over the form that adds to it */
+  .tariffs-page .page-head .sub { max-width: 72ch; }
+  .tariffs-page h2 { margin: 30px 0 12px; font-size: var(--fs-lg); font-weight: 600; line-height: 1.3; }
+  .tariffs-page .page-head + h2 { margin-top: 0; }
+  .tariffs-page :is(.table-wrap, .inline-form, .empty, .banner) { max-width: 760px; }
+  .tariffs-page .banner { margin: 0 0 14px; }
+  .tariffs-page .empty { padding: 22px 24px; }
+  .tariffs-page .empty p { max-width: 520px; }
+
+  .tariff-table td { font-variant-numeric: tabular-nums; }
+  .tariff-table td input { min-height: 34px; }
+  .tariff-table td input[type="date"] { width: 160px; }
+  .tariff-table td input[type="number"] { width: 120px; text-align: right; }
+  .tariff-table .asset-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tariff-table :is(th, td).actions { width: 1%; text-align: right; white-space: nowrap; }
+  .tariff-table td.actions { padding-block: 5px; }
+  .tariff-table .row-actions { display: flex; justify-content: flex-end; gap: 2px; }
+  .tariff-table td.actions .error { display: block; width: max-content; max-width: 280px; margin: 4px 0 0 auto; font-size: var(--fs-xs); font-weight: 600; white-space: normal; text-align: right; } /* a row error widens the column to 280px instead of wrapping in the buttons' width */
+
+  /* The add forms and the currency form are one-line bars on a surface; an error takes the whole last line */
+  .tariffs-page .inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 14px; margin: 12px 0 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .tariffs-page .inline-form label { flex: none; }
+  .tariffs-page .inline-form .asset-field { flex: 1 1 260px; min-width: 0; }
+  .tariffs-page .inline-form .asset-field select { width: 100%; }
+  .tariffs-page .inline-form input[type="date"] { width: 170px; }
+  .tariffs-page .inline-form input[type="number"] { width: 130px; }
+  .tariffs-page .inline-form .currency-field input { width: 110px; }
+  .tariffs-page .inline-form button { min-height: 38px; }
+  .tariffs-page .inline-form .saved { align-self: center; padding-bottom: 8px; }
+  .tariffs-page .inline-form p.error { flex: 0 0 100%; margin: 0; font-size: var(--fs-sm); font-weight: 600; }
 }
