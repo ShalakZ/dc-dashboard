@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { Route, Routes, useLocation } from "react-router";
@@ -755,5 +755,42 @@ describe("AssetsPage header", () => {
     expect(note.closest(".empty")).not.toBeNull();
     expect(screen.getAllByRole("heading")).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Add asset" })).toHaveLength(1);
+  });
+});
+
+describe("the stream of an asset's page", () => {
+  // One point mapped to both assets (a room's meter that the site shows too), so that a value left over from the first page would show on the second.
+  const point = (value: number) => ({ mapping_id: 1, point_id: 7, metric: "active_power_kw", unit: "kW", value, ts: "2026-10-07T10:00:00+00:00", quality: 0 });
+  const livePower = () => screen.getByText("Live power").closest(".tile")!.querySelector(".big")!;
+  const tree = () => within(screen.getByRole("region", { name: "Asset tree" }));
+  const push = (stream: FakeEventSource, value: number) => act(() => stream.emit([[7, Date.now() / 1000, value, 0]]));
+
+  it("starts afresh for each asset: a live value never outlives its page, going to another asset and back", async () => {
+    mockFetch({
+      ...authed("viewer"),
+      "GET /api/assets/1/summary": { body: summaryOf(assets[0], [point(3)]) },
+      "GET /api/assets/2/summary": { body: summaryOf(assets[1], [point(10.5)]) },
+    });
+    renderWorkspace("/assets/2");
+    await screen.findByRole("heading", { name: "Room A", level: 1 });
+    expect(livePower()).toHaveTextContent(/^10\.50 kW$/);
+    const first = FakeEventSource.open;
+    expect(first).toHaveLength(1);
+    push(first[0], 11.25);
+    expect(livePower()).toHaveTextContent(/^11\.25 kW$/);
+
+    await userEvent.click(tree().getByRole("link", { name: "Site" }));
+    await screen.findByRole("heading", { name: "Site", level: 1 });
+    expect(livePower()).toHaveTextContent(/^3\.00 kW$/); // its own summary, not Room A's 11.25
+    expect(FakeEventSource.open).toHaveLength(1);
+    expect(FakeEventSource.open[0]).not.toBe(first[0]);
+    expect(first[0].closed).toBe(true);
+    push(FakeEventSource.open[0], 4.5);
+    expect(livePower()).toHaveTextContent(/^4\.50 kW$/);
+
+    await userEvent.click(tree().getByRole("link", { name: "Room A" }));
+    await screen.findByRole("heading", { name: "Room A", level: 1 });
+    expect(livePower()).toHaveTextContent(/^10\.50 kW$/); // not Site's 4.50, and not the 11.25 it showed before
+    expect(FakeEventSource.open).toHaveLength(1);
   });
 });

@@ -11,7 +11,7 @@ import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import { useAction } from "../hooks/useAction";
 import { assetImpact, assetLoss } from "../lib/impact";
-import { buildTree, descendantIds } from "../lib/tree";
+import { buildTree, descendantIds, parseAssetId } from "../lib/tree";
 
 /** Inline SVG, 24-unit viewBox, drawn with the 1.7 stroke of `svg.i`; decoration only (the text beside it is the name). */
 function Icon({ children }: { children: ReactNode }) {
@@ -80,8 +80,7 @@ export function AssetsPage() {
   const { data: assets = [], error, isLoading } = useAssets();
   const invalidate = useInvalidate();
   const navigate = useNavigate();
-  const urlId = useMatch("/assets/:id")?.params.id;
-  const selectedId = urlId !== undefined && /^\d+$/.test(urlId) ? Number(urlId) : null; // digits only; the asset page's id check is stricter
+  const selectedId = parseAssetId(useMatch("/assets/:id")?.params.id); // null for a URL that cannot be an asset's: nothing is selected
   const [dialog, setDialog] = useState<{ kind: "add"; parentId: number | null } | { kind: "edit" } | null>(null);
   const [confirming, setConfirming] = useState<{ asset: Asset; impact: AssetImpact } | null>(null);
   const tree = useMemo(() => buildTree(assets), [assets]);

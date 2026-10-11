@@ -1,4 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { Route, Routes, useLocation } from "react-router";
+import { useAssets } from "../api/queries";
 import { PARTIAL_TIP } from "../components/Figure";
 import { formatSiteClock } from "../lib/siteTime";
 import { mockFetch } from "../test/fetchMock";
@@ -18,7 +21,7 @@ class FakeEventSource {
 
 /** `cost` defaults to what the API sends for the energy figure: both are null together and share `no_data` (API reference section 5). */
 const summary = (energy: unknown, cost?: unknown) => ({
-  asset: { id: 4, name: "Panel 1", parent_id: 1, kind: "panel" },
+  asset: { id: 4, name: "Panel 1", parent_id: 3, kind: "panel" },
   metrics: [
     { mapping_id: 1, point_id: 7, metric: "active_power_kw", unit: "kW", value: 10.5, ts: "2026-10-07T10:00:00+00:00", quality: 0 },
     { mapping_id: 2, point_id: 8, metric: "voltage_v", unit: "V", value: null, ts: null, quality: null },
@@ -29,15 +32,27 @@ const summary = (energy: unknown, cost?: unknown) => ({
     : { cost: null, estimated: false, partial: false, no_data: (energy as { no_data: boolean }).no_data },
   currency: "QAR",
 });
+/** The asset list the crumb trail and the sub line read: Panel 1 (id 4) sits under MV2 / Hall 1 and has two sub-assets. */
+const family = [
+  { id: 1, parent_id: null, name: "MV2", kind: "site", sort_order: 0 },
+  { id: 3, parent_id: 1, name: "Hall 1", kind: "room", sort_order: 0 },
+  { id: 4, parent_id: 3, name: "Panel 1", kind: "panel", sort_order: 0 },
+  { id: 5, parent_id: 4, name: "Rack A", kind: "rack", sort_order: 0 },
+  { id: 6, parent_id: 4, name: "Rack B", kind: "rack", sort_order: 1 },
+];
 const routes = (energy: unknown, cost?: unknown) => ({
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
+  "GET /api/assets": { body: family },
   "GET /api/assets/4/summary": { body: summary(energy, cost) },
   "GET /api/assets/4/series": { body: { metric: "active_power_kw", unit: "kW", points: [] } },
 });
 
-beforeEach(() => vi.stubGlobal("EventSource", FakeEventSource));
+beforeEach(() => {
+  FakeEventSource.last = null;
+  vi.stubGlobal("EventSource", FakeEventSource);
+});
 
 describe("AssetPage", () => {
   it("renders live value from stream and dash for null", async () => {
@@ -89,20 +104,143 @@ describe("AssetPage", () => {
     });
   });
 
-  it("opens with a page header: the trail Assets / the asset (Assets links to the summary), then the one h1", async () => {
-    mockFetch(routes(null));
-    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
-    const h1 = await screen.findByRole("heading", { name: "Panel 1", level: 1 });
-    const head = h1.closest("header")!;
-    expect(head).toHaveClass("page-head");
-    const crumb = head.querySelector(".crumbs")!;
-    expect(crumb.tagName).toBe("NAV");
-    expect(crumb).toHaveAccessibleName("Breadcrumb");
-    expect(within(crumb as HTMLElement).getByRole("link", { name: "Assets" })).toHaveAttribute("href", "/assets");
-    expect(within(crumb as HTMLElement).getByText("Panel 1")).toHaveAttribute("aria-current", "page");
-    expect(screen.getAllByRole("link")).toHaveLength(1);
-    expect(screen.getAllByRole("navigation")).toHaveLength(1);
-    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  describe("the page header: crumb trail, sub line and the id in the URL", () => {
+    const where = () => screen.getByTestId("where").textContent;
+    const Where = () => <span data-testid="where">{useLocation().pathname}</span>;
+    /** The asset list's state as text, read from the page's own query: a test waits for it to leave "pending" before it asserts on the list's absence. */
+    const ListState = () => <span data-testid="list-state">{useAssets().status}</span>;
+    const listSettled = (state: "success" | "error") => waitFor(() => expect(screen.getByTestId("list-state")).toHaveTextContent(state));
+    const crumbNames = (nav: Element) => [...nav.querySelectorAll("li > :first-child")].map((el) => el.textContent);
+
+    it("opens with a page header: the trail Assets / the asset's ancestors / the asset (a link each but the last), then the one h1", async () => {
+      mockFetch(routes(null));
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      const h1 = await screen.findByRole("heading", { name: "Panel 1", level: 1 });
+      const head = h1.closest("header")!;
+      expect(head).toHaveClass("page-head");
+      const crumb = head.querySelector(".crumbs") as HTMLElement;
+      expect(crumb.tagName).toBe("NAV");
+      expect(crumb).toHaveAccessibleName("Breadcrumb");
+      // The list arrives after the summary: until it does, the trail is Assets / Panel 1.
+      await waitFor(() => expect(crumbNames(crumb)).toEqual(["Assets", "MV2", "Hall 1", "Panel 1"]));
+      expect(within(crumb).getAllByRole("link").map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
+        ["Assets", "/assets"], ["MV2", "/assets/1"], ["Hall 1", "/assets/3"],
+      ]);
+      expect(within(crumb).getByText("Panel 1")).toHaveAttribute("aria-current", "page");
+      expect(within(crumb).queryByRole("link", { name: "Panel 1" })).not.toBeInTheDocument();
+      expect(screen.getAllByRole("link")).toHaveLength(3);
+      expect(screen.getAllByRole("navigation")).toHaveLength(1);
+      expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    });
+
+    it("goes to the asset or to the summary when a crumb is clicked", async () => {
+      const hall = { ...summary(null), asset: { id: 3, name: "Hall 1", parent_id: 1, kind: "room" }, metrics: [] };
+      mockFetch({ ...routes(null), "GET /api/assets/3/summary": { body: hall } });
+      renderWithProviders(<><Routes><Route path="/assets/:id" element={<AssetPage />} /></Routes><Where /></>, { route: "/assets/4" });
+      await userEvent.click(await screen.findByRole("link", { name: "Hall 1" }));
+      expect(where()).toBe("/assets/3");
+      const h1 = await screen.findByRole("heading", { name: "Hall 1", level: 1 });
+      const crumb = h1.closest("header")!.querySelector(".crumbs") as HTMLElement;
+      await waitFor(() => expect(crumbNames(crumb)).toEqual(["Assets", "MV2", "Hall 1"]));
+      await userEvent.click(within(crumb).getByRole("link", { name: "Assets" }));
+      expect(where()).toBe("/assets");
+    });
+
+    it.each([
+      ["the list has not caught up with the asset (a create just now)", { body: [family[0]] }, "success"],
+      ["the list is empty", { body: [] }, "success"],
+      ["the list could not be read", { status: 500, body: { detail: "list unavailable" } }, "error"],
+    ] as const)("keeps the asset itself in the trail when %s: Assets / the asset's name", async (_why, list, settled) => {
+      mockFetch({ ...routes(null), "GET /api/assets": list });
+      renderWithProviders(<><AssetPage /><ListState /></>, { route: "/assets/4", path: "/assets/:id" });
+      const h1 = await screen.findByRole("heading", { name: "Panel 1", level: 1 });
+      await listSettled(settled); // the answer is in, not just the summary
+      const crumb = h1.closest("header")!.querySelector(".crumbs") as HTMLElement;
+      expect(crumbNames(crumb)).toEqual(["Assets", "Panel 1"]);
+      expect(within(crumb).getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual(["/assets"]);
+      expect(within(crumb).getByText("Panel 1")).toHaveAttribute("aria-current", "page");
+    });
+
+    it("shows a root asset as Assets / the asset", async () => {
+      const root = { ...summary(null), asset: { id: 1, name: "MV2", parent_id: null, kind: "site" } };
+      mockFetch({ ...routes(null), "GET /api/assets/1/summary": { body: root } });
+      renderWithProviders(<AssetPage />, { route: "/assets/1", path: "/assets/:id" });
+      const h1 = await screen.findByRole("heading", { name: "MV2", level: 1 });
+      const crumb = h1.closest("header")!.querySelector(".crumbs") as HTMLElement;
+      await screen.findByText("site · 1 sub-asset"); // the list is in: the trail is final
+      expect(crumbNames(crumb)).toEqual(["Assets", "MV2"]);
+      expect(within(crumb).getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual(["/assets"]);
+    });
+
+    it("keeps a 46-character ancestor name whole in its crumb (the CSS wraps it)", async () => {
+      const long = "Main medium-voltage switchgear, hall 2, bay 11";
+      expect(long).toHaveLength(46);
+      const list = family.map((a) => (a.id === 3 ? { ...a, name: long } : a));
+      mockFetch({ ...routes(null), "GET /api/assets": { body: list } });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      const crumb = (await screen.findByRole("heading", { name: "Panel 1", level: 1 })).closest("header")!.querySelector(".crumbs") as HTMLElement;
+      expect(await within(crumb).findByRole("link", { name: long })).toHaveAttribute("href", "/assets/3");
+    });
+
+    it("says what the asset is and how many sub-assets it has, in the header's sub line", async () => {
+      mockFetch(routes(null));
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      const sub = await screen.findByText("panel · 2 sub-assets");
+      expect(sub.tagName).toBe("P");
+      expect(sub).toHaveClass("sub");
+      expect(sub.closest("header")).toHaveClass("page-head");
+    });
+
+    it.each([
+      ["one sub-asset", [family[2], family[4]], "panel · 1 sub-asset"],
+      ["no sub-asset", [family[2]], "panel · 0 sub-assets"],
+    ])("counts the direct sub-assets only: %s", async (_name, list, text) => {
+      mockFetch({ ...routes(null), "GET /api/assets": { body: list } });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      expect(await screen.findByText(text)).toBeInTheDocument();
+    });
+
+    it("counts a sub-asset's own children for the parent only, not the whole branch", async () => {
+      const list = [...family, { id: 7, parent_id: 5, name: "Server 1", kind: "server", sort_order: 0 }];
+      mockFetch({ ...routes(null), "GET /api/assets": { body: list } });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      expect(await screen.findByText("panel · 2 sub-assets")).toBeInTheDocument();
+    });
+
+    it.each([
+      ["lacks the asset", { body: [] }, "success"],
+      ["could not be read", { status: 500, body: { detail: "list unavailable" } }, "error"],
+    ] as const)("shows the kind alone when the list %s: a count of 0 would be a guess", async (_why, list, settled) => {
+      mockFetch({ ...routes(null), "GET /api/assets": list });
+      renderWithProviders(<><AssetPage /><ListState /></>, { route: "/assets/4", path: "/assets/:id" });
+      const sub = await screen.findByText("panel");
+      await listSettled(settled);
+      expect(sub).toHaveClass("sub");
+      expect(screen.getByText("panel")).toBe(sub);
+      expect(screen.queryByText(/sub-asset/)).not.toBeInTheDocument();
+    });
+
+    it.each(["abc", "12abc", "0", "007", "-1", "2147483648", "99999999999"])(
+      "answers /assets/%s with 'Asset not found.' in the pane and sends no request for it",
+      async (raw) => {
+        const calls = mockFetch(routes(null));
+        renderWithProviders(<AssetPage />, { route: `/assets/${raw}`, path: "/assets/:id" });
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent(/^Asset not found\.$/);
+        expect(alert).toHaveClass("error");
+        expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
+        expect(calls.filter((c) => c.path.startsWith("/api/assets") || c.path === "/api/stream")).toEqual([]);
+        expect(FakeEventSource.last).toBeNull();
+      },
+    );
+
+    it("shows the API's own message when the asset is unknown (404)", async () => {
+      mockFetch({ ...routes(null), "GET /api/assets/4/summary": { status: 404, body: { detail: "asset not found" } } });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(/^asset not found$/);
+      expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
+    });
   });
 
   it("lays the three tiles out in one .tiles grid, in the order Live power, Energy today, Cost today", async () => {
