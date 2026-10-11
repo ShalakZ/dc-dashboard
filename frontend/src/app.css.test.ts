@@ -1,11 +1,55 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { MUTED_FIGURE } from "./lib/widgetFormat";
 
-// vitest is configured with `css: false`, which empties a CSS import, so the stylesheet is read as text.
-const css = readFileSync("src/app.css", "utf8"); // vitest runs from the frontend directory
+// vitest is configured with `css: false`, which empties a CSS import, so the stylesheets are read as text.
+// Comments go first: one in front of a rule would otherwise become part of its selector.
+const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "");
+const css = stripComments(readFileSync("src/app.css", "utf8")); // vitest runs from the frontend directory
+
+type Rule = { selector: string; body: string; at: string[]; order: number };
+
+/**
+ * The style rules of a stylesheet, each with the at-rules it sits in (`@layer w6`, `@media (...)`) and its position.
+ * CSS nesting is not used: a `{` after an at-rule header opens a block of rules, any other `{` a declaration block.
+ */
+function parseRules(text: string): Rule[] {
+  const rules: Rule[] = [];
+  const at: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "{") {
+      const prelude = text.slice(start, i).trim().replace(/\s+/g, " ");
+      if (prelude.startsWith("@")) {
+        at.push(prelude);
+        start = i + 1;
+      } else {
+        const end = text.indexOf("}", i);
+        rules.push({ selector: prelude, body: text.slice(i + 1, end), at: [...at], order: rules.length });
+        i = end;
+        start = end + 1;
+      }
+    } else if (text[i] === "}") {
+      at.pop();
+      start = i + 1;
+    }
+  }
+  return rules;
+}
+
+const rules = parseRules(css);
+const inLayer = (rule: Rule) => rule.at.some((a) => a.startsWith("@layer"));
+
+// The tokens: one `:root` block, so a `var(--name)` has one meaning.
+const rootRules = rules.filter((r) => r.selector === ":root");
+const tokens = new Map<string, string>(
+  [...(rootRules[0]?.body ?? "").matchAll(/--([\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()] as [string, string]),
+);
+const resolve = (value: string) => value.replace(/var\(--([\w-]+)\)/g, (_, name: string) => tokens.get(name) ?? `<missing --${name}>`);
+const HEX = /^#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$/;
 
 // The muted greys are the only text on a tinted or white ground that is meant to look faded; WCAG AA asks 4.5:1 for it.
 const AA = 4.5;
+const NON_TEXT = 3; // WCAG 1.4.11: the boundary of a control, a focus ring, an indicator
 
 const channel = (v: number) => {
   const c = v / 255;
@@ -21,12 +65,21 @@ const contrast = (fg: string, bg: string) => {
   return (hi + 0.05) / (lo + 0.05);
 };
 
-/** The value of `property` in the rule whose selector list is exactly `selector`. */
+/** The colour of `property` in the one rule whose selector list is exactly `selector`; a `var(--name)` is read from `:root`. */
 function declared(selector: string, property: string): string {
-  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => m[1].trim() === selector);
-  expect(rules, `a rule for "${selector}"`).toHaveLength(1);
-  const value = new RegExp(`(?:^|;|\\s)${property}:\\s*(#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?)\\b`).exec(rules[0][2])?.[1];
-  expect(value, `${property} of "${selector}"`).toBeDefined();
+  const found = rules.filter((r) => r.selector === selector);
+  expect(found, `a rule for "${selector}"`).toHaveLength(1);
+  const raw = new RegExp(`(?:^|;|\\s)${property}:\\s*([^;]+)`).exec(found[0].body)?.[1];
+  expect(raw, `${property} of "${selector}"`).toBeDefined();
+  const value = resolve(raw!.trim());
+  expect(value, `${property} of "${selector}"`).toMatch(HEX);
+  return value;
+}
+
+/** A token's colour. */
+function tok(name: string): string {
+  const value = tokens.get(name);
+  expect(value, `--${name} in :root`).toMatch(HEX);
   return value!;
 }
 
@@ -81,4 +134,174 @@ describe("long asset names wrap, figures do not", () => {
     expect(wrapping).not.toMatch(/\.stat \.muted(?!:)/); // the old rule matched .big.muted too
     expect(wrapping).not.toMatch(/\.widget-body td(?!:first-child)/); // and every cell, including the number column
   });
+});
+
+describe("the design tokens (W6)", () => {
+  it("live in one :root block, so every var() has one meaning", () => {
+    expect(rootRules).toHaveLength(1);
+    expect(tokens.size).toBeGreaterThan(40);
+  });
+
+  it("body and .muted are each one rule with exactly that selector (the helper above relies on it)", () => {
+    expect(rules.filter((r) => r.selector === "body")).toHaveLength(1);
+    expect(rules.filter((r) => r.selector === ".muted")).toHaveLength(1);
+  });
+
+  it("the page is white (never a cream or off-white ground) and the base type size is unchanged", () => {
+    expect(tok("bg")).toBe("#ffffff");
+    expect(declared("body", "background")).toBe("#ffffff");
+    expect(rules.find((r) => r.selector === "body")!.body).toMatch(/font:\s*14px\/1\.4\s+var\(--font\)/);
+  });
+
+  it("the sidebar is quantum navy", () => {
+    expect(tok("side-bg")).toBe("#283354");
+  });
+
+  // Every pair of spec section 2 "Measured contrast": text pairs at 4.5:1, the non-text ones at 3:1.
+  const white = "#ffffff";
+  const textPairs: Array<[string, () => string, () => string]> = [
+    ["white on the accent (primary button)", () => white, () => tok("accent")],
+    ["accent on white (link)", () => tok("accent"), () => tok("bg")],
+    ["text on white", () => tok("text"), () => tok("bg")],
+    ["text-2 on white", () => tok("text-2"), () => tok("bg")],
+    ["disabled text on white", () => tok("text-disabled"), () => tok("bg")],
+    ["chip ok", () => tok("ok"), () => tok("ok-tint")],
+    ["chip warning", () => tok("warn"), () => tok("warn-tint")],
+    ["chip critical", () => tok("crit"), () => tok("crit-tint")],
+    ["chip info", () => tok("info"), () => tok("info-tint")],
+    ["chip stale", () => tok("stale"), () => tok("stale-tint")],
+    ["white on the danger button", () => white, () => tok("danger")],
+    ["banner ink on the warning banner", () => tok("warn-ink"), () => tok("warn-bg")],
+    ["info banner ink on its tint", () => tok("info-ink"), () => tok("info-tint")],
+    ["accent ink on the accent tint (selected, pressed)", () => tok("accent-ink"), () => tok("accent-tint")],
+    ["accent on the accent tint (quiet button hover)", () => tok("accent"), () => tok("accent-tint")],
+    ["text-2 on the table head ground", () => tok("text-2"), () => tok("surface")],
+    ["error text on white", () => tok("crit"), () => tok("bg")],
+    ["warning text on white", () => tok("warn-ink"), () => tok("bg")],
+    ["text on a conflict row", () => tok("text"), () => tok("crit-tint")],
+    ["sidebar: white on the navy", () => tok("side-text-strong"), () => tok("side-bg")],
+    ["sidebar: link text on the navy", () => tok("side-text"), () => tok("side-bg")],
+    ["sidebar: link text on the hover fill", () => tok("side-text"), () => tok("side-bg-hover")],
+    ["sidebar: hover text on the hover fill", () => tok("side-text-strong"), () => tok("side-bg-hover")],
+    ["sidebar: group heading on the plain navy", () => tok("side-muted"), () => tok("side-bg")],
+    ["sidebar: active item", () => tok("side-text-strong"), () => tok("side-bg-active")],
+    ["sidebar: accent on the navy (focus ring, indicator)", () => tok("side-accent"), () => tok("side-bg")],
+    ["sidebar: navy on the accent brand mark", () => tok("side-bg"), () => tok("side-accent")],
+    ["sidebar: avatar", () => tok("side-avatar-text"), () => tok("side-avatar-bg")],
+    ["tooltip", () => tok("tooltip-text"), () => tok("tooltip-bg")],
+  ];
+  it.each(textPairs)("%s reads at 4.5:1", (_name, fg, bg) => {
+    expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(AA);
+  });
+
+  const nonTextPairs: Array<[string, () => string, () => string]> = [
+    ["sidebar: accent on the active fill", () => tok("side-accent"), () => tok("side-bg-active")],
+    ["a field's border on white", () => tok("field-border"), () => tok("bg")],
+    ["a field's border on the surface ground", () => tok("field-border"), () => tok("surface")],
+  ];
+  it.each(nonTextPairs)("%s reads at 3:1", (_name, fg, bg) => {
+    expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(NON_TEXT);
+  });
+
+  it("the content accent is 2.09:1 on the navy, which is why no sidebar rule may use it", () => {
+    expect(contrast(tok("accent"), tok("side-bg"))).toBeLessThan(NON_TEXT);
+    const sideRules = rules.filter((r) => r.selector.includes(".side"));
+    for (const rule of sideRules) expect(rule.body, `"${rule.selector}"`).not.toMatch(/var\(--accent/);
+    // once the sidebar rule exists it overrides the focus ring colour (--ring equals --accent, which the navy cannot show)
+    for (const rule of rules.filter((r) => r.selector === ".side")) expect(rule.body).toMatch(/--ring:\s*var\(--side-accent\)/);
+  });
+});
+
+describe("the layer and the frozen island", () => {
+  const W = ":is(.widget-frame, .widget-preview)";
+  // spec section 5 "F" plus the island that keeps the widgets looking as before: unlayered, after the layer block
+  const FROZEN = [
+    "table.billing td.muted, table.billing td.muted .muted",
+    "table.billing td.muted",
+    ".dash-grid",
+    ".dash-cell",
+    ".widget-frame",
+    ".widget-head",
+    ".widget-head h3",
+    ".widget-notes",
+    ".widget-body",
+    ".widget-body table",
+    ".stat .big",
+    ".stat .big small",
+    ".stat .big.muted",
+    ".stat > .muted:not(.big), .widget-body td:first-child",
+    ".gauge",
+    `${W} .chip`,
+    `${W} .chip-warn`,
+    ".dash-grid-edit",
+    ".dash-grid-edit .widget-drag-handle",
+    ".dash-grid-edit .react-grid-item > .react-resizable-handle",
+    ".dash-grid-edit .react-grid-item.react-grid-placeholder",
+    ".widget-actions",
+    ".widget-actions button",
+    ".widget-preview",
+    W,
+    `${W} table`,
+    `${W} th, ${W} td`,
+    `${W} td.muted`,
+    `${W} button`,
+    `${W} .widget-actions button`,
+    `${W} .chip::before`,
+  ];
+
+  it("has one @layer w6 block", () => {
+    expect(css.match(/@layer/g) ?? []).toHaveLength(1);
+    expect(css).toMatch(/@layer\s+w6\s*\{/);
+    expect(rules.some(inLayer)).toBe(true);
+  });
+
+  it.each(FROZEN)("%s stays unlayered, after the layer, so no layer rule can outrank it", (selector) => {
+    const found = rules.filter((r) => r.selector === selector);
+    expect(found.length, `a rule for "${selector}"`).toBeGreaterThan(0);
+    const lastLayered = Math.max(...rules.filter(inLayer).map((r) => r.order));
+    for (const rule of found) {
+      expect(inLayer(rule), `"${selector}" is in the layer`).toBe(false);
+      expect(rule.order, `"${selector}" comes before the end of the layer`).toBeGreaterThan(lastLayered);
+    }
+  });
+
+  it("the old bare .chip and .chip-warn are gone (they are the layered status chips now)", () => {
+    const bare = rules.filter((r) => r.selector === ".chip" || r.selector === ".chip-warn");
+    for (const rule of bare) expect(inLayer(rule), `"${rule.selector}"`).toBe(true);
+  });
+});
+
+describe("the page style files (src/styles/*.css)", () => {
+  const STYLES = "src/styles";
+  const files = existsSync(STYLES) ? readdirSync(STYLES).filter((f) => f.endsWith(".css")).sort() : [];
+
+  it("has one file per page group", () => {
+    expect(files).toEqual(
+      expect.arrayContaining(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css"]),
+    );
+  });
+
+  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css"])(
+    "%s is one @layer w6 block with nothing outside it, no raw colour and no accent in a sidebar rule",
+    (file) => {
+      expect(existsSync(`${STYLES}/${file}`), `${STYLES}/${file} exists`).toBe(true);
+      const text = stripComments(readFileSync(`${STYLES}/${file}`, "utf8"));
+      expect(text.match(/@layer/g) ?? []).toHaveLength(1);
+      const open = text.search(/@layer\s+w6\s*\{/);
+      expect(open, "an @layer w6 block").toBeGreaterThanOrEqual(0);
+      expect(text.slice(0, open).trim(), "text before the block").toBe("");
+      let depth = 0;
+      let close = -1;
+      for (let i = text.indexOf("{", open); i < text.length && close < 0; i++) {
+        if (text[i] === "{") depth++;
+        else if (text[i] === "}" && --depth === 0) close = i;
+      }
+      expect(close, "the block is closed").toBeGreaterThan(open);
+      expect(text.slice(close + 1).trim(), "text after the block").toBe("");
+      for (const rule of parseRules(text)) {
+        expect(rule.body, `colour in "${rule.selector}"`).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
+        if (rule.selector.includes(".side")) expect(rule.body, `"${rule.selector}"`).not.toMatch(/var\(--accent/);
+      }
+    },
+  );
 });
