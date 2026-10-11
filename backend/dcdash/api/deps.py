@@ -68,6 +68,9 @@ async def account_vanished_is_401(db: AsyncSession) -> AsyncIterator[None]:
 
     Only "the account is gone" is turned into a 401: a stale-row error, or a foreign-key violation (a new row points at
     the deleted account). Any other database error, a duplicate name for one, passes through untouched.
+
+    Use it only around writes where every foreign key points at the acting account (sessions.user_id and audit_log.user_id
+    today): wrapping a write to an asset, source or mapping would disguise a real foreign-key error as "not authenticated".
     """
     try:
         yield

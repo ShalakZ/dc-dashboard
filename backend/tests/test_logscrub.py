@@ -5,7 +5,7 @@ import sys
 import time
 
 import pytest
-from uvicorn.logging import AccessFormatter
+from uvicorn.logging import AccessFormatter, ColourizedFormatter
 
 import dcdash.api.main as api_main
 from dcdash.collector.logs import configure_logging
@@ -171,6 +171,28 @@ def test_the_uvicorn_access_line_is_scrubbed_and_still_formats():
     assert out.strip(), "the access line was not written at all"
     assert 'GET /x?u=http://[hidden]@host:9000/x HTTP/1.1" 200 OK' in out and "Zq9" not in out
     assert len(scrub_filters(handler)) == 1
+
+
+def test_a_coloured_uvicorn_startup_line_keeps_its_text():
+    """With colours on, ColourizedFormatter prints record.color_message, a template that still holds %s/%d placeholders."""
+    error_logger = logging.getLogger("uvicorn.error")
+    error_logger.setLevel(logging.INFO)
+    error_logger.propagate = False
+    fmt = "%(levelprefix)s %(message)s"
+    _, stream = stream_handler("uvicorn.error", ColourizedFormatter(fmt=fmt, use_colors=True))
+    install_log_scrub()
+    # The way uvicorn/server.py logs "Uvicorn running on ...".
+    error_logger.info(
+        "Uvicorn running on %s://%s:%d (Press CTRL+C to quit)",
+        "http",
+        "0.0.0.0",
+        8000,
+        extra={"color_message": "Uvicorn running on \x1b[1m%s://%s:%d\x1b[0m (Press CTRL+C to quit)"},
+    )
+    out = stream.getvalue()
+    assert "\x1b[32mINFO" in out  # the colours are still on
+    assert "http://0.0.0.0:8000" in out.replace("\x1b[1m", "").replace("\x1b[0m", "")
+    assert "%s" not in out and "%d" not in out
 
 
 def test_a_logger_with_no_handler_of_its_own_is_covered_by_the_last_resort_handler(capsys):

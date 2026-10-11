@@ -14,6 +14,8 @@ def _scrub_message(record: logging.LogRecord) -> None:
     # Scrub the formatted text, not the parts: a URL can be split over several %s arguments.
     record.msg = scrub_url_credentials(record.getMessage())
     record.args = ()
+    # uvicorn's ColourizedFormatter prints this %-template instead of msg; with the args emptied it would show raw %s/%d.
+    record.__dict__.pop("color_message", None)
 
 
 def _drop_arguments(record: logging.LogRecord) -> None:
