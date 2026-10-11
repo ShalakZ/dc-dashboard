@@ -266,6 +266,62 @@ describe("the shell (W6 sidebar)", () => {
       expect(bodyOf('.live[data-state="stale"]::before, .live[data-state="waiting"]::before')).toMatch(/box-shadow:\s*inset 0 0 0 2px var\(--top-stale\)/);
       expect(bodyOf('.live[data-state="offline"]::before')).toMatch(/clip-path:\s*polygon/);
     });
+
+    describe("the quick find", () => {
+      const field = '.qf input[type="search"]';
+
+      it("is a field on the chip's lighter navy: the find tokens carry its ground, border, text and placeholder", () => {
+        expect(bodyOf(".qf")).toMatch(/width:\s*var\(--find-w\)/);
+        expect(bodyOf(field)).toMatch(/background:\s*var\(--top-find-bg\)/);
+        expect(bodyOf(field)).toMatch(/border:\s*1px solid var\(--top-find-border\)/);
+        expect(bodyOf(field)).toMatch(/color:\s*var\(--top-find-text\)/);
+        expect(bodyOf(`${field}::placeholder`)).toMatch(/color:\s*var\(--top-find-ph\)/);
+        expect(bodyOf(".qf-field > svg.i")).toMatch(/color:\s*var\(--top-find-ph\)/);
+        // the base input rule (min-height 38px) comes first in the file and has the same weight as ".qf input": the selector must outrank it
+        expect(bodyOf(field)).toMatch(/min-height:\s*0/);
+        expect(bodyOf(field)).toMatch(/height:\s*34px/);
+      });
+
+      it("draws the shortcut hint in the page's font: the browser's own kbd font is monospace", () => {
+        expect(bodyOf(".qf kbd")).toMatch(/font-family:\s*inherit/);
+        expect(bodyOf(".qf kbd")).toMatch(/color:\s*var\(--top-find-ph\)/);
+      });
+
+      it("floats a white popup above the bar's content, with the shared popup shadow, scrolling when the window is short", () => {
+        const pop = bodyOf(".qf-pop");
+        expect(pop).toMatch(/position:\s*absolute/);
+        expect(zIndex(".qf-pop")).toBeGreaterThan(1);
+        expect(pop).toMatch(/background:\s*var\(--bg\)/);
+        expect(pop).toMatch(/color:\s*var\(--text\)/); // not the bar's light text
+        expect(pop).toMatch(/box-shadow:\s*var\(--shadow-pop\)/);
+        expect(pop).toMatch(/max-height:/);
+        expect(pop).toMatch(/overflow-y:\s*auto/);
+      });
+
+      it("shortens a long label and a long path with an ellipsis instead of wrapping", () => {
+        for (const selector of [".qf-label", ".qf-opt small"]) {
+          const body = bodyOf(selector);
+          expect(body, selector).toMatch(/overflow:\s*hidden/);
+          expect(body, selector).toMatch(/text-overflow:\s*ellipsis/);
+          expect(body, selector).toMatch(/white-space:\s*nowrap/);
+          expect(body, selector).toMatch(/min-width:\s*0/);
+        }
+      });
+
+      it("marks the active option with a fill and a ring, so the colour is not the only sign", () => {
+        const active = bodyOf('.qf-opt[aria-selected="true"]');
+        expect(active).toMatch(/background:\s*var\(--accent-tint\)/);
+        expect(active).toMatch(/outline:\s*2px solid var\(--ring\)/);
+        expect(bodyOf(".qf-opt:hover")).toMatch(/background:\s*var\(--accent-tint\)/);
+      });
+
+      it("is 300px wide, 220px in a narrow window, where the shortcut hint goes", () => {
+        expect(tokens.get("find-w")).toBe("300px");
+        const narrow = rules.filter((r) => r.at.some((a) => /max-width:\s*1179\.98px/.test(a)));
+        expect(narrow.find((r) => r.selector === "#root")?.body).toMatch(/--find-w:\s*220px/);
+        expect(narrow.find((r) => r.selector.includes(".qf kbd"))?.body).toMatch(/display:\s*none/);
+      });
+    });
   });
 });
 
@@ -340,6 +396,9 @@ describe("the design tokens (W6)", () => {
     ["top bar: the role word on the open profile button", () => tok("side-text"), () => tok("side-bg-active")],
     ["top bar: find text on the find ground (and the chip's word)", () => tok("top-find-text"), () => tok("top-find-bg")],
     ["top bar: placeholder on the find ground (and the chip's age)", () => tok("top-find-ph"), () => tok("top-find-bg")],
+    ["quick find: text on the active option", () => tok("text"), () => tok("accent-tint")],
+    ["quick find: the path and the group caption on the active option", () => tok("text-2"), () => tok("accent-tint")],
+    ["quick find: the path and the group caption on the popup", () => tok("text-2"), () => tok("bg")],
   ];
   it.each(textPairs)("%s reads at 4.5:1", (_name, fg, bg) => {
     expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(AA);
@@ -352,6 +411,7 @@ describe("the design tokens (W6)", () => {
     ["top bar: the live dot on the chip ground", () => tok("top-live"), () => tok("top-find-bg")],
     ["top bar: the stale ring and offline diamond on the chip ground", () => tok("top-stale"), () => tok("top-find-bg")],
     ["top bar: white on the bar, as a mark rather than text", () => tok("side-text-strong"), () => tok("top-bg")],
+    ["quick find: the active option's ring on the popup", () => tok("accent"), () => tok("bg")],
   ];
   it.each(nonTextPairs)("%s reads at 3:1", (_name, fg, bg) => {
     expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(NON_TEXT);

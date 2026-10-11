@@ -230,6 +230,18 @@ describe("Layout top bar", () => {
     expect(within(frame.children[0] as HTMLElement).queryByText("DC Dashboard")).not.toBeInTheDocument(); // the brand moved out of the rail
   });
 
+  it("puts the quick find first in the bar's content, ahead of the chip, the time and the profile", async () => {
+    mockFetch(routes("viewer"));
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    const bar = screen.getByRole("banner").querySelector(".bar-in") as HTMLElement;
+    const first = bar.firstElementChild as HTMLElement;
+    expect(first).toHaveAttribute("role", "search");
+    expect(within(first).getByRole("combobox", { name: "Quick find" })).toBeInTheDocument();
+    expect(first.nextElementSibling).toHaveClass("grow");
+    expect(screen.getAllByRole("search")).toHaveLength(1);
+    await profileButton();
+  });
+
   it("keeps the brand's label for a screen reader when the sidebar is minimized", async () => {
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });

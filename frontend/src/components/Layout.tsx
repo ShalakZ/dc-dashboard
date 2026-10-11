@@ -6,6 +6,7 @@ import { CertificateNotice } from "./CertificateNotice";
 import { Icon, ICONS } from "./Icon";
 import { GROUPS } from "./navItems";
 import { ProfileMenu } from "./ProfileMenu";
+import { QuickFind } from "./QuickFind";
 import { RoleChangedNotice } from "./RoleChangedNotice";
 import { SiteClock } from "./SiteClock";
 import { StatusChip } from "./StatusChip";
@@ -117,6 +118,7 @@ export function Layout() {
             <span className="lbl">DC Dashboard</span>
           </div>
           <div className="bar-in">
+            <QuickFind />
             <span className="grow" />
             <StatusChip />
             <span className="vr" aria-hidden="true" />

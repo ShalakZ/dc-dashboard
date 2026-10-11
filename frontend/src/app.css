@@ -30,6 +30,7 @@
   --shadow-dialog: 0 18px 50px rgba(10, 16, 28, 0.28); --shadow-tip: 0 4px 14px rgba(10, 16, 28, 0.25); --shadow-pop: 0 10px 30px rgba(10, 16, 28, 0.18);
   --motion: 150ms ease;
   --side-w-open: 236px; --side-w-closed: 64px; --tree-w: 280px; --tree-w-closed: 44px; /* tree 248px below 1180px */
+  --find-w: 300px;                                        /* the quick find in the top bar, 220px below 1180px */
 }
 
 /* Everything W6 writes lives in this one layer. The widget and editor-grid rules at the end of the file are unlayered,
@@ -147,6 +148,29 @@
   .prof-item svg.i { width: 16px; height: 16px; color: var(--text-2); }
   .prof-item:hover, .prof-item:focus-visible { background: var(--accent-tint); text-decoration: none; }
   .prof-item:focus-visible { outline-offset: -2px; }
+
+  /* The quick find: a field on the chip's lighter navy (its focus ring is the bar's, --side-accent) and a white popup under it (which
+     takes the content's ring, above). The field's selector outranks the base input rule, which comes later in the file. The shortcut
+     hint sets its font back: the browser's own kbd font is monospace. */
+  .qf { position: relative; flex: none; width: var(--find-w); max-width: 100%; }
+  .qf-field { position: relative; display: flex; align-items: center; }
+  .qf-field > svg.i { position: absolute; left: 10px; width: 16px; height: 16px; color: var(--top-find-ph); pointer-events: none; }
+  .qf input[type="search"] { width: 100%; min-height: 0; height: 34px; padding: 0 64px 0 34px; border: 1px solid var(--top-find-border); border-radius: var(--radius); background: var(--top-find-bg); color: var(--top-find-text); font-size: var(--fs-sm); }
+  .qf input[type="search"]::placeholder { color: var(--top-find-ph); opacity: 1; }
+  .qf input[type="search"]:focus-visible { outline-offset: 1px; }
+  .qf input[type="search"]::-webkit-search-cancel-button { display: none; } /* Chromium's blue clear cross is unreadable on the navy; Escape clears */
+  .qf kbd { position: absolute; right: 8px; padding: 1px 6px; border: 1px solid var(--top-find-border); border-radius: var(--radius-sm); color: var(--top-find-ph); font-family: inherit; font-size: 11px; font-weight: 600; line-height: 16px; pointer-events: none; }
+  .qf-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 80; width: 380px; max-height: min(70vh, 520px); overflow-y: auto; padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); }
+  .qf-list, .qf-list ul { list-style: none; margin: 0; padding: 0; }
+  .qf-cap { display: block; padding: 6px 8px 4px; color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; }
+  .qf-opt { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--radius-sm); color: var(--text); font-size: var(--fs-sm); cursor: pointer; }
+  .qf-opt:hover { background: var(--accent-tint); }
+  .qf-opt[aria-selected="true"] { background: var(--accent-tint); outline: 2px solid var(--ring); outline-offset: -2px; }
+  .qf-opt svg.i { width: 16px; height: 16px; color: var(--text-2); }
+  /* a long row gives up the path before the name (the path shrinks a hundred times as fast) */
+  .qf-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qf-opt small { flex: 0 100 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: var(--fs-xs); }
+  .qf-empty { margin: 0; padding: 10px 8px; color: var(--text-2); font-size: var(--fs-sm); }
 
   /* Tables */
   table { border-collapse: separate; border-spacing: 0; width: 100%; margin: 8px 0; } /* separate: collapsed borders on fractional row heights left a 1px notch */
@@ -414,8 +438,10 @@
   /* Narrow windows: tighter page gutter and tree column. Set on #root, not :root (a second :root rule would make every
      var() ambiguous for the contrast test). */
   @media (max-width: 1179.98px) {
-    #root { --gutter: 22px; --tree-w: 248px; }
+    #root { --gutter: 22px; --tree-w: 248px; --find-w: 220px; }
     .node .kind { display: none; }
+    .qf input[type="search"] { padding-right: 10px; }
+    .qf kbd { display: none; }
     .live .detail, .site-time .zone { display: none; }
     .who-role { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } /* clipped, not display: none: the role word stays in the button's name */
   }
