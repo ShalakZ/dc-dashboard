@@ -191,6 +191,43 @@ describe("Sign out confirmation", () => {
     expect(logouts(calls)).toHaveLength(0);
   });
 
+  it("keeps Tab inside: from the last button it wraps to the first, Shift+Tab from the first wraps to the last, and focus never reaches the body", async () => {
+    const { calls, trigger } = await mount();
+    const dialog = await openDialog(trigger);
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    const signOut = within(dialog).getByRole("button", { name: "Sign out" });
+    expect(cancel).toHaveFocus();
+    const stays = () => {
+      expect(document.activeElement).not.toBe(document.body);
+      expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    };
+    await userEvent.tab();
+    expect(signOut).toHaveFocus();
+    await userEvent.tab(); // past the last control
+    stays();
+    expect(cancel).toHaveFocus();
+    await userEvent.tab({ shift: true }); // back past the first control
+    stays();
+    expect(signOut).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(cancel).toHaveFocus();
+    expect(logouts(calls)).toHaveLength(0);
+  });
+
+  it("wraps Tab itself rather than leaving it to the browser (the dialog is the last thing in the body, so the browser would take the focus away)", async () => {
+    const { trigger } = await mount();
+    const dialog = await openDialog(trigger);
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    const signOut = within(dialog).getByRole("button", { name: "Sign out" });
+    signOut.focus();
+    expect(fireEvent.keyDown(signOut, { key: "Tab" })).toBe(false); // default prevented: the dialog moved the focus
+    expect(cancel).toHaveFocus();
+    expect(fireEvent.keyDown(cancel, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(signOut).toHaveFocus();
+    cancel.focus();
+    expect(fireEvent.keyDown(cancel, { key: "Tab" })).toBe(true); // not at an edge: the browser moves on by itself
+  });
+
   it("Cancel keeps the session and gives the focus back to the trigger", async () => {
     const { calls, trigger } = await mount();
     const dialog = await openDialog(trigger);

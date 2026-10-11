@@ -9,6 +9,8 @@ const open: HTMLElement[] = [];
  * Accessibility behaviour shared by the dashboard dialogs (it mirrors `ReviewDialog`): focus moves into the dialog
  * (to `options.initial` if given, else the first control), stays inside while it is the top-most dialog, and goes back
  * to what had it when the dialog goes away. Escape calls `onClose`, except while `options.busy`.
+ * Tab from the last control wraps to the first and Shift+Tab from the first to the last: the focusin guard below cannot do it
+ * alone, because a dialog rendered at the end of the body has no next element, so the focus would leave for the browser or the body.
  */
 export function useDialogFocus(
   root: RefObject<HTMLElement | null>,
@@ -27,9 +29,24 @@ export function useDialogFocus(
       if (open[open.length - 1] !== element) return;
       if (event.target instanceof Node && !element.contains(event.target)) first()?.focus();
     };
+    const wrapTab = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (open[open.length - 1] !== element) return;
+      const items = Array.from(element.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (items.length === 0) return;
+      const [head, tail] = [items[0], items[items.length - 1]];
+      const at = document.activeElement;
+      const inside = at instanceof Node && element.contains(at);
+      if (!inside || at === (event.shiftKey ? head : tail)) {
+        event.preventDefault();
+        (event.shiftKey ? tail : head).focus();
+      }
+    };
     document.addEventListener("focusin", keepFocus);
+    document.addEventListener("keydown", wrapTab);
     return () => {
       document.removeEventListener("focusin", keepFocus);
+      document.removeEventListener("keydown", wrapTab);
       open.splice(open.indexOf(element), 1);
       if (previous?.isConnected) previous.focus();
     };
