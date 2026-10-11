@@ -137,6 +137,27 @@ async def test_a_policy_change_while_a_key_is_blocked_changes_retry_after_at_onc
     assert shorter.status_code == 429 and int(shorter.headers["retry-after"]) <= 60
 
 
+async def test_a_sign_in_reads_the_policy_before_it_checks_the_block(client, db):
+    await make_user(db, "bob")
+    await _fail(client, "bob", 5)  # blocked under the default 5 failures and 5 minutes
+    # Written straight to the row (a PUT would configure the limiter itself and hide the order of the two steps).
+    await _store(db, '{"max_failures": 5, "block_minutes": 10}')
+    blocked = await client.post("/api/login", json={"username": "bob", **WRONG})
+    assert blocked.status_code == 429
+    assert int(blocked.headers["retry-after"]) > 500  # the 10-minute policy, not the 5 the limiter last held
+
+
+async def test_a_password_change_reads_the_policy_before_it_checks_the_block(client, db):
+    await login_as(client, db, "viewer")
+    body = {"current_password": "wrong-wrong", "new_password": "newpassword1"}
+    for _ in range(5):
+        assert (await client.post("/api/me/password", json=body)).status_code == 401
+    await _store(db, '{"max_failures": 5, "block_minutes": 10}')
+    blocked = await client.post("/api/me/password", json=body)
+    assert blocked.status_code == 429
+    assert int(blocked.headers["retry-after"]) > 500
+
+
 async def test_the_password_change_follows_the_stored_policy_too(client, db):
     await login_as(client, db, "viewer")
     await _store(db, '{"max_failures": 3, "block_minutes": 1}')

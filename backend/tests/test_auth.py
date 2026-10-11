@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy.exc import OperationalError
 
 from dcdash.api.deps import get_db
@@ -161,7 +162,24 @@ async def test_the_429_says_how_long_and_carries_retry_after(client, db):
     assert 295 <= int(blocked.headers["retry-after"]) <= 300
 
 
-async def test_the_429_wording_for_one_minute_and_for_the_last_seconds(client, db):
+@pytest.mark.parametrize(
+    "seconds,wording,retry_after",
+    [
+        (90.0, "about 2 minutes", "90"),
+        (60.0, "about 1 minute", "60"),
+        (0.2, "about 1 minute", "1"),  # the last fraction of a second still says a minute and waits one second
+        (300.0, "about 5 minutes", "300"),
+        (300.5, "about 6 minutes", "301"),  # both round up: a plain round() or int() would say 5 minutes and 300
+    ],
+)
+def test_the_429_rounds_the_minutes_and_the_seconds_up(seconds, wording, retry_after):
+    error = auth_module._too_many(seconds)
+    assert error.status_code == 429
+    assert error.detail == f"too many failed attempts, try again in {wording}"
+    assert error.headers == {"Retry-After": retry_after}
+
+
+async def test_the_429_for_a_one_minute_block_says_1_minute_in_the_singular(client, db):
     await make_user(db, "viewer")
     # The limiter's numbers come from the stored policy on every attempt, so a direct configure() would be overwritten.
     await db.execute(

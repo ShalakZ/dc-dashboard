@@ -28,8 +28,8 @@ async def get_setting(db: AsyncSession, key: str, default: dict[str, Any]) -> di
     value = row.scalar_one_or_none()
     if value is None:
         return dict(default)
-    # asyncpg hands JSONB back as a str unless a codec is registered; SQLAlchemy's text() path
-    # does not register one, so decode defensively.
+    # The driver normally hands JSONB back already decoded (the production engine does); the json.loads
+    # branch is only a defensive fallback for a connection without that codec.
     return dict(json.loads(value) if isinstance(value, str) else value)
 
 

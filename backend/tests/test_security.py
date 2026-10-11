@@ -72,6 +72,33 @@ def test_a_failure_during_a_block_neither_extends_nor_restarts_it():
     assert not limiter.blocked("k")  # still ends at 0 + 60, not 30 + 60
 
 
+def test_a_full_set_of_failures_during_a_block_does_not_start_a_second_block():
+    limiter, now = _limiter()  # 3 failures, 60 s
+    for _ in range(3):
+        limiter.record_failure("k")  # blocked at t=0
+    now[0] = 30.0
+    for _ in range(3):
+        limiter.record_failure("k")  # a whole new set of failures, but the key is already blocked
+    assert limiter.retry_after("k") == 30.0
+    now[0] = 59.0
+    assert limiter.blocked("k")
+    now[0] = 60.0
+    assert not limiter.blocked("k")  # the block still ends at 0 + 60, not 30 + 60
+    limiter.record_failure("k")
+    assert not limiter.blocked("k")  # the failures made during the block were not kept to add to this one
+
+
+def test_a_failure_exactly_one_window_old_no_longer_counts():
+    limiter, now = _limiter()  # 3 failures, 60 s
+    for moment in (0.0, 30.0, 60.0):
+        now[0] = moment
+        limiter.record_failure("k")
+    assert not limiter.blocked("k")  # at t=60 the failure from t=0 is a full window old and has dropped out
+    now[0] = 61.0
+    limiter.record_failure("k")
+    assert limiter.blocked("k")  # t=30, 60 and 61 are all inside the window
+
+
 def test_configure_applies_to_a_running_block_in_both_directions():
     limiter, now = _limiter(max_failures=5, window=300)
     for _ in range(5):
