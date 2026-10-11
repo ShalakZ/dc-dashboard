@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -16,6 +17,20 @@ from dcdash.core.models import User, UserSession
 
 router = APIRouter(prefix="/api", tags=["auth"])
 limiter = LoginLimiter()
+
+
+def limiter_key(request: Request, username: str) -> tuple[str, str]:
+    # The name exactly as typed: the account lookup is case-sensitive, so a folded key would tie `bob` to `Bob`.
+    return client_address(request), username
+
+
+def _too_many(seconds: float) -> HTTPException:
+    minutes = max(1, math.ceil(seconds / 60))
+    return HTTPException(
+        429,
+        f"too many failed attempts, try again in about {minutes} minute{'s' if minutes != 1 else ''}",
+        headers={"Retry-After": str(max(1, math.ceil(seconds)))},
+    )
 
 
 class NewAdmin(BaseModel):
@@ -84,10 +99,9 @@ async def setup(
 async def login(
     body: Credentials, request: Request, response: Response, db: AsyncSession = Depends(get_db)
 ) -> User:
-    host = request.client.host if request.client else "-"
-    key = f"{host}:{body.username.lower()}"
+    key = limiter_key(request, body.username)
     if limiter.blocked(key):
-        raise HTTPException(429, "too many failed attempts, try again later")
+        raise _too_many(limiter.retry_after(key))
     # Look the account up whether or not it is active, so a failed sign-in on a deactivated account can be attributed.
     found = (await db.execute(select(User).where(User.username == body.username))).scalar_one_or_none()
     user = found if found is not None and found.active else None
@@ -132,10 +146,9 @@ async def change_my_password(
     user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    host = request.client.host if request.client else "-"
-    key = f"{host}:{user.username.lower()}"
+    key = limiter_key(request, user.username)
     if limiter.blocked(key):
-        raise HTTPException(429, "too many failed attempts, try again later")
+        raise _too_many(limiter.retry_after(key))
     if not verify_password(user.password_hash, body.current_password):
         # No await between the two reads: only the failure that blocks the key is the lockout, not a concurrent one.
         was_blocked = limiter.blocked(key)

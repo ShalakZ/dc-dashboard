@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
@@ -37,33 +37,88 @@ def new_session_token() -> tuple[str, str]:
 
 
 class LoginLimiter:
-    """Blocks a key after too many failed logins inside a sliding window."""
+    """Blocks a key for `window_seconds` once it has `max_failures` failures inside that window.
+
+    The two numbers can change at run time (`configure`); a block lasts `blocked_since + window` with the CURRENT window.
+    Memory is bounded: expired entries are swept and, past `max_keys`, plain counters are evicted before blocks.
+    """
 
     def __init__(
         self,
         max_failures: int = 5,
         window_seconds: float = 300,
         clock: Callable[[], float] = time.monotonic,
+        max_keys: int = 50_000,
     ) -> None:
         self._max = max_failures
         self._window = window_seconds
+        self._initial = (max_failures, window_seconds)
         self._clock = clock
-        self._failures: dict[str, list[float]] = {}
+        self._max_keys = max_keys
+        self._failures: dict[Hashable, list[float]] = {}
+        self._blocked_since: dict[Hashable, float] = {}
 
-    def _recent(self, key: str) -> list[float]:
-        cutoff = self._clock() - self._window
-        recent = [t for t in self._failures.get(key, []) if t > cutoff]
-        self._failures[key] = recent
-        return recent
+    def configure(self, max_failures: int, window_seconds: float) -> None:
+        self._max, self._window = max_failures, window_seconds
 
-    def blocked(self, key: str) -> bool:
-        return len(self._recent(key)) >= self._max
+    def retry_after(self, key: Hashable) -> float:
+        since = self._blocked_since.get(key)
+        if since is None:
+            return 0.0
+        left = since + self._window - self._clock()
+        if left <= 0:
+            del self._blocked_since[key]
+            return 0.0
+        return left
 
-    def record_failure(self, key: str) -> None:
-        self._recent(key).append(self._clock())
+    def blocked(self, key: Hashable) -> bool:
+        return self.retry_after(key) > 0
 
-    def reset(self, key: str) -> None:
+    def record_failure(self, key: Hashable) -> None:
+        if self.blocked(key):
+            return  # a failure during a block neither counts nor extends it
+        now = self._clock()
+        recent = [t for t in self._failures.get(key, []) if t > now - self._window]
+        recent.append(now)
+        if len(recent) >= self._max:
+            self._blocked_since[key] = now
+            self._failures.pop(key, None)
+        else:
+            self._failures[key] = recent
+        self._bound()
+
+    def blocked_keys(self) -> list[Hashable]:
+        return [key for key in list(self._blocked_since) if self.blocked(key)]
+
+    def drop(self, match: Callable[[Hashable], bool]) -> int:
+        gone = {k for k in (*self._failures, *self._blocked_since) if match(k)}
+        for key in gone:
+            self._failures.pop(key, None)
+            self._blocked_since.pop(key, None)
+        return len(gone)
+
+    def reset(self, key: Hashable) -> None:
         self._failures.pop(key, None)
+        self._blocked_since.pop(key, None)
 
     def clear(self) -> None:
         self._failures.clear()
+        self._blocked_since.clear()
+        self._max, self._window = self._initial  # a configure() from an earlier test or request is forgotten too
+
+    def _bound(self) -> None:
+        # Only non-empty lists are ever stored in _failures, so times[-1] below is safe. The sweep is O(n) per failure
+        # once over the cap (about 0.8 ms at 50,000 keys), noise next to the argon2 verify every attempt pays. Past the
+        # cap blocks can be evicted too, but that takes max_keys x max_failures attempts, far longer than a block lasts.
+        if len(self._failures) + len(self._blocked_since) <= self._max_keys:
+            return
+        cutoff = self._clock() - self._window
+        for key in [k for k, times in self._failures.items() if times[-1] <= cutoff]:
+            del self._failures[key]
+        for key in [k for k, since in self._blocked_since.items() if since <= cutoff]:
+            del self._blocked_since[key]
+        while len(self._failures) + len(self._blocked_since) > self._max_keys:
+            if self._failures:
+                del self._failures[next(iter(self._failures))]  # counters go first, blocks are worth keeping
+            else:
+                del self._blocked_since[next(iter(self._blocked_since))]

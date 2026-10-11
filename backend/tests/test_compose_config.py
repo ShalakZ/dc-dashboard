@@ -80,3 +80,8 @@ def test_the_web_service_has_a_healthcheck_that_works_with_and_without_tls():
     check = compose_config()["services"]["web"]["healthcheck"]
     command = " ".join(check["test"])
     assert "/srv/index.html" in command and "127.0.0.1:2019" in command  # Caddy's admin endpoint, same in HTTP and TLS mode
+
+
+def test_the_api_service_publishes_no_ports():
+    # The sign-in limiter keys on X-Forwarded-For (and the cookie's Secure flag on X-Forwarded-Proto), which only Caddy sets.
+    assert "ports" not in compose_config()["services"]["api"]
