@@ -10,6 +10,9 @@
   --side-text: #b8c2dc; --side-text-strong: #ffffff; --side-muted: #9aa6c4; --side-rule: #3a4569;
   --side-accent: #8fb2ff; --side-avatar-bg: #3a4772; --side-avatar-text: #dce4f7;
   --tooltip-bg: #172033; --tooltip-text: #ffffff;
+  /* top bar: the sidebar's navy carried across the page; the chip (and the quick find) sit on a lighter navy. Contrast: app.css.test.ts */
+  --bar-h: 52px; --top-bg: #283354; --top-find-bg: #313d63; --top-find-border: #4a5682; --top-find-text: #ffffff; --top-find-ph: #b8c2dc;
+  --top-live: #6fdc9a; --top-stale: #ffc46b;
   /* status: text / fill / border */
   --ok: #136c37;   --ok-tint: #e3f3e9;
   --warn: #8a4b00; --warn-tint: #fcefd6; --warn-line: #f1d29e; --warn-ink: #6b3a00; --warn-bg: #fdf3e1; --warn-icon: #a85d00;
@@ -24,7 +27,7 @@
   /* spacing, radius, elevation, motion, sizes */
   --row-y: 11px; --row-x: 14px; --gutter: 28px;          /* 22px below 1180px, see the media query in the layer */
   --radius: 6px; --radius-sm: 4px; --radius-lg: 8px;
-  --shadow-dialog: 0 18px 50px rgba(10, 16, 28, 0.28); --shadow-tip: 0 4px 14px rgba(10, 16, 28, 0.25);
+  --shadow-dialog: 0 18px 50px rgba(10, 16, 28, 0.28); --shadow-tip: 0 4px 14px rgba(10, 16, 28, 0.25); --shadow-pop: 0 10px 30px rgba(10, 16, 28, 0.18);
   --motion: 150ms ease;
   --side-w-open: 236px; --side-w-closed: 64px; --tree-w: 280px; --tree-w-closed: 44px; /* tree 248px below 1180px */
 }
@@ -34,6 +37,7 @@
 @layer w6 {
   /* Base elements. No global element resets: they would reach the widgets (spec section 2). */
   * { box-sizing: border-box; }
+  html { scroll-padding-top: var(--bar-h); } /* a focused element scrolled into view stays clear of the sticky top bar */
   body { margin: 0; font: 14px/1.4 var(--font); color: var(--text); background: var(--bg); }
   a { color: var(--accent); text-decoration: none; }
   a:hover, p a { text-decoration: underline; }
@@ -41,30 +45,36 @@
   svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-  /* The shell: a sticky navy sidebar beside main. min-width: 0 on main lets a wide table scroll inside it instead of the page. */
-  .shell { --side-w: var(--side-w-open); display: flex; min-height: 100vh; }
+  /* The shell: a sticky navy top bar over a frame that holds the sticky navy sidebar beside main (the two navies form an L around the
+     white content). Every page uses the whole width: no rule for main caps it. min-width: 0 on main lets a wide table scroll inside it
+     instead of the page. */
+  .shell { --side-w: var(--side-w-open); display: flex; flex-direction: column; min-height: 100vh; }
   .shell[data-sidebar="minimized"] { --side-w: var(--side-w-closed); }
-  main { flex: 1; min-width: 0; max-width: 1200px; padding: 0 var(--gutter) 48px; }
-  main.wide { max-width: none; }
+  .frame { flex: 1; min-height: 0; display: flex; }
+  main { flex: 1; min-width: 0; padding: 0 var(--gutter) 48px; }
   main:focus { outline: none; }
   .shell-notices { padding-top: 12px; }
   .shell-notices:empty { display: none; }
-  main:has(.assets-layout) { max-width: none; padding: 0; }
+  main:has(.assets-layout) { padding: 0; }
   main:has(.assets-layout) .shell-notices { padding-inline: var(--gutter); }
   .skip-link { position: absolute; left: -9999px; top: 0; }
   .skip-link:focus { left: 8px; top: 8px; z-index: 2000; padding: 4px 8px; background: var(--bg); border: 1px solid var(--border-strong); outline-offset: 0; } /* the ring stays on the link, not out on the navy sidebar */
 
-  /* The sidebar. Its focus ring is --side-accent (--ring equals --accent, which the navy cannot show); no rule with .side in its
-     selector may use var(--accent…), app.css.test.ts checks. z-index 40 keeps the sticky tree column below it, the tip is above. */
-  .side { --ring: var(--side-accent); position: sticky; top: 0; z-index: 40; align-self: flex-start; height: 100vh; width: var(--side-w); flex: none; background: var(--side-bg); color: var(--side-text); }
+  /* The sidebar, under the top bar. Its focus ring is --side-accent (--ring equals --accent, which the navy cannot show); no rule with
+     .side in its selector may use var(--accent…), app.css.test.ts checks. z-index 40 keeps the sticky tree column below it, the bar
+     (45) is above it and the tip (50) above both. */
+  .side { --ring: var(--side-accent); position: sticky; top: var(--bar-h); z-index: 40; align-self: flex-start; height: calc(100vh - var(--bar-h)); width: var(--side-w); flex: none; background: var(--side-bg); color: var(--side-text); }
   .shell.ready .side { transition: width var(--motion); } /* from the second frame on, so a remembered state does not animate in */
   .side nav { height: 100%; display: flex; flex-direction: column; }
   .side .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .brand { position: relative; flex: none; display: flex; align-items: center; gap: 10px; padding: 18px 20px 16px; color: var(--side-text-strong); font-size: var(--fs-md); font-weight: 600; white-space: nowrap; }
+  /* The brand is the first thing in the top bar, as wide as the sidebar below it (so it follows the minimized state: the mark alone). */
+  .brand { position: relative; flex: none; display: flex; align-items: center; gap: 10px; width: var(--side-w); height: 100%; padding: 0 20px; overflow: hidden; color: var(--side-text-strong); font-size: var(--fs-md); font-weight: 600; white-space: nowrap; }
+  .shell.ready .brand { transition: width var(--motion); }
+  .brand .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .brand-mark { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); background: var(--side-accent); }
   .brand-mark svg { width: 16px; height: 16px; fill: none; stroke: var(--side-bg); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   /* overflow-y auto in both states: on a short window the rail scrolls, the foot stays put */
-  .nav-groups { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 4px 12px 12px; scrollbar-width: thin; scrollbar-color: var(--side-bg-active) transparent; }
+  .nav-groups { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 16px 12px 12px; scrollbar-width: thin; scrollbar-color: var(--side-bg-active) transparent; }
   .nav-group + .nav-group { margin-top: 18px; }
   .nav-heading { display: block; padding: 0 10px 6px; color: var(--side-muted); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.2px; white-space: nowrap; }
   .side-row { position: relative; display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; min-height: 36px; padding: 0 10px; border: 0; border-radius: var(--radius); background: none; color: var(--side-text); font-family: inherit; font-size: var(--fs-base); font-weight: 400; line-height: 1.4; text-align: left; text-decoration: none; white-space: nowrap; cursor: pointer; }
@@ -75,28 +85,68 @@
   .side-row[aria-current="page"] svg.i { color: var(--side-accent); }
   .side-foot { flex: none; display: grid; gap: 2px; padding: 10px 12px 12px; border-top: 1px solid var(--side-rule); }
   .side-foot .side-row { min-height: 34px; font-size: var(--fs-sm); }
-  .who { position: relative; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 4px 10px 8px; white-space: nowrap; }
-  .who .lbl { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); }
-  .avatar { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--side-avatar-bg); color: var(--side-avatar-text); font-size: var(--fs-sm); font-weight: 600; }
-  .who-name { overflow: hidden; text-overflow: ellipsis; color: var(--side-text-strong); font-size: var(--fs-sm); font-weight: 600; }
-  .who-role { overflow: hidden; text-overflow: ellipsis; color: var(--side-muted); font-size: var(--fs-xs); } /* muted text only on the plain navy */
-  .side-toggle { margin-top: 6px; border-top: 1px solid var(--side-rule); border-radius: 0 0 var(--radius) var(--radius); }
+  .side-toggle { border-radius: var(--radius); }
   .shell.ready .side-toggle svg.i { transition: transform var(--motion); }
   /* Minimized: an icon rail. The labels stay in the DOM (screen readers, tests) and show in the tip below. */
   .shell[data-sidebar="minimized"] .side .lbl,
+  .shell[data-sidebar="minimized"] .brand .lbl,
   .shell[data-sidebar="minimized"] .nav-heading { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .shell[data-sidebar="minimized"] .brand { justify-content: center; padding: 18px 0 16px; }
-  .shell[data-sidebar="minimized"] .nav-groups { padding: 4px 10px 12px; }
+  .shell[data-sidebar="minimized"] .brand { justify-content: center; padding: 0; }
+  .shell[data-sidebar="minimized"] .nav-groups { padding: 16px 10px 12px; }
   .shell[data-sidebar="minimized"] .nav-group + .nav-group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--side-rule); }
   .shell[data-sidebar="minimized"] .side-row { justify-content: center; padding: 0; }
   .shell[data-sidebar="minimized"] .side-row[aria-current="page"]::before { left: -10px; }
   .shell[data-sidebar="minimized"] .side-foot { padding: 10px; }
-  .shell[data-sidebar="minimized"] .who { justify-content: center; padding: 4px 0 6px; }
   .shell[data-sidebar="minimized"] .side-toggle svg.i { transform: rotate(180deg); }
   /* One shared tip, placed by Layout from the row's rectangle. Fixed, because the rail scrolls and would clip a CSS label. */
   .side-tip { position: fixed; left: calc(var(--side-w-closed) + 8px); z-index: 50; transform: translateY(-50%); display: grid; gap: 1px; padding: 5px 9px; border-radius: var(--radius-sm); background: var(--tooltip-bg); color: var(--tooltip-text); box-shadow: var(--shadow-tip); font-size: var(--fs-sm); font-weight: 500; white-space: nowrap; }
   .side-tip[hidden] { display: none; }
   .side-tip-sub { font-size: var(--fs-xs); font-weight: 400; }
+
+  /* The top bar. It continues the sidebar's navy across the page and shares its focus ring (--side-accent: the accent is 2.09:1 on the
+     navy); no rule with .navbar in its selector may use var(--accent…), app.css.test.ts checks. z-index 45: above the sidebar (40) and the
+     sticky tree column, below the sidebar tip (50); the dialogs (1000) cover it. */
+  .navbar { --ring: var(--side-accent); position: sticky; top: 0; z-index: 45; flex: none; display: flex; align-items: center; height: var(--bar-h); background: var(--top-bg); color: var(--side-text); }
+  .bar-in { flex: 1; min-width: 0; display: flex; align-items: center; gap: 16px; padding: 0 var(--gutter); }
+  .navbar .grow { flex: 1; }
+  .vr { flex: none; width: 1px; height: 24px; background: var(--side-rule); }
+  .bar-in > .grow + .vr, .bar-in > .vr + .vr { display: none; } /* a chip or a clock that is not shown leaves no separator behind */
+  /* The data chip: the words and a shape carry the state, the colour only reinforces it (a filled dot is live, a hollow ring is stale
+     or waiting, a diamond is offline). The diamond is the stale amber too: there is no red that reads on this navy. */
+  .live { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: var(--radius-sm); background: var(--top-find-bg); box-shadow: inset 0 0 0 1px var(--top-find-border); color: var(--top-find-text); font-size: var(--fs-sm); white-space: nowrap; }
+  .live::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--top-live); }
+  .live b { font-weight: 600; }
+  .live .detail { color: var(--top-find-ph); }
+  .live[data-state="stale"]::before, .live[data-state="waiting"]::before { background: none; box-shadow: inset 0 0 0 2px var(--top-stale); }
+  .live[data-state="offline"]::before { border-radius: 0; background: var(--top-stale); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+  .site-time { display: inline-flex; align-items: baseline; gap: 6px; color: var(--side-text); font-size: var(--fs-sm); white-space: nowrap; }
+  .site-time time { color: var(--side-text-strong); font-size: var(--fs-md); font-weight: 600; font-variant-numeric: tabular-nums; }
+  /* The user: a light-on-navy button (it sets back the base button's border, ground and 34px floor) that opens a white panel. */
+  .profile { position: relative; flex: none; }
+  .avatar { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--side-avatar-bg); color: var(--side-avatar-text); font-size: var(--fs-sm); font-weight: 600; }
+  .who { display: flex; align-items: center; gap: 10px; max-width: 260px; height: 40px; min-height: 0; padding: 0 8px 0 5px; border: 1px solid transparent; border-radius: var(--radius); background: none; color: var(--side-text-strong); font-family: inherit; font-size: var(--fs-sm); font-weight: 400; text-align: left; white-space: nowrap; cursor: pointer; }
+  .who:hover { background: var(--side-bg-hover); }
+  .who[aria-expanded="true"] { background: var(--side-bg-active); }
+  .who .lbl { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+  .who-name { overflow: hidden; text-overflow: ellipsis; color: var(--side-text-strong); font-size: var(--fs-sm); font-weight: 600; line-height: 1.2; }
+  .who-role { overflow: hidden; text-overflow: ellipsis; color: var(--side-text); font-size: var(--fs-xs); line-height: 1.25; }
+  .who > svg.i { width: 14px; height: 14px; margin-left: 2px; color: var(--side-text); } /* the caret */
+  .shell.ready .who > svg.i { transition: transform var(--motion); }
+  .who[aria-expanded="true"] > svg.i { transform: rotate(180deg); }
+  /* White surfaces inside the bar take the content's ring back: the bar's light one is 2.10:1 on white (WCAG 1.4.11 asks 3:1). */
+  .prof-menu, .qf-pop { --ring: var(--accent); }
+  .prof-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 90; width: 240px; padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); }
+  .prof-menu[hidden] { display: none; }
+  .prof-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; padding: 8px 8px 10px; border-bottom: 1px solid var(--border); }
+  .prof-head > div { min-width: 0; }
+  .prof-head .avatar { width: 34px; height: 34px; }
+  .prof-head strong { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-size: var(--fs-base); font-weight: 600; }
+  .prof-head .r { display: block; color: var(--text-2); font-size: var(--fs-xs); }
+  /* A link and a button that look alike: everything the base button and link rules set is set again here. */
+  .prof-item { display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; height: 36px; min-height: 0; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text); font-family: inherit; font-size: var(--fs-sm); font-weight: 400; text-align: left; text-decoration: none; cursor: pointer; }
+  .prof-item svg.i { width: 16px; height: 16px; color: var(--text-2); }
+  .prof-item:hover, .prof-item:focus-visible { background: var(--accent-tint); text-decoration: none; }
+  .prof-item:focus-visible { outline-offset: -2px; }
 
   /* Tables */
   table { border-collapse: separate; border-spacing: 0; width: 100%; margin: 8px 0; } /* separate: collapsed borders on fractional row heights left a 1px notch */
@@ -186,10 +236,10 @@
   .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 12px; margin: 8px 0; max-width: 480px; display: grid; gap: 8px; }
 
   /* Asset tree column (Assets list page, option B). main is flush on this page (main:has(.assets-layout) above), so the column
-     meets the sidebar; it is sticky and one window tall, and the detail area beside it restores the page gutter. */
-  .assets-layout { display: flex; align-items: flex-start; min-height: 100vh; }
+     meets the sidebar; it is sticky, as tall as the window below the top bar, and the detail area beside it restores the page gutter. */
+  .assets-layout { display: flex; align-items: flex-start; min-height: calc(100vh - var(--bar-h)); }
   .assets-detail { flex: 1; min-width: 0; padding: 0 var(--gutter) 48px; }
-  .tree-col { --w: var(--tree-w); position: sticky; top: 0; align-self: flex-start; width: var(--w); height: 100vh; flex: none; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border-strong); background: var(--bg); }
+  .tree-col { --w: var(--tree-w); position: sticky; top: var(--bar-h); align-self: flex-start; width: var(--w); height: calc(100vh - var(--bar-h)); flex: none; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border-strong); background: var(--bg); }
   .shell.ready .tree-col { transition: width var(--motion); } /* from the second frame on, so a remembered state does not animate in */
   .tree-col[data-state="minimized"] { --w: var(--tree-w-closed); background: var(--surface); }
   .tree-head { display: flex; align-items: center; gap: 4px; flex: none; height: 52px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--border); }
@@ -295,11 +345,11 @@
   .empty p { margin: 0; max-width: 420px; font-size: var(--fs-sm); color: var(--text-2); }
   .empty button { margin-top: 8px; }
 
-  /* Discovery graph. The page is exactly one window tall (the shell, then main beside the sidebar), and the canvas takes what
-     the header leaves, so nothing scrolls and nothing at the canvas edge is clipped. A canvas is never shorter than 320px (the
-     page scrolls then). */
+  /* Discovery graph. The page is exactly one window tall (the shell: the bar, then the frame with main beside the sidebar), and
+     the canvas takes what the header leaves, so nothing scrolls and nothing at the canvas edge is clipped. A canvas is never
+     shorter than 320px (the page scrolls then). */
   .shell:has(.graph-page) { height: 100vh; }
-  main:has(.graph-page) { max-width: none; display: flex; flex-direction: column; min-height: 0; }
+  main:has(.graph-page) { display: flex; flex-direction: column; min-height: 0; }
   .graph-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .graph-page h1 { margin: 0; }
   .graph-page > .row { flex: none; margin-bottom: 8px; }
@@ -366,6 +416,8 @@
   @media (max-width: 1179.98px) {
     #root { --gutter: 22px; --tree-w: 248px; }
     .node .kind { display: none; }
+    .live .detail, .site-time .zone { display: none; }
+    .who-role { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } /* clipped, not display: none: the role word stays in the button's name */
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; }

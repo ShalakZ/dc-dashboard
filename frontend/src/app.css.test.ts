@@ -118,8 +118,12 @@ describe("navigation and page width", () => {
     expect(css).toMatch(/\.skip-link\s*\{[^}]*position:\s*absolute/);
     expect(css).toMatch(/\.skip-link:focus\s*\{/);
   });
-  it("lets the wide pages use the whole window", () => {
-    expect(css).toMatch(/main\.wide\s*\{[^}]*max-width:\s*none/);
+  it("lets every page use the whole window: no rule for main sets a max-width, and main.wide is gone", () => {
+    const mainRules = rules.filter((r) => /(^|[\s,>+~(])main(?![\w-])/.test(r.selector)); // main as a type, also inside :has(...)
+    expect(mainRules.length, "the rules for main").toBeGreaterThan(3);
+    for (const rule of mainRules) expect(rule.body, `"${rule.selector}"`).not.toMatch(/max-width/);
+    expect(rules.filter((r) => /main\.wide/.test(r.selector))).toEqual([]);
+    expect(rules.find((r) => r.selector === "main")?.body).toMatch(/flex:\s*1;\s*min-width:\s*0/);
   });
 });
 
@@ -188,10 +192,80 @@ describe("the shell (W6 sidebar)", () => {
     expect(titles[0].body).toMatch(/font-size:\s*var\(--fs-lg\)/);
   });
 
-  it("Discovery is exactly one window tall inside the shell, not on #root", () => {
+  it("Discovery is exactly one window tall inside the shell, the bar included, not on #root", () => {
     expect(bodyOf(".shell:has(.graph-page)")).toMatch(/height:\s*100vh/);
+    // the shell is a column (bar, then frame); the frame takes what the bar leaves and may shrink, so main (and the canvas) fit in it
+    expect(bodyOf(".shell")).toMatch(/display:\s*flex;\s*flex-direction:\s*column/);
+    expect(bodyOf(".navbar")).toMatch(/flex:\s*none/); // the bar never shrinks in that column
+    expect(bodyOf(".frame")).toMatch(/flex:\s*1/);
+    expect(bodyOf(".frame")).toMatch(/min-height:\s*0/);
+    expect(bodyOf(".frame")).toMatch(/display:\s*flex/);
     expect(bodyOf("main:has(.graph-page)")).toMatch(/min-height:\s*0/);
     expect(css).not.toMatch(/#root:has\(\.graph-page\)/);
+  });
+
+  describe("the top bar", () => {
+    const zIndex = (selector: string) => Number(/z-index:\s*(\d+)/.exec(bodyOf(selector))?.[1]);
+    const parts = (selector: string) => selector.split(",").map((part) => part.trim());
+
+    it("is sticky, one bar high, above the sidebar (40) and below the tooltip (50)", () => {
+      expect(bodyOf(".navbar")).toMatch(/position:\s*sticky/);
+      expect(bodyOf(".navbar")).toMatch(/top:\s*0\b/);
+      expect(bodyOf(".navbar")).toMatch(/height:\s*var\(--bar-h\)/);
+      expect(zIndex(".navbar")).toBeGreaterThan(zIndex(".side"));
+      expect(zIndex(".navbar")).toBeLessThan(zIndex(".side-tip"));
+    });
+
+    it("pushes the sticky sidebar and tree column down by its height, and keeps them one window tall with it", () => {
+      for (const selector of [".side", ".tree-col"]) {
+        expect(bodyOf(selector), `"${selector}" top`).toMatch(/top:\s*var\(--bar-h\)/);
+        expect(bodyOf(selector), `"${selector}" height`).toMatch(/height:\s*calc\(100vh - var\(--bar-h\)\)/);
+      }
+      expect(bodyOf(".assets-layout")).toMatch(/min-height:\s*calc\(100vh - var\(--bar-h\)\)/);
+    });
+
+    it("keeps a focused element from hiding under it: a scroll offset on html, inside the layer", () => {
+      const html = rules.filter((r) => r.selector === "html");
+      expect(html).toHaveLength(1);
+      expect(inLayer(html[0])).toBe(true);
+      expect(html[0].body).toMatch(/scroll-padding-top:\s*var\(--bar-h\)/);
+    });
+
+    it("is the sidebar's navy, so the two form one L, and its focus ring is the sidebar's", () => {
+      expect(tok("top-bg")).toBe(tok("side-bg"));
+      expect(bodyOf(".navbar")).toMatch(/--ring:\s*var\(--side-accent\)/);
+    });
+
+    it("has no accent in any rule of its own (the accent is 2.09:1 on the navy), and the white surfaces inside it take the accent ring back", () => {
+      const own = rules.filter((r) => r.selector.includes(".navbar"));
+      expect(own.length, "the rules of the bar").toBeGreaterThan(0);
+      for (const rule of own) expect(rule.body, `"${rule.selector}"`).not.toMatch(/var\(--accent/);
+      // the profile panel and the quick find's popup are white and sit inside the bar: they would inherit its light ring (2.10:1 on white)
+      for (const selector of [".prof-menu", ".qf-pop"]) {
+        const found = rules.filter((r) => parts(r.selector).includes(selector));
+        expect(found.some((r) => /--ring:\s*var\(--accent\)/.test(r.body)), `--ring: var(--accent) for ${selector}`).toBe(true);
+      }
+      // and not the mockup's catch-all, which would repaint those surfaces' rings
+      expect(rules.filter((r) => /\.navbar\s+:focus-visible/.test(r.selector))).toEqual([]);
+    });
+
+    it("hides the extras of the chip, the clock and the profile in a narrow window, without taking a name out of the accessibility tree", () => {
+      const narrow = rules.filter((r) => r.at.some((a) => /max-width:\s*1179\.98px/.test(a)));
+      const hiding = narrow.map((r) => r.selector).join(" | ");
+      expect(hiding).toContain(".live .detail");
+      expect(hiding).toContain(".site-time .zone");
+      expect(hiding).toContain(".who-role");
+      // the role word is part of the profile button's name: clipped, not display: none
+      const role = narrow.find((r) => r.selector.includes(".who-role"))!;
+      expect(role.body).not.toMatch(/display:\s*none|visibility:\s*hidden/);
+      expect(role.body).toMatch(/clip:\s*rect\(0 0 0 0\)/);
+    });
+
+    it("draws the chip's state as a shape as well as a colour: a dot, a hollow ring, a diamond", () => {
+      expect(bodyOf(".live::before")).toMatch(/border-radius:\s*50%/);
+      expect(bodyOf('.live[data-state="stale"]::before, .live[data-state="waiting"]::before')).toMatch(/box-shadow:\s*inset 0 0 0 2px var\(--top-stale\)/);
+      expect(bodyOf('.live[data-state="offline"]::before')).toMatch(/clip-path:\s*polygon/);
+    });
   });
 });
 
@@ -261,6 +335,11 @@ describe("the design tokens (W6)", () => {
     ["sidebar: navy on the accent brand mark", () => tok("side-bg"), () => tok("side-accent")],
     ["sidebar: avatar", () => tok("side-avatar-text"), () => tok("side-avatar-bg")],
     ["tooltip", () => tok("tooltip-text"), () => tok("tooltip-bg")],
+    ["top bar: white on the bar (brand, site time, user name)", () => tok("side-text-strong"), () => tok("top-bg")],
+    ["top bar: light text on the bar (time zone, role word)", () => tok("side-text"), () => tok("top-bg")],
+    ["top bar: the role word on the open profile button", () => tok("side-text"), () => tok("side-bg-active")],
+    ["top bar: find text on the find ground (and the chip's word)", () => tok("top-find-text"), () => tok("top-find-bg")],
+    ["top bar: placeholder on the find ground (and the chip's age)", () => tok("top-find-ph"), () => tok("top-find-bg")],
   ];
   it.each(textPairs)("%s reads at 4.5:1", (_name, fg, bg) => {
     expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(AA);
@@ -270,6 +349,9 @@ describe("the design tokens (W6)", () => {
     ["sidebar: accent on the active fill", () => tok("side-accent"), () => tok("side-bg-active")],
     ["a field's border on white", () => tok("field-border"), () => tok("bg")],
     ["a field's border on the surface ground", () => tok("field-border"), () => tok("surface")],
+    ["top bar: the live dot on the chip ground", () => tok("top-live"), () => tok("top-find-bg")],
+    ["top bar: the stale ring and offline diamond on the chip ground", () => tok("top-stale"), () => tok("top-find-bg")],
+    ["top bar: white on the bar, as a mark rather than text", () => tok("side-text-strong"), () => tok("top-bg")],
   ];
   it.each(nonTextPairs)("%s reads at 3:1", (_name, fg, bg) => {
     expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(NON_TEXT);

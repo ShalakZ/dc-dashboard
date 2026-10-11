@@ -2,6 +2,16 @@ type Reply = { status?: number; body?: unknown };
 type Handler = Reply | ((req: { url: string; body: unknown }) => Reply);
 export type Routes = Record<string, Handler>;
 
+/**
+ * What the app shell asks for on every page: the top bar's data chip and site clock, and the asset list the quick find searches.
+ * Spread it first into the routes of a test that mounts `Layout` or `App` (`{ ...shellRoutes, ...own }`), so the three have an answer.
+ */
+export const shellRoutes: Routes = {
+  "GET /api/status": { body: { collector_alive: true, readings_fresh: true, last_reading_age_seconds: 4 } },
+  "GET /api/site": { body: { timezone: "UTC", currency: null } },
+  "GET /api/assets": { body: [] },
+};
+
 /** Install a fetch mock keyed by "METHOD /path" (query string ignored). Returns the recorded calls. */
 export function mockFetch(routes: Routes) {
   const calls: { method: string; path: string; body: unknown }[] = [];

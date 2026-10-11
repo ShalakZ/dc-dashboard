@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RequireRole } from "../auth/RequireAuth";
-import { mockFetch } from "../test/fetchMock";
+import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { Layout } from "./Layout";
 
@@ -16,9 +16,21 @@ afterEach(() => {
 });
 
 const routes = (role: string) => ({
+  ...shellRoutes,
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: { id: 1, username: "u", role } },
 });
+
+/**
+ * The signed-in user's button in the top bar. Its name is the user and then the role word, so it doubles as the signal that the
+ * user has loaded (a text lookup would find the name twice: the panel under the button is always mounted).
+ */
+const profileButton = () => screen.findByRole("button", { name: /^u (Administrator|Operator|Viewer)$/ });
+/** Presses the user's button and returns the panel it opens. */
+const openProfile = async () => {
+  await userEvent.click(await profileButton());
+  return document.getElementById("profile-panel") as HTMLElement;
+};
 
 describe("Layout nav", () => {
   it("shows admin links only to admins, Password link to everyone", async () => {
@@ -26,11 +38,11 @@ describe("Layout nav", () => {
     const { unmount } = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     expect(await screen.findByRole("link", { name: "Users" })).toHaveAttribute("href", "/users");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
-    expect(screen.getByRole("link", { name: "Password" })).toHaveAttribute("href", "/password");
+    expect(within(await openProfile()).getByRole("link", { name: "Password" })).toHaveAttribute("href", "/password");
     unmount();
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    expect(await screen.findByRole("link", { name: "Password" })).toBeInTheDocument();
+    expect(within(await openProfile()).getByRole("link", { name: "Password" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Sources" })).not.toBeInTheDocument();
   });
@@ -48,7 +60,7 @@ describe("Layout scans link", () => {
     admin.unmount();
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    expect(await screen.findByRole("link", { name: "Password" })).toBeInTheDocument();
+    await profileButton();
     expect(screen.queryByRole("link", { name: "Scans" })).not.toBeInTheDocument();
   });
 });
@@ -65,7 +77,7 @@ describe("Layout discovery link", () => {
     admin.unmount();
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    expect(await screen.findByRole("link", { name: "Password" })).toBeInTheDocument();
+    await profileButton();
     expect(screen.queryByRole("link", { name: "Discovery" })).not.toBeInTheDocument();
   });
 });
@@ -83,7 +95,7 @@ describe("Layout audit link", () => {
     operator.unmount();
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    expect(await screen.findByRole("link", { name: "Password" })).toBeInTheDocument();
+    await profileButton();
     expect(screen.queryByRole("link", { name: "Audit" })).not.toBeInTheDocument();
   });
 });
@@ -130,8 +142,7 @@ describe("Layout phase 3 links", () => {
   it.each(["viewer", "operator", "admin"] as const)("%s sees Dashboards and Billing, and Tariffs only as admin", async (role) => {
     mockFetch(routes(role));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    await screen.findByText("u"); // the user has loaded, so role-gated links are decided
-    expect(screen.getByText(ROLE_WORD[role])).toBeInTheDocument(); // the role is written out under the name
+    expect(await profileButton()).toHaveAccessibleName(`u ${ROLE_WORD[role]}`); // the user has loaded, so role-gated links are decided; the role is written out
     expect(screen.getByRole("link", { name: "Dashboards" })).toHaveAttribute("href", "/dashboards");
     expect(screen.getByRole("link", { name: "Billing" })).toHaveAttribute("href", "/billing");
     if (role === "admin") expect(screen.getByRole("link", { name: "Tariffs" })).toHaveAttribute("href", "/tariffs");
@@ -149,18 +160,15 @@ describe("Layout skip link and page width", () => {
     expect(screen.getByRole("main")).toHaveFocus();
   });
 
-  it.each([
-    ["/billing", true],
-    ["/dashboards/3", true],
-    ["/dashboards", false],
-    ["/assets", false],
-    ["/sources/4/points", false],
-  ])("gives %s the whole window: %s", async (route, wide) => {
-    mockFetch(routes("viewer"));
-    renderWithProviders(<Layout />, { route, path: "*" });
-    const main = await screen.findByRole("main");
-    expect(main.classList.contains("wide")).toBe(wide);
-  });
+  it.each(["/billing", "/dashboards/3", "/dashboards", "/assets", "/sources/4/points"])(
+    "gives %s no width class: every page uses the whole window",
+    async (route) => {
+      mockFetch(routes("viewer"));
+      renderWithProviders(<Layout />, { route, path: "*" });
+      const main = await screen.findByRole("main");
+      expect(main).not.toHaveClass("wide");
+    },
+  );
 });
 
 describe("Layout certificate notice", () => {
@@ -177,27 +185,78 @@ describe("Layout certificate notice", () => {
   it("shows an admin the notice in the app shell", async () => {
     mockFetch(withTls("admin"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    expect(await screen.findByRole("status")).toHaveTextContent("The HTTPS certificate expires on 2026-11-09 11:03:11 (12 days left)");
+    // in main: the top bar's data chip is a status too
+    expect(await within(await screen.findByRole("main")).findByRole("status")).toHaveTextContent("The HTTPS certificate expires on 2026-11-09 11:03:11 (12 days left)");
   });
 
   it.each(["operator", "viewer"])("does not even ask for the status as %s", async (role) => {
     const calls = mockFetch(withTls(role));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    await screen.findByText("u");
+    await profileButton();
     await waitFor(() => expect(calls.some((c) => c.path === "/api/me")).toBe(true));
     expect(calls.some((c) => c.path === "/api/tls/status")).toBe(false);
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("main")).queryByRole("status")).not.toBeInTheDocument();
   });
 });
 
-describe("Layout user block", () => {
-  it.each(["viewer", "operator", "admin"] as const)("shows the name with the %s role word below it", async (role) => {
+describe("Layout top bar", () => {
+  it.each(["viewer", "operator", "admin"] as const)("puts the %s user in the banner: the name with the role word after it", async (role) => {
     mockFetch(routes(role));
     const { container } = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    expect(await screen.findByText("u")).toHaveClass("who-name");
-    expect(screen.getByText(ROLE_WORD[role])).toHaveClass("who-role");
+    const trigger = await profileButton();
+    expect(trigger).toHaveAccessibleName(`u ${ROLE_WORD[role]}`);
+    expect(screen.getByRole("banner")).toContainElement(trigger);
+    expect(trigger.querySelector(".who-name")).toHaveTextContent("u");
+    expect(trigger.querySelector(".who-role")).toHaveTextContent(ROLE_WORD[role]);
     expect(container.querySelector(".who .avatar")).toHaveTextContent("U");
-    expect(screen.queryByText(`u (${role})`)).not.toBeInTheDocument(); // the old single text run is gone
+  });
+
+  it("holds the brand, the data chip, the site time and the profile, above the sidebar and main", async () => {
+    mockFetch(routes("admin"));
+    const { container } = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    const banner = screen.getByRole("banner");
+    expect(banner).toHaveClass("navbar");
+    expect(within(banner).getByText("DC Dashboard")).toBeInTheDocument();
+    expect(await within(banner).findByRole("status")).toHaveTextContent("Live"); // the data chip, from /api/status
+    expect(banner.querySelector(".live")).toHaveAttribute("data-state", "live");
+    await waitFor(() => expect(banner.querySelector(".site-time time")).toHaveTextContent(/^\d\d:\d\d$/)); // from /api/site
+    expect(within(banner).getByRole("button", { name: "u Administrator" })).toBeInTheDocument();
+    // the bar is the first thing in the shell, then one frame holds the sidebar and main
+    const shell = container.querySelector(".shell") as HTMLElement;
+    expect(Array.from(shell.children).map((el) => el.tagName + (el.className ? `.${el.className.split(" ")[0]}` : ""))).toEqual(["HEADER.navbar", "DIV.frame"]);
+    const frame = shell.querySelector(".frame") as HTMLElement;
+    expect(Array.from(frame.children).map((el) => el.tagName)).toEqual(["DIV", "MAIN"]);
+    expect(frame.children[0]).toHaveAttribute("id", "sidebar");
+    expect(within(frame.children[0] as HTMLElement).queryByText("DC Dashboard")).not.toBeInTheDocument(); // the brand moved out of the rail
+  });
+
+  it("keeps the brand's label for a screen reader when the sidebar is minimized", async () => {
+    mockFetch(routes("viewer"));
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await userEvent.click(await screen.findByRole("button", { name: "Minimize sidebar" }));
+    expect(within(screen.getByRole("banner")).getByText("DC Dashboard")).toBeInTheDocument();
+  });
+
+  it("says nothing about the data while /api/status cannot be read, and shows no alert for it", async () => {
+    mockFetch({ ...routes("viewer"), "GET /api/status": { status: 500, body: { detail: "down" } } });
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    await waitFor(() => expect(screen.getByRole("banner").querySelector(".site-time time")).not.toBeNull());
+    expect(within(screen.getByRole("banner")).queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("opens a panel under the user's button with Password and Sign out, which the sidebar no longer holds", async () => {
+    mockFetch(routes("viewer"));
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    const panel = await openProfile();
+    expect(panel).not.toHaveAttribute("hidden");
+    expect(screen.getByRole("banner")).toContainElement(panel);
+    expect(within(panel).getByRole("link", { name: "Password" })).toHaveAttribute("href", "/password");
+    expect(within(panel).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+    const rail = screen.getByRole("navigation", { name: "Main" });
+    expect(within(rail).queryByRole("link", { name: "Password" })).not.toBeInTheDocument();
+    expect(within(rail).queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
   });
 
   it("renders before the user has loaded without an avatar letter or a role word", () => {
@@ -209,12 +268,13 @@ describe("Layout user block", () => {
 });
 
 describe("Layout sidebar landmarks and groups", () => {
-  it("has exactly one navigation landmark and no complementary one", async () => {
+  it("has exactly one navigation landmark, named Main, one banner and no complementary one", async () => {
     mockFetch(routes("admin"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    await screen.findByText("u");
+    await profileButton();
     expect(screen.getAllByRole("navigation")).toHaveLength(1);
     expect(screen.getByRole("navigation")).toHaveAccessibleName("Main");
+    expect(screen.getAllByRole("banner")).toHaveLength(1);
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
   });
 
@@ -225,7 +285,7 @@ describe("Layout sidebar landmarks and groups", () => {
   ] as const)("%s sees the groups %j and not %j", async (role, shown, absent) => {
     mockFetch(routes(role));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    await screen.findByText("u"); // the user has loaded, so a missing group is really gated away
+    await profileButton(); // the user has loaded, so a missing group is really gated away
     for (const name of shown) expect(screen.getByRole("group", { name })).toBeInTheDocument();
     for (const name of absent) expect(screen.queryByRole("group", { name })).not.toBeInTheDocument();
   });
@@ -233,7 +293,7 @@ describe("Layout sidebar landmarks and groups", () => {
   it("puts each link in its group, in the order of the old bar", async () => {
     mockFetch(routes("admin"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    await screen.findByText("u");
+    await profileButton();
     const linksOf = (group: string) => within(screen.getByRole("group", { name: group })).getAllByRole("link").map((a) => a.textContent);
     expect(linksOf("Monitor")).toEqual(["Assets", "Dashboards", "Billing"]);
     expect(linksOf("Operate")).toEqual(["Sources", "Scans", "Discovery"]);
@@ -243,7 +303,7 @@ describe("Layout sidebar landmarks and groups", () => {
   it("marks the current page and no other link", async () => {
     mockFetch(routes("admin"));
     renderWithProviders(<Layout />, { route: "/billing", path: "/billing" });
-    await screen.findByText("u");
+    await profileButton();
     expect(screen.getByRole("link", { name: "Billing" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Assets" })).not.toHaveAttribute("aria-current");
   });
@@ -278,15 +338,14 @@ describe("Layout sidebar toggle", () => {
     expect(localStorage.getItem("dcdash.sidebar")).toBe("expanded");
   });
 
-  it("minimized, every link is still there by name, and so are Password and Sign out", async () => {
+  it("minimized, every link is still there by name", async () => {
     mockFetch(routes("admin"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    await screen.findByText("u");
+    await profileButton();
     await userEvent.click(screen.getByRole("button", { name: "Minimize sidebar" }));
-    for (const name of ["Assets", "Dashboards", "Billing", "Sources", "Scans", "Discovery", "Users", "Settings", "Tariffs", "Storage", "Audit", "Password"]) {
+    for (const name of ["Assets", "Dashboards", "Billing", "Sources", "Scans", "Discovery", "Users", "Settings", "Tariffs", "Storage", "Audit"]) {
       expect(screen.getByRole("link", { name })).toBeInTheDocument();
     }
-    expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Monitor" })).toBeInTheDocument(); // the headings stay in the DOM too
   });
 
@@ -322,22 +381,25 @@ describe("Layout sidebar toggle", () => {
     expect(shell(container)).toHaveAttribute("data-sidebar", "minimized");
   });
 
-  it("puts the toggle, Password and Sign out in the foot, after the links and before main", async () => {
+  it("keeps only the toggle in the foot, after the links and before main", async () => {
     mockFetch(routes("viewer"));
-    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    await screen.findByText("u");
-    const links = screen.getAllByRole("link").map((a) => a.textContent);
-    expect(links[0]).toBe("Skip to content");
-    expect(links.indexOf("Assets")).toBeLessThan(links.indexOf("Password"));
-    const tail = screen.getAllByRole("button").map((b) => b.textContent);
-    expect(tail.slice(-2)).toEqual(["Sign out", "Minimize sidebar"]);
+    const { container } = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    expect(screen.getAllByRole("link")[0]).toHaveAccessibleName("Skip to content");
+    const foot = container.querySelector(".side-foot") as HTMLElement;
+    expect(foot.children).toHaveLength(1);
+    expect(within(foot).getByRole("button")).toHaveAccessibleName("Minimize sidebar");
+    expect(within(foot).queryAllByRole("link")).toHaveLength(0);
+    const groups = container.querySelector(".nav-groups") as HTMLElement;
+    expect(groups.compareDocumentPosition(foot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(foot.compareDocumentPosition(screen.getByRole("main")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
 describe("Layout minimized tooltip", () => {
   const tip = () => screen.getByRole("tooltip", { hidden: true });
   const minimize = async () => {
-    await screen.findByText("u");
+    await profileButton();
     await userEvent.click(screen.getByRole("button", { name: "Minimize sidebar" }));
   };
 
@@ -371,9 +433,9 @@ describe("Layout minimized tooltip", () => {
     expect(tip()).toHaveTextContent("Assets");
     act(() => screen.getByRole("link", { name: "Billing" }).focus());
     expect(tip()).toHaveTextContent("Billing");
-    act(() => screen.getByRole("button", { name: "Sign out" }).focus());
-    expect(tip()).toHaveTextContent("Sign out");
-    act(() => screen.getByRole("button", { name: "Sign out" }).blur());
+    act(() => screen.getByRole("button", { name: "Expand sidebar" }).focus());
+    expect(tip()).toHaveTextContent("Expand sidebar");
+    act(() => screen.getByRole("button", { name: "Expand sidebar" }).blur());
     expect(tip()).toHaveAttribute("hidden");
   });
 
@@ -410,13 +472,14 @@ describe("Layout minimized tooltip", () => {
     expect(tip()).toHaveTextContent("Audit");
   });
 
-  it("shows the name and the role word for the user block", async () => {
+  it("is for the rows and the toggle only: the user's button in the bar gets none", async () => {
     mockFetch(routes("operator"));
-    const { container } = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     await minimize();
-    await userEvent.hover(container.querySelector(".who") as HTMLElement);
-    expect(tip().querySelector(".side-tip-text")).toHaveTextContent("u");
-    expect(tip().querySelector(".side-tip-sub")).toHaveTextContent("Operator");
+    await userEvent.hover(await profileButton());
+    act(() => screen.getByRole("button", { name: /^u Operator$/ }).focus());
+    expect(tip()).toHaveAttribute("hidden");
+    expect(tip()).toHaveTextContent("");
   });
 
   it("shows the toggle's current name", async () => {
@@ -431,7 +494,7 @@ describe("Layout minimized tooltip", () => {
   it("does not show while the sidebar is expanded, and goes when the sidebar is expanded again", async () => {
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    await screen.findByText("u");
+    await profileButton();
     act(() => screen.getByRole("link", { name: "Assets" }).focus());
     expect(tip()).toHaveAttribute("hidden");
     await userEvent.click(screen.getByRole("button", { name: "Minimize sidebar" }));

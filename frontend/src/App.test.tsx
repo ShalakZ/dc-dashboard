@@ -1,11 +1,12 @@
 import { screen } from "@testing-library/react";
 import { App } from "./App";
 import { config, dashboard, widget, widgetDataRoute } from "./test/dashboardFixtures";
-import { mockFetch } from "./test/fetchMock";
+import { mockFetch, shellRoutes } from "./test/fetchMock";
 import { renderWithProviders } from "./test/render";
 
 // Answers for whatever the Phase 3 pages (placeholders now, real pages later) ask on load.
 const routes = (role: string) => ({
+  ...shellRoutes, // the top bar's chip and clock, and the asset list: asked on every page
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: { id: 1, username: "u", role } },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },

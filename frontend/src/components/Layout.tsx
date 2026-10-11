@@ -1,50 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type FocusEvent, type PointerEvent } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import { NavLink, Outlet } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
-import type { Role } from "../api/types";
 import { initialSidebar, saveSidebar, type SidebarState } from "../lib/sidebarState";
 import { CertificateNotice } from "./CertificateNotice";
-import { Icon, ICONS, type IconName } from "./Icon";
+import { Icon, ICONS } from "./Icon";
+import { GROUPS } from "./navItems";
+import { ProfileMenu } from "./ProfileMenu";
 import { RoleChangedNotice } from "./RoleChangedNotice";
+import { SiteClock } from "./SiteClock";
+import { StatusChip } from "./StatusChip";
 
-// Billing's day columns and a dashboard on a wall screen use the whole window; every other page keeps the 1200 px column.
-const WIDE = /^\/(billing|dashboards\/[^/]+)\/?$/;
-
-/** The role written out under the user's name. */
-export const ROLE_LABEL: Record<Role, string> = { admin: "Administrator", operator: "Operator", viewer: "Viewer" };
-
-interface NavItem { to: string; label: string; icon: IconName }
-interface NavGroup { id: string; title: string; min?: Role; items: NavItem[] }
-
-// Role gating is the old bar's, link for link; a group whose links are all gated away is not rendered.
-const GROUPS: NavGroup[] = [
-  {
-    id: "nav-monitor", title: "Monitor",
-    items: [
-      { to: "/assets", label: "Assets", icon: "assets" },
-      { to: "/dashboards", label: "Dashboards", icon: "dashboards" },
-      { to: "/billing", label: "Billing", icon: "billing" },
-    ],
-  },
-  {
-    id: "nav-operate", title: "Operate", min: "operator",
-    items: [
-      { to: "/sources", label: "Sources", icon: "sources" },
-      { to: "/scans", label: "Scans", icon: "scans" },
-      { to: "/discovery", label: "Discovery", icon: "discovery" },
-    ],
-  },
-  {
-    id: "nav-administer", title: "Administer", min: "admin",
-    items: [
-      { to: "/users", label: "Users", icon: "users" },
-      { to: "/settings", label: "Settings", icon: "settings" },
-      { to: "/tariffs", label: "Tariffs", icon: "tariffs" },
-      { to: "/storage", label: "Storage", icon: "storage" },
-      { to: "/audit", label: "Audit", icon: "audit" },
-    ],
-  },
-];
+export { ROLE_LABEL } from "./navItems";
 
 interface Tip { text: string; sub?: string; top: number }
 /** The pointer crosses the gap between a row and its tip inside this time, so the tip can be hovered (WCAG 1.4.13). */
@@ -113,9 +79,7 @@ function useSideTip(active: boolean) {
 }
 
 export function Layout() {
-  const { user, hasRole, logout } = useAuth();
-  const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { hasRole } = useAuth();
   const [sidebar, setSidebar] = useState<SidebarState>(initialSidebar);
   const minimized = sidebar === "minimized";
   const { tip, bind, scrolled, keep, leave } = useSideTip(minimized);
@@ -133,8 +97,6 @@ export function Layout() {
     saveSidebar(next); // only a click is remembered; a narrow window's automatic start is not the user's choice
   };
   const toggleLabel = minimized ? "Expand sidebar" : "Minimize sidebar";
-  const name = user?.username ?? "";
-  const role = user ? ROLE_LABEL[user.role] ?? user.role : "";
 
   return (
     <>
@@ -149,72 +111,69 @@ export function Layout() {
         Skip to content
       </a>
       <div className="shell" data-sidebar={sidebar} ref={shellRef}>
-        <div className="side" id="sidebar">
-          <nav aria-label="Main">
-            <div className="brand">
-              <span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24">{ICONS.brand}</svg></span>
-              <span className="lbl">DC Dashboard</span>
-            </div>
-            <div className="nav-groups" onScroll={scrolled}>
-              {GROUPS.filter((group) => !group.min || hasRole(group.min)).map((group) => (
-                <div className="nav-group" role="group" aria-labelledby={group.id} key={group.id}>
-                  <span className="nav-heading" id={group.id}>{group.title}</span>
-                  {group.items.map((item) => (
-                    <NavLink to={item.to} className="side-row" key={item.to} {...bind(item.label)}>
-                      <Icon name={item.icon} />
-                      <span className="lbl">{item.label}</span>
-                    </NavLink>
-                  ))}
-                </div>
-              ))}
-            </div>
-            <div className="side-foot">
-              <div className="who" {...bind(name, role)}>
-                <span className="avatar" aria-hidden="true">{name.charAt(0).toUpperCase()}</span>
-                <span className="lbl">
-                  <span className="who-name" title={name}>{name}</span>
-                  <span className="who-role">{role}</span>
-                </span>
+        <header className="navbar">
+          <div className="brand">
+            <span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24">{ICONS.brand}</svg></span>
+            <span className="lbl">DC Dashboard</span>
+          </div>
+          <div className="bar-in">
+            <span className="grow" />
+            <StatusChip />
+            <span className="vr" aria-hidden="true" />
+            <SiteClock />
+            <span className="vr" aria-hidden="true" />
+            <ProfileMenu />
+          </div>
+        </header>
+        <div className="frame">
+          <div className="side" id="sidebar">
+            <nav aria-label="Main">
+              <div className="nav-groups" onScroll={scrolled}>
+                {GROUPS.filter((group) => !group.min || hasRole(group.min)).map((group) => (
+                  <div className="nav-group" role="group" aria-labelledby={group.id} key={group.id}>
+                    <span className="nav-heading" id={group.id}>{group.title}</span>
+                    {group.items.map((item) => (
+                      <NavLink to={item.to} className="side-row" key={item.to} {...bind(item.label)}>
+                        <Icon name={item.icon} />
+                        <span className="lbl">{item.label}</span>
+                      </NavLink>
+                    ))}
+                  </div>
+                ))}
               </div>
-              <NavLink to="/password" className="side-row" {...bind("Password")}>
-                <Icon name="password" />
-                <span className="lbl">Password</span>
-              </NavLink>
-              <button type="button" className="side-row" onClick={() => logout().then(() => navigate("/login"))} {...bind("Sign out")}>
-                <Icon name="signOut" />
-                <span className="lbl">Sign out</span>
-              </button>
-              <button type="button" className="side-row side-toggle" onClick={toggle} {...bind(toggleLabel)}>
-                <Icon name="collapse" />
-                <span className="lbl">{toggleLabel}</span>
-              </button>
+              <div className="side-foot">
+                <button type="button" className="side-row side-toggle" onClick={toggle} {...bind(toggleLabel)}>
+                  <Icon name="collapse" />
+                  <span className="lbl">{toggleLabel}</span>
+                </button>
+              </div>
+            </nav>
+            <div
+              className="side-tip"
+              id="side-tip"
+              role="tooltip"
+              aria-hidden="true"
+              hidden={!tip}
+              style={tip ? { top: tip.top } : undefined}
+              onPointerEnter={keep}
+              onPointerLeave={leave}
+            >
+              {tip && (
+                <>
+                  <span className="side-tip-text">{tip.text}</span>
+                  {tip.sub && <span className="side-tip-sub">{tip.sub}</span>}
+                </>
+              )}
             </div>
-          </nav>
-          <div
-            className="side-tip"
-            id="side-tip"
-            role="tooltip"
-            aria-hidden="true"
-            hidden={!tip}
-            style={tip ? { top: tip.top } : undefined}
-            onPointerEnter={keep}
-            onPointerLeave={leave}
-          >
-            {tip && (
-              <>
-                <span className="side-tip-text">{tip.text}</span>
-                {tip.sub && <span className="side-tip-sub">{tip.sub}</span>}
-              </>
-            )}
           </div>
+          <main id="main" tabIndex={-1}>
+            <div className="shell-notices">
+              <RoleChangedNotice />
+              {hasRole("admin") && <CertificateNotice />}
+            </div>
+            <Outlet />
+          </main>
         </div>
-        <main id="main" tabIndex={-1} className={WIDE.test(pathname) ? "wide" : undefined}>
-          <div className="shell-notices">
-            <RoleChangedNotice />
-            {hasRole("admin") && <CertificateNotice />}
-          </div>
-          <Outlet />
-        </main>
       </div>
     </>
   );

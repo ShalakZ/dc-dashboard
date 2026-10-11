@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Link } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
 import { Icon } from "./Icon";
-import { ROLE_LABEL } from "./Layout";
+import { ROLE_LABEL } from "./navItems";
 import { SignOutDialog } from "./SignOutDialog";
 
 /**
