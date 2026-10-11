@@ -7,7 +7,7 @@
   .cell-name { font-weight: 600; }
   .cell-trunc { max-width: 360px; }
   .wrap-any { overflow-wrap: anywhere; }
-  .nowrap, .table-wrap td.num { white-space: nowrap; }
+  .nowrap, .table-wrap.dense td.num { white-space: nowrap; }
   /* Nine columns: a tighter cell and headers that may wrap. When the wrap is narrower than 1100px (a window under 1280px with the
      sidebar open, or about 1100px with it minimized) the rows also take the small text size and a shorter name; what still does not
      fit scrolls inside the wrap, with Last error, Test result and the actions together at its right end. */
@@ -16,13 +16,14 @@
   .table-wrap.dense th { white-space: normal; vertical-align: bottom; }
   @container (max-width: 1099.98px) {
     .table-wrap.dense th, .table-wrap.dense td { padding-left: 6px; padding-right: 6px; }
-    td { font-size: var(--fs-sm); }
+    .table-wrap.dense td { font-size: var(--fs-sm); }
     .cell-name { max-width: 104px; }
     td.row-actions :is(.quiet, .danger-quiet, .quiet-link) { padding: 0 5px; }
   }
-  .table-wrap td.error { min-width: 140px; max-width: 260px; overflow-wrap: break-word; } /* never squeezed to a few letters per line: the wrap scrolls instead */
+  .table-wrap.dense td.error { min-width: 140px; max-width: 260px; overflow-wrap: break-word; } /* never squeezed to a few letters per line: the wrap scrolls instead */
 
   /* Row actions: quiet buttons at the right of the row. The cell stays a table cell (it must not be display: flex). */
+  td.row-actions, th.row-actions { display: table-cell; } /* belt: no other rule may turn the cell into a flex box and tear the row */
   td.row-actions { padding-top: 6px; padding-bottom: 6px; text-align: right; white-space: nowrap; }
   td.row-actions > * { vertical-align: middle; }
   td.row-actions :is(.quiet, .danger-quiet, .quiet-link) { padding: 0 7px; }
@@ -48,7 +49,6 @@
   .sort-mark.desc { transform: rotate(180deg); }
 
   /* Scans: the confirmation, the scan in view and the section titles */
-  .section-title { margin: 28px 0 12px; font-size: var(--fs-lg); font-weight: 600; }
   .scope-card { margin: 0 0 24px; padding: 18px 20px; border: 1px solid var(--border); border-radius: var(--radius); }
   .scope-card form { margin: 0; }
   .scope-card > p { margin: 0 0 12px; }

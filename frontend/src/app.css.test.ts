@@ -149,6 +149,45 @@ describe("the shell (W6 sidebar)", () => {
     expect(bodyOf('.shell[data-sidebar="minimized"]')).toMatch(/--side-w:\s*var\(--side-w-closed\)/);
   });
 
+  it("a minimized rail hides its labels with the clip pattern, never display: none or visibility: hidden (a screen reader still reads them)", () => {
+    const minimizedLabels = rules.filter((r) => r.selector.includes('[data-sidebar="minimized"]') && /\.(lbl|nav-heading)\b/.test(r.selector));
+    expect(minimizedLabels.length, "a minimized rule for .lbl and .nav-heading").toBeGreaterThan(0);
+    for (const rule of minimizedLabels) {
+      expect(rule.body, `"${rule.selector}"`).not.toMatch(/display:\s*none|visibility:\s*hidden/);
+    }
+    const clip = minimizedLabels.find((r) => r.selector.includes(".nav-heading") && r.selector.includes(".lbl"));
+    expect(clip, "one rule for both").toBeDefined();
+    expect(clip!.body).toMatch(/position:\s*absolute/);
+    expect(clip!.body).toMatch(/width:\s*1px/);
+    expect(clip!.body).toMatch(/height:\s*1px/);
+    expect(clip!.body).toMatch(/overflow:\s*hidden/);
+    expect(clip!.body).toMatch(/clip:\s*rect\(0 0 0 0\)/);
+    // and no other rule at all takes the label out of the accessibility tree
+    for (const rule of rules.filter((r) => /\.(lbl|nav-heading)\b/.test(r.selector))) {
+      expect(rule.body, `"${rule.selector}"`).not.toMatch(/display:\s*none|visibility:\s*hidden/);
+    }
+  });
+
+  it("the skip link's focus ring does not stray onto the sidebar (offset 0)", () => {
+    expect(bodyOf(".skip-link:focus")).toMatch(/outline-offset:\s*0\b/);
+  });
+
+  it("the graph's zoom buttons are dimmed once (by React Flow), not twice (the disabled-button rule)", () => {
+    expect(bodyOf(".graph-canvas .react-flow__controls button")).toMatch(/opacity:\s*1\b/);
+  });
+
+  it("the asset page's no-data words are not set as a figure", () => {
+    expect(bodyOf(".tile .big.none")).toMatch(/font-weight:\s*400/);
+    expect(bodyOf(".tile .big.none")).toMatch(/color:\s*var\(--text-2\)/);
+  });
+
+  it("a section title is one rule, in app.css, in the layer, at --fs-lg", () => {
+    const titles = rules.filter((r) => r.selector === ".section-title");
+    expect(titles).toHaveLength(1);
+    expect(inLayer(titles[0])).toBe(true);
+    expect(titles[0].body).toMatch(/font-size:\s*var\(--fs-lg\)/);
+  });
+
   it("Discovery is exactly one window tall inside the shell, not on #root", () => {
     expect(bodyOf(".shell:has(.graph-page)")).toMatch(/height:\s*100vh/);
     expect(bodyOf("main:has(.graph-page)")).toMatch(/min-height:\s*0/);
@@ -238,7 +277,9 @@ describe("the design tokens (W6)", () => {
 
   it("the content accent is 2.09:1 on the navy, which is why no sidebar rule may use it", () => {
     expect(contrast(tok("accent"), tok("side-bg"))).toBeLessThan(NON_TEXT);
-    const sideRules = rules.filter((r) => r.selector.includes(".side"));
+    // .side covers .side-row, .side-foot, .side-tip and .side-toggle; the rest of the rail's pieces are named one by one
+    const sideRules = rules.filter((r) => /\.(side|brand-mark|avatar|who|nav-heading)(?![\w-]*-page)/.test(r.selector));
+    expect(sideRules.length, "the rules of the rail").toBeGreaterThan(25);
     for (const rule of sideRules) expect(rule.body, `"${rule.selector}"`).not.toMatch(/var\(--accent/);
     // once the sidebar rule exists it overrides the focus ring colour (--ring equals --accent, which the navy cannot show)
     for (const rule of rules.filter((r) => r.selector === ".side")) expect(rule.body).toMatch(/--ring:\s*var\(--side-accent\)/);
@@ -281,6 +322,12 @@ describe("the layer and the frozen island", () => {
     `${W} .widget-actions button`,
     `${W} .chip::before`,
   ];
+
+  it("the layered rules of app.css hold no raw colour: the tokens in :root are the only place a colour is written", () => {
+    for (const rule of rules.filter((r) => inLayer(r))) {
+      expect(rule.body, `colour in "${rule.selector}"`).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
+    }
+  });
 
   it("has one @layer w6 block", () => {
     expect(css.match(/@layer/g) ?? []).toHaveLength(1);
@@ -337,4 +384,94 @@ describe("the page style files (src/styles/*.css)", () => {
       }
     },
   );
+
+  // All five files load on every route, so a rule written for one page group can restyle another. The guard: a class that a rule
+  // names on its own (no page-root class before it) belongs to one file, and no other page file may name it.
+  const parsed = files.map((file) => ({ file, rules: parseRules(stripComments(readFileSync(`${STYLES}/${file}`, "utf8"))) }));
+
+  /** A selector list split at its top-level commas (a comma inside :is(...) or [...] stays in its part). */
+  const selectorParts = (selector: string) => {
+    const parts: string[] = [];
+    let depth = 0;
+    let current = "";
+    for (const ch of selector) {
+      if (ch === "(" || ch === "[") depth++;
+      else if (ch === ")" || ch === "]") depth--;
+      if (ch === "," && depth === 0) {
+        parts.push(current.trim());
+        current = "";
+      } else current += ch;
+    }
+    return [...parts, current.trim()];
+  };
+  /** The part of one selector before its first top-level combinator (space, >, + or ~). */
+  const firstCompound = (part: string) => {
+    let depth = 0;
+    let end = part.length;
+    for (let i = 0; i < part.length; i++) {
+      const ch = part[i];
+      if (ch === "(" || ch === "[") depth++;
+      else if (ch === ")" || ch === "]") depth--;
+      else if (depth === 0 && " >+~".includes(ch)) {
+        end = i;
+        break;
+      }
+    }
+    return part.slice(0, end);
+  };
+  const classesIn = (text: string) => [...text.matchAll(/\.([A-Za-z_][\w-]*)/g)].map((m) => m[1]);
+  /** The classes a file's rules name on their own: the first compound is one class, with at most pseudo-classes after it. */
+  const bareClasses = (list: Rule[]) =>
+    new Set(
+      list.flatMap((r) =>
+        selectorParts(r.selector).flatMap((part) => {
+          const m = /^\.([A-Za-z_][\w-]*)(?::{1,2}[\w-]+(?:\([^)]*\))?|\[[^\]]*\])*$/.exec(firstCompound(part));
+          return m ? [m[1]] : [];
+        }),
+      ),
+    );
+
+  it("no class is written on its own in one page file and named in another (one page group cannot restyle another)", () => {
+    expect(parsed.length).toBeGreaterThanOrEqual(5);
+    const clashes: string[] = [];
+    for (const a of parsed) {
+      for (const cls of bareClasses(a.rules)) {
+        for (const b of parsed.filter((other) => other.file !== a.file)) {
+          if (b.rules.some((r) => classesIn(r.selector).includes(cls))) clashes.push(`.${cls}: bare in ${a.file}, named in ${b.file}`);
+        }
+      }
+    }
+    expect(clashes).toEqual([]);
+  });
+
+  it("no selector is written in two page files, and no plain class rule is written in both a page file and app.css", () => {
+    // (app.css and pages-billing.css split the billing table between them on purpose: a selector there is compared only when it is a plain class)
+    const owners = new Map<string, Set<string>>();
+    const note = (file: string, list: Rule[], keep: (part: string) => boolean) => {
+      for (const r of list) for (const part of selectorParts(r.selector).filter(keep)) owners.set(part, (owners.get(part) ?? new Set()).add(file));
+    };
+    note("app.css", rules, (part) => /^\.[\w-]+$/.test(part));
+    for (const p of parsed) note(p.file, p.rules, () => true);
+    const twice = [...owners].filter(([, files]) => files.size > 1).map(([selector, files]) => `${selector}: ${[...files].join(", ")}`);
+    expect(twice).toEqual([]);
+  });
+
+  it("every selector of a page file names a class (a bare element rule such as td would reach every table)", () => {
+    const bare: string[] = [];
+    for (const p of parsed) {
+      for (const r of p.rules) {
+        for (const part of selectorParts(r.selector)) {
+          if (classesIn(part).length === 0) bare.push(`${p.file}: ${part}`);
+        }
+      }
+    }
+    expect(bare).toEqual([]);
+  });
+
+  it("the checks above can see a clash (the helpers are exercised on a small example)", () => {
+    const sample = parseRules(".row-actions { display: flex; } td.row-actions, .users-page .row-actions :is(a, b), .x:hover, .y::before { color: red; }");
+    expect([...bareClasses(sample)].sort()).toEqual(["row-actions", "users-page", "x", "y"]); // a page root is "bare" too; only it is named in no other file
+    expect(selectorParts(".a :is(b, c), d")).toEqual([".a :is(b, c)", "d"]);
+    expect(firstCompound(".users-page .row-actions")).toBe(".users-page");
+  });
 });

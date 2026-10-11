@@ -96,14 +96,19 @@ describe("TariffsPage", () => {
     const row = (await screen.findByText("2026-10-01")).closest("tr")!;
     expect(within(row).getByRole("button", { name: "Edit" })).toHaveClass("quiet");
     expect(within(row).getByRole("button", { name: "Delete" })).toHaveClass("danger-quiet");
+    // the page has no primary button: the two Add rate buttons and the currency Save are plain (none is invented here)
     expect(document.querySelectorAll(".primary").length).toBeLessThanOrEqual(1);
+    expect(document.querySelectorAll(".primary")).toHaveLength(0);
+    expect(screen.getAllByRole("button", { name: "Add rate" })).toHaveLength(2);
   });
 
   it("puts the currency notes in info banners that keep role status", async () => {
     currency = null;
     open();
-    expect(await screen.findByText(/No currency is set/)).toHaveClass("banner");
-    expect(await screen.findByText(/Set the currency first/)).toHaveClass("banner");
+    for (const note of [await screen.findByText(/No currency is set/), await screen.findByText(/Set the currency first/)]) {
+      expect(note).toHaveClass("banner", "banner-info");
+      expect(note).toHaveAttribute("role", "status");
+    }
   });
 
   it("shows empty states when there are no rates and no overrides", async () => {

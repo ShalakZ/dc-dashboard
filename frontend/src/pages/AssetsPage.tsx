@@ -89,6 +89,7 @@ export function AssetsPage() {
             </div>
           )}
           {actionError && <p className="error" role="alert">{actionError}</p>}
+          {!selected && assets.length > 0 && <p className="muted">Select an asset in the tree.</p>}
           {selected && (
             <dl className="detail-meta">
               <div><dt>Kind</dt><dd>{selected.kind}</dd></div>

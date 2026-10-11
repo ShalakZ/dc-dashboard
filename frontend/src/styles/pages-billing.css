@@ -42,7 +42,7 @@
   .tariff-table .asset-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tariff-table :is(th, td).actions { width: 1%; text-align: right; white-space: nowrap; }
   .tariff-table td.actions { padding-block: 5px; }
-  .tariff-table .row-actions { display: flex; justify-content: flex-end; gap: 2px; }
+  .tariff-table .row-actions { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 2px; } /* Edit and Delete stay on one line */
   .tariff-table td.actions .error { display: block; width: max-content; max-width: 280px; margin: 4px 0 0 auto; font-size: var(--fs-xs); font-weight: 600; white-space: normal; text-align: right; } /* a row error widens the column to 280px instead of wrapping in the buttons' width */
 
   /* The add forms and the currency form are one-line bars on a surface; an error takes the whole last line */

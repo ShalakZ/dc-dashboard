@@ -591,6 +591,24 @@ describe("AssetsPage detail area", () => {
     expect(within(line).getByRole("link", { name: "Room A" })).toHaveAttribute("href", "/assets/2");
   });
 
+  it("nothing selected: one muted line under the header says what to do; a selection or an empty list has none", async () => {
+    await show("viewer", "/assets");
+    const hint = screen.getByText("Select an asset in the tree.");
+    expect(hint.tagName).toBe("P");
+    expect(hint).toHaveClass("muted");
+    expect(hint.previousElementSibling).toBe(header());
+  });
+
+  it("a selected asset has no such line", async () => {
+    await show("viewer", "/assets?selected=2");
+    expect(screen.queryByText("Select an asset in the tree.")).not.toBeInTheDocument();
+  });
+
+  it("an empty list has no such line either (there is nothing to select)", async () => {
+    await show("admin", "/assets", []);
+    expect(screen.queryByText("Select an asset in the tree.")).not.toBeInTheDocument();
+  });
+
   it("an empty list says so in an .empty block and adds no heading (a heading with 'assets' in it would clash with the h1 in e2e)", async () => {
     await show("admin", "/assets", []);
     const note = screen.getByText("No assets yet.");

@@ -145,7 +145,7 @@ export function ScansPage() {
                   <td><span className="cell-name" title={scan.scope_name}>{scan.scope_name}</span></td>
                   <td><span className={`chip ${SCAN_CHIP[scan.status] ?? "chip-stale"}`}>{scan.status}</span></td>
                   <td className="nowrap">{site.data ? formatSiteDateTime(scan.created_at, site.data.timezone) : "—"}</td>
-                  <td className="num">{claimedCount(scan.progress)} / {scan.progress.points ?? 0}</td>
+                  <td className="num nowrap">{claimedCount(scan.progress)} / {scan.progress.points ?? 0}</td>
                   <td className="row-actions"><button className="quiet" onClick={() => setActiveScan(scan.id)}>Details</button></td>
                 </tr>
               ))}

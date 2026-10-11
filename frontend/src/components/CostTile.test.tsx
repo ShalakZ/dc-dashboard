@@ -31,6 +31,7 @@ describe("CostTile", () => {
     render(<CostTile cost={null} currency="QAR" />);
     const tile = screen.getByText("Cost today").closest(".tile")!;
     expect(tile.querySelector(".big")).toHaveTextContent(/^no cost data$/);
+    expect(tile.querySelector(".big")).toHaveClass("none"); // words, not a figure: the stylesheet mutes them
     expect(tile).not.toHaveTextContent("—");
   });
 

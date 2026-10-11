@@ -26,7 +26,7 @@ function FriendlyRow({ entry, timezone }: { entry: AuditEntry; timezone: string 
   return (
     <tr>
       <td className="cell-time"><TimeLink id={entry.id} ts={entry.ts} timezone={timezone} /></td>
-      <td className="cell-name" title={entry.username ?? undefined}>{entry.username ?? "—"}</td>
+      <td className="cell-user" title={entry.username ?? undefined}>{entry.username ?? "—"}</td>
       <td>
         <div className="what">{summary}</div>
         {link && <div className="sub"><Link to={link.to}>{link.label}</Link></div>}
@@ -165,7 +165,7 @@ export function AuditPage() {
                   raw ? (
                     <tr key={e.id}>
                       <td className="cell-time"><TimeLink id={e.id} ts={e.ts} timezone={timezone} /></td>
-                      <td className="cell-name" title={e.username ?? undefined}>{e.username ?? "—"}</td>
+                      <td className="cell-user" title={e.username ?? undefined}>{e.username ?? "—"}</td>
                       <td className="cell-action">{e.action}</td>
                       <td><code>{JSON.stringify(e.detail)}</code></td>
                     </tr>

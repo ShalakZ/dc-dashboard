@@ -22,7 +22,7 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
   const [deleting, setDeleting] = useState(false);
   return (
     <tr>
-      <td className="cell-name" title={user.username}>{user.username}</td>
+      <td className="cell-user" title={user.username}>{user.username}</td>
       <td>
         <select
           aria-label={`Role for ${user.username}`}
