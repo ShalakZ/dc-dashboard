@@ -42,6 +42,10 @@ class AssetTree:
         assets = await db.scalars(select(Asset))
         return cls(AssetNode(a.id, a.parent_id, a.name, a.sort_order) for a in assets)
 
+    def roots(self) -> list[int]:
+        """The assets with no parent, ordered by sort_order, name, id (a node whose parent is missing counts)."""
+        return list(self._roots)
+
     def children(self, asset_id: int) -> list[int]:
         """Direct children ordered by sort_order, name, id; empty for a leaf or an unknown id."""
         return list(self._children.get(asset_id, ()))

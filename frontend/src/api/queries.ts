@@ -4,9 +4,9 @@ import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { api } from "./client";
 import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
-  GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
+  FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
-  WidgetData, WidgetType, CollectorStatus, SecretKeyStatus, TlsStatus,
+  WidgetData, WidgetType, CollectorStatus, LiveStatus, SecretKeyStatus, TlsStatus,
 } from "./types";
 
 export const keys = {
@@ -35,20 +35,26 @@ export const keys = {
   site: ["site"] as const,
   billingSettings: ["settings", "billing"] as const,
   tariffs: ["tariffs"] as const,
+  fleet: ["fleet-summary"] as const,
   billing: ["billing"] as const,
   billingCosts: (month: string | null) => ["billing", "costs", month] as const,
   dashboardList: ["dashboards", "list"] as const,
   dashboard: (id: number) => ["dashboards", "detail", id] as const,
   widgetData: ["widget-data"] as const,
   collectorStatus: ["collector-status"] as const,
+  status: ["status"] as const,
   secretKey: ["secret-key"] as const,
   tlsStatus: ["tls-status"] as const,
 };
 
-/** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today). */
-const COST_DEPENDENT = [keys.billing, keys.widgetData, keys.assets] as const;
+/** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today), `fleet` the Assets landing page's figures. */
+const COST_DEPENDENT = [keys.billing, keys.widgetData, keys.assets, keys.fleet] as const;
 
 export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets") });
+
+/** The Assets landing page: live power, today's energy and cost over the whole site, and the readings that need attention. */
+export const useFleetSummary = () =>
+  useQuery({ queryKey: keys.fleet, queryFn: () => api.get<FleetSummary>("/api/fleet/summary"), refetchInterval: 15_000 });
 
 export const useSummary = (id: number) =>
   useQuery({ queryKey: keys.summary(id), queryFn: () => api.get<Summary>(`/api/assets/${id}/summary`), refetchInterval: 60_000 });
@@ -72,6 +78,10 @@ export const useSources = () =>
 
 export const useCollectorStatus = () =>
   useQuery({ queryKey: keys.collectorStatus, queryFn: () => api.get<CollectorStatus>("/api/collector/status"), refetchInterval: 10_000 });
+
+/** The top bar's live chip; any signed-in user. */
+export const useStatus = () =>
+  useQuery({ queryKey: keys.status, queryFn: () => api.get<LiveStatus>("/api/status"), refetchInterval: 10_000 });
 
 /** Operators and admins only (the Sources page). A fetch error shows nothing: the warning is an extra, not a gate. */
 export const useSecretKeyStatus = () =>

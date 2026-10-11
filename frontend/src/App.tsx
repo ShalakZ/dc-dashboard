@@ -4,6 +4,7 @@ import { RequireAuth, RequireRole } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
+import { AssetsSummary } from "./pages/AssetsSummary";
 import { AuditEntryPage } from "./pages/AuditEntryPage";
 import { AuditPage } from "./pages/AuditPage";
 import { BillingPage } from "./pages/BillingPage";
@@ -32,8 +33,10 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
         <Route path="/" element={<Navigate to="/assets" replace />} />
-        <Route path="/assets" element={<AssetsPage />} />
-        <Route path="/assets/:id" element={<AssetPage />} />
+        <Route path="/assets" element={<AssetsPage />}>
+          <Route index element={<AssetsSummary />} />
+          <Route path=":id" element={<AssetPage />} />
+        </Route>
         <Route path="/dashboards" element={<Suspense fallback={loading}><DashboardsPage /></Suspense>} />
         <Route path="/dashboards/:id" element={<Suspense fallback={loading}><DashboardPage /></Suspense>} />
         <Route path="/billing" element={<BillingPage />} />

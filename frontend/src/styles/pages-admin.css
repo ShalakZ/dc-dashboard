@@ -78,9 +78,9 @@
 
   /* Audit entry page */
   .audit-entry-page :is(.kv, .audit-detail, pre) { max-width: 760px; }
-  .audit-entry-page .crumbs a, .audit-entry-page .back-line a { display: inline-flex; align-items: center; gap: 2px; text-decoration: none; }
-  .audit-entry-page .crumbs a:hover, .audit-entry-page .back-line a:hover { text-decoration: underline; }
-  .audit-entry-page .crumbs svg.i, .audit-entry-page .back-line svg.i { width: 16px; height: 16px; margin-left: -4px; }
+  .audit-entry-page .actions a, .audit-entry-page .back-line a { display: inline-flex; align-items: center; gap: 2px; text-decoration: none; }
+  .audit-entry-page .actions a:hover, .audit-entry-page .back-line a:hover { text-decoration: underline; }
+  .audit-entry-page .actions svg.i, .audit-entry-page .back-line svg.i { width: 16px; height: 16px; margin-left: -4px; }
   .back-line { margin: 22px 0 14px; font-size: var(--fs-sm); }
   .audit-entry-page pre { margin: 0 0 22px; padding: 14px 16px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: var(--fs-sm); line-height: 1.5; }
 }

@@ -5,8 +5,8 @@ import { NO_FILTERS } from "../lib/auditFilters";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
-  auditPosition, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useGraph, usePatchUser,
-  usePutGeneralSettings, usePutSignInPolicy, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useTariffs, useUnblockUser, useUsers, useWidgetData,
+  auditPosition, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
+  usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
 
@@ -420,5 +420,52 @@ describe("audit queries", () => {
     const answer = await auditPosition({ ...NO_FILTERS, actions: ["*.deleted"], q: "a b" }, "2026-10-05");
     expect(answer).toEqual({ offset: 73, total: 120, on_day: true });
     expect(new URL(url, "http://x").searchParams.toString()).toBe("action=*.deleted&q=a+b&date=2026-10-05");
+  });
+});
+
+describe("useStatus", () => {
+  it("asks /api/status for the collector and reading state", async () => {
+    const calls = mockFetch({ "GET /api/status": { body: { collector_alive: true, readings_fresh: false, last_reading_age_seconds: 300 } } });
+    const { result } = renderHook(() => useStatus(), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.data).toEqual({ collector_alive: true, readings_fresh: false, last_reading_age_seconds: 300 }));
+    expect(calls.filter((c) => c.path === "/api/status")).toHaveLength(1);
+  });
+});
+
+describe("useFleetSummary", () => {
+  afterEach(() => vi.useRealTimers());
+  const body = {
+    power: { kw: 12.5, counted: 2, of: 2 }, energy_today: null, cost_today: null, currency: "QAR", attention: { total: 0, items: [] },
+  };
+  const fetched = (calls: { path: string }[]) => calls.filter((c) => c.path === "/api/fleet/summary").length;
+
+  it("reads the fleet summary from its endpoint", async () => {
+    const calls = mockFetch({ "GET /api/fleet/summary": { body } });
+    const { result } = renderHook(() => useFleetSummary(), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.data).toEqual(body));
+    expect(fetched(calls)).toBe(1);
+  });
+
+  it("fetches again every 15 s, not after 10 s", async () => {
+    vi.useFakeTimers();
+    const calls = mockFetch({ "GET /api/fleet/summary": { body } });
+    renderHook(() => useFleetSummary(), { wrapper: stableWrapper() });
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(fetched(calls)).toBe(1);
+    await act(() => vi.advanceTimersByTimeAsync(10_000)); // 11 s
+    expect(fetched(calls)).toBe(1);
+    await act(() => vi.advanceTimersByTimeAsync(5_000)); // 16 s
+    expect(fetched(calls)).toBe(2);
+  });
+
+  it("is fetched again after the currency or a rate changes, like the other cost figures", async () => {
+    const calls = mockFetch({
+      "GET /api/fleet/summary": { body },
+      "PUT /api/settings/billing": { body: { currency: "USD" } },
+    });
+    const { result } = renderHook(() => ({ fleet: useFleetSummary(), put: usePutBillingSettings() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.fleet.data).toBeDefined());
+    await result.current.put.mutateAsync({ currency: "USD" });
+    await waitFor(() => expect(fetched(calls)).toBe(2));
   });
 });

@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../App";
-import { mockFetch, type Routes } from "../test/fetchMock";
+import { mockFetch, shellRoutes, type Routes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { TariffsPage } from "./TariffsPage";
 
@@ -410,7 +410,7 @@ describe("TariffsPage", () => {
   });
 
   it("never asks for tariffs or the currency when a non-admin opens the route", async () => {
-    const calls = mockFetch(routes("operator"));
+    const calls = mockFetch({ ...shellRoutes, ...routes("operator") }); // the app shell asks for its chip and clock too
     renderWithProviders(<App />, { route: "/tariffs", path: "*" });
     expect(await screen.findByText("Admins only")).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/tariffs" || c.path === "/api/settings/billing")).toBe(false);

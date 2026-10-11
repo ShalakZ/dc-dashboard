@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { AuditEntryPage } from "./AuditEntryPage";
@@ -32,6 +32,18 @@ describe("AuditEntryPage", () => {
     expect(screen.getByRole("link", { name: "Back to the log" })).toHaveAttribute("href", "/audit");
   });
 
+  it("puts the trail Audit log / Entry #9 above the title, and keeps one Back to the log link, in the header's actions", async () => {
+    open("9", { "GET /api/audit/9": { body: stored } });
+    const h1 = await screen.findByRole("heading", { name: "Audit entry #9", level: 1 });
+    const head = h1.closest<HTMLElement>("header.page-head")!;
+    const nav = within(head).getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(nav).getByRole("link", { name: "Audit log" })).toHaveAttribute("href", "/audit");
+    expect(within(nav).getByText("Entry #9")).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getAllByRole("link")).toHaveLength(1);
+    expect(screen.getAllByRole("link", { name: "Back to the log" })).toHaveLength(1);
+    expect(head.querySelector(".actions")).toContainElement(screen.getByRole("link", { name: "Back to the log" }));
+  });
+
   it("shows a dash for an entry with no user", async () => {
     open("9", { "GET /api/audit/9": { body: { ...stored, user_id: null, actor_id: null, username: null } } });
     expect(await screen.findByRole("heading", { name: "Audit entry #9" })).toBeInTheDocument();
@@ -42,6 +54,7 @@ describe("AuditEntryPage", () => {
     open("404", { "GET /api/audit/404": { status: 404, body: { detail: "audit entry not found" } } });
     expect(await screen.findByRole("alert")).toHaveTextContent("Audit entry not found.");
     expect(screen.getByRole("link", { name: "Back to the log" })).toHaveAttribute("href", "/audit");
+    expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).not.toBeInTheDocument(); // no entry, no trail
   });
 
   it.each(["abc", "99999999999", "0", "1.5"])("says not found for the id %s without asking the API", async (id) => {

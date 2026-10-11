@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { navLink, treeLink } from "./shell";
 
 test("first-run journey: setup, simulator source, map two points, live values", async ({ page }) => {
   // 1. First-run setup
@@ -13,7 +14,7 @@ test("first-run journey: setup, simulator source, map two points, live values", 
   await expect(page.getByRole("heading", { name: "Assets" })).toBeVisible();
 
   // 2. Add the simulator source and test it
-  await page.getByRole("link", { name: "Sources" }).click();
+  await navLink(page, "Sources").click();
   await expect(page.getByRole("heading", { name: "Sources" })).toBeVisible();
   await page.getByRole("button", { name: "Add source" }).click();
   await page.getByLabel("Name").fill("sim");
@@ -36,14 +37,14 @@ test("first-run journey: setup, simulator source, map two points, live values", 
   await expect(page.getByRole("cell", { name: "LVP01_kWh", exact: true })).toBeVisible();
 
   // 4. Create an asset
-  await page.getByRole("link", { name: "Assets" }).click();
+  await navLink(page, "Assets").click();
   await page.getByRole("button", { name: "Add asset" }).click();
   await page.getByLabel("Name").fill("MV2");
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("link", { name: "MV2" })).toBeVisible();
+  await expect(treeLink(page, "MV2")).toBeVisible();
 
   // 5. Map two points to MV2
-  await page.getByRole("link", { name: "Sources" }).click();
+  await navLink(page, "Sources").click();
   await page.getByRole("row").filter({ has: page.getByRole("cell", { name: "sim", exact: true }) })
     .getByRole("link", { name: "Points" }).click();
   await expect(page.getByRole("heading", { name: "Points" })).toBeVisible();
@@ -58,10 +59,9 @@ test("first-run journey: setup, simulator source, map two points, live values", 
   }
 
   // 6. Live values on the asset page within 10 s
-  await page.getByRole("link", { name: "Assets" }).click();
-  // Clicking a tree node only selects it; the "Selected: … (open page)" link opens the asset page.
-  await page.getByRole("list").getByRole("link", { name: "MV2" }).click();
-  await page.locator("p", { hasText: "(open page)" }).getByRole("link", { name: "MV2" }).click();
+  await navLink(page, "Assets").click();
+  // A tree node is a link to the asset page: one click opens it, and the tree stays beside it.
+  await treeLink(page, "MV2").click();
   await expect(page).toHaveURL(/\/assets\/\d+$/);
   await expect(page.getByRole("heading", { name: "MV2" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Metrics" })).toBeVisible();

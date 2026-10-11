@@ -423,7 +423,7 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Six specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Nine specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
 
 - `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
@@ -446,9 +446,16 @@ Six specs run in one `playwright test` run against the dev-profile stack on `htt
   failing on a Content-Security-Policy violation.
 - `w3a.spec.ts` (after it, at 1600×1000) adds a child asset from a `+` and picks the Kind from the list, sorts, filters and searches the
   source's points, checks the unit warning in the mapping dialog, and adds and edits a source that has no mapped points.
-- `w3b.spec.ts` (last, at 1600×1000) checks that a dashboard saved with a gap closes up the same in the view and in the editor (and
+- `w3b.spec.ts` (after it, at 1600×1000) checks that a dashboard saved with a gap closes up the same in the view and in the editor (and
   that Save stays disabled until something changes), that a parent asset shows the sum of its sub-assets' live power, that the asset
   page's Trend says when it was updated, and that a dashboard with a 45-character asset name draws its bar and time series widgets.
+- `w3c.spec.ts` and `w3d.spec.ts` (after it, at 1600×1000) cover the Audit screen (filters, search, a link per entry, CSV export, paging,
+  administrators only) and sign-in protection with the Users page (a blocked account, Unblock, Delete, and no screen or API answer showing
+  the password stored inside a source's URL).
+- `w7a.spec.ts` (last, at 1600×1000) checks the Assets workspace and the shell: a tree node opens its asset with one click and the tree
+  stays, the "Assets" crumb returns to the summary, the tree column resizes by keyboard and keeps its width and its folds across a reload,
+  quick find (Ctrl+K) and its Esc keys, the "Live" status chip, Billing and Users at the full width of a 1920 px window, the summary's four
+  tiles and "Needs attention", and the profile panel's Sign out with its Cancel.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

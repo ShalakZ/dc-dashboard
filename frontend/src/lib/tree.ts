@@ -41,3 +41,40 @@ export function descendantIds(nodes: TreeNode[], id: number): Set<number> {
   if (start) collect(start);
   return out;
 }
+
+/** The parents of `id` from the root down to its direct parent; empty for a root or an id that is not in the tree. */
+export function ancestorIds(nodes: readonly TreeNode[], id: number): number[] {
+  const walk = (list: readonly TreeNode[], path: number[]): number[] | null => {
+    for (const node of list) {
+      if (node.id === id) return path;
+      const hit = walk(node.children, [...path, node.id]);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return walk(nodes, []) ?? [];
+}
+
+/**
+ * The asset's trail: its ancestors from the root down, ending with the asset itself; empty for an id that is not in `assets`.
+ * It stops at a parent that is missing from the list (as `buildTree` makes such an asset a root) and at a cycle.
+ */
+export function assetTrail(assets: readonly Asset[], id: number): Asset[] {
+  const byId = new Map(assets.map((asset) => [asset.id, asset]));
+  const trail: Asset[] = [];
+  const seen = new Set<number>();
+  for (let at = byId.get(id); at && !seen.has(at.id); at = at.parent_id === null ? undefined : byId.get(at.parent_id)) {
+    seen.add(at.id);
+    trail.unshift(at);
+  }
+  return trail;
+}
+
+const INT32_MAX = 2147483647; // the API's asset ids are 32-bit; anything above it is a 500 there
+
+/** The id in an asset URL, or null when it is not a plain positive integer that fits (never `Number()` of arbitrary text: "1e3", "0x10"). */
+export function parseAssetId(raw: string | undefined): number | null {
+  if (raw === undefined || !/^[1-9]\d{0,9}$/.test(raw)) return null;
+  const id = Number(raw);
+  return id <= INT32_MAX ? id : null;
+}

@@ -1,18 +1,13 @@
 @layer w6 {
-  /* W6 assets: the Assets list's detail area and the asset page. main.tsx loads this file on every route, so every rule below
+  /* W6 assets: the Assets workspace's pane (index and asset page). main.tsx loads this file on every route, so every rule below
      is scoped to a class that only these two pages (and TrendChart, which only the asset page renders) carry. Tokens only. */
 
-  /* Assets list: the detail area beside the tree column */
-  /* The header is as tall as the tree column's (52px), so the two rules under them meet across the page. */
-  .assets-detail .page-head { align-items: center; min-height: 52px; margin-bottom: 22px; padding: 0; }
-  .assets-detail .page-head > .actions { grid-row: 1; align-self: center; } /* this header has no crumbs or sub line, so the actions take the one row */
+  /* Assets workspace: the pane beside the tree column */
+  /* The index page's header (no crumbs) is as tall as the tree column's (52px), so the two rules under them meet across the page.
+     An asset's header has crumbs and keeps the standard page header. */
+  .assets-detail .page-head:not(:has(.crumbs)) { align-items: center; min-height: 52px; margin-bottom: 22px; padding: 0; }
+  .assets-detail .page-head:not(:has(.crumbs)) > .actions { grid-row: 1; align-self: center; } /* no crumbs or sub line, so the actions take the one row */
   .assets-detail .page-head .actions .danger-quiet { min-height: 34px; } /* as tall as the buttons beside it */
-  .assets-detail .detail-meta { width: fit-content; max-width: 100%; gap: 14px 40px; margin: 0 0 16px; padding: 14px 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
-  .assets-detail .detail-meta div { display: grid; gap: 2px; min-width: 0; }
-  .assets-detail .detail-meta dt { font-size: var(--fs-xs); font-weight: 600; }
-  .assets-detail .detail-meta dd { font-size: var(--fs-base); }
-  .assets-detail .detail-open { margin: 0; font-size: var(--fs-base); overflow-wrap: anywhere; }
-  .assets-detail .detail-open a { font-weight: 600; }
   .assets-detail .empty { margin-top: 4px; }
   .assets-detail .empty .empty-title { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
 
@@ -40,4 +35,19 @@
   .metrics-table th:nth-child(3) { width: 14%; }
   .metrics-table th:nth-child(4) { width: 22%; }
   .metrics-table td:last-child { color: var(--text-2); }
+
+  /* Fleet summary (the index page): the kinds as a wrapped row of name and count with a hairline between them, and the attention table */
+  .kind-list { display: flex; flex-wrap: wrap; row-gap: 10px; margin: 0 0 0 -17px; padding: 0; list-style: none; clip-path: inset(0 0 0 17px); }
+  .kind-list li { display: flex; align-items: baseline; gap: 8px; margin-left: -1px; padding: 0 18px 0 17px; border-left: 1px solid var(--border); } /* the first item of a line has its hairline clipped away, with the 17px that the list is pulled out to the left */
+  .fleet-tiles .tile .big:not(.none) { font-size: var(--fs-title); } /* four tiles share the row: a figure such as 1605.00 kWh must fit on one line (the asset page's three tiles keep the larger size) */
+  .kind-name { color: var(--text); font-size: var(--fs-base); }
+  .kind-count { color: var(--text-2); font-size: var(--fs-base); font-variant-numeric: tabular-nums; }
+  .attention-table th:first-child { width: 24%; } /* the asset's name keeps a readable share when the path is long */
+  .attn-name, .attn-where { overflow-wrap: anywhere; } /* a long asset name or a deep path wraps inside its cell instead of widening the table */
+  .attn-where { min-width: 8em; }
+  .attn-where, .attn-points { color: var(--text-2); }
+  .attn-points { font-size: var(--fs-xs); }
+  .attn-problem, .attn-time { white-space: nowrap; } /* the chip and its "· 3 points" stay on one line; a narrow table scrolls inside its frame */
+  .attn-time { font-variant-numeric: tabular-nums; }
+  .attn-more { margin: 10px 0 0; color: var(--text-2); font-size: var(--fs-sm); }
 }

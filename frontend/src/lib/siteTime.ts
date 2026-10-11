@@ -39,6 +39,12 @@ export function formatSiteClock(iso: string, timezone: string): string {
   return f ? `${f.hour}:${f.minute}:${f.second}` : iso;
 }
 
+/** `19:42` in the site zone; null for an invalid date or an unknown zone (the caller shows nothing rather than a wrong time). */
+export function formatSiteHourMinute(date: Date, timezone: string): string | null {
+  const f = fields(date, timezone);
+  return f ? `${f.hour}:${f.minute}` : null;
+}
+
 /** Short axis label: `13:00` (no bucket), `10-07 13:00` (hour) or `10-07` (day), in the site zone. */
 export function formatSiteTick(iso: string, timezone: string, bucket: "hour" | "day" | null): string {
   const f = fields(new Date(iso), timezone);

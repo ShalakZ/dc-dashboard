@@ -1,5 +1,10 @@
 import { render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router";
 import { PageHeader } from "./PageHeader";
+
+// The crumbs are links, so the header needs a router around it.
+const inRouter = (ui: ReactElement) => render(<MemoryRouter>{ui}</MemoryRouter>);
 
 describe("PageHeader", () => {
   it("renders exactly one h1 with the title, in a header.page-head", () => {
@@ -11,13 +16,20 @@ describe("PageHeader", () => {
     expect(header).toContainElement(screen.getByRole("heading", { level: 1 }));
   });
 
-  it("puts the crumbs in a p (never a nav) above the title", () => {
-    const { container } = render(<PageHeader title="MV2" crumbs={<>Assets / MV2</>} />);
-    const crumbs = container.querySelector("p.crumbs");
-    expect(crumbs).toHaveTextContent("Assets / MV2");
-    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
-    expect(container.querySelector("nav")).toBeNull();
+  it("puts the crumbs in one nav labelled Breadcrumb above the title", () => {
+    const { container } = inRouter(<PageHeader title="MV2" crumbs={[{ label: "Assets", to: "/assets" }, { label: "MV2" }]} />);
+    const crumbs = container.querySelector("nav.crumbs");
+    expect(crumbs).toHaveTextContent("Assets/MV2");
+    expect(screen.getAllByRole("navigation")).toHaveLength(1);
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toBe(crumbs);
+    expect(screen.getByRole("link", { name: "Assets" })).toHaveAttribute("href", "/assets");
     expect(crumbs!.compareDocumentPosition(screen.getByRole("heading", { level: 1 })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("renders no crumbs element for an empty trail", () => {
+    const { container } = inRouter(<PageHeader title="MV2" crumbs={[]} />);
+    expect(container.querySelector(".crumbs")).toBeNull();
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
   });
 
   it("shows the sub line and the actions slot, with the buttons reachable", () => {
@@ -34,8 +46,8 @@ describe("PageHeader", () => {
   });
 
   it("keeps its parts as direct children of the header (the CSS grid places them, no wrapper)", () => {
-    const { container } = render(<PageHeader title="Audit log" crumbs="Admin" sub="Every change" actions={<button type="button">Export</button>} />);
+    const { container } = inRouter(<PageHeader title="Audit log" crumbs={[{ label: "Admin" }]} sub="Every change" actions={<button type="button">Export</button>} />);
     const parts = Array.from(container.querySelector("header.page-head")!.children).map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${el.className}` : ""}`);
-    expect(parts).toEqual(["p.crumbs", "h1", "p.sub", "div.actions"]);
+    expect(parts).toEqual(["nav.crumbs", "h1", "p.sub", "div.actions"]);
   });
 });

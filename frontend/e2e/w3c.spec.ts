@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
+import { navLink, signOut, userBlock } from "./shell";
 
 // W3c (the Audit screen: filters, quick filters, search, a permanent link per entry, links to the thing an entry is about, the friendly
 // and the raw view, CSV export, "Go to date", page size and page controls, admin only) on the state the earlier projects leave behind:
@@ -38,9 +39,9 @@ async function signIn(page: Page, who: { username: string; password: string }, r
   await page.getByLabel("Username").fill(who.username);
   await page.getByLabel("Password", { exact: true }).fill(who.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  const userBlock = page.getByRole("navigation").locator(".who");
-  await expect(userBlock).toContainText(who.username);
-  await expect(userBlock).toContainText(roleLabel(role));
+  const block = userBlock(page);
+  await expect(block).toContainText(who.username);
+  await expect(block).toContainText(roleLabel(role));
 }
 
 /** Today as `YYYY-MM-DD` on the site's wall clock, which is what the screen and the API call "today". */
@@ -68,7 +69,7 @@ test("W3c: the audit screen filters, links, exports and pages, and is for admins
   });
 
   await test.step("the Action filter, the Deletions quick filter and the search narrow the log, and the address holds them", async () => {
-    await page.getByRole("link", { name: "Audit", exact: true }).click();
+    await navLink(page, "Audit").click();
     await expect(page.getByRole("heading", { name: "Audit log" })).toBeVisible();
     await expect(rows.first()).toBeVisible();
 
@@ -165,8 +166,7 @@ test("W3c: the audit screen filters, links, exports and pages, and is for admins
   });
 
   await test.step("an operator has no Audit link, is turned away from the page and from the API", async () => {
-    await page.getByRole("button", { name: "Sign out" }).click();
-    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+    await signOut(page);
     await signIn(page, OPERATOR, OPERATOR.role);
     await expect(page.getByRole("link", { name: "Audit", exact: true })).toHaveCount(0);
     await page.goto("/audit");

@@ -1,17 +1,21 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import { config, dashboard, widget, widgetDataRoute } from "./test/dashboardFixtures";
-import { mockFetch } from "./test/fetchMock";
+import { FakeEventSource } from "./test/fakeEventSource";
+import { mockFetch, shellRoutes } from "./test/fetchMock";
 import { renderWithProviders } from "./test/render";
 
 // Answers for whatever the Phase 3 pages (placeholders now, real pages later) ask on load.
 const routes = (role: string) => ({
+  ...shellRoutes, // the top bar's chip and clock, and the asset list: asked on every page
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: { id: 1, username: "u", role } },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
   "GET /api/tariffs": { body: [] },
   "GET /api/settings/billing": { body: { currency: "QAR" } },
   "GET /api/assets": { body: [] },
+  "GET /api/fleet/summary": { body: { power: { kw: null, counted: 0, of: 0 }, energy_today: null, cost_today: null, currency: "QAR", attention: { total: 0, items: [] } } },
   "GET /api/sources": { body: [] },
   "GET /api/sources/4/points": { body: [] },
   "GET /api/billing/costs": { body: { month: "2026-10", timezone: "Asia/Qatar", currency: "QAR", days: [], assets: [] } },
@@ -82,5 +86,44 @@ describe("App routes", () => {
     visit(role, "/nope");
     expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Assets" })).toBeInTheDocument(); // the nav is still there
+  });
+});
+
+describe("the Assets workspace", () => {
+  const site = { id: 1, parent_id: null, name: "Site", kind: "site", sort_order: 0 };
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  const visitAssets = (route: string) => {
+    mockFetch({
+      ...routes("viewer"),
+      "GET /api/assets": { body: [site] },
+      "GET /api/assets/1/summary": { body: { asset: site, metrics: [], energy_today: null, cost_today: null, currency: "QAR" } },
+      "GET /api/assets/1/series": { body: { metric: "active_power_kw", unit: "kW", points: [] } },
+    });
+    renderWithProviders(<App />, { route, path: "*" });
+  };
+
+  it("/assets shows the asset tree beside the index page", async () => {
+    visitAssets("/assets");
+    expect(await screen.findByRole("region", { name: "Asset tree" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument(); // the fleet summary
+  });
+
+  it("/assets/1 shows the same tree beside the asset's page, with the asset selected", async () => {
+    visitAssets("/assets/1");
+    const tree = await screen.findByRole("region", { name: "Asset tree" });
+    expect(await screen.findByRole("heading", { name: "Site", level: 1 })).toBeInTheDocument();
+    expect(within(tree).getByRole("link", { name: "Site" })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("clicking a node in the tree opens the asset and leaves the tree mounted", async () => {
+    visitAssets("/assets");
+    const tree = await screen.findByRole("region", { name: "Asset tree" });
+    await userEvent.click(within(tree).getByRole("link", { name: "Site" }));
+    expect(await screen.findByRole("heading", { name: "Site", level: 1 })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Asset tree" })).toBe(tree);
   });
 });

@@ -118,8 +118,12 @@ describe("navigation and page width", () => {
     expect(css).toMatch(/\.skip-link\s*\{[^}]*position:\s*absolute/);
     expect(css).toMatch(/\.skip-link:focus\s*\{/);
   });
-  it("lets the wide pages use the whole window", () => {
-    expect(css).toMatch(/main\.wide\s*\{[^}]*max-width:\s*none/);
+  it("lets every page use the whole window: no rule for main sets a max-width, and main.wide is gone", () => {
+    const mainRules = rules.filter((r) => /(^|[\s,>+~(])main(?![\w-])/.test(r.selector)); // main as a type, also inside :has(...)
+    expect(mainRules.length, "the rules for main").toBeGreaterThan(3);
+    for (const rule of mainRules) expect(rule.body, `"${rule.selector}"`).not.toMatch(/max-width/);
+    expect(rules.filter((r) => /main\.wide/.test(r.selector))).toEqual([]);
+    expect(rules.find((r) => r.selector === "main")?.body).toMatch(/flex:\s*1;\s*min-width:\s*0/);
   });
 });
 
@@ -188,10 +192,236 @@ describe("the shell (W6 sidebar)", () => {
     expect(titles[0].body).toMatch(/font-size:\s*var\(--fs-lg\)/);
   });
 
-  it("Discovery is exactly one window tall inside the shell, not on #root", () => {
+  it("Discovery is exactly one window tall inside the shell, the bar included, not on #root", () => {
     expect(bodyOf(".shell:has(.graph-page)")).toMatch(/height:\s*100vh/);
+    // the shell is a column (bar, then frame); the frame takes what the bar leaves and may shrink, so main (and the canvas) fit in it
+    expect(bodyOf(".shell")).toMatch(/display:\s*flex;\s*flex-direction:\s*column/);
+    expect(bodyOf(".navbar")).toMatch(/flex:\s*none/); // the bar never shrinks in that column
+    expect(bodyOf(".frame")).toMatch(/flex:\s*1/);
+    expect(bodyOf(".frame")).toMatch(/min-height:\s*0/);
+    expect(bodyOf(".frame")).toMatch(/display:\s*flex/);
     expect(bodyOf("main:has(.graph-page)")).toMatch(/min-height:\s*0/);
     expect(css).not.toMatch(/#root:has\(\.graph-page\)/);
+  });
+
+  describe("the top bar", () => {
+    const zIndex = (selector: string) => Number(/z-index:\s*(\d+)/.exec(bodyOf(selector))?.[1]);
+    const parts = (selector: string) => selector.split(",").map((part) => part.trim());
+
+    it("is sticky, one bar high, above the sidebar (40) and below the tooltip (50)", () => {
+      expect(bodyOf(".navbar")).toMatch(/position:\s*sticky/);
+      expect(bodyOf(".navbar")).toMatch(/top:\s*0\b/);
+      expect(bodyOf(".navbar")).toMatch(/height:\s*var\(--bar-h\)/);
+      expect(zIndex(".navbar")).toBeGreaterThan(zIndex(".side"));
+      expect(zIndex(".navbar")).toBeLessThan(zIndex(".side-tip"));
+    });
+
+    it("pushes the sticky sidebar and tree column down by its height, and keeps them one window tall with it", () => {
+      for (const selector of [".side", ".tree-col"]) {
+        expect(bodyOf(selector), `"${selector}" top`).toMatch(/top:\s*var\(--bar-h\)/);
+        expect(bodyOf(selector), `"${selector}" height`).toMatch(/height:\s*calc\(100vh - var\(--bar-h\)\)/);
+      }
+      expect(bodyOf(".assets-layout")).toMatch(/min-height:\s*calc\(100vh - var\(--bar-h\)\)/);
+    });
+
+    it("keeps a focused element from hiding under it: a scroll offset on html, inside the layer", () => {
+      const html = rules.filter((r) => r.selector === "html");
+      expect(html).toHaveLength(1);
+      expect(inLayer(html[0])).toBe(true);
+      expect(html[0].body).toMatch(/scroll-padding-top:\s*var\(--bar-h\)/);
+    });
+
+    it("is the sidebar's navy, so the two form one L, and its focus ring is the sidebar's", () => {
+      expect(tok("top-bg")).toBe(tok("side-bg"));
+      expect(bodyOf(".navbar")).toMatch(/--ring:\s*var\(--side-accent\)/);
+    });
+
+    it("has no accent in any rule of its own (the accent is 2.09:1 on the navy), and the white surfaces inside it take the accent ring back", () => {
+      const own = rules.filter((r) => r.selector.includes(".navbar"));
+      expect(own.length, "the rules of the bar").toBeGreaterThan(0);
+      for (const rule of own) expect(rule.body, `"${rule.selector}"`).not.toMatch(/var\(--accent/);
+      // the profile panel and the quick find's popup are white and sit inside the bar: they would inherit its light ring (2.10:1 on white)
+      for (const selector of [".prof-menu", ".qf-pop"]) {
+        const found = rules.filter((r) => parts(r.selector).includes(selector));
+        expect(found.some((r) => /--ring:\s*var\(--accent\)/.test(r.body)), `--ring: var(--accent) for ${selector}`).toBe(true);
+      }
+      // and not the mockup's catch-all, which would repaint those surfaces' rings
+      expect(rules.filter((r) => /\.navbar\s+:focus-visible/.test(r.selector))).toEqual([]);
+    });
+
+    it("hides the extras of the chip, the clock and the profile in a narrow window, without taking a name out of the accessibility tree", () => {
+      const narrow = rules.filter((r) => r.at.some((a) => /max-width:\s*1179\.98px/.test(a)));
+      const hiding = narrow.map((r) => r.selector).join(" | ");
+      expect(hiding).toContain(".live .detail");
+      expect(hiding).toContain(".site-time .zone");
+      expect(hiding).toContain(".who-role");
+      // the role word is part of the profile button's name: clipped, not display: none
+      const role = narrow.find((r) => r.selector.includes(".who-role"))!;
+      expect(role.body).not.toMatch(/display:\s*none|visibility:\s*hidden/);
+      expect(role.body).toMatch(/clip:\s*rect\(0 0 0 0\)/);
+    });
+
+    it("draws the chip's state as a shape as well as a colour: a dot, a hollow ring, a diamond", () => {
+      expect(bodyOf(".live::before")).toMatch(/border-radius:\s*50%/);
+      expect(bodyOf('.live[data-state="stale"]::before, .live[data-state="waiting"]::before')).toMatch(/box-shadow:\s*inset 0 0 0 2px var\(--top-stale\)/);
+      expect(bodyOf('.live[data-state="offline"]::before')).toMatch(/clip-path:\s*polygon/);
+    });
+
+    describe("the quick find", () => {
+      const field = '.qf input[type="search"]';
+
+      it("is a field on the chip's lighter navy: the find tokens carry its ground, border, text and placeholder", () => {
+        expect(bodyOf(".qf")).toMatch(/width:\s*var\(--find-w\)/);
+        expect(bodyOf(field)).toMatch(/background:\s*var\(--top-find-bg\)/);
+        expect(bodyOf(field)).toMatch(/border:\s*1px solid var\(--top-find-border\)/);
+        expect(bodyOf(field)).toMatch(/color:\s*var\(--top-find-text\)/);
+        expect(bodyOf(`${field}::placeholder`)).toMatch(/color:\s*var\(--top-find-ph\)/);
+        expect(bodyOf(".qf-field > svg.i")).toMatch(/color:\s*var\(--top-find-ph\)/);
+        // the base input rule (min-height 38px) comes first in the file and has the same weight as ".qf input": the selector must outrank it
+        expect(bodyOf(field)).toMatch(/min-height:\s*0/);
+        expect(bodyOf(field)).toMatch(/height:\s*34px/);
+      });
+
+      it("gives the field the border that reaches 3:1, and keeps the quieter ring for the chip and the shortcut hint beside it", () => {
+        expect(tok("top-find-border")).not.toBe(tok("top-chip-border"));
+        expect(bodyOf(".qf kbd")).toMatch(/border:\s*1px solid var\(--top-chip-border\)/);
+        expect(bodyOf(".live")).toMatch(/box-shadow:\s*inset 0 0 0 1px var\(--top-chip-border\)/);
+        expect(contrast(tok("top-chip-border"), tok("top-bg"))).toBeLessThan(NON_TEXT); // decoration: why it must not be the field's
+      });
+
+      it("draws the shortcut hint in the page's font: the browser's own kbd font is monospace", () => {
+        expect(bodyOf(".qf kbd")).toMatch(/font-family:\s*inherit/);
+        expect(bodyOf(".qf kbd")).toMatch(/color:\s*var\(--top-find-ph\)/);
+      });
+
+      it("floats a white popup above the bar's content, with the shared popup shadow, scrolling when the window is short", () => {
+        const pop = bodyOf(".qf-pop");
+        expect(pop).toMatch(/position:\s*absolute/);
+        expect(zIndex(".qf-pop")).toBeGreaterThan(1);
+        expect(pop).toMatch(/background:\s*var\(--bg\)/);
+        expect(pop).toMatch(/color:\s*var\(--text\)/); // not the bar's light text
+        expect(pop).toMatch(/box-shadow:\s*var\(--shadow-pop\)/);
+        expect(pop).toMatch(/max-height:/);
+        expect(pop).toMatch(/overflow-y:\s*auto/);
+      });
+
+      it("shortens a long label and a long path with an ellipsis instead of wrapping", () => {
+        for (const selector of [".qf-label", ".qf-opt small"]) {
+          const body = bodyOf(selector);
+          expect(body, selector).toMatch(/overflow:\s*hidden/);
+          expect(body, selector).toMatch(/text-overflow:\s*ellipsis/);
+          expect(body, selector).toMatch(/white-space:\s*nowrap/);
+          expect(body, selector).toMatch(/min-width:\s*0/);
+        }
+      });
+
+      it("marks the active option with a fill and a ring, so the colour is not the only sign", () => {
+        const active = bodyOf('.qf-opt[aria-selected="true"]');
+        expect(active).toMatch(/background:\s*var\(--accent-tint\)/);
+        expect(active).toMatch(/outline:\s*2px solid var\(--ring\)/);
+        expect(bodyOf(".qf-opt:hover")).toMatch(/background:\s*var\(--accent-tint\)/);
+      });
+
+      it("is 300px wide, 220px in a narrow window, where the shortcut hint goes", () => {
+        expect(tokens.get("find-w")).toBe("300px");
+        const narrow = rules.filter((r) => r.at.some((a) => /max-width:\s*1179\.98px/.test(a)));
+        expect(narrow.find((r) => r.selector === "#root")?.body).toMatch(/--find-w:\s*220px/);
+        expect(narrow.find((r) => r.selector.includes(".qf kbd"))?.body).toMatch(/display:\s*none/);
+      });
+    });
+  });
+});
+
+describe("the resizable asset tree column (W7a)", () => {
+  const only = (selector: string) => {
+    const found = rules.filter((r) => r.selector === selector);
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0];
+  };
+  const classCount = (selector: string) => selector.match(/\./g)?.length ?? 0;
+
+  it("the column's width is --w, which takes the user's width (--tree-user-w) and falls back to --tree-w", () => {
+    const col = only(".tree-col");
+    expect(inLayer(col)).toBe(true);
+    expect(col.body).toMatch(/--w:\s*var\(--tree-user-w,\s*var\(--tree-w\)\)/);
+    expect(col.body).toMatch(/(?:^|[;\s])width:\s*var\(--w\)/);
+  });
+
+  it("a window or sidebar that shrank after saving is guarded in the CSS: 220px at least, else half of the flex container, but leaving 560px to the pane", () => {
+    expect(only(".tree-col").body).toMatch(/max-width:\s*max\(220px,\s*min\(50%,\s*calc\(100%\s*-\s*560px\)\)\)/);
+    expect(only(".tree-col").body).not.toMatch(/50vw/); // the window is not the area right of the sidebar
+  });
+
+  it("the asset pane takes what the column leaves and may shrink below its content", () => {
+    const pane = only(".assets-detail");
+    expect(pane.body).toMatch(/flex:\s*1[;\s]/);
+    expect(pane.body).toMatch(/min-width:\s*0/);
+  });
+
+  it("the minimized column keeps its own --w and so ignores the user's width", () => {
+    const minimized = only('.tree-col[data-state="minimized"]');
+    expect(minimized.body).toMatch(/--w:\s*var\(--tree-w-closed\)/);
+    expect(minimized.body).not.toMatch(/--tree-user-w/);
+  });
+
+  it("while dragging the column does not animate or select text: .shell.ready .tree-col.is-resizing, after and heavier than the transition rule", () => {
+    const base = only(".shell.ready .tree-col");
+    expect(base.body).toMatch(/transition:\s*width/);
+    const dragging = only(".shell.ready .tree-col.is-resizing");
+    expect(inLayer(dragging)).toBe(true);
+    expect(dragging.body).toMatch(/transition:\s*none/);
+    expect(dragging.body).toMatch(/user-select:\s*none/);
+    expect(classCount(dragging.selector)).toBeGreaterThan(classCount(base.selector)); // (0,4,0) against (0,3,0)
+    expect(dragging.order).toBeGreaterThan(base.order);
+  });
+
+  it("the handle is a 6px strip on the column's right edge with the column-resize cursor and no touch panning", () => {
+    const handle = only(".tree-resize");
+    expect(inLayer(handle)).toBe(true);
+    expect(handle.body).toMatch(/position:\s*absolute/);
+    expect(handle.body).toMatch(/right:\s*0/);
+    expect(handle.body).toMatch(/(?:^|[;\s])width:\s*6px/);
+    expect(handle.body).toMatch(/cursor:\s*col-resize/);
+    expect(handle.body).toMatch(/touch-action:\s*none/);
+  });
+
+  it("hover, focus and a drag show the handle in --ring", () => {
+    const shown = rules.filter((r) => r.selector.split(",").map((part) => part.trim()).includes(".tree-resize:hover::after"));
+    expect(shown).toHaveLength(1);
+    expect(shown[0].selector).toContain(".tree-resize:focus-visible::after");
+    expect(shown[0].selector).toContain(".tree-col.is-resizing .tree-resize::after");
+    expect(shown[0].body).toMatch(/background:\s*var\(--ring\)/);
+  });
+
+  it("the focus ring of the handle is drawn inside it (negative offset), because the column is overflow: hidden and would clip an outside ring", () => {
+    expect(only(".tree-col").body).toMatch(/overflow:\s*hidden/);
+    const focus = only(".tree-resize:focus-visible");
+    expect(inLayer(focus)).toBe(true);
+    expect(focus.body).toMatch(/outline-offset:\s*-\d+px/);
+  });
+});
+
+describe("a deep row of the asset tree keeps a readable name (review M-1)", () => {
+  const unconditional = (selector: string) => {
+    const found = rules.filter((r) => r.selector === selector && !r.at.some((a) => a.startsWith("@media")));
+    expect(found, `exactly one unconditional rule for "${selector}"`).toHaveLength(1);
+    return found[0];
+  };
+
+  it("the kind label gives way first: it shrinks (a very large shrink factor, no minimum) and ends in an ellipsis", () => {
+    const kind = unconditional(".node .kind");
+    expect(inLayer(kind)).toBe(true);
+    expect(kind.body).toMatch(/flex:\s*0\s+100000\s+auto/);
+    expect(kind.body).toMatch(/min-width:\s*0/);
+    expect(kind.body).toMatch(/overflow:\s*hidden/);
+    expect(kind.body).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it("the name link keeps at least 6 characters before its ellipsis, whatever the depth", () => {
+    const name = unconditional(".node a");
+    expect(inLayer(name)).toBe(true);
+    expect(name.body).toMatch(/min-width:\s*6ch/);
+    expect(name.body).toMatch(/text-overflow:\s*ellipsis/);
   });
 });
 
@@ -261,6 +491,14 @@ describe("the design tokens (W6)", () => {
     ["sidebar: navy on the accent brand mark", () => tok("side-bg"), () => tok("side-accent")],
     ["sidebar: avatar", () => tok("side-avatar-text"), () => tok("side-avatar-bg")],
     ["tooltip", () => tok("tooltip-text"), () => tok("tooltip-bg")],
+    ["top bar: white on the bar (brand, site time, user name)", () => tok("side-text-strong"), () => tok("top-bg")],
+    ["top bar: light text on the bar (time zone, role word)", () => tok("side-text"), () => tok("top-bg")],
+    ["top bar: the role word on the open profile button", () => tok("side-text"), () => tok("side-bg-active")],
+    ["top bar: find text on the find ground (and the chip's word)", () => tok("top-find-text"), () => tok("top-find-bg")],
+    ["top bar: placeholder on the find ground (and the chip's age)", () => tok("top-find-ph"), () => tok("top-find-bg")],
+    ["quick find: text on the active option", () => tok("text"), () => tok("accent-tint")],
+    ["quick find: the path and the group caption on the active option", () => tok("text-2"), () => tok("accent-tint")],
+    ["quick find: the path and the group caption on the popup", () => tok("text-2"), () => tok("bg")],
   ];
   it.each(textPairs)("%s reads at 4.5:1", (_name, fg, bg) => {
     expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(AA);
@@ -270,6 +508,12 @@ describe("the design tokens (W6)", () => {
     ["sidebar: accent on the active fill", () => tok("side-accent"), () => tok("side-bg-active")],
     ["a field's border on white", () => tok("field-border"), () => tok("bg")],
     ["a field's border on the surface ground", () => tok("field-border"), () => tok("surface")],
+    ["top bar: the live dot on the chip ground", () => tok("top-live"), () => tok("top-find-bg")],
+    ["top bar: the stale ring and offline diamond on the chip ground", () => tok("top-stale"), () => tok("top-find-bg")],
+    ["top bar: white on the bar, as a mark rather than text", () => tok("side-text-strong"), () => tok("top-bg")],
+    ["top bar: the quick find's border on the bar (its outer edge)", () => tok("top-find-border"), () => tok("top-bg")],
+    ["top bar: the quick find's border on the field ground (its inner edge)", () => tok("top-find-border"), () => tok("top-find-bg")],
+    ["quick find: the active option's ring on the popup", () => tok("accent"), () => tok("bg")],
   ];
   it.each(nonTextPairs)("%s reads at 3:1", (_name, fg, bg) => {
     expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(NON_TEXT);

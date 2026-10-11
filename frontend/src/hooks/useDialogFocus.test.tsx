@@ -71,4 +71,32 @@ describe("useDialogFocus", () => {
       outside.remove();
     }
   });
+
+  it("wraps Tab between the first and the last control, and lets the browser move on inside", async () => {
+    render(<Dialog label="a" onClose={vi.fn()} />);
+    const first = screen.getByRole("button", { name: "a first" });
+    const last = screen.getByLabelText("a preferred");
+    expect(last).toHaveFocus();
+    await userEvent.tab();
+    expect(first).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(last).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(first).toHaveFocus();
+    await userEvent.tab();
+    expect(last).toHaveFocus();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("brings the focus back in on Tab when it was lost to the body, and wraps only in the top-most of two dialogs", async () => {
+    const { rerender } = render(<><Dialog label="a" onClose={vi.fn()} /><Dialog label="b" onClose={vi.fn()} /></>);
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "b first" })).toHaveFocus();
+    await userEvent.tab({ shift: true }); // the first of b goes to the last of b, not into a
+    expect(screen.getByLabelText("b preferred")).toHaveFocus();
+    rerender(<><Dialog label="a" onClose={vi.fn()} /></>);
+    expect(screen.getByRole("dialog", { name: "a" })).toContainElement(document.activeElement as HTMLElement);
+  });
 });
