@@ -99,7 +99,7 @@ export function useCreateUser() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (body: { username: string; password: string; role: Role }) => api.post<UserRow>("/api/users", body),
-    onSuccess: () => invalidate(keys.users),
+    onSuccess: () => invalidate(keys.users, keys.auditAll),
   });
 }
 
@@ -108,7 +108,7 @@ export function usePatchUser() {
   return useMutation({
     mutationFn: ({ id, body }: { id: number; body: { role?: Role; active?: boolean; password?: string } }) =>
       api.patch<UserRow>(`/api/users/${id}`, body),
-    onSuccess: () => invalidate(keys.users),
+    onSuccess: () => invalidate(keys.users, keys.auditAll),
   });
 }
 
@@ -153,7 +153,7 @@ export function usePutSignInPolicy() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (body: SignInValues) => api.put<SignInPolicy>("/api/settings/sign-in", body),
-    onSuccess: () => invalidate(keys.signInPolicy),
+    onSuccess: () => invalidate(keys.signInPolicy, keys.auditAll),
   });
 }
 
