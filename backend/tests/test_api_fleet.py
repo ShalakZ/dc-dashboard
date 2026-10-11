@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from billing_helpers import add_tariff, set_currency
+from dcdash.core.tree import AssetTree
 from helpers import login_as, make_asset, make_mapping, make_point, make_source, settle_rollups
 from test_api_summary_cost import todays_panel, yesterdays_panel
 
@@ -251,6 +252,25 @@ async def test_an_asset_with_a_bad_and_a_stale_mapping_is_one_bad_item_with_two_
     assert attention["total"] == 1
     assert attention["items"][0]["problem"] == "bad" and attention["items"][0]["points"] == 2
     assert datetime.fromisoformat(attention["items"][0]["last_ts"]) == NOW - timedelta(seconds=30)
+
+
+async def test_a_mapping_whose_asset_the_tree_does_not_know_yet_is_skipped_not_a_500(client, db, monkeypatch):
+    """An asset and its mapping created between the tree query and the mapping query: the mapping reads fine but the
+    tree, loaded a moment earlier, lacks the asset. Simulated by loading the tree without it."""
+    site = await make_asset(db, "Site")
+    known = await mapped(db, "Known", site, age=500, metric="voltage_v")
+    late = await mapped(db, "Created a moment ago", site, age=500, metric="voltage_v")
+    real_load = AssetTree.load
+
+    async def tree_from_before_the_asset(session):
+        tree = await real_load(session)
+        return AssetTree(node for node in tree.nodes.values() if node.id != late)
+
+    monkeypatch.setattr(AssetTree, "load", tree_from_before_the_asset)
+    await login_as(client, db, "viewer")
+    attention = (await fleet(client))["attention"]
+    assert attention["total"] == 1  # the unknown asset is not counted, so the total still matches the listed items
+    assert [(i["asset_id"], i["name"]) for i in attention["items"]] == [(known, "Known")]
 
 
 async def test_thirty_problem_assets_give_a_total_of_thirty_and_the_first_twenty_five(client, db):

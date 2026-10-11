@@ -162,7 +162,9 @@ async def fleet_summary(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
         .outerjoin(PointLatest, PointLatest.point_id == Mapping.point_id)
         .where(Source.enabled)
     )
-    problems = attention([MappedReading(*row) for row in rows], now)
+    # The tree was read before these rows: an asset (and its mapping) created in between is not in it yet, so skip it
+    # here rather than count a problem the list below cannot name.
+    problems = attention([MappedReading(*row) for row in rows if row.asset_id in tree.nodes], now)
     return {
         "power": {"kw": kw, "counted": counted, "of": of},
         "energy_today": None if energy is None else {
