@@ -8,7 +8,6 @@ import { AssetForm } from "../components/AssetForm";
 import { AssetTree } from "../components/AssetTree";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { Modal } from "../components/Modal";
-import { PageHeader } from "../components/PageHeader";
 import { useAction } from "../hooks/useAction";
 import { assetImpact, assetLoss } from "../lib/impact";
 import { buildTree, descendantIds, parseAssetId } from "../lib/tree";
@@ -18,7 +17,7 @@ function Icon({ children }: { children: ReactNode }) {
   return <svg className="i" viewBox="0 0 24 24" aria-hidden="true">{children}</svg>;
 }
 
-/** What the workspace layout hands to the page in its pane (the index page and the asset page). */
+/** What the workspace layout hands to the page in its pane (the fleet summary and the asset page). */
 export interface AssetsContext {
   admin: boolean;
   /** A delete is running or awaiting its confirmation: no form may open next to it. */
@@ -38,7 +37,7 @@ export function useAssetsContext(): AssetsContext | null {
 
 /**
  * The admin's buttons for a page header, Add asset (the page's one primary) last; nothing for anyone else. `assetId` is the asset the
- * page shows: Edit and Delete exist only then, and Add asset adds under it. Null on the index page: Add asset adds a top-level asset.
+ * page shows: Edit and Delete exist only then, and Add asset adds under it. Null on the fleet summary: Add asset adds a top-level asset.
  */
 export function assetActions(ctx: AssetsContext | null, assetId: number | null): ReactNode {
   if (!ctx?.admin) return undefined;
@@ -47,25 +46,6 @@ export function assetActions(ctx: AssetsContext | null, assetId: number | null):
       {assetId !== null && <button type="button" onClick={ctx.openEdit} disabled={ctx.locked}><Icon><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z" /><path d="m14 7 3 3" /></Icon>Edit</button>}
       {assetId !== null && <button type="button" className="danger-quiet" onClick={ctx.remove} disabled={ctx.locked}>Delete</button>}
       <button type="button" className="primary" onClick={() => ctx.openAdd(assetId)} disabled={ctx.locked}><Icon><path d="M12 5v14M5 12h14" /></Icon>Add asset</button>
-    </>
-  );
-}
-
-/** `/assets` itself, until the fleet summary takes its place: the page header, the empty state, or a hint to pick an asset. */
-export function AssetsHome() {
-  const { data: assets = [] } = useAssets();
-  const ctx = useAssetsContext();
-  return (
-    <>
-      <PageHeader title="Assets" actions={assetActions(ctx, null)} />
-      {assets.length === 0 ? (
-        <div className="empty">
-          <span className="empty-icon"><Icon><path d="M12 3 3 7.5 12 12l9-4.5L12 3Z" /><path d="m3 12 9 4.5 9-4.5" /><path d="m3 16.5 9 4.5 9-4.5" /></Icon></span>
-          <p className="empty-title">No assets yet.</p>
-        </div>
-      ) : (
-        <p className="muted">Select an asset in the tree.</p>
-      )}
     </>
   );
 }

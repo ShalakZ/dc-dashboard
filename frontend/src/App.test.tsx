@@ -15,6 +15,7 @@ const routes = (role: string) => ({
   "GET /api/tariffs": { body: [] },
   "GET /api/settings/billing": { body: { currency: "QAR" } },
   "GET /api/assets": { body: [] },
+  "GET /api/fleet/summary": { body: { power: { kw: null, counted: 0, of: 0 }, energy_today: null, cost_today: null, currency: "QAR", attention: { total: 0, items: [] } } },
   "GET /api/sources": { body: [] },
   "GET /api/sources/4/points": { body: [] },
   "GET /api/billing/costs": { body: { month: "2026-10", timezone: "Asia/Qatar", currency: "QAR", days: [], assets: [] } },
@@ -108,7 +109,7 @@ describe("the Assets workspace", () => {
     visitAssets("/assets");
     expect(await screen.findByRole("region", { name: "Asset tree" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
-    expect(screen.getByText("Select an asset in the tree.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument(); // the fleet summary
   });
 
   it("/assets/1 shows the same tree beside the asset's page, with the asset selected", async () => {

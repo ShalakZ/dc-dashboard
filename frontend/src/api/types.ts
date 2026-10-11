@@ -201,6 +201,16 @@ export interface TariffPatch { rate_per_kwh?: number; effective_from?: string }
 export interface CostFigure { kwh: number; cost: number | null; estimated: boolean; partial: boolean; no_data: boolean }
 /** `cost_today` of the asset summary: no kWh, the energy tile already has it. */
 export interface CostToday { cost: number | null; estimated: boolean; partial: boolean; no_data: boolean }
+/** One asset with a reading that needs attention, as the fleet summary lists it (`path` runs from the root down and ends with `name`). */
+export interface AttentionItem { asset_id: number; name: string; path: string; problem: "bad" | "stale"; points: number; last_ts: string }
+/** GET /api/fleet/summary: the Assets landing page. `power.kw` is null (never 0) when no meter is counted; `attention.total` counts all, `items` is cut at 25. */
+export interface FleetSummary {
+  power: { kw: number | null; counted: number; of: number };
+  energy_today: { kwh: number; estimated: boolean; no_data: boolean } | null;
+  cost_today: CostToday | null;
+  currency: string | null;
+  attention: { total: number; items: AttentionItem[] };
+}
 export interface BillingAssetRow {
   asset_id: number; parent_id: number | null; name: string; path: string; rate_per_kwh: number | null;
   days: (CostFigure | null)[]; total: CostFigure | null;

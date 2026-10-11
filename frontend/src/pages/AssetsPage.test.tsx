@@ -1,17 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { Route, Routes, useLocation } from "react-router";
-import { api } from "../api/client";
-import { keys } from "../api/queries";
+import { useFleetSummary } from "../api/queries";
 import { mockFetch } from "../test/fetchMock";
 import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { FakeEventSource } from "../test/fakeEventSource";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { AssetPage } from "./AssetPage";
-import { AssetsHome, AssetsPage } from "./AssetsPage";
+import { AssetsPage } from "./AssetsPage";
+import { AssetsSummary } from "./AssetsSummary";
 
 const assets = [
   { id: 1, parent_id: null, name: "Site", kind: "site", sort_order: 0 },
@@ -29,7 +28,10 @@ const pageRoutes = (list: Fixture) => ({
     [`GET /api/assets/${a.id}/series`, { body: { metric: "active_power_kw", unit: "kW", points: [] } }],
   ])),
 });
+/** The fleet summary of a site with nothing to report. The index page asks for it, and an unmocked request is a 500 (a second role="alert"). */
+const emptyFleet = { power: { kw: null, counted: 0, of: 0 }, energy_today: null, cost_today: null, currency: null, attention: { total: 0, items: [] } };
 const authed = (role: string, list: Fixture = assets) => ({
+  "GET /api/fleet/summary": { body: emptyFleet },
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: { id: 1, username: "u", role } },
   "GET /api/assets": { body: list },
@@ -42,13 +44,12 @@ function Where() {
 }
 const where = () => screen.getByTestId("where").textContent;
 
-/** keys.fleet has no hook until the summary page exists: a probe that is fetched again only when something invalidates the key. */
+/** Next to the page: keeps the fleet summary query mounted, so a test can count how often it is fetched (it is fetched again only when something invalidates it). */
 function FleetProbe() {
-  useQuery({ queryKey: keys.fleet, queryFn: () => api.get("/api/probe/fleet"), staleTime: Infinity });
+  useFleetSummary();
   return null;
 }
-const fleetRoutes = { "GET /api/probe/fleet": { body: {} } };
-const cacheCounts = (calls: { path: string }[]) => ({ ...probeFetches(calls), fleet: calls.filter((c) => c.path === "/api/probe/fleet").length });
+const cacheCounts = (calls: { path: string }[]) => ({ ...probeFetches(calls), fleet: calls.filter((c) => c.path === "/api/fleet/summary").length });
 
 /** The Assets workspace as App mounts it: the layout with the real index page and the real asset page. `extra` renders outside the routes. */
 function renderWorkspace(route: string, { extra }: { extra?: ReactElement } = {}) {
@@ -56,7 +57,7 @@ function renderWorkspace(route: string, { extra }: { extra?: ReactElement } = {}
     <>
       <Routes>
         <Route path="/assets" element={<AssetsPage />}>
-          <Route index element={<AssetsHome />} />
+          <Route index element={<AssetsSummary />} />
           <Route path=":id" element={<AssetPage />} />
         </Route>
       </Routes>
@@ -359,14 +360,14 @@ describe("AssetsPage", () => {
       it("clicking a node navigates and the asset's tiles, Trend and Metrics appear in the pane, with no second click", async () => {
         await show();
         expect(where()).toBe("/assets");
-        expect(screen.getByText("Select an asset in the tree.")).toBeInTheDocument();
+        expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument(); // the index page is the fleet summary
         await userEvent.click(within(column()).getByRole("link", { name: "Room B" }));
         expect(await screen.findByRole("heading", { name: "Room B", level: 1 })).toBeInTheDocument();
         expect(where()).toBe("/assets/4");
         expect(screen.getByText("Live power")).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: "Trend", level: 2 })).toBeInTheDocument();
         expect(screen.getByRole("heading", { name: "Metrics", level: 2 })).toBeInTheDocument();
-        expect(screen.queryByText("Select an asset in the tree.")).not.toBeInTheDocument();
+        expect(screen.queryByRole("heading", { name: "By kind" })).not.toBeInTheDocument();
       });
 
       it("selecting highlights the node: aria-current follows the URL from one asset to the next", async () => {
@@ -481,7 +482,7 @@ describe("AssetsPage", () => {
   describe("saving refreshes the fleet figures too", () => {
     it("a new asset and an edited one each fetch the fleet summary again", async () => {
       const calls = mockFetch({
-        ...authed("admin"), ...fleetRoutes,
+        ...authed("admin"),
         "POST /api/assets": { status: 201, body: { id: 3, parent_id: 1, name: "Room B", kind: "generic", sort_order: 0 } },
         "PATCH /api/assets/2": { body: { ...assets[1], name: "Room A2" } },
       });
@@ -507,7 +508,7 @@ describe("AssetsPage", () => {
       let removed = false;
       const calls = mockFetch({
         ...authed("admin"),
-        ...(probes ? { ...probeRoutes, ...fleetRoutes } : {}),
+        ...(probes ? probeRoutes : {}),
         "GET /api/assets": () => ({ body: removed ? [assets[0]] : assets }),
         "DELETE /api/assets/2": ({ url }) => {
           urls.push(url);
@@ -532,7 +533,7 @@ describe("AssetsPage", () => {
       expect(deletes(calls)).toBe(1);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(where()).toBe("/assets"); // not a dead /assets/2
-      expect(await screen.findByText("Select an asset in the tree.")).toBeInTheDocument();
+      expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument();
       expect(screen.getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
     });
 
@@ -543,7 +544,8 @@ describe("AssetsPage", () => {
         await waitFor(() => expect(cacheCounts(calls)).toEqual({ billing: 1, widgetData: 1, tariffs: 1, fleet: 1 }));
         await click("Delete");
         if (needsConfirm) await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
-        await waitFor(() => expect(cacheCounts(calls)).toEqual({ billing: 2, widgetData: 2, tariffs: 2, fleet: 2 }));
+        // The fleet summary is fetched three times: at the start, again when the summary page mounts after the redirect to /assets (its entry is stale), and once more by the invalidation.
+        await waitFor(() => expect(cacheCounts(calls)).toEqual({ billing: 2, widgetData: 2, tariffs: 2, fleet: 3 }));
       },
     );
 
@@ -587,7 +589,7 @@ describe("AssetsPage", () => {
       expect(urls).toEqual(["/api/assets/2", "/api/assets/2?confirm=true"]);
       await waitFor(() => expect(screen.queryByRole("link", { name: "Room A" })).not.toBeInTheDocument());
       expect(where()).toBe("/assets");
-      expect(screen.getByText("Select an asset in the tree.")).toBeInTheDocument();
+      expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument();
     });
 
     it("keeps the dialog open and says why when the confirmed request fails", async () => {
@@ -731,21 +733,16 @@ describe("AssetsPage header", () => {
     expect(within(header("Room A")).queryAllByRole("button")).toHaveLength(0);
   });
 
-  it("nothing selected: one muted line under the header says what to do; a selection or an empty list has none", async () => {
+  it("nothing selected: the fleet summary follows the header, and the old 'select an asset' line is gone", async () => {
     await show("viewer", "/assets");
-    const hint = screen.getByText("Select an asset in the tree.");
-    expect(hint.tagName).toBe("P");
-    expect(hint).toHaveClass("muted");
-    expect(hint.previousElementSibling).toBe(header());
-  });
-
-  it("a selected asset has no such line", async () => {
-    await show("viewer", "/assets/2", assets, "Room A");
+    expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument();
+    expect(header().nextElementSibling).toHaveClass("tiles");
     expect(screen.queryByText("Select an asset in the tree.")).not.toBeInTheDocument();
   });
 
-  it("an empty list has no such line either (there is nothing to select)", async () => {
-    await show("admin", "/assets", []);
+  it("a selected asset shows its own page, not the fleet summary", async () => {
+    await show("viewer", "/assets/2", assets, "Room A");
+    expect(screen.queryByRole("heading", { name: "By kind" })).not.toBeInTheDocument();
     expect(screen.queryByText("Select an asset in the tree.")).not.toBeInTheDocument();
   });
 

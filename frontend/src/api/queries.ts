@@ -4,7 +4,7 @@ import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { api } from "./client";
 import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
-  GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
+  FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, SecretKeyStatus, TlsStatus,
 } from "./types";
@@ -47,10 +47,14 @@ export const keys = {
   tlsStatus: ["tls-status"] as const,
 };
 
-/** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today). */
-const COST_DEPENDENT = [keys.billing, keys.widgetData, keys.assets] as const;
+/** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today), `fleet` the Assets landing page's figures. */
+const COST_DEPENDENT = [keys.billing, keys.widgetData, keys.assets, keys.fleet] as const;
 
 export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets") });
+
+/** The Assets landing page: live power, today's energy and cost over the whole site, and the readings that need attention. */
+export const useFleetSummary = () =>
+  useQuery({ queryKey: keys.fleet, queryFn: () => api.get<FleetSummary>("/api/fleet/summary"), refetchInterval: 15_000 });
 
 export const useSummary = (id: number) =>
   useQuery({ queryKey: keys.summary(id), queryFn: () => api.get<Summary>(`/api/assets/${id}/summary`), refetchInterval: 60_000 });

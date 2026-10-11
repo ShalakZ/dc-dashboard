@@ -3,7 +3,8 @@ import { Navigate, Route, Routes } from "react-router";
 import { RequireAuth, RequireRole } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { AssetPage } from "./pages/AssetPage";
-import { AssetsHome, AssetsPage } from "./pages/AssetsPage";
+import { AssetsPage } from "./pages/AssetsPage";
+import { AssetsSummary } from "./pages/AssetsSummary";
 import { AuditEntryPage } from "./pages/AuditEntryPage";
 import { AuditPage } from "./pages/AuditPage";
 import { BillingPage } from "./pages/BillingPage";
@@ -33,7 +34,7 @@ export function App() {
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
         <Route path="/" element={<Navigate to="/assets" replace />} />
         <Route path="/assets" element={<AssetsPage />}>
-          <Route index element={<AssetsHome />} />
+          <Route index element={<AssetsSummary />} />
           <Route path=":id" element={<AssetPage />} />
         </Route>
         <Route path="/dashboards" element={<Suspense fallback={loading}><DashboardsPage /></Suspense>} />
