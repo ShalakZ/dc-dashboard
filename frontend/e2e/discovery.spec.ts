@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { navLink } from "./shell";
 
 async function drag(page: Page, from: Locator, to: Locator | { x: number; y: number }) {
   const a = (await from.boundingBox())!;
@@ -68,7 +69,7 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
   const panel = (await panelRes.json()) as { id: number };
 
   // 2. Scope and scan: the HTTP simulator already exists as the manual source `sim`; OPC UA and Modbus are new
-  await page.getByRole("link", { name: "Scans", exact: true }).click();
+  await navLink(page, "Scans").click();
   await expect(page.getByRole("heading", { name: "Scans", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "New scope" }).click();
   await expect(page.getByLabel("Targets")).toBeVisible();
@@ -92,7 +93,7 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
   expect(graphRes.ok()).toBe(true);
   const opcua = ((await graphRes.json()) as { sources: GraphSource[] }).sources.find((s) => s.connector_type === "opcua")!;
   expect(opcua).toBeTruthy();
-  await page.getByRole("link", { name: "Discovery", exact: true }).click();
+  await navLink(page, "Discovery").click();
   await expect(page.getByRole("heading", { name: "Discovery", exact: true })).toBeVisible();
   await page.getByRole("button", { name: `Expand ${opcua.name}` }).click();
   const cluster = (key: string) => node(page, `cluster:${opcua.id}:${key}`);
@@ -167,7 +168,7 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
 
   // 8. The audit log: the scope, the scan and ten accepted mappings. The page shows only the newest 50 rows and every
   // sign-in adds one, so the counts are read from the API instead.
-  await page.getByRole("link", { name: "Audit", exact: true }).click();
+  await navLink(page, "Audit").click();
   await expect(page.getByRole("heading", { name: "Audit log" })).toBeVisible();
   await expect(page.getByRole("row").nth(1)).toBeVisible(); // the header row and at least one entry
   const auditCounts = async () => {

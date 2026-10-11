@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
+import { treeLink, userBlock } from "./shell";
 
 // W3a (assets, mapping, sources) on the state the journey, discovery, phase3 and headers projects leave behind: admin `admin` /
 // `correct-horse`; the manual source `sim` (60 simulator points; LVP01_kW and LVP01_kWh mapped to the asset MV2); every asset of kind
@@ -32,9 +33,8 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
     await page.getByLabel("Username").fill(ADMIN.username);
     await page.getByLabel("Password", { exact: true }).fill(ADMIN.password);
     await page.getByRole("button", { name: "Sign in" }).click();
-    const userBlock = page.getByRole("navigation").locator(".who");
-    await expect(userBlock).toContainText(ADMIN.username);
-    await expect(userBlock).toContainText(roleLabel("admin"));
+    await expect(userBlock(page)).toContainText(ADMIN.username);
+    await expect(userBlock(page)).toContainText(roleLabel("admin"));
   });
 
   await test.step("assets: a + on a branch, Kind picked from a list, one spelling per kind", async () => {
@@ -54,7 +54,7 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
     await dialog.getByLabel("Name", { exact: true }).fill("W3a-Room");
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
     await expect(dialog).toBeHidden();
-    await expect(page.getByRole("link", { name: "W3a-Room", exact: true })).toBeVisible();
+    await expect(treeLink(page, "W3a-Room")).toBeVisible();
 
     // Kind "Other…": a text box appears; a brand-new kind is stored as typed
     await page.getByRole("button", { name: "Add asset", exact: true }).click();
@@ -66,7 +66,7 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
     await dialog.getByLabel("Name", { exact: true }).fill("W3a-Panel-A");
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
     await expect(dialog).toBeHidden();
-    await expect(page.getByRole("link", { name: "W3a-Panel-A", exact: true })).toBeVisible();
+    await expect(treeLink(page, "W3a-Panel-A")).toBeVisible();
 
     // The same kind typed with other case and a trailing blank reuses the stored spelling, and the list now offers it
     await page.getByRole("button", { name: "Add asset", exact: true }).click();
@@ -77,7 +77,7 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
     await dialog.getByLabel("Name", { exact: true }).fill("W3a-Panel-B");
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
     await expect(dialog).toBeHidden();
-    await expect(page.getByRole("link", { name: "W3a-Panel-B", exact: true })).toBeVisible();
+    await expect(treeLink(page, "W3a-Panel-B")).toBeVisible();
 
     const assets = await getJson<ApiAsset[]>(page, "/api/assets");
     const byName = (name: string) => assets.find((a) => a.name === name);

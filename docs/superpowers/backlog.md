@@ -257,12 +257,12 @@ The plan names section K for these; K already holds Part A, so they are here.
 
 ## Q. W6 UI overhaul leftovers (final review and fix wave, 2026-10-11; none of these blocks)
 
-- **F-1: the asset tree column on `/assets/:id`** (the owner wants it "e2e eventually"): today it is on the Assets list page only; the Assets detail area is small and the asset page has no tree.
+- **F-1: the asset tree column on `/assets/:id`** (the owner wants it "e2e eventually"): today it is on the Assets list page only; the Assets detail area is small and the asset page has no tree. **Closed by W7a (2026-10-11).** The tree is the left column of one Assets workspace: `/assets` and every `/assets/:id` show it, a node is a link (no select step), and `e2e/w7a.spec.ts` covers it.
 - **F-2: status icons and a legend on tree nodes** (owner decision 4 of W6, dropped for lack of data): needs a per-asset status in `GET /api/assets` (worst status of its mapped points, rolled up from children) plus a backend test; the shapes (`.st-*`) already exist.
 - **The dashboard widgets and the editor grid** keep their old plain look (their own dedicated session, see the roadmap W6 paragraph); the page frame, dialogs and controls around them are new.
 - **Phone layout** is still parked (the sidebar starts minimized below 1180 px, which helps, but nothing else was designed for a phone).
 - **Settings has two Save buttons that look different** (General primary, Sign-in protection plain): a side effect of "one primary per page"; **Tariffs has no primary button** (three submit buttons, two named "Add rate").
-- **Crumb styles differ:** Asset, Points and Audit entry use grey plain-text crumbs; the dashboard page keeps the old blue underlined link and has no bottom rule (`.dash-head` is not a `PageHeader`).
+- **Crumb styles differ:** Asset, Points and Audit entry use grey plain-text crumbs; the dashboard page keeps the old blue underlined link and has no bottom rule (`.dash-head` is not a `PageHeader`). **Partly closed by W7a (2026-10-11):** Asset, Points and Audit entry now share the `Crumbs` component (links, the current page in bold); the dashboard page still has its own.
 - **Tooltip after minimizing:** the pointer is still on the toggle, so its tooltip shows only after leaving and re-entering it.
 - **Focus order changed in two places** (no test pins either): Assets admin buttons now in the header as Edit, Delete, Add asset; Billing's Download CSV before Previous/Next month.
 - **New copy the spec did not name:** a sub line under the titles of Users, Audit, Settings, Storage, Tariffs and Discovery, an `h2` "General" on Settings, "No sources yet.", Discovery's empty state h1, "No assets match the filter.", the Assets meta labels (Kind, Parent, Children), "Select an asset in the tree.". An opened Audit row hides its duplicate summary sentence with CSS.
@@ -272,3 +272,20 @@ The plan names section K for these; K already holds Part A, so they are here.
 - **`vite.config.ts` reads `.env` files** through `loadEnv` (dev only).
 - **The page-CSS guard test is CSS-only:** it cannot see a TSX file that reuses another group's class; a page-root class on Sources, Points and Scans would allow the stricter "every rule starts with the page root" check.
 - **Not verified live by the final review:** the role-changed and certificate banners on the flush Assets page, the review-mappings dialog, a widget `table`; the first two were checked by eye in Task 3, the third is unchanged by construction (the frozen island).
+
+## R. W7a leftovers (task reviews and the e2e task, 2026-10-11; none of these blocks; the final review adds its own)
+
+- **`GET /api/assets/99999999999/summary` answers 500** (`DBAPIError ... value out of int32 range`): the asset page now refuses an id above 2147483647 before it asks, but the route should validate the path id and answer 422 or 404 (`GET /api/audit/99999999999` already answers 422).
+- **Open question: a "No reading yet" problem in the attention list.** A mapped point that was never read is skipped (`attention` in `core/fleet.py`), because mappings have no creation time and a never-read mapping cannot be told from one made a minute ago. The chip says "No readings yet" site-wide only. Needs a decision, and a `created_at` on mappings (a migration) if the answer is yes.
+- **A power meter of a disabled source counts in the fleet's `power.of`,** as it does on the asset page (`_metered_power` has no `Source.enabled` filter), so the tile can say "N of M meters" with a meter that is switched off in M. Filtering changes `_power_rollup` too.
+- **`energy_today` / `cost_today` JSON shaping is written twice** (the asset summary route and the fleet route in `api/data.py`, near lines 287 and 327): a `_today_json` helper would stop the two drifting.
+- **Two silent roots, one with a rate and one without:** the fleet cost shows 0.0 while the root without a rate shows a dash on its own page.
+- **No fleet test with `estimated: true`.**
+- **The profile avatar is a navy disc,** not the mockup's accent tint: the rail guard in `app.css.test.ts` forbids `var(--accent)` in a rule whose selector holds `.avatar` or `.who`.
+- **Discovery at 1024 px has its graph cropped at the canvas edges** (React Flow's fit-view minimum scale is 0.5); not compared with the build before W7a. `scroll-padding-top` under the sticky bar was only tested as a rule, not with a Tab-scrolled element in a browser.
+- **The quick-find field's border is about 1.6:1 on the bar** (the mockup's value; WCAG 1.4.11 asks 3:1 for a component boundary): the final review judges it.
+- **Quick find, small things:** clicking into a field that still has the focus after Esc does not reopen the list (typing, an arrow or Ctrl+K does); a name of about 45 characters squeezes the path in its row to nothing (the option's accessible name keeps the path); Enter with no option chosen does nothing (by design).
+- **Tree column at 800 px:** with the sidebar expanded and the column widened to its 50vw cap the page scrolls sideways by 18 px (the default width does not); check at 1024 px with a wide column. The resize handle covers the outer 5 px of the tree's scrollbar, and every pointer move re-renders the whole tree (fine for hundreds of assets).
+- **Crumbs:** when a long current crumb wraps, the `/` that belongs to the previous crumb stays at the end of the first line; the last crumb repeats the h1 (same text).
+- **The top bar's profile block overflows at 600 px** (the page scrolls to 646 px on every assets page); outside the 1024 px minimum, and phone layout is parked.
+- **Fleet tiles use the 22 px title size** (the asset page's 28 px broke "1605.00 kWh" in a 205 px tile) and reflow 3 + 1 at 1024 px; the singular wordings ("Sum of 1 meter", "The meter is not reporting") and leaving a blank kind out of "By kind" are new copy the spec did not name.

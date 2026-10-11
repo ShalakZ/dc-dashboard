@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Download, type Locator, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
+import { navLink, signOut, userBlock } from "./shell";
 
 // Phase 3 on the state the journey and discovery projects leave behind: admin `admin` / `correct-horse`; assets Site
 // (root) > Panel 01, LVP02 ... LVP10, plus MV2; the collector has been polling for some minutes. The database is young,
@@ -30,7 +31,6 @@ interface ApiWidgetData {
 }
 
 // ---- locators the UI does not label (Tasks 8-10 define these classes and elements; change them here only) ----
-const navLink = (page: Page, name: string) => page.getByRole("navigation").getByRole("link", { name, exact: true });
 const region = (page: Page, title: string) => page.getByRole("region", { name: title, exact: true });
 const statFigure = (page: Page, title: string) => region(page, title).locator(".big");
 const barChart = (page: Page, title: string) => region(page, title).locator("canvas").first();
@@ -51,14 +51,9 @@ async function signIn(page: Page, who: Account) {
   await page.getByLabel("Password", { exact: true }).fill(who.password);
   await page.getByRole("button", { name: "Sign in" }).click();
   // Where you land depends on where the previous sign-out happened, so callers navigate explicitly.
-  const userBlock = page.getByRole("navigation").locator(".who");
-  await expect(userBlock).toContainText(who.username);
-  await expect(userBlock).toContainText(roleLabel(who.role));
-}
-
-async function signOut(page: Page) {
-  await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  const block = userBlock(page);
+  await expect(block).toContainText(who.username);
+  await expect(block).toContainText(roleLabel(who.role));
 }
 
 async function createUser(page: Page, who: Account) {

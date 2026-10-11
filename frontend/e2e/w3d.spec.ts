@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
+import { navLink, signOut, userBlock } from "./shell";
 
 // W3d (sign-in protection and Users: the admin sets how many failed sign-ins block an account and for how long, a blocked account shows
 // on the Users page and can be unblocked, an account can be deleted and its past audit entries keep its name; and no screen or API answer
@@ -40,7 +41,6 @@ async function send<T>(page: Page, method: "post" | "patch" | "delete", path: st
   return response.status() === 204 ? null : ((await response.json()) as T);
 }
 
-const navLink = (page: Page, name: string) => page.getByRole("navigation").getByRole("link", { name, exact: true });
 const userRow = (page: Page, username: string) =>
   page.getByRole("row").filter({ has: page.getByRole("cell", { name: username, exact: true }) });
 const sourceRow = (page: Page, name: string) =>
@@ -51,14 +51,9 @@ async function signIn(page: Page, who: Account, role: string) {
   await page.getByLabel("Username").fill(who.username);
   await page.getByLabel("Password", { exact: true }).fill(who.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  const userBlock = page.getByRole("navigation").locator(".who");
-  await expect(userBlock).toContainText(who.username);
-  await expect(userBlock).toContainText(roleLabel(role));
-}
-
-async function signOut(page: Page) {
-  await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  const block = userBlock(page);
+  await expect(block).toContainText(who.username);
+  await expect(block).toContainText(roleLabel(role));
 }
 
 /** One refused attempt on the login page. Resolves once the page has handled the answer (the page empties the password box then). */
