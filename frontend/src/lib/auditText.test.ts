@@ -15,7 +15,7 @@ const ALL_ACTIONS = [
   "scope.created", "scope.updated", "scope.deleted", "settings.sign_in_changed", "settings.timezone_changed", "setup.completed",
   "source.browsed", "source.created", "source.deleted", "source.test_all", "source.tested", "source.updated",
   "storage.changed", "storage.default_set", "tariff.created", "tariff.updated", "tariff.deleted",
-  "user.created", "user.updated",
+  "user.created", "user.deleted", "user.updated",
 ];
 
 describe("humanise", () => {
@@ -325,6 +325,11 @@ describe("describeAudit: creations, deletions and events", () => {
     expect(describeAudit(entry("user.created", { user_id: 3, username: "carol", role: "operator", active: true })).summary).toBe(
       "Created user carol (operator)",
     );
+    expect(describeAudit(entry("user.deleted", { user_id: 3, username: "carol", role: "operator", active: true })).summary).toBe(
+      "Deleted user carol",
+    );
+    expect(describeAudit(entry("user.deleted", { user_id: 3, username: "carol", role: "operator", active: true })).link).toBeNull();
+    expect(describeAudit(entry("user.deleted", { user_id: 3 })).summary).toBe("Deleted user #3");
     expect(describeAudit(entry("scope.created", { scope_id: 1, name: "Lab" })).summary).toBe("Created scan scope Lab");
     expect(describeAudit(entry("scope.deleted", { scope_id: 1, name: "Lab" })).link).toBeNull();
     expect(describeAudit(entry("setup.completed", { username: "admin", role: "admin" })).link).toBeNull();
@@ -425,7 +430,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(37);
+    expect(ALL_ACTIONS).toHaveLength(38);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }

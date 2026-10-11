@@ -2,9 +2,10 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dcdash.api.auth import limiter
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.security import hash_password
 from dcdash.core.audit import audit, audit_change
@@ -13,6 +14,8 @@ from dcdash.core.models import User, UserSession
 router = APIRouter(prefix="/api", tags=["users"], dependencies=[Depends(require_role("admin"))])
 
 Role = Literal["viewer", "operator", "admin"]
+
+ADMIN_CHANGES_LOCK = 7_300_001  # any constant; one lock serialises every change that can remove an administrator
 
 
 class UserRow(BaseModel):
@@ -61,6 +64,33 @@ async def create_user(
     return user
 
 
+async def lock_admin_changes(db: AsyncSession, acting: User, target_id: int) -> User:
+    """Serialise the changes that can remove an administrator, then check that one will remain.
+
+    Without the lock two admins could demote, deactivate or delete each other in the same instant and leave none (and
+    with no admin the first-run /setup is open to anyone). Under the lock the acting admin is read again: a request
+    that lost the race finds itself changed or gone and gets a 401. Returns the target, freshly read.
+    """
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ADMIN_CHANGES_LOCK})
+    current = await db.get(User, acting.id, populate_existing=True)
+    if current is None or not current.active or current.role != "admin":
+        raise HTTPException(401, "not authenticated")
+    target = await db.get(User, target_id, populate_existing=True)
+    if target is None:
+        raise HTTPException(404, "user not found")
+    others = await db.scalar(
+        select(func.count()).select_from(User).where(User.role == "admin", User.active, User.id != target.id)
+    )
+    if not others:
+        raise HTTPException(409, "cannot remove the last active administrator")
+    return target
+
+
+def forget_sign_in_failures(username: str) -> None:
+    """Drop the limiter's keys for this account name, so a block does not outlive a reset or a deleted account."""
+    limiter.drop(lambda key: isinstance(key, tuple) and key[1] == username)
+
+
 @router.patch("/users/{user_id}", response_model=UserRow)
 async def patch_user(
     user_id: int,
@@ -73,6 +103,8 @@ async def patch_user(
         raise HTTPException(404, "user not found")
     if user.id == admin.id and (body.active is False or (body.role is not None and body.role != "admin")):
         raise HTTPException(409, "cannot deactivate or demote yourself")
+    if body.active is False or body.role not in (None, "admin"):
+        user = await lock_admin_changes(db, admin, user_id)
     before = {"role": user.role, "active": user.active, "password": "set"}
     if body.role is not None:
         user.role = body.role
@@ -85,6 +117,26 @@ async def patch_user(
         await db.execute(delete(UserSession).where(UserSession.user_id == user.id))
     after = {"role": user.role, "active": user.active, "password": "changed" if body.password is not None else "set"}
     await audit_change(db, admin.id, "user.updated", {"user_id": user.id, "username": user.username}, before, after)
+    name = user.username  # read before the commit expires the instance
     await db.commit()
+    if body.password is not None:
+        forget_sign_in_failures(name)
     await db.refresh(user)
     return user
+
+
+@router.delete("/users/{user_id}", status_code=204, response_model=None)
+async def delete_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_role("admin")),
+) -> None:
+    if user_id == admin.id:
+        raise HTTPException(409, "cannot delete yourself")
+    user = await lock_admin_changes(db, admin, user_id)
+    name = user.username  # read before the commit expires the instance
+    await audit(db, admin.id, "user.deleted", {"user_id": user.id, "username": name, "role": user.role, "active": user.active})
+    # The database does the rest: sessions go with the account, every other row keeps its owner field as NULL.
+    await db.execute(delete(User).where(User.id == user.id))
+    await db.commit()
+    forget_sign_in_failures(name)  # a re-created name starts clean

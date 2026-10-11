@@ -284,6 +284,26 @@ async def test_a_scope_that_finds_nothing_completes(db):
     assert await db.fetchval("SELECT count(*) FROM scan_findings") == 0
 
 
+async def test_a_scan_finishes_done_when_its_starting_user_is_deleted_mid_run(db, monkeypatch):
+    """run_scan reads started_by once at its start; deleting that account later must not turn the scan into a failure."""
+    user = await db.fetchval(
+        "INSERT INTO users (username, password_hash, role) VALUES ('a', 'x', 'admin') RETURNING id"
+    )
+    scan = await make_scan(db, ["127.0.0.1"], [free_port()], user)
+    real = scan_module._record_findings
+
+    async def delete_the_user_then_record(pool, scan_id, findings):
+        await db.execute("DELETE FROM users WHERE id = $1", user)
+        await real(pool, scan_id, findings)
+
+    monkeypatch.setattr(scan_module, "_record_findings", delete_the_user_then_record)
+    await run_scan(db, scan)
+    row = await db.fetchrow("SELECT status, error, started_by FROM scans WHERE id = $1", scan)
+    assert row["status"] == "done" and row["error"] is None and row["started_by"] is None
+    audit = await db.fetchrow("SELECT user_id, detail FROM audit_log WHERE action = 'scan.finished'")
+    assert audit["user_id"] is None and audit["detail"]["scan_id"] == scan and audit["detail"]["status"] == "done"
+
+
 async def test_an_invalid_snapshot_fails_the_scan_with_a_reason_and_audits_it(db):
     scan = await make_scan(db, ["not a host!"], [502])
     with pytest.raises(Exception):

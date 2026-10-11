@@ -317,6 +317,7 @@ const RULES: Record<string, Rule> = {
     },
     link: usersPage,
   },
+  "user.deleted": removed("user", "user_id"),
   "user.updated": {
     summary: (c) => userUpdate(c) ?? withFields(`Changed ${thing("user", c.d, "user_id")}`, c.fields),
     link: usersPage,

@@ -23,9 +23,14 @@ async def audit(db: AsyncSession, user_id: int | None, action: str, detail: dict
 async def audit_pool(
     pool: asyncpg.Pool, user_id: int | None, action: str, detail: dict[str, Any] | None = None
 ) -> None:
-    """Insert an audit row immediately (used by the collector, which has no SQLAlchemy session)."""
+    """Insert an audit row immediately (used by the collector, which has no SQLAlchemy session).
+
+    The collector reads a scan's starter once and finishes minutes later; the account may have been deleted by then,
+    which would be a foreign-key error. A user that no longer exists is recorded as no user.
+    """
     await pool.execute(
-        "INSERT INTO audit_log (user_id, action, detail) VALUES ($1, $2, $3)", user_id, action, detail or {}
+        "INSERT INTO audit_log (user_id, action, detail) VALUES ((SELECT id FROM users WHERE id = $1), $2, $3)",
+        user_id, action, detail or {},
     )
 
 
