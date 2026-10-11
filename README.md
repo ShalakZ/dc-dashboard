@@ -517,6 +517,24 @@ from the last answer. After a restore the old heartbeat reads as "silent" until 
 The collector deletes expired sessions and finished jobs older than 7 days every hour
 (`backend/dcdash/collector/housekeeping.py`). "Test all" runs at most 4 connector tests at once.
 
+### If you are blocked from signing in
+
+After too many wrong passwords for one account from one computer, that account is blocked from that computer and the sign-in page
+says `too many failed attempts, try again in about N minutes`. Other accounts are not affected. The block ends by itself. To get in
+sooner:
+
+1. **Another admin presses Unblock.** On the Users page a blocked account shows `blocked` and an `Unblock <name>` button; it clears
+   that account's blocks from every computer. Resetting the account's password or deleting it clears them too.
+2. **An admin changes the numbers** on the Settings page, section Sign-in protection: how many failed sign-ins block an account
+   (3 to 20, default 5) and for how many minutes (1 to 60, default 5). A change applies to the next sign-in attempt, also to a block
+   that is running: a shorter block time ends a block that has already lasted that long. The limits cannot be switched off.
+3. **If every admin is blocked,** run `docker compose restart api`. The blocks are held in the api's memory, so a restart clears
+   all of them (the stored numbers are kept).
+
+On this Docker setup every browser may look like one computer: Docker can present all browser connections to the stack as coming
+from the one Compose gateway address, so the wrong passwords typed on one machine can block that account for everyone who signs in
+the same way. Browsers on other computers of a network, behind a Linux server, are told apart.
+
 ## Backup and restore
 
 Both scripts talk to the `db` container of the running stack (`.ps1` twins exist for Windows).

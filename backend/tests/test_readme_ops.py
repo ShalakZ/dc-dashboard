@@ -33,6 +33,7 @@ def section(level: int, title: str) -> str:
         (2, "Scheduled backups"),
         (2, "Upgrading and going back"),
         (2, "Release notes"),
+        (3, "If you are blocked from signing in"),
     ],
 )
 def test_the_runbook_headings_exist(level, title):
@@ -57,6 +58,12 @@ def test_the_runbook_headings_exist(level, title):
 )
 def test_the_readme_mentions(text):
     assert text in README
+
+
+def test_the_blocked_sign_in_section_names_every_way_out_and_the_docker_caveat():
+    text = section(3, "If you are blocked from signing in")
+    for needle in ("Unblock", "Users page", "Settings", "3 to 20", "1 to 60", "docker compose restart api", "one computer"):
+        assert needle in text, f"the blocked sign-in section does not mention {needle!r}"
 
 
 def test_the_release_specific_upgrade_sections_are_no_longer_top_level():
