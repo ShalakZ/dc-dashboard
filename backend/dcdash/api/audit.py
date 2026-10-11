@@ -1,15 +1,18 @@
 import json
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from pydantic import StringConstraints
 from sqlalchemy import ColumnElement, Select, Text, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.settings import current_timezone
+from dcdash.core.csvout import write_csv
 from dcdash.core.models import AuditLog, User
 from dcdash.core.timeutil import local_midnight
 
@@ -17,6 +20,10 @@ router = APIRouter(prefix="/api", tags=["audit"], dependencies=[Depends(require_
 
 # An exact action, or one `*` at the start and/or end (`*.deleted`, `login.*`).
 ACTION = Annotated[str, StringConstraints(pattern=r"^\*?[a-z0-9_.]+\*?$", max_length=60)]
+
+# The export is built in memory on the one API worker: 100,000 rows measured 10 s and 446 MB.
+EXPORT_LIMIT = 20_000
+CSV_HEADER = ("id", "time", "user", "action", "detail")
 
 
 @dataclass
@@ -111,6 +118,38 @@ async def list_audit(
     total = await db.scalar(select(func.count()).select_from(AuditLog).where(*clauses))
     rows = await db.execute(_entries().where(*clauses).order_by(AuditLog.id.desc()).limit(limit).offset(offset))
     return {"total": total, "offset": offset, "limit": limit, "items": [_item(e, username) for e, username in rows]}
+
+
+@router.get("/audit.csv")
+async def audit_csv(f: AuditFilter = Depends(audit_filter), db: AsyncSession = Depends(get_db)) -> Response:
+    """The filtered log as it is stored (not the friendly text), newest first; too many rows is a 422, never a short file."""
+    tz = await current_timezone(db)
+    clauses = where_clauses(f, tz)
+    rows = (
+        await db.execute(
+            select(AuditLog.id, AuditLog.ts, func.coalesce(AuditLog.actor_name, User.username), AuditLog.action, AuditLog.detail)
+            .outerjoin(User, User.id == AuditLog.user_id)
+            .where(*clauses)
+            .order_by(AuditLog.id.desc())
+            .limit(EXPORT_LIMIT + 1)
+        )
+    ).all()
+    if len(rows) > EXPORT_LIMIT:
+        matched = await db.scalar(select(func.count()).select_from(AuditLog).where(*clauses))
+        raise HTTPException(
+            422,
+            f"{matched:,} entries match; the export holds at most {EXPORT_LIMIT:,}. Narrow the date range and try again.",
+        )
+    zone = ZoneInfo(tz)
+    lines = (
+        [entry_id, ts.astimezone(zone), username or "", action, json.dumps(detail, ensure_ascii=False)]
+        for entry_id, ts, username, action, detail in rows
+    )
+    body = await run_in_threadpool(write_csv, CSV_HEADER, lines)
+    stamp = datetime.now(zone).strftime("%Y%m%d-%H%M")
+    return Response(
+        body, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="audit-{stamp}.csv"'}
+    )
 
 
 @router.get("/audit/options")
