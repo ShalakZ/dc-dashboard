@@ -12,7 +12,9 @@ from collections import deque
 from collections.abc import Callable
 
 from fastapi import Request
+from sqlalchemy.exc import IntegrityError
 
+from dcdash.api.deps import is_foreign_key_violation
 from dcdash.core.audit import audit
 from dcdash.core.db import get_sessionmaker
 
@@ -79,7 +81,8 @@ class SignInEvents:
 
         `locked` is True when this failure is the one that blocked the key; it is then written as `login.locked` and
         counted against the lockout budget instead. `user_id` is the account when one exists, else None: the typed
-        username is never stored.
+        username is never stored. An account deleted in the meantime fails the foreign key: the row is then written
+        once more without the id, so the attempt is not lost.
         """
         budget = self.lockouts if locked else self.failures
         refused = budget.take()
@@ -92,11 +95,20 @@ class SignInEvents:
         if refused:
             detail["suppressed_before"] = refused
         try:
-            async with get_sessionmaker()() as session:
-                await audit(session, user_id, action, detail)
-                await session.commit()
+            try:
+                await self._write(user_id, action, detail)
+            except IntegrityError as exc:
+                if user_id is None or not is_foreign_key_violation(exc):
+                    raise
+                await self._write(None, action, detail)
         except Exception:
             log.exception("could not write the %s audit row", action)
+
+    @staticmethod
+    async def _write(user_id: int | None, action: str, detail: dict[str, object]) -> None:
+        async with get_sessionmaker()() as session:
+            await audit(session, user_id, action, detail)
+            await session.commit()
 
 
 sign_in_events = SignInEvents()

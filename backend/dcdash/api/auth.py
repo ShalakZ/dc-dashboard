@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import COOKIE, current_user, get_db
+from dcdash.api.deps import COOKIE, account_vanished_is_401, current_user, get_db
 from dcdash.api.security import (
     DUMMY_HASH, LoginLimiter, hash_password, hash_token, new_session_token, verify_password,
 )
@@ -131,9 +131,10 @@ async def login(
         )
         raise HTTPException(401, "invalid username or password")
     limiter.reset(key)
-    _start_session(db, user, response, _is_https(request))
-    await audit(db, user.id, "login.succeeded", {"client": client_address(request)})
-    await db.commit()
+    async with account_vanished_is_401(db):  # the account may be gone since the lookup above
+        _start_session(db, user, response, _is_https(request))
+        await audit(db, user.id, "login.succeeded", {"client": client_address(request)})
+        await db.commit()
     return user
 
 
@@ -174,10 +175,11 @@ async def change_my_password(
         )
         raise HTTPException(401, "current password is incorrect")
     limiter.reset(key)
-    user.password_hash = hash_password(body.new_password)
     keep = hash_token(request.cookies.get(COOKIE, ""))
-    closed = await db.execute(
-        delete(UserSession).where(UserSession.user_id == user.id, UserSession.id != keep)
-    )
-    await audit(db, user.id, "password.changed", {"other_sessions_signed_out": closed.rowcount})
-    await db.commit()
+    async with account_vanished_is_401(db):  # a deleted account fails the UPDATE at the autoflush of the next statement
+        user.password_hash = hash_password(body.new_password)
+        closed = await db.execute(
+            delete(UserSession).where(UserSession.user_id == user.id, UserSession.id != keep)
+        )
+        await audit(db, user.id, "password.changed", {"other_sessions_signed_out": closed.rowcount})
+        await db.commit()

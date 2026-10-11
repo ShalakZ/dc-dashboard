@@ -4,7 +4,7 @@ import pytest
 from starlette.requests import Request
 
 from dcdash.api import auth as auth_module
-from dcdash.api.security_events import RowBudget, client_address, sign_in_events
+from dcdash.api.security_events import RowBudget, SignInEvents, client_address, sign_in_events
 from helpers import login_as, make_user
 
 GOOD = {"password": "correct-horse"}
@@ -186,3 +186,25 @@ async def test_a_failed_sign_in_gives_its_request_connection_back_before_writing
     monkeypatch.setattr(sign_in_events, "audit_sign_in_failure", spy_failure)
     assert (await client.post("/api/login", json={"username": "nobody", "password": "whatever1"})).status_code == 401
     assert order[:2] == ["rollback", "failure row"]
+
+
+async def test_a_failed_sign_in_row_keeps_the_user_id_while_the_account_exists(db):
+    uid = await make_user(db, "ann")
+    await SignInEvents().audit_sign_in_failure(
+        via="login", user_id=uid, reason="wrong_password", client="203.0.113.9", locked=False
+    )
+    (row,) = await sign_in_rows(db)
+    assert (row["action"], row["user_id"], row["actor_name"]) == ("login.failed", uid, "ann")
+
+
+@pytest.mark.parametrize(("locked", "action"), [(False, "login.failed"), (True, "login.locked")])
+async def test_a_failed_sign_in_row_survives_the_account_being_deleted_meanwhile(db, locked, action):
+    """The account is gone by the time the row is written: the foreign key fails, so the row is written without the id."""
+    gone = await make_user(db, "ghost")
+    await db.execute("DELETE FROM users WHERE id = $1", gone)
+    await SignInEvents().audit_sign_in_failure(
+        via="login", user_id=gone, reason="wrong_password", client="203.0.113.9", locked=locked
+    )
+    (row,) = await sign_in_rows(db)
+    assert (row["action"], row["user_id"], row["actor_name"]) == (action, None, None)
+    assert row["detail"] == {"via": "login", "reason": "wrong_password", "client": "203.0.113.9"}

@@ -441,3 +441,64 @@ async def test_a_patch_answers_200_even_if_the_row_is_gone_after_the_commit(clie
     response = await client.patch(f"/api/users/{victim}", json={"role": "operator"})
     assert response.status_code == 200, response.text
     assert response.json() == {"id": victim, "username": "victim", "role": "operator", "active": True}
+
+
+# The order of the checks: a request whose acting admin vanished while it waited at the lock is answered 401 even when the
+# target does not exist (404 would tell a signed-out caller which ids exist), and the argon2 hash is computed before the
+# lock is taken, so the lock is held for milliseconds, not for a hash.
+
+
+@pytest.mark.parametrize(("method", "body"), [("PATCH", {"role": "viewer"}), ("DELETE", None)], ids=["patch", "delete"])
+async def test_a_vanished_acting_admin_gets_401_even_when_the_target_does_not_exist(app, db, method, body):
+    async with two_admins(app, db) as (_a, b, _a_id, b_id):
+
+        def send():
+            return b.request(method, "/api/users/999999", json=body)
+
+        async with request_stuck_at_the_lock(db, send) as (holder, requesting):
+            await holder.execute("DELETE FROM users WHERE id = $1", b_id)
+        response = await asyncio.wait_for(requesting, 10)
+    assert response.status_code == 401, response.text
+
+
+def record_hash_and_lock_order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    order: list[str] = []
+    real_hash, real_lock = users_module.hash_password, users_module.lock_admin_changes
+
+    def hashing(password):
+        order.append("hash")
+        return real_hash(password)
+
+    async def locking(*args, **kwargs):
+        order.append("lock")
+        return await real_lock(*args, **kwargs)
+
+    monkeypatch.setattr(users_module, "hash_password", hashing)
+    monkeypatch.setattr(users_module, "lock_admin_changes", locking)
+    return order
+
+
+async def test_a_password_reset_hashes_the_password_before_it_takes_the_lock(client, db, monkeypatch):
+    await login_as(client, db)
+    victim = await make_user(db, "victim")
+    order = record_hash_and_lock_order(monkeypatch)
+    response = await client.patch(f"/api/users/{victim}", json={"password": "another-password"})
+    assert response.status_code == 200, response.text
+    assert order == ["hash", "lock"]
+
+
+async def test_a_change_without_a_password_hashes_nothing(client, db, monkeypatch):
+    await login_as(client, db)
+    victim = await make_user(db, "victim")
+    order = record_hash_and_lock_order(monkeypatch)
+    assert (await client.patch(f"/api/users/{victim}", json={"role": "operator"})).status_code == 200
+    assert order == ["lock"]
+
+
+async def test_the_self_demotion_refusal_comes_before_the_hash_and_the_lock(client, db, monkeypatch):
+    await login_as(client, db)
+    me = await db.fetchval("SELECT id FROM users WHERE username = 'admin'")
+    order = record_hash_and_lock_order(monkeypatch)
+    response = await client.patch(f"/api/users/{me}", json={"role": "viewer", "password": "another-password"})
+    assert response.status_code == 409, response.text
+    assert order == []
