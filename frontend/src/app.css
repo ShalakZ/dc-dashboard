@@ -306,7 +306,7 @@
   /* Breadcrumb trail (Crumbs): links in the accent, the current page bold, a "/" between; a long label wraps instead of widening the page */
   .crumbs { font-size: var(--fs-sm); color: var(--text-2); }
   .crumbs ol { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
-  .crumbs li { display: flex; align-items: center; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+  .crumbs li { display: flex; align-items: baseline; gap: 4px; min-width: 0; overflow-wrap: anywhere; } /* the separator leads its crumb: it stays on the crumb's first line when the name itself wraps */
   .crumbs a { color: var(--accent); }
   .crumbs [aria-current="page"] { color: var(--text); font-weight: 600; }
   .crumbs .sep { flex: none; color: var(--text-2); }

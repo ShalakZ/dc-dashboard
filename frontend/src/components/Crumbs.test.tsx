@@ -77,4 +77,20 @@ describe("Crumbs", () => {
       expect(sep).toHaveTextContent("/");
     }
   });
+
+  it("puts each separator before the crumb it belongs to, in the same list item, and none before the first", () => {
+    const { container } = show([{ label: "Assets", to: "/assets" }, { label: "MV2", to: "/assets/3" }, { label: "Room-1" }]);
+    const items = Array.from(container.querySelectorAll("li"));
+    expect(items).toHaveLength(3);
+    expect(items[0].querySelector(".sep")).toBeNull();
+    for (const li of items.slice(1)) {
+      const first = li.firstElementChild;
+      expect(first).toHaveClass("sep");
+      expect(li.querySelectorAll(".sep")).toHaveLength(1);
+      expect(li.lastElementChild).not.toBe(first);
+    }
+    // a separator is never inside a link, so it cannot become part of a link name
+    expect(container.querySelectorAll("a .sep")).toHaveLength(0);
+    expect(screen.getByRole("link", { name: "MV2" })).toBeInTheDocument();
+  });
 });

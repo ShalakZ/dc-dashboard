@@ -110,7 +110,7 @@ describe("AssetPage", () => {
     /** The asset list's state as text, read from the page's own query: a test waits for it to leave "pending" before it asserts on the list's absence. */
     const ListState = () => <span data-testid="list-state">{useAssets().status}</span>;
     const listSettled = (state: "success" | "error") => waitFor(() => expect(screen.getByTestId("list-state")).toHaveTextContent(state));
-    const crumbNames = (nav: Element) => [...nav.querySelectorAll("li > :first-child")].map((el) => el.textContent);
+    const crumbNames = (nav: Element) => [...nav.querySelectorAll("li > :not(.sep)")].map((el) => el.textContent);
 
     it("opens with a page header: the trail Assets / the asset's ancestors / the asset (a link each but the last), then the one h1", async () => {
       mockFetch(routes(null));
