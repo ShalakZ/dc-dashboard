@@ -6,7 +6,7 @@ import { describeAudit } from "../lib/auditText";
 export function AuditEntryDetail({ entry, view }: { entry: AuditEntry; view: "friendly" | "raw" }) {
   if (view === "raw") {
     return (
-      <div>
+      <div className="audit-detail">
         <p>{entry.action}</p>
         <code>{JSON.stringify(entry.detail)}</code>
       </div>
@@ -14,25 +14,27 @@ export function AuditEntryDetail({ entry, view }: { entry: AuditEntry; view: "fr
   }
   const { summary, changes, unchanged, facts, link } = describeAudit(entry);
   return (
-    <div>
-      <p>{summary}</p>
+    <div className="audit-detail">
+      <p className="detail-summary">{summary}</p>
       {changes.length > 0 && (
-        <table>
-          <thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead>
-          <tbody>
-            {changes.map((change, i) => (
-              <tr key={`${change.field}-${i}`}>
-                <td>{change.field}</td>
-                <td>{change.before}</td>
-                <td>{change.after}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead>
+            <tbody>
+              {changes.map((change, i) => (
+                <tr key={`${change.field}-${i}`}>
+                  <td>{change.field}</td>
+                  <td>{change.before}</td>
+                  <td>{change.after}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {unchanged > 0 && <p className="muted">{`${unchanged} unchanged ${unchanged === 1 ? "value" : "values"} not shown`}</p>}
       {facts.length > 0 && (
-        <dl>
+        <dl className="kv">
           {facts.map((fact, i) => (
             <div key={`${fact.label}-${i}`}>
               <dt>{fact.label}</dt>

@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router";
 import { useAuditEntry, useSite } from "../api/queries";
 import { ApiError } from "../api/client";
 import { AuditEntryDetail } from "../components/AuditEntryDetail";
+import { PageHeader } from "../components/PageHeader";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 const MAX_ID = 2_147_483_647; // the largest id the API holds
@@ -14,26 +15,31 @@ export function AuditEntryPage() {
   const { data, error, isLoading } = useAuditEntry(id);
   const site = useSite();
   const timezone = site.data?.timezone ?? "UTC"; // falls back to UTC if the site cannot be read
-  const back = <p><Link to="/audit">Back to the log</Link></p>;
+  // The way back, once: in the page header's crumbs when the entry shows, on its own line above the message otherwise.
+  const back = (
+    <Link to="/audit">
+      <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
+      Back to the log
+    </Link>
+  );
 
   if (id === null || (error instanceof ApiError && error.status === 404)) {
-    return <>{back}<p className="error" role="alert">Audit entry not found.</p></>;
+    return <div className="admin-page audit-entry-page"><p className="back-line">{back}</p><p className="error" role="alert">Audit entry not found.</p></div>;
   }
-  if (error) return <>{back}<p className="error" role="alert">{error.message}</p></>;
+  if (error) return <div className="admin-page audit-entry-page"><p className="back-line">{back}</p><p className="error" role="alert">{error.message}</p></div>;
   if (isLoading || site.isPending || !data) return <p className="muted">loading…</p>;
   return (
-    <>
-      {back}
-      <h1>Audit entry #{data.id}</h1>
-      <dl>
+    <div className="admin-page audit-entry-page">
+      <PageHeader title={`Audit entry #${data.id}`} crumbs={back} />
+      <dl className="kv">
         <div><dt>Time ({timezone})</dt><dd>{formatSiteDateTime(data.ts, timezone)}</dd></div>
         <div><dt>User</dt><dd>{data.username ?? "—"}</dd></div>
         <div><dt>Action</dt><dd>{data.action}</dd></div>
       </dl>
-      <h2>What happened</h2>
+      <h2 className="section-title">What happened</h2>
       <AuditEntryDetail entry={data} view="friendly" />
-      <h2>Raw</h2>
+      <h2 className="section-title">Raw</h2>
       <pre>{JSON.stringify(data.detail, null, 2)}</pre>
-    </>
+    </div>
   );
 }
