@@ -163,3 +163,14 @@ async def test_a_blocked_name_is_forgotten_when_an_admin_resets_the_password(cli
     assert (await client.post("/api/login", json={"username": "bob", "password": "correct-horse"})).status_code == 429
     assert (await client.patch(f"/api/users/{uid}", json={"password": "newpassword1"})).status_code == 200
     assert (await client.post("/api/login", json={"username": "bob", "password": "newpassword1"})).status_code == 200
+
+
+async def test_only_the_list_carries_the_blocked_mark(client, db):
+    await login_as(client, db)
+    created = await client.post("/api/users", json={"username": "ops", "password": "longenough", "role": "operator"})
+    uid = created.json()["id"]
+    assert set(created.json()) == {"id", "username", "role", "active"}
+    patched = await client.patch(f"/api/users/{uid}", json={"role": "viewer"})
+    assert set(patched.json()) == {"id", "username", "role", "active"}
+    rows = (await client.get("/api/users")).json()
+    assert all(set(row) == {"id", "username", "role", "active", "blocked"} and row["blocked"] is False for row in rows)

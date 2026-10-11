@@ -31,3 +31,40 @@ async def test_audit_keeps_the_actor_name_after_the_user_is_deleted(client, db):
     item = (await client.get("/api/audit")).json()["items"][0]
     assert item["action"] == "x.did"
     assert item["user_id"] is None and item["actor_id"] == gone and item["username"] == "gone"
+
+
+async def test_options_marks_actors_whose_account_is_gone_and_tells_namesakes_apart(client, db):
+    await login_as(client, db, "admin")
+    kept = await db.fetchval(
+        "INSERT INTO users (username, password_hash, role) VALUES ('kept', 'x', 'viewer') RETURNING id"
+    )
+    old_bob = await db.fetchval(
+        "INSERT INTO users (username, password_hash, role) VALUES ('bob', 'x', 'viewer') RETURNING id"
+    )
+    await audit_pool(db, kept, "x.did")
+    await audit_pool(db, old_bob, "x.did")
+    await db.execute("DELETE FROM users WHERE id = $1", old_bob)
+    # an actor id that never belonged to an account in this database reads as a deleted one too
+    await db.execute("INSERT INTO audit_log (action, detail, actor_id, actor_name) VALUES ('x.did', '{}', 4000, 'ghost')")
+    users = (await client.get("/api/audit/options")).json()["users"]
+    assert {u["id"]: u["name"] for u in users} == {kept: "kept", old_bob: "bob (deleted)", 4000: "ghost (deleted)"}
+
+    new_bob = await db.fetchval(
+        "INSERT INTO users (username, password_hash, role) VALUES ('bob', 'x', 'operator') RETURNING id"
+    )
+    await audit_pool(db, new_bob, "x.did")
+    users = (await client.get("/api/audit/options")).json()["users"]
+    assert {u["id"]: u["name"] for u in users} == {
+        kept: "kept",  # an existing account with a name of its own keeps the plain name
+        old_bob: f"bob (deleted) #{old_bob}",
+        new_bob: f"bob #{new_bob}",
+        4000: "ghost (deleted)",
+    }
+    assert [u["id"] for u in users] == [old_bob, new_bob, 4000, kept]  # in name order, namesakes by id
+
+
+async def test_options_names_an_actor_without_a_stored_name_by_its_id(client, db):
+    await login_as(client, db, "admin")
+    await db.execute("INSERT INTO audit_log (action, detail, actor_id, actor_name) VALUES ('x.did', '{}', 4001, NULL)")
+    users = (await client.get("/api/audit/options")).json()["users"]
+    assert users == [{"id": 4001, "name": "#4001 (deleted)"}]

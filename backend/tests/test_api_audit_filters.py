@@ -190,10 +190,11 @@ async def test_options_lists_actions_and_the_actors_found_in_the_log(client, db)
     await db.execute("DELETE FROM users WHERE id = $1", gone)
     body = (await client.get("/api/audit/options")).json()
     assert body["actions"] == ["a.first", "b.second", "c.third"]
+    # none of the three has an account any more (5 and 9 never had one in this database)
     assert body["users"] == [
-        {"id": 9, "name": "#9"},
-        {"id": gone, "name": "gone"},
-        {"id": 5, "name": "new name"},
+        {"id": 9, "name": "#9 (deleted)"},
+        {"id": gone, "name": "gone (deleted)"},
+        {"id": 5, "name": "new name (deleted)"},
     ]
     assert body["unattributed"] is False
     await add(db, "d.nobody")

@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Annotated, Any
@@ -158,11 +159,20 @@ async def audit_options(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     newest = (
         select(func.max(AuditLog.id)).where(AuditLog.actor_id.is_not(None)).group_by(AuditLog.actor_id)
     )  # the newest entry of each actor carries the name to show
-    actors = await db.execute(select(AuditLog.actor_id, AuditLog.actor_name).where(AuditLog.id.in_(newest)))
-    users = sorted(
-        ({"id": actor_id, "name": name or f"#{actor_id}"} for actor_id, name in actors),
-        key=lambda u: (u["name"].casefold(), u["id"]),
+    actors = await db.execute(
+        select(AuditLog.actor_id, AuditLog.actor_name, User.id.is_(None))
+        .outerjoin(User, User.id == AuditLog.actor_id)
+        .where(AuditLog.id.in_(newest))
     )
+    named = sorted(
+        ((actor_id, name or f"#{actor_id}", gone) for actor_id, name, gone in actors),
+        key=lambda a: (a[1].casefold(), a[0]),
+    )
+    namesakes = Counter(name for _, name, _ in named)  # a deleted `bob` and a new `bob` would otherwise read alike
+    users = [
+        {"id": actor_id, "name": f"{name}{' (deleted)' if gone else ''}{f' #{actor_id}' if namesakes[name] > 1 else ''}"}
+        for actor_id, name, gone in named
+    ]
     unattributed = await db.scalar(select(exists().where(AuditLog.actor_id.is_(None))))
     return {"actions": list(actions), "users": users, "unattributed": bool(unattributed)}
 

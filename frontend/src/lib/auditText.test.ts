@@ -10,7 +10,7 @@ const entry = (action: string, detail: unknown, extra: Partial<AuditEntry> = {})
 const ALL_ACTIONS = [
   "asset.created", "asset.updated", "asset.deleted", "billing.currency_changed",
   "dashboard.created", "dashboard.updated", "dashboard.deleted", "discovery.accepted",
-  "login.failed", "login.locked", "login.succeeded", "mapping.created", "mapping.updated", "mapping.deleted",
+  "login.failed", "login.locked", "login.succeeded", "login.unblocked", "mapping.created", "mapping.updated", "mapping.deleted",
   "password.change_failed", "password.changed", "scan.finished", "scan.started",
   "scope.created", "scope.updated", "scope.deleted", "settings.sign_in_changed", "settings.timezone_changed", "setup.completed",
   "source.browsed", "source.created", "source.deleted", "source.test_all", "source.tested", "source.updated",
@@ -281,6 +281,16 @@ describe("describeAudit: creations, deletions and events", () => {
     expect(describeAudit(entry("login.succeeded", { client: "10.0.0.5" })).facts).toEqual([{ label: "Client", value: "10.0.0.5" }]);
   });
 
+  it("says whose sign-in an admin unblocked, links to the Users page and labels the account id", () => {
+    const view = describeAudit(entry("login.unblocked", { user_id: 9, username: "bob", cleared: 2 }));
+    expect(view.summary).toBe("Unblocked sign-in for user bob");
+    expect(view.link).toEqual({ to: "/users", label: "Open Users" });
+    expect(view.facts).toContainEqual({ label: "Account id", value: "9" });
+    expect(view.facts).toContainEqual({ label: "Cleared", value: "2" });
+    expect(describeAudit(entry("login.unblocked", { user_id: 9, cleared: 1 })).summary).toBe("Unblocked sign-in for user #9");
+    expect(describeAudit(entry("login.unblocked", {})).summary).toBe("Unblocked sign-in for user");
+  });
+
   it("says a failed sign-in was made to an account, with the stored reason", () => {
     // For these rows the User column is the account that was attacked, not someone who did something.
     const failed = (reason?: string) =>
@@ -430,7 +440,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(38);
+    expect(ALL_ACTIONS).toHaveLength(39);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }

@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.auth import limiter
+from dcdash.api.auth import apply_sign_in_policy, limiter
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.security import hash_password
 from dcdash.core.audit import audit, audit_change
@@ -26,6 +26,14 @@ class UserRow(BaseModel):
     active: bool
 
 
+class UserListRow(UserRow):
+    blocked: bool  # some sign-in key of this account name is blocked right now
+
+
+class Unblocked(BaseModel):
+    cleared: int
+
+
 class NewUser(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8, max_length=256)
@@ -38,9 +46,15 @@ class UserPatch(BaseModel):
     password: str | None = Field(default=None, min_length=8, max_length=256)
 
 
-@router.get("/users", response_model=list[UserRow])
-async def list_users(db: AsyncSession = Depends(get_db)) -> list[User]:
-    return list((await db.execute(select(User).order_by(User.id))).scalars())
+@router.get("/users", response_model=list[UserListRow])
+async def list_users(db: AsyncSession = Depends(get_db)) -> list[UserListRow]:
+    await apply_sign_in_policy(db)  # so a block that the stored policy has already ended is not shown
+    blocked = {key[1] for key in limiter.blocked_keys() if isinstance(key, tuple)}
+    users = (await db.execute(select(User).order_by(User.id))).scalars()
+    return [
+        UserListRow(id=u.id, username=u.username, role=u.role, active=u.active, blocked=u.username in blocked)
+        for u in users
+    ]
 
 
 @router.post("/users", response_model=UserRow, status_code=201)
@@ -140,3 +154,21 @@ async def delete_user(
     await db.execute(delete(User).where(User.id == user.id))
     await db.commit()
     forget_sign_in_failures(name)  # a re-created name starts clean
+
+
+@router.post("/users/{user_id}/unblock", response_model=Unblocked)
+async def unblock_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_role("admin")),
+) -> Unblocked:
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "user not found")
+    await apply_sign_in_policy(db)
+    name = user.username  # read before the commit expires the instance
+    cleared = limiter.drop(lambda key: isinstance(key, tuple) and key[1] == name)  # every address, this exact name
+    if cleared:
+        await audit(db, admin.id, "login.unblocked", {"user_id": user.id, "username": name, "cleared": cleared})
+    await db.commit()
+    return Unblocked(cleared=cleared)
