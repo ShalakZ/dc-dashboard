@@ -47,8 +47,8 @@ export function CreateDashboardDialog({ onClose }: { onClose: () => void }) {
           {trimmed === "" && <p className="muted">Enter a name.</p>}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="row">
-            <button type="submit" disabled={busy || trimmed === ""}>Create</button>
             <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+            <button type="submit" className="primary" disabled={busy || trimmed === ""}>Create</button>
           </div>
         </form>
       </div>

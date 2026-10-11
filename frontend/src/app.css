@@ -126,10 +126,28 @@
   select:disabled, textarea:disabled { background: var(--surface); color: var(--text-disabled); }
   input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: 0; border-color: var(--ring); }
   input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+  /* A label that wraps a checkbox or radio reads as [box] text: the control sits in the first column, whatever its place in the DOM
+     (so no visual reordering of anything focusable); a help line under it lines up with the text. The flex variants (.inline,
+     .picker-row, .check) keep their own layout. */
+  label:not(.inline, .picker-row, .check):has(> input[type="checkbox"], > input[type="radio"]) { grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 8px; }
+  label:not(.inline, .picker-row, .check) > :is(input[type="checkbox"], input[type="radio"]) { grid-column: 1; grid-row: 1; margin: 0; }
+  label:not(.inline, .picker-row, .check):has(> input[type="checkbox"], > input[type="radio"]) > :not(input) { grid-column: 2; }
   input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible { outline-offset: 2px; }
   :is(input, select, textarea)[aria-invalid="true"] { border-color: var(--crit); }
   fieldset { border: 1px solid var(--border); border-radius: var(--radius); }
   legend { font-size: var(--fs-sm); font-weight: 600; }
+
+  /* Audit filter bar and pager: a surface panel with labels above the controls; the pager's page-size group sits at the right */
+  .filter-bar { display: grid; gap: 12px; margin: 8px 0 14px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .filter-bar .row { align-items: flex-end; gap: 12px; }
+  .filter-bar .row[role="group"] { align-items: center; gap: 8px; }
+  .filter-bar .field { display: grid; gap: 6px; }
+  .filter-bar .field.grow { flex: 1 1 220px; }
+  .filter-bar select { min-width: 150px; }
+  .filter-bar p { margin: 0; }
+  .pager { gap: 8px; margin: 12px 0; }
+  .pager input[type="number"] { width: 5em; }
+  .pager-end { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 
   /* Buttons: square-ish (radius 4 to 8 px, never a pill). Variants win over the base by class specificity; the base hover and
      disabled states use :where() so they never outrank a variant. */
@@ -157,10 +175,13 @@
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
   /* Asset page tiles; .tiles is the grid they sit in from 4a on */
-  .tile { display: inline-block; min-width: 180px; margin-right: 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); }
-  .tile .big { font-size: var(--fs-figure); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile { max-width: 360px; margin: 0 0 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .tile > .muted:first-child { font-size: var(--fs-sm); }
+  .tile .big { margin-top: 2px; font-size: var(--fs-figure); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .big small { font-size: var(--fs-base); font-weight: 400; }
+  .tile > small { display: block; margin-top: 2px; font-size: var(--fs-xs); }
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 16px; margin-bottom: 26px; }
-  .tiles > .tile { min-width: 0; margin: 0; }
+  .tiles > .tile { min-width: 0; max-width: none; margin: 0; }
   .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 12px; margin: 8px 0; max-width: 480px; display: grid; gap: 8px; }
 
   /* Asset tree column (Assets list page, option B). main is flush on this page (main:has(.assets-layout) above), so the column
@@ -246,9 +267,11 @@
   .banner { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 20px; padding: 12px 16px; border: 1px solid; border-radius: var(--radius); font-size: var(--fs-sm); }
   .banner svg.i { margin-top: 1px; }
   .banner strong { font-weight: 600; }
-  .banner .b-act { margin-left: auto; white-space: nowrap; }
+  .banner .b-act { margin: -5px 0 -5px auto; min-height: 28px; white-space: nowrap; } /* a button as tall as one text line, so the text and the button centre on each other */
   .banner-warn { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
   .banner-warn svg.i { color: var(--warn-icon); }
+  .banner > span { flex: 1 1 auto; min-width: 0; }
+  .banner-bad { border-color: var(--crit); background: var(--crit-tint); color: var(--crit); } /* an expired certificate: tint, border and ink are all the critical token */
   .banner-info { border-color: var(--info-line); background: var(--info-tint); color: var(--info-ink); }
   .notice { display: flex; gap: 12px; align-items: flex-start; margin-top: 16px; padding: 12px 16px; border: 1px solid var(--border); border-left: 3px solid var(--text-disabled); border-radius: var(--radius); font-size: var(--fs-sm); color: var(--text); }
   .notice svg.i { margin-top: 1px; color: var(--text-2); }
@@ -288,6 +311,9 @@
   .dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--backdrop); }
   .dialog { width: min(960px, 100%); max-height: 100%; overflow: auto; display: grid; gap: 16px; align-content: start; padding: 22px 24px; background: var(--bg); border-radius: var(--radius-lg); box-shadow: var(--shadow-dialog); }
   .dialog h2, .dialog p { margin: 0; }
+  .dialog form { max-width: none; margin: 0; gap: 12px; }
+  .dialog, .dialog form, .dialog label, .dialog .field { grid-template-columns: minmax(0, 1fr); } /* a long option text must not widen the dialog */
+  .dialog > .row:last-child, .dialog > form > .row:last-child { justify-content: flex-end; } /* the buttons: Cancel, then the primary, at the right */
   .dialog h2 { font-size: var(--fs-lg); font-weight: 600; }
   .dialog fieldset { display: grid; gap: 8px; max-width: 480px; margin: 0; padding: 8px 12px; }
   .dialog .field { display: grid; gap: 6px; }

@@ -120,7 +120,7 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
       )}
       <label>Enabled<input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /></label>
       {error && <p className="error" role="alert">{error}</p>}
-      <div className="row"><button type="submit" disabled={submitting}>Save</button><button type="button" onClick={onDone} disabled={submitting}>Cancel</button></div>
+      <div className="row"><button type="button" onClick={onDone} disabled={submitting}>Cancel</button><button type="submit" className="primary" disabled={submitting}>Save</button></div>
     </form>
   );
 }

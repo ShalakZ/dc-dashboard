@@ -8,6 +8,7 @@ import { AssetForm } from "../components/AssetForm";
 import { AssetTree } from "../components/AssetTree";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { Modal } from "../components/Modal";
+import { PageHeader } from "../components/PageHeader";
 import { useAction } from "../hooks/useAction";
 import { assetImpact, assetLoss } from "../lib/impact";
 import { buildTree, descendantIds } from "../lib/tree";
@@ -67,7 +68,7 @@ export function AssetsPage() {
           disabled={locked}
         />
         <div className="assets-detail">
-          <header className="page-head"><h1>Assets</h1></header>
+          <PageHeader title="Assets" />
           {assets.length === 0 && <p className="muted">No assets yet.</p>}
           {actionError && <p className="error" role="alert">{actionError}</p>}
           {selected && (

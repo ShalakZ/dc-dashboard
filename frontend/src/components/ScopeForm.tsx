@@ -42,8 +42,8 @@ export function ScopeForm({ initial, suggestions, onSaved, onCancel }: Props) {
       <small id="scope-ports-hint" className="muted">Comma or space separated TCP ports to probe on every host.</small>
       {error && <p className="error" role="alert">{error}</p>}
       <div className="row">
-        <button type="submit" disabled={busy}>Save</button>
         <button type="button" onClick={onCancel}>Cancel</button>
+        <button type="submit" className="primary" disabled={busy}>Save</button>
       </div>
     </form>
   );
