@@ -1,0 +1,57 @@
+import { screen } from "@testing-library/react";
+import { mockFetch, type Routes } from "../test/fetchMock";
+import { renderWithProviders } from "../test/render";
+import { AuditEntryPage } from "./AuditEntryPage";
+
+const detail = { tariff_id: 3, asset_id: 7, before: { rate_per_kwh: 0.1 }, after: { rate_per_kwh: 0.12 } };
+const stored = { id: 9, user_id: 1, actor_id: 1, username: "admin", action: "tariff.updated", detail, ts: "2026-10-07T10:00:00Z" };
+const admin: Routes = {
+  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "u", role: "admin" } },
+  "GET /api/site": { body: { timezone: "Asia/Qatar", currency: null } },
+};
+const open = (id: string, routes: Routes = {}) => {
+  const calls = mockFetch({ ...admin, ...routes });
+  renderWithProviders(<AuditEntryPage />, { route: `/audit/${id}`, path: "/audit/:id" });
+  return calls;
+};
+
+describe("AuditEntryPage", () => {
+  it("shows one entry: who, when in the site zone, what happened, what changed, and the stored JSON", async () => {
+    open("9", { "GET /api/audit/9": { body: stored } });
+    expect(await screen.findByRole("heading", { name: "Audit entry #9" })).toBeInTheDocument();
+    expect(screen.getByText("2026-10-07 13:00:00")).toBeInTheDocument(); // 10:00Z in Asia/Qatar (UTC+3)
+    expect(screen.getByText("Asia/Qatar", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("admin")).toBeInTheDocument();
+    expect(screen.getByText("Changed tariff #3: rate per kwh")).toBeInTheDocument();
+    const table = screen.getByRole("table");
+    expect(table).toHaveTextContent("Rate per kwh");
+    expect(screen.getByRole("link", { name: "Open Tariffs" })).toHaveAttribute("href", "/tariffs");
+    expect(screen.getByRole("heading", { name: "Raw" })).toBeInTheDocument();
+    expect(document.querySelector("pre")?.textContent).toBe(JSON.stringify(detail, null, 2));
+    expect(screen.getByText("tariff.updated")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to the log" })).toHaveAttribute("href", "/audit");
+  });
+
+  it("shows a dash for an entry with no user", async () => {
+    open("9", { "GET /api/audit/9": { body: { ...stored, user_id: null, actor_id: null, username: null } } });
+    expect(await screen.findByRole("heading", { name: "Audit entry #9" })).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("says not found for an entry that does not exist, and offers the way back", async () => {
+    open("404", { "GET /api/audit/404": { status: 404, body: { detail: "audit entry not found" } } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Audit entry not found.");
+    expect(screen.getByRole("link", { name: "Back to the log" })).toHaveAttribute("href", "/audit");
+  });
+
+  it.each(["abc", "99999999999", "0", "1.5"])("says not found for the id %s without asking the API", async (id) => {
+    const calls = open(id);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Audit entry not found.");
+    expect(calls.some((c) => c.path.startsWith("/api/audit/"))).toBe(false);
+  });
+
+  it("shows the API's message for any other failure", async () => {
+    open("9", { "GET /api/audit/9": { status: 500, body: { detail: "database is down" } } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is down");
+  });
+});
