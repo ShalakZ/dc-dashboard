@@ -20,6 +20,7 @@ from dcdash.api.settings import seed_general
 from dcdash.api.stream import Broadcaster
 from dcdash.core.config import get_settings
 from dcdash.core.db import dispose_engine, get_sessionmaker
+from dcdash.core.logscrub import install_log_scrub
 from dcdash.core.pg import CONFIG_CHANNEL, LATEST_CHANNEL, create_pool, listen_forever
 from dcdash.core.secret_key import check_secret_key_at_start
 
@@ -73,6 +74,7 @@ async def _database_unavailable(_request: Request, _exc: Exception) -> JSONRespo
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    install_log_scrub()  # a database error prints its statement parameters, which can hold a source's URL with its password
     broadcaster: Broadcaster = app.state.broadcaster
     pool = await create_pool()
     scales_stale = asyncio.Event()
