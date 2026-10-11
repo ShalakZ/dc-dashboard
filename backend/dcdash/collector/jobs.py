@@ -9,7 +9,7 @@ from dcdash.collector.browse import browse_source, connector_for
 from dcdash.collector.scan import run_scan
 from dcdash.collector.scheduler import mark_source
 from dcdash.connectors.base import ConnectorFactory, create_connector
-from dcdash.core.audit import audit_pool, scrub_strings
+from dcdash.core.audit import audit_pool, clip_error, scrub_strings
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,16 @@ async def _scan(pool: asyncpg.Pool, params: dict[str, Any], factory: ConnectorFa
 _HANDLERS = {"test_source": _test_source, "browse_source": _browse_source, "scan": _scan}
 
 
+def _stored_result(result: Any) -> Any:
+    """A job's result as it is stored: no URL credentials in any string, and the error or message cut to a sane size."""
+    result = scrub_strings(result)  # an error or a check's message may quote the URL
+    if isinstance(result, dict):
+        for key in ("error", "message"):
+            if isinstance(result.get(key), str):
+                result[key] = clip_error(result[key])
+    return result
+
+
 async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFactory) -> None:
     try:
         handler = _HANDLERS.get(job["kind"])
@@ -62,7 +72,7 @@ async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFa
         status = "failed"
     await pool.execute(
         "UPDATE jobs SET status = $2, result = $3, finished_at = now() WHERE id = $1",
-        job["id"], status, scrub_strings(result),  # an error or a check's message may quote the URL
+        job["id"], status, _stored_result(result),
     )
 
 

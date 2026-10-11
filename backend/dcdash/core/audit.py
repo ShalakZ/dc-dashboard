@@ -134,20 +134,57 @@ def strip_credentials(url: str) -> str:
     return _split(url)[1]
 
 
-_URL_CREDENTIALS = re.compile(r"://\S*@")
+_WHITESPACE_RUNS = re.compile(r"(\s+)")
+_MIN_KNOWN = 4  # a shorter known value ("f") would mangle ordinary words around it
+
+
+def _known_values(known: Iterable[str]) -> list[str]:
+    """The values to hide, longest first: each known value, and the password part (after the first ":") of each."""
+    values: set[str] = set()
+    for value in known:
+        for candidate in (value, value.partition(":")[2]):
+            if len(candidate) >= _MIN_KNOWN:
+                values.add(candidate)
+    return sorted(values, key=len, reverse=True)
+
+
+def _scrub_run(run: str) -> str:
+    """One run of non-space text: from its first "://" to its last "@" becomes "://[hidden]@" (if an "@" follows)."""
+    start = run.find("://")
+    end = run.rfind("@")
+    if start < 0 or end < start + len("://"):
+        return run
+    return f"{run[:start]}://[hidden]@{run[end + 1:]}"
 
 
 def scrub_url_credentials(text: str, known: Iterable[str] = ()) -> str:
     """`text` with every "://user:password@" turned into "://[hidden]@", and every value in `known` into "[hidden]".
 
-    For error text that quotes a URL (an exception message, a log line). `known` catches what the pattern cannot: a
-    password with a space inside, or a credential that is quoted on its own. Text with neither comes back unchanged,
-    and scrubbing scrubbed text changes nothing. Over-masks an "@" later in the same run of non-space text (a query
-    string with an e-mail address), the safe direction.
+    For error text that quotes a URL (an exception message, a log line). `known` catches what the position cannot: a
+    password with a space inside, or a credential that is quoted on its own. It holds the values `hidden_parts` returns
+    (the user name and password joined by ":"); each value of 4 or more characters is hidden, and so is the password
+    part of each when that is 4 or more characters. Text with neither comes back unchanged, and scrubbing scrubbed text
+    changes nothing. Over-masks an "@" later in the same run of non-space text (a query string with an e-mail address),
+    the safe direction.
+
+    The result is what `re.sub(r"://\S*@", "://[hidden]@", text)` gives, in linear time: that pattern rescans the rest
+    of the run at every "://", so a hostile string of 100,000 of them took 20 seconds.
     """
-    for value in sorted({value for value in known if value}, key=len, reverse=True):
+    for value in _known_values(known):
         text = text.replace(value, "[hidden]")
-    return _URL_CREDENTIALS.sub("://[hidden]@", text)
+    if "://" not in text or "@" not in text:
+        return text
+    return "".join(_scrub_run(part) for part in _WHITESPACE_RUNS.split(text))
+
+
+def clip_error(text: str, limit: int = 1000) -> str:
+    """`text` scrubbed (`scrub_url_credentials`) and then cut to at most `limit` characters, the cut marked with "…".
+
+    For error text that is stored: a device can send a megabyte. Scrubbing comes first, so a password that straddles the
+    cut cannot survive as half a password.
+    """
+    text = scrub_url_credentials(text)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def scrub_strings(value: Any) -> Any:

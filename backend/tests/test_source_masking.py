@@ -1,10 +1,13 @@
 """A source's config is shown with its URL credentials and credential-named keys hidden, and editing it keeps them."""
 
 import json
+import random
+import re
+import time
 
 import pytest
 
-from dcdash.core.audit import reconcile_config, scrub_url_credentials, strip_credentials
+from dcdash.core.audit import clip_error, reconcile_config, scrub_url_credentials, strip_credentials
 from helpers import login_as, make_source
 
 PASSWORD = "Zq9-unique-pw"
@@ -37,6 +40,38 @@ def test_scrub_url_credentials_leaves_other_text_alone():
     assert scrub_url_credentials(once) == once  # scrubbing twice changes nothing
 
 
+# The hard shapes of a credentialed URL in error text: every one must lose the password, and only the password.
+HARD_SCRUB_CASES = {
+    "at-sign-in-the-user-name": (
+        "connect http://a@b:Zq9pw-1@h:80/x failed", "Zq9pw-1", "connect http://[hidden]@h:80/x failed",
+    ),
+    "slash-in-the-password": (
+        "connect opc.tcp://svc:pa/ss-Zq9pw-2@h:4840/x failed", "Zq9pw-2", "connect opc.tcp://[hidden]@h:4840/x failed",
+    ),
+    "question-mark-in-the-password": (
+        "connect http://u:p?Zq9pw-3@h failed", "Zq9pw-3", "connect http://[hidden]@h failed",
+    ),
+    "hash-in-the-password": ("connect http://u:p#Zq9pw-4@h failed", "Zq9pw-4", "connect http://[hidden]@h failed"),
+    "dot-in-the-password": ("connect http://u:Zq9.pw-5@h failed", "Zq9.pw-5", "connect http://[hidden]@h failed"),
+    "bang-in-the-password": ("connect http://u:Zq9!pw-6@h failed", "Zq9!pw-6", "connect http://[hidden]@h failed"),
+    "percent-escape-in-the-password": (
+        "connect http://u:Zq9%2Fpw-7@h failed", "Zq9%2Fpw-7", "connect http://[hidden]@h failed",
+    ),
+    "url-followed-by-a-parenthesis": (
+        "see (http://u:Zq9pw-8@h:80), then", "Zq9pw-8", "see (http://[hidden]@h:80), then",
+    ),
+    "url-followed-by-a-colon": ("http://u:Zq9pw-9@h:80: refused", "Zq9pw-9", "http://[hidden]@h:80: refused"),
+    "url-followed-by-a-comma": ("http://u:Zq9pw-10@h, next one", "Zq9pw-10", "http://[hidden]@h, next one"),
+}
+
+
+@pytest.mark.parametrize("text, password, expected", list(HARD_SCRUB_CASES.values()), ids=list(HARD_SCRUB_CASES))
+def test_scrub_url_credentials_removes_the_password_in_the_hard_shapes(text, password, expected):
+    scrubbed = scrub_url_credentials(text)
+    assert password not in scrubbed
+    assert scrubbed == expected
+
+
 def test_scrub_url_credentials_also_replaces_the_known_values():
     assert scrub_url_credentials("login svc:p w rejected at http://svc:p w@host", known=["svc:p w"]) == (
         "login [hidden] rejected at http://[hidden]@host"
@@ -44,7 +79,86 @@ def test_scrub_url_credentials_also_replaces_the_known_values():
     assert scrub_url_credentials("token abc123 was refused", known=["abc123", ""]) == "token [hidden] was refused"
     assert scrub_url_credentials("nothing to hide", known={"url": "svc:pw"}.values()) == "nothing to hide"
     # a longer known value goes before a shorter one that it contains
-    assert scrub_url_credentials("p and pw and p", known=["p", "pw"]) == "[hidden] and [hidden] and [hidden]"
+    assert scrub_url_credentials("pass and password and pass", known=["pass", "password"]) == (
+        "[hidden] and [hidden] and [hidden]"
+    )
+
+
+def test_scrub_url_credentials_ignores_known_values_shorter_than_four_characters():
+    # a one-letter user name must not mangle the words around it
+    text = "connect failed: http://f@host:9000/x refused"
+    assert scrub_url_credentials(text, known=["f", "ab", "xyz", "f:ab"]) == (
+        "connect failed: http://[hidden]@host:9000/x refused"
+    )
+    # the password alone is 2 characters, so only the whole value goes
+    assert scrub_url_credentials("pw is svc:pw", known=["svc:pw"]) == "pw is [hidden]"
+
+
+def test_scrub_url_credentials_hides_the_password_of_a_known_user_and_password_alone_too():
+    assert scrub_url_credentials("login svc:Zq9 unique refused", known=["svc:Zq9 unique"]) == "login [hidden] refused"
+    assert scrub_url_credentials("the password Zq9 unique is wrong", known=["svc:Zq9 unique"]) == (
+        "the password [hidden] is wrong"
+    )
+    assert scrub_url_credentials("user svc is fine", known=["svc:Zq9 unique"]) == "user svc is fine"  # not the user
+
+
+# --- scrub_url_credentials is linear, and gives what the old pattern gave -------------------------------------------
+
+OLD_PATTERN = re.compile(r"://\S*@")  # what scrub_url_credentials used before it was made linear: the reference
+
+
+def old_scrub(text: str) -> str:
+    return OLD_PATTERN.sub("://[hidden]@", text)
+
+
+def test_scrub_url_credentials_gives_exactly_what_the_old_pattern_gave():
+    rng = random.Random(20261011)
+    pieces = ["://", ":", "/", "@", "a", "b", ".", " ", "\t", "\n", "\u00a0", "\u2003"]
+    for _ in range(6000):
+        text = "".join(rng.choices(pieces, k=rng.randint(0, 14)))
+        assert scrub_url_credentials(text) == old_scrub(text), repr(text)
+    for text in ("://@", "://", "@://", ":/@/", "x://@ ://a@", "a@b://c d@e://f@g@h", "://:/@@ @://"):
+        assert scrub_url_credentials(text) == old_scrub(text), repr(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["://" * 100_000, "a://b:c/d." * 15_000 + " end"],
+    ids=["many-url-starts-no-at-sign", "150-kilobytes-mixed"],
+)
+def test_scrub_url_credentials_takes_linear_time_on_hostile_text(text):
+    started = time.perf_counter()
+    scrub_url_credentials(text)
+    assert time.perf_counter() - started < 0.5
+
+
+# --- clip_error -------------------------------------------------------------------------------------------------------
+
+
+def straddling_error(total: int = 5000) -> str:
+    """Error text whose URL password starts at character 995, so a cut at 1000 would land inside it."""
+    prefix = "http://svc:"
+    head = "a" * (995 - len(prefix))
+    return (head + prefix + "Zq9-unique-pw@host:9000/x " + "b" * total)[:total]
+
+
+def test_clip_error_scrubs_first_and_then_cuts_to_the_limit():
+    text = straddling_error()
+    assert len(text) == 5000 and text.index("Zq9") == 995
+    clipped = clip_error(text)
+    assert len(clipped) <= 1000
+    assert "Zq9" not in clipped and "unique" not in clipped  # not half a password either
+    assert clipped.startswith("a" * 984 + "http://[hidden]")  # the URL was scrubbed before the cut moved
+    assert clipped.endswith("…")
+
+
+def test_clip_error_keeps_short_text_and_scrubs_it():
+    assert clip_error("plain failure") == "plain failure"
+    assert clip_error("a http://u:Zq9@h b") == "a http://[hidden]@h b"
+    exactly = "x" * 1000
+    assert clip_error(exactly) == exactly
+    assert len(clip_error("x" * 1001)) == 1000 and clip_error("x" * 1001).endswith("…")
+    assert clip_error("x" * 50, limit=10) == "x" * 9 + "…"
 
 
 # --- strip_credentials ------------------------------------------------------------------------------------------------
@@ -303,3 +417,95 @@ async def test_last_error_without_a_url_comes_back_as_it_is(client, db, last_err
     source_id = await seed_credentialed(db)
     await db.execute("UPDATE sources SET last_error = $2 WHERE id = $1", source_id, last_error)
     assert (await listed(client))["last_error"] == last_error
+
+
+# --- the marker that hides a user name is never stored as one ---------------------------------------------------------
+
+REFUSED = "the credentials stored in this address are hidden: retype them in the address, or remove them"
+MARKED_URLS = [
+    "http://[hidden]@simulator:9001/", "http://%5Bhidden%5D@simulator:9001/", "http://%5bHIDDEN%5d@simulator:9001/",
+    "http://[HIDDEN]@simulator:9001",
+]
+
+
+async def test_an_over_masked_endpoint_edited_to_a_new_host_is_refused_not_stored_with_a_marker_user_name(client, db):
+    await login_as(client, db)
+    source_id = await make_source(db, "plc", "opcua", {"endpoint": OVER_MASKED_STORED})
+    shown = (await listed(client, "plc"))["config"]["endpoint"]
+    assert shown == OVER_MASKED_SHOWN
+    edited = shown.replace("@host:", "@other:")  # the form only lets the admin change the host
+    response = await client.patch(f"/api/sources/{source_id}", json={"config": {"endpoint": edited}})
+    assert response.status_code == 422 and response.json()["detail"] == REFUSED
+    assert PASSWORD not in response.text and "other" not in response.text  # nothing is echoed
+    assert (await stored_config(db, source_id)) == {"endpoint": OVER_MASKED_STORED}
+    assert await update_rows(db) == []
+
+
+@pytest.mark.parametrize("url", MARKED_URLS)
+async def test_the_hidden_marker_is_refused_as_a_user_name_when_editing_and_when_adding(client, db, url):
+    await login_as(client, db)
+    source_id = await seed_credentialed(db)
+    patched = await client.patch(f"/api/sources/{source_id}", json={"config": {"url": url}})
+    assert patched.status_code == 422 and patched.json()["detail"] == REFUSED
+    assert (await stored_config(db, source_id)) == {"url": STORED_URL, "timeout_seconds": 5.0}
+    new = {"name": "new", "connector_type": "simulator", "config": {"url": url}}
+    created = await client.post("/api/sources", json=new)
+    assert created.status_code == 422 and created.json()["detail"] == REFUSED
+    assert await db.fetchval("SELECT count(*) FROM sources WHERE name = 'new'") == 0
+    assert await update_rows(db) == []
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'source.created'") == 0
+
+
+async def test_a_marker_user_name_stored_before_the_fix_survives_an_untouched_round_trip_and_can_be_cleared(client, db):
+    await login_as(client, db)
+    source_id = await seed_credentialed(db, name="old", url="http://%5Bhidden%5D@simulator:9001/")
+    shown = await listed(client, "old")
+    assert shown["config"]["url"] == "http://simulator:9001/" and shown["hidden_config_keys"] == ["url"]
+    kept = await client.patch(f"/api/sources/{source_id}", json={"config": shown["config"], "enabled": False})
+    assert kept.status_code == 200, kept.text
+    assert (await stored_config(db, source_id))["url"] == "http://%5Bhidden%5D@simulator:9001/"
+    cleared = await client.patch(
+        f"/api/sources/{source_id}", json={"config": shown["config"], "clear_config_credentials": ["url"]}
+    )
+    assert cleared.status_code == 200 and (await stored_config(db, source_id))["url"] == "http://simulator:9001/"
+
+
+# --- a request validation error does not echo the request -----------------------------------------------------------
+
+
+async def test_a_request_validation_error_does_not_echo_the_submitted_url_and_its_password(client, db):
+    await login_as(client, db)
+    body = {"connector_type": "simulator", "config": {"url": f"http://svc:{PASSWORD}@simulator:9000"}}  # no name
+    response = await client.post("/api/sources", json=body)
+    assert response.status_code == 422
+    assert PASSWORD not in response.text and "svc" not in response.text
+    (error,) = response.json()["detail"]
+    assert error["loc"] == ["body", "name"] and error["type"] == "missing" and error["msg"] and "input" not in error
+
+
+# --- the places that hide error text use the known credentials ------------------------------------------------------
+
+
+async def test_the_discovery_graph_hides_the_known_credentials_in_a_sources_last_error(client, db):
+    await login_as(client, db)
+    source_id = await seed_credentialed(db, name="spacey", url="http://svc:Zq9 unique@simulator:9000/")
+    await db.execute(
+        "UPDATE sources SET last_error = $2 WHERE id = $1", source_id,
+        "login svc:Zq9 unique refused; the password Zq9 unique is wrong",  # a space defeats the URL pattern
+    )
+    graph = (await client.get("/api/discovery/graph")).json()
+    (source,) = [s for s in graph["sources"] if s["name"] == "spacey"]
+    assert source["last_error"] == "login [hidden] refused; the password [hidden] is wrong"
+
+
+async def test_a_one_letter_user_name_does_not_mangle_the_words_of_the_error_in_the_list_or_the_graph(client, db):
+    await login_as(client, db)
+    source_id = await seed_credentialed(db, name="short", url="http://f@simulator:9000/")
+    await db.execute(
+        "UPDATE sources SET last_error = $2 WHERE id = $1", source_id,
+        "connect failed: http://f@simulator:9000/x refused",
+    )
+    expected = "connect failed: http://[hidden]@simulator:9000/x refused"
+    assert (await listed(client, "short"))["last_error"] == expected
+    graph = (await client.get("/api/discovery/graph")).json()
+    assert [s["last_error"] for s in graph["sources"] if s["name"] == "short"] == [expected]

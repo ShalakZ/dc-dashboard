@@ -205,3 +205,36 @@ async def test_mark_source_scrubs_whatever_it_is_given_and_keeps_plain_errors(db
     assert await stored_error(db, source) == "login http://[hidden]@host:9000 refused"
     assert await mark_source(db, source, False, "credentials rejected")
     assert await stored_error(db, source) == "credentials rejected"
+
+
+# Error text of 5000 characters whose URL password starts at character 995: a cut at 1000 before the scrub would leave
+# half of it behind.
+HUGE = "a" * 984 + f"http://svc:{PASSWORD}@host:9000/x " + "b" * 5000
+
+
+async def test_mark_source_scrubs_and_then_cuts_a_huge_error(db):
+    source = await make_source(db, "huge")
+    assert await mark_source(db, source, False, HUGE)
+    stored = await stored_error(db, source)
+    assert len(stored) <= 1000 and stored.startswith("a" * 984 + "http://[hidden]")
+    assert "Zq9" not in stored and "unique" not in stored
+
+
+async def test_a_failing_poll_stores_a_huge_error_cut_and_without_the_url_credentials(db):
+    source = await make_source(db, "poll-huge")
+
+    class Failing(_Connector):
+        async def read(self, addresses):
+            raise RuntimeError(HUGE)
+
+    group = PollGroup(source_id=source, connector_type="fake", config={}, secret=None, interval=5, points=((10, "A"),))
+    task = asyncio.create_task(run_group(group, db, _Writer(), lambda *_a: Failing(), sleep=_quick_sleep))
+
+    async def check():
+        stored = await stored_error(db, source)
+        return stored is not None and stored.startswith("a" * 984 + "http://[hidden]")
+
+    await wait_for(check, True)
+    await stop(task)
+    stored = await stored_error(db, source)
+    assert len(stored) <= 1000 and "Zq9" not in stored and "unique" not in stored

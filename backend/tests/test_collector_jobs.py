@@ -454,3 +454,44 @@ async def test_a_connection_check_message_with_a_url_is_stored_without_its_crede
     assert row["status"] == "done" and row["result"]["ok"] is False and row["result"]["message"] == SCRUBBED
     assert row["result"]["status"] == "unreachable"  # the rest of the result is untouched
     assert await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source) == SCRUBBED
+
+
+# Error text of 5000 characters whose URL password starts at character 995: a cut at 1000 before the scrub would leave
+# half of it behind.
+HUGE = "a" * 984 + "http://svc:Zq9-unique-pw@host:9000/x " + "b" * 5000
+
+
+def assert_cut_and_scrubbed(text: str) -> None:
+    assert len(text) <= 1000 and text.startswith("a" * 984 + "http://[hidden]")
+    assert "Zq9" not in text and "unique" not in text
+
+
+@pytest.mark.parametrize("kind", ["test_source", "browse_source"])
+async def test_a_failed_job_stores_a_huge_error_scrubbed_and_cut(db, kind):
+    source = await make_source(db)
+    job_id = await add_job(db, kind, source)
+
+    def raising(*_args):
+        raise RuntimeError(HUGE)
+
+    await run_pending_jobs(db, raising)
+    row = await job(db, job_id)
+    assert row["status"] == "failed"
+    assert_cut_and_scrubbed(row["result"]["error"])
+
+
+async def test_a_huge_connection_check_message_is_scrubbed_and_cut_in_the_result_and_in_the_source(db):
+    class Unreachable:
+        async def test(self):
+            return ConnectionCheck(ok=False, status="unreachable", message=HUGE)
+
+        async def close(self):
+            pass
+
+    source = await make_source(db)
+    job_id = await add_job(db, "test_source", source)
+    await run_pending_jobs(db, lambda *_args: Unreachable())
+    row = await job(db, job_id)
+    assert row["status"] == "done" and row["result"]["status"] == "unreachable"
+    assert_cut_and_scrubbed(row["result"]["message"])
+    assert_cut_and_scrubbed(await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source))

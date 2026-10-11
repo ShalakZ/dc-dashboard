@@ -1,5 +1,6 @@
 import copy
 import json
+import re
 from datetime import datetime
 from typing import Any, Self
 
@@ -86,6 +87,25 @@ def validated_config(connector_type: str, config: dict[str, Any]) -> dict[str, A
     except ValidationError as exc:
         # No input: an edit puts the STORED config back into validation, so the input can be a password.
         raise HTTPException(422, json.loads(exc.json(include_url=False, include_input=False))) from exc
+
+
+# What a form sends back for a user name it was not shown: `safe_config` writes "[hidden]@" where it removed them.
+_HIDDEN_MARKER = re.compile(r"\[hidden\]@|%5Bhidden%5D@", re.IGNORECASE)
+
+
+def reject_hidden_marker(config: dict[str, Any], stored: dict[str, Any]) -> None:
+    """422 for a submitted top-level string that carries the `[hidden]@` marker unless it is the stored value.
+
+    A masked URL comes back from the form with its host edited: without this, validation takes the marker for a user
+    name and stores it (`http://%5Bhidden%5D@host/`), and the real credentials are gone. `reconcile_config` has
+    already put back every masked value that came back unchanged, so what still carries the marker was edited. The
+    value is not echoed.
+    """
+    for key, value in config.items():
+        if isinstance(value, str) and _HIDDEN_MARKER.search(value) and value != stored.get(key):
+            raise HTTPException(
+                422, "the credentials stored in this address are hidden: retype them in the address, or remove them"
+            )
 
 
 async def get_source(db: AsyncSession, source_id: int) -> Source:
@@ -176,6 +196,7 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
 
 @router.post("/sources", response_model=SourceOut, status_code=201, dependencies=[Admin])
 async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db), admin: User = Admin) -> SourceOut:
+    reject_hidden_marker(body.config, {})
     source = Source(
         name=body.name,
         connector_type=body.connector_type,
@@ -206,6 +227,7 @@ async def update_source(
         # The form can only send back the masked config: put back what it did not see (before validation, which
         # normalises URLs and would make the comparison fail).
         submitted = reconcile_config(source.config, body.config, body.clear_config_credentials)
+        reject_hidden_marker(submitted, source.config)
         source.config = validated_config(source.connector_type, submitted)
     if "secret" in body.model_fields_set:
         source.secret = encrypt(body.secret) if body.secret else None

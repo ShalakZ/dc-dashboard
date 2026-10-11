@@ -406,3 +406,39 @@ async def test_a_browse_failure_is_stored_in_the_finding_and_the_source_without_
     finding = await db.fetchrow("SELECT outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
     assert finding["outcome"] == "claimed" and finding["detail"] == f"browse failed: {SCRUBBED}"
     assert await db.fetchval("SELECT last_error FROM sources") == SCRUBBED
+
+
+# Error text of 5000 characters whose URL password starts at character 995: a cut at 1000 before the scrub would leave
+# half of it behind.
+HUGE = "a" * 984 + "http://svc:Zq9-unique-pw@host:9000/x " + "b" * 5000
+
+
+def assert_cut_and_scrubbed(text: str) -> None:
+    assert len(text) <= 1000 and text.startswith("a" * 984 + "http://[hidden]")
+    assert "Zq9" not in text and "unique" not in text
+
+
+async def test_a_failed_scan_stores_a_huge_error_scrubbed_and_cut_in_the_scan_and_the_audit_row(db, monkeypatch):
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError(HUGE)
+
+    monkeypatch.setattr(scan_module, "_sweep_stage", boom)
+    scan = await make_scan(db, ["127.0.0.1"], [free_port()])
+    with pytest.raises(RuntimeError):
+        await run_scan(db, scan)
+    assert_cut_and_scrubbed(await db.fetchval("SELECT error FROM scans WHERE id = $1", scan))
+    detail = await db.fetchval("SELECT detail FROM audit_log WHERE action = 'scan.finished'")
+    assert_cut_and_scrubbed(detail["error"])
+
+
+async def test_a_huge_browse_failure_is_scrubbed_and_cut_in_the_finding_and_the_source(db, simulator_network):
+    def raising(*_args):
+        raise RuntimeError(HUGE)
+
+    scan = await make_scan(db, ["127.0.0.1"], [simulator_network["modbus"]])
+    await run_scan(db, scan, raising)
+    finding = await db.fetchrow("SELECT outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
+    assert finding["outcome"] == "claimed"
+    assert len(finding["detail"]) <= 1000 and finding["detail"].startswith("browse failed: " + "a" * 900)
+    assert "Zq9" not in finding["detail"] and "unique" not in finding["detail"]
+    assert_cut_and_scrubbed(await db.fetchval("SELECT last_error FROM sources"))

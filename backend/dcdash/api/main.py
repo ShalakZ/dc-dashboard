@@ -61,9 +61,10 @@ def _defuse(value: Any) -> Any:
 
 
 async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
-    """FastAPI's own 422 handler echoes each error's `input`; an input of NaN or Infinity then cannot be encoded and the
-    reply would be a 500. Same body otherwise."""
-    return JSONResponse(status_code=422, content={"detail": _defuse(jsonable_encoder(exc.errors()))})
+    """FastAPI's own 422 handler echoes each error's `input`: a missing `name` sends back the whole body, including the
+    password in a source's URL, and an input of NaN or Infinity cannot be encoded (a 500). Same body without `input`."""
+    errors = [{key: value for key, value in error.items() if key != "input"} for error in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": _defuse(jsonable_encoder(errors))})
 
 
 async def _database_unavailable(_request: Request, _exc: Exception) -> JSONResponse:

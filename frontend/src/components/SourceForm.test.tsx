@@ -207,6 +207,31 @@ describe("SourceForm, editing a source", () => {
       expect((patchOf(calls)!.body as { config: unknown }).config).toEqual({ url: "http://sim:9000", timeout_seconds: 2.5 });
     });
 
+    it("sends every schema key with the masked address byte-identical when the field is left alone", async () => {
+      // The API keeps the stored credentials only when the submitted value EQUALS the masked one it showed: a trimmed
+      // value, a dropped trailing slash or a left-out key would silently replace them.
+      const calls = mockFetch({ ...auth, "PATCH /api/sources/2": { body: { id: 2 } } });
+      const onDone = vi.fn();
+      const slashed: Source = { ...sim, config: { url: "http://simulator:9000/", timeout_seconds: 5 }, hidden_config_keys: ["url"] };
+      renderWithProviders(<SourceForm source={slashed} onDone={onDone} />);
+      await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
+      const { config } = patchOf(calls)!.body as { config: Record<string, unknown> };
+      expect(Object.keys(config).sort()).toEqual(["timeout_seconds", "url"]);
+      expect(config.url).toBe("http://simulator:9000/");
+      expect(config).toEqual({ url: "http://simulator:9000/", timeout_seconds: 5 });
+    });
+
+    it("sends a false flag and every other key of the stored config too, on a connector with three fields", async () => {
+      const calls = mockFetch({ ...auth, "PATCH /api/sources/2": { body: { id: 2 } } });
+      const onDone = vi.fn();
+      const plc: Source = { ...sim, connector_type: "other", config: { host: "opc.tcp://plc:4840/x", port: 502, tls: false }, hidden_config_keys: ["host"] };
+      renderWithProviders(<SourceForm source={plc} onDone={onDone} />);
+      await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
+      expect((patchOf(calls)!.body as { config: unknown }).config).toEqual({ host: "opc.tcp://plc:4840/x", port: 502, tls: false });
+    });
+
     it("shows neither the note nor the checkbox for a source with no hidden keys, or an empty list", async () => {
       mockFetch(auth);
       const { unmount } = renderWithProviders(<SourceForm source={sim} onDone={() => {}} />);
