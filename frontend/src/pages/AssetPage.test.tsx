@@ -89,17 +89,19 @@ describe("AssetPage", () => {
     });
   });
 
-  it("opens with a page header: the crumb is plain text (the sidebar owns the Assets link), then the one h1", async () => {
+  it("opens with a page header: the trail Assets / the asset (Assets links to the summary), then the one h1", async () => {
     mockFetch(routes(null));
     renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
     const h1 = await screen.findByRole("heading", { name: "Panel 1", level: 1 });
     const head = h1.closest("header")!;
     expect(head).toHaveClass("page-head");
     const crumb = head.querySelector(".crumbs")!;
-    expect(crumb.tagName).toBe("P");
-    expect(crumb).toHaveTextContent("Assets");
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
-    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(crumb.tagName).toBe("NAV");
+    expect(crumb).toHaveAccessibleName("Breadcrumb");
+    expect(within(crumb as HTMLElement).getByRole("link", { name: "Assets" })).toHaveAttribute("href", "/assets");
+    expect(within(crumb as HTMLElement).getByText("Panel 1")).toHaveAttribute("aria-current", "page");
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(screen.getAllByRole("navigation")).toHaveLength(1);
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 

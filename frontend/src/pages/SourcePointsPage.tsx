@@ -54,10 +54,9 @@ export function SourcePointsPage() {
   if (error && !data) return <p className="error" role="alert">{error.message}</p>;
   return (
     <>
-      {/* The crumb is plain text: a link named "Sources" would sit next to the sidebar's (the sidebar is one click away). */}
       <PageHeader
         title="Points"
-        crumbs={<><span>Sources</span> / {sourceName}</>}
+        crumbs={[{ label: "Sources", to: "/sources" }, { label: sourceName }]}
         actions={<button className="primary" onClick={browse}>Browse points</button>}
       />
       {browseJob !== null && (

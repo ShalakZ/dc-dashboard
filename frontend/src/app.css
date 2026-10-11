@@ -228,12 +228,20 @@
   .detail-meta dt { color: var(--text-2); }
   .detail-meta dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
 
+  /* Breadcrumb trail (Crumbs): links in the accent, the current page bold, a "/" between; a long label wraps instead of widening the page */
+  .crumbs { font-size: var(--fs-sm); color: var(--text-2); }
+  .crumbs ol { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
+  .crumbs li { display: flex; align-items: center; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+  .crumbs a { color: var(--accent); }
+  .crumbs [aria-current="page"] { color: var(--text); font-weight: 600; }
+  .crumbs .sep { flex: none; color: var(--text-2); }
+  main > .crumbs { margin: 18px 0 4px; } /* the trail of a page without a page header (Dashboards) */
+
   /* Page header: crumbs, the one h1, a sub line and the actions on the right */
   .page-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; align-items: end; margin: 0 0 22px; padding: 22px 0 18px; border-bottom: 1px solid var(--border); }
   .page-head > * { grid-column: 1; margin: 0; }
   .page-head h1 { font-size: var(--fs-title); font-weight: 600; line-height: 1.25; letter-spacing: -0.2px; }
-  .page-head .crumbs { margin-bottom: 4px; font-size: var(--fs-sm); color: var(--text-2); }
-  .page-head .crumbs a { color: var(--text-2); }
+  .page-head .crumbs { margin-bottom: 4px; }
   .page-head .sub { margin-top: 2px; font-size: var(--fs-sm); color: var(--text-2); }
   .page-head > .actions { grid-column: 2; grid-row: 1 / span 3; align-self: end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   /* A titled block under the page header (Users, Settings, Storage, Audit entry, Scans): one rule, so no page file can restyle another's */

@@ -31,10 +31,9 @@ export function AssetPage() {
   const note = rollup && rollupNote(rollup, sources);
   return (
     <div className="asset-page">
-      {/* The crumb is plain text: the sidebar's Assets link is the one link of that name (e2e clicks it unscoped). */}
       <PageHeader
         title={data.asset.name}
-        crumbs="Assets"
+        crumbs={[{ label: "Assets", to: "/assets" }, { label: data.asset.name }]}
         actions={wanted.size > 0 ? <span className={connected ? "chip chip-ok" : "chip chip-warn"}>{connected ? "live" : "reconnecting…"}</span> : undefined}
       />
       <div className="tiles">

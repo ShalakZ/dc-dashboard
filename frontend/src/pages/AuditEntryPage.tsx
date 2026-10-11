@@ -15,7 +15,7 @@ export function AuditEntryPage() {
   const { data, error, isLoading } = useAuditEntry(id);
   const site = useSite();
   const timezone = site.data?.timezone ?? "UTC"; // falls back to UTC if the site cannot be read
-  // The way back, once: in the page header's crumbs when the entry shows, on its own line above the message otherwise.
+  // The way back, once: in the page header's actions when the entry shows, on its own line above the message otherwise.
   const back = (
     <Link to="/audit">
       <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
@@ -30,7 +30,7 @@ export function AuditEntryPage() {
   if (isLoading || site.isPending || !data) return <p className="muted">loading…</p>;
   return (
     <div className="admin-page audit-entry-page">
-      <PageHeader title={`Audit entry #${data.id}`} crumbs={back} />
+      <PageHeader title={`Audit entry #${data.id}`} crumbs={[{ label: "Audit log", to: "/audit" }, { label: `Entry #${data.id}` }]} actions={back} />
       <dl className="kv">
         <div><dt>Time ({timezone})</dt><dd>{formatSiteDateTime(data.ts, timezone)}</dd></div>
         <div><dt>User</dt><dd>{data.username ?? "—"}</dd></div>

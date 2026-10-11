@@ -1,8 +1,9 @@
 import { lazy, Suspense, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { useDashboard, useSite } from "../api/queries";
 import type { Dashboard } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
+import { Crumbs } from "../components/Crumbs";
 import { DashboardViewer } from "../components/dashboard/DashboardViewer";
 import { LiveValuesProvider } from "../components/dashboard/LiveValuesContext";
 import { newest } from "../lib/dashboardEdit";
@@ -38,7 +39,7 @@ function DashboardScreen({ id }: { id: number }) {
   if (!dashboard || !site.data) return <p className="error" role="alert">{failure?.message ?? "not found"}</p>;
   const timezone = site.data.timezone;
   const notice = failure ? <p className="error" role="alert">Could not refresh this page: {failure.message}</p> : null;
-  const crumbs = <p><Link to="/dashboards">Dashboards</Link> / {dashboard.name}</p>;
+  const crumbs = <Crumbs trail={[{ label: "Dashboards", to: "/dashboards" }, { label: dashboard.name }]} />;
 
   const leaveEdit = () => {
     setWantsEdit(false);

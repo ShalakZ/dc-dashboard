@@ -80,6 +80,15 @@ describe("DashboardPage (view)", () => {
     expect(screen.getByRole("heading", { name: "Hall A" })).toBeInTheDocument();
   });
 
+  it("shows the trail Dashboards / Hall A above the page: the list is a link, the dashboard is the current page", async () => {
+    open();
+    await region("Power trend");
+    const nav = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(nav).getByRole("link", { name: "Dashboards" })).toHaveAttribute("href", "/dashboards");
+    expect(within(nav).getByText("Hall A")).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getAllByRole("link")).toHaveLength(1);
+  });
+
   it("draws a dashboard saved with a gap closed up, and sends no save on a view-only visit", async () => {
     const gap = [
       widget(1, "stat", { title: "Upper", config: config({ aggregation: "last" }), x: 0, y: 0, w: 3, h: 2 }),

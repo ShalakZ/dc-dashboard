@@ -26,7 +26,7 @@ describe("SourcePointsPage", () => {
     const calls = mockFetch(routes);
     renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
     await userEvent.click(await screen.findByRole("button", { name: "Browse points" }));
-    expect(await screen.findByText("/ sim")).toBeInTheDocument();
+    expect(await screen.findByText("sim", { selector: "[aria-current]" })).toBeInTheDocument();
     expect(await screen.findByText("found 2 points")).toBeInTheDocument();
     const row = (await screen.findByText("panel1/power")).closest("tr")!;
     await userEvent.click(within(row).getByRole("button", { name: "Map" }));
@@ -395,13 +395,15 @@ describe("SourcePointsPage mapping dialog", () => {
 describe("SourcePointsPage look (W6)", () => {
   const page = () => renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
 
-  it("writes the crumb as plain text: no link named Sources next to the sidebar's, one h1 Points, Browse points the primary action", async () => {
+  it("shows the trail Sources / sim: Sources links to the list, the source is the current page, one h1 Points, Browse points the primary action", async () => {
     mockFetch(routes);
     page();
-    const crumb = await screen.findByText("/ sim");
-    expect(crumb).toHaveClass("crumbs");
-    expect(within(crumb).queryByRole("link")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Sources" })).not.toBeInTheDocument();
+    const nav = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    expect(nav).toHaveClass("crumbs");
+    expect(within(nav).getByRole("link", { name: "Sources" })).toHaveAttribute("href", "/sources");
+    const current = within(nav).getByText("sim");
+    expect(current).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getAllByRole("link")).toHaveLength(1);
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Browse points" })).toHaveClass("primary");
   });
