@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { NO_FILTERS } from "../lib/auditFilters";
+import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
-  useAudit, useBillingCosts, useCreateTariff, useDashboard, useDashboards, useGraph, usePatchUser, usePutGeneralSettings,
+  auditPosition, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useDashboard, useDashboards, useGraph, usePatchUser, usePutGeneralSettings,
   useSaveDashboard, useScan, useSeries, useSite, useTariffs, useUsers, useWidgetData,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
@@ -31,10 +33,20 @@ describe("user queries", () => {
 describe("discovery queries", () => {
   it("passes the page window to the audit endpoint", async () => {
     let url = "";
-    mockFetch({ "GET /api/audit": (req) => { url = req.url; return { body: { total: 0, items: [] } }; } });
-    const { result } = renderHook(() => useAudit(50, 100), { wrapper });
+    mockFetch({ "GET /api/audit": (req) => { url = req.url; return { body: { total: 0, offset: 100, limit: 50, items: [] } }; } });
+    const { result } = renderHook(() => useAudit(NO_FILTERS, 50, 100), { wrapper });
     await waitFor(() => expect(result.current.data?.total).toBe(0));
     expect(new URL(url, "http://x").searchParams.toString()).toBe("limit=50&offset=100");
+  });
+
+  it("sends the filters before the page window", async () => {
+    let url = "";
+    mockFetch({ "GET /api/audit": (req) => { url = req.url; return { body: { total: 0, offset: 100, limit: 50, items: [] } }; } });
+    const filters = { user: "2", actions: ["*.deleted"], from: "2026-10-01", to: "2026-10-05", q: "say hi" };
+    const { result } = renderHook(() => useAudit(filters, 50, 100), { wrapper });
+    await waitFor(() => expect(result.current.data?.total).toBe(0));
+    expect(new URL(url, "http://x").searchParams.toString())
+      .toBe("user=2&action=*.deleted&from=2026-10-01&to=2026-10-05&q=say+hi&limit=50&offset=100");
   });
 
   it("reads the graph from the discovery endpoint", async () => {
@@ -223,5 +235,63 @@ describe("useSeries refetching", () => {
     rerender({ paused: false });
     await advance(11_000);
     expect(fetched(calls)).toBe(2);
+  });
+});
+
+describe("audit queries", () => {
+  const entry = (id: number) => ({ id, user_id: 1, actor_id: 1, username: "admin", action: "scan.finished", detail: {}, ts: "2026-10-07T10:00:00Z" });
+
+  it("keeps the previous page on screen, marked as placeholder, while the next one loads", async () => {
+    mockFetch({
+      "GET /api/audit": ({ url }) => ({
+        body: url.includes("offset=50")
+          ? { total: 51, offset: 50, limit: 50, items: [entry(1)] }
+          : { total: 51, offset: 0, limit: 50, items: [entry(51)] },
+      }),
+    });
+    const { result, rerender } = renderHook(({ offset }) => useAudit(NO_FILTERS, 50, offset), {
+      wrapper: stableWrapper(), initialProps: { offset: 0 },
+    });
+    await waitFor(() => expect(result.current.data?.items[0].id).toBe(51));
+    expect(result.current.isPlaceholderData).toBe(false);
+    const held = holdFetch((_method, path) => path === "/api/audit");
+    rerender({ offset: 50 });
+    await waitFor(() => expect(result.current.isPlaceholderData).toBe(true));
+    expect(result.current.data?.items[0].id).toBe(51);
+    held.release();
+    await waitFor(() => expect(result.current.data?.items[0].id).toBe(1));
+    expect(result.current.isPlaceholderData).toBe(false);
+  });
+
+  it("reads the filter options and caches them for a minute", async () => {
+    const options = { actions: ["scan.finished"], users: [{ id: 1, name: "admin" }], unattributed: true };
+    const calls = mockFetch({ "GET /api/audit/options": { body: options } });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const shared = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    const first = renderHook(() => useAuditOptions(), { wrapper: shared });
+    await waitFor(() => expect(first.result.current.data).toEqual(options));
+    const second = renderHook(() => useAuditOptions(), { wrapper: shared });
+    expect(second.result.current.data).toEqual(options);
+    expect(calls.filter((c) => c.path === "/api/audit/options")).toHaveLength(1);
+  });
+
+  it("fetches one entry only for a usable id", async () => {
+    const calls = mockFetch({ "GET /api/audit/7": { body: entry(7) } });
+    for (const id of [null, 0, -1, 1.5, Number.NaN, 2_147_483_648]) {
+      const { result } = renderHook(() => useAuditEntry(id), { wrapper });
+      expect(result.current.fetchStatus).toBe("idle");
+    }
+    expect(calls).toHaveLength(0);
+    const { result } = renderHook(() => useAuditEntry(7), { wrapper });
+    await waitFor(() => expect(result.current.data?.id).toBe(7));
+    expect(calls.map((c) => c.path)).toEqual(["/api/audit/7"]);
+  });
+
+  it("asks where a day starts in the filtered log", async () => {
+    let url = "";
+    mockFetch({ "GET /api/audit/position": (req) => { url = req.url; return { body: { offset: 73, total: 120, on_day: true } }; } });
+    const answer = await auditPosition({ ...NO_FILTERS, actions: ["*.deleted"], q: "a b" }, "2026-10-05");
+    expect(answer).toEqual({ offset: 73, total: 120, on_day: true });
+    expect(new URL(url, "http://x").searchParams.toString()).toBe("action=*.deleted&q=a+b&date=2026-10-05");
   });
 });

@@ -162,8 +162,6 @@ export interface AuditEntry {
   detail: Record<string, unknown>; ts: string;
 }
 export interface AuditList { total: number; offset: number; limit: number; items: AuditEntry[] }
-/** Temporary: the old name, kept until the audit queries move to AuditList (W3c Task 5 deletes it). */
-export type AuditPage = AuditList;
 export interface AuditOptions { actions: string[]; users: { id: number; name: string }[]; unattributed: boolean }
 export interface AuditPosition { offset: number; total: number; on_day: boolean }
 

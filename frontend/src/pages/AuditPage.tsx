@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useAudit, useSite } from "../api/queries";
+import { NO_FILTERS } from "../lib/auditFilters";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 const PAGE_SIZE = 50;
 
 export function AuditPage() {
   const [offset, setOffset] = useState(0);
-  const { data, error, isLoading } = useAudit(PAGE_SIZE, offset);
+  const { data, error, isLoading } = useAudit(NO_FILTERS, PAGE_SIZE, offset);
   const site = useSite();
   const timezone = site.data?.timezone ?? "UTC"; // falls back to UTC if the site cannot be read
   const ready = !site.isPending;
