@@ -204,6 +204,15 @@ const RULES: Record<string, Rule> = {
   "dashboard.updated": changed("dashboard", "dashboard_id", ownDashboard),
   "dashboard.deleted": removed("dashboard", "dashboard_id"),
 
+  // The report text is never stored: this row says only how it was asked for. No link yet: the Diagnostics page is a later task.
+  "diagnostics.report": {
+    summary: ({ d }) => {
+      const source = idOf(d.source_id);
+      const detail = d.detail === "full" ? "full" : "summary";
+      return `Generated a diagnostics report (${detail}, ${d.mask === true ? "masked" : "not masked"}${source !== null ? `, source #${source}` : ""})`;
+    },
+  },
+
   "discovery.accepted": {
     summary: ({ d }) => {
       const asset = idOf(d.asset_id);
@@ -285,6 +294,10 @@ const RULES: Record<string, Rule> = {
   "setup.completed": { summary: () => "Completed the first-run setup" },
 
   "source.browsed": { summary: (c) => `Started a browse of ${thing("source", c.d, "source_id")}`, link: sourcesPage },
+  "source.checked": {
+    summary: (c) => `Started a connection check of ${thing("source", c.d, "source_id")}`,
+    link: sourcesPage,
+  },
   "source.created": made("source", "source_id", sourcesPage),
   "source.deleted": removed("source", "source_id"),
   "source.test_all": {

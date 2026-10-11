@@ -9,11 +9,11 @@ const entry = (action: string, detail: unknown, extra: Partial<AuditEntry> = {})
 // Every action the backend writes (the Python parity test keeps this list and the table in step).
 const ALL_ACTIONS = [
   "asset.created", "asset.updated", "asset.deleted", "billing.currency_changed",
-  "dashboard.created", "dashboard.updated", "dashboard.deleted", "discovery.accepted",
+  "dashboard.created", "dashboard.updated", "dashboard.deleted", "diagnostics.report", "discovery.accepted",
   "login.failed", "login.locked", "login.succeeded", "login.unblocked", "mapping.created", "mapping.updated", "mapping.deleted",
   "password.change_failed", "password.changed", "scan.finished", "scan.started",
   "scope.created", "scope.updated", "scope.deleted", "settings.sign_in_changed", "settings.timezone_changed", "setup.completed",
-  "source.browsed", "source.created", "source.deleted", "source.test_all", "source.tested", "source.updated",
+  "source.browsed", "source.checked", "source.created", "source.deleted", "source.test_all", "source.tested", "source.updated",
   "storage.changed", "storage.default_set", "tariff.created", "tariff.updated", "tariff.deleted",
   "user.created", "user.deleted", "user.updated",
 ];
@@ -315,6 +315,18 @@ describe("describeAudit: creations, deletions and events", () => {
     expect(locked({ via: "login" })).toBe("Sign-in blocked after repeated failures");
   });
 
+  it("describes a diagnostics report by how it was asked for, never by its content", () => {
+    const report = (detail: unknown) => describeAudit(entry("diagnostics.report", detail));
+    expect(report({ detail: "summary", mask: false, source_id: null, parts: 1, chars: 9000 }).summary).toBe(
+      "Generated a diagnostics report (summary, not masked)",
+    );
+    expect(report({ detail: "full", mask: true, source_id: 4, parts: 5, chars: 55000 }).summary).toBe(
+      "Generated a diagnostics report (full, masked, source #4)",
+    );
+    expect(report({}).summary).toBe("Generated a diagnostics report (summary, not masked)");
+    expect(report({ detail: "summary", mask: false, source_id: 4, parts: 1, chars: 5 }).link).toBeNull();
+  });
+
   it("leaves the failed password change as it was", () => {
     expect(describeAudit(entry("password.change_failed", { via: "password_change", client: "10.0.0.5" }, { actor_id: 7, username: "bob" })).summary).toBe(
       "Failed password change (wrong current password)",
@@ -328,6 +340,12 @@ describe("describeAudit: creations, deletions and events", () => {
     expect(describeAudit(entry("source.test_all", { sources: 3, job_ids: [1, 2, 3] })).summary).toBe(
       "Started a connection test of 3 sources",
     );
+    expect(describeAudit(entry("source.checked", { source_id: 2, name: "PM-1", job_id: 9 })).summary).toBe(
+      "Started a connection check of source PM-1",
+    );
+    expect(describeAudit(entry("source.checked", { source_id: 2, name: "PM-1", job_id: 9 })).link).toEqual({
+      to: "/sources", label: "Open Sources",
+    });
     expect(describeAudit(entry("source.browsed", { source_id: 2, name: "PM-1", job_id: 9 })).link).toEqual({
       to: "/sources", label: "Open Sources",
     });
@@ -440,7 +458,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(39);
+    expect(ALL_ACTIONS).toHaveLength(41);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }
