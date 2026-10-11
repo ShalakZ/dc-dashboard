@@ -1,7 +1,8 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { readStored, writeStored } from "../lib/sidebarState";
-import type { TreeNode } from "../lib/tree";
+import { ancestorIds, type TreeNode } from "../lib/tree";
+import { foldableIds, readFolded, saveFolded } from "../lib/treeFold";
 
 const KEY = "dcdash.assetTree";
 type ColumnState = "expanded" | "minimized";
@@ -13,6 +14,9 @@ function Svg({ children }: { children: ReactNode }) {
 const Plus = () => <Svg><path d="M12 5v14M5 12h14" /></Svg>;
 const Caret = () => <Svg><path d="m7 9 5 5 5-5" /></Svg>;
 const ChevronLeft = () => <Svg><path d="m15 6-6 6 6 6" /></Svg>;
+// Two chevrons that point toward each other (fold everything) and away from each other (unfold everything).
+const ChevronsIn = () => <Svg><path d="m7 5 5 5 5-5" /><path d="m7 19 5-5 5 5" /></Svg>;
+const ChevronsOut = () => <Svg><path d="m7 10 5-5 5 5" /><path d="m7 14 5 5 5-5" /></Svg>;
 const Search = () => <Svg><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4-4" /></Svg>;
 
 /** The ids to show while filtering: what matches by name or kind, and the ancestors of a match (a match's own children only if they match too). */
@@ -95,8 +99,9 @@ function Nodes({ nodes, view }: { nodes: TreeNode[]; view: View }) {
 }
 
 /**
- * The asset tree as its own column (option B): a title, the top-level + and a toggle, then a filter and the tree. The column can be
- * minimized to a strip with just the toggle (remembered in localStorage); the branches fold with a twisty each.
+ * The asset tree as its own column (option B): a title, the top-level +, Collapse all / Expand all and a toggle, then a filter and the
+ * tree. The column can be minimized to a strip with just the toggle (remembered in localStorage); the branches fold with a twisty each,
+ * and which are folded is remembered too. Selecting an asset unfolds the way to it.
  */
 export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, disabled }: {
   nodes: TreeNode[]; selectedId: number | null; onSelect: (id: number) => void;
@@ -109,10 +114,34 @@ export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, d
 }) {
   const [state, setState] = useState<ColumnState>(() => (readStored(KEY) === "minimized" ? "minimized" : "expanded"));
   const [filter, setFilter] = useState("");
-  const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(() => new Set());
+  const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(readFolded);
   const minimized = state === "minimized";
   const needle = filter.trim().toLowerCase();
   const visible = useMemo(() => (needle ? matchingIds(nodes, needle) : null), [nodes, needle]);
+  const foldable = useMemo(() => new Set(foldableIds(nodes)), [nodes]);
+  // The way to the selection as text, so that a new `nodes` array with the same path is not a change.
+  const pathKey = useMemo(() => (selectedId === null ? "" : ancestorIds(nodes, selectedId).join(",")), [nodes, selectedId]);
+
+  // Forget folds of nodes that are gone or have lost their children (such a node starts open when it gains one). Not while the list is loading.
+  useEffect(() => {
+    if (nodes.length === 0) return;
+    setCollapsed((prev) => {
+      const kept = [...prev].filter((id) => foldable.has(id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+  }, [nodes, foldable]);
+  useEffect(() => { saveFolded(collapsed); }, [collapsed]);
+  // Keyed on the selection and its path, not on `nodes` or `collapsed`: a create, rename or delete anywhere gives `nodes` a new identity,
+  // which must not re-open what Collapse all just folded. A new selection or a reparent still unfolds the way to it.
+  useEffect(() => {
+    const path = pathKey ? pathKey.split(",").map(Number) : [];
+    setCollapsed((prev) => {
+      if (!path.some((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      path.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, [selectedId, pathKey]);
 
   const toggleColumn = () => {
     const next: ColumnState = minimized ? "expanded" : "minimized";
@@ -124,6 +153,8 @@ export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, d
     if (!next.delete(id)) next.add(id);
     return next;
   });
+  const collapseAll = () => setCollapsed(new Set(foldable));
+  const expandAll = () => setCollapsed(new Set());
   const addChild = onAddChild && ((id: number) => {
     setCollapsed((prev) => {
       if (!prev.has(id)) return prev;
@@ -134,6 +165,7 @@ export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, d
     onAddChild(id); // the new child must not appear inside a folded branch
   });
 
+  const noFold = visible !== null || foldable.size === 0; // a filter has its own view of the tree
   const toggleName = minimized ? "Expand asset tree" : "Minimize asset tree";
   const view: View = { selectedId, onSelect, onAddChild: addChild, disabled, collapsed, visible, toggle: toggleBranch };
   return (
@@ -144,6 +176,16 @@ export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, d
           <button type="button" className="icon-btn" aria-label="Add a top-level asset" title="Add a top-level asset" disabled={disabled} onClick={onAddTop}>
             <Plus />
           </button>
+        )}
+        {!minimized && (
+          <>
+            <button type="button" className="icon-btn" aria-label="Collapse all" title="Collapse all" disabled={noFold} onClick={collapseAll}>
+              <ChevronsIn />
+            </button>
+            <button type="button" className="icon-btn" aria-label="Expand all" title="Expand all" disabled={noFold} onClick={expandAll}>
+              <ChevronsOut />
+            </button>
+          </>
         )}
         <button type="button" className="icon-btn tree-toggle" aria-controls="asset-tree-body" aria-expanded={!minimized} aria-label={toggleName} title={toggleName} onClick={toggleColumn}>
           <ChevronLeft />

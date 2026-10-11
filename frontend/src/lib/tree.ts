@@ -41,3 +41,16 @@ export function descendantIds(nodes: TreeNode[], id: number): Set<number> {
   if (start) collect(start);
   return out;
 }
+
+/** The parents of `id` from the root down to its direct parent; empty for a root or an id that is not in the tree. */
+export function ancestorIds(nodes: readonly TreeNode[], id: number): number[] {
+  const walk = (list: readonly TreeNode[], path: number[]): number[] | null => {
+    for (const node of list) {
+      if (node.id === id) return path;
+      const hit = walk(node.children, [...path, node.id]);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return walk(nodes, []) ?? [];
+}
