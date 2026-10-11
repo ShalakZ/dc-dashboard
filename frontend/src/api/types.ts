@@ -157,8 +157,15 @@ export type AcceptIn = { source_id: number; points: AcceptPointIn[] } & (
   | { new_asset: { name: string; parent_id: number | null }; asset_id?: never }
 );
 export interface AcceptResult { asset_id: number; mapping_ids: number[] }
-export interface AuditEntry { id: number; user_id: number | null; username: string | null; action: string; detail: Record<string, unknown>; ts: string }
-export interface AuditPage { total: number; items: AuditEntry[] }
+export interface AuditEntry {
+  id: number; user_id: number | null; actor_id: number | null; username: string | null; action: string;
+  detail: Record<string, unknown>; ts: string;
+}
+export interface AuditList { total: number; offset: number; limit: number; items: AuditEntry[] }
+/** Temporary: the old name, kept until the audit queries move to AuditList (W3c Task 5 deletes it). */
+export type AuditPage = AuditList;
+export interface AuditOptions { actions: string[]; users: { id: number; name: string }[]; unattributed: boolean }
+export interface AuditPosition { offset: number; total: number; on_day: boolean }
 
 // ---- Phase 3: site info, tariffs, billing, dashboards ----
 

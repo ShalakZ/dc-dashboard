@@ -53,16 +53,42 @@ export function siteMonth(now: Date, timezone: string): string {
   return f ? `${f.year}-${f.month}` : "";
 }
 
+/** `YYYY-MM-DD` of `now` on the wall clock of the site zone (UTC when the zone is unknown). */
+export function siteDay(now: Date, timezone: string): string {
+  const f = fields(now, timezone) ?? fields(now, "UTC");
+  return f ? `${f.year}-${f.month}-${f.day}` : "";
+}
+
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+/** UTC midnight of a real local day `YYYY-MM-DD`; null for anything else (2026-02-30 and friends). */
+function parseDay(day: string): Date | null {
+  const m = DAY.exec(day);
+  if (!m) return null;
+  const [year, month, date] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const utc = new Date(0);
+  utc.setUTCFullYear(year, month - 1, date); // not Date.UTC: it reads years 0-99 as 19xx
+  return utc.getUTCMonth() === month - 1 && utc.getUTCDate() === date ? utc : null;
+}
+
+/** True for a real local day `YYYY-MM-DD`. */
+export function isSiteDay(day: string): boolean {
+  return parseDay(day) !== null;
+}
+
+/** `day` moved by `n` calendar days. Pure calendar arithmetic, so a 23- or 25-hour day still counts as one. Anything that is not a real day comes back unchanged. */
+export function addDays(day: string, n: number): string {
+  const utc = parseDay(day);
+  if (!utc) return day;
+  utc.setUTCDate(utc.getUTCDate() + n);
+  return utc.toISOString().slice(0, 10);
+}
+
 /** `Wed 07 Oct` for a local day `YYYY-MM-DD`. Pure calendar arithmetic: a day has no timezone, so nothing shifts. */
 export function formatSiteDay(day: string): string {
-  const m = DAY.exec(day);
-  if (!m) return day;
-  const [year, month, date] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const utc = new Date(Date.UTC(year, month - 1, date));
-  if (utc.getUTCMonth() !== month - 1 || utc.getUTCDate() !== date) return day; // 2026-02-30 and friends
-  return `${WEEKDAYS[utc.getUTCDay()]} ${m[3]} ${MONTHS[month - 1]}`;
+  const utc = parseDay(day);
+  if (!utc) return day;
+  return `${WEEKDAYS[utc.getUTCDay()]} ${day.slice(8)} ${MONTHS[utc.getUTCMonth()]}`;
 }

@@ -1,4 +1,4 @@
-import { formatSiteClock, formatSiteDateTime, formatSiteDay, formatSiteTick, siteMonth } from "./siteTime";
+import { addDays, formatSiteClock, formatSiteDateTime, formatSiteDay, formatSiteTick, isSiteDay, siteDay, siteMonth } from "./siteTime";
 
 describe("formatSiteDateTime", () => {
   // Every case names its zone, so the result never depends on the machine running the tests.
@@ -60,4 +60,47 @@ describe("siteMonth", () => {
     expect(siteMonth(edge, "UTC")).toBe("2026-10");
     expect(siteMonth(edge, "Asia/Qatar")).toBe("2026-11"); // 01:30 on 1 November there
   });
+});
+
+describe("siteDay", () => {
+  const edge = new Date("2026-10-05T21:30:00Z");
+  it("names the day on the wall clock of the site zone, not UTC", () => {
+    expect(siteDay(edge, "Asia/Qatar")).toBe("2026-10-06"); // 00:30 on the 6th there
+    expect(siteDay(edge, "UTC")).toBe("2026-10-05");
+  });
+  it("falls back to UTC for an unknown zone", () => {
+    expect(siteDay(edge, "Mars/Olympus")).toBe("2026-10-05");
+  });
+  it("is empty for an invalid date", () => {
+    expect(siteDay(new Date("nope"), "UTC")).toBe("");
+  });
+});
+
+describe("addDays", () => {
+  it.each([
+    ["2026-10-06", -6, "2026-09-30"],
+    ["2026-10-06", 1, "2026-10-07"],
+    ["2026-10-06", 0, "2026-10-06"],
+    ["2026-03-01", -1, "2026-02-28"],
+    ["2028-03-01", -1, "2028-02-29"], // a leap year
+    ["2026-12-31", 1, "2027-01-01"],
+    ["2026-01-01", -1, "2025-12-31"],
+    ["0050-01-01", 1, "0050-01-02"], // a two-digit-looking year stays itself
+    ["2026-10-25", 1, "2026-10-26"], // a clock-change day in Europe: a calendar day is still one day
+  ])("%s %i days is %s", (day, n, expected) => {
+    expect(addDays(day, n)).toBe(expected);
+  });
+  it("returns anything that is not a real day unchanged", () => {
+    expect(addDays("2026-02-30", 1)).toBe("2026-02-30");
+    expect(addDays("nope", 1)).toBe("nope");
+  });
+});
+
+describe("isSiteDay", () => {
+  it.each([["2026-10-06", true], ["2028-02-29", true], ["2026-02-29", false], ["2026-02-30", false], ["2026-13-01", false], ["2026-1-5", false], ["", false]])(
+    "%s is %s",
+    (day, expected) => {
+      expect(isSiteDay(day)).toBe(expected);
+    },
+  );
 });
