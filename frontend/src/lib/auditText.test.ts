@@ -12,7 +12,7 @@ const ALL_ACTIONS = [
   "dashboard.created", "dashboard.updated", "dashboard.deleted", "discovery.accepted",
   "login.failed", "login.locked", "login.succeeded", "mapping.created", "mapping.updated", "mapping.deleted",
   "password.change_failed", "password.changed", "scan.finished", "scan.started",
-  "scope.created", "scope.updated", "scope.deleted", "settings.timezone_changed", "setup.completed",
+  "scope.created", "scope.updated", "scope.deleted", "settings.sign_in_changed", "settings.timezone_changed", "setup.completed",
   "source.browsed", "source.created", "source.deleted", "source.test_all", "source.tested", "source.updated",
   "storage.changed", "storage.default_set", "tariff.created", "tariff.updated", "tariff.deleted",
   "user.created", "user.updated",
@@ -120,6 +120,19 @@ describe("describeAudit: updates with before and after", () => {
     );
     expect(zone.summary).toBe("Changed the site time zone from UTC to Asia/Qatar");
     expect(zone.link).toEqual({ to: "/settings", label: "Open Settings" });
+  });
+
+  it("names the sign-in protection fields that changed and links to Settings", () => {
+    const view = describeAudit(
+      entry("settings.sign_in_changed", { before: { max_failures: 5, block_minutes: 5 }, after: { max_failures: 7, block_minutes: 10 } }),
+    );
+    expect(view.summary).toBe("Changed the sign-in protection: max failures, block minutes");
+    expect(view.changes).toEqual([
+      { field: "Max failures", before: "5", after: "7" },
+      { field: "Block minutes", before: "5", after: "10" },
+    ]);
+    expect(view.link).toEqual({ to: "/settings", label: "Open Settings" });
+    expect(describeAudit(entry("settings.sign_in_changed", {})).summary).toBe("Changed the sign-in protection");
   });
 
   it("names the field changed on an asset and links to it", () => {
@@ -412,7 +425,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(36);
+    expect(ALL_ACTIONS).toHaveLength(37);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }

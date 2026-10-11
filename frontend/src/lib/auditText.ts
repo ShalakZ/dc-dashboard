@@ -268,6 +268,10 @@ const RULES: Record<string, Rule> = {
   },
   "scope.deleted": { summary: (c) => `Deleted scan ${thing("scope", c.d, "scope_id")}` },
 
+  "settings.sign_in_changed": {
+    summary: (c) => withFields("Changed the sign-in protection", c.fields),
+    link: page("/settings", "Open Settings"),
+  },
   "settings.timezone_changed": {
     summary: ({ sides }) =>
       sides

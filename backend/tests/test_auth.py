@@ -163,7 +163,10 @@ async def test_the_429_says_how_long_and_carries_retry_after(client, db):
 
 async def test_the_429_wording_for_one_minute_and_for_the_last_seconds(client, db):
     await make_user(db, "viewer")
-    auth_module.limiter.configure(5, 60)
+    # The limiter's numbers come from the stored policy on every attempt, so a direct configure() would be overwritten.
+    await db.execute(
+        "INSERT INTO settings (key, value) VALUES ('sign_in', '{\"max_failures\": 5, \"block_minutes\": 1}'::jsonb)"
+    )
     await _fail(client, "viewer", 5)
     one = await client.post("/api/login", json={"username": "viewer", "password": "correct-horse"})
     assert one.json()["detail"] == "too many failed attempts, try again in about 1 minute"
