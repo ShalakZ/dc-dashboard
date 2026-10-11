@@ -375,3 +375,34 @@ def test_overlapping_quiet_sections_restore_the_original_levels_only_when_the_la
     assert (asyncua.level, pymodbus.level) == (logging.ERROR, logging.ERROR)
     second.__exit__(None, None, None)
     assert (asyncua.level, pymodbus.level) == (logging.INFO, logging.NOTSET)
+
+
+LEAKY = "connect failed: http://svc:Zq9-unique-pw@host:9000/x (timeout)"
+SCRUBBED = "connect failed: http://[hidden]@host:9000/x (timeout)"
+
+
+async def test_a_failed_scan_stores_its_error_and_audit_row_without_the_url_credentials(db, monkeypatch):
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError(LEAKY)
+
+    monkeypatch.setattr(scan_module, "_sweep_stage", boom)
+    scan = await make_scan(db, ["127.0.0.1"], [free_port()])
+    with pytest.raises(RuntimeError):
+        await run_scan(db, scan)
+    assert await db.fetchval("SELECT error FROM scans WHERE id = $1", scan) == SCRUBBED
+    detail = await db.fetchval("SELECT detail FROM audit_log WHERE action = 'scan.finished'")
+    assert detail["status"] == "failed" and detail["error"] == SCRUBBED
+
+
+async def test_a_browse_failure_is_stored_in_the_finding_and_the_source_without_the_url_credentials(
+    db, simulator_network
+):
+    def raising(*_args):
+        raise RuntimeError(LEAKY)
+
+    scan = await make_scan(db, ["127.0.0.1"], [simulator_network["modbus"]])
+    await run_scan(db, scan, raising)
+    assert await db.fetchval("SELECT status FROM scans WHERE id = $1", scan) == "done"
+    finding = await db.fetchrow("SELECT outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
+    assert finding["outcome"] == "claimed" and finding["detail"] == f"browse failed: {SCRUBBED}"
+    assert await db.fetchval("SELECT last_error FROM sources") == SCRUBBED

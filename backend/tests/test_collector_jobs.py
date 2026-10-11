@@ -5,6 +5,7 @@ import pytest
 
 from dcdash.collector import jobs as jobs_module
 from dcdash.collector.jobs import fail_stale_jobs, run_job_loop, run_pending_jobs
+from dcdash.connectors.base import ConnectionCheck
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.model import Simulator
 from helpers import make_source, sim_factory, wait_for
@@ -419,3 +420,37 @@ async def test_a_queued_scan_with_a_pending_job_stays_queued_and_unaudited(db):
     assert (await scan_row(db, queued))["status"] == "queued"
     assert (await scan_row(db, other))["status"] == "failed"
     assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'scan.finished'") == 1
+
+
+LEAKY = "connect failed: http://svc:Zq9-unique-pw@host:9000/x (timeout)"
+SCRUBBED = "connect failed: http://[hidden]@host:9000/x (timeout)"
+
+
+@pytest.mark.parametrize("kind", ["test_source", "browse_source"])
+async def test_a_failed_job_stores_its_error_without_the_url_credentials(db, kind):
+    source = await make_source(db)
+    job_id = await add_job(db, kind, source)
+
+    def raising(*_args):
+        raise RuntimeError(LEAKY)
+
+    await run_pending_jobs(db, raising)
+    row = await job(db, job_id)
+    assert row["status"] == "failed" and row["result"] == {"error": SCRUBBED}
+
+
+async def test_a_connection_check_message_with_a_url_is_stored_without_its_credentials(db):
+    class Unreachable:
+        async def test(self):
+            return ConnectionCheck(ok=False, status="unreachable", message=LEAKY)
+
+        async def close(self):
+            pass
+
+    source = await make_source(db)
+    job_id = await add_job(db, "test_source", source)
+    await run_pending_jobs(db, lambda *_args: Unreachable())
+    row = await job(db, job_id)
+    assert row["status"] == "done" and row["result"]["ok"] is False and row["result"]["message"] == SCRUBBED
+    assert row["result"]["status"] == "unreachable"  # the rest of the result is untouched
+    assert await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source) == SCRUBBED

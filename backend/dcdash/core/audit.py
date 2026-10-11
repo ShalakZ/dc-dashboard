@@ -150,6 +150,20 @@ def scrub_url_credentials(text: str, known: Iterable[str] = ()) -> str:
     return _URL_CREDENTIALS.sub("://[hidden]@", text)
 
 
+def scrub_strings(value: Any) -> Any:
+    """A JSON value with `scrub_url_credentials` applied to every string in it, however deep (keys are left alone).
+
+    For a stored result (a job's) that may quote a URL anywhere in it. Other values come back as they are.
+    """
+    if isinstance(value, str):
+        return scrub_url_credentials(value)
+    if isinstance(value, dict):
+        return {key: scrub_strings(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [scrub_strings(item) for item in value]
+    return value
+
+
 def hidden_parts(config: Mapping[str, Any]) -> dict[str, str]:
     """What `safe_config` hides from `config`, by key: the value of a credential-named key, the credentials in a URL.
 

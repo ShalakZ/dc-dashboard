@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from dcdash.collector import scheduler
 from dcdash.collector.scheduler import PollGroup, mark_source, run_group
 from dcdash.connectors.base import GOOD, PointValue
+from helpers import make_source, wait_for
 
 GROUP = PollGroup(source_id=1, connector_type="fake", config={}, secret=None, interval=5, points=((10, "A"),))
 
@@ -161,3 +162,46 @@ async def test_the_connector_is_closed_even_when_a_second_cancellation_interrupt
     task.cancel()
     await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=2)
     assert task.cancelled() and connector.closed
+
+
+PASSWORD = "Zq9-unique-pw"
+
+
+async def stored_error(db, source_id):
+    return await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source_id)
+
+
+async def test_a_failing_poll_stores_its_error_without_the_url_credentials(db):
+    source = await make_source(db, "poll")
+
+    class Failing(_Connector):
+        async def read(self, addresses):
+            raise RuntimeError(f"connect failed: http://svc:{PASSWORD}@host:9000/x (timeout)")
+
+    group = PollGroup(source_id=source, connector_type="fake", config={}, secret=None, interval=5, points=((10, "A"),))
+    task = asyncio.create_task(run_group(group, db, _Writer(), lambda *_a: Failing(), sleep=_quick_sleep))
+
+    async def check():
+        return await stored_error(db, source)
+
+    await wait_for(check, "connect failed: http://[hidden]@host:9000/x (timeout)")
+    await stop(task)
+
+
+async def test_an_invalid_configuration_error_loses_the_url_credentials(db):
+    source = await make_source(db, "bad")
+
+    def factory(*_args):
+        raise ValueError(f"bad url http://svc:{PASSWORD}@host:9000")
+
+    group = PollGroup(source_id=source, connector_type="fake", config={}, secret=None, interval=5, points=((10, "A"),))
+    await run_group(group, db, _Writer(), factory)
+    assert await stored_error(db, source) == "invalid configuration: bad url http://[hidden]@host:9000"
+
+
+async def test_mark_source_scrubs_whatever_it_is_given_and_keeps_plain_errors(db):
+    source = await make_source(db, "marked")
+    assert await mark_source(db, source, False, f"login http://svc:{PASSWORD}@host:9000 refused")
+    assert await stored_error(db, source) == "login http://[hidden]@host:9000 refused"
+    assert await mark_source(db, source, False, "credentials rejected")
+    assert await stored_error(db, source) == "credentials rejected"

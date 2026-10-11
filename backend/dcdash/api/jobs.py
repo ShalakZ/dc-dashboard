@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, notify, require_role
+from dcdash.core.audit import scrub_strings
 from dcdash.core.models import Job, User
 from dcdash.core.pg import JOBS_CHANNEL
 
@@ -28,7 +29,7 @@ async def get_job(job_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, 
         "id": job.id,
         "kind": job.kind,
         "status": job.status,
-        "result": job.result,
+        "result": scrub_strings(job.result),  # rows stored before the collector scrubbed what it writes
         "created_at": job.created_at,
         "finished_at": job.finished_at,
     }
