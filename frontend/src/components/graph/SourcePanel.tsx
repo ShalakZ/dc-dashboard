@@ -58,7 +58,7 @@ export function SourcePanel({ source, canEdit, onClose }: Props) {
       <div className="row">
         <h2 ref={heading} tabIndex={-1}>{source.name}</h2>
         <span className="spacer" />
-        <button onClick={onClose}>Close</button>
+        <button className="quiet" onClick={onClose}>Close</button>
       </div>
       <p className="muted">{source.connector_type} · {source.origin} · {source.status} · {source.point_count} points</p>
       {source.last_error && <p className="error">Last error: {source.last_error}</p>}
@@ -69,7 +69,7 @@ export function SourcePanel({ source, canEdit, onClose }: Props) {
           {source.connector_type === "opcua" && (
             <label>Username<input autoComplete="off" value={username} onChange={(e) => setUsername(e.target.value)} /></label>
           )}
-          <div className="row"><button type="submit" disabled={busy}>Save and browse</button></div>
+          <div className="row"><button type="submit" className="primary" disabled={busy}>Save and browse</button></div>
         </form>
       )}
       {canEdit && !source.needs_credentials && (

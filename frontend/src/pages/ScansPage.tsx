@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import { keys, useInvalidate, useScans, useScopes, useScopeSuggestions, useSite } from "../api/queries";
 import type { Scope, ScopePreview } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
+import { PageHeader } from "../components/PageHeader";
 import { ScanProgress } from "../components/ScanProgress";
 import { ScopeForm } from "../components/ScopeForm";
 import { useAction } from "../hooks/useAction";
@@ -10,6 +11,14 @@ import { claimedCount } from "../lib/scanText";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 type FormState = "new" | Scope | null;
+
+/** The chip of a scan's status: finished reads ok, failed reads bad, and queued or running is the hollow dot (not finished yet). */
+const SCAN_CHIP: Record<string, string> = { done: "chip-ok", failed: "chip-bad" };
+
+// Inline SVG, 24-unit viewBox, decoration only.
+const ScansIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /><path d="M11 7v4l2.5 2" /></svg>
+);
 
 export function ScansPage() {
   const { hasRole } = useAuth();
@@ -61,74 +70,88 @@ export function ScansPage() {
   if (scopesError) return <p className="error" role="alert">{scopesError.message}</p>;
   return (
     <>
-      <h1>Scans</h1>
-      {isAdmin && form === null && (
-        <div className="row"><button onClick={() => setForm("new")}>New scope</button></div>
-      )}
+      <PageHeader
+        title="Scans"
+        actions={isAdmin && form === null ? (
+          // One primary per page: while a scan waits for its confirmation, that button is the one.
+          <button className={pending ? undefined : "primary"} onClick={() => setForm("new")}>New scope</button>
+        ) : undefined}
+      />
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {form === "new" && suggestions.isPending && <p className="muted">loading suggestions…</p>}
       {form === "new" && !suggestions.isPending && (
-        <>
+        <div className="scope-card">
           {suggestions.error && <p className="muted">Could not load suggestions: {suggestions.error.message}</p>}
           <ScopeForm suggestions={suggestions.data} onSaved={saved} onCancel={() => setForm(null)} />
-        </>
+        </div>
       )}
       {form !== null && form !== "new" && (
-        <ScopeForm key={form.id} initial={form} onSaved={saved} onCancel={() => setForm(null)} />
+        <div className="scope-card">
+          <ScopeForm key={form.id} initial={form} onSaved={saved} onCancel={() => setForm(null)} />
+        </div>
       )}
       {pending && (
-        <div className="panel">
-          <p>Scan "{pending.scope.name}"?</p>
+        <div className="panel confirm-scan">
+          <p className="confirm-title">Scan "{pending.scope.name}"?</p>
           <p>{`${pending.preview.hosts} hosts × ${pending.preview.ports} ports (${pending.preview.pairs} probes)`}</p>
           <div className="row">
-            <button onClick={startScan} disabled={busy}>Start scan</button>
             <button onClick={() => setPending(null)} disabled={busy}>Cancel</button>
+            <button className="primary" onClick={startScan} disabled={busy}>Start scan</button>
           </div>
         </div>
       )}
       {scopes.length === 0 ? (
-        <p className="muted">
-          {isAdmin ? "No scopes yet. Use New scope to define what to scan." : "No scopes have been defined yet."}
-        </p>
+        <div className="empty">
+          <div className="empty-icon"><ScansIcon /></div>
+          <p className="muted">
+            {isAdmin ? "No scopes yet. Use New scope to define what to scan." : "No scopes have been defined yet."}
+          </p>
+        </div>
       ) : (
-        <table>
-          <thead><tr><th>Name</th><th>Targets</th><th>Ports</th>{isAdmin && <th></th>}</tr></thead>
-          <tbody>
-            {scopes.map((s) => (
-              <tr key={s.id}>
-                <td>{s.name}</td><td>{s.targets.join(", ")}</td><td>{s.ports.join(", ")}</td>
-                {isAdmin && (
-                  <td className="row">
-                    <button onClick={() => requestPreview(s)} disabled={busy}>Scan</button>
-                    <button onClick={() => edit(s)}>Edit</button>
-                    <button onClick={() => remove(s)} disabled={busy}>Delete</button>
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Targets</th><th>Ports</th>{isAdmin && <th className="row-actions"></th>}</tr></thead>
+            <tbody>
+              {scopes.map((s) => (
+                <tr key={s.id}>
+                  <td><span className="cell-name" title={s.name}>{s.name}</span></td><td className="wrap-any">{s.targets.join(", ")}</td><td className="wrap-any">{s.ports.join(", ")}</td>
+                  {isAdmin && (
+                    <td className="row-actions">
+                      <button className="quiet" onClick={() => requestPreview(s)} disabled={busy}>Scan</button>
+                      <button className="quiet" onClick={() => edit(s)}>Edit</button>
+                      <button className="danger-quiet" onClick={() => remove(s)} disabled={busy}>Delete</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {activeScan !== null && <ScanProgress scanId={activeScan} />}
-      <h2>Recent scans</h2>
+      <h2 className="section-title">Recent scans</h2>
       {scansLoading && <p className="muted">loading…</p>}
       {scansError && <p className="error" role="alert">{scansError.message}</p>}
-      {!scansLoading && !scansError && scans.length === 0 && <p className="muted">No scans yet.</p>}
+      {!scansLoading && !scansError && scans.length === 0 && (
+        <div className="empty"><div className="empty-icon"><ScansIcon /></div><p className="muted">No scans yet.</p></div>
+      )}
       {!scansLoading && !scansError && scans.length > 0 && (
-        <table>
-          <thead><tr><th>Scope</th><th>Status</th><th>Started</th><th>Claimed / points</th><th></th></tr></thead>
-          <tbody>
-            {scans.map((scan) => (
-              <tr key={scan.id}>
-                <td>{scan.scope_name}</td>
-                <td>{scan.status}</td>
-                <td>{site.data ? formatSiteDateTime(scan.created_at, site.data.timezone) : "—"}</td>
-                <td>{claimedCount(scan.progress)} / {scan.progress.points ?? 0}</td>
-                <td><button onClick={() => setActiveScan(scan.id)}>Details</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Scope</th><th>Status</th><th>Started</th><th className="num">Claimed / points</th><th className="row-actions"></th></tr></thead>
+            <tbody>
+              {scans.map((scan) => (
+                <tr key={scan.id}>
+                  <td><span className="cell-name" title={scan.scope_name}>{scan.scope_name}</span></td>
+                  <td><span className={`chip ${SCAN_CHIP[scan.status] ?? "chip-stale"}`}>{scan.status}</span></td>
+                  <td className="nowrap">{site.data ? formatSiteDateTime(scan.created_at, site.data.timezone) : "—"}</td>
+                  <td className="num">{claimedCount(scan.progress)} / {scan.progress.points ?? 0}</td>
+                  <td className="row-actions"><button className="quiet" onClick={() => setActiveScan(scan.id)}>Details</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </>
   );

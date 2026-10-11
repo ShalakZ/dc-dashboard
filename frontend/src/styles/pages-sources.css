@@ -1,3 +1,77 @@
 @layer w6 {
-  /* W6 sources */
+  /* W6 sources: Sources, source points, Scans, and the Discovery page chrome with its panel and review dialog */
+
+  /* Names and addresses stay on one line with an ellipsis; the full text is the title attribute. A long source name must not
+     push the table (or the page) sideways. */
+  .cell-name, .cell-trunc { display: block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cell-name { font-weight: 600; }
+  .cell-trunc { max-width: 360px; }
+  .wrap-any { overflow-wrap: anywhere; }
+  .nowrap, .table-wrap td.num { white-space: nowrap; }
+  /* Nine columns: a tighter cell and headers that may wrap. When the wrap is narrower than 1100px (a window under 1280px with the
+     sidebar open, or about 1100px with it minimized) the rows also take the small text size and a shorter name; what still does not
+     fit scrolls inside the wrap, with Last error, Test result and the actions together at its right end. */
+  .table-wrap.dense { container-type: inline-size; }
+  .table-wrap.dense th, .table-wrap.dense td { padding-left: 8px; padding-right: 8px; }
+  .table-wrap.dense th { white-space: normal; vertical-align: bottom; }
+  @container (max-width: 1099.98px) {
+    .table-wrap.dense th, .table-wrap.dense td { padding-left: 6px; padding-right: 6px; }
+    td { font-size: var(--fs-sm); }
+    .cell-name { max-width: 104px; }
+    td.row-actions :is(.quiet, .danger-quiet, .quiet-link) { padding: 0 5px; }
+  }
+  .table-wrap td.error { min-width: 140px; max-width: 260px; overflow-wrap: break-word; } /* never squeezed to a few letters per line: the wrap scrolls instead */
+
+  /* Row actions: quiet buttons at the right of the row. The cell stays a table cell (it must not be display: flex). */
+  td.row-actions { padding-top: 6px; padding-bottom: 6px; text-align: right; white-space: nowrap; }
+  td.row-actions > * { vertical-align: middle; }
+  td.row-actions :is(.quiet, .danger-quiet, .quiet-link) { padding: 0 7px; }
+  td.row-actions > * + * { margin-left: 2px; }
+  .quiet-link { display: inline-flex; align-items: center; min-height: 30px; padding: 0 10px; border-radius: var(--radius); font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; }
+  .quiet-link:hover { background: var(--accent-tint); text-decoration: none; }
+
+  /* A status text: a shape in front, the words wrap (a job message or a "not polled" reason can be a sentence) */
+  .st.job, .st.note { align-items: flex-start; font-size: var(--fs-sm); font-weight: 500; white-space: normal; }
+  .st.job::before, .st.note::before { margin-top: 0.4em; }
+  .st-off.job::before, .st-off.note::before { margin-top: 0.6em; }
+  .st.note { min-width: 90px; max-width: 240px; }
+  .st.plain { font-size: var(--fs-base); font-weight: 400; } /* a status word that sits in a row of body text */
+  .job-line { margin: 0 0 14px; }
+
+  /* Source points: the filter row and the sortable column headers (a header button looks like the header text) */
+  .toolbar { gap: 16px; margin: 0 0 14px; }
+  .toolbar input[type="search"] { width: 260px; max-width: 100%; }
+  .th-sort { display: inline-flex; align-items: center; gap: 4px; min-height: 0; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: inherit; font: inherit; font-weight: 600; }
+  .th-sort:hover:not(:disabled) { color: var(--text); }
+  th[aria-sort] .th-sort { color: var(--accent-ink); }
+  .th-sort svg.i { width: 14px; height: 14px; }
+  .sort-mark.desc { transform: rotate(180deg); }
+
+  /* Scans: the confirmation, the scan in view and the section titles */
+  .section-title { margin: 28px 0 12px; font-size: var(--fs-lg); font-weight: 600; }
+  .scope-card { margin: 0 0 24px; padding: 18px 20px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .scope-card form { margin: 0; }
+  .scope-card > p { margin: 0 0 12px; }
+  .confirm-scan { max-width: 520px; margin: 0 0 20px; padding: 14px 16px; }
+  .confirm-scan p { margin: 0; }
+  .confirm-title { font-weight: 600; }
+  .scan-detail { margin: 24px 0 8px; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .scan-detail > .section-title { margin-top: 0; }
+  .scan-detail p { margin: 0 0 12px; }
+  .scan-detail .table-wrap { margin-bottom: 12px; }
+  .scan-detail > :last-child { margin-bottom: 0; }
+  .scan-stats { gap: 8px; }
+  .scan-stats span { padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+
+  /* Discovery: the page header stays slim so the canvas keeps the height (the page is exactly one window tall) */
+  .graph-page > .page-head { flex: none; margin-bottom: 12px; padding: 14px 0 12px; }
+  .gpanel p { margin: 0; }
+  /* a long source name wraps beside the Close button instead of pushing it onto its own line */
+  .gpanel > .row:first-child { flex-wrap: nowrap; align-items: flex-start; }
+  .gpanel > .row:first-child h2 { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .gpanel > .row:first-child .spacer { flex: none; }
+
+  /* The review dialog: the point rows are denser than a page table (a dozen of them share 45vh) */
+  .dialog-rows td { padding-top: 6px; padding-bottom: 6px; }
+  .dialog-rows select, .dialog-rows input:is(:not([type]), [type="number"]) { min-height: 34px; }
 }

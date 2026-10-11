@@ -477,3 +477,24 @@ describe("DiscoveryPage mapping", () => {
     expect(calls.some((c) => c.method === "PUT" || c.method === "POST")).toBe(false);
   });
 });
+
+describe("DiscoveryPage look (W6)", () => {
+  it("has one h1 in a page header with the hint as its sub line and Refresh in its actions", async () => {
+    mockFetch(routes("operator"));
+    open();
+    const title = await screen.findByRole("heading", { level: 1, name: "Discovery" });
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    const header = title.closest("header")!;
+    expect(header).toHaveClass("page-head");
+    expect(within(header).getByText(/Dashed nodes were discovered/)).toHaveClass("sub");
+    expect(within(header.querySelector(".actions") as HTMLElement).getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+  });
+
+  it("with nothing discovered, still has the page's h1 and shows the empty look with the link to Scans", async () => {
+    mockFetch(routes("operator", { sources: [], unidentified: [], assets: [], layout: {} }));
+    open();
+    expect(await screen.findByRole("heading", { level: 1, name: "Discovery" })).toBeInTheDocument();
+    expect(screen.getByText(/Nothing discovered yet/).closest(".empty")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "run a scan" })).toHaveAttribute("href", "/scans");
+  });
+});

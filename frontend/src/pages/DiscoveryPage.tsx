@@ -12,6 +12,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { nodeTypes } from "../components/graph/nodes";
 import { ReviewDialog, type InitialTarget } from "../components/graph/ReviewDialog";
 import { SourcePanel } from "../components/graph/SourcePanel";
+import { PageHeader } from "../components/PageHeader";
 import { useAction } from "../hooks/useAction";
 import { dropPayload, pickDropTarget, type DropPayload } from "../lib/drop";
 import {
@@ -150,11 +151,11 @@ function Canvas({ model }: { model: GraphModel }) {
 
   return (
     <>
-      <div className="row">
-        <h1>Discovery</h1>
-        <button onClick={() => invalidate(keys.graph)}>Refresh</button>
-        <span className="muted">Dashed nodes were discovered; solid nodes are assets. Drag nodes to arrange them.</span>
-      </div>
+      <PageHeader
+        title="Discovery"
+        sub="Dashed nodes were discovered; solid nodes are assets. Drag nodes to arrange them."
+        actions={<button onClick={() => invalidate(keys.graph)}>Refresh</button>}
+      />
       {saveError && <p className="error" role="alert">{saveError}</p>}
       <div className="graph-layout">
         <div className="graph-canvas" ref={canvas}>
@@ -177,12 +178,12 @@ function Canvas({ model }: { model: GraphModel }) {
           {isAdmin && offer && (
             <div className="offer-bar" role="status">
               <span>{`Create asset "${offer.label}" from this cluster?`}</span>
-              <button onClick={() => {
+              <button className="primary" onClick={() => {
                 const payload = dropPayload(model, offer.nodeId);
                 if (payload) openReview(payload, { kind: "new", name: payload.label, parentId: null });
                 else setOffer(null);
               }}>Create asset…</button>
-              <button onClick={() => setOffer(null)}>Dismiss</button>
+              <button className="quiet" onClick={() => setOffer(null)}>Dismiss</button>
             </div>
           )}
         </div>
@@ -201,7 +202,17 @@ export function DiscoveryPage() {
   if (loading || isLoading) return <p className="muted">loading…</p>;
   if (error) return <p className="error" role="alert">{error.message}</p>;
   if (!model || (model.sources.length === 0 && model.unidentified.length === 0)) {
-    return <p className="muted">Nothing discovered yet — <Link to="/scans">run a scan</Link>.</p>;
+    return (
+      <>
+        <PageHeader title="Discovery" />
+        <div className="empty">
+          <div className="empty-icon">
+            <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.2" /><circle cx="19" cy="5" r="2.2" /><circle cx="19" cy="19" r="2.2" /><path d="M7 11 17 6M7 13l10 5" /></svg>
+          </div>
+          <p className="muted">Nothing discovered yet — <Link to="/scans">run a scan</Link>.</p>
+        </div>
+      </>
+    );
   }
   return (
     <div className="graph-page">
