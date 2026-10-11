@@ -54,7 +54,7 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
       {other && <label>New kind<input value={typed} onChange={(e) => setTyped(e.target.value)} /></label>}
       <label>Sort order<input type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} /></label>
       {error && <p className="error" role="alert">{error}</p>}
-      <div className="row"><button type="submit" disabled={submitting}>Save</button><button type="button" onClick={onCancel} disabled={submitting}>Cancel</button></div>
+      <div className="row"><button type="button" onClick={onCancel} disabled={submitting}>Cancel</button><button type="submit" className="primary" disabled={submitting}>Save</button></div>
     </form>
   );
 }

@@ -34,7 +34,7 @@ export function AuditPager({ total, offset, size, onOffset, onSize }: Props) {
   }
 
   return (
-    <div className="row">
+    <div className="row pager">
       <button type="button" onClick={() => onOffset(0)} disabled={atStart}>First</button>
       <button type="button" onClick={() => onOffset(previousOffset(offset, size))} disabled={atStart}>Previous</button>
       <button type="button" onClick={() => next !== null && onOffset(next)} disabled={next === null}>Next</button>
@@ -50,11 +50,13 @@ export function AuditPager({ total, offset, size, onOffset, onSize }: Props) {
         onKeyDown={(e) => { if (e.key === "Enter") applyDraft(); }}
       />
       <span className="muted">{`Page ${pastEnd ? "–" : pageOf(offset, size)} of ${pages}`}</span>
-      <label htmlFor={sizeId}>Rows per page</label>
-      <select id={sizeId} value={size} onChange={(e) => onSize(Number(e.target.value))}>
-        {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
-      </select>
-      {!pastEnd && <span className="muted">{`Showing ${offset + 1}–${Math.min(offset + size, total)} of ${total}`}</span>}
+      <div className="pager-end">
+        <label htmlFor={sizeId}>Rows per page</label>
+        <select id={sizeId} value={size} onChange={(e) => onSize(Number(e.target.value))}>
+          {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+        {!pastEnd && <span className="muted">{`Showing ${offset + 1}–${Math.min(offset + size, total)} of ${total}`}</span>}
+      </div>
     </div>
   );
 }

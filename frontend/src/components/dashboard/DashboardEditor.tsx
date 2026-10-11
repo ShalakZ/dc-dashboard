@@ -198,7 +198,7 @@ function LeaveDialog({ onStay, onLeave }: { onStay: () => void; onLeave: () => v
         <p>This dashboard has changes that are not saved. If you leave now they are lost.</p>
         <div className="row">
           <button type="button" onClick={onStay}>Keep editing</button>
-          <button type="button" onClick={onLeave}>Leave and discard changes</button>
+          <button type="button" className="danger" onClick={onLeave}>Leave and discard changes</button>
         </div>
       </div>
     </div>

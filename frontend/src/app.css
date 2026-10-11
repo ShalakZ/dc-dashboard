@@ -1,87 +1,388 @@
-* { box-sizing: border-box; }
-body { margin: 0; font: 14px/1.4 system-ui, sans-serif; color: #000; background: #fff; }
-a { color: #000; }
-nav { display: flex; gap: 16px; padding: 8px 16px; border-bottom: 1px solid #000; align-items: center; }
-nav .spacer { flex: 1; }
-main { padding: 16px; max-width: 1200px; }
-main.wide { max-width: none; }
-main:focus { outline: none; }
-nav a[aria-current="page"] { font-weight: 700; text-decoration: none; border-bottom: 2px solid #000; }
-.skip-link { position: absolute; left: -9999px; top: 0; }
-.skip-link:focus { left: 8px; top: 8px; z-index: 2000; padding: 4px 8px; background: #fff; border: 1px solid #000; }
-table { border-collapse: collapse; width: 100%; margin: 8px 0; }
-th, td { border: 1px solid #000; padding: 4px 8px; text-align: left; vertical-align: top; }
-form { display: grid; gap: 8px; max-width: 480px; margin: 8px 0; }
-label { display: grid; gap: 2px; }
-button { padding: 4px 10px; cursor: pointer; }
-.error { color: #b00; }
-.warning { color: #8a5a00; }
-.muted { color: #555; }
-.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.tile { border: 1px solid #000; padding: 12px; min-width: 180px; display: inline-block; margin-right: 12px; }
-.tile .big { font-size: 28px; }
-ul.tree, ul.tree ul { list-style: none; padding-left: 20px; margin: 0; }
-ul.tree li { margin: 2px 0; }
-.selected { font-weight: bold; }
-textarea { font: inherit; width: 100%; }
-.panel { border: 1px solid #000; padding: 12px; margin: 8px 0; max-width: 480px; display: grid; gap: 8px; }
+/* W6 design tokens (spec section 2). One :root block, unlayered; every component rule below uses var(--…) only. */
+:root {
+  /* content */
+  --accent: #1d5bd8; --accent-hover: #174bb5; --accent-tint: #e8effc; --accent-ink: #163f94;
+  --bg: #ffffff; --surface: #f6f8fb; --row-hover: #fafbfd; --border: #e1e5ec; --border-strong: #cdd3dd;
+  --field-border: #868fa0;   /* inputs, selects, textareas, checkboxes: 3.26:1 on white, 3.06:1 on --surface (WCAG 1.4.11) */
+  --text: #172033; --text-2: #596579; --text-disabled: #6b7484; --ring: #1d5bd8;
+  /* sidebar, all derived from quantum navy */
+  --side-bg: #283354; --side-bg-hover: #313d63; --side-bg-active: #3a4772;
+  --side-text: #b8c2dc; --side-text-strong: #ffffff; --side-muted: #9aa6c4; --side-rule: #3a4569;
+  --side-accent: #8fb2ff; --side-avatar-bg: #3a4772; --side-avatar-text: #dce4f7;
+  --tooltip-bg: #172033; --tooltip-text: #ffffff;
+  /* status: text / fill / border */
+  --ok: #136c37;   --ok-tint: #e3f3e9;
+  --warn: #8a4b00; --warn-tint: #fcefd6; --warn-line: #f1d29e; --warn-ink: #6b3a00; --warn-bg: #fdf3e1; --warn-icon: #a85d00;
+  --crit: #b0202a; --crit-tint: #fce8e8;
+  --info: #1d4fb8; --info-tint: #e7eefc; --info-line: #c5d6f6; --info-ink: #173f8f;
+  --stale: #545d6b; --stale-tint: #eceef2;
+  --danger: #c0262d; --danger-hover: #a51f25;
+  --backdrop: rgba(10, 16, 28, 0.55);
+  /* type: 12 / 13 / 14 / 16 / 18 / 22 / 28 */
+  --font: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fs-xs: 12px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 16px; --fs-lg: 18px; --fs-title: 22px; --fs-figure: 28px;
+  /* spacing, radius, elevation, motion, sizes */
+  --row-y: 11px; --row-x: 14px; --gutter: 28px;          /* 22px below 1180px, see the media query in the layer */
+  --radius: 6px; --radius-sm: 4px; --radius-lg: 8px;
+  --shadow-dialog: 0 18px 50px rgba(10, 16, 28, 0.28); --shadow-tip: 0 4px 14px rgba(10, 16, 28, 0.25);
+  --motion: 150ms ease;
+  --side-w-open: 236px; --side-w-closed: 64px; --tree-w: 280px; --tree-w-closed: 44px; /* tree 248px below 1180px */
+}
 
-/* Discovery graph */
-main:has(.graph-page) { max-width: none; }
-/* The page is exactly one window tall (nav, then main taking the rest), and the canvas takes what the header leaves, so
-   nothing scrolls and nothing at the canvas edge is clipped. A canvas is never shorter than 320px (the page scrolls then). */
-#root:has(.graph-page) { height: 100vh; display: flex; flex-direction: column; }
-#root:has(.graph-page) > nav { flex: none; }
-main:has(.graph-page) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.graph-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.graph-page h1 { margin: 0; }
-.graph-page > .row { flex: none; margin-bottom: 8px; }
-.graph-layout { flex: 1; min-height: 320px; display: flex; gap: 12px; }
-.graph-canvas { flex: 1; min-width: 0; border: 1px solid #000; position: relative; }
-.gpanel { width: 320px; flex: none; align-content: start; overflow: auto; margin: 0; }
-.gpanel h2 { margin: 0; font-size: 16px; }
-.gpanel .spacer { flex: 1; }
-.gnode { width: 220px; padding: 6px 8px; background: #fff; border: 1px solid #000; border-style: solid; font-size: 12px; }
-.gnode-source.discovered, .gnode-cluster, .gnode-point { border-style: dashed; }
-.gnode-unidentified { background: #eee; color: #555; border-color: #888; }
-.gnode .node-title { font-weight: 600; overflow-wrap: anywhere; }
-.gnode .row { gap: 4px; flex-wrap: nowrap; justify-content: space-between; }
-.gnode button { padding: 0 6px; font-size: 11px; }
-.gnode .badge { display: inline-block; margin-top: 2px; padding: 0 4px; border: 1px solid #b00; color: #b00; }
-.offer-bar { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10; display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: #fff; border: 1px solid #000; }
+/* Everything W6 writes lives in this one layer. The widget and editor-grid rules at the end of the file are unlayered,
+   so they win over anything in here whatever its specificity. */
+@layer w6 {
+  /* Base elements. No global element resets: they would reach the widgets (spec section 2). */
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 var(--font); color: var(--text); background: var(--bg); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover, p a { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-/* Review mappings dialog */
-.dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, 0.4); }
-.dialog { width: min(960px, 100%); max-height: 100%; overflow: auto; display: grid; gap: 10px; align-content: start; padding: 16px; background: #fff; border: 1px solid #000; }
-.dialog h2, .dialog p { margin: 0; }
-.dialog h2 { font-size: 16px; }
-.dialog fieldset { display: grid; gap: 8px; max-width: 480px; margin: 0; padding: 8px 12px; border: 1px solid #000; }
-.dialog .field { display: grid; gap: 2px; }
-.dialog label.inline { display: flex; gap: 6px; align-items: center; }
-.dialog-rows { max-height: 45vh; overflow: auto; }
-.dialog-rows table { margin: 0; }
-.dialog input[type="number"] { width: 7em; }
-.dialog tr.conflict td { background: #fdd; }
-.dialog.confirm { width: min(480px, 100%); }
-button.danger { color: #fff; background: #b00020; border-color: #b00020; }
+  /* The shell: a sticky navy sidebar beside main. min-width: 0 on main lets a wide table scroll inside it instead of the page. */
+  .shell { --side-w: var(--side-w-open); display: flex; min-height: 100vh; }
+  .shell[data-sidebar="minimized"] { --side-w: var(--side-w-closed); }
+  main { flex: 1; min-width: 0; max-width: 1200px; padding: 0 var(--gutter) 48px; }
+  main.wide { max-width: none; }
+  main:focus { outline: none; }
+  .shell-notices { padding-top: 12px; }
+  .shell-notices:empty { display: none; }
+  main:has(.assets-layout) { max-width: none; padding: 0; }
+  main:has(.assets-layout) .shell-notices { padding-inline: var(--gutter); }
+  .skip-link { position: absolute; left: -9999px; top: 0; }
+  .skip-link:focus { left: 8px; top: 8px; z-index: 2000; padding: 4px 8px; background: var(--bg); border: 1px solid var(--border-strong); outline-offset: 0; } /* the ring stays on the link, not out on the navy sidebar */
 
-/* Audit log: the detail is JSON with no spaces, so it must wrap or the page scrolls sideways */
-td code { overflow-wrap: anywhere; white-space: pre-wrap; }
+  /* The sidebar. Its focus ring is --side-accent (--ring equals --accent, which the navy cannot show); no rule with .side in its
+     selector may use var(--accent…), app.css.test.ts checks. z-index 40 keeps the sticky tree column below it, the tip is above. */
+  .side { --ring: var(--side-accent); position: sticky; top: 0; z-index: 40; align-self: flex-start; height: 100vh; width: var(--side-w); flex: none; background: var(--side-bg); color: var(--side-text); }
+  .shell.ready .side { transition: width var(--motion); } /* from the second frame on, so a remembered state does not animate in */
+  .side nav { height: 100%; display: flex; flex-direction: column; }
+  .side .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .brand { position: relative; flex: none; display: flex; align-items: center; gap: 10px; padding: 18px 20px 16px; color: var(--side-text-strong); font-size: var(--fs-md); font-weight: 600; white-space: nowrap; }
+  .brand-mark { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); background: var(--side-accent); }
+  .brand-mark svg { width: 16px; height: 16px; fill: none; stroke: var(--side-bg); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  /* overflow-y auto in both states: on a short window the rail scrolls, the foot stays put */
+  .nav-groups { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 4px 12px 12px; scrollbar-width: thin; scrollbar-color: var(--side-bg-active) transparent; }
+  .nav-group + .nav-group { margin-top: 18px; }
+  .nav-heading { display: block; padding: 0 10px 6px; color: var(--side-muted); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.2px; white-space: nowrap; }
+  .side-row { position: relative; display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; min-height: 36px; padding: 0 10px; border: 0; border-radius: var(--radius); background: none; color: var(--side-text); font-family: inherit; font-size: var(--fs-base); font-weight: 400; line-height: 1.4; text-align: left; text-decoration: none; white-space: nowrap; cursor: pointer; }
+  .side-row svg.i { width: 18px; height: 18px; }
+  .side-row:hover { background: var(--side-bg-hover); color: var(--side-text-strong); text-decoration: none; }
+  .side-row[aria-current="page"] { background: var(--side-bg-active); color: var(--side-text-strong); font-weight: 600; }
+  .side-row[aria-current="page"]::before { content: ""; position: absolute; left: -12px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 2px 2px 0; background: var(--side-accent); }
+  .side-row[aria-current="page"] svg.i { color: var(--side-accent); }
+  .side-foot { flex: none; display: grid; gap: 2px; padding: 10px 12px 12px; border-top: 1px solid var(--side-rule); }
+  .side-foot .side-row { min-height: 34px; font-size: var(--fs-sm); }
+  .who { position: relative; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 4px 10px 8px; white-space: nowrap; }
+  .who .lbl { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); }
+  .avatar { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--side-avatar-bg); color: var(--side-avatar-text); font-size: var(--fs-sm); font-weight: 600; }
+  .who-name { overflow: hidden; text-overflow: ellipsis; color: var(--side-text-strong); font-size: var(--fs-sm); font-weight: 600; }
+  .who-role { overflow: hidden; text-overflow: ellipsis; color: var(--side-muted); font-size: var(--fs-xs); } /* muted text only on the plain navy */
+  .side-toggle { margin-top: 6px; border-top: 1px solid var(--side-rule); border-radius: 0 0 var(--radius) var(--radius); }
+  .shell.ready .side-toggle svg.i { transition: transform var(--motion); }
+  /* Minimized: an icon rail. The labels stay in the DOM (screen readers, tests) and show in the tip below. */
+  .shell[data-sidebar="minimized"] .side .lbl,
+  .shell[data-sidebar="minimized"] .nav-heading { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .shell[data-sidebar="minimized"] .brand { justify-content: center; padding: 18px 0 16px; }
+  .shell[data-sidebar="minimized"] .nav-groups { padding: 4px 10px 12px; }
+  .shell[data-sidebar="minimized"] .nav-group + .nav-group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--side-rule); }
+  .shell[data-sidebar="minimized"] .side-row { justify-content: center; padding: 0; }
+  .shell[data-sidebar="minimized"] .side-row[aria-current="page"]::before { left: -10px; }
+  .shell[data-sidebar="minimized"] .side-foot { padding: 10px; }
+  .shell[data-sidebar="minimized"] .who { justify-content: center; padding: 4px 0 6px; }
+  .shell[data-sidebar="minimized"] .side-toggle svg.i { transform: rotate(180deg); }
+  /* One shared tip, placed by Layout from the row's rectangle. Fixed, because the rail scrolls and would clip a CSS label. */
+  .side-tip { position: fixed; left: calc(var(--side-w-closed) + 8px); z-index: 50; transform: translateY(-50%); display: grid; gap: 1px; padding: 5px 9px; border-radius: var(--radius-sm); background: var(--tooltip-bg); color: var(--tooltip-text); box-shadow: var(--shadow-tip); font-size: var(--fs-sm); font-weight: 500; white-space: nowrap; }
+  .side-tip[hidden] { display: none; }
+  .side-tip-sub { font-size: var(--fs-xs); font-weight: 400; }
 
-/* Billing and cost figures */
-.table-scroll { overflow-x: auto; }
-table.billing th, table.billing td { white-space: nowrap; }
-table.billing tbody th[scope="row"] { position: sticky; left: 0; background: #fff; font-weight: normal; }
+  /* Tables */
+  table { border-collapse: separate; border-spacing: 0; width: 100%; margin: 8px 0; } /* separate: collapsed borders on fractional row heights left a 1px notch */
+  th { padding: 9px var(--row-x); border-bottom: 1px solid var(--border); background: var(--surface); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; text-align: left; vertical-align: middle; white-space: nowrap; }
+  td { padding: var(--row-y) var(--row-x); border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+  tbody th[scope="row"] { padding: var(--row-y) var(--row-x); background: var(--bg); color: var(--text); font-size: var(--fs-base); font-weight: 400; }
+  tbody tr:hover > td { background: var(--row-hover); }
+  td .strong { font-weight: 600; }
+  td .sub { display: block; font-size: var(--fs-xs); color: var(--text-2); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+  .table-wrap > table { margin: 0; }
+  .table-wrap tbody tr:last-child > :is(td, th) { border-bottom: 0; }
+
+  /* Forms and fields */
+  form { display: grid; gap: 8px; max-width: 480px; margin: 8px 0; }
+  label { display: grid; gap: 6px; font-size: var(--fs-sm); font-weight: 600; }
+  label :is(input, select, textarea, .muted, .error) { font-weight: 400; }
+  label.inline, .check, .picker-row { font-weight: 400; }
+  label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) { font-weight: 400; }
+  label .muted, .field-help { font-size: var(--fs-xs); }
+  label .error, .field .error { font-size: var(--fs-xs); font-weight: 600; }
+  input:is(:not([type]), [type="text"], [type="password"], [type="number"], [type="date"], [type="time"], [type="datetime-local"], [type="search"], [type="email"], [type="url"]),
+  select, textarea { min-height: 38px; padding: 0 12px; border: 1px solid var(--field-border); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-base); font-weight: 400; line-height: 1.4; }
+  textarea { width: 100%; min-height: 0; padding: 8px 12px; }
+  input:is(:not([type]), [type="text"], [type="password"], [type="number"], [type="date"], [type="time"], [type="datetime-local"], [type="search"], [type="email"], [type="url"]):disabled,
+  select:disabled, textarea:disabled { background: var(--surface); color: var(--text-disabled); }
+  input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: 0; border-color: var(--ring); }
+  input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+  /* A label that wraps a checkbox or radio reads as [box] text: the control sits in the first column, whatever its place in the DOM
+     (so no visual reordering of anything focusable); a help line under it lines up with the text. The flex variants (.inline,
+     .picker-row, .check) keep their own layout. */
+  label:not(.inline, .picker-row, .check):has(> input[type="checkbox"], > input[type="radio"]) { grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 8px; }
+  label:not(.inline, .picker-row, .check) > :is(input[type="checkbox"], input[type="radio"]) { grid-column: 1; grid-row: 1; margin: 0; }
+  label:not(.inline, .picker-row, .check):has(> input[type="checkbox"], > input[type="radio"]) > :not(input) { grid-column: 2; }
+  input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible { outline-offset: 2px; }
+  :is(input, select, textarea)[aria-invalid="true"] { border-color: var(--crit); }
+  fieldset { border: 1px solid var(--border); border-radius: var(--radius); }
+  legend { font-size: var(--fs-sm); font-weight: 600; }
+
+  /* Audit filter bar and pager: a surface panel with labels above the controls; the pager's page-size group sits at the right */
+  .filter-bar { display: grid; gap: 12px; margin: 8px 0 14px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .filter-bar .row { align-items: flex-end; gap: 12px; }
+  .filter-bar .row[role="group"] { align-items: center; gap: 8px; }
+  .filter-bar .field { display: grid; gap: 6px; }
+  .filter-bar .field.grow { flex: 1 1 220px; }
+  .filter-bar select { min-width: 150px; }
+  .filter-bar p { margin: 0; }
+  .pager { gap: 8px; margin: 12px 0; }
+  .pager input[type="number"] { width: 5em; }
+  .pager-end { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+  /* Buttons: square-ish (radius 4 to 8 px, never a pill). Variants win over the base by class specificity; the base hover and
+     disabled states use :where() so they never outrank a variant. */
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; cursor: pointer; }
+  button svg.i { width: 16px; height: 16px; }
+  button:where(:hover:not(:disabled)) { background: var(--surface); }
+  button:where(:disabled) { opacity: 0.55; cursor: not-allowed; }
+  button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-tint); color: var(--accent-ink); }
+  .primary { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+  .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+  button.danger { border-color: var(--danger); background: var(--danger); color: var(--bg); }
+  button.danger:hover:not(:disabled) { border-color: var(--danger-hover); background: var(--danger-hover); }
+  .quiet { min-height: 30px; padding: 0 10px; border-color: transparent; background: none; color: var(--accent); }
+  .quiet:hover:not(:disabled) { background: var(--accent-tint); }
+  .danger-quiet { min-height: 30px; padding: 0 10px; border-color: transparent; background: none; color: var(--crit); }
+  .danger-quiet:hover:not(:disabled) { background: var(--crit-tint); }
+  .icon-btn { flex: none; display: grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
+  .icon-btn:hover:not(:disabled) { background: var(--accent-tint); color: var(--accent); }
+  .icon-btn svg.i { width: 16px; height: 16px; }
+
+  /* Plain text colours (colour only: they also style text inside the widgets) */
+  .error { color: var(--crit); }
+  .warning { color: var(--warn-ink); }
+  .muted { color: var(--text-2); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  /* Asset page tiles; .tiles is the grid they sit in from 4a on */
+  .tile { max-width: 360px; margin: 0 0 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .tile > .muted:first-child { font-size: var(--fs-sm); }
+  .tile .big { margin-top: 2px; font-size: var(--fs-figure); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .big small { font-size: var(--fs-base); font-weight: 400; }
+  .tile .big.none { font-size: var(--fs-base); font-weight: 400; color: var(--text-2); } /* "no energy data": words, not a measurement, so not set as the figure */
+  .tile > small { display: block; margin-top: 2px; font-size: var(--fs-xs); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 16px; margin-bottom: 26px; }
+  .tiles > .tile { min-width: 0; max-width: none; margin: 0; }
+  .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 12px; margin: 8px 0; max-width: 480px; display: grid; gap: 8px; }
+
+  /* Asset tree column (Assets list page, option B). main is flush on this page (main:has(.assets-layout) above), so the column
+     meets the sidebar; it is sticky and one window tall, and the detail area beside it restores the page gutter. */
+  .assets-layout { display: flex; align-items: flex-start; min-height: 100vh; }
+  .assets-detail { flex: 1; min-width: 0; padding: 0 var(--gutter) 48px; }
+  .tree-col { --w: var(--tree-w); position: sticky; top: 0; align-self: flex-start; width: var(--w); height: 100vh; flex: none; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border-strong); background: var(--bg); }
+  .shell.ready .tree-col { transition: width var(--motion); } /* from the second frame on, so a remembered state does not animate in */
+  .tree-col[data-state="minimized"] { --w: var(--tree-w-closed); background: var(--surface); }
+  .tree-head { display: flex; align-items: center; gap: 4px; flex: none; height: 52px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--border); }
+  .tree-col[data-state="minimized"] .tree-head { justify-content: center; padding: 0; border-bottom: 0; }
+  .tree-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; font-size: var(--fs-md); font-weight: 600; white-space: nowrap; } /* a p, never a heading: the page's h1 is "Assets" */
+  .tree-toggle svg.i { transition: transform var(--motion); }
+  .tree-col[data-state="minimized"] .tree-toggle svg.i { transform: rotate(180deg); }
+  .tree-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .tree-body[hidden] { display: none; }
+  .tree-filter { position: relative; flex: none; padding: 10px 12px 8px; }
+  .tree-filter input[type="search"] { width: 100%; min-height: 34px; padding: 0 10px 0 32px; font-size: var(--fs-sm); }
+  .tree-filter svg.i { position: absolute; left: 22px; top: 19px; width: 16px; height: 16px; color: var(--text-2); pointer-events: none; }
+  .tree-scroll { flex: 1; min-height: 0; overflow: auto; padding: 2px 0 8px; }
+  .tree-empty { margin: 0; padding: 8px 16px; font-size: var(--fs-sm); }
+  ul.tree, ul.tree ul { list-style: none; margin: 0; padding: 0; }
+  ul.tree ul { margin-left: 21px; border-left: 1px solid var(--border); }
+  ul.tree ul[hidden] { display: none; }
+  .node { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 6px; }
+  ul.tree ul > li > .node { padding-left: 8px; }
+  .node:hover { background: var(--surface); }
+  .node a { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .node a:hover { text-decoration: none; }
+  .node .kind { flex: none; max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--text-2); }
+  .twisty { flex: none; display: grid; place-items: center; width: 20px; height: 20px; min-height: 0; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
+  .twisty:hover:not(:disabled) { background: var(--border); color: var(--text); }
+  .twisty svg.i { width: 16px; height: 16px; transition: transform var(--motion); }
+  .twisty[aria-expanded="false"] svg.i { transform: rotate(-90deg); }
+  .twisty-sp { flex: none; width: 20px; }
+  .node .add { flex: none; display: grid; place-items: center; width: 24px; height: 24px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
+  .node .add:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg); color: var(--accent); }
+  .node .add svg.i { width: 14px; height: 14px; }
+  .node.is-selected { background: var(--accent-tint); box-shadow: inset 3px 0 0 var(--accent); }
+  .node.is-selected a { color: var(--accent-ink); font-weight: 600; }
+  .detail-meta { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 0 0 18px; font-size: var(--fs-sm); }
+  .detail-meta div { display: flex; gap: 8px; }
+  .detail-meta dt { color: var(--text-2); }
+  .detail-meta dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
+
+  /* Page header: crumbs, the one h1, a sub line and the actions on the right */
+  .page-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; align-items: end; margin: 0 0 22px; padding: 22px 0 18px; border-bottom: 1px solid var(--border); }
+  .page-head > * { grid-column: 1; margin: 0; }
+  .page-head h1 { font-size: var(--fs-title); font-weight: 600; line-height: 1.25; letter-spacing: -0.2px; }
+  .page-head .crumbs { margin-bottom: 4px; font-size: var(--fs-sm); color: var(--text-2); }
+  .page-head .crumbs a { color: var(--text-2); }
+  .page-head .sub { margin-top: 2px; font-size: var(--fs-sm); color: var(--text-2); }
+  .page-head > .actions { grid-column: 2; grid-row: 1 / span 3; align-self: end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  /* A titled block under the page header (Users, Settings, Storage, Audit entry, Scans): one rule, so no page file can restyle another's */
+  .section-title { margin: 28px 0 12px; font-size: var(--fs-lg); font-weight: 600; }
+
+  /* Status chips: tinted fill, a shape, and always the word (colour plus shape plus word) */
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: var(--radius-sm); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
+  .chip::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .chip-ok { background: var(--ok-tint); color: var(--ok); }
+  .chip-stale { background: var(--stale-tint); color: var(--stale); }
+  .chip-stale::before { background: none; box-shadow: inset 0 0 0 1.5px currentColor; }
+  .chip-warn { background: var(--warn-tint); color: var(--warn); }
+  .chip-warn::before { width: 8px; height: 7px; border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+  .chip-bad { background: var(--crit-tint); color: var(--crit); }
+  .chip-bad::before { width: 7px; height: 7px; border-radius: 0; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+  .chip-off { background: var(--bg); color: var(--text-disabled); box-shadow: inset 0 0 0 1px var(--border-strong); }
+  .chip-off::before { width: 7px; height: 2px; border-radius: 0; }
+
+  /* Status icons: the same shapes without a chip, for a bare mark (give it role="img" and an aria-label) */
+  .st { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
+  .st::before { content: ""; flex: none; width: 8px; height: 8px; background: currentColor; }
+  .st-ok { color: var(--ok); }
+  .st-ok::before { border-radius: 50%; }
+  .st-stale { color: var(--stale); }
+  .st-stale::before { border-radius: 50%; background: none; box-shadow: inset 0 0 0 1.6px currentColor; }
+  .st-warn { color: var(--warn); }
+  .st-warn::before { width: 9px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+  .st-bad { color: var(--crit); }
+  .st-bad::before { width: 9px; height: 9px; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+  .st-off { color: var(--text-disabled); font-weight: 500; }
+  .st-off::before { width: 8px; height: 2px; }
+
+  /* Banners and notices */
+  .banner { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 20px; padding: 12px 16px; border: 1px solid; border-radius: var(--radius); font-size: var(--fs-sm); }
+  .banner svg.i { margin-top: 1px; }
+  .banner strong { font-weight: 600; }
+  .banner .b-act { margin: -5px 0 -5px auto; min-height: 28px; white-space: nowrap; } /* a button as tall as one text line, so the text and the button centre on each other */
+  .banner-warn { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
+  .banner-warn svg.i { color: var(--warn-icon); }
+  .banner > span { flex: 1 1 auto; min-width: 0; }
+  .banner-bad { border-color: var(--crit); background: var(--crit-tint); color: var(--crit); } /* an expired certificate: tint, border and ink are all the critical token */
+  .banner-info { border-color: var(--info-line); background: var(--info-tint); color: var(--info-ink); }
+  .notice { display: flex; gap: 12px; align-items: flex-start; margin-top: 16px; padding: 12px 16px; border: 1px solid var(--border); border-left: 3px solid var(--text-disabled); border-radius: var(--radius); font-size: var(--fs-sm); color: var(--text); }
+  .notice svg.i { margin-top: 1px; color: var(--text-2); }
+
+  /* Empty state */
+  .empty { display: grid; justify-items: center; gap: 8px; padding: 36px 24px; border: 1px dashed var(--border-strong); border-radius: var(--radius); text-align: center; }
+  .empty-icon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 4px; border-radius: var(--radius); background: var(--accent-tint); color: var(--accent); }
+  .empty-icon svg.i { width: 22px; height: 22px; }
+  .empty h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
+  .empty p { margin: 0; max-width: 420px; font-size: var(--fs-sm); color: var(--text-2); }
+  .empty button { margin-top: 8px; }
+
+  /* Discovery graph. The page is exactly one window tall (the shell, then main beside the sidebar), and the canvas takes what
+     the header leaves, so nothing scrolls and nothing at the canvas edge is clipped. A canvas is never shorter than 320px (the
+     page scrolls then). */
+  .shell:has(.graph-page) { height: 100vh; }
+  main:has(.graph-page) { max-width: none; display: flex; flex-direction: column; min-height: 0; }
+  .graph-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .graph-page h1 { margin: 0; }
+  .graph-page > .row { flex: none; margin-bottom: 8px; }
+  .graph-layout { flex: 1; min-height: 320px; display: flex; gap: 12px; }
+  .graph-canvas { flex: 1; min-width: 0; border: 1px solid var(--border-strong); position: relative; }
+  .graph-canvas .react-flow__controls button { min-height: 0; border-radius: 0; font-weight: 400; opacity: 1; } /* opacity 1: React Flow dims a disabled zoom button itself, the base disabled rule must not dim it twice */
+  .gpanel { width: 320px; flex: none; align-content: start; overflow: auto; margin: 0; }
+  .gpanel h2 { margin: 0; font-size: 16px; }
+  .gpanel .spacer { flex: 1; }
+  .gnode { width: 220px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--border-strong); border-style: solid; font-size: 12px; }
+  .gnode-source.discovered, .gnode-cluster, .gnode-point { border-style: dashed; }
+  .gnode-unidentified { background: var(--surface); color: var(--text-2); border-color: var(--field-border); }
+  .gnode .node-title { font-weight: 600; overflow-wrap: anywhere; }
+  .gnode .row { gap: 4px; flex-wrap: nowrap; justify-content: space-between; }
+  .gnode button { min-height: 0; padding: 0 6px; font-size: 11px; font-weight: 400; }
+  .gnode .badge { display: inline-block; margin-top: 2px; padding: 0 4px; border: 1px solid var(--crit); color: var(--crit); }
+  .offer-bar { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10; display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border-strong); }
+
+  /* Dialogs */
+  .dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--backdrop); }
+  .dialog { width: min(960px, 100%); max-height: 100%; overflow: auto; display: grid; gap: 16px; align-content: start; padding: 22px 24px; background: var(--bg); border-radius: var(--radius-lg); box-shadow: var(--shadow-dialog); }
+  .dialog h2, .dialog p { margin: 0; }
+  .dialog form { max-width: none; margin: 0; gap: 12px; }
+  .dialog, .dialog form, .dialog label, .dialog .field { grid-template-columns: minmax(0, 1fr); } /* a long option text must not widen the dialog */
+  .dialog > .row:last-child, .dialog > form > .row:last-child { justify-content: flex-end; } /* the buttons: Cancel, then the primary, at the right */
+  .dialog h2 { font-size: var(--fs-lg); font-weight: 600; }
+  .dialog fieldset { display: grid; gap: 8px; max-width: 480px; margin: 0; padding: 8px 12px; }
+  .dialog .field { display: grid; gap: 6px; }
+  .dialog label.inline { display: flex; gap: 6px; align-items: center; }
+  .dialog-rows { max-height: 45vh; overflow: auto; }
+  .dialog-rows table { margin: 0; }
+  .dialog-rows th { position: sticky; top: 0; z-index: 1; }
+  .dialog input[type="number"] { width: 7em; }
+  .dialog tr.conflict td { background: var(--crit-tint); }
+  .dialog.confirm { width: min(480px, 100%); }
+  .dialog.narrow { width: min(440px, 100%); }
+
+  /* Audit log: the detail is JSON with no spaces, so it must wrap or the page scrolls sideways */
+  td code { overflow-wrap: anywhere; white-space: pre-wrap; }
+
+  /* Billing and cost figures. The muted shaded cell is frozen below, with the widget rules. */
+  .table-scroll { overflow-x: auto; }
+  table.billing th, table.billing td { white-space: nowrap; }
+  table.billing tbody th[scope="row"] { position: sticky; left: 0; background: var(--bg); font-weight: normal; }
+  abbr[title] { text-decoration: none; cursor: help; }
+  ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; margin: 8px 0; }
+
+  /* Dashboard page header (the widgets below it are frozen) */
+  .dash-head { margin-bottom: 8px; }
+  .dash-head h1 { margin: 0; font-size: var(--fs-title); font-weight: 600; line-height: 1.25; letter-spacing: -0.2px; }
+  .row .spacer, .widget-head .spacer { flex: 1; }
+
+  /* Widget editor dialog: it takes the dialog's controls and tokens, its layout is unchanged */
+  .editor-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .editor-cols > div { display: grid; gap: 8px; align-content: start; }
+  .editor-cols h3 { margin: 0; font-size: 14px; }
+  .asset-picker { max-width: none; }
+  .picker-list { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; }
+  .picker-row { display: flex; gap: 6px; align-items: center; }
+  .issues { margin: 0; padding-left: 18px; }
+
+  /* Narrow windows: tighter page gutter and tree column. Set on #root, not :root (a second :root rule would make every
+     var() ambiguous for the contrast test). */
+  @media (max-width: 1179.98px) {
+    #root { --gutter: 22px; --tree-w: 248px; }
+    .node .kind { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; }
+  }
+}
+
+/* ===== Frozen: the dashboard widgets and the editor grid. Unlayered and last, so nothing in the layer can outrank them. ===== */
+
+/* The island. Properties that only the layer sets (nowrap on th, a row hover tint, the 34px button, the status chip) would
+   otherwise reach a widget, so these elements go back to the browser default and get today's literals back. */
+:is(.widget-frame, .widget-preview) { color: #000; font: 14px/1.4 system-ui, sans-serif; }
+:is(.widget-frame, .widget-preview) table { all: revert; box-sizing: border-box; border-collapse: collapse; width: 100%; margin: 8px 0; }
+:is(.widget-frame, .widget-preview) th, :is(.widget-frame, .widget-preview) td { all: revert; box-sizing: border-box; border: 1px solid #000; padding: 4px 8px; text-align: left; vertical-align: top; }
+:is(.widget-frame, .widget-preview) td.muted { color: #555; }
+:is(.widget-frame, .widget-preview) button { all: revert; box-sizing: border-box; padding: 4px 10px; cursor: pointer; }
+:is(.widget-frame, .widget-preview) .widget-actions button { padding: 0 6px; font-size: 12px; }
+:is(.widget-frame, .widget-preview) .chip { all: revert; box-sizing: border-box; display: inline-block; padding: 0 6px; border: 1px solid #000; font-size: 12px; white-space: nowrap; }
+:is(.widget-frame, .widget-preview) .chip::before { content: none; }
+:is(.widget-frame, .widget-preview) .chip-warn { border-color: #b00; color: #b00; }
+
+/* Billing: the muted cell's ink and ground are literals because app.css.test.ts reads them (5.22:1) */
 table.billing td.muted, table.billing td.muted .muted { color: #666; }
 table.billing td.muted { background: #f4f4f4; }
-td.num { text-align: right; }
-abbr[title] { text-decoration: none; cursor: help; }
-ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; margin: 8px 0; }
 
 /* Dashboards */
-.dash-head { margin-bottom: 8px; }
-.dash-head h1 { margin: 0; font-size: 20px; }
-.row .spacer, .widget-head .spacer { flex: 1; }
 .dash-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); }
 .dash-cell { min-width: 0; min-height: 0; }
 .widget-frame { height: 100%; display: flex; flex-direction: column; border: 1px solid #000; background: #fff; }
@@ -90,14 +391,11 @@ ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; pad
 .widget-notes { display: flex; flex-wrap: wrap; gap: 0 12px; margin: 0; padding: 2px 8px; border-bottom: 1px solid #ddd; }
 .widget-body { flex: 1; min-height: 0; padding: 8px; overflow: auto; }
 .widget-body table { margin: 0; }
-.chip { display: inline-block; padding: 0 6px; border: 1px solid #000; font-size: 12px; white-space: nowrap; }
-.chip-warn { border-color: #b00; color: #b00; }
 .stat .big { font-size: 32px; }
 .stat .big small { font-size: 14px; margin-left: 4px; }
 .stat .big.muted { color: #6e6e6e; }
 .stat > .muted:not(.big), .widget-body td:first-child { overflow-wrap: anywhere; } /* the asset name only, never a figure */
 .gauge { height: 100%; display: flex; flex-direction: column; }
-.dialog.narrow { width: min(440px, 100%); }
 @media (max-width: 700px) {
   .dash-grid { display: block; }
   .dash-cell { grid-column: auto !important; grid-row: auto !important; height: 280px; margin-bottom: 10px; }
@@ -110,14 +408,7 @@ ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; pad
 .dash-grid-edit .react-grid-item.react-grid-placeholder { background: #000; }
 .widget-actions { display: inline-flex; gap: 4px; }
 .widget-actions button { padding: 0 6px; font-size: 12px; }
-.editor-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.editor-cols > div { display: grid; gap: 8px; align-content: start; }
-.editor-cols h3 { margin: 0; font-size: 14px; }
 .widget-preview { height: 260px; }
-.asset-picker { max-width: none; }
-.picker-list { max-height: 220px; overflow: auto; border: 1px solid #000; padding: 4px; }
-.picker-row { display: flex; gap: 6px; align-items: center; }
-.issues { margin: 0; padding-left: 18px; }
 @media (max-width: 700px) {
   .editor-cols { grid-template-columns: minmax(0, 1fr); }
 }

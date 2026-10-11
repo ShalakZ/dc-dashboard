@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
+import { roleLabel } from "./roles";
 
 // W3c (the Audit screen: filters, quick filters, search, a permanent link per entry, links to the thing an entry is about, the friendly
 // and the raw view, CSV export, "Go to date", page size and page controls, admin only) on the state the earlier projects leave behind:
@@ -37,7 +38,9 @@ async function signIn(page: Page, who: { username: string; password: string }, r
   await page.getByLabel("Username").fill(who.username);
   await page.getByLabel("Password", { exact: true }).fill(who.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("navigation")).toContainText(`${who.username} (${role})`);
+  const userBlock = page.getByRole("navigation").locator(".who");
+  await expect(userBlock).toContainText(who.username);
+  await expect(userBlock).toContainText(roleLabel(role));
 }
 
 /** Today as `YYYY-MM-DD` on the site's wall clock, which is what the screen and the API call "today". */

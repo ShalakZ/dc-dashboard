@@ -57,7 +57,7 @@ export function MappingForm({ assets, initial, unitHint, onSubmit, onCancel }: {
       <label>Scale<input type="number" step="any" min="0" value={scale} onChange={(e) => setScale(e.target.value)} /></label>
       <label>Custom unit<input value={unit} disabled={metric !== "custom"} onChange={(e) => setUnit(e.target.value)} /></label>
       {error && <p className="error" role="alert">{error}</p>}
-      <div className="row"><button type="submit" disabled={submitting}>Save</button><button type="button" onClick={onCancel} disabled={submitting}>Cancel</button></div>
+      <div className="row"><button type="button" onClick={onCancel} disabled={submitting}>Cancel</button><button type="submit" className="primary" disabled={submitting}>Save</button></div>
     </form>
   );
 }

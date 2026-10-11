@@ -4,6 +4,11 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import "./app.css";
+import "./styles/pages-assets.css";
+import "./styles/pages-sources.css";
+import "./styles/pages-billing.css";
+import "./styles/pages-admin.css";
+import "./styles/pages-auth.css";
 import { App } from "./App";
 import { AuthProvider } from "./auth/AuthProvider";
 

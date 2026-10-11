@@ -391,3 +391,45 @@ describe("SourcePointsPage mapping dialog", () => {
     expect(screen.getByLabelText("Metric")).toHaveValue("energy_kwh");
   });
 });
+
+describe("SourcePointsPage look (W6)", () => {
+  const page = () => renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
+
+  it("writes the crumb as plain text: no link named Sources next to the sidebar's, one h1 Points, Browse points the primary action", async () => {
+    mockFetch(routes);
+    page();
+    const crumb = await screen.findByText("/ sim");
+    expect(crumb).toHaveClass("crumbs");
+    expect(within(crumb).queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Sources" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Browse points" })).toHaveClass("primary");
+  });
+
+  it("shows an unmapped point with a shape and the word, and a mapped one as plain text", async () => {
+    mockFetch(routes);
+    page();
+    const unmapped = within((await screen.findByText("panel1/power")).closest("tr")!).getByText("unmapped");
+    expect(unmapped).toHaveClass("muted", "st", "st-off");
+    expect(within(screen.getByText("panel1/energy").closest("tr")!).queryByText("unmapped")).not.toBeInTheDocument();
+  });
+
+  it("a sort header is a quiet button inside the th, and only the sorted one draws the arrow", async () => {
+    mockFetch(routes);
+    page();
+    await screen.findByText("panel1/power");
+    const address = screen.getByRole("button", { name: "Address" });
+    expect(address).toHaveClass("th-sort");
+    expect(address.querySelector("svg.sort-mark")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Name" }).querySelector("svg")).toBeNull();
+    expect(address.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("with no points, shows the empty look instead of an empty table", async () => {
+    mockFetch({ ...routes, "GET /api/sources/2/points": { body: [] } });
+    page();
+    const empty = await screen.findByText(/No points yet/);
+    expect(empty.closest(".empty")).not.toBeNull();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+});

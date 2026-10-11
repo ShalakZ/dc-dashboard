@@ -22,7 +22,7 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
   const [deleting, setDeleting] = useState(false);
   return (
     <tr>
-      <td>{user.username}</td>
+      <td className="cell-user" title={user.username}>{user.username}</td>
       <td>
         <select
           aria-label={`Role for ${user.username}`}
@@ -36,46 +36,53 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
         </select>
       </td>
       <td>
-        {user.active ? "active" : "inactive"}
-        {user.blocked && <> <span className="error">blocked</span></>}
+        <span className="chips">
+          <span className={user.active ? "chip chip-ok" : "chip chip-off"}>{user.active ? "active" : "inactive"}</span>
+          {user.blocked && <span className="chip chip-bad">blocked</span>}
+        </span>
       </td>
       <td>
-        <button
-          disabled={self || patch.isPending}
-          onClick={() => patch.mutate({ id: user.id, body: { active: !user.active } })}
-        >
-          {user.active ? "Deactivate" : "Activate"}
-        </button>{" "}
-        {resetting ? (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              patch.mutate(
-                { id: user.id, body: { password: newPassword } },
-                { onSuccess: () => { setResetting(false); setNewPassword(""); } },
-              );
-            }}
+        <div className="row-actions">
+          <button
+            type="button"
+            className="quiet"
+            disabled={self || patch.isPending}
+            onClick={() => patch.mutate({ id: user.id, body: { active: !user.active } })}
           >
-            <input
-              aria-label={`New password for ${user.username}`}
-              type="password"
-              minLength={8}
-              required
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-            />
-            <button type="submit" disabled={patch.isPending}>Save</button>
-            <button type="button" onClick={() => setResetting(false)}>Cancel</button>
-          </form>
-        ) : (
-          <button onClick={() => setResetting(true)}>Reset password</button>
-        )}{" "}
-        {user.blocked && (
-          <button aria-label={`Unblock ${user.username}`} disabled={unblock.isPending} onClick={() => unblock.mutate(user.id)}>Unblock</button>
-        )}{" "}
-        <button aria-label={`Delete ${user.username}`} disabled={self} onClick={() => setDeleting(true)}>Delete</button>
-        {patch.isError && <span className="error" role="alert"> {errorText(patch.error)}</span>}
-        {unblock.isError && <span className="error" role="alert"> {errorText(unblock.error)}</span>}
+            {user.active ? "Deactivate" : "Activate"}
+          </button>
+          {resetting ? (
+            <form
+              className="reset-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                patch.mutate(
+                  { id: user.id, body: { password: newPassword } },
+                  { onSuccess: () => { setResetting(false); setNewPassword(""); } },
+                );
+              }}
+            >
+              <input
+                aria-label={`New password for ${user.username}`}
+                type="password"
+                minLength={8}
+                required
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
+              <button type="submit" disabled={patch.isPending}>Save</button>
+              <button type="button" className="quiet" onClick={() => setResetting(false)}>Cancel</button>
+            </form>
+          ) : (
+            <button className="quiet" onClick={() => setResetting(true)}>Reset password</button>
+          )}
+          {user.blocked && (
+            <button className="quiet" aria-label={`Unblock ${user.username}`} disabled={unblock.isPending} onClick={() => unblock.mutate(user.id)}>Unblock</button>
+          )}
+          <button className="danger-quiet" aria-label={`Delete ${user.username}`} disabled={self} onClick={() => setDeleting(true)}>Delete</button>
+        </div>
+        {patch.isError && <span className="error row-error" role="alert"> {errorText(patch.error)}</span>}
+        {unblock.isError && <span className="error row-error" role="alert"> {errorText(unblock.error)}</span>}
         {deleting && (
           <ConfirmDeleteDialog
             title={`Delete user ${user.username}?`}
@@ -103,45 +110,54 @@ export function UsersPage() {
   const heading = useRef<HTMLHeadingElement>(null);
   const [deletions, setDeletions] = useState(0);
   useEffect(() => { if (deletions > 0) heading.current?.focus(); }, [deletions]);
-  if (users.isPending) return <p>loading…</p>;
+  if (users.isPending) return <p className="muted">loading…</p>;
   if (users.isError) return <p className="error" role="alert">{errorText(users.error)}</p>;
   return (
-    <section>
-      <h1 ref={heading} tabIndex={-1}>Users</h1>
-      <table>
-        <thead>
-          <tr><th>Username</th><th>Role</th><th>Status</th><th></th></tr>
-        </thead>
-        <tbody>
-          {users.data.map((u) => <UserRowView key={u.id} user={u} self={u.id === me?.id} onDeleted={() => setDeletions((n) => n + 1)} />)}
-        </tbody>
-      </table>
-      <h2>Create user</h2>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          create.mutate(form, { onSuccess: () => setForm({ username: "", password: "", role: "viewer" }) });
-        }}
-      >
-        <label>
-          Username{" "}
-          <input value={form.username} required maxLength={64} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-        </label>
-        <label>
-          Password{" "}
-          <input type="password" value={form.password} required minLength={8} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-        </label>
-        <label>
-          Role{" "}
-          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}>
-            {ROLES.map((r) => (
-              <option key={r} value={r}>{r}</option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" disabled={create.isPending}>Create user</button>
-        {create.isError && <p className="error" role="alert">{errorText(create.error)}</p>}
-      </form>
+    <section className="admin-page users-page">
+      {/* PageHeader's markup, written out here because the h1 must take focus after a delete (PageHeader forwards no ref) */}
+      <header className="page-head">
+        <h1 ref={heading} tabIndex={-1}>Users</h1>
+        <p className="sub">Who can sign in, and what each account may do.</p>
+      </header>
+      <div className="table-wrap">
+        <table className="users-table">
+          <thead>
+            <tr><th>Username</th><th>Role</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody>
+            {users.data.map((u) => <UserRowView key={u.id} user={u} self={u.id === me?.id} onDeleted={() => setDeletions((n) => n + 1)} />)}
+          </tbody>
+        </table>
+      </div>
+      <div className="form-card wide">
+        <h2 className="section-title">Create user</h2>
+        <form
+          className="create-user"
+          onSubmit={(e) => {
+            e.preventDefault();
+            create.mutate(form, { onSuccess: () => setForm({ username: "", password: "", role: "viewer" }) });
+          }}
+        >
+          <label>
+            Username{" "}
+            <input value={form.username} required maxLength={64} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+          </label>
+          <label>
+            Password{" "}
+            <input type="password" value={form.password} required minLength={8} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          </label>
+          <label>
+            Role{" "}
+            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}>
+              {ROLES.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" className="primary" disabled={create.isPending}>Create user</button>
+          {create.isError && <p className="error" role="alert">{errorText(create.error)}</p>}
+        </form>
+      </div>
     </section>
   );
 }

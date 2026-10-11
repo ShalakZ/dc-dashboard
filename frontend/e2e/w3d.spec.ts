@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
+import { roleLabel } from "./roles";
 
 // W3d (sign-in protection and Users: the admin sets how many failed sign-ins block an account and for how long, a blocked account shows
 // on the Users page and can be unblocked, an account can be deleted and its past audit entries keep its name; and no screen or API answer
@@ -50,7 +51,9 @@ async function signIn(page: Page, who: Account, role: string) {
   await page.getByLabel("Username").fill(who.username);
   await page.getByLabel("Password", { exact: true }).fill(who.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("navigation")).toContainText(`${who.username} (${role})`);
+  const userBlock = page.getByRole("navigation").locator(".who");
+  await expect(userBlock).toContainText(who.username);
+  await expect(userBlock).toContainText(roleLabel(role));
 }
 
 async function signOut(page: Page) {

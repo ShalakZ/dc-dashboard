@@ -79,11 +79,45 @@ describe("TariffsPage", () => {
     expect(screen.queryByText(/Set the currency first/)).not.toBeInTheDocument();
   });
 
+  it("opens with the shared page header (one h1 in a .page-head), the tables in .table-wrap and the notes in the header", async () => {
+    open();
+    const defaults = await screen.findByRole("table", { name: "Site default rates" });
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1, name: "Tariffs" }).closest("header")).toHaveClass("page-head");
+    expect(defaults.closest(".table-wrap")).not.toBeNull();
+    expect(screen.getByRole("table", { name: "Asset overrides" }).closest(".table-wrap")).not.toBeNull();
+    // the explanation of how a rate applies is said once, in the header
+    expect(screen.getAllByText(/A rate applies from its effective date/)).toHaveLength(1);
+    expect(screen.getByText(/A rate applies from its effective date/).closest(".page-head")).not.toBeNull();
+  });
+
+  it("styles the row actions as quiet (Edit) and danger-quiet (Delete), and has at most one primary button", async () => {
+    open();
+    const row = (await screen.findByText("2026-10-01")).closest("tr")!;
+    expect(within(row).getByRole("button", { name: "Edit" })).toHaveClass("quiet");
+    expect(within(row).getByRole("button", { name: "Delete" })).toHaveClass("danger-quiet");
+    // the page has no primary button: the two Add rate buttons and the currency Save are plain (none is invented here)
+    expect(document.querySelectorAll(".primary").length).toBeLessThanOrEqual(1);
+    expect(document.querySelectorAll(".primary")).toHaveLength(0);
+    expect(screen.getAllByRole("button", { name: "Add rate" })).toHaveLength(2);
+  });
+
+  it("puts the currency notes in info banners that keep role status", async () => {
+    currency = null;
+    open();
+    for (const note of [await screen.findByText(/No currency is set/), await screen.findByText(/Set the currency first/)]) {
+      expect(note).toHaveClass("banner", "banner-info");
+      expect(note).toHaveAttribute("role", "status");
+    }
+  });
+
   it("shows empty states when there are no rates and no overrides", async () => {
     rows = [];
     open();
     expect(await screen.findByText(/No site default rate yet/)).toBeInTheDocument();
     expect(screen.getByText(/No overrides/)).toBeInTheDocument();
+    expect(screen.getByText(/No site default rate yet/).closest(".empty")).not.toBeNull();
+    expect(screen.getByText(/No overrides/).closest(".empty")).not.toBeNull();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 

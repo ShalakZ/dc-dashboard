@@ -1,9 +1,10 @@
 import { lazy, Suspense, useMemo } from "react";
-import { Link, useParams } from "react-router";
+import { useParams } from "react-router";
 import { useSummary } from "../api/queries";
 import { CostTile } from "../components/CostTile";
 import { EnergyTile } from "../components/EnergyTile";
 import { fmt, MetricsTable } from "../components/MetricsTable";
+import { PageHeader } from "../components/PageHeader";
 import { useStream } from "../hooks/useStream";
 import { rollupNote, rollupPower } from "../lib/rollup";
 
@@ -29,23 +30,29 @@ export function AssetPage() {
   const rollup = sources.length > 0 ? rollupPower(sources, live) : null;
   const note = rollup && rollupNote(rollup, sources);
   return (
-    <>
-      <p><Link to="/assets">Assets</Link> / {data.asset.name}</p>
-      <div className="row"><h1>{data.asset.name}</h1>{wanted.size > 0 && <span className="muted">{connected ? "live" : "reconnecting…"}</span>}</div>
-      <div className="tile">
-        <div className="muted">Live power</div>
-        <div className="big">{power ? `${fmt(livePower)} kW` : rollup?.kw != null ? `${fmt(rollup.kw)} kW` : "—"}</div>
-        {note && <small className="muted" title={note.title}>{note.text}</small>}
-        {note?.silent && <div className="muted"><small>Not reporting: {note.silent}</small></div>}
+    <div className="asset-page">
+      {/* The crumb is plain text: the sidebar's Assets link is the one link of that name (e2e clicks it unscoped). */}
+      <PageHeader
+        title={data.asset.name}
+        crumbs="Assets"
+        actions={wanted.size > 0 ? <span className={connected ? "chip chip-ok" : "chip chip-warn"}>{connected ? "live" : "reconnecting…"}</span> : undefined}
+      />
+      <div className="tiles">
+        <div className="tile">
+          <div className="muted">Live power</div>
+          <div className="big">{power ? `${fmt(livePower)} kW` : rollup?.kw != null ? `${fmt(rollup.kw)} kW` : "—"}</div>
+          {note && <small className="muted" title={note.title}>{note.text}</small>}
+          {note?.silent && <div className="muted"><small>Not reporting: {note.silent}</small></div>}
+        </div>
+        <EnergyTile energy={data.energy_today} />
+        <CostTile cost={data.cost_today ?? null} currency={data.currency ?? null} />
       </div>
-      <EnergyTile energy={data.energy_today} />
-      <CostTile cost={data.cost_today ?? null} currency={data.currency ?? null} />
       <h2>Trend</h2>
       <Suspense fallback={<p className="muted">loading chart…</p>}>
         <TrendChart assetId={id} metrics={data.metrics} />
       </Suspense>
       <h2>Metrics</h2>
       <MetricsTable metrics={data.metrics} live={live} />
-    </>
+    </div>
   );
 }

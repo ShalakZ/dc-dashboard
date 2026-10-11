@@ -226,14 +226,48 @@ describe("BillingPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("site timezone must have a whole-hour UTC offset");
   });
 
+  it("opens with the shared page header (one h1 in a .page-head) over one table in a .table-wrap", async () => {
+    open();
+    await screen.findByRole("rowheader", { name: "Site" });
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1, name: "Billing" }).closest("header")).toHaveClass("page-head");
+    expect(screen.getByRole("table").closest(".table-scroll")).toHaveClass("table-wrap");
+    // exactly one table, and the figure cell keeps its two bare divs (e2e reads the first and the last)
+    expect(screen.getAllByRole("table")).toHaveLength(1);
+    expect(tdsOf("Site")[1].querySelectorAll(":scope > div")).toHaveLength(2);
+  });
+
+  it("makes Download CSV the page's one primary button and numbers right-aligned", async () => {
+    open();
+    await screen.findByRole("rowheader", { name: "Site" });
+    expect(document.querySelectorAll(".primary")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Download CSV" })).toHaveClass("primary");
+    expect(screen.getByRole("columnheader", { name: "Month total" })).toHaveClass("num");
+    expect(screen.getByRole("columnheader", { name: "2" })).toHaveClass("num");
+  });
+
+  it("shows the admin's missing-rate note as a warning banner", async () => {
+    open("admin");
+    await screen.findByRole("rowheader", { name: "Annex" });
+    expect(screen.getByRole("status")).toHaveClass("banner", "banner-warn");
+  });
+
+  it("shows the viewer's missing-rate note as a warning banner too", async () => {
+    open("viewer");
+    await screen.findByRole("rowheader", { name: "Annex" });
+    expect(screen.getByRole("status")).toHaveClass("banner", "banner-warn");
+  });
+
   it("says so when there are no assets", async () => {
     open("viewer", { body: { ...costs, assets: [] } });
     expect(await screen.findByText("No assets yet.")).toBeInTheDocument();
+    expect(screen.getByText("No assets yet.").closest(".empty")).not.toBeNull();
   });
 
   it("says so when no asset has energy data in the month", async () => {
     const none = costs.assets.map((a) => ({ ...a, days: a.days.map(() => null), total: null }));
     open("viewer", { body: { ...costs, assets: none } });
     expect(await screen.findByText("No energy data for this month.")).toBeInTheDocument();
+    expect(screen.getByText("No energy data for this month.").closest(".empty")).not.toBeNull();
   });
 });

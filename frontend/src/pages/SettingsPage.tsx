@@ -3,6 +3,7 @@ import { ApiError } from "../api/client";
 import type { TlsStatus } from "../api/types";
 import { useGeneralSettings, usePutGeneralSettings, usePutSignInPolicy, useSignInPolicy, useTlsStatus } from "../api/queries";
 import { daysLeftText } from "../components/CertificateNotice";
+import { PageHeader } from "../components/PageHeader";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 /** ApiError.message already carries the API's `detail`; drop pydantic's "Value error, " prefix. */
@@ -46,9 +47,9 @@ function SignInProtection() {
     put.reset();
   };
   return (
-    <>
-      <h2 id="sign-in-protection">Sign-in protection</h2>
-      {policy.isPending && <p>loading…</p>}
+    <div className="form-card">
+      <h2 id="sign-in-protection" className="section-title">Sign-in protection</h2>
+      {policy.isPending && <p className="muted">loading…</p>}
       {policy.isError && <p className="error" role="alert">{detailText(policy.error)}</p>}
       {policy.data && (
         <form
@@ -86,12 +87,14 @@ function SignInProtection() {
             After this many wrong passwords for one account from one computer, that account is blocked from that computer for
             this long. Restarting the api service clears every block; Unblock on the Users page lets one account in sooner.
           </p>
-          <button type="submit" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
-          {put.isSuccess && <span className="muted"> saved</span>}
+          <div className="row">
+            <button type="submit" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
+            {put.isSuccess && <span className="muted"> saved</span>}
+          </div>
           {put.isError && <p className="error" role="alert">{detailText(put.error)}</p>}
         </form>
       )}
-    </>
+    </div>
   );
 }
 
@@ -105,42 +108,56 @@ export function SettingsPage() {
   useEffect(() => {
     if (settings.data) setTimezone(settings.data.timezone);
   }, [settings.data]);
-  if (settings.isPending) return <p>loading…</p>;
+  if (settings.isPending) return <p className="muted">loading…</p>;
   if (settings.isError) return <p className="error" role="alert">{detailText(settings.error)}</p>;
   return (
-    <section>
-      <h1>Settings</h1>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          put.mutate({ timezone });
-        }}
-      >
-        <label>
-          Timezone{" "}
-          <input
-            list="tz-options"
-            value={timezone}
-            required
-            onChange={(e) => {
-              setTimezone(e.target.value);
-              put.reset();
-            }}
-          />
-        </label>
-        <datalist id="tz-options">
-          {ZONES.map((z) => <option key={z} value={z} />)}
-        </datalist>
-        <p className="muted">
-          The site's time zone. It decides where a day and a month start (today, yesterday, this month and last month in
-          energy totals, Billing and dashboard ranges) and the times shown in the app. Readings are stored in UTC.
-        </p>
-        <button type="submit" disabled={put.isPending}>Save</button>
-        {put.isSuccess && <span className="muted"> saved</span>}
-        {put.isError && <p className="error" role="alert">{detailText(put.error)}</p>}
-      </form>
-      {tls.data?.enabled && <p>Certificate: {certificateText(tls.data, settings.data.timezone)}</p>}
-      <SignInProtection />
+    <section className="admin-page settings-page">
+      <PageHeader title="Settings" sub="Options that apply to the whole site." />
+      <div className="settings-grid">
+        <div className="settings-col">
+          <div className="form-card">
+            <h2 className="section-title">General</h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                put.mutate({ timezone });
+              }}
+            >
+              <label>
+                Timezone{" "}
+                <input
+                  list="tz-options"
+                  value={timezone}
+                  required
+                  onChange={(e) => {
+                    setTimezone(e.target.value);
+                    put.reset();
+                  }}
+                />
+              </label>
+              <datalist id="tz-options">
+                {ZONES.map((z) => <option key={z} value={z} />)}
+              </datalist>
+              <p className="muted">
+                The site's time zone. It decides where a day and a month start (today, yesterday, this month and last month in
+                energy totals, Billing and dashboard ranges) and the times shown in the app. Readings are stored in UTC.
+              </p>
+              <div className="row">
+                <button type="submit" className="primary" disabled={put.isPending}>Save</button>
+                {put.isSuccess && <span className="muted"> saved</span>}
+              </div>
+              {put.isError && <p className="error" role="alert">{detailText(put.error)}</p>}
+            </form>
+          </div>
+          {tls.data?.enabled && (
+            <p className="notice">
+              <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>
+              <span>Certificate: {certificateText(tls.data, settings.data.timezone)}</span>
+            </p>
+          )}
+        </div>
+        <SignInProtection />
+      </div>
     </section>
   );
 }

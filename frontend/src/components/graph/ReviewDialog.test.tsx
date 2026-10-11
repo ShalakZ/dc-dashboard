@@ -440,3 +440,14 @@ describe("ReviewDialog", () => {
     expect(dialog).toHaveAttribute("aria-modal", "true");
   });
 });
+
+describe("ReviewDialog look (W6)", () => {
+  it("puts Cancel before Create mappings, and Create mappings is the primary button", async () => {
+    await open(existing(11));
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(create()).toHaveClass("primary");
+    expect(cancel).not.toHaveClass("primary");
+    expect(cancel.compareDocumentPosition(create()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(create().closest(".row")).toBe(cancel.closest(".row")); // the last row of the dialog (right-aligned by the CSS)
+  });
+});

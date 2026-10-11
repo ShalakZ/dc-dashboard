@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Download, type Locator, type Page } from "@playwright/test";
+import { roleLabel } from "./roles";
 
 // Phase 3 on the state the journey and discovery projects leave behind: admin `admin` / `correct-horse`; assets Site
 // (root) > Panel 01, LVP02 ... LVP10, plus MV2; the collector has been polling for some minutes. The database is young,
@@ -50,7 +51,9 @@ async function signIn(page: Page, who: Account) {
   await page.getByLabel("Password", { exact: true }).fill(who.password);
   await page.getByRole("button", { name: "Sign in" }).click();
   // Where you land depends on where the previous sign-out happened, so callers navigate explicitly.
-  await expect(page.getByRole("navigation")).toContainText(`${who.username} (${who.role})`);
+  const userBlock = page.getByRole("navigation").locator(".who");
+  await expect(userBlock).toContainText(who.username);
+  await expect(userBlock).toContainText(roleLabel(who.role));
 }
 
 async function signOut(page: Page) {

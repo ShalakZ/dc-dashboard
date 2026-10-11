@@ -5,6 +5,7 @@ import type { AuditEntry } from "../api/types";
 import { AuditEntryDetail } from "../components/AuditEntryDetail";
 import { AuditFilterBar } from "../components/AuditFilterBar";
 import { AuditPager } from "../components/AuditPager";
+import { PageHeader } from "../components/PageHeader";
 import { apiQuery, isFiltered, readUrl, writeUrl, type AuditFilters, type AuditUrlState } from "../lib/auditFilters";
 import { describeAudit } from "../lib/auditText";
 import { downloadCsv } from "../lib/download";
@@ -24,12 +25,12 @@ function FriendlyRow({ entry, timezone }: { entry: AuditEntry; timezone: string 
   const { summary, link } = describeAudit(entry);
   return (
     <tr>
-      <td><TimeLink id={entry.id} ts={entry.ts} timezone={timezone} /></td>
-      <td>{entry.username ?? "—"}</td>
+      <td className="cell-time"><TimeLink id={entry.id} ts={entry.ts} timezone={timezone} /></td>
+      <td className="cell-user" title={entry.username ?? undefined}>{entry.username ?? "—"}</td>
       <td>
-        <div>{summary}</div>
-        {link && <div><Link to={link.to}>{link.label}</Link></div>}
-        <details onToggle={(e) => setOpen(e.currentTarget.open)}>
+        <div className="what">{summary}</div>
+        {link && <div className="sub"><Link to={link.to}>{link.label}</Link></div>}
+        <details className="audit-more" onToggle={(e) => setOpen(e.currentTarget.open)}>
           <summary>Details</summary>
           {open && <AuditEntryDetail entry={entry} view="friendly" />}
         </details>
@@ -112,9 +113,16 @@ export function AuditPage() {
   const fresh = ready && !isPlaceholderData ? data : undefined;
   const raw = view === "raw";
 
+  // The two "nothing to show" messages keep their exact words; the icon only fills the empty space around them.
+  const emptyIcon = (
+    <div className="empty-icon">
+      <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" /></svg>
+    </div>
+  );
+
   return (
-    <>
-      <h1>Audit log</h1>
+    <div className="admin-page audit-page">
+      <PageHeader title="Audit log" sub="Who did what, and when. The newest entries come first." />
       <AuditFilterBar
         filters={filters}
         onChange={changeFilters}
@@ -130,39 +138,44 @@ export function AuditPage() {
       {(isLoading || site.isPending) && <p className="muted">loading…</p>}
       {error && <p className="error" role="alert">{error.message}</p>}
       {fresh && fresh.total === 0 && (
-        <p className="muted">{isFiltered(filters) ? "No entries match these filters." : "No audit entries yet."}</p>
+        <div className="empty">
+          {emptyIcon}
+          <p>{isFiltered(filters) ? "No entries match these filters." : "No audit entries yet."}</p>
+        </div>
       )}
       {fresh && fresh.total > 0 && rows.length === 0 && <p className="muted">This page is past the end of the log.</p>}
       {isPlaceholderData && rows.length === 0 && <p className="muted">Updating…</p>}
       {rows.length > 0 && (
         <>
-          <div className="row" role="group" aria-label="View">
+          <div className="row seg" role="group" aria-label="View">
             <button type="button" aria-pressed={!raw} onClick={() => go({ ...state, view: "friendly" })}>Friendly</button>
             <button type="button" aria-pressed={raw} onClick={() => go({ ...state, view: "raw" })}>Raw</button>
             {isPlaceholderData && <span className="muted">Updating…</span>}
           </div>
-          <table aria-busy={isPlaceholderData}>
-            <thead>
-              <tr>
-                <th>Time ({timezone})</th><th>User</th>
-                {raw ? <><th>Action</th><th>Detail</th></> : <th>What happened</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((e) =>
-                raw ? (
-                  <tr key={e.id}>
-                    <td><TimeLink id={e.id} ts={e.ts} timezone={timezone} /></td>
-                    <td>{e.username ?? "—"}</td>
-                    <td>{e.action}</td>
-                    <td><code>{JSON.stringify(e.detail)}</code></td>
-                  </tr>
-                ) : (
-                  <FriendlyRow key={e.id} entry={e} timezone={timezone} />
-                ),
-              )}
-            </tbody>
-          </table>
+          <div className="table-wrap">
+            <table className="audit-table" aria-busy={isPlaceholderData}>
+              <thead>
+                <tr>
+                  <th>Time ({timezone})</th><th>User</th>
+                  {raw ? <><th>Action</th><th>Detail</th></> : <th>What happened</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((e) =>
+                  raw ? (
+                    <tr key={e.id}>
+                      <td className="cell-time"><TimeLink id={e.id} ts={e.ts} timezone={timezone} /></td>
+                      <td className="cell-user" title={e.username ?? undefined}>{e.username ?? "—"}</td>
+                      <td className="cell-action">{e.action}</td>
+                      <td><code>{JSON.stringify(e.detail)}</code></td>
+                    </tr>
+                  ) : (
+                    <FriendlyRow key={e.id} entry={e} timezone={timezone} />
+                  ),
+                )}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
       {ready && data && (
@@ -174,6 +187,6 @@ export function AuditPage() {
           onSize={(next) => go({ ...state, size: next, offset: 0 })}
         />
       )}
-    </>
+    </div>
   );
 }

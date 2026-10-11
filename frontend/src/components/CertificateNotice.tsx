@@ -7,6 +7,11 @@ export function daysLeftText(days: number): string {
   return days === 1 ? "1 day left" : `${days} days left`;
 }
 
+// Inline SVG, 24-unit viewBox, decoration only (the sentence next to it says everything).
+const WarnIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z" /><path d="M12 10v4.5M12 17.5h.01" /></svg>
+);
+
 /**
  * The HTTPS certificate warning in the app shell. Admins only (the status endpoint is admin-only), and only for the states that need
  * action: expiring, expired and unreadable. Nothing for ok, for "not checked lately" (the collector may simply be down, and the
@@ -23,21 +28,24 @@ export function CertificateNotice() {
   switch (status.state) {
     case "expiring":
       return (
-        <p role="status" className="warning">
-          {`The HTTPS certificate expires${on}${left}. Renew it before then: once it expires, browsers warn everyone who opens the dashboard.`}
-        </p>
+        <div role="status" className="banner banner-warn warning">
+          <WarnIcon />
+          <span>{`The HTTPS certificate expires${on}${left}. Renew it before then: once it expires, browsers warn everyone who opens the dashboard.`}</span>
+        </div>
       );
     case "expired":
       return (
-        <p role="status" className="error">
-          {`The HTTPS certificate expired${on}. Browsers already warn everyone who opens the dashboard. Replace the certificate and restart the web service.`}
-        </p>
+        <div role="status" className="banner banner-bad error">
+          <WarnIcon />
+          <span>{`The HTTPS certificate expired${on}. Browsers already warn everyone who opens the dashboard. Replace the certificate and restart the web service.`}</span>
+        </div>
       );
     case "unreadable":
       return (
-        <p role="status" className="warning">
-          {`The HTTPS certificate file cannot be read${status.error ? `: ${status.error}` : ""}. Its expiry is not being watched until that is fixed.`}
-        </p>
+        <div role="status" className="banner banner-warn warning">
+          <WarnIcon />
+          <span>{`The HTTPS certificate file cannot be read${status.error ? `: ${status.error}` : ""}. Its expiry is not being watched until that is fixed.`}</span>
+        </div>
       );
     default:
       return null;

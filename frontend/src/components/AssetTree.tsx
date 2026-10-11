@@ -1,27 +1,171 @@
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
+import { readStored, writeStored } from "../lib/sidebarState";
 import type { TreeNode } from "../lib/tree";
 
-export function AssetTree({ nodes, selectedId, onSelect, onAddChild, disabled }: {
-  nodes: TreeNode[]; selectedId: number | null; onSelect?: (id: number) => void; onAddChild?: (id: number) => void;
+const KEY = "dcdash.assetTree";
+type ColumnState = "expanded" | "minimized";
+
+// Inline SVG, 24-unit viewBox, drawn with the 1.7 stroke of `svg.i`; decoration only (the button's own label is its name).
+function Svg({ children }: { children: ReactNode }) {
+  return <svg className="i" viewBox="0 0 24 24" aria-hidden="true">{children}</svg>;
+}
+const Plus = () => <Svg><path d="M12 5v14M5 12h14" /></Svg>;
+const Caret = () => <Svg><path d="m7 9 5 5 5-5" /></Svg>;
+const ChevronLeft = () => <Svg><path d="m15 6-6 6 6 6" /></Svg>;
+const Search = () => <Svg><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4-4" /></Svg>;
+
+/** The ids to show while filtering: what matches by name or kind, and the ancestors of a match (a match's own children only if they match too). */
+function matchingIds(nodes: TreeNode[], needle: string): Set<number> {
+  const out = new Set<number>();
+  const walk = (node: TreeNode): boolean => {
+    let hit = node.name.toLowerCase().includes(needle) || node.kind.toLowerCase().includes(needle);
+    for (const child of node.children) if (walk(child)) hit = true; // every child, no short-circuit: each needs its own verdict
+    if (hit) out.add(node.id);
+    return hit;
+  };
+  nodes.forEach(walk);
+  return out;
+}
+
+const only = (list: TreeNode[], visible: ReadonlySet<number> | null) => (visible ? list.filter((node) => visible.has(node.id)) : list);
+
+interface View {
+  selectedId: number | null;
+  onSelect: (id: number) => void;
+  onAddChild?: (id: number) => void;
+  disabled?: boolean;
+  /** Branches the user folded; a branch is open unless it is in here, so a node that gains its first child starts open. */
+  collapsed: ReadonlySet<number>;
+  /** Null when there is no filter. */
+  visible: ReadonlySet<number> | null;
+  toggle: (id: number) => void;
+}
+
+/** The rows of one level. `nodes` is already narrowed by the filter; the nested `ul` stays inside the parent's `li`. */
+function Nodes({ nodes, view }: { nodes: TreeNode[]; view: View }) {
+  const filtering = view.visible !== null;
+  return nodes.map((node) => {
+    const kids = only(node.children, view.visible);
+    const open = filtering || !view.collapsed.has(node.id); // a filter shows its matches even under a folded branch
+    const selected = node.id === view.selectedId;
+    const childrenId = `asset-children-${node.id}`;
+    return (
+      <li key={node.id}>
+        <div className={selected ? "node is-selected" : "node"}>
+          {kids.length > 0 ? (
+            <button
+              type="button"
+              className="twisty"
+              aria-expanded={open}
+              aria-controls={childrenId}
+              aria-label={`Children of ${node.name}`}
+              disabled={filtering}
+              onClick={() => view.toggle(node.id)}
+            >
+              <Caret />
+            </button>
+          ) : (
+            <span className="twisty-sp" />
+          )}
+          <Link
+            to={`/assets/${node.id}`}
+            title={node.name}
+            aria-current={selected ? "true" : undefined}
+            onClick={(e) => { e.preventDefault(); view.onSelect(node.id); }}
+          >
+            {node.name}
+          </Link>
+          <span className="kind">{node.kind}</span>
+          {view.onAddChild && (
+            <button type="button" className="add" aria-label={`Add child of ${node.name}`} title="Add child" disabled={view.disabled} onClick={() => view.onAddChild!(node.id)}>
+              <Plus />
+            </button>
+          )}
+        </div>
+        {kids.length > 0 && (
+          // Folded is hidden, not removed, so the twisty's aria-controls always names an element.
+          <ul id={childrenId} hidden={!open}>
+            <Nodes nodes={kids} view={view} />
+          </ul>
+        )}
+      </li>
+    );
+  });
+}
+
+/**
+ * The asset tree as its own column (option B): a title, the top-level + and a toggle, then a filter and the tree. The column can be
+ * minimized to a strip with just the toggle (remembered in localStorage); the branches fold with a twisty each.
+ */
+export function AssetTree({ nodes, selectedId, onSelect, onAddChild, onAddTop, disabled }: {
+  nodes: TreeNode[]; selectedId: number | null; onSelect: (id: number) => void;
+  /** Present for an admin: a + on every node. */
+  onAddChild?: (id: number) => void;
+  /** Present for an admin: a + in the header that adds a top-level asset. */
+  onAddTop?: () => void;
   /** Disables the + buttons (the page is busy with something that must not get a dialog next to it). */
   disabled?: boolean;
 }) {
-  if (nodes.length === 0) return null;
+  const [state, setState] = useState<ColumnState>(() => (readStored(KEY) === "minimized" ? "minimized" : "expanded"));
+  const [filter, setFilter] = useState("");
+  const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(() => new Set());
+  const minimized = state === "minimized";
+  const needle = filter.trim().toLowerCase();
+  const visible = useMemo(() => (needle ? matchingIds(nodes, needle) : null), [nodes, needle]);
+
+  const toggleColumn = () => {
+    const next: ColumnState = minimized ? "expanded" : "minimized";
+    setState(next);
+    writeStored(KEY, next);
+  };
+  const toggleBranch = (id: number) => setCollapsed((prev) => {
+    const next = new Set(prev);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
+  const addChild = onAddChild && ((id: number) => {
+    setCollapsed((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    onAddChild(id); // the new child must not appear inside a folded branch
+  });
+
+  const toggleName = minimized ? "Expand asset tree" : "Minimize asset tree";
+  const view: View = { selectedId, onSelect, onAddChild: addChild, disabled, collapsed, visible, toggle: toggleBranch };
   return (
-    <ul className="tree">
-      {nodes.map((node) => (
-        <li key={node.id}>
-          <Link to={`/assets/${node.id}`} className={node.id === selectedId ? "selected" : undefined}
-            onClick={(e) => { if (onSelect) { e.preventDefault(); onSelect(node.id); } }}>
-            {node.name}
-          </Link>{" "}
-          <span className="muted">{node.kind}</span>
-          {onAddChild && (
-            <>{" "}<button type="button" aria-label={`Add child of ${node.name}`} disabled={disabled} onClick={() => onAddChild(node.id)}>+</button></>
+    <section className="tree-col" aria-label="Asset tree" data-state={state}>
+      <div className="tree-head">
+        {!minimized && <p className="tree-title">Assets</p>}
+        {!minimized && onAddTop && (
+          <button type="button" className="icon-btn" aria-label="Add a top-level asset" title="Add a top-level asset" disabled={disabled} onClick={onAddTop}>
+            <Plus />
+          </button>
+        )}
+        <button type="button" className="icon-btn tree-toggle" aria-controls="asset-tree-body" aria-expanded={!minimized} aria-label={toggleName} title={toggleName} onClick={toggleColumn}>
+          <ChevronLeft />
+        </button>
+      </div>
+      <div className="tree-body" id="asset-tree-body" hidden={minimized}>
+        {nodes.length > 0 && (
+          <div className="tree-filter">
+            <Search />
+            <label className="sr-only" htmlFor="asset-tree-filter">Filter assets</label>
+            <input id="asset-tree-filter" type="search" placeholder="Filter by name or kind" autoComplete="off" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          </div>
+        )}
+        <div className="tree-scroll">
+          {visible && visible.size === 0 && <p className="muted tree-empty">No assets match the filter.</p>}
+          {nodes.length > 0 && (!visible || visible.size > 0) && (
+            <ul className="tree">
+              <Nodes nodes={only(nodes, visible)} view={view} />
+            </ul>
           )}
-          <AssetTree nodes={node.children} selectedId={selectedId} onSelect={onSelect} onAddChild={onAddChild} disabled={disabled} />
-        </li>
-      ))}
-    </ul>
+        </div>
+      </div>
+    </section>
   );
 }

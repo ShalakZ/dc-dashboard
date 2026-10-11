@@ -45,7 +45,10 @@ describe("AssetsPage", () => {
     it("shows a + on every node for an admin, named after the node", async () => {
       mockFetch(authed("admin"));
       renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
-      expect(await screen.findByRole("button", { name: "Add child of Site" })).toHaveTextContent("+");
+      const plus = await screen.findByRole("button", { name: "Add child of Site" });
+      expect(plus).toHaveAttribute("type", "button");
+      expect(plus.textContent).toBe(""); // an icon button: the name comes from aria-label, the svg is decoration
+      expect(plus.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
       expect(screen.getByRole("button", { name: "Add child of Room A" })).toHaveAttribute("type", "button");
     });
 
@@ -126,6 +129,197 @@ describe("AssetsPage", () => {
       await userEvent.click(edit);
       await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(edit).toHaveFocus();
+    });
+  });
+
+  describe("the asset tree column", () => {
+    // A local fixture (the shared one is counted by other tests): a second root that never matches "panel", and a leaf two levels down.
+    const deep = [
+      { id: 1, parent_id: null, name: "Site", kind: "site", sort_order: 0 },
+      { id: 2, parent_id: 1, name: "Room A", kind: "room", sort_order: 0 },
+      { id: 3, parent_id: 2, name: "Panel 1", kind: "panel", sort_order: 0 },
+      { id: 4, parent_id: 1, name: "Room B", kind: "room", sort_order: 1 },
+      { id: 5, parent_id: null, name: "Yard", kind: "outdoor", sort_order: 1 },
+    ];
+    const deepRoutes = (role: string) => ({ ...authed(role), "GET /api/assets": { body: deep } });
+    const show = async (role = "viewer", route = "/assets") => {
+      mockFetch(deepRoutes(role));
+      renderWithProviders(<AssetsPage />, { route, path: "/assets" });
+      await screen.findAllByRole("link", { name: "Site" }); // two when Site itself is selected (the tree and the Selected line)
+    };
+    const column = () => screen.getByRole("region", { name: "Asset tree" });
+    const link = (name: string) => screen.queryByRole("link", { name });
+    const typeFilter = (text: string) => userEvent.type(screen.getByLabelText("Filter assets"), text);
+
+    it("is a region named Asset tree; the title is plain text, so the h1 is the only heading named Assets, and there is no legend", async () => {
+      await show();
+      expect(within(column()).getByText("Assets")).toBeInTheDocument();
+      expect(screen.getAllByRole("heading", { name: "Assets" })).toHaveLength(1);
+      expect(screen.getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+      expect(screen.queryByRole("group")).not.toBeInTheDocument();
+      expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    });
+
+    it("keeps the nested lists of the old tree: the only lists on the page, children inside the parent's li", async () => {
+      await show();
+      const lists = screen.getAllByRole("list");
+      expect(lists.length).toBeGreaterThan(0);
+      for (const list of lists) expect(column()).toContainElement(list);
+      expect(within(link("Room A")!.closest("li")!).getByRole("link", { name: "Panel 1" })).toBeInTheDocument();
+    });
+
+    it("a twisty collapses and expands its branch; a leaf has none", async () => {
+      await show();
+      const twisty = screen.getByRole("button", { name: "Children of Site" });
+      expect(twisty).toHaveAttribute("aria-expanded", "true");
+      expect(screen.queryByRole("button", { name: "Children of Room B" })).not.toBeInTheDocument();
+      await userEvent.click(twisty);
+      expect(twisty).toHaveAttribute("aria-expanded", "false");
+      expect(link("Room A")).not.toBeInTheDocument(); // hidden, so not in the accessibility tree
+      expect(link("Panel 1")).not.toBeInTheDocument();
+      expect(link("Yard")).toBeInTheDocument();
+      expect(document.getElementById(twisty.getAttribute("aria-controls")!)).toBeInTheDocument(); // collapsed is hidden, not removed
+      await userEvent.click(twisty);
+      expect(twisty).toHaveAttribute("aria-expanded", "true");
+      expect(link("Room A")).toBeInTheDocument();
+      expect(link("Panel 1")).toBeInTheDocument();
+    });
+
+    it("the tree toggle flips its name and aria-expanded, hides the body, keeps focus and is remembered", async () => {
+      await show();
+      const toggle = screen.getByRole("button", { name: "Minimize asset tree" });
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+      expect(toggle).toHaveAttribute("aria-controls", "asset-tree-body");
+      await userEvent.click(toggle);
+      expect(toggle).toHaveAccessibleName("Expand asset tree");
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(toggle).toHaveFocus();
+      expect(document.getElementById("asset-tree-body")).not.toBeVisible();
+      expect(link("Site")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Filter assets")).not.toBeVisible(); // kept mounted, so the typed filter and the folds survive
+      expect(localStorage.getItem("dcdash.assetTree")).toBe("minimized");
+      await userEvent.click(toggle);
+      expect(toggle).toHaveAccessibleName("Minimize asset tree");
+      expect(document.getElementById("asset-tree-body")).toBeVisible();
+      expect(link("Site")).toBeInTheDocument();
+      expect(localStorage.getItem("dcdash.assetTree")).toBe("expanded");
+    });
+
+    it("minimized, only the toggle is left of the header (no title, no top-level +)", async () => {
+      await show("admin");
+      expect(screen.getByRole("button", { name: "Add a top-level asset" })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Minimize asset tree" }));
+      expect(screen.queryByRole("button", { name: "Add a top-level asset" })).not.toBeInTheDocument();
+      expect(within(column()).queryByText("Assets")).not.toBeInTheDocument();
+      expect(within(column()).getAllByRole("button")).toHaveLength(1);
+    });
+
+    it("starts minimized when minimized was remembered", async () => {
+      localStorage.setItem("dcdash.assetTree", "minimized");
+      mockFetch(deepRoutes("viewer"));
+      renderWithProviders(<AssetsPage />, { route: "/assets", path: "/assets" });
+      expect(await screen.findByRole("button", { name: "Expand asset tree" })).toHaveAttribute("aria-expanded", "false");
+      expect(link("Site")).not.toBeInTheDocument();
+    });
+
+    it("renders expanded and does not throw when storage is blocked", async () => {
+      vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+      await show();
+      await userEvent.click(screen.getByRole("button", { name: "Minimize asset tree" }));
+      expect(screen.getByRole("button", { name: "Expand asset tree" })).toBeInTheDocument(); // works for this visit, just not remembered
+    });
+
+    it("a filter keeps what matches by name or kind, with its ancestors, whatever the case", async () => {
+      await show();
+      await typeFilter("PANEL");
+      expect(link("Panel 1")).toBeInTheDocument();
+      expect(link("Room A")).toBeInTheDocument(); // ancestors stay
+      expect(link("Site")).toBeInTheDocument();
+      expect(link("Room B")).not.toBeInTheDocument();
+      expect(link("Yard")).not.toBeInTheDocument();
+      await userEvent.clear(screen.getByLabelText("Filter assets"));
+      await typeFilter("outdoor"); // by kind
+      expect(link("Yard")).toBeInTheDocument();
+      expect(link("Site")).not.toBeInTheDocument();
+      await userEvent.clear(screen.getByLabelText("Filter assets"));
+      expect(link("Room B")).toBeInTheDocument(); // cleared: everything is back
+      expect(link("Panel 1")).toBeInTheDocument();
+    });
+
+    it("a match under a collapsed branch is shown anyway, the twisties wait while filtering, and clearing restores the collapse", async () => {
+      await show();
+      await userEvent.click(screen.getByRole("button", { name: "Children of Room A" }));
+      expect(link("Panel 1")).not.toBeInTheDocument();
+      await typeFilter("panel");
+      expect(link("Panel 1")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Children of Room A" })).toBeDisabled();
+      await userEvent.clear(screen.getByLabelText("Filter assets"));
+      expect(link("Panel 1")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Children of Room A" })).toBeEnabled();
+    });
+
+    it("says so when nothing matches", async () => {
+      await show();
+      await typeFilter("zzz");
+      expect(screen.getByText("No assets match the filter.")).toBeInTheDocument();
+      expect(screen.queryAllByRole("link")).toHaveLength(0);
+    });
+
+    it("gives each name a title with the full name; the selected one carries aria-current", async () => {
+      await show("viewer", "/assets?selected=3");
+      expect(within(column()).getByRole("link", { name: "Panel 1" })).toHaveAttribute("title", "Panel 1");
+      expect(within(column()).getByRole("link", { name: "Panel 1" })).toHaveAttribute("aria-current", "true");
+      expect(within(column()).getByRole("link", { name: "Room A" })).not.toHaveAttribute("aria-current");
+    });
+
+    it("clicking a name selects it without leaving the page", async () => {
+      await show();
+      await userEvent.click(within(column()).getByRole("link", { name: "Room B" }));
+      expect(within(column()).getByRole("link", { name: "Room B" })).toHaveAttribute("aria-current", "true");
+      expect(screen.getByText(/Selected:/)).toHaveTextContent("Selected: Room B (open page)");
+    });
+
+    it("a + on a collapsed branch opens it again", async () => {
+      await show("admin");
+      await userEvent.click(screen.getByRole("button", { name: "Children of Site" }));
+      expect(link("Room A")).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Add child of Site" }));
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(link("Room A")).toBeInTheDocument();
+    });
+
+    it("the top-level + (admin only) opens Add asset with no parent, even with an asset selected", async () => {
+      await show("admin", "/assets?selected=2");
+      await userEvent.click(screen.getByRole("button", { name: "Add a top-level asset" }));
+      expect(within(screen.getByRole("dialog", { name: "Add asset" })).getByLabelText("Parent")).toHaveValue("");
+    });
+
+    it.each(["viewer", "operator"])("shows no top-level + to a %s", async (role) => {
+      await show(role);
+      expect(screen.queryByRole("button", { name: "Add a top-level asset" })).not.toBeInTheDocument();
+    });
+
+    it("the detail area gives the selection's kind, parent and number of children, from the list", async () => {
+      await show("viewer", "/assets?selected=2");
+      const value = (label: string) => screen.getByText(label, { selector: "dt" }).nextElementSibling;
+      expect(value("Kind")).toHaveTextContent("room");
+      expect(value("Parent")).toHaveTextContent("Site");
+      expect(value("Children")).toHaveTextContent("1");
+      expect(screen.getByText(/Selected:/)).toHaveTextContent("Selected: Room A (open page)");
+      expect(screen.getAllByRole("link", { name: "Room A" })).toHaveLength(2); // the tree and the Selected line, no third link
+    });
+
+    it("a top-level selection says None for its parent; nothing selected shows no details", async () => {
+      await show("viewer", "/assets?selected=1");
+      expect(screen.getByText("Parent", { selector: "dt" }).nextElementSibling).toHaveTextContent("None");
+      expect(screen.getByText("Children", { selector: "dt" }).nextElementSibling).toHaveTextContent("2");
+    });
+
+    it("nothing selected: the h1 and no details, no Selected line", async () => {
+      await show();
+      expect(screen.queryByText("Kind", { selector: "dt" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Selected:/)).not.toBeInTheDocument();
     });
   });
 
@@ -356,5 +550,70 @@ describe("AssetsPage", () => {
         expect(screen.getByRole("button", { name: "Add child of Site" })).toBeEnabled();
       });
     });
+  });
+});
+
+describe("AssetsPage detail area", () => {
+  const show = async (role: string, route: string, body: unknown = assets) => {
+    mockFetch({ ...authed(role), "GET /api/assets": { body } });
+    renderWithProviders(<AssetsPage />, { route, path: "/assets" });
+    await screen.findByRole("heading", { name: "Assets", level: 1 });
+  };
+  const header = () => screen.getByRole("heading", { name: "Assets", level: 1 }).closest("header")!;
+
+  it("puts an admin's buttons in the page header, with Add asset as the page's only primary and Delete quiet", async () => {
+    await show("admin", "/assets?selected=2");
+    for (const name of ["Add asset", "Edit", "Delete"]) expect(header()).toContainElement(screen.getByRole("button", { name }));
+    expect(document.querySelectorAll("button.primary")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Add asset" })).toHaveClass("primary");
+    expect(screen.getByRole("button", { name: "Delete" })).toHaveClass("danger-quiet");
+    expect(screen.getByRole("button", { name: "Edit" })).not.toHaveClass("primary");
+    for (const name of ["Add asset", "Edit", "Delete"]) expect(screen.getByRole("button", { name })).toHaveAttribute("type", "button");
+  });
+
+  it("nothing selected: the admin has Add asset only in the header", async () => {
+    await show("admin", "/assets");
+    expect(within(header()).getAllByRole("button").map((b) => b.textContent)).toEqual(["Add asset"]);
+  });
+
+  it.each(["viewer", "operator"])("a %s gets no actions in the header", async (role) => {
+    await show(role, "/assets?selected=2");
+    expect(header().querySelector(".actions")).toBeNull();
+    expect(within(header()).queryAllByRole("button")).toHaveLength(0);
+  });
+
+  it("keeps the Selected line a paragraph holding one link to the asset's page, with the words around it", async () => {
+    await show("viewer", "/assets?selected=2");
+    const line = screen.getByText(/\(open page\)/);
+    expect(line.tagName).toBe("P");
+    expect(line).toHaveTextContent("Selected: Room A (open page)");
+    expect(within(line).getAllByRole("link")).toHaveLength(1);
+    expect(within(line).getByRole("link", { name: "Room A" })).toHaveAttribute("href", "/assets/2");
+  });
+
+  it("nothing selected: one muted line under the header says what to do; a selection or an empty list has none", async () => {
+    await show("viewer", "/assets");
+    const hint = screen.getByText("Select an asset in the tree.");
+    expect(hint.tagName).toBe("P");
+    expect(hint).toHaveClass("muted");
+    expect(hint.previousElementSibling).toBe(header());
+  });
+
+  it("a selected asset has no such line", async () => {
+    await show("viewer", "/assets?selected=2");
+    expect(screen.queryByText("Select an asset in the tree.")).not.toBeInTheDocument();
+  });
+
+  it("an empty list has no such line either (there is nothing to select)", async () => {
+    await show("admin", "/assets", []);
+    expect(screen.queryByText("Select an asset in the tree.")).not.toBeInTheDocument();
+  });
+
+  it("an empty list says so in an .empty block and adds no heading (a heading with 'assets' in it would clash with the h1 in e2e)", async () => {
+    await show("admin", "/assets", []);
+    const note = screen.getByText("No assets yet.");
+    expect(note.closest(".empty")).not.toBeNull();
+    expect(screen.getAllByRole("heading")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Add asset" })).toHaveLength(1);
   });
 });

@@ -1,0 +1,28 @@
+@layer w6 {
+  /* W6 auth */
+
+  /* Login and Setup render outside the shell: a centred 400px card with a 1px border on the plain white page. The page itself
+     keeps --bg (never an off-white surface); main is a grid only to centre the card. */
+  main.auth { display: grid; place-items: center; min-height: 100vh; max-width: none; padding: 32px 16px; }
+  .auth-card { width: min(100%, 400px); padding: 28px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); }
+  .auth-brand { display: flex; align-items: center; gap: 10px; margin: 0 0 22px; font-size: var(--fs-md); font-weight: 600; color: var(--text); }
+  .auth-mark { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--side-bg); }
+  .auth-mark svg { width: 18px; height: 18px; fill: none; stroke: var(--side-accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .auth-card h1 { margin: 0 0 20px; font-size: var(--fs-title); font-weight: 600; line-height: 1.25; letter-spacing: -0.2px; }
+  .auth-card h1:has(+ .auth-lead) { margin-bottom: 6px; }
+  .auth-lead { margin: 0 0 20px; font-size: var(--fs-sm); color: var(--text-2); }
+  .auth-card form { gap: 14px; max-width: none; margin: 0; }
+  .auth-card form .error, .password-page form .error { margin: 0; padding: 8px 12px; border: 1px solid var(--crit); border-radius: var(--radius-sm); background: var(--crit-tint); font-size: var(--fs-sm); font-weight: 600; }
+  .auth-card button.primary { width: 100%; min-height: 38px; margin-top: 4px; }
+
+  /* Change password: the one primary button sits left under the fields; its errors take the card's alert box (rule above) and the
+     confirmation is a mark plus the sentence */
+  .password-page button.primary { justify-self: start; }
+  .form-ok { display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--ok); }
+
+  /* Dashboards list: the name truncates with an ellipsis (the link carries a title), the figures and the row action stay compact */
+  .dashboards-table td.name { width: 55%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dashboards-table td.name a { font-weight: 600; }
+  .dashboards-table td.when { white-space: nowrap; color: var(--text-2); }
+  .dashboards-table :is(th, td).act { width: 1%; text-align: right; white-space: nowrap; }
+}

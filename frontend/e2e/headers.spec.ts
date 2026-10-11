@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { roleLabel } from "./roles";
 
 // Security headers (deploy/security-headers.caddy) on the state the journey, discovery and phase3 projects leave behind: admin
 // `admin` / `correct-horse`, assets Site > Panel 01 ..., a source `sim`, the dashboard "Phase 3 overview", and a collector that has
@@ -90,7 +91,9 @@ test("every page an admin can open runs under the policy without one violation, 
     await page.getByLabel("Username").fill(ADMIN.username);
     await page.getByLabel("Password", { exact: true }).fill(ADMIN.password);
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByRole("navigation")).toContainText(`${ADMIN.username} (admin)`);
+    const userBlock = page.getByRole("navigation").locator(".who");
+    await expect(userBlock).toContainText(ADMIN.username);
+    await expect(userBlock).toContainText(roleLabel("admin"));
   });
 
   const getJson = async <T>(path: string) => (await (await page.request.get(path)).json()) as T;

@@ -178,8 +178,8 @@ export function WidgetEditor({ initial, assets, metricAssets, dashboardRange, ti
         </div>
         {messages.length > 0 && <ul className="muted issues">{messages.map((m) => <li key={m}>{m}</li>)}</ul>}
         <div className="row">
-          <button type="button" onClick={() => onSave(fields)} disabled={messages.length > 0}>Save widget</button>
           <button type="button" onClick={onClose}>Cancel</button>
+          <button type="button" className="primary" onClick={() => onSave(fields)} disabled={messages.length > 0}>Save widget</button>
         </div>
       </div>
     </div>

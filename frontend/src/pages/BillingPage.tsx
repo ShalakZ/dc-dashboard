@@ -4,9 +4,33 @@ import { useBillingCosts, useSite } from "../api/queries";
 import type { BillingCosts, CostFigure } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ESTIMATED_TIP, Figure, PARTIAL_TIP } from "../components/Figure";
+import { PageHeader } from "../components/PageHeader";
 import { depthsByAsset, fmtCost, fmtKwh, fmtRate, monthLabel, shiftMonth } from "../lib/billing";
 import { downloadCsv } from "../lib/download";
 import { formatSiteDay, siteMonth } from "../lib/siteTime";
+
+// Inline SVG, 24-unit viewBox, decoration only (the words next to each one say everything).
+const WarnIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z" /><path d="M12 10v4.5M12 17.5h.01" /></svg>
+);
+const ReceiptIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z" /><path d="M9 8h6M9 12h6M9 16h3" /></svg>
+);
+const ChevronIcon = ({ dir }: { dir: "left" | "right" }) => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d={dir === "left" ? "m14.5 6-6 6 6 6" : "m9.5 6 6 6-6 6"} /></svg>
+);
+const DownloadIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14" /></svg>
+);
+
+function Empty({ text }: { text: string }) {
+  return (
+    <div className="empty">
+      <div className="empty-icon"><ReceiptIcon /></div>
+      <p>{text}</p>
+    </div>
+  );
+}
 
 /**
  * One day (or the month) of one asset: kWh above, cost below.
@@ -40,19 +64,23 @@ function Legend() {
 
 function BillingTable({ costs, isAdmin }: { costs: BillingCosts; isAdmin: boolean }) {
   const depth = useMemo(() => depthsByAsset(costs.assets), [costs.assets]);
-  if (costs.assets.length === 0) return <p className="muted">No assets yet.</p>;
-  if (costs.assets.every((a) => a.total === null)) return <p className="muted">No energy data for this month.</p>;
+  if (costs.assets.length === 0) return <Empty text="No assets yet." />;
+  if (costs.assets.every((a) => a.total === null)) return <Empty text="No energy data for this month." />;
   const missingRate = costs.assets.some((a) => a.total !== null && a.total.kwh > 0 && (a.total.cost === null || a.total.partial));
   return (
     <>
       {missingRate && (isAdmin ? (
-        <p role="status">
-          Some consumption has no rate (shown as — or *). <Link to="/tariffs">Set a rate on the Tariffs page</Link>.
-        </p>
+        <div role="status" className="banner banner-warn">
+          <WarnIcon />
+          <span>Some consumption has no rate (shown as — or *). <Link to="/tariffs">Set a rate on the Tariffs page</Link>.</span>
+        </div>
       ) : (
-        <p role="status" className="muted">Some consumption has no rate (shown as — or *). Ask an administrator to set one.</p>
+        <div role="status" className="banner banner-warn">
+          <WarnIcon />
+          <span>Some consumption has no rate (shown as — or *). Ask an administrator to set one.</span>
+        </div>
       ))}
-      <div className="table-scroll">
+      <div className="table-scroll table-wrap">
         <table className="billing">
           <caption className="muted">
             Each cell shows kWh above and cost{costs.currency ? ` in ${costs.currency}` : ""} below.
@@ -60,9 +88,9 @@ function BillingTable({ costs, isAdmin }: { costs: BillingCosts; isAdmin: boolea
           <thead>
             <tr>
               <th>Asset</th>
-              <th>{costs.currency ? `Rate (${costs.currency}/kWh)` : "Rate (per kWh)"}</th>
-              <th>Month total</th>
-              {costs.days.map((day) => <th key={day} title={formatSiteDay(day)}>{Number(day.slice(8))}</th>)}
+              <th className="num">{costs.currency ? `Rate (${costs.currency}/kWh)` : "Rate (per kWh)"}</th>
+              <th className="num">Month total</th>
+              {costs.days.map((day) => <th key={day} className="num" title={formatSiteDay(day)}>{Number(day.slice(8))}</th>)}
             </tr>
           </thead>
           <tbody>
@@ -111,17 +139,21 @@ export function BillingPage() {
   };
 
   return (
-    <section>
-      <h1>Billing</h1>
+    <section className="billing-page">
+      <PageHeader
+        title="Billing"
+        actions={month !== null && (
+          <button type="button" className="primary" onClick={exportCsv} disabled={exporting}><DownloadIcon />Download CSV</button>
+        )}
+      />
       {site.isError && <p className="error" role="alert">{site.error.message}</p>}
       {month !== null && (
-        <div className="row">
-          <button type="button" onClick={() => setPicked(shiftMonth(month, -1))}>Previous month</button>
-          <strong aria-live="polite">{monthLabel(month)}</strong>
+        <div className="row billing-bar">
+          <button type="button" onClick={() => setPicked(shiftMonth(month, -1))}><ChevronIcon dir="left" />Previous month</button>
+          <strong className="month-label" aria-live="polite">{monthLabel(month)}</strong>
           <button type="button" onClick={() => setPicked(shiftMonth(month, 1))} disabled={current !== null && month >= current}>
-            Next month
+            Next month<ChevronIcon dir="right" />
           </button>
-          <button type="button" onClick={exportCsv} disabled={exporting}>Download CSV</button>
         </div>
       )}
       {exportError && <p className="error" role="alert">{exportError}</p>}

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ApiError } from "../api/client";
 import { useChangePassword } from "../api/queries";
+import { PageHeader } from "../components/PageHeader";
 
 export function PasswordPage() {
   const change = useChangePassword();
@@ -10,8 +11,8 @@ export function PasswordPage() {
   const [localError, setLocalError] = useState<string | null>(null);
   const apiError = change.error instanceof ApiError ? change.error.message : change.error ? "request failed" : null;
   return (
-    <section>
-      <h1>Change password</h1>
+    <section className="password-page">
+      <PageHeader title="Change password" />
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -42,10 +43,15 @@ export function PasswordPage() {
           Repeat new password{" "}
           <input type="password" autoComplete="new-password" value={repeat} required onChange={(e) => setRepeat(e.target.value)} />
         </label>
-        <button type="submit" disabled={change.isPending}>Change password</button>
+        <button type="submit" className="primary" disabled={change.isPending}>Change password</button>
         {localError && <p className="error" role="alert">{localError}</p>}
         {apiError && <p className="error" role="alert">{apiError}</p>}
-        {change.isSuccess && <p>Password changed. Other sessions were signed out.</p>}
+        {change.isSuccess && (
+          <p className="form-ok">
+            <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
+            Password changed. Other sessions were signed out.
+          </p>
+        )}
       </form>
     </section>
   );

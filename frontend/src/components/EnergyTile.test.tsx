@@ -20,6 +20,8 @@ describe("EnergyTile", () => {
   it("says so in words when the asset has no energy figure", () => {
     render(<EnergyTile energy={null} />);
     expect(screen.getByText("no energy data")).toBeInTheDocument();
+    // words, not a measurement: the modifier lets the stylesheet set them small and muted instead of in the 28px figure style
+    expect(screen.getByText("no energy data")).toHaveClass("big", "none");
   });
 
   it("mutes a figure that recorded nothing", () => {

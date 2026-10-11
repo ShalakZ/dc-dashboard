@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { PageHeader } from "../components/PageHeader";
 import { useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
 import type { StorageSettings } from "../api/types";
 import { storageLoss } from "../lib/impact";
@@ -64,7 +65,7 @@ export function StoragePage() {
   }, [settings.data, form]);
   if (stats.isError) return <p className="error" role="alert">{stats.error.message}</p>;
   if (settings.isError) return <p className="error" role="alert">{settings.error.message}</p>;
-  if (stats.isPending || settings.isPending || !form) return <p>loading…</p>;
+  if (stats.isPending || settings.isPending || !form) return <p className="muted">loading…</p>;
   const s = stats.data;
   const factory = settings.data.factory;
   const siteDefault = settings.data.site_default ?? null;
@@ -93,59 +94,82 @@ export function StoragePage() {
       onError: (err) => setError(err.message),
     });
   };
+  const warnIcon = <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z" /><path d="M12 10v4.5M12 17.5h.01" /></svg>;
   return (
-    <section>
-      <h1>Storage</h1>
-      {s.warn && <p role="alert" className="warning">Database uses {s.used_pct}% of the configured capacity.</p>}
-      {s.retention_paused && (
-        <p role="alert" className="warning">
-          Retention is paused (usually because a restore paused it so that older readings survive). Nothing is deleted while it is paused, and the disk is
-          not trimmed either. Press Save to start retention again; the save lists what it would delete and asks first.
-        </p>
-      )}
-      <dl className="stats">
-        <dt>Database size</dt><dd>{gib(s.database_bytes)}</dd>
-        <dt>Readings (raw)</dt>
-        <dd>{gib(s.readings_bytes_total)} — compressed {gib(s.readings_bytes_compressed)} of {gib(s.readings_bytes_uncompressed)} (ratio {ratio})</dd>
-        <dt>Rollups</dt><dd>1 min {gib(s.rollup_1m_bytes)}, 1 h {gib(s.rollup_1h_bytes)}</dd>
-        <dt>Growth</dt><dd>{gib(s.growth_bytes_per_day)} / day</dd>
-        <dt>Projected full</dt>
-        <dd>{projection(s.used_pct, s.days_until_full)} ({s.used_pct}% of {gib(s.disk_capacity_bytes)})</dd>
-      </dl>
-      <p className="muted">
-        Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.
-      </p>
-      <h2>Rows per day</h2>
-      <table>
-        <tbody>
-          {s.rows_per_day.map((d) => (
-            <tr key={d.day}><td>{d.day}</td><td>{d.rows.toLocaleString("en-US")}</td></tr>
-          ))}
-        </tbody>
-      </table>
-      <h2>Retention and capacity</h2>
-      <form onSubmit={(e: FormEvent) => { e.preventDefault(); submit(false); }}>
-        {FIELDS.map(([key, label]) => (
-          <label key={key}>
-            {label}
-            <input type="number" step="any" value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} />
-          </label>
-        ))}
-        {error && <p className="error" role="alert">{error}</p>}
-        {note && !error && <p className="muted" role="status">{note}</p>}
-        <div className="row">
-          <button type="submit" disabled={save.isPending}>Save</button>
-          <button type="button" onClick={rememberAsDefault} disabled={makeDefault.isPending}>Set as default</button>
-          <button type="button" onClick={() => fill(siteDefault ?? factory)}>Reset to default</button>
-          <button type="button" onClick={() => fill(factory)}>Reset to factory settings</button>
+    <section className="admin-page storage-page">
+      <PageHeader title="Storage" sub="How much space the readings take, and how long they are kept." />
+      {s.warn && (
+        <div role="alert" className="banner banner-warn">
+          {warnIcon}
+          <span>Database uses {s.used_pct}% of the configured capacity.</span>
         </div>
-        <p className="muted">
-          {siteDefault
-            ? `This site's default: ${summary(siteDefault)}.`
-            : "No site default has been set, so Reset to default loads the factory values."}{" "}
-          Factory: {summary(factory)}. The two Resets only fill in the form; nothing changes until you press Save.
-        </p>
-      </form>
+      )}
+      {s.retention_paused && (
+        <div role="alert" className="banner banner-warn">
+          {warnIcon}
+          <span>
+            Retention is paused (usually because a restore paused it so that older readings survive). Nothing is deleted while it is paused, and the disk is
+            not trimmed either. Press Save to start retention again; the save lists what it would delete and asks first.
+          </span>
+        </div>
+      )}
+      <div className="storage-top">
+        <div>
+          <dl className="kv">
+            <div><dt>Database size</dt><dd>{gib(s.database_bytes)}</dd></div>
+            <div>
+              <dt>Readings (raw)</dt>
+              <dd>{gib(s.readings_bytes_total)} — compressed {gib(s.readings_bytes_compressed)} of {gib(s.readings_bytes_uncompressed)} (ratio {ratio})</dd>
+            </div>
+            <div><dt>Rollups</dt><dd>1 min {gib(s.rollup_1m_bytes)}, 1 h {gib(s.rollup_1h_bytes)}</dd></div>
+            <div><dt>Growth</dt><dd>{gib(s.growth_bytes_per_day)} / day</dd></div>
+            <div>
+              <dt>Projected full</dt>
+              <dd>{projection(s.used_pct, s.days_until_full)} ({s.used_pct}% of {gib(s.disk_capacity_bytes)})</dd>
+            </div>
+          </dl>
+          <p className="muted">
+            Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.
+          </p>
+        </div>
+        <div>
+          <h2 className="section-title">Rows per day</h2>
+          <div className="table-wrap">
+            <table>
+              <tbody>
+                {s.rows_per_day.map((d) => (
+                  <tr key={d.day}><td>{d.day}</td><td className="num">{d.rows.toLocaleString("en-US")}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div className="form-card wide">
+        <h2 className="section-title">Retention and capacity</h2>
+        <form className="retention-form" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(false); }}>
+          {FIELDS.map(([key, label]) => (
+            <label key={key}>
+              {label}
+              <input type="number" step="any" value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} />
+            </label>
+          ))}
+          {error && <p className="error" role="alert">{error}</p>}
+          {note && !error && <p className="muted" role="status">{note}</p>}
+          <div className="row">
+            <button type="submit" className="primary" disabled={save.isPending}>Save</button>
+            <button type="button" onClick={rememberAsDefault} disabled={makeDefault.isPending}>Set as default</button>
+            <button type="button" className="quiet" onClick={() => fill(siteDefault ?? factory)}>Reset to default</button>
+            <button type="button" className="quiet" onClick={() => fill(factory)}>Reset to factory settings</button>
+          </div>
+          <p className="muted">
+            {siteDefault
+              ? `This site's default: ${summary(siteDefault)}.`
+              : "No site default has been set, so Reset to default loads the factory values."}{" "}
+            Factory: {summary(factory)}. The two Resets only fill in the form; nothing changes until you press Save.
+          </p>
+        </form>
+      </div>
       {needsConfirm && (
         <ConfirmDeleteDialog
           title={needsConfirm.deletesNow ? "Delete old readings?" : "Shorten retention?"}

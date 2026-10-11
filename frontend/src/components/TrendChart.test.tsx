@@ -131,6 +131,23 @@ describe("TrendChart", () => {
     expect(region).toContainElement(await screen.findByTestId("chart"));
   });
 
+  it("is one framed region: the controls sit in a bar inside it, the range picker is a segmented group, and no section is nested in the region", async () => {
+    mockFetch({
+      ...siteRoute,
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/assets/4/series": { body: series },
+    });
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    const region = await screen.findByRole("region", { name: "Trend" });
+    expect(region).toHaveClass("trend-frame");
+    expect(region.querySelectorAll("section")).toHaveLength(0);
+    const group = screen.getByRole("group", { name: "Time range" });
+    expect(group).toHaveClass("range-picker");
+    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(["1h", "6h", "24h", "7d"]);
+    expect(group.closest(".trend-bar")).not.toBeNull();
+    expect(region).toContainElement(group.closest(".trend-bar") as HTMLElement);
+  });
+
   it("labels the storage tier the series came from", async () => {
     mockFetch({
       ...siteRoute,
