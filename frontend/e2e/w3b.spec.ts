@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { roleLabel } from "./roles";
 
 // W3b (dashboards close up vertically, a parent's live power, the Trend says when it was updated, long names in charts) on the state
 // the earlier projects leave behind: admin `admin` / `correct-horse`; the manual source `sim` (60 simulator points, LVP01..LVP10 with
@@ -87,7 +88,9 @@ test("W3b: dashboards close up, a parent's live power, the Trend's updated time,
     await page.getByLabel("Username").fill(ADMIN.username);
     await page.getByLabel("Password", { exact: true }).fill(ADMIN.password);
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByRole("navigation")).toContainText(`${ADMIN.username} (admin)`);
+    const userBlock = page.getByRole("navigation").locator(".who");
+    await expect(userBlock).toContainText(ADMIN.username);
+    await expect(userBlock).toContainText(roleLabel("admin"));
   });
 
   const assets = await getJson<ApiAsset[]>(page, "/api/assets");

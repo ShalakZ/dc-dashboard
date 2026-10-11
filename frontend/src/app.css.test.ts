@@ -112,7 +112,7 @@ describe("contrast of the muted text", () => {
 
 describe("navigation and page width", () => {
   it("styles the current page link (nothing marked it visibly before)", () => {
-    expect(css).toMatch(/nav a\[aria-current="page"\]\s*\{[^}]*font-weight:\s*700/);
+    expect(css).toMatch(/\.side-row\[aria-current="page"\]\s*\{[^}]*font-weight:\s*600/);
   });
   it("hides the skip link until it has focus", () => {
     expect(css).toMatch(/\.skip-link\s*\{[^}]*position:\s*absolute/);
@@ -120,6 +120,39 @@ describe("navigation and page width", () => {
   });
   it("lets the wide pages use the whole window", () => {
     expect(css).toMatch(/main\.wide\s*\{[^}]*max-width:\s*none/);
+  });
+});
+
+describe("the shell (W6 sidebar)", () => {
+  const bodyOf = (selector: string) => rules.find((r) => r.selector === selector)?.body ?? "";
+
+  it("has no bare nav rule left: the old top bar is gone, and a bare nav rule would restyle the sidebar", () => {
+    expect(rules.filter((r) => /^nav(?![\w-])/.test(r.selector))).toEqual([]);
+    expect(css).not.toMatch(/a\[aria-current="page"\]\s*\{[^}]*border-bottom/);
+  });
+
+  it("the rail scrolls in both states: .nav-groups is overflow-y auto and nothing makes it visible", () => {
+    expect(bodyOf(".nav-groups")).toMatch(/overflow-y:\s*auto/);
+    for (const rule of rules.filter((r) => r.selector.includes(".nav-groups"))) {
+      expect(rule.body, `"${rule.selector}"`).not.toMatch(/overflow(-y)?:\s*visible/);
+    }
+  });
+
+  it("the sidebar sits above the sticky tree column (z-index 40) and the tooltip above the sidebar (50)", () => {
+    expect(bodyOf(".side")).toMatch(/z-index:\s*40\b/);
+    expect(bodyOf(".side-tip")).toMatch(/z-index:\s*50\b/);
+    expect(bodyOf(".side-tip")).toMatch(/position:\s*fixed/);
+  });
+
+  it("the sidebar width follows data-sidebar and the page keeps its own scroll bar out of the rail", () => {
+    expect(bodyOf(".shell")).toMatch(/--side-w:\s*var\(--side-w-open\)/);
+    expect(bodyOf('.shell[data-sidebar="minimized"]')).toMatch(/--side-w:\s*var\(--side-w-closed\)/);
+  });
+
+  it("Discovery is exactly one window tall inside the shell, not on #root", () => {
+    expect(bodyOf(".shell:has(.graph-page)")).toMatch(/height:\s*100vh/);
+    expect(bodyOf("main:has(.graph-page)")).toMatch(/min-height:\s*0/);
+    expect(css).not.toMatch(/#root:has\(\.graph-page\)/);
   });
 });
 

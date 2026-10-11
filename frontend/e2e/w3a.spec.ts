@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { roleLabel } from "./roles";
 
 // W3a (assets, mapping, sources) on the state the journey, discovery, phase3 and headers projects leave behind: admin `admin` /
 // `correct-horse`; the manual source `sim` (60 simulator points; LVP01_kW and LVP01_kWh mapped to the asset MV2); every asset of kind
@@ -31,7 +32,9 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
     await page.getByLabel("Username").fill(ADMIN.username);
     await page.getByLabel("Password", { exact: true }).fill(ADMIN.password);
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByRole("navigation")).toContainText(`${ADMIN.username} (admin)`);
+    const userBlock = page.getByRole("navigation").locator(".who");
+    await expect(userBlock).toContainText(ADMIN.username);
+    await expect(userBlock).toContainText(roleLabel("admin"));
   });
 
   await test.step("assets: a + on a branch, Kind picked from a list, one spelling per kind", async () => {
