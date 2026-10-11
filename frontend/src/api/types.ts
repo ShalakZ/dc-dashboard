@@ -17,6 +17,8 @@ export interface Source {
   last_reading_age_seconds?: number | null;
   /** How many of its points have a mapping (the list endpoint only). */
   mapped_points?: number;
+  /** Config keys whose value had a user name and password removed from it (the `config` here is already masked). */
+  hidden_config_keys?: string[];
 }
 export interface CollectorStatus { alive: boolean; age_seconds: number | null }
 /** GET /api/secret-key/status: whether every stored source secret can be decrypted with the key in .env. */

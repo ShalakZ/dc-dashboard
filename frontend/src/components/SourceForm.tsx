@@ -14,11 +14,13 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
   const invalidate = useInvalidate();
   const queryClient = useQueryClient();
   const secretHintId = useId();
+  const hiddenNoteId = useId();
   const [name, setName] = useState(source?.name ?? "");
   const [type, setType] = useState("");
   const [values, setValues] = useState<RawValues>({});
   const [secret, setSecret] = useState("");
   const [removeSecret, setRemoveSecret] = useState(false);
+  const [clearKeys, setClearKeys] = useState<string[]>([]);
   const [enabled, setEnabled] = useState(source?.enabled ?? true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -29,7 +31,10 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
   const fields = useMemo(() => (connector ? fieldsFromSchema(connector.config_schema) : []), [connector]);
   useEffect(() => { if (!source && connector && type !== connector.type) setType(connector.type); }, [source, connector, type]);
   // `source` must be a stable object (the page keeps the one it was opened with): a new one would reset what is typed.
-  useEffect(() => { setValues(source ? valuesFromConfig(fields, source.config) : initialValues(fields)); }, [fields, source]);
+  useEffect(() => { setValues(source ? valuesFromConfig(fields, source.config) : initialValues(fields)); setClearKeys([]); }, [fields, source]);
+  // Config keys whose stored user name and password the API hides (an edit only; the field shows the masked value).
+  const hiddenKeys = source?.hidden_config_keys ?? [];
+  const fieldTitle = (key: string) => fields.find((f) => f.name === key)?.label ?? key;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -39,8 +44,11 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
     try {
       if (source) {
         // No `secret` key keeps the stored secret; "" would erase it.
-        const body: Partial<Omit<SourceIn, "connector_type">> = {
+        // `clear_config_credentials` only takes effect together with `config`, which an edit always sends.
+        const cleared = hiddenKeys.filter((key) => clearKeys.includes(key));
+        const body: Partial<Omit<SourceIn, "connector_type">> & { clear_config_credentials?: string[] } = {
           name, config: coerceValues(fields, values), enabled, ...(removeSecret ? { secret: null } : secret ? { secret } : {}),
+          ...(cleared.length ? { clear_config_credentials: cleared } : {}),
         };
         const patched = await api.patch<Source>(`/api/sources/${source.id}`, body);
         // Put the saved source into the list first: if the refetch below fails, the next Edit must not start from (and save back) the old values.
@@ -86,6 +94,18 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
         </label>
       )}
       <SchemaForm fields={fields} values={values} onChange={setValues} />
+      {hiddenKeys.map((key) => (
+        <div key={key}>
+          <small id={`${hiddenNoteId}-${key}`} className="muted">
+            The user name and password stored in {fieldTitle(key)} are hidden. They are kept while you leave the address as it is;
+            {" "}a different address replaces them, so type them into the address if it needs them.
+          </small>
+          <label>Remove the credentials stored in {fieldTitle(key)}
+            <input type="checkbox" aria-describedby={`${hiddenNoteId}-${key}`} checked={clearKeys.includes(key)}
+              onChange={(e) => setClearKeys((keysNow) => (e.target.checked ? [...keysNow, key] : keysNow.filter((k) => k !== key)))} />
+          </label>
+        </div>
+      ))}
       <label>Secret
         <input type="password" autoComplete="off" value={secret} disabled={removeSecret} aria-describedby={source?.has_secret ? secretHintId : undefined}
           onChange={(e) => setSecret(e.target.value)} />

@@ -160,6 +160,87 @@ describe("SourceForm, editing a source", () => {
     expect(onDone).toHaveBeenCalled();
   });
 
+  describe("credentials hidden in the stored address", () => {
+    const hiddenSim: Source = { ...sim, config: { url: "http://sim:9000", timeout_seconds: 2.5 }, hidden_config_keys: ["url"] };
+    const note = "The user name and password stored in Url are hidden. They are kept while you leave the address as it is; "
+      + "a different address replaces them, so type them into the address if it needs them.";
+
+    it("says which field hides credentials, offers to remove them, and shows the masked value in the field", async () => {
+      mockFetch(auth);
+      renderWithProviders(<SourceForm source={hiddenSim} onDone={() => {}} />);
+      expect(await screen.findByLabelText("Url")).toHaveValue("http://sim:9000");
+      expect(screen.getByText(note)).toBeInTheDocument();
+      expect(screen.getByLabelText("Remove the credentials stored in Url")).not.toBeChecked();
+    });
+
+    it("sends clear_config_credentials with the key once the checkbox is ticked", async () => {
+      const calls = mockFetch({ ...auth, "PATCH /api/sources/2": { body: { id: 2 } } });
+      const onDone = vi.fn();
+      renderWithProviders(<SourceForm source={hiddenSim} onDone={onDone} />);
+      await userEvent.click(await screen.findByLabelText("Remove the credentials stored in Url"));
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
+      expect(patchOf(calls)!.body).toEqual({
+        name: "sim", config: { url: "http://sim:9000", timeout_seconds: 2.5 }, enabled: true, clear_config_credentials: ["url"],
+      });
+    });
+
+    it("sends no clear_config_credentials key when the checkbox is left alone, or ticked and unticked again", async () => {
+      const calls = mockFetch({ ...auth, "PATCH /api/sources/2": { body: { id: 2 } } });
+      const onDone = vi.fn();
+      renderWithProviders(<SourceForm source={hiddenSim} onDone={onDone} />);
+      const box = await screen.findByLabelText("Remove the credentials stored in Url");
+      await userEvent.click(box);
+      await userEvent.click(box);
+      expect(box).not.toBeChecked();
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
+      expect(patchOf(calls)!.body).not.toHaveProperty("clear_config_credentials");
+    });
+
+    it("keeps the config the field shows in the PATCH body, so the API can tell the address is unchanged", async () => {
+      const calls = mockFetch({ ...auth, "PATCH /api/sources/2": { body: { id: 2 } } });
+      const onDone = vi.fn();
+      renderWithProviders(<SourceForm source={hiddenSim} onDone={onDone} />);
+      await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
+      expect((patchOf(calls)!.body as { config: unknown }).config).toEqual({ url: "http://sim:9000", timeout_seconds: 2.5 });
+    });
+
+    it("shows neither the note nor the checkbox for a source with no hidden keys, or an empty list", async () => {
+      mockFetch(auth);
+      const { unmount } = renderWithProviders(<SourceForm source={sim} onDone={() => {}} />);
+      await screen.findByLabelText("Url");
+      expect(screen.queryByText(/are hidden/)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Remove the credentials/)).not.toBeInTheDocument();
+      unmount();
+      renderWithProviders(<SourceForm source={{ ...sim, hidden_config_keys: [] }} onDone={() => {}} />);
+      await screen.findByLabelText("Url");
+      expect(screen.queryByText(/are hidden/)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Remove the credentials/)).not.toBeInTheDocument();
+    });
+
+    it("shows neither when adding a source", async () => {
+      mockFetch(auth);
+      renderWithProviders(<SourceForm onDone={() => {}} />);
+      await screen.findByLabelText("Url");
+      expect(screen.queryByText(/are hidden/)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Remove the credentials/)).not.toBeInTheDocument();
+    });
+
+    it("names a hidden key that is not in the connector's schema by the key itself, and sends every ticked key", async () => {
+      const calls = mockFetch({ ...auth, "PATCH /api/sources/2": { body: { id: 2 } } });
+      const onDone = vi.fn();
+      renderWithProviders(<SourceForm source={{ ...sim, hidden_config_keys: ["url", "proxy"] }} onDone={onDone} />);
+      expect(await screen.findByText(/stored in proxy are hidden/)).toBeInTheDocument();
+      await userEvent.click(screen.getByLabelText("Remove the credentials stored in proxy"));
+      await userEvent.click(screen.getByLabelText("Remove the credentials stored in Url"));
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
+      expect((patchOf(calls)!.body as { clear_config_credentials: string[] }).clear_config_credentials).toEqual(["url", "proxy"]);
+    });
+  });
+
   it("Cancel calls onDone and sends nothing", async () => {
     const calls = mockFetch(auth);
     const onDone = vi.fn();
