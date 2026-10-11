@@ -15,7 +15,7 @@ from helpers import refresh_rollup  # noqa: E402  (imports dcdash, which needs t
 
 BACKEND = Path(__file__).resolve().parents[1]
 TABLES = (
-    "audit_log, widgets, dashboards, tariffs, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, "
+    "diag_events, audit_log, widgets, dashboards, tariffs, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, "
     "readings, mappings, points, assets, sources, sessions, users, settings"
 )
 
