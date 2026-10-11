@@ -5,8 +5,8 @@ import { NO_FILTERS } from "../lib/auditFilters";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
-  auditPosition, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useDashboard, useDashboards, useGraph, usePatchUser, usePutGeneralSettings,
-  useSaveDashboard, useScan, useSeries, useSite, useTariffs, useUsers, useWidgetData,
+  auditPosition, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useDashboard, useDashboards, useDeleteUser, useGraph, usePatchUser,
+  usePutGeneralSettings, usePutSignInPolicy, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useTariffs, useUnblockUser, useUsers, useWidgetData,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
 
@@ -27,6 +27,63 @@ describe("user queries", () => {
     await result.current.patch.mutateAsync({ id: 2, body: { active: false } });
     await waitFor(() => expect(result.current.users.data?.[0].active).toBe(false));
     expect(calls.filter((c) => c.path === "/api/users").length).toBe(2);
+  });
+});
+
+describe("user delete and unblock", () => {
+  const row = (id: number, blocked: boolean) => ({ id, username: `u${id}`, role: "viewer", active: true, blocked });
+
+  it("deletes a user and refetches the list", async () => {
+    let users = [row(2, false), row(3, false)];
+    const calls = mockFetch({
+      "GET /api/users": () => ({ body: users }),
+      "DELETE /api/users/2": () => { users = users.filter((u) => u.id !== 2); return { status: 204 }; },
+    });
+    const { result } = renderHook(() => ({ users: useUsers(), del: useDeleteUser() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.users.data).toHaveLength(2));
+    await result.current.del.mutateAsync(2);
+    await waitFor(() => expect(result.current.users.data?.map((u) => u.id)).toEqual([3]));
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/api/users/2"]);
+  });
+
+  it("unblocks a user with an empty POST and refetches the list", async () => {
+    let blocked = true;
+    const calls = mockFetch({
+      "GET /api/users": () => ({ body: [row(2, blocked)] }),
+      "POST /api/users/2/unblock": () => { blocked = false; return { body: { cleared: 2 } }; },
+    });
+    const { result } = renderHook(() => ({ users: useUsers(), unblock: useUnblockUser() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.users.data?.[0].blocked).toBe(true));
+    await expect(result.current.unblock.mutateAsync(2)).resolves.toEqual({ cleared: 2 });
+    await waitFor(() => expect(result.current.users.data?.[0].blocked).toBe(false));
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({});
+  });
+});
+
+describe("sign-in policy queries", () => {
+  const answer = (max_failures: number, block_minutes: number) => ({
+    max_failures, block_minutes,
+    limits: { max_failures: [3, 20], block_minutes: [1, 60] },
+    defaults: { max_failures: 5, block_minutes: 5 },
+  });
+
+  it("reads the policy and refetches it after a save", async () => {
+    let policy = answer(5, 5);
+    const calls = mockFetch({
+      "GET /api/settings/sign-in": () => ({ body: policy }),
+      "PUT /api/settings/sign-in": ({ body }) => {
+        const b = body as { max_failures: number; block_minutes: number };
+        policy = answer(b.max_failures, b.block_minutes);
+        return { body: policy };
+      },
+    });
+    const { result } = renderHook(() => ({ policy: useSignInPolicy(), put: usePutSignInPolicy() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.policy.data?.max_failures).toBe(5));
+    expect(result.current.policy.data?.limits.block_minutes).toEqual([1, 60]);
+    await result.current.put.mutateAsync({ max_failures: 8, block_minutes: 15 });
+    await waitFor(() => expect(result.current.policy.data?.block_minutes).toBe(15));
+    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ max_failures: 8, block_minutes: 15 });
+    expect(calls.filter((c) => c.method === "GET" && c.path === "/api/settings/sign-in")).toHaveLength(2);
   });
 });
 

@@ -98,8 +98,16 @@ export interface Job {
 /** result of a done test_source job (dataclasses.asdict(ConnectionCheck)) */
 export interface CheckResult { ok: boolean; status: string; latency_ms: number | null; message: string }
 
-export interface UserRow { id: number; username: string; role: Role; active: boolean }
+/** `blocked`: some sign-in key of this account name is blocked right now (GET /api/users). */
+export interface UserRow { id: number; username: string; role: Role; active: boolean; blocked?: boolean }
 export interface GeneralSettings { timezone: string }
+
+export interface SignInValues { max_failures: number; block_minutes: number }
+/** What GET and PUT /api/settings/sign-in answer: the policy in force, its bounds as [min, max] and the factory values; PUT takes only the two numbers. */
+export interface SignInPolicy extends SignInValues {
+  limits: { max_failures: [number, number]; block_minutes: [number, number] };
+  defaults: SignInValues;
+}
 
 export interface StorageSettings {
   raw_retention_days: number;

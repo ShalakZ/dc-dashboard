@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { ApiError } from "../api/client";
-import { useCreateUser, usePatchUser, useUsers } from "../api/queries";
+import { useCreateUser, useDeleteUser, usePatchUser, useUnblockUser, useUsers } from "../api/queries";
 import type { Role, UserRow } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
+import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 
 const ROLES: Role[] = ["viewer", "operator", "admin"];
 
@@ -14,8 +15,11 @@ function errorText(error: unknown): string {
 
 function UserRowView({ user, self }: { user: UserRow; self: boolean }) {
   const patch = usePatchUser();
+  const remove = useDeleteUser();
+  const unblock = useUnblockUser();
   const [newPassword, setNewPassword] = useState("");
   const [resetting, setResetting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   return (
     <tr>
       <td>{user.username}</td>
@@ -31,7 +35,10 @@ function UserRowView({ user, self }: { user: UserRow; self: boolean }) {
           ))}
         </select>
       </td>
-      <td>{user.active ? "active" : "inactive"}</td>
+      <td>
+        {user.active ? "active" : "inactive"}
+        {user.blocked && <> <span className="error">blocked</span></>}
+      </td>
       <td>
         <button
           disabled={self || patch.isPending}
@@ -62,8 +69,25 @@ function UserRowView({ user, self }: { user: UserRow; self: boolean }) {
           </form>
         ) : (
           <button onClick={() => setResetting(true)}>Reset password</button>
-        )}
+        )}{" "}
+        {user.blocked && (
+          <button aria-label={`Unblock ${user.username}`} disabled={unblock.isPending} onClick={() => unblock.mutate(user.id)}>Unblock</button>
+        )}{" "}
+        <button aria-label={`Delete ${user.username}`} disabled={self} onClick={() => setDeleting(true)}>Delete</button>
         {patch.isError && <span className="error" role="alert"> {errorText(patch.error)}</span>}
+        {unblock.isError && <span className="error" role="alert"> {errorText(unblock.error)}</span>}
+        {deleting && (
+          <ConfirmDeleteDialog
+            title={`Delete user ${user.username}?`}
+            message={`${user.username} will no longer be able to sign in. This cannot be undone. Their name stays in the audit log. To keep the account but stop it signing in, deactivate it instead.`}
+            confirmLabel="Delete user"
+            onConfirm={async () => {
+              await remove.mutateAsync(user.id);
+              setDeleting(false);
+            }}
+            onCancel={() => setDeleting(false)}
+          />
+        )}
       </td>
     </tr>
   );
