@@ -1188,9 +1188,10 @@ class _Renderer:
                 if step.ok is False:
                     lines.extend(self._step_lines(number, step))
             if any(step.id == "session" and step.ok is False for step in steps):
-                lines.extend(  # the session hints say "the thumbprint in the certificates step": show it, with the full line allowance
-                    f"   {self.text(s.id, 30)}: {self.text(s.summary)}" for s in steps if s.ok and s.id in SESSION_CONTEXT_STEPS and s.summary
-                )
+                for s in steps:  # the session hints say "the thumbprint in the certificates step": show it, with the full line allowance
+                    if s.ok and s.id in SESSION_CONTEXT_STEPS and s.summary:
+                        prefix = f"   {self.text(s.id, 30)}: "
+                        lines.append(prefix + self.text(s.summary, LINE_LIMIT - len(prefix)))
             skipped = [step.id for step in steps if step.ok is None]
             if skipped:
                 lines.append("   skipped: " + ", ".join(self.text(s, 30) for s in skipped))

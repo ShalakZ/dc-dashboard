@@ -169,6 +169,11 @@ def test_a_failed_session_brings_the_certificates_and_endpoints_lines_the_hints_
     assert f"   certificates: {CERTIFICATES_SUMMARY}" in section  # the whole line, thumbprint and the server certificate part
     assert f"   endpoints: {ENDPOINTS_SUMMARY}" in section and "[UserName]" in section[section.index(f"   endpoints: {ENDPOINTS_SUMMARY}")]
     assert section.index(f"   certificates: {CERTIFICATES_SUMMARY}") > next(i for i, line in enumerate(section) if "5 session FAIL" in line)
+    long = replace(data, checks=(refused_session_check(),))
+    long_steps = tuple(replace(s, summary=s.summary + " and more " * 60) if s.id == "certificates" else s for s in long.checks[0].steps)
+    clipped = lines_of(render(replace(long, checks=(replace(long.checks[0], steps=long_steps),)), "summary", ident), "CONNECTION CHECKS")
+    line = next(line for line in clipped if line.startswith("   certificates:"))
+    assert len(line) == 300 and THUMBPRINT in line  # a 600-character summary is cut at the line limit, after the thumbprint
     others = replace(data, checks=(check(fail_at="tcp", steps=(CheckStep("dns", True, ms=3.0, summary="dns fine"),
                                                            CheckStep("tcp", False, error_class="ConnectionRefusedError"))),))
     assert not any(line.startswith(("   certificates:", "   endpoints:")) for line in lines_of(render(others, "summary", ident), "CONNECTION CHECKS"))
