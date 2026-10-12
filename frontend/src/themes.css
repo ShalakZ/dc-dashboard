@@ -74,3 +74,6 @@
 /* Billing: app.css freezes the muted cell as light literals (#666 on #f4f4f4); in dark that is a light patch on a dark page. */
 :root[data-mode="dark"] table.billing td.muted, :root[data-mode="dark"] table.billing td.muted .muted { color: #b7bdc9; }
 :root[data-mode="dark"] table.billing td.muted { background: #262b33; }
+
+/* The editor's drag placeholder is frozen black in app.css and sits on the page, not on a card: invisible on a dark page (1.18:1). */
+:root[data-mode="dark"] .dash-grid-edit .react-grid-item.react-grid-placeholder { background: #fff; }

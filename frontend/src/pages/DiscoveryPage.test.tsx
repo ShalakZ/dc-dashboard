@@ -19,8 +19,8 @@ vi.mock("@xyflow/react", async (importOriginal) => {
     ...actual,
     Handle: () => null,
     useReactFlow: () => ({ getIntersectingNodes: flow.getIntersectingNodes }),
-    ReactFlow: ({ nodes, nodeTypes, onNodeClick, onNodeDragStart, onNodeDragStop, onNodesChange }: any) => (
-      <div data-testid="flow">
+    ReactFlow: ({ nodes, nodeTypes, colorMode, onNodeClick, onNodeDragStart, onNodeDragStop, onNodesChange }: any) => (
+      <div data-testid="flow" data-color-mode={colorMode}>
         {nodes.map((n: any) => {
           const Node = nodeTypes[n.type];
           const dropped = { ...n, position: { x: 7, y: 8 } };
@@ -90,6 +90,20 @@ describe("DiscoveryPage", () => {
     expect(screen.getByText("10.0.0.9:8080 — unidentified service")).toBeInTheDocument();
     expect(screen.queryByText("LVP01 (2)")).not.toBeInTheDocument();
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+  });
+
+  it("hands React Flow the account's mode, so the graph's own controls and labels follow the page", async () => {
+    mockFetch(routes("operator"));
+    open();
+    await screen.findByText("Plant OPC");
+    expect(screen.getByTestId("flow")).toHaveAttribute("data-color-mode", "light");
+  });
+
+  it("hands React Flow the dark colour mode when the account chose dark", async () => {
+    mockFetch({ ...routes("operator"), "GET /api/me": { body: { id: 1, username: "u", role: "operator", preferences: { mode: "dark", theme: "navy-gold" } } } });
+    open();
+    await screen.findByText("Plant OPC");
+    await waitFor(() => expect(screen.getByTestId("flow")).toHaveAttribute("data-color-mode", "dark"));
   });
 
   it("expanding a source shows its clusters, and a cluster shows its points", async () => {

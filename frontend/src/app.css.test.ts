@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { MUTED_FIGURE } from "./lib/widgetFormat";
-import { AA, contrast, NON_TEXT, parseRules, stripComments, type Rule } from "./test/cssTools";
+import { AA, contrast, customProperties, NON_TEXT, parseRules, stripComments, type Rule } from "./test/cssTools";
 
 // vitest is configured with `css: false`, which empties a CSS import, so the stylesheets are read as text.
 const css = stripComments(readFileSync("src/app.css", "utf8")); // vitest runs from the frontend directory
@@ -129,6 +129,17 @@ describe("the shell (W6 sidebar)", () => {
 
   it("the graph's zoom buttons are dimmed once (by React Flow), not twice (the disabled-button rule)", () => {
     expect(bodyOf(".graph-canvas .react-flow__controls button")).toMatch(/opacity:\s*1\b/);
+  });
+
+  it("the graph's React Flow colours (both of its modes) are pointed at page tokens, never at a raw colour", () => {
+    const flow = customProperties(bodyOf(".graph-canvas .react-flow"));
+    for (const name of [
+      "xy-background-color", "xy-edge-stroke", "xy-background-pattern-dots-color", "xy-controls-button-background-color",
+      "xy-controls-button-background-color-hover", "xy-controls-button-color", "xy-controls-button-color-hover",
+      "xy-controls-button-border-color", "xy-edge-label-background-color", "xy-edge-label-color", "xy-attribution-background-color",
+    ]) {
+      expect(flow.get(name), `--${name}`).toMatch(/^(?:transparent|var\(--[a-z0-9-]+\))$/);
+    }
   });
 
   it("the asset page's no-data words are not set as a figure", () => {

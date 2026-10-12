@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
+import { useAppearance } from "../auth/AppearanceProvider";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { seriesToOption, TrendChart } from "./TrendChart";
@@ -32,6 +33,63 @@ describe("seriesToOption", () => {
     expect(avg.connectNulls).toBe(false);
     expect(avg.data).toEqual([["2026-10-07T10:00:00+00:00", 1], ["2026-10-07T10:01:00+00:00", 2]]);
     expect(option.series.map((s) => s.name)).toEqual(["min", "max", "avg"]);
+  });
+});
+
+describe("seriesToOption appearance", () => {
+  const T1 = "2026-10-07T10:00:00+00:00";
+  const T2 = "2026-10-07T10:01:00+00:00";
+  const minuteBuckets = { start: "2026-10-07T10:00:00Z", end: "2026-10-07T15:00:00Z", buckets: 300 };
+  type Dark = {
+    backgroundColor?: string;
+    tooltip: { backgroundColor?: string; borderColor?: string; textStyle?: { color: string } };
+    xAxis: Record<string, { color?: string; lineStyle?: { color: string } }>;
+    yAxis: Record<string, { color?: string; lineStyle?: { color: string } }>;
+    series: { name: string; color?: string; areaStyle?: { color: string; opacity: number } }[];
+  };
+
+  // The option as it was before the dark parameter existed: a chart in light mode must not change by a single key.
+  it("returns today's option, key for key, when dark is false or left out", () => {
+    const today = {
+      animation: false,
+      useUTC: true,
+      tooltip: { trigger: "axis", formatter: expect.any(Function) },
+      grid: { left: 60, right: 20, top: 30, bottom: 40 },
+      xAxis: { type: "time", axisLabel: { formatter: expect.any(Function) } },
+      yAxis: { type: "value", name: "kW", scale: true },
+      series: [
+        { name: "min", type: "line", data: [[T1, 0.5], [T2, 1]], lineStyle: { opacity: 0 }, symbol: "none", stack: "band", connectNulls: false },
+        { name: "max", type: "line", data: [[T1, 1], [T2, 2]], lineStyle: { opacity: 0 }, symbol: "none", stack: "band", areaStyle: { color: "#000", opacity: 0.1 }, connectNulls: false },
+        { name: "avg", type: "line", data: [[T1, 1], [T2, 2]], symbol: "none", color: "#000", connectNulls: false },
+      ],
+    };
+    expect(seriesToOption(series as never, "1h", minuteBuckets)).toStrictEqual(today);
+    expect(seriesToOption(series as never, "1h", minuteBuckets, "UTC", false)).toStrictEqual(today);
+  });
+
+  it("paints the axes, the unit name, the lines, the band and the tooltip in light-on-dark colours when dark is true", () => {
+    const o = seriesToOption(series as never, "1h", minuteBuckets, "UTC", true) as unknown as Dark;
+    expect(o.backgroundColor).toBe("transparent");
+    for (const axis of [o.xAxis, o.yAxis]) {
+      expect(axis.axisLabel.color).toBe("#a3abb8");
+      expect(axis.axisLine.lineStyle!.color).toBe("#3a414d");
+      expect(axis.axisTick.lineStyle!.color).toBe("#3a414d");
+      expect(axis.splitLine.lineStyle!.color).toBe("#2b313b");
+    }
+    expect(o.yAxis.nameTextStyle.color).toBe("#a3abb8"); // the unit name: ECharts' own default (#6E7079) is 3.6:1 on the dark page
+    expect(o.series.find((s) => s.name === "avg")!.color).toBe("#e4e7ed");
+    expect(o.series.find((s) => s.name === "max")!.areaStyle).toEqual({ color: "#e4e7ed", opacity: 0.12 });
+    expect(o.tooltip).toMatchObject({ backgroundColor: "#1f232b", borderColor: "#3a414d", textStyle: { color: "#e4e7ed" } });
+  });
+
+  it("keeps the data, the unit, the site-zone ticks and the tooltip text in dark", () => {
+    const light = seriesToOption(series as never, "1h", minuteBuckets, "Asia/Qatar") as unknown as { yAxis: { name: string }; xAxis: { axisLabel: { formatter: (v: number) => string } }; series: unknown[]; tooltip: { formatter: (v: unknown) => string } };
+    const dark = seriesToOption(series as never, "1h", minuteBuckets, "Asia/Qatar", true) as unknown as typeof light;
+    const at = Date.parse("2026-10-06T21:00:00Z");
+    expect(dark.yAxis.name).toBe("kW");
+    expect(dark.xAxis.axisLabel.formatter(at)).toBe(light.xAxis.axisLabel.formatter(at));
+    expect(dark.tooltip.formatter([{ axisValue: at, seriesName: "avg", value: [at, 2] }])).toBe(light.tooltip.formatter([{ axisValue: at, seriesName: "avg", value: [at, 2] }]));
+    expect(dark.series.map((s) => (s as { data: unknown }).data)).toEqual(light.series.map((s) => (s as { data: unknown }).data));
   });
 });
 
@@ -118,6 +176,26 @@ describe("TrendChart", () => {
     const urls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.includes("metric=active_power_kw") && u.includes("buckets=300"))).toBe(true);
     expect(calls.filter((c) => c.path === "/api/assets/4/series").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("draws in the dark colours when the account's mode is dark, and redraws when the mode is switched", async () => {
+    mockFetch({
+      ...siteRoute,
+      "GET /api/setup": { body: { needed: false } },
+      "GET /api/me": { body: { id: 1, username: "v", role: "viewer", preferences: { mode: "light", theme: "navy-gold" } } },
+      "PUT /api/me/preferences": { body: { mode: "dark", theme: "navy-gold" } },
+      "GET /api/assets/4/series": { body: series },
+    });
+    captured.options.length = 0;
+    function Switch() {
+      const { setMode } = useAppearance();
+      return <button onClick={() => setMode("dark")}>go dark</button>;
+    }
+    renderWithProviders(<><Switch /><TrendChart assetId={4} metrics={metrics} /></>);
+    await screen.findByTestId("chart");
+    expect(captured.options.at(-1)).not.toHaveProperty("backgroundColor");
+    await userEvent.click(screen.getByRole("button", { name: "go dark" }));
+    await waitFor(() => expect(captured.options.at(-1)).toHaveProperty("backgroundColor", "transparent"));
   });
 
   it("is a region named Trend, so a page (and a test) can find it by its name", async () => {

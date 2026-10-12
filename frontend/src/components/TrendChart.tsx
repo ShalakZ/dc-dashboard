@@ -3,6 +3,7 @@ import ReactECharts from "echarts-for-react";
 import { useMemo, useState } from "react";
 import { useSeries, useSite } from "../api/queries";
 import type { Metric, Series, SeriesTier, SummaryMetric } from "../api/types";
+import { useAppearance } from "../auth/AppearanceProvider";
 import { formatSiteClock, formatSiteDateTime, formatSiteTick } from "../lib/siteTime";
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { bucketMs, markIsolated } from "./dashboard/widgets/TimeSeriesWidget";
@@ -53,22 +54,48 @@ export function tooltipHtml(raw: unknown, timezone: string): string {
   return [header, ...rows].join("<br/>");
 }
 
-export function seriesToOption(series: Series, range: Range, query: Query = rangeToQuery(range), timezone = "UTC"): EChartsOption {
+// Colours for the chart on the dark page (tokens cannot reach a canvas). Text 7.7:1 on the dark --bg, the average line 14:1; the axis and grid lines stay quiet.
+const DARK_CHART = { text: "#a3abb8", axis: "#3a414d", split: "#2b313b", line: "#e4e7ed", tipBg: "#1f232b" };
+
+/** The axis colours of the dark page; nothing at all in light, so the light option keeps exactly the keys it always had. */
+function darkAxis(dark: boolean) {
+  if (!dark) return {};
+  return {
+    axisLine: { lineStyle: { color: DARK_CHART.axis } },
+    axisTick: { lineStyle: { color: DARK_CHART.axis } },
+    splitLine: { lineStyle: { color: DARK_CHART.split } },
+  };
+}
+
+export function seriesToOption(series: Series, range: Range, query: Query = rangeToQuery(range), timezone = "UTC", dark = false): EChartsOption {
   const bucket = range === "7d" ? "hour" : null; // a week needs dates on the ticks, a day does not
   return {
     animation: false,
     useUTC: true, // tick positions on whole UTC hours; labels below are formatted in the site zone, not the browser's
-    tooltip: { trigger: "axis", formatter: (raw: unknown) => tooltipHtml(raw, timezone) },
+    ...(dark && { backgroundColor: "transparent" }),
+    tooltip: {
+      trigger: "axis",
+      formatter: (raw: unknown) => tooltipHtml(raw, timezone),
+      ...(dark && { backgroundColor: DARK_CHART.tipBg, borderColor: DARK_CHART.axis, textStyle: { color: DARK_CHART.line } }),
+    },
     grid: { left: 60, right: 20, top: 30, bottom: 40 },
     xAxis: {
       type: "time",
-      axisLabel: { formatter: (value: number) => (Number.isFinite(value) ? formatSiteTick(new Date(value).toISOString(), timezone, bucket) : "") },
+      axisLabel: {
+        formatter: (value: number) => (Number.isFinite(value) ? formatSiteTick(new Date(value).toISOString(), timezone, bucket) : ""),
+        ...(dark && { color: DARK_CHART.text }),
+      },
+      ...darkAxis(dark),
     },
-    yAxis: { type: "value", name: series.unit, scale: true },
+    yAxis: {
+      type: "value", name: series.unit, scale: true,
+      ...(dark && { axisLabel: { color: DARK_CHART.text }, nameTextStyle: { color: DARK_CHART.text } }),
+      ...darkAxis(dark),
+    },
     series: [
       { name: "min", type: "line", data: withGaps(series.points, query, (p) => p.min), lineStyle: { opacity: 0 }, symbol: "none", stack: "band", connectNulls: false },
-      { name: "max", type: "line", data: withGaps(series.points, query, (p) => p.max - p.min), lineStyle: { opacity: 0 }, symbol: "none", stack: "band", areaStyle: { color: "#000", opacity: 0.1 }, connectNulls: false },
-      { name: "avg", type: "line", data: markIsolated(withGaps(series.points, query, (p) => p.avg)), symbol: "none", color: "#000", connectNulls: false },
+      { name: "max", type: "line", data: withGaps(series.points, query, (p) => p.max - p.min), lineStyle: { opacity: 0 }, symbol: "none", stack: "band", areaStyle: dark ? { color: DARK_CHART.line, opacity: 0.12 } : { color: "#000", opacity: 0.1 }, connectNulls: false },
+      { name: "avg", type: "line", data: markIsolated(withGaps(series.points, query, (p) => p.avg)), symbol: "none", color: dark ? DARK_CHART.line : "#000", connectNulls: false },
     ],
   };
 }
@@ -88,7 +115,8 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
   const site = useSite();
   const timezone = site.data?.timezone;
   // Memoised: every stream message re-renders the asset page, and a new option object would make the chart redraw and close a tooltip.
-  const option = useMemo(() => (data && timezone ? seriesToOption(data, range, undefined, timezone) : null), [data, range, timezone]);
+  const { dark } = useAppearance();
+  const option = useMemo(() => (data && timezone ? seriesToOption(data, range, undefined, timezone, dark) : null), [data, range, timezone, dark]);
   if (metric === null) return <p className="muted">No metric to chart.</p>;
   return (
     <section className="trend-frame" aria-label="Trend" onPointerEnter={(e) => { if (e.pointerType === "mouse") setHover(true); }} onPointerLeave={() => setHover(false)}>

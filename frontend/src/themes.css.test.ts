@@ -24,6 +24,7 @@ const darkRule = () => only(':root[data-mode="dark"]');
 const ISLAND = ":is(.widget-frame, .widget-preview)";
 const BILLING_INK = ':root[data-mode="dark"] table.billing td.muted, :root[data-mode="dark"] table.billing td.muted .muted';
 const BILLING_GROUND = ':root[data-mode="dark"] table.billing td.muted';
+const PLACEHOLDER = ':root[data-mode="dark"] .dash-grid-edit .react-grid-item.react-grid-placeholder';
 
 /** The tokens the cascade gives an element under <html data-mode data-theme>: the base, the preset, then (dark only) the dark block. */
 function cascade(themeId: string, mode: "light" | "dark") {
@@ -216,9 +217,22 @@ describe("the Billing muted cell", () => {
   });
 });
 
+describe("the editor's drag placeholder", () => {
+  it("is white in dark (app.css freezes it black, 1.18:1 on the dark page), well apart from the page", () => {
+    const fill = /(?:^|;|\s)background:\s*([^;]+)/.exec(only(PLACEHOLDER).body)?.[1].trim();
+    expect(fill).toBe("#fff");
+    expect(contrast("#ffffff", customProperties(darkRule().body).get("bg")!)).toBeGreaterThanOrEqual(NON_TEXT);
+  });
+
+  it("outranks app.css's rule for it (more specific, and later)", () => {
+    expect(only(PLACEHOLDER).order).toBeGreaterThan(darkRule().order);
+    expect(only(PLACEHOLDER).order).toBeGreaterThan(only(ISLAND).order);
+  });
+});
+
 describe("the file", () => {
-  it("is ordered: the four presets, then dark, then the island, then Billing", () => {
-    const order = [...THEMES.map((t) => presetRule(t.id).order), darkRule().order, only(ISLAND).order, only(BILLING_INK).order, only(BILLING_GROUND).order];
+  it("is ordered: the four presets, then dark, then the island, then Billing, then the placeholder", () => {
+    const order = [...THEMES.map((t) => presetRule(t.id).order), darkRule().order, only(ISLAND).order, only(BILLING_INK).order, only(BILLING_GROUND).order, only(PLACEHOLDER).order];
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(rules).toHaveLength(order.length);
   });

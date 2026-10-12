@@ -416,6 +416,14 @@
   .graph-page > .row { flex: none; margin-bottom: 8px; }
   .graph-layout { flex: 1; min-height: 320px; display: flex; gap: 12px; }
   .graph-canvas { flex: 1; min-width: 0; border: 1px solid var(--border-strong); position: relative; }
+  /* React Flow's own colours (its light and its dark mode) come from --xy-* variables; they are pointed at the page tokens, so both modes and all presets follow the theme. */
+  .graph-canvas .react-flow {
+    --xy-background-color: transparent; --xy-edge-stroke: var(--text-disabled); --xy-background-pattern-dots-color: var(--border-strong);
+    --xy-controls-button-background-color: var(--bg); --xy-controls-button-background-color-hover: var(--surface);
+    --xy-controls-button-color: var(--text); --xy-controls-button-color-hover: var(--text); --xy-controls-button-border-color: var(--border-strong);
+    --xy-edge-label-background-color: var(--bg); --xy-edge-label-color: var(--text-2);
+    --xy-attribution-background-color: var(--surface);
+  }
   .graph-canvas .react-flow__controls button { min-height: 0; border-radius: 0; font-weight: 400; opacity: 1; } /* opacity 1: React Flow dims a disabled zoom button itself, the base disabled rule must not dim it twice */
   .gpanel { width: 320px; flex: none; align-content: start; overflow: auto; margin: 0; }
   .gpanel h2 { margin: 0; font-size: 16px; }
