@@ -1,4 +1,4 @@
-"""The sign-in protection setting: how many failed sign-ins block an account, and for how many minutes."""
+"""The sign-in protection setting: how many failed sign-ins block an account, for how many minutes, and whether it is on."""
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -18,9 +18,10 @@ MIN_BLOCK_MINUTES, MAX_BLOCK_MINUTES = 1, 60
 class SignInPolicy:
     max_failures: int
     block_minutes: int
+    enabled: bool = True
 
 
-DEFAULT_POLICY = SignInPolicy(max_failures=5, block_minutes=5)  # what the limiter did before it was configurable
+DEFAULT_POLICY = SignInPolicy(max_failures=5, block_minutes=5, enabled=True)  # what the limiter did before it was configurable
 
 
 def _int_in(value: Any, low: int, high: int) -> bool:
@@ -31,10 +32,15 @@ _warned: set[str] = set()  # one warning per distinct bad value, not one per sig
 
 
 def policy_from(stored: Any) -> SignInPolicy:
-    """The stored value as a policy; anything out of bounds or of the wrong shape means the defaults, as a whole."""
+    """The stored value as a policy; anything out of bounds or of the wrong shape means the defaults, as a whole.
+
+    `enabled` is absent in a row saved before the switch existed, which means ON; present, it must be a real bool (not
+    0, "false" or null) or the whole row is invalid. Protection is never switched off by a value nobody wrote on purpose.
+    """
     if isinstance(stored, dict) and _int_in(stored.get("max_failures"), MIN_FAILURES, MAX_FAILURES) \
-            and _int_in(stored.get("block_minutes"), MIN_BLOCK_MINUTES, MAX_BLOCK_MINUTES):
-        return SignInPolicy(stored["max_failures"], stored["block_minutes"])
+            and _int_in(stored.get("block_minutes"), MIN_BLOCK_MINUTES, MAX_BLOCK_MINUTES) \
+            and ("enabled" not in stored or type(stored["enabled"]) is bool):
+        return SignInPolicy(stored["max_failures"], stored["block_minutes"], stored.get("enabled", True))
     if stored is not None and (shown := repr(stored)[:200]) not in _warned:
         _warned.add(shown)
         log.warning("stored sign-in policy %s is not valid; using the defaults", shown)

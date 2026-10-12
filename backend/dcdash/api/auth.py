@@ -26,9 +26,9 @@ def limiter_key(request: Request, username: str) -> tuple[str, str]:
 
 
 async def apply_sign_in_policy(db: AsyncSession) -> SignInPolicy:
-    """Read the stored policy and give its numbers to the limiter, so a change applies to the very next attempt."""
+    """Read the stored policy and give it to the limiter, so a change applies to the very next attempt."""
     policy = await get_sign_in_policy(db)
-    limiter.configure(policy.max_failures, policy.block_minutes * 60)
+    limiter.configure(policy.max_failures, policy.block_minutes * 60, policy.enabled)
     return policy
 
 

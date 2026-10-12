@@ -4,7 +4,8 @@ from dataclasses import asdict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.auth import limiter
@@ -128,25 +129,33 @@ async def put_billing(
 
 
 class SignInPolicyIn(BaseModel):
-    """The PUT body: the two numbers only, whole numbers inside the bounds (so protection cannot be switched off)."""
+    """The PUT body: the two numbers (whole numbers inside the bounds, also while protection is off) and the switch.
+
+    `enabled` is a real boolean and defaults to ON, so a client that does not know the switch can only ever turn
+    protection on, never off."""
 
     model_config = ConfigDict(extra="forbid")
     max_failures: StrictInt = Field(ge=MIN_FAILURES, le=MAX_FAILURES)
     block_minutes: StrictInt = Field(ge=MIN_BLOCK_MINUTES, le=MAX_BLOCK_MINUTES)
+    enabled: StrictBool = True
 
 
 class SignInPolicyOut(BaseModel):
     max_failures: int
     block_minutes: int
+    enabled: bool
     limits: dict[str, list[int]]
     defaults: dict[str, int]
 
 
 def _sign_in_out(policy: SignInPolicy) -> SignInPolicyOut:
     return SignInPolicyOut(
-        **asdict(policy),
+        max_failures=policy.max_failures,
+        block_minutes=policy.block_minutes,
+        enabled=policy.enabled,
         limits={"max_failures": [MIN_FAILURES, MAX_FAILURES], "block_minutes": [MIN_BLOCK_MINUTES, MAX_BLOCK_MINUTES]},
-        defaults=asdict(DEFAULT_POLICY),
+        # The two numbers only: with `enabled` in here pydantic would turn the bool into 1 in a dict[str, int].
+        defaults={"max_failures": DEFAULT_POLICY.max_failures, "block_minutes": DEFAULT_POLICY.block_minutes},
     )
 
 
@@ -158,13 +167,24 @@ async def get_sign_in(db: AsyncSession = Depends(get_db)) -> SignInPolicyOut:
 @router.put("/settings/sign-in", response_model=SignInPolicyOut)
 async def put_sign_in(
     body: SignInPolicyIn,
+    confirm: bool = False,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role("admin")),
-) -> SignInPolicyOut:
+) -> SignInPolicyOut | JSONResponse:
     before = await get_sign_in_policy(db)
-    after = SignInPolicy(max_failures=body.max_failures, block_minutes=body.block_minutes)
+    if before.enabled and not body.enabled and not confirm:
+        # Same pattern as PUT /api/settings/storage: refuse, say why, ask for confirm=true. Nothing is written or audited.
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "Switching sign-in protection off ends every current block and stops blocking accounts after "
+                          "wrong passwords: this needs confirmation (send confirm=true).",
+                "needs_confirmation": True,
+            },
+        )
+    after = SignInPolicy(max_failures=body.max_failures, block_minutes=body.block_minutes, enabled=body.enabled)
     await set_setting(db, SIGN_IN_KEY, asdict(after))
     await audit_change(db, admin.id, "settings.sign_in_changed", {}, asdict(before), asdict(after))
     await db.commit()
-    limiter.configure(after.max_failures, after.block_minutes * 60)  # this process applies it at once
+    limiter.configure(after.max_failures, after.block_minutes * 60, after.enabled)  # this process applies it at once
     return _sign_in_out(after)

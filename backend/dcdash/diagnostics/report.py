@@ -547,6 +547,7 @@ async def _settings(db: AsyncSession) -> SettingsInfo:
     policy = await get_sign_in_policy(db)
     values.append(("sign_in.max_failures", str(policy.max_failures)))
     values.append(("sign_in.block_minutes", str(policy.block_minutes)))
+    values.append(("sign_in.enabled", str(policy.enabled)))
     env = get_settings()
     values.extend((f"env.{name}", str(getattr(env, name)) or "(empty)") for name in REPORT_ENV_FIELDS)
     return SettingsInfo(tuple(values))

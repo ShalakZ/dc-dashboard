@@ -9,7 +9,7 @@ from dcdash.api import auth as auth_module
 from dcdash.core import sign_in_policy
 
 DEFAULTS = {"max_failures": 5, "block_minutes": 5}
-SHAPE = {"limits": {"max_failures": [3, 20], "block_minutes": [1, 60]}, "defaults": DEFAULTS}
+SHAPE = {"enabled": True, "limits": {"max_failures": [3, 20], "block_minutes": [1, 60]}, "defaults": DEFAULTS}
 WRONG = {"password": "wrong-wrong"}
 FROM = {"x-forwarded-for": "9.9.9.9"}
 
