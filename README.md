@@ -1238,7 +1238,7 @@ stylesheet has arrived (a static copy of the shell inside `index.html`, in the l
 minimized as you left it); while the two sign-in requests are out, the same frame shows quiet placeholders and the loading bar runs along
 the top edge; then the real shell replaces it without anything moving. The sign-in and setup pages do not show the frame. Screen readers
 hear one "Loading" line. A first-ever visit in a browser shows Light and Navy and gold. The frame's content area stays empty until the
-page itself starts loading (its own grey shapes appear after the usual sixth of a second).
+page itself starts loading (its own grey shapes appear after the usual sixth of a second). If the app script never arrives (a blocked or stale file), the frame says "Still loading. If this stays, reload the page." after 15 seconds.
 
 1. **Back up first** (a habit here: nothing in the database changes), as in step 1 of "Upgrading and going back".
 2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
