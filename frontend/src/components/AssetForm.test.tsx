@@ -271,6 +271,26 @@ describe("AssetForm Icon", () => {
     expect(sent(onSubmit).icon).toBeNull();
   });
 
+  it("treats a blank stored icon as Automatic: the caption, the checked cell, nothing sent untouched, a pick still sent", async () => {
+    const { onSubmit } = open([], { ...named, icon: "" });
+    expect(field()).toHaveAccessibleDescription("Automatic (Room)");
+    expect(cell("Automatic")).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(submittedKeys(onSubmit)).not.toContain("icon");
+    onSubmit.mockClear();
+    await userEvent.click(opener());
+    await userEvent.click(cell("Fan"));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(sent(onSubmit).icon).toBe("fan");
+  });
+
+  it("compares with the icon the dialog opened with: a refetched list that changes the stored icon does not make an untouched form send the old one", async () => {
+    const { onSubmit, view } = open([], { ...named, icon: "server" });
+    view.rerender(<AssetForm assets={[]} initial={{ ...named, icon: "leak" }} excludeIds={new Set()} onSubmit={onSubmit} onCancel={() => undefined} />);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(submittedKeys(onSubmit)).not.toContain("icon");
+  });
+
   it("changes the choice, the caption, the preview and the payload with the arrow keys", async () => {
     const { onSubmit } = open([], { ...named, icon: "site" });
     await userEvent.click(opener());

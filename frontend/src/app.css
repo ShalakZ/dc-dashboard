@@ -516,7 +516,7 @@
   .dialog.narrow { width: min(440px, 100%); }
 
   /* The icon field of the asset dialog: the preview tile (the page header's), its caption and Change icon in one row, then a grid of
-     40px cells. A cell is a label around a native radio clipped inside it, so its rules are written to outrank the base `label` and
+     32 px cells. A cell is a label around a native radio clipped inside it, so its rules are written to outrank the base `label` and
      `.dialog label` rules (grid, bold, one column); the checked cell is marked by fill, border and ring, not by colour alone. */
   .icon-field { display: grid; gap: 8px; }
   .icon-field-label { font-size: var(--fs-sm); font-weight: 600; }
