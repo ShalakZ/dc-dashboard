@@ -1,6 +1,6 @@
 # W7g: a chosen icon per asset (live preview and picker in the asset dialog) and the "Assets Tree" rename Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** An admin can give every asset an icon of their choice. The Add/Edit asset dialog gets an "Icon" field with a live preview tile and an inline picker; the choice shows in the tree rows, the asset page header, and quick find. "Automatic" (the default, stored as NULL) keeps today's behaviour: the icon follows the free-text kind. The Assets workspace is renamed "Assets Tree" wherever the page is named (O-22, O-23).
 
@@ -73,7 +73,7 @@
 
 **Tests (write first):** Review Focus 1 to 6 as parametrized cases. `test_schema_asset_icon.py` follows `test_schema_user_preferences.py` (column type text, nullable, no default; upgrade from 0007 on a DB with assets and an audit row leaves every row NULL and every other value identical; downgrade drops the column and a snapshot equals the 0007 one; upgrade again; `history -r 0007:0008` contains `0007 -> 0008`; `heads` is `["0008"]`). `test_api_asset_icon.py`: create with and without; PATCH absent/null/value; the validation table; 403/401; audit row content (`before`/`after`), no row for a no-op; two assets independent; a stored unknown id read back through GET and the summary; `GET /api/assets/{id}/summary` carries `asset.icon`; creating a child never copies the parent's icon. Update `test_schema_user_preferences.py` (`upgrade 0007` instead of `head` where it snapshots, the heads assertion becomes a history-only check) and every test that pins the exact create/update audit detail or `AssetOut` keys. Run: `cd backend && uv run pytest tests/test_schema_asset_icon.py tests/test_api_asset_icon.py tests/test_api_data.py tests/test_schema_user_preferences.py tests/test_schema_diag_events.py tests/test_api_assets.py tests/test_audit_coverage.py tests/test_audit_describers.py tests/test_schema.py -q` plus `tests/test_api_data.py` (line 90 pins the summary's asset dict exactly: add `"icon": None`), `tests/test_api_assets.py` (lines 244-246 pin the create detail: add `"icon": None`; the update and no-op pins at 248-263 are unaffected) and any other file a grep for `asset.created`, `asset.updated` or `"sort_order"` in `backend/tests` turns up.
 
-- [ ] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the command above → Step 4: commit `feat(assets): a chosen icon per asset, migration 0008 (W7g)`
+- [x] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the command above → Step 4: commit `feat(assets): a chosen icon per asset, migration 0008 (W7g)`
 
 ---
 
@@ -87,7 +87,7 @@
 
 **Tests (write first):** `assetIcons.test.ts`: every catalogue id resolves to an `ICONS` entry and has a non-empty label; ids unique, lowercase; `assetIcon` with null, undefined, a known id, an unknown id (`"zzz"`, `""`, `"__proto__"`, `"constructor"`, `"toString"`) falls back to `kindIcon(kind)`; a known id wins over a conflicting kind. `AssetTree.test.tsx`: a node with `icon: "server"` renders the server icon, one without keeps the kind icon, one with an unknown icon renders the kind icon (match the file's idiom for telling icons apart). `AssetPage.test.tsx` (header tile follows the summary's `asset.icon`), `quickFind.test.ts` (the hit carries `assetIcon`), `QuickFind.test.tsx` row icon, `auditText.test.ts` (icon null to server reads "Icon: Automatic to Server"; an unknown id shows raw; missing key; a created row shows "Automatic" / the label); the 28 catalogue icons render 28 DISTINCT `innerHTML`s (catches a copy-pasted drawing). Run: `cd frontend && npx vitest run src/lib/assetIcons.test.ts src/lib/kindIcon.test.ts src/lib/auditText.test.ts src/lib/quickFind.test.ts src/components/AssetTree.test.tsx src/components/QuickFind.test.tsx src/pages/AssetPage.test.tsx && npm run typecheck && npm run build`; `cd backend && uv run pytest tests/test_asset_icons_parity.py -q`.
 
-- [ ] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the commands above → Step 4: commit `feat(ui): 14 more icons, the asset icon catalogue and where it shows (W7g)`
+- [x] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the commands above → Step 4: commit `feat(ui): 14 more icons, the asset icon catalogue and where it shows (W7g)`
 
 ### Task 3: the Icon field in the Add/Edit asset dialog
 
@@ -97,13 +97,13 @@
 
 **Tests (write first):** the preview follows Kind while Automatic (select a kind, type a new kind: the caption `Automatic (UPS)` and the preview change); choosing a cell sets the caption to its name and the payload to `icon: "<id>"`; choosing Automatic after a pick sends `icon: null` on edit and omits it on add; an edit of only the name sends no `icon` key; an unknown stored id shows `Unknown icon "xyz"`, no cell checked, and an untouched save sends no icon; the grid is closed on open, `Change icon` opens it (`aria-expanded`) and focus lands on the checked radio; arrow keys change the checked cell, the caption and the submitted payload: user-event 14.6.7 implements radio arrow navigation but crashes under jsdom 26 (`TypeError ... reading 'escape'`, no `window.CSS`), so `AssetForm.test.tsx` stubs it locally, NOT in the shared setup: `vi.stubGlobal("CSS", { escape: (s: string) => String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => "\\" + c) })` (unstub in `afterEach`); clicking `Change icon` does NOT call `onSubmit`; Enter on a focused cell does NOT call `onSubmit`; "Other…" with nothing typed shows `Automatic (Generic)`; every cell has an accessible name equal to its label and a `title`; the preview is `aria-hidden`; the CSS test files stay green. Run: `cd frontend && npx vitest run src/components/AssetForm.test.tsx src/pages/AssetsPage.test.tsx src/app.css.test.ts src/themes.css.test.ts && npm run typecheck && npm run build`.
 
-- [ ] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the command above → Step 4: commit `feat(ui): icon preview and picker in the asset dialog (W7g)`
+- [x] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the command above → Step 4: commit `feat(ui): icon preview and picker in the asset dialog (W7g)`
 
 ### Task 4: the "Assets Tree" rename and the e2e audit
 
 **Files:** as the file map. Decision 10 lists the surfaces and what stays. Steps: change the five visible strings; grep `frontend/src` (tests included) and `frontend/e2e` for the old page name and update every expectation that pins it (the commit body lists each file and why); audit every locator in `e2e/*.ts` against `Assets Tree`: `navLink(page, "Assets")` is `exact: true` and must become `"Assets Tree"` (or the helper gets a small alias), the two crumb lookups of `w7a.spec.ts` and `w7e.spec.ts`, the `toHaveText(["Assets", "Site"])` crumb assertion, the `["/assets", "Assets"]` route tables of `w7d.spec.ts`/`w7e.spec.ts` (check what the second value is compared to), `headers.spec.ts`, `discovery.spec.ts`, `w3a.spec.ts` (`exact: true` heading), `journey.spec.ts`. A noun-sense lookup (the tile caption) is left alone. Run: `cd frontend && npx vitest run src/components/Layout.test.tsx src/components/AssetTree.test.tsx src/pages/AssetsPage.test.tsx src/pages/AssetPage.test.tsx src/pages/AssetsSummary.test.tsx src/components/QuickFind.test.tsx src/App.test.tsx` (there is no `NotFoundPage.test.tsx`: add one `App.test.tsx` case that renders an unknown route and finds the link "Back to Assets Tree"; the command` (plus any other file the grep finds), `npm run typecheck`, the e2e type-check.
 
-- [ ] Step 1: strings and unit tests → Step 2: the e2e audit and edits → Step 3: the commands above → Step 4: commit `feat(ui): the Assets workspace is called Assets Tree (W7g)`
+- [x] Step 1: strings and unit tests → Step 2: the e2e audit and edits → Step 3: the commands above → Step 4: commit `feat(ui): the Assets workspace is called Assets Tree (W7g)`
 
 ### Task 5: end-to-end spec, project, docs
 
@@ -113,18 +113,26 @@
 
 **Name audit:** the Global Constraints list; write the result into the commit body.
 
-- [ ] Step 1: spec + project + README → Step 2: e2e type-check, `uv run pytest tests/test_readme_ops.py -q` → Step 3: commit `test(e2e): asset icon spec and the 0008 upgrade notes (W7g)`
+- [x] Step 1: spec + project + README → Step 2: e2e type-check, `uv run pytest tests/test_readme_ops.py -q` → Step 3: commit `test(e2e): asset icon spec and the 0008 upgrade notes (W7g)`
 
 ---
 
 ## Part C: controller steps (not delegated)
 
-- [ ] C1 migration rehearsal on a restored copy of the dev database in a guarded scratch project `dcdash_e2e_w7g_mig` (upgrade, set icons through the API, downgrade, compare every other table, upgrade again), after Task 1 and its review.
-- [ ] C2 contact sheet of the 28 icons at 16, 24, 40 px, light and dark; notes on the closest pairs; the dialog on a scratch build (closed, open, typed kind) before Task 4.
-- [ ] C3 full backend suite (a migration), full frontend suite, typecheck, build, the isolated Playwright run on a build of the final commit (project `dcdash_e2e_w7g_vis`, ports 18197 and 18551; the run lists `w7g`).
-- [ ] C4 whole-wave Opus review (browser, 1920/1440/1024, light and dark, at least two presets, create/edit/pick by mouse and keyboard, the rename on every page that names it), ONE fix wave, one scoped re-review.
-- [ ] C5 gallery into `.superpowers/sdd/overnight-w7/gallery/W7g/`, docs close-out (roadmap O-22/O-23, backlog next free section, plan log), merge gate, backup, rebuild, verify counts and `alembic current` 0008, push, markers, memory, MORNING.
+- [x] C1 migration rehearsal on a restored copy of the dev database in a guarded scratch project `dcdash_e2e_w7g_mig` (upgrade, set icons through the API, downgrade, compare every other table, upgrade again), after Task 1 and its review.
+- [x] C2 contact sheet of the 28 icons at 16, 24, 40 px, light and dark; notes on the closest pairs; the dialog on a scratch build (closed, open, typed kind) before Task 4.
+- [x] C3 full backend suite (a migration), full frontend suite, typecheck, build, the isolated Playwright run on a build of the final commit (project `dcdash_e2e_w7g_vis`, ports 18197 and 18551; the run lists `w7g`).
+- [x] C4 whole-wave Opus review (browser, 1920/1440/1024, light and dark, at least two presets, create/edit/pick by mouse and keyboard, the rename on every page that names it), ONE fix wave, one scoped re-review.
+- [x] C5 gallery into `.superpowers/sdd/overnight-w7/gallery/W7g/`, docs close-out (roadmap O-22/O-23, backlog next free section, plan log), merge gate, backup, rebuild, verify counts and `alembic current` 0008, push, markers, memory, MORNING.
 
 ## Execution log
 
-(filled in at close-out)
+Run 2026-10-12/13 (unattended, attempt 1, AUTO_MERGE=1), controller on Sonnet, implementers on Sonnet, reviews on Opus. Ledger `.superpowers/sdd/2026-10-12-w7g-asset-icons/progress.md` (git-ignored) holds every Ruling.
+
+- Plan written, ONE Opus plan review (0 Blocker / 3 Major / 9 Minor; it ran the validator, the PATCH and audit helpers and a user-event radio test) folded in at `3869258`. Majors: `heading1` is `exact: true` in every spec, so about 14 e2e lookups break on the rename (the plan now lists each); `Change icon` needs `type="button"` and Enter on a cell must not submit the form; user-event 14.6.7's radio arrows crash under jsdom 26 (`window.CSS` missing), so the test stubs it locally.
+- Task 1 `06d8a9a` migration 0008 + allow-list + API + audit + summary (Opus review, medium: 0 Critical / 0 Important / 4 Minor, applied in `1bc9ebc`); Task 2 `aad196c` 14 icons, catalogue, `assetIcon()`, audit text, parity test; Task 3 `887b2fe` the dialog field; Task 4 `6458148` the rename (36 pins on the old name updated, the whole frontend suite run); Task 5 `75de2a8` the `w7g` Playwright project and spec, README upgrade section.
+- Controller C1: the migration was rehearsed on a restored copy of the dev database (scratch project `dcdash_e2e_w7g_mig`, dump at schema 0007 with 8 assets and 51 audit rows): upgrade leaves every asset NULL and every other table identical, the column is text, nullable, no default; downgrade is lossless (every table fingerprint identical to the restored copy); upgrade again. C2: contact sheet of the icons (all 14 new ones recognisable at 16, 24 and 40 px, light and dark) and the dialog on a scratch build: the first grid (8 x 4 cells of 40 px) made the open dialog 680 to 748 px tall and pushed Save off a 1024 x 640 window, so the grid became 10 x 3 cells of 32 px (`107eebd`), which also marked the Automatic cell with a dashed edge.
+- Gates at `75de2a8`: full backend 3607 passed / 1 skipped; frontend 121 files / 3111 tests, typecheck, build; Playwright 65 passed, 0 failed (the `w7g` project ran 6).
+- Whole-wave Opus review (browser, 1920/1440/1024, four presets in light and dark, keyboard and mouse): 0 Critical / 3 Important / 6 Minor. Important: the dashed Automatic edge never rendered (a cascade loss no jsdom test can see), the compaction commit had moved the GLOBAL focus ring offset from 2 to 1 px (the controller's own edit script replaced the first match), and "Assets Tree" was cut to "Assets Tre" in the 248 px tree header at 1024 px. Fix wave `c57eb63` (all three plus M-1 to M-5; the spec now asserts the dashed edge and that Save stays on screen) and `7289384` (two tests the re-review asked for). Scoped re-review (Opus medium, browser): 0 Critical / 0 Important / 3 Minor (the Automatic cell's accessible name, two missing unit tests, a stale comment: the tests and the comment were done, the accessible name is parked).
+- Gates at the final code: frontend 3113 tests, typecheck, build; Playwright on a build of the final branch head (see the ledger for the summary line); the whole backend suite was not rerun after `06d8a9a` because no backend file changed after it except `tests/test_api_asset_icon.py` (`1bc9ebc`, run: 116 passed).
+- Parked in backlog section AA: Automatic by kind (the owner's likely first tweak), catalogue gaps (ATS/STS, busway, cooling tower), the Automatic cell's accessible name, picker polish, the dialog scrolls inside itself at 1024 x 640 when a new kind is typed and the grid is open, and a pre-existing aborted DELETE / 404 summary pair on asset delete.

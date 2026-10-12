@@ -116,7 +116,7 @@ Report-Only and has to be changed in the same commit, and so does the header nam
 
 Open `http://localhost/`. The first visit asks you to create the admin
 account. Then: Sources → Add source → Test → Points → Browse points → Map;
-Assets → open the asset to see live and historical values.
+Assets Tree → open the asset to see live and historical values.
 
 To include the SCADA simulator (10 LV panels), add the dev profile:
 
@@ -143,7 +143,7 @@ the user `sim` with that password. Modbus needs none.
 | `simulator` | Stand-in SCADA, dev profile only: HTTP `:9000`, OPC UA `opc.tcp://simulator:4840/dcdash/` (user `sim`), Modbus TCP `simulator:5020` (unit 1); all three bound to `127.0.0.1` on the host |
 | `web` | Caddy: serves the UI, proxies `/api` to `api` |
 
-UI screens, besides Assets, Sources and Points:
+UI screens, besides Assets Tree, Sources and Points:
 
 - **Users** (admin): create users, change roles, deactivate / reactivate, reset a password, delete a user
   (after a confirmation; never yourself and never the last administrator). Deactivating signs that user out
@@ -366,7 +366,7 @@ Dashboards entry then opens it directly and so does the first page after signing
 away from when your session expired still wins; a deliberate sign-out forgets the page, so signing in
 again lands on the default). The list of all dashboards stays one click away: the **Dashboards** crumb
 above the dashboard, or the Quick find entry. With no default set, the entry opens the list and the first
-page is Assets. Deleting the default dashboard clears the choice (the audit row says so); choosing, switching
+page is Assets Tree. Deleting the default dashboard clears the choice (the audit row says so); choosing, switching
 and clearing it are audited as `dashboard.default_changed`. An open page learns of a change within a minute
 or when you return to its window.
 
