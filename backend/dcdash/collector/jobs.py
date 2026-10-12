@@ -68,8 +68,9 @@ async def _check_connection(
 ) -> dict[str, Any]:
     """The step-by-step check of one source. The result in `jobs` is rewritten after every step, so the screen shows them live.
 
-    The source is marked online or offline from the `session` step (the `test` step of a connector without more) and from
-    nothing else: a failed `endpoints` step or a skewed clock says nothing about whether the source works.
+    The source is marked online or offline from the `session` step (the `test` step of a connector without more) when it ran,
+    and from nothing else: a failed `endpoints` step or a skewed clock says nothing about whether the source works. When the
+    session was skipped, the first failed step (dns, tcp, endpoints, certificates) says the source cannot be reached.
     """
     source_id = params["source_id"]
     known = list(known)
@@ -96,6 +97,10 @@ async def _check_connection(
         await connector.close()
     result.source_id = source_id
     decisive = result.step("session") or result.step("test")
+    if decisive is not None and decisive.ok is None:
+        # The session was skipped because a step before it failed (dns, tcp, endpoints, certificates): the source cannot be reached,
+        # and the first failed step says why. A failed diagnostic step while the session RAN decides nothing (handled above).
+        decisive = next((step for step in result.steps if step.ok is False), None)
     if decisive is not None and decisive.ok is not None:
         error = decisive.error or {}
         reason = error.get("message") or error.get("class") or "connection check failed"

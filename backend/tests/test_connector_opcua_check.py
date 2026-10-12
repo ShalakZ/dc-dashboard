@@ -20,6 +20,7 @@ from cryptography.x509.oid import NameOID
 
 from dcdash.connectors import opcua_check
 from dcdash.connectors.base import create_connector
+from dcdash.diagnostics.check import StepFailed
 from dcdash.diagnostics.hints import CLOCK_SKEW, hint_for
 from tests.helpers import free_port, opcua_server
 
@@ -140,7 +141,7 @@ async def test_nothing_listening_fails_tcp_and_skips_the_rest():
     ]
     assert steps["tcp"].error["class"] == "ConnectionRefusedError"
     assert "nothing listens" in steps["tcp"].hint
-    assert steps["endpoints"].summary == "skipped: tcp failed"
+    assert steps["endpoints"].summary == "skipped: TCP connection failed"
     assert result.first_failed == "tcp" and result.finished and result.ok is False
 
 
@@ -150,7 +151,7 @@ async def test_unresolvable_host_fails_dns_with_the_dns_hint():
     steps = _by_id(result)
     assert steps["dns"].ok is False and steps["dns"].error["class"] == "gaierror"
     assert "could not be resolved" in steps["dns"].hint
-    assert all(step.ok is None for step in result.steps[1:]) and steps["tcp"].summary == "skipped: dns failed"
+    assert all(step.ok is None for step in result.steps[1:]) and steps["tcp"].summary == "skipped: DNS resolution failed"
     assert result.first_failed == "dns"
 
 
@@ -470,3 +471,24 @@ def test_hints_for_the_read_failures_exist():
         hint = hint_for(name, None, "read_points")
         assert hint and len(hint) <= 300
 
+
+
+def test_the_read_points_budget_follows_the_real_chunk_size():
+    budget = opcua_check.OpcUaCheck._read_budget
+    assert budget(2.0, 250, 100) == 2.0 * (2 + 3 * 3)
+    assert budget(2.0, 250, 10) == 2.0 * (2 + 3 * 25)  # a server that reads 10 nodes at a time needs 8 times the requests
+    assert budget(2.0, 0, 100) == 4.0
+
+
+async def test_a_read_that_never_answers_fails_the_step_with_its_budget(monkeypatch):
+    connector = create_connector("opcua", {"endpoint": "opc.tcp://127.0.0.1:4840/", "timeout_seconds": 2})
+    check = opcua_check.OpcUaCheck(connector, ["ns=2;i=1"], None)
+
+    async def stalled(*_args, **_kwargs):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(opcua_check.OpcUaCheck, "_read_budget", staticmethod(lambda *_args: 0.05))
+    monkeypatch.setattr(check, "_read", stalled)
+    with pytest.raises(StepFailed) as failed:
+        await check.read_points()
+    assert failed.value.error_class == "TimeoutError" and "no answer within 0.05 s" in str(failed.value)

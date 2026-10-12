@@ -213,6 +213,7 @@ class Checker:
         self._deadline_seconds = deadline_seconds
         self._deadline = None if deadline_seconds is None else time.monotonic() + deadline_seconds
         self._deadline_reported = False
+        self._cause: dict[str, str] = {}  # a skipped step's id -> the name of the step that failed and caused the skip
         self._publish_failing = False
 
     # -- what a connector calls ------------------------------------------------------------------------------------------------
@@ -235,7 +236,7 @@ class Checker:
         """
         step = Step(step_id, name)
         self.result.steps.append(step)
-        blocked = self._blocked(needs)
+        blocked = self._blocked(step_id, needs)
         if blocked:
             step.summary = f"skipped: {blocked}"
         else:
@@ -271,13 +272,21 @@ class Checker:
 
     # -- internals -------------------------------------------------------------------------------------------------------------
 
-    def _blocked(self, needs: Iterable[str]) -> str:
+    def _blocked(self, step_id: str, needs: Iterable[str]) -> str:
+        """Why a step with these `needs` is not run, in the words of the screen (step names, not ids): the first need that did not
+        succeed. When that one was itself skipped, the step that actually failed is named."""
         for need in needs:
             found = self.result.step(need)
             if found is None:
                 return f"{need} was not run"
-            if found.ok is not True:
-                return f"{need} {'failed' if found.ok is False else 'was skipped'}"
+            if found.ok is False:
+                self._cause[step_id] = found.name
+                return f"{found.name} failed"
+            if found.ok is None:
+                if cause := self._cause.get(need):
+                    self._cause[step_id] = cause
+                    return f"{cause} failed"
+                return f"{found.name} was skipped"
         return ""
 
     def _limit(self, timeout: float | None) -> float | None:

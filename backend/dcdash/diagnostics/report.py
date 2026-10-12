@@ -781,6 +781,18 @@ def _iso(moment: datetime | None) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _utc_text(stamp: str | None) -> str:
+    """An ISO time as UTC ("2026-10-11T17:00:00Z"), so that every time in the report is read the same way; the text as it is when
+    it is not an ISO time with an offset."""
+    if stamp is None:
+        return "-"
+    try:
+        moment = datetime.fromisoformat(stamp.strip())
+    except ValueError:
+        return stamp
+    return stamp if moment.tzinfo is None else moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _age(seconds: float | None) -> str:
     if seconds is None:
         return "never"
@@ -961,7 +973,7 @@ class _Renderer:
         shown = "all" if data.source_id is None else f"#{data.source_id}"
         mask = "masked (addresses and host names appear as HOST-n and URN-n)" if self.masked else "not masked"
         lines.append(f"report: detail={data.detail}, {mask}, source filter: {shown}")
-        built = f"built {self.text(env.build_time, 40)}"
+        built = f"built {self.text(_utc_text(env.build_time), 40)}"
         lines.append(f"api: build {self.text(env.build_id, 64)} ({built}), up {_age(env.uptime_seconds)}")
         lines.append(self._collector(env))
         lines.append(self._build_check(env))

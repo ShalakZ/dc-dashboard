@@ -774,9 +774,55 @@ async def test_only_the_session_step_decides_whether_the_source_is_online(db):
         return tuple(await db.fetchrow("SELECT status, last_error FROM sources WHERE id = $1", source))
 
     assert await status_of(endpoints_fail_session_ok, "a") == ("online", None)
-    assert await status_of(endpoints_fail_session_skipped, "b") == ("unknown", None)
+    assert await status_of(endpoints_fail_session_skipped, "b") == ("offline", "closed")  # the session never ran
     assert await status_of(session_fails, "c") == ("offline", "rejected the login")
     assert await status_of(no_session_step, "d") == ("unknown", None)
+
+
+@pytest.mark.parametrize("failing", ["dns", "tcp", "endpoints", "certificates"])
+async def test_a_step_before_the_session_that_fails_and_skips_it_marks_the_source_offline_with_its_error(db, failing):
+    async def body(points, publish):
+        checker = Checker("fake", publish)
+        needs: tuple[str, ...] = ()
+        for step_id in ("dns", "tcp", "endpoints", "certificates"):
+            await checker.step(step_id, step_id.upper(), fails(f"{step_id} broke") if step_id == failing else ok_step, needs=needs)
+            needs = (step_id,)
+        await checker.step("session", "Session", ok_step, needs=needs)
+        return await checker.finish()
+
+    source, _job, row = await run_check(db, Scripted(body), name=f"x-{failing}")
+    assert row["result"]["steps"][-1]["ok"] is None  # the session was skipped
+    assert tuple(await db.fetchrow("SELECT status, last_error FROM sources WHERE id = $1", source)) == (
+        "offline", f"{failing} broke"
+    )
+
+
+async def test_the_error_that_marks_a_source_offline_from_a_skipped_session_is_scrubbed(db):
+    async def body(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("tcp", "TCP", fails("cannot reach http://svc:Zq9-pw-leak@10.1.2.3:4840"))
+        await checker.step("session", "Session", ok_step, needs=("tcp",))
+        return await checker.finish()
+
+    source, _job, _row = await run_check(db, Scripted(body))
+    error = await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source)
+    assert error is not None and "Zq9" not in error and "[hidden]" in error
+
+
+async def test_a_failed_time_check_after_a_good_session_leaves_the_source_online(db):
+    async def body(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("session", "Session", ok_step)
+
+        async def skewed() -> None:
+            raise StepFailed("the server clock is 3 h ahead")
+
+        await checker.step("server_time", "Server time", skewed, needs=("session",))
+        return await checker.finish()
+
+    source, _job, row = await run_check(db, Scripted(body))
+    assert row["result"]["ok"] is False and row["result"]["first_failed"] == "server_time"
+    assert tuple(await db.fetchrow("SELECT status, last_error FROM sources WHERE id = $1", source)) == ("online", None)
 
 
 SECRET = "Zq-source-secret-7781"

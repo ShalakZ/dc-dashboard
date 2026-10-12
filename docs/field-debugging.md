@@ -27,7 +27,7 @@ Ask these before the first real connection; write the answers next to the source
 3. Tick **Hide host names and addresses** if the report must not show your OT network's addresses. Hosts and IPs are replaced by `HOST-1`, `HOST-2`... consistently through the whole report. The **Address key** (which alias is which host) stays on the page and is never part of the text; keep it to translate Claude's answer back.
 4. Press **Build report**. For each part press **Copy part i of n** and paste it, one part per message if there are several. **Download .txt** saves the same text as a file.
 
-Every part starts with `DCDASH-REPORT v1 | PART i OF n | build <id> | <time>` and ends with a footer `--- PART i OF n | chars=N lines=N ---`; the last part ends with `END OF REPORT <checksum>`. If the footer or the checksum line is missing in what Claude received, the paste was cut: paste again.
+Every part starts with `DCDASH-REPORT v1 | PART i OF n | build <id> | <time>` and ends with a footer `--- PART i OF n | chars=N lines=N ---`; the last part ends with `END OF REPORT <checksum>`. `chars=` counts only the content between the header line and the footer (not the header or the footer themselves), so the whole part you paste is a little longer than that number. If the footer or the checksum line is missing in what Claude received, the paste was cut: paste again.
 
 Building a report is recorded in the audit log (who, when, summary or full, masked or not), never its content.
 

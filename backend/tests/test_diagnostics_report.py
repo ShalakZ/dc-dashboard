@@ -164,7 +164,7 @@ def environment_lines(**kw) -> str:
 def test_the_environment_lists_builds_runtime_and_database_versions():
     out = environment_lines()
     assert "generated: 2026-10-12T10:00:00Z, site time 2026-10-12 13:00:00 +03 (Asia/Qatar)" in out
-    assert "api: build abc1234 (built 2026-10-11T20:00:00+03:00), up 3 h 2 min" in out
+    assert "api: build abc1234 (built 2026-10-11T17:00:00Z), up 3 h 2 min" in out  # the commit time is printed in UTC
     assert "collector: build abc1234, last heartbeat 4 s ago" in out
     assert "build check: OK" in out
     assert "runtime: Python 3.12.3, Linux x86_64 microsoft-standard-WSL2, asyncua 1.1.8, pymodbus 3.8.6" in out
@@ -821,3 +821,14 @@ async def test_a_journal_row_written_by_the_writer_shows_up_in_a_report(db, sess
     data = await gather(session, detail="summary")
     line = lines_of(render(data, "summary", ident), "JOURNAL")[0]
     assert "warning collector source.offline code=unreachable: link lost" in line and '{"failures":3}' in line
+
+
+@pytest.mark.parametrize("stamp, shown", [
+    ("2026-10-11T20:00:00+03:00", "2026-10-11T17:00:00Z"),
+    ("2026-10-11T17:00:00Z", "2026-10-11T17:00:00Z"),
+    ("2026-10-11 20:00:00+0300", "2026-10-11T17:00:00Z"),  # git's own %ci spelling
+    ("unknown", "unknown"),
+    ("2026-10-11T20:00:00", "2026-10-11T20:00:00"),  # no offset: nothing to convert with
+])
+def test_the_build_time_is_printed_in_utc_when_it_can_be_read(stamp, shown):
+    assert f"(built {shown})" in environment_lines(build_time=stamp)

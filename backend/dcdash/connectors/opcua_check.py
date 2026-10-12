@@ -198,8 +198,9 @@ class OpcUaCheck:
             await step("session", "Secure channel and session", self.open_session, needs=("tcp",), timeout=t)
             await step("server_time", "Server time", self.server_time, needs=("session",), timeout=t)
             await step("namespaces", "Namespaces", self.read_namespaces, needs=("session",), timeout=t)
-            requests = 2 + 3 * math.ceil(len(self.points) / MAX_CHUNK)
-            await step("read_points", "Read the mapped points", self.read_points, needs=("session",), timeout=t * requests)
+            # no bound of its own: the step knows its budget only once the server has said how many nodes it reads per request,
+            # so `read_points` sets it (the overall deadline still bounds it from outside)
+            await step("read_points", "Read the mapped points", self.read_points, needs=("session",))
             timing_limit = (t + TIMING_PAUSE) * TIMING_READS
             await step("timing", "Read timing", self.timing, needs=("session",), timeout=timing_limit)
         finally:
@@ -462,22 +463,33 @@ class OpcUaCheck:
         self._plan_cache = (limit, chunk, valid, invalid)
         return self._plan_cache
 
+    @staticmethod
+    def _read_budget(timeout: float, valid: int, chunk: int) -> float:
+        """What the read_points step may take: `timeout` for each request it can send (the values, the data types and the access
+        levels of every chunk, plus two spare)."""
+        return timeout * (2 + 3 * math.ceil(valid / chunk))
+
     async def read_points(self) -> StepOutcome:
         if not self.points:
             return StepOutcome("no points are mapped to this source: nothing to read")
         limit, chunk, valid, rows = await self._plan()
+        budget = self._read_budget(self.config.timeout_seconds, len(valid), chunk)
         requests = 0
-        for start in range(0, len(valid), chunk):
-            batch = valid[start : start + chunk]
-            nodeids = [nodeid for _address, nodeid in batch]
-            values = await self._read(nodeids, ua.AttributeIds.Value)
-            requests += 1
-            types = await self._read_optional(nodeids, ua.AttributeIds.DataType)
-            levels = await self._read_optional(nodeids, ua.AttributeIds.AccessLevel)
-            requests += 2
-            now = _local_now()
-            for (address, nodeid), data_value, data_type, level in zip(batch, values, types, levels, strict=True):
-                rows.append(self._point_row(address, nodeid, now, data_value, data_type, level))
+        try:
+            async with asyncio.timeout(budget):
+                for start in range(0, len(valid), chunk):
+                    batch = valid[start : start + chunk]
+                    nodeids = [nodeid for _address, nodeid in batch]
+                    values = await self._read(nodeids, ua.AttributeIds.Value)
+                    requests += 1
+                    types = await self._read_optional(nodeids, ua.AttributeIds.DataType)
+                    levels = await self._read_optional(nodeids, ua.AttributeIds.AccessLevel)
+                    requests += 2
+                    now = _local_now()
+                    for (address, nodeid), data_value, data_type, level in zip(batch, values, types, levels, strict=True):
+                        rows.append(self._point_row(address, nodeid, now, data_value, data_type, level))
+        except TimeoutError:
+            raise StepFailed(f"no answer within {budget:g} s", error_class="TimeoutError") from None
         bad = [row for row in rows if not row["good"]]
         good = [row for row in rows if row["good"]]
         listed = [*bad, *good][:MAX_POINT_LINES]

@@ -173,7 +173,8 @@ async def test_a_step_that_needs_a_failed_or_skipped_step_is_skipped_and_the_oth
     result = await checker.finish()
     states = {step.id: step.ok for step in result.steps}
     assert states == {"a": False, "b": None, "c": None, "d": True, "e": None}
-    assert result.step("b").summary == "skipped: a failed" and result.step("c").summary == "skipped: b was skipped"
+    # the visible step name, and a chain names the step that actually failed
+    assert result.step("b").summary == "skipped: A failed" and result.step("c").summary == "skipped: A failed"
     assert result.step("e").summary == "skipped: nothing was not run"
     assert result.step("b").ms is None and result.step("b").error is None
     assert (result.ok, result.first_failed) == (False, "a")
