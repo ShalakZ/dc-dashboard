@@ -93,9 +93,9 @@
 | Audit entry | `isLoading \|\| site.isPending \|\| !data` (the not-found and error branches come first) | `PageHeaderSkeleton crumbs` + a `dl.kv` of ten line pairs |
 | Settings | `settings.isPending`; `policy.isPending` | wrapper + real header + the two-column `settings-grid` with `FormSkeleton` cards; the sign-in card's own wait is a `FormSkeleton` of 2 rows |
 
-- [ ] **Step 1: tests first**, per page: its request held shows the region and the real content absent; released shows the content and no region; an error response shows the error (no skeleton); the page's existing loading assertions are updated to wait for the region first and keep their intent (grep `loading` in each page's test file: `BillingPage.test.tsx` 2, `StoragePage.test.tsx` 2, `DashboardsPage.test.tsx` 1). Headers now render while loading, so also check `SourcesPage.test.tsx` (~651-653) and any test that counts rows or headings before the data arrives.
-- [ ] **Step 2: implement** page by page; read each page's real header and table first so the column counts and wrappers match (decision 5). Record a Ruling for any page whose shape you could not match.
-- [ ] **Step 3:** run each touched page's test file, `npm run typecheck`, `npm run build`. Commit `feat(ui): skeletons for the table and form pages (O-21)`.
+- [x] **Step 1: tests first**, per page: its request held shows the region and the real content absent; released shows the content and no region; an error response shows the error (no skeleton); the page's existing loading assertions are updated to wait for the region first and keep their intent (grep `loading` in each page's test file: `BillingPage.test.tsx` 2, `StoragePage.test.tsx` 2, `DashboardsPage.test.tsx` 1). Headers now render while loading, so also check `SourcesPage.test.tsx` (~651-653) and any test that counts rows or headings before the data arrives.
+- [x] **Step 2: implement** page by page; read each page's real header and table first so the column counts and wrappers match (decision 5). Record a Ruling for any page whose shape you could not match.
+- [x] **Step 3:** run each touched page's test file, `npm run typecheck`, `npm run build`. Commit `feat(ui): skeletons for the table and form pages (O-21)`.
 
 ### Task 4: Dashboard, Discovery, the home redirect, the lazy fallbacks, the sweep
 
