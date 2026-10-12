@@ -9,7 +9,7 @@ precondition checks that the seed still holds them. Like test_audit_coverage.py 
 fastapi.routing.iter_route_contexts, and a self-test proves the check can fail.
 """
 import re
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -46,6 +46,11 @@ SKIPPED: dict[str, str] = {
 QUERIES: dict[str, dict[str, str]] = {
     "/api/assets/{asset_id}/series": {"metric": "active_power_kw"},
     "/api/audit/position": {"date": date.today().isoformat()},
+    # the storage clock is UTC, so the range ends on the UTC day (never date.today(), which follows the process zone)
+    "/api/storage/rows-per-day": {
+        "start": (datetime.now(timezone.utc).date() - timedelta(days=6)).isoformat(),
+        "end": datetime.now(timezone.utc).date().isoformat(),
+    },
 }
 
 

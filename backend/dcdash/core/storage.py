@@ -265,6 +265,17 @@ class DayRows(BaseModel):
     rows: int
 
 
+class RowsPerDay(BaseModel):
+    """Rows per UTC day for an arbitrary range, zero-filled, plus the bounds the date inputs need."""
+
+    start: date
+    end: date
+    days: list[DayRows]
+    total_rows: int
+    first_day: date | None  # UTC date of the oldest hourly bucket; None when there is none
+    last_day: date  # today, UTC: the latest day a range may end on
+
+
 class StorageStats(BaseModel):
     database_bytes: int
     readings_bytes_uncompressed: int
@@ -300,18 +311,45 @@ _STATS_SQL = text(
 _ROWS_SQL = text(
     """
     SELECT d::date AS day, coalesce(sum(r.n), 0)::bigint AS rows
-    FROM generate_series(CAST(:first AS date), CAST(:today AS date), INTERVAL '1 day') AS d
+    FROM generate_series(CAST(:first AS date), CAST(:last AS date), INTERVAL '1 day') AS d
     LEFT JOIN readings_1h r ON r.bucket >= d AND r.bucket < d + INTERVAL '1 day'
     GROUP BY d ORDER BY d
     """
 )
+_FIRST_DAY_SQL = text("SELECT (min(bucket) AT TIME ZONE 'UTC')::date FROM readings_1h")
+
+MAX_RANGE_DAYS = 366
+
+
+class RangeError(ValueError):
+    """A rows-per-day range that cannot be answered; the message is meant for the person who typed the dates."""
+
+
+async def rows_per_day(db: AsyncSession, first: date, last: date) -> list[DayRows]:
+    """Rows of the hourly rollup per UTC day, first..last inclusive, a day without rows counted as 0."""
+    rows = (await db.execute(_ROWS_SQL, {"first": first, "last": last})).mappings().all()
+    return [DayRows(day=r["day"], rows=r["rows"]) for r in rows]
+
+
+async def rows_per_day_range(db: AsyncSession, start: date, end: date) -> RowsPerDay:
+    last_day = datetime.now(timezone.utc).date()
+    if end < start:
+        raise RangeError("The end day is before the start day.")
+    if end > last_day:
+        raise RangeError(f"The end day is in the future; the latest day is {last_day}.")
+    if (end - start).days + 1 > MAX_RANGE_DAYS:
+        raise RangeError(f"The range is longer than {MAX_RANGE_DAYS} days.")
+    days = await rows_per_day(db, start, end)
+    return RowsPerDay(
+        start=start, end=end, days=days, total_rows=sum(d.rows for d in days),
+        first_day=await db.scalar(_FIRST_DAY_SQL), last_day=last_day,
+    )
 
 
 async def storage_stats(db: AsyncSession) -> StorageStats:
     s = await load_storage_settings(db)
     row = (await db.execute(_STATS_SQL)).mappings().one()
     today = datetime.now(timezone.utc).date()
-    rows = (await db.execute(_ROWS_SQL, {"first": today - timedelta(days=6), "today": today})).mappings().all()
     oldest = row["oldest"]
     days = max((datetime.now(timezone.utc) - oldest).total_seconds() / 86400, 1.0) if oldest else 1.0
     growth = row["readings_total"] / days if oldest else 0.0
@@ -325,7 +363,7 @@ async def storage_stats(db: AsyncSession) -> StorageStats:
         readings_bytes_total=row["readings_total"],
         rollup_1m_bytes=row["m1"],
         rollup_1h_bytes=row["h1"],
-        rows_per_day=[DayRows(day=r["day"], rows=r["rows"]) for r in rows],
+        rows_per_day=await rows_per_day(db, today - timedelta(days=6), today),
         growth_bytes_per_day=growth,
         disk_capacity_bytes=capacity,
         used_pct=round(used_pct, 2),

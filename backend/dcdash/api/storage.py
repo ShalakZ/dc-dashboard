@@ -1,5 +1,7 @@
 """Storage settings and statistics endpoints (admin)."""
-from fastapi import APIRouter, Depends
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,12 +10,15 @@ from dcdash.core.audit import audit_change
 from dcdash.core.models import User
 from dcdash.core.storage import (
     FACTORY_STORAGE_SETTINGS,
+    RangeError,
+    RowsPerDay,
     StorageSettings,
     StorageSettingsOut,
     StorageStats,
     load_site_default,
     load_storage_settings,
     retention_impact,
+    rows_per_day_range,
     save_origin,
     save_site_default,
     save_storage_settings,
@@ -26,6 +31,14 @@ router = APIRouter(prefix="/api", tags=["storage"], dependencies=[Depends(requir
 @router.get("/storage", response_model=StorageStats)
 async def get_storage(db: AsyncSession = Depends(get_db)) -> StorageStats:
     return await storage_stats(db)
+
+
+@router.get("/storage/rows-per-day", response_model=RowsPerDay)
+async def get_rows_per_day(start: date, end: date, db: AsyncSession = Depends(get_db)) -> RowsPerDay:
+    try:
+        return await rows_per_day_range(db, start, end)
+    except RangeError as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 @router.get("/settings/storage", response_model=StorageSettingsOut)
