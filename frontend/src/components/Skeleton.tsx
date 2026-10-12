@@ -20,32 +20,47 @@ export function Skeleton({ variant = "line", width, height }: { variant?: Varian
   return <span className={`sk sk-${variant}`} style={style} aria-hidden="true" />;
 }
 
-// A region that follows another (one mounted, or one gone less than 250 ms ago) skips the fade-in delay: a chain of skeletons (the tree
-// and then the page, a lazy route's fallback and then the page's table) would otherwise blank the area for 150 ms at every step.
+// A region that follows a skeleton somebody SAW skips the fade-in delay: a chain of skeletons (the tree and then the page, a lazy route's
+// fallback and then the page's table) would otherwise blank the area for 150 ms at every step. A skeleton is seen once it is on screen:
+// an instant one at once, a delayed one when its 150 ms delay (app.css) has run out. One that was answered inside the delay was never seen
+// and leaves nothing behind, or the next region (the chart after the asset) would pop in at full opacity for a few frames.
 // Read at render, not in an effect, so a swap inside one commit counts too (the old region has not cleaned up yet).
+const SEEN_AFTER_MS = 150;
 const GRACE_MS = 250;
-let mounted = 0;
-let lastUnmount = -Infinity;
+interface Region { born: number; instant: boolean }
+const mounted = new Set<Region>();
+let lastSeenGone = -Infinity;
+
+const isSeen = (region: Region, now: number) => region.instant || now - region.born >= SEEN_AFTER_MS;
+function followsSeen(now: number) {
+  if (now - lastSeenGone < GRACE_MS) return true;
+  for (const region of mounted) if (isSeen(region, now)) return true;
+  return false;
+}
 
 /** For tests: forget every mounted region and the last unmount. */
 export function resetSkeletonClock() {
-  mounted = 0;
-  lastUnmount = -Infinity;
+  mounted.clear();
+  lastSeenGone = -Infinity;
 }
 
 /** The one `role="status"` of an area: busy, with the label as its only text. It takes a className so it can BE the real wrapper. */
 export function SkeletonRegion({ label, className, children }: { label: string; className?: string; children?: ReactNode }) {
-  // once per mount: its own effect below raises the count, which must not turn a region that is still waiting out its delay into an instant one
-  const [instant] = useState(() => mounted > 0 || Date.now() - lastUnmount < GRACE_MS);
+  // once per mount: its own effect below joins the set, which must not turn a region that is still waiting out its delay into an instant one
+  const [self] = useState<Region>(() => {
+    const born = performance.now();
+    return { born, instant: followsSeen(born) };
+  });
   useEffect(() => {
-    mounted += 1;
+    mounted.add(self);
     return () => {
-      mounted -= 1;
-      lastUnmount = Date.now();
+      mounted.delete(self);
+      const now = performance.now();
+      if (isSeen(self, now)) lastSeenGone = now; // StrictMode's simulated unmount comes at once, so it stamps nothing for a delayed region
     };
-  }, []);
+  }, [self]);
   return (
-    <div role="status" aria-busy="true" className={className ? `sk-region ${className}` : "sk-region"} data-instant={instant ? "" : undefined}>
+    <div role="status" aria-busy="true" className={className ? `sk-region ${className}` : "sk-region"} data-instant={self.instant ? "" : undefined}>
       <span className="sr-only">{label}</span>
       {children}
     </div>
@@ -89,16 +104,23 @@ export function TilesSkeleton({ count, fleet, notes, plain, className, label }: 
 const HEAD_WIDTHS = ["7ch", "10ch", "6ch", "9ch", "8ch"];
 const CELL_WIDTHS = ["11ch", "8ch", "14ch", "6ch", "10ch", "12ch"];
 
-/** A real table in the real `.table-wrap`, so the header and row heights come from the same CSS (`--row-y`). Its rows are not in the accessibility tree; it never scrolls. */
-export function TableSkeleton({ columns, rows, label }: { columns: number; rows: number; label?: string }) {
+/**
+ * A real table in the real `.table-wrap`, so the header and row heights come from the same CSS (`--row-y`). Its rows are not in the
+ * accessibility tree; it never scrolls. `caption` adds the muted how-to-read row above the header (Billing's), `headless` leaves the header
+ * out (Storage's rows per day has body rows only): a table is as tall as the real one only if it has the same rows.
+ */
+export function TableSkeleton({ columns, rows, label, caption, headless }: { columns: number; rows: number; label?: string; caption?: boolean; headless?: boolean }) {
   const cols = Array.from({ length: columns }, (_, c) => c);
   return (
     <Labelled label={label}>
       <div className="table-wrap sk-table" aria-hidden="true">
         <table>
-          <thead>
-            <tr>{cols.map((c) => <th key={c}><Skeleton width={HEAD_WIDTHS[c % HEAD_WIDTHS.length]} /></th>)}</tr>
-          </thead>
+          {caption ? <caption className="muted"><Skeleton width="44ch" /></caption> : null}
+          {headless ? null : (
+            <thead>
+              <tr>{cols.map((c) => <th key={c}><Skeleton width={HEAD_WIDTHS[c % HEAD_WIDTHS.length]} /></th>)}</tr>
+            </thead>
+          )}
           <tbody>
             {Array.from({ length: rows }, (_, r) => (
               <tr key={r}>{cols.map((c) => <td key={c}><Skeleton width={CELL_WIDTHS[(r * 2 + c * 3) % CELL_WIDTHS.length]} /></td>)}</tr>
@@ -214,11 +236,12 @@ export function PageHeaderSkeleton({ crumbs, icon, sub, actions, label }: { crum
 }
 
 /**
- * The actions slot of a REAL page header whose buttons depend on data (Sources, Scans): a 34px gap, so the header is as tall as it will be (one
- * without its actions is 6.5px shorter). Not grey: the header stands outside any region, and a grey block would show before the fade-in delay.
+ * A gap (34px, or the `height` given) for a button or a row of controls that depends on data: the actions slot of a REAL page header
+ * (Sources, Scans, Billing: one without its actions is 6.5px shorter), Audit's place for the Friendly/Raw switch, Billing's for the month
+ * bar (38px, its selects). Not grey: it stands outside any region, and a grey block would show before the fade-in delay.
  */
-export function ActionsSpace() {
-  return <span aria-hidden="true" style={{ display: "block", height: 34 }} />;
+export function ActionsSpace({ height = 34 }: { height?: number } = {}) {
+  return <span aria-hidden="true" style={{ display: "block", height }} />;
 }
 
 /** A whole page with nothing known about it: a page head with a title line, then two 240px blocks side by side. One region. */

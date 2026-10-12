@@ -385,6 +385,22 @@ describe("AuditPage while the log loads (W7f)", () => {
     expect(document.querySelector(".sk-region")).toBeNull();
   });
 
+  it("keeps the place of the Friendly/Raw switch above the skeleton (an aria-hidden .row.seg with a 34px gap, so the table does not jump), and the real switch replaces it", async () => {
+    const hold = mount("/audit", "/api/audit");
+    const place = document.querySelector(".audit-page > .row.seg")!;
+    expect(place).toHaveAttribute("aria-hidden", "true");
+    expect(place.textContent).toBe("");
+    expect(place.querySelector("button")).toBeNull();
+    expect((place.firstElementChild as HTMLElement).style.height).toBe("34px");
+    const region = screen.getByText(LABEL).parentElement!;
+    expect(place.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING, "the gap comes before the skeleton").toBeTruthy();
+    expect(screen.queryByRole("group", { name: "View" })).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByRole("group", { name: "View" })).toBeInTheDocument();
+    expect(document.querySelectorAll(".audit-page .row.seg")).toHaveLength(1); // the real one only
+    expect(document.querySelector(".audit-page .row.seg[aria-hidden]")).toBeNull();
+  });
+
   it("has four columns in the raw view", async () => {
     const hold = mount("/audit?view=raw", "/api/audit");
     expect(screen.getByText(LABEL).parentElement!.querySelectorAll(".sk-table thead th")).toHaveLength(4);

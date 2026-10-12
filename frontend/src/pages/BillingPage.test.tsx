@@ -102,6 +102,43 @@ describe("BillingPage", () => {
       expect(document.querySelector(".sk-region")).toBeNull(); // (the missing-rate banner is a status of its own)
     });
 
+    it("draws the how-to-read caption row of the table (a line placeholder in a muted caption), so the first row sits where it will land", async () => {
+      open();
+      const caption = region().querySelector(".sk-table caption")!;
+      expect(caption).toHaveClass("muted");
+      expect(caption.querySelector(".sk-line")).not.toBeNull();
+      expect(caption.textContent).toBe("");
+      expect(caption.nextElementSibling?.tagName, "the caption comes first in the table, then the head").toBe("THEAD");
+      await screen.findByRole("rowheader", { name: "LV Panel 1" });
+    });
+
+    it("keeps a 34px gap in the header's actions slot and the month bar's place while the site is unknown, and the real ones take their place", async () => {
+      const held = open("viewer", { body: costs }, "Asia/Qatar", { body: { first_month: null } }, (_method, path) => path === "/api/site");
+      const actions = document.querySelector("header.page-head > .actions")!;
+      expect(actions).not.toBeNull();
+      const gap = actions.firstElementChild as HTMLElement;
+      expect(gap).toHaveAttribute("aria-hidden", "true");
+      expect(gap.style.height).toBe("34px");
+      expect(screen.queryByRole("button", { name: "Download CSV" })).not.toBeInTheDocument();
+      const bar = document.querySelector(".billing-page > .row.billing-bar")!; // and the month bar's place, with its selects' height
+      expect(bar).toHaveAttribute("aria-hidden", "true");
+      expect((bar.firstElementChild as HTMLElement).style.height).toBe("38px");
+      expect(bar.querySelector("button, select")).toBeNull();
+      held.release();
+      expect(await screen.findByRole("button", { name: "Download CSV" })).toBeInTheDocument();
+      expect(document.querySelectorAll("header.page-head > .actions > *")).toHaveLength(1); // the button, and the gap is gone
+      expect(document.querySelectorAll(".billing-page .billing-bar")).toHaveLength(1); // the real bar only
+      expect(document.querySelector(".billing-bar[aria-hidden]")).toBeNull();
+    });
+
+    it("keeps no gap when the site could not be read (there is no button or bar to come)", async () => {
+      mockFetch({ ...routes("viewer", { body: costs }, "Asia/Qatar", { body: { first_month: null } }), "GET /api/site": { status: 500, body: { detail: "no site" } } });
+      renderWithProviders(<BillingPage />, { route: "/billing", path: "/billing" });
+      expect(await screen.findByText("no site")).toBeInTheDocument();
+      expect(document.querySelector("header.page-head > .actions")).toBeNull();
+      expect(document.querySelector(".billing-bar")).toBeNull();
+    });
+
     it("keeps the pickers and shows the skeleton in the table's place while the month's costs are held", async () => {
       const held = open("viewer", { body: costs }, "Asia/Qatar", { body: { first_month: null } }, (_method, path) => path === "/api/billing/costs");
       expect(await screen.findByText("October 2026")).toBeInTheDocument();

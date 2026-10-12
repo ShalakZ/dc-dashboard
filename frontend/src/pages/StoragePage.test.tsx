@@ -532,6 +532,32 @@ describe("StoragePage while it loads (W7f)", () => {
     expect(await screen.findByLabelText(/raw retention/i)).toBeInTheDocument();
   });
 
+  it("lays the middle of the page out as it will be: the disk note, the Rows per day section (heading, range fields, two note lines, 7 day rows with no header), then the form skeleton, all as placeholders", async () => {
+    const hold = mount("/api/storage");
+    const region = screen.getByText(LABEL).parentElement!;
+    expect(region.textContent, "a region holds no words but its label").toBe(LABEL);
+    const order = [...region.children].filter((child) => !child.classList.contains("sr-only")).map((child) => child.tagName + "." + child.className.split(" ")[0]);
+    expect(order).toEqual(["DIV.tiles", "P.muted", "DIV.rows-day", "DIV.form-card"]);
+    expect(region.querySelector(":scope > p.muted .sk-line")).not.toBeNull();
+    const day = region.querySelector(".rows-day")!;
+    expect(day).toHaveAttribute("aria-hidden", "true");
+    expect(day.querySelector("h2.section-title .sk-line")).not.toBeNull();
+    expect(day.querySelectorAll(".rows-range .sk-field")).toHaveLength(2);
+    expect(day.querySelectorAll(".rows-range > .sk-block")).toHaveLength(1); // the Last 7 days button
+    expect(day.querySelectorAll(":scope > p.muted .sk-line")).toHaveLength(2); // the UTC note and the count
+    const table = day.querySelector(":scope > .table-wrap.sk-table")!;
+    expect(table.querySelector("thead")).toBeNull();
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(7);
+    expect(table.querySelectorAll("tbody tr:first-child td")).toHaveLength(2);
+    // none of it is in the accessibility tree and nothing can be focused
+    expect(screen.queryByRole("heading", { name: "Rows per day" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Rows from day")).not.toBeInTheDocument();
+    expect(region.querySelector("input, button, a, select")).toBeNull();
+    hold.release();
+    expect(await screen.findByRole("heading", { name: "Rows per day" })).toBeInTheDocument();
+    expect(document.querySelectorAll(".rows-day")).toHaveLength(1);
+  });
+
   it("ends with the error alone when the storage request fails, and no region", async () => {
     mockFetch({ ...base, "GET /api/storage": { status: 500, body: { detail: "storage is down" } }, "GET /api/settings/storage": { body: settingsOut } });
     renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });

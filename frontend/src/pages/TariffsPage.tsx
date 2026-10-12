@@ -240,6 +240,15 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
   );
 }
 
+/** Static, so the page draws it while the rates load too: the table skeleton sits under it, where the table will be. */
+function SiteDefaultHead() {
+  return (
+    <SectionHead icon="rate" title="Site default rate">
+      The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date.
+    </SectionHead>
+  );
+}
+
 function TariffTables({ tariffs, assets, assetsError, currencyUnset }: {
   tariffs: Tariff[]; assets: Asset[]; assetsError: string | null; currencyUnset: boolean;
 }) {
@@ -251,9 +260,7 @@ function TariffTables({ tariffs, assets, assetsError, currencyUnset }: {
       {currencyUnset && (
         <Note>Set the currency first: rates are in the site currency, and it is not set yet.</Note>
       )}
-      <SectionHead icon="rate" title="Site default rate">
-        The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date.
-      </SectionHead>
+      <SiteDefaultHead />
       {defaults.length === 0 ? (
         <Empty>No site default rate yet. Until one is set, assets with no override show a dash for cost. Add a rate below.</Empty>
       ) : (
@@ -300,7 +307,12 @@ export function TariffsPage() {
         The unit costs are shown in. Set it first: every rate below is in this currency.
       </SectionHead>
       <CurrencyForm />
-      {tariffs.isPending && <TableSkeleton columns={3} rows={3} label="Loading tariffs" />}
+      {tariffs.isPending && (
+        <>
+          <SiteDefaultHead />
+          <TableSkeleton columns={3} rows={3} label="Loading tariffs" />
+        </>
+      )}
       {tariffs.isError && <p className="error" role="alert">{errorText(tariffs.error)}</p>}
       {tariffs.data && (
         <TariffTables

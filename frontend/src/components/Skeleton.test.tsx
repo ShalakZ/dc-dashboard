@@ -196,6 +196,25 @@ describe("TableSkeleton", () => {
     expect(screen.queryAllByRole("cell")).toHaveLength(0);
   });
 
+  it("with caption has a muted <caption> holding one line placeholder, first in the table (as billing's how-to-read row)", () => {
+    const { container } = render(<TableSkeleton columns={3} rows={2} caption />);
+    const table = container.querySelector("table")!;
+    const caption = table.firstElementChild!;
+    expect(caption.tagName).toBe("CAPTION");
+    expect(caption).toHaveClass("muted");
+    expect(caption.querySelectorAll(".sk-line")).toHaveLength(1);
+    expect(caption.textContent).toBe("");
+    expect(table.querySelector("thead")).not.toBeNull();
+    expect(render(<TableSkeleton columns={3} rows={2} />).container.querySelector("caption")).toBeNull();
+  });
+
+  it("with headless has body rows only, as a table with no <thead> (Storage's rows per day)", () => {
+    const { container } = render(<TableSkeleton columns={2} rows={7} headless />);
+    expect(container.querySelector("thead")).toBeNull();
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(7);
+    expect(container.querySelectorAll("tbody tr:first-child td")).toHaveLength(2);
+  });
+
   it("varies the widths but not from one render to the next", () => {
     const { container } = render(<TableSkeleton columns={4} rows={4} />);
     const widths = [...container.querySelectorAll<HTMLElement>("tbody .sk-line")].map((l) => l.style.width);
@@ -332,6 +351,11 @@ describe("ActionsSpace", () => {
     expect(gap.style.height).toBe("34px");
     expect(gap.className).toBe("");
     expect(gap.textContent).toBe("");
+  });
+
+  it("takes a height of its own (Billing's month bar is 38px)", () => {
+    const { container } = render(<ActionsSpace height={38} />);
+    expect((container.firstElementChild as HTMLElement).style.height).toBe("38px");
   });
 });
 
@@ -515,72 +539,124 @@ describe("CanvasSkeleton", () => {
   });
 });
 
-describe("the instant rule (a region that follows another does not wait out the fade-in delay)", () => {
-  const now = (ms: number) => vi.setSystemTime(ms);
+describe("the instant rule (a region that follows a skeleton somebody saw does not wait out the fade-in delay)", () => {
+  // The clock is performance.now, which the rule reads at render; React Query is not involved, but global fake timers are not used anyway.
+  let clock = 0;
+  const at = (ms: number) => { clock = ms; };
+  let spy: { mockRestore: () => void };
   beforeEach(() => {
     resetSkeletonClock();
-    vi.useFakeTimers({ toFake: ["Date"] });
-    now(10_000);
+    at(10_000);
+    spy = vi.spyOn(performance, "now").mockImplementation(() => clock);
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => spy.mockRestore());
 
   // always one fragment of keyed regions, so a rerender keeps the ones that stay and a changed key is a swap
   const regions = (labels: string[], className?: string) => (
     <>{labels.map((label) => <SkeletonRegion key={label} label={label} className={className}><Skeleton /></SkeletonRegion>)}</>
   );
   const status = (label: string) => screen.getByText(label).parentElement!;
+  const instant = (label: string) => status(label).hasAttribute("data-instant");
 
   it("a lone region is delayed (no data-instant)", () => {
     render(regions(["One"]));
-    expect(status("One")).not.toHaveAttribute("data-instant");
+    expect(instant("One")).toBe(false);
   });
 
-  it("a region that mounts while another is mounted is instant", () => {
+  it("a region that mounts beside one that has been up 150 ms is instant (that one was seen)", () => {
     const { rerender } = render(regions(["One"]));
+    at(10_150);
     rerender(regions(["One", "Two"]));
-    expect(status("Two")).toHaveAttribute("data-instant");
-    expect(status("One")).not.toHaveAttribute("data-instant"); // it was first
+    expect(instant("Two")).toBe(true);
+    expect(instant("One")).toBe(false); // it was first
+  });
+
+  it("a region that mounts beside one that is still inside its delay is delayed too (nobody saw that one)", () => {
+    const { rerender } = render(regions(["One"]));
+    at(10_149);
+    rerender(regions(["One", "Two"]));
+    expect(instant("Two")).toBe(false);
   });
 
   it("two regions that mount in the same commit are both delayed (the tree and the pane)", () => {
     render(regions(["Tree", "Pane"]));
-    expect(status("Tree")).not.toHaveAttribute("data-instant");
-    expect(status("Pane")).not.toHaveAttribute("data-instant");
+    expect(instant("Tree")).toBe(false);
+    expect(instant("Pane")).toBe(false);
   });
 
-  it("a region swapped for another in one commit is instant (the old one has not cleaned up when the new one renders)", () => {
+  it("a region swapped in for one that was up 200 ms is instant (the old one has not cleaned up when the new one renders)", () => {
     const { rerender } = render(regions(["Old"]));
+    at(10_200);
     rerender(regions(["New"]));
-    expect(status("New")).toHaveAttribute("data-instant");
+    expect(instant("New")).toBe(true);
   });
 
-  it("a region that mounts less than 250 ms after another unmounted is instant", () => {
-    render(regions(["One"])).unmount(); // at 10_000
-    now(10_249);
+  it("a region swapped in for one that was up only 40 ms is delayed: the data came back before the first was ever visible", () => {
+    const { rerender } = render(regions(["Old"]));
+    at(10_040);
+    rerender(regions(["New"]));
+    expect(instant("New")).toBe(false);
+  });
+
+  it("a region that unmounted after 40 ms leaves no grace: the next one, a moment later, is delayed (a tree click that is answered quickly)", () => {
+    const first = render(regions(["Asset"]));
+    at(10_040);
+    first.unmount();
+    at(10_050);
+    render(regions(["Chart"]));
+    expect(instant("Chart")).toBe(false);
+  });
+
+  it("a region that was up 200 ms leaves a grace of 250 ms: one that mounts 249 ms after it left is instant", () => {
+    const first = render(regions(["One"]));
+    at(10_200);
+    first.unmount();
+    at(10_449);
     render(regions(["Quick"]));
-    expect(status("Quick")).toHaveAttribute("data-instant");
+    expect(instant("Quick")).toBe(true);
   });
 
-  it("a region that mounts 250 ms or more after the last unmount is delayed again", () => {
-    render(regions(["One"])).unmount(); // at 10_000
-    now(10_250);
+  it("and one that mounts 250 ms after it left is delayed again", () => {
+    const first = render(regions(["One"]));
+    at(10_200);
+    first.unmount();
+    at(10_450);
     render(regions(["Late"]));
-    expect(status("Late")).not.toHaveAttribute("data-instant");
+    expect(instant("Late")).toBe(false);
+  });
+
+  it("a region that was instant counts as seen at once: a chain of short hops keeps the grace alive", () => {
+    const { rerender, unmount } = render(regions(["A"]));
+    at(10_200);
+    rerender(regions(["B"])); // B follows A: instant, so on screen from this moment
+    expect(instant("B")).toBe(true);
+    at(10_240);
+    unmount(); // B was up for 40 ms, A went 240 ms ago: past the grace of A at 10_450, within B's own
+    at(10_460);
+    render(regions(["C"]));
+    expect(instant("C")).toBe(true);
   });
 
   it("a re-render of a delayed region does not make it instant (its own mount must not count against it)", () => {
     const { rerender } = render(regions(["One"]));
+    at(10_500);
     rerender(regions(["One"], "again"));
     expect(status("One")).toHaveClass("again");
-    expect(status("One")).not.toHaveAttribute("data-instant");
+    expect(instant("One")).toBe(false);
   });
 
-  it("under StrictMode a lone region is delayed, and the counter balances: a later region, after the grace, is delayed too", () => {
+  it("under StrictMode a lone region is delayed, its simulated unmount leaves no grace, and nothing leaks into the regions after it", () => {
     const first = render(<StrictMode>{regions(["One"])}</StrictMode>);
-    expect(status("One")).not.toHaveAttribute("data-instant");
+    expect(instant("One")).toBe(false);
+    at(10_010);
     first.unmount();
-    now(10_300);
-    render(<StrictMode>{regions(["Two"])}</StrictMode>);
-    expect(status("Two")).not.toHaveAttribute("data-instant"); // a leaked count would leave every later region instant for good
+    at(10_020);
+    const second = render(<StrictMode>{regions(["Two"])}</StrictMode>);
+    expect(instant("Two")).toBe(false); // One lived 10 ms: nobody saw it, and the simulated unmount did not stamp the grace
+    at(10_030);
+    second.unmount();
+    at(10_600);
+    render(<StrictMode>{regions(["Three"])}</StrictMode>);
+    expect(instant("Three")).toBe(false); // a leaked region would leave every later one instant for good
   });
 });

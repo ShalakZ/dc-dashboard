@@ -573,6 +573,19 @@ describe("TariffsPage while its lists load (W7f)", () => {
     expect(document.querySelector(".sk-region")).toBeNull();
   });
 
+  it("draws the Site default rate section head, its words and all, above the table skeleton, and keeps just the one head when the rates arrive (the skeleton must sit where the table will)", async () => {
+    const hold = mount("/api/tariffs");
+    await screen.findByRole("form", { name: "Site currency" });
+    const head = screen.getByRole("heading", { level: 2, name: "Site default rate" });
+    expect(screen.getByText(/The price per kWh used for every asset that has no override/)).toBeInTheDocument();
+    const region = screen.getByText("Loading tariffs").parentElement!;
+    expect(head.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING, "the head comes before the skeleton").toBeTruthy();
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Currency", "Site default rate"]);
+    hold.release();
+    await screen.findByRole("table", { name: "Site default rates" });
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Currency", "Site default rate", "Asset overrides"]);
+  });
+
   it("ends with the errors as alerts, never a region, when the lists fail", async () => {
     overrides = { "GET /api/tariffs": { status: 500, body: { detail: "rates are down" } }, "GET /api/settings/billing": { status: 500, body: { detail: "settings are down" } } };
     mockFetch(routes("admin"));

@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { InfoTip } from "../components/InfoTip";
 import { PageHeader } from "../components/PageHeader";
-import { FormSkeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
+import { FormSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
 import { useRowsPerDay, useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
 import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
 import { storageLoss } from "../lib/impact";
@@ -170,12 +170,27 @@ export function StoragePage() {
   if (stats.isError) return <p className="error" role="alert">{stats.error.message}</p>;
   if (settings.isError) return <p className="error" role="alert">{settings.error.message}</p>;
   if (stats.isPending || settings.isPending || !form) {
-    // The tiles are the real five, three with their note line; the form's height is a guess (its rows lay out in columns).
+    // The page in its order: the five real tiles (three with their note line), the disk note, Rows per day (heading, range fields, the UTC
+    // note and the count, then the seven day rows with no header, as the real table has none), then the form, whose own height is a guess
+    // (its rows lay out in columns). All lines are placeholders: a region holds no words but its label. Banners are data and are not drawn.
     return (
       <section className="admin-page storage-page">
         <PageHeader title="Storage" sub="How much space the readings take, and how long they are kept." />
         <SkeletonRegion label="Loading storage">
           <TilesSkeleton count={5} plain className="storage-tiles" notes={[1, 2, 4]} />
+          <p className="muted" aria-hidden="true"><Skeleton width="90%" /></p>
+          <div className="rows-day" aria-hidden="true">
+            <h2 className="section-title"><Skeleton width="12ch" /></h2>
+            <div className="rows-range">
+              {[0, 1].map((i) => (
+                <div className="sk-field" key={i}><Skeleton width="12ch" /><Skeleton variant="block" width={150} height={34} /></div>
+              ))}
+              <Skeleton variant="block" width={96} height={30} />
+            </div>
+            <p className="muted"><Skeleton width="60%" /></p>
+            <p className="muted"><Skeleton width="16ch" /></p>
+            <TableSkeleton columns={2} rows={7} headless />
+          </div>
           <FormSkeleton rows={4} wide />
         </SkeletonRegion>
       </section>
