@@ -1012,10 +1012,11 @@ describe("the loading skeletons (W7f)", () => {
 });
 
 describe("the app-shell skeleton (W7h)", () => {
-  // every rule written for it: the placeholder sizes, the .sk-shell scope, the find box and the avatar
-  const mine = rules.filter((r) => /\.sk-(shell|find|avatar|[wh]-\d+)(?![\w-])/.test(r.selector));
+  // every rule written for it: the placeholder sizes, the .sk-shell scope, the find box, the avatar, the chip and the caret
+  const mine = rules.filter((r) => /\.sk-(shell|find|avatar|chip|caret|[wh]-\d+)(?![\w-])/.test(r.selector));
+  const narrow = (r: Rule) => r.at.some((a) => a.startsWith("@media (max-width: 1179.98px)"));
   const only = (selector: string) => {
-    const found = mine.filter((r) => r.selector === selector);
+    const found = mine.filter((r) => r.selector === selector && !narrow(r)); // the narrow window's rules are checked on their own
     expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
     return found[0];
   };
@@ -1071,6 +1072,26 @@ describe("the app-shell skeleton (W7h)", () => {
   it("a placeholder row takes no pointer and shows no hover colour", () => {
     expect(only(".sk-shell .side-row").body).toMatch(/pointer-events:\s*none/);
     expect(only(".sk-shell .side-row").body).toMatch(/cursor:\s*default/);
+  });
+
+  it("the right side of the bar: a chip placeholder as high as the real chip (28px) with its ring, a caret placeholder, a user block that takes no pointer", () => {
+    const chip = only(".sk-chip");
+    expect(chip.body).toMatch(/height:\s*28px/);
+    expect(chip.body).toMatch(/flex:\s*none/);
+    expect(chip.body).toMatch(/border:\s*1px solid var\(--top-chip-border\)/);
+    expect(chip.body).toMatch(/border-radius:\s*var\(--radius-sm\)/);
+    expect(chip.body).toMatch(/font-size:\s*var\(--fs-sm\)/); // the chip's own size, so its ch is the real chip's
+    expect(only(".sk-caret").body).toMatch(/width:\s*14px;\s*height:\s*14px/);
+    expect(only(".sk-caret").body).toMatch(/margin-left:\s*2px/);
+    expect(only(".sk-shell .who").body).toMatch(/pointer-events:\s*none/);
+  });
+
+  it("in a narrow window the chip placeholder is the word alone, as the real chip is (its detail is hidden there)", () => {
+    const chip = mine.filter((r) => r.selector === ".sk-chip" && narrow(r));
+    expect(chip).toHaveLength(1);
+    expect(chip[0].body).toMatch(/width:\s*\d+ch/);
+    expect(chip[0].order).toBeGreaterThan(only(".sk-chip").order);
+    expect(inLayer(chip[0])).toBe(true);
   });
 
   it("draws the brand name in CSS, so the markup holds no word of it", () => {

@@ -103,6 +103,10 @@ describe("AppShellSkeleton", () => {
       el ? `${el.tagName.toLowerCase()}${[...el.classList].filter((c) => !c.startsWith("sk-") && c !== "ready").map((c) => `.${c}`).join("")}` : "(none)";
     const first = (el: Element | null) => el?.firstElementChild ?? null;
     const next = (el: Element | null) => el?.nextElementSibling ?? null;
+    /** The bar's right side stands in for the real chip, caret and button by slot, not by class: a placeholder has its own classes. */
+    const slot = (el: Element) => (el.matches(".live, .sk-chip") ? "chip" : el.matches("svg.i, .sk-caret") ? "caret" : describeEl(el));
+    const slots = (els: Iterable<Element>) => [...els].map(slot);
+    const following = (el: Element | null) => { const found: Element[] = []; for (let n = next(el); n; n = next(n)) found.push(n); return found; };
     /** The chain of one shell: each pair is (what the step is, what it found). */
     const chain = (shell: Element) => {
       const header = first(shell);
@@ -111,6 +115,8 @@ describe("AppShellSkeleton", () => {
       const nav = first(side);
       const brand = first(header);
       const barIn = next(brand);
+      const grow = barIn!.querySelector(":scope > .grow");
+      const who = barIn!.querySelector(".profile > .who");
       return {
         shell: describeEl(shell),
         "shell > first": describeEl(header),
@@ -122,6 +128,10 @@ describe("AppShellSkeleton", () => {
         "brand > first": describeEl(first(brand)),
         "brand > second": describeEl(next(first(brand))),
         "bar-in > first": describeEl(first(barIn)),
+        "bar-in > second": describeEl(next(first(barIn))),
+        "bar-in after the grow": slots(following(grow)),
+        "who": slots(who?.children ?? []),
+        "who > lbl": slots(who?.querySelector(".lbl")?.children ?? []),
         "side > first": describeEl(nav),
         "nav > first": describeEl(first(nav)),
         "nav > second": describeEl(next(first(nav))),
@@ -140,6 +150,10 @@ describe("AppShellSkeleton", () => {
       expect(skeletonChain).toEqual(realChain);
       expect(realChain["frame > second"]).toBe("main"); // the chain found something at every step
       expect(realChain["nav-group > first"]).toBe("span.nav-heading");
+      // the right side of the bar: the data chip, the separators, the clock and the user, as the real bar has them, so the avatar and the chip sit where the real ones will
+      expect(realChain["bar-in after the grow"]).toEqual(["chip", "span.vr", "span.site-time", "span.vr", "div.profile"]);
+      expect(realChain.who).toEqual(["span.avatar", "span.lbl", "caret"]);
+      expect(realChain["who > lbl"]).toEqual(["span.who-name", "span.who-role"]);
     });
   });
 });

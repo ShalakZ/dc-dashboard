@@ -469,6 +469,9 @@
      placeholders, shown before the user is known. Placeholder widths are classes, not style attributes (the copy in index.html must
      survive a strict style-src). On the navy the placeholders are the sidebar's hover colour and do not shine: the hand-over to the real
      shell would restart a sweep. Only the sizes the component uses are written. */
+  .sk-w-3 { width: 3ch; }
+  .sk-w-5 { width: 5ch; }
+  .sk-w-6 { width: 6ch; }
   .sk-w-7 { width: 7ch; }
   .sk-w-8 { width: 8ch; }
   .sk-w-9 { width: 9ch; }
@@ -479,9 +482,15 @@
   .sk-shell .navbar .sk::after, .sk-shell .side .sk::after { display: none; }
   .sk-shell .brand .lbl::before { content: "DC Dashboard"; } /* the name is drawn here so the markup holds no text */
   .sk-shell .navbar .sk-find { display: block; width: 100%; height: 34px; border: 1px solid var(--top-find-border); border-radius: var(--radius); background: var(--top-find-bg); } /* the real field's box */
+  .sk-chip { flex: none; width: 25ch; height: 28px; border: 1px solid var(--top-chip-border); border-radius: var(--radius-sm); font-size: var(--fs-sm); } /* the data chip: the real one's height and about its width (its own font size, so ch is the real chip's) */
+  .sk-caret { flex: none; width: 14px; height: 14px; margin-left: 2px; border-radius: var(--radius-sm); } /* the profile caret's box */
   .sk-avatar { background: var(--side-bg-hover); } /* the real avatar's size and shape (.avatar), a placeholder's colour instead of the gold */
   .sk-shell .side-row { pointer-events: none; cursor: default; }
+  .sk-shell .who { pointer-events: none; cursor: default; }
   .sk-shell .side-row .sk-circle { width: 18px; height: 18px; } /* the row icon's size */
+  @media (max-width: 1179.98px) {
+    .sk-chip { width: 8ch; } /* the real chip shows the word alone in a narrow window; the clock's zone and the role are hidden by the real rules */
+  }
 
   /* Discovery graph. The page is exactly one window tall (the shell: the bar, then the frame with main beside the sidebar), and
      the canvas takes what the header leaves, so nothing scrolls and nothing at the canvas edge is clipped. A canvas is never
