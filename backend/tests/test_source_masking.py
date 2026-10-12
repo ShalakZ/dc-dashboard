@@ -104,7 +104,7 @@ def test_scrub_url_credentials_hides_the_password_of_a_known_user_and_password_a
 
 # --- scrub_url_credentials is linear, and gives what the old pattern gave -------------------------------------------
 
-OLD_PATTERN = re.compile(r"://\S*@")  # what scrub_url_credentials used before it was made linear: the reference
+OLD_PATTERN = re.compile(r"://\S*@", re.ASCII)  # what scrub_url_credentials used before it was made linear: the reference (ASCII whitespace since W8b: a no-break space inside a password must not end the run)
 
 
 def old_scrub(text: str) -> str:
