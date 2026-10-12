@@ -92,30 +92,28 @@ function Format-Line([string]$Raw, [int]$Clip, [int]$Cap = 65536) {   # cap the 
 function Add-Line([string]$Text, [int]$Clip = 0, [string]$Prefix = "", [Collections.Generic.List[string]]$To = $Lines) {   # the one way a line enters a file
   foreach ($l in $Text.Replace("`r", "").Split([char]10)) { $To.Add($Prefix + (Format-Line $l $Clip)) }
 }
-function Read-EnvSecrets([string]$Path) {   # values of PASSWORD/SECRET/TOKEN/KEY variables; parsed, never sourced
-  $found = New-Object 'System.Collections.Generic.List[string]'
-  if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
-    foreach ($raw in [IO.File]::ReadAllLines($Path, [Text.Encoding]::UTF8)) {
-      $l = ($raw -replace '^\s*export\s+', '').Trim()
-      $eq = $l.IndexOf([char]61)
-      if ($l.Length -eq 0 -or $l[0] -ceq '#' -or $eq -lt 1) { continue }
-      if ($l.Substring(0, $eq) -notmatch 'PASSWORD|SECRET|TOKEN|KEY') { continue }
-      $v = $l.Substring($eq + 1).Trim()
-      if ($v.Length -gt 0 -and ($v[0] -ceq '"' -or $v[0] -ceq "'")) {
-        $q = $v[0]; $close = $v.IndexOf($q, 1)
-        if ($close -gt 0) {
-          $after = $v.Substring($close + 1).Trim()
-          if ($after.Length -gt 0 -and $after[0] -cne '#') { $close = $v.LastIndexOf($q) }   # a quote inside the value
-          $v = $v.Substring(1, $close - 1)
-        } else { $v = $v.Substring(1) }
-      } else {
-        $hash = $v.IndexOf(" #", [StringComparison]::Ordinal)
-        if ($hash -ge 0) { $v = $v.Substring(0, $hash).TrimEnd() }
-      }
-      if ($v.Length -ge 4) { $found.Add($v) }
-    }
+function Read-EnvSecrets([string]$Path) {   # the twin of load_env in collect-diagnostics.sh (backend/tests/fixtures/env_cases.tsv pins both)
+  # Values of PASSWORD/SECRET/TOKEN/KEY variables: Values counts them, Hide also holds the unescaped form of a double-quoted one (the form
+  # compose hands to a container and a log quotes). Parsed, never sourced; like the sh copy it does NOT expand $VAR the way compose does.
+  $r = @{ Values = (New-Object 'System.Collections.Generic.List[string]'); Hide = (New-Object 'System.Collections.Generic.List[string]') }
+  if (-not ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf))) { return $r }
+  $blank = [char[]](32, 9)
+  foreach ($raw in [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8).Split([char]10)) {   # lines end at LF only, as awk reads them
+    $l = ($raw -creplace '\r$', '').TrimStart($blank)
+    if ($l.Length -eq 0 -or $l[0] -ceq '#') { continue }
+    $l = $l -creplace '^export[ \t]+', ''
+    $eq = $l.IndexOf([char]61)
+    if ($eq -lt 1 -or $l.Substring(0, $eq) -notmatch 'PASSWORD|SECRET|TOKEN|KEY') { continue }
+    $v = $l.Substring($eq + 1).TrimStart($blank)
+    $dq = $v.Length -gt 0 -and $v[0] -ceq '"'
+    if ($v.Length -gt 0 -and $v[0] -ceq "'") { $end = $v.IndexOf([char]39, 1); $v = $(if ($end -gt 0) { $v.Substring(1, $end - 1) } else { $v.Substring(1) }) }
+    elseif ($dq) { $v = [regex]::Match($v, '^"((?:[^"\\]|\\.|\\$)*)').Groups[1].Value }   # up to the first unescaped quote
+    else { $m = [regex]::Match($v, '[ \t]#'); if ($m.Success) { $v = $v.Substring(0, $m.Index) }; $v = $v.TrimEnd($blank) }
+    if ($v.Length -lt 4) { continue }
+    $r.Values.Add($v); $r.Hide.Add($v)
+    if ($dq) { $u = [regex]::Replace($v, '\\(["\\])', '$1'); if ($u -cne $v) { $r.Hide.Add($u) } }
   }
-  return ,$found
+  return $r
 }
 function ConvertFrom-Escapes([string]$S) {   # the fixture's escapes, decoded in ONE left-to-right pass
   if ($S -ceq "(empty)") { return "" }
@@ -163,8 +161,8 @@ else {
 }
 $HasCompose = [bool]($Root -and (Test-Path -LiteralPath (Join-Path $Root "compose.yaml") -PathType Leaf))
 $EnvPath = $(if ($EnvFile) { $EnvFile } elseif ($Root) { Join-Path $Root ".env" })
-$EnvSecrets = Read-EnvSecrets $EnvPath
-$Known = Get-KnownValues $EnvSecrets
+$EnvRead = Read-EnvSecrets $EnvPath
+$Known = Get-KnownValues $EnvRead.Hide
 if ($ScrubFile) {
   try { foreach ($l in [IO.File]::ReadAllLines($ScrubFile, [Text.Encoding]::UTF8)) { Write-Host (Format-Line $l 0 0) } }
   catch { [Console]::Error.WriteLine("cannot read ${ScrubFile}: $($_.Exception.Message)"); Stop-Script 1 }
@@ -226,7 +224,15 @@ function Invoke-Limited([string]$File, [string[]]$ArgList, [int]$Seconds, [strin
       try { if (-not $p.HasExited) { $p.Kill() } } catch { }
     }
   } catch { $r.Failed = Format-Err $_ }
-  finally { Remove-Item -LiteralPath $o, $e -ErrorAction SilentlyContinue }
+  finally {
+    Remove-Item -LiteralPath $o, $e -ErrorAction SilentlyContinue
+    if ($r.TimedOut -and ((Test-Path -LiteralPath $o) -or (Test-Path -LiteralPath $e))) {   # a child that outlived the kill may still hold them
+      Start-Sleep -Milliseconds 500
+      Remove-Item -LiteralPath $o, $e -ErrorAction SilentlyContinue
+      $left = @($o, $e | Where-Object { Test-Path -LiteralPath $_ })
+      if ($left.Count -gt 0) { [Console]::Error.WriteLine("raw, unscrubbed command output is still in " + ($left -join " and ") + ": delete it by hand") }
+    }
+  }
   return $r
 }
 function Invoke-Docker([string[]]$ArgList, [int]$Seconds) {   # $null when docker gave no answer; after the first such failure no more calls
@@ -242,7 +248,7 @@ try {
   Add-Line "DCDASH-DIAG v$Version | collect-diagnostics.ps1 | PowerShell $($PSVersionTable.PSVersion)"
   Add-Line ("local time: " + $now.ToString("yyyy-MM-dd HH:mm:ss zzz", $Inv) + " (" + [TimeZoneInfo]::Local.Id + ")")
   Add-Line ("utc time:   " + $now.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss", $Inv))
-  $hides = "scrubbing: URL credentials, and $($EnvSecrets.Count) secret value(s) read from .env ($(if ($EnvPath -and (Test-Path -LiteralPath $EnvPath)) { 'found' } else { 'not found' }))"
+  $hides = "scrubbing: URL credentials, and $($EnvRead.Values.Count) secret value(s) read from .env ($(if ($EnvPath -and (Test-Path -LiteralPath $EnvPath)) { 'found' } else { 'not found' }))"
   Add-Line $hides
   Add-Line "DCDASH-DIAG-LOGS v$Version | collect-diagnostics.ps1 | PowerShell $($PSVersionTable.PSVersion)" -To $LogLines
   Add-Line ("local time: " + $now.ToString("yyyy-MM-dd HH:mm:ss zzz", $Inv)) -To $LogLines

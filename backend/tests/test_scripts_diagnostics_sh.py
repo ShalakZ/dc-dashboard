@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from dcdash.core.audit import scrub_url_credentials
+from tests.env_fixture import load_env_cases
 from tests.scrub_fixture import FIXTURE, load_cases
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,7 @@ SCRIPT = ROOT / "scripts" / "collect-diagnostics.sh"
 BASH = shutil.which("bash")
 pytestmark = pytest.mark.skipif(BASH is None, reason="bash is not available")
 CASES = load_cases()
+ENV_CASES = load_env_cases()
 FOOTER = re.compile(r"END OF DIAGNOSTICS ([0-9a-f]{12})")
 
 
@@ -270,6 +272,22 @@ def test_env_file_is_parsed_and_never_executed(tmp_path, quiet_cwd):
     assert not marker.exists()
 
 
+def test_the_env_fixture_has_enough_cases_and_every_case_has_a_secret():
+    assert len(ENV_CASES) >= 20 and all(case.secrets and case.env_text for case in ENV_CASES)
+
+
+@pytest.mark.parametrize("case", ENV_CASES, ids=lambda case: case.name)
+def test_the_shared_env_fixture_hides_every_secret_and_keeps_the_text_next_to_it(case, awk_path, tmp_path, quiet_cwd):
+    cwd, fake = quiet_cwd
+    env_file = tmp_path / "case.env"
+    env_file.write_bytes(case.env_text.encode())
+    text, expected = case.probe()
+    result = _run(["--scrub-stdin", "--env-file", str(env_file), "--project-dir", str(cwd)], cwd,
+                  stdin=text.encode(), path=fake + os.pathsep + awk_path)
+    assert result.rc == 0, result.err
+    assert result.out == "\n".join(expected) + "\n"
+
+
 HOSTILE = {
     "scheme separators": ("://" * 50_000, None),
     "single letters and spaces": ("a " * 75_000, None),
@@ -356,6 +374,15 @@ def test_invalid_utf8_is_dropped_so_the_report_stays_valid_utf8(awk_path, tmp_pa
     assert files["main.txt"].decode("utf-8") == "badbyte"
 
 
+@pytest.mark.skipif(shutil.which("iconv") is None, reason="iconv is not installed")
+def test_a_secret_with_an_invalid_byte_inside_is_hidden_in_either_form(awk_path, tmp_path):
+    # iconv runs BEFORE the scrubber: dropping the byte afterwards would put the secret back together in the file
+    files = _emit(tmp_path, awk_path, 'emit_lines < "$WORK/in.dat"', env_text="DCDASH_DB_PASSWORD=Hunter2-pass\n",
+                  inputs={"in.dat": b"a Hunter2\xff-pass b\nc Hunter2-pass d\n"})
+    assert b"Hunter2" not in files["main.txt"]
+    assert files["main.txt"] == b"a [hidden] b\nc [hidden] d"
+
+
 def test_an_iconv_that_exits_1_after_dropping_a_byte_does_not_fail_the_section(awk_path, tmp_path):
     fake = tmp_path / "iconv"
     fake.write_text(f'#!/bin/sh\n{shutil.which("iconv")} "$@"\nexit 1\n')
@@ -363,6 +390,44 @@ def test_an_iconv_that_exits_1_after_dropping_a_byte_does_not_fail_the_section(a
     files = _emit(tmp_path, awk_path, f'ICONV_BIN={fake}; emit_lines < "$WORK/in.dat"; echo "rc=$?" > "$WORK/rc.txt"',
                   inputs={"in.dat": b"bad\xffbyte\n"})
     assert files["main.txt"] == b"badbyte" and files["rc.txt"] == b"rc=0\n"
+
+
+# ---- the scratch folder and the file modes --------------------------------------------------------------------------------------
+
+def _init_work(tmp_path, snippet: str) -> subprocess.CompletedProcess:
+    """Run `init_work` with a `mktemp` that always fails, so the fallback runs; TMPDIR is the folder tmp_path/tmpdir."""
+    (tmp_path / "tmpdir").mkdir()
+    driver = tmp_path / "init_driver.sh"
+    driver.write_text('source "$1"; export LC_ALL=C TMPDIR=$2; mktemp() { return 1; }\n' + snippet + "\n")
+    return subprocess.run([BASH, str(driver), str(SCRIPT), str(tmp_path / "tmpdir")], capture_output=True, text=True, cwd=tmp_path,
+                          env={**os.environ, "PATH": _with_fake(os.environ["PATH"])}, timeout=60)
+
+
+def test_without_mktemp_the_scratch_folder_is_a_new_private_folder(tmp_path):
+    proc = _init_work(tmp_path, 'init_work; echo "$WORK"')
+    assert proc.returncode == 0, proc.stderr
+    work = Path(proc.stdout.strip())
+    assert work.parent == tmp_path / "tmpdir" and work.name.startswith("dcdash-diag.")
+    assert stat.S_IMODE(work.stat().st_mode) == 0o700 and (work / "main.txt").exists()
+
+
+def test_a_scratch_folder_that_exists_already_is_refused_and_left_alone(tmp_path):
+    proc = _init_work(tmp_path, 'echo "$$"; mkdir "$TMPDIR/dcdash-diag.$$"; : > "$TMPDIR/dcdash-diag.$$/precious"; init_work; echo "went on"')
+    assert proc.returncode == 1
+    assert "went on" not in proc.stdout
+    assert len(proc.stderr.strip().splitlines()) == 1 and "dcdash-diag." in proc.stderr
+    assert (tmp_path / "tmpdir" / f"dcdash-diag.{proc.stdout.strip()}" / "precious").exists()
+
+
+def test_the_report_is_saved_for_its_owner_only(skeleton):
+    assert stat.S_IMODE((skeleton.out_dir / skeleton.names[0]).stat().st_mode) & 0o077 == 0
+
+
+def test_the_logs_file_is_saved_for_its_owner_only(compose_run):
+    files = list(compose_run.out_dir.iterdir())
+    assert len(files) == 2
+    for path in files:
+        assert stat.S_IMODE(path.stat().st_mode) & 0o077 == 0, path.name
 
 
 # ---- a run of the skeleton ---------------------------------------------------------------------------------------------------------

@@ -33,6 +33,19 @@ for name in $(compgen -e SIM_FAULT_); do
   fi
 done
 
+# Compose also reads the project's .env, so a fault left there reaches the simulator just the same. Only the key is looked at: sed prints
+# the name of a SIM_FAULT_ assignment whose value is not empty ("", '' and a bare # comment count as empty), never the value.
+quote="'"
+fault_in_env=""
+if [ -r .env ]; then
+  fault_in_env=$(sed -nE "s/^[[:space:]]*(export[[:space:]]+)?(SIM_FAULT_[A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*[\"$quote]?[^[:space:]#\"$quote].*/\2/p" .env) || fault_in_env=""
+  fault_in_env=${fault_in_env%%$'\n'*}
+fi
+if [ -n "$fault_in_env" ]; then
+  echo "$fault_in_env is set in .env: the end-to-end run starts the simulator and must not inherit a fault switch. Remove the line (or empty its value) first." >&2
+  exit 1
+fi
+
 if [ -n "$(docker compose -p dcdash --profile dev ps -q)" ]; then
   echo "The normal stack (Compose project dcdash) is running and holds ports 80 and 443. Stop it first, without -v:" >&2
   echo "  docker compose --profile dev stop" >&2

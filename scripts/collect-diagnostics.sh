@@ -8,9 +8,9 @@
 # LOGS. When docker and a compose.yaml exist, SERVICES/DATABASE/LOGS ask `docker compose` (ps -a, config --services, logs, exec: nothing
 # else, never inspect) and the LAST 300 LINES PER SERVICE go to a second file, dcdash-diag-<stamp>-logs.txt (header DCDASH-DIAG-LOGS v1,
 # same footer rule), which is saved but never printed; the report names its path. Read-only, needs no internet and none of the
-# application; POSIX tools only (awk, sed, df, date, getent), no Python, no jq. The files are UTF-8 with LF line breaks. The last line of
-# each is `END OF DIAGNOSTICS <12 hex>`: the first 12 hex characters of the SHA-256 of every line before it, joined by LF (no trailing
-# LF), so a paste can be verified.
+# application; POSIX tools only (awk, sed, df, date, getent), no Python, no jq. The files are UTF-8 with LF line breaks, saved for their
+# owner only (umask 077). The last line of each is `END OF DIAGNOSTICS <12 hex>`: the first 12 hex characters of the SHA-256 of every
+# line before it, joined by LF (no trailing LF), so a paste can be verified.
 # Every output line passes through `emit`: cut at 64 KB, then scrubbed (known secrets from the project's .env, then user:password in
 # URLs), then clipped. The .env is only parsed by awk, never sourced, and its values are never printed (only their count).
 # Every external command runs under `timeout` (10 s, `compose logs` 30 s); after the first docker command that does not answer the rest of
@@ -244,7 +244,11 @@ init_awk() {
 }
 
 init_work() {
-  WORK=$(mktemp -d 2>/dev/null) || { WORK=${TMPDIR:-/tmp}/dcdash-diag.$$; (umask 077; mkdir -p "$WORK"); }
+  WORK=$(mktemp -d 2>/dev/null) || {
+    # no mktemp: a plain mkdir (no -p) on a name with the PID in it, refused when it exists (someone else's folder is not private)
+    WORK=${TMPDIR:-/tmp}/dcdash-diag.$$
+    (umask 077; mkdir "$WORK" 2> /dev/null) || { echo "collect-diagnostics.sh: cannot create the scratch folder $WORK (it exists already, or its parent is not writable)" >&2; exit 1; }
+  }
   TIMEOUT_BIN=$(type -P timeout)
   ICONV_BIN=$(type -P iconv)
   DOCKER_BIN=$(type -P docker)
@@ -280,12 +284,13 @@ awk_scrub() {
 
 # emit_lines [CLIP [SINK]]: lines on stdin -> cut at 64 KB, scrubbed, clipped to CLIP bytes (0 = no clip), appended to the sink file
 # (main, or logs for B1b's second file). Lines are joined by LF with no trailing LF, so the file is exactly what the footer hashes.
-# Invalid UTF-8 is dropped with iconv when iconv exists.
+# Invalid UTF-8 is dropped with iconv when iconv exists, BEFORE the scrubber: a secret with a stray byte inside would escape the scrubber, and
+# dropping the byte afterwards would put the secret back together.
 emit_lines() {
   local file=$WORK/${2:-main}.txt lead=0
   [ -s "$file" ] && lead=1
   if [ -n "${ICONV_BIN:-}" ]; then
-    awk_scrub file "$CAP_BYTES" "${1:-0}" 1 "$lead" | "$ICONV_BIN" -c -f UTF-8 -t UTF-8 2>/dev/null >> "$file"
+    "$ICONV_BIN" -c -f UTF-8 -t UTF-8 2>/dev/null | awk_scrub file "$CAP_BYTES" "${1:-0}" 1 "$lead" >> "$file"
   else
     awk_scrub file "$CAP_BYTES" "${1:-0}" 1 "$lead" >> "$file"
   fi
@@ -673,6 +678,7 @@ finish_report() {
 }
 
 collect() {
+  umask 077   # the report and the logs file hold scrubbed log text: saved for their owner only
   init_work
   trap 'rm -rf "$WORK"' EXIT
   trap 'exit 130' INT TERM HUP

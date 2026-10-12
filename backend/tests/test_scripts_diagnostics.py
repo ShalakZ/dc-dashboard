@@ -14,15 +14,18 @@ import shutil
 import subprocess
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from env_fixture import load_env_cases
 from scrub_fixture import FIXTURE, load_cases
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "collect-diagnostics.ps1"
 POWERSHELL = shutil.which("powershell.exe")
 needs_powershell = pytest.mark.skipif(POWERSHELL is None, reason="powershell.exe is not available")
+ENV_CASES = load_env_cases()
 SECTIONS = ("HOST", "DISKS", "NETWORK", "CLOCK", "TARGETS", "LOCAL PORTS", "TOOLS ON PATH", "SERVICES", "DATABASE", "API", "LOGS")
 
 
@@ -236,7 +239,7 @@ def test_scrub_file_reads_quoted_export_and_commented_env_lines(scratch):
            "SIM_API_KEY=sim-key # tail\n"
            "  OTHER_SECRET = padded-value  \n"
            "PLAIN_NOTE=not-hidden-1234\n"
-           'MIXED_KEY="has"quote-inside"\n')
+           'MIXED_KEY="has"quote-inside"\n')   # closed at the first quote, as the sh copy does: "has" is under 4 characters and hides nothing
     text = ("pw two words 77 here\n"
             "token tok-1234-abc and # a note\n"
             "key sim-key # tail\n"
@@ -249,8 +252,31 @@ def test_scrub_file_reads_quoted_export_and_commented_env_lines(scratch):
         "key [hidden] # tail",
         "[hidden] stays padded",
         "not-hidden-1234 remains",
-        "[hidden]",
+        'has"quote-inside',
     ]
+
+
+@pytest.fixture(scope="module")
+def env_case_runs(scratch):
+    """Every case of the shared .env fixture through -ScrubFile/-EnvFile; a few runs at a time, as starting PowerShell is slow."""
+    folders = {case.name: scratch() for case in ENV_CASES}
+
+    def run_case(case):
+        folder = folders[case.name]
+        (folder / "input.txt").write_bytes(case.probe()[0].encode("utf-8"))
+        (folder / "secrets.env").write_bytes(case.env_text.encode("utf-8"))
+        return case.name, _run_script(["-ScrubFile", _win(folder / "input.txt"), "-EnvFile", _win(folder / "secrets.env")], folder, folder)
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        return dict(pool.map(run_case, ENV_CASES))
+
+
+@needs_powershell
+@pytest.mark.parametrize("case", ENV_CASES, ids=lambda case: case.name)
+def test_the_shared_env_fixture_hides_every_secret_and_keeps_the_text_next_to_it(case, env_case_runs):
+    proc = env_case_runs[case.name]
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == case.probe()[1]
 
 
 @needs_powershell
@@ -456,6 +482,14 @@ def test_script_sticks_to_powershell_51_syntax_and_stays_small():
     assert "UTF8Encoding $false" in code and "WriteAllText" in code
     assert text.isascii(), "PowerShell 5.1 reads a script without a BOM as ANSI: use [char]0x2026 and friends"
     assert len(text.splitlines()) <= 450
+
+
+def test_a_timed_out_command_gets_a_second_try_at_deleting_its_raw_output():
+    # a child that outlived the kill may still hold the temp files; the locked-file case cannot be staged, so the retry is pinned in the text
+    body = _code().split("function Invoke-Limited", 1)[1].split("function Invoke-Docker", 1)[0]
+    cleanup = body.split("finally {", 1)[1]
+    assert cleanup.count("Remove-Item -LiteralPath $o, $e") == 2 and "Start-Sleep" in cleanup
+    assert cleanup.index("Start-Sleep") < cleanup.rindex("Remove-Item") and "Console]::Error.WriteLine" in cleanup
 
 
 def test_script_never_dumps_the_environment_or_evaluates_text():
