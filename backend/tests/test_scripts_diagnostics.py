@@ -754,9 +754,9 @@ def _ps_arg(arg: str) -> str:
     return arg if arg.startswith("-") else "'" + arg.replace("'", "''") + "'"   # a quoted '-Mask' would be a value, not the switch
 
 
-def _run_in_powershell(args: list[str], cwd: Path, project: Path, timeout: int = 180) -> subprocess.CompletedProcess:
-    """Like _run_script, but through -Command so that USERDNSDOMAIN can be set first."""
-    command = f"{DOMAIN_SETUP}; & '{_win(SCRIPT)}' {' '.join(map(_ps_arg, args))} -ProjectDir '{_win(project)}'; exit $LASTEXITCODE"
+def _run_in_powershell(args: list[str], cwd: Path, project: Path, timeout: int = 180, setup: str = "") -> subprocess.CompletedProcess:
+    """Like _run_script, but through -Command so that USERDNSDOMAIN (and whatever `setup` adds) can be set first."""
+    command = f"{DOMAIN_SETUP}; {setup + '; ' if setup else ''}& '{_win(SCRIPT)}' {' '.join(map(_ps_arg, args))} -ProjectDir '{_win(project)}'; exit $LASTEXITCODE"
     return subprocess.run(
         [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
         capture_output=True, text=True, timeout=timeout, cwd=str(cwd),
@@ -779,9 +779,9 @@ def who(scratch):
     )
     out = subprocess.run([POWERSHELL, "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=60).stdout.strip()
     computer, user, domain, ips = (out.split("|") + ["", "", "", ""])[:4]
-    if len(computer) < 3 or len(user) < 3:
-        pytest.skip("the computer or user name is shorter than 3 characters: the script does not register such names")
-    words = [w for w in dict.fromkeys([computer, user, domain, *ips.split(",")]) if len(w) >= 3]
+    if len(computer) < 3 or len(user) < 2:
+        pytest.skip("the computer name is shorter than 3 or the user name shorter than 2 characters: the script does not register such names")
+    words = [w for w in dict.fromkeys([computer, user, domain, *ips.split(",")]) if len(w) >= 3 or w == user]
     return {"computer": computer, "user": user, "words": words}
 
 
@@ -893,6 +893,9 @@ _MASK_CASES = [   # (text, a regular expression the masked line must fully match
     ("peer 10.1.2.3 and 10.1.2.3:4840 and 010.001.002.003", r"peer (HOST-\d+) and \1:4840 and \1"),
     ("v6 [2001:db8::1]:4840 fe80::1%12 fe80::1", r"v6 (HOST-\d+):4840 (?!\1)(HOST-\d+) \2"),
     ("url opc.tcp://svc:pw@fileserver.corp:4840/x https://[2001:db8::2]/y", r"url opc\.tcp://\[hidden\]@(HOST-\d+):4840/x https://(?!\1)(HOST-\d+)/y"),
+    ("srv _ldap._tcp.meeza.local and _msdcs.meeza.local end", r"srv (HOST-\d+) and (?!\1)(HOST-\d+) end"),   # a SRV label starts with an underscore
+    ("connect opc.tcp://scada07:4840 failed; scada07 timed out", r"connect opc\.tcp://(HOST-\d+):4840 failed; \1 timed out"),   # a URL host is a name from then on
+    ("probe http://127.0.0.1:8000/x [::1]:80 http://[::1]/y 0.0.0.0 127.0.0.2 [::] ::1 end", r"probe http://127\.0\.0\.1:8000/x \[::1\]:80 http://\[::1\]/y 0\.0\.0\.0 127\.0\.0\.2 \[::\] ::1 end"),
     ("plain words: local time, api, docker and PowerShell stay", r"plain words: local time, api, docker and PowerShell stay"),
 ]
 
@@ -932,6 +935,97 @@ def test_masking_150_kb_takes_seconds_not_minutes(scratch, payload, expected):
     assert proc.returncode == 0, proc.stderr
     assert re.fullmatch(expected, proc.stdout.rstrip("\r\n")), proc.stdout[:200]
     assert elapsed < 20, f"{elapsed:.1f} s"
+
+
+# ---- W8c review fixes: targets without a port, the w32tm lines, short user names, loopback, a typo in -ProjectDir ----------
+
+@pytest.fixture(scope="module")
+def target_run(scratch):
+    """A masked run whose targets have no port ('scada01'), a space instead of a colon ('scada01 4840'), a port, and a loopback address."""
+    fake, project, out_dir = scratch("dcdash-diag-fake-"), scratch("dcdash-diag-project-"), scratch()
+    _compose_project(project)
+    logs = {"db": _prefixed("db", ["host scada01 refused", "peer SCADA02 slow", "probe 127.0.0.1 ok"]), "api": _prefixed("api", ["api is up"])}
+    docker = _fake_docker(fake, answers=True, logs=logs)
+    targets = ["scada01", "scada01 4840", "scada02:4840", "127.0.0.1:1"]
+    proc = _run_in_powershell([*targets, "-Mask", "-OutDir", _win(out_dir), "-DockerPath", _win(docker)], out_dir, project)
+    return proc, {f.name: f.read_bytes().decode("utf-8") for f in sorted(out_dir.glob("dcdash-diag-*.txt"))}
+
+
+@needs_powershell
+def test_a_target_without_a_port_is_masked_too_and_the_port_stays(target_run):
+    proc, files = target_run
+    assert proc.returncode == 0, proc.stderr
+    main, logs = _main_and_logs(files)
+    for name, text in files.items():
+        assert "scada01" not in text.lower() and "scada02" not in text.lower(), name
+    lines = main.splitlines()
+    assert "target 4840" in lines, "the port is no name: it is not registered, so it stays"
+    assert sum(1 for l in lines if re.fullmatch(r"target HOST-\d+", l)) == 2 and sum(1 for l in lines if re.fullmatch(r"target HOST-\d+:4840", l)) == 1
+    assert all(lines[i + 1] == "  invalid (expected host:port)" for i, l in enumerate(lines) if l in ("target 4840",) or re.fullmatch(r"target HOST-\d+", l))
+    assert re.search(r"^db-1  \| host (HOST-\d+) refused$", logs, re.M)
+
+
+@needs_powershell
+def test_loopback_addresses_are_left_as_they_are_even_as_a_target(target_run):
+    main, logs = _main_and_logs(target_run[1])
+    assert "target 127.0.0.1:1" in main.splitlines() and "  tcp 127.0.0.1:1 " in main.replace("\n", "\n ")
+    assert "GET http://127.0.0.1/api/health" in main.splitlines()
+    assert "db-1  | probe 127.0.0.1 ok" in logs.splitlines()
+    assert "127.0.0.1" not in target_run[0].stdout.split("MASK LEGEND", 1)[1], "a loopback address never gets an alias"
+
+
+def _scrub_clock(scratch, text: str, setup: str = "", flags: tuple[str, ...] = ("-Mask",)) -> list[str]:
+    folder = scratch()
+    (folder / "input.txt").write_bytes(text.encode("utf-8"))
+    proc = _run_in_powershell([*flags, "-ScrubFile", _win(folder / "input.txt")], folder, folder, setup=setup)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.splitlines()
+
+
+@needs_powershell
+def test_the_w32tm_source_and_its_hex_reference_id_are_masked(scratch):
+    lines = _scrub_clock(scratch, "\n".join([
+        "  ReferenceId: 0x0A000001 (source IP:  10.0.0.1)",
+        "  Reference Id: 0xc0a80002 (source IP:  192.168.0.2)",
+        "  Source: ntp01.plant.lan,0x8",
+        "  Source: Local CMOS Clock",
+        "  Source: VM IC Time Synchronization Provider",
+        "  ReferenceId: 0x4C4F434C (source name:  LOCL)",
+        "  Poll Interval: 10 (1024s)",
+        "later ntp01.plant.lan answers; 10.0.0.1 too",
+    ]) + "\n")
+    first = re.fullmatch(r"  ReferenceId: (HOST-\d+) \(source IP:  (HOST-\d+)\)", lines[0])
+    assert first and first.group(1) == first.group(2), lines[0]
+    second = re.fullmatch(r"  Reference Id: (HOST-\d+) \(source IP:  (HOST-\d+)\)", lines[1])
+    assert second and second.group(1) == second.group(2) != first.group(1), lines[1]
+    source = re.fullmatch(r"  Source: (HOST-\d+),0x8", lines[2])
+    assert source and source.group(1) not in (first.group(1), second.group(1)), lines[2]
+    assert lines[3:7] == ["  Source: Local CMOS Clock", "  Source: VM IC Time Synchronization Provider",
+                          "  ReferenceId: 0x4C4F434C (source name:  LOCL)", "  Poll Interval: 10 (1024s)"], "a name with spaces, an ASCII refid and a plain line are no hosts"
+    assert lines[7] == f"later {source.group(1)} answers; {first.group(1)} too", "the source is a registered name from its line on, the refid address has one alias"
+
+
+@needs_powershell
+def test_without_mask_the_w32tm_lines_are_left_alone(scratch):
+    text = ["  ReferenceId: 0x0A000001 (source IP:  10.0.0.1)", "  Source: ntp01.plant.lan,0x8"]
+    assert _scrub_clock(scratch, "\n".join(text) + "\n", flags=()) == text
+
+
+@needs_powershell
+def test_a_two_letter_user_name_is_masked_but_a_two_letter_computer_name_is_not(scratch):
+    lines = _scrub_clock(scratch, "user ak logged in as AK on ab; peak, ak.api and ak-1 stay near\n", setup="$env:USERNAME = 'ak'; $env:COMPUTERNAME = 'ab'")
+    assert len(lines) == 1 and re.fullmatch(r"user (USER-\d+) logged in as \1 on ab; peak, \1\.api and ak-1 stay near", lines[0]), lines
+
+
+@needs_powershell
+def test_a_mistyped_project_folder_is_not_created_and_the_files_land_in_logs_of_the_current_folder(scratch):
+    cwd = scratch()
+    typo = cwd / "does-not-exist"
+    proc = _run_script(["-DockerPath", _win(cwd / "no-such-docker.exe")], cwd, typo)
+    assert proc.returncode == 0, proc.stderr
+    assert not typo.exists(), "a typo in -ProjectDir must not create that folder"
+    saved = sorted((cwd / "logs").glob("dcdash-diag-*.txt"))
+    assert len(saved) == 1 and sorted(p.name for p in cwd.iterdir()) == ["logs"]
 
 
 # ---- the script itself --------------------------------------------------------------------------------------------------

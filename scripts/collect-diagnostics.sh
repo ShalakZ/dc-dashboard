@@ -727,7 +727,7 @@ section_logs() {
     emit "== $svc ==" 0 logs
     emit_lines 1000 logs < "$WORK/svc.tail"
   done
-  if [ -s "$WORK/logs.txt" ]; then emit "logs file (the last 300 lines per service, saved next to this report): $LOGS_FILE"
+  if [ -s "$WORK/logs.txt" ]; then emit "logs file (the last 300 kept lines per service, saved next to this report): $LOGS_FILE"
   else emit "no logs read, no logs file"
   fi
 }

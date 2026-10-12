@@ -769,7 +769,7 @@ def test_services_database_and_logs_show_the_canned_facts(compose_run):
         assert f"-- {svc} (last 30 of {LINES_PER_SERVICE} kept lines; dropped 0 routine lines of {LINES_PER_SERVICE} read)" in logs
         assert f"  {svc}-1  | the very last line" in logs
     assert "-- worker: docker compose logs failed (exit code 1): Error response from daemon: [hidden] was rejected" in logs
-    assert f"logs file (the last 300 lines per service, saved next to this report): {compose_run.out_dir}/dcdash-diag-" in logs
+    assert f"logs file (the last 300 kept lines per service, saved next to this report): {compose_run.out_dir}/dcdash-diag-" in logs
     assert logs.splitlines()[-2].endswith("-logs.txt") and FOOTER.fullmatch(logs.splitlines()[-1])
 
 
