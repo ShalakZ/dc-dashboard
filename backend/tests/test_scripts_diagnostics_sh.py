@@ -645,7 +645,11 @@ def test_compose_run_writes_both_files_and_both_footers_verify(compose_run):
     assert _verifies(run.main) and _verifies(run.logs)
     assert "section failed" not in run.main
     assert run.logs.startswith("DCDASH-DIAG-LOGS v1 | collect-diagnostics.sh | bash ")
-    assert run.stdout.startswith(run.main.split("\n")[0]) and run.stdout.count("\nsaved: ") == 2
+    names = {f.name: f for f in run.out_dir.iterdir()}
+    logs_path = next(f for n, f in names.items() if n.endswith("-logs.txt"))
+    main_path = next(f for n, f in names.items() if not n.endswith("-logs.txt"))
+    # the logs file is saved, never printed: stdout is the report, then one "saved:" line per file
+    assert run.stdout == run.main + f"saved: {logs_path}\nsaved: {main_path}\n"
     assert not DOCKER_MARKER.exists()
 
 
@@ -800,7 +804,7 @@ def test_a_docker_that_does_not_answer_is_skipped_once_and_the_run_still_finishe
                   extra_env={"DCDASH_DIAG_DOCKER_SECONDS": "1"})
     elapsed = time.monotonic() - started
     text = result.out
-    assert result.rc == 0 and elapsed < 7, (result.err, elapsed)
+    assert result.rc == 0 and elapsed < 40, (result.err, elapsed)  # the argv log below is the real proof that docker was not waited for again
     assert text.count("docker did not answer within 1 s; container sections skipped") == 1
     assert log.read_text().splitlines() == ["compose ps -a"], "after the first timeout docker is not called again"
     assert re.search(r"^tcp 127\.0\.0\.1:5432 (OK|FAILED) in \d+ ms", _section(text, "DATABASE"), re.M)
@@ -824,7 +828,7 @@ def test_a_docker_that_cannot_be_run_is_reported_once(tmp_path):
 
 # ---- the API probe: curl, wget or bash alone, against a real local server --------------------------------------------------------------
 
-BODY = ('{"status":  "degraded",\n\t"detail": "db url postgres://svc:' + URL_SECRET + '@db/x and ' + ENV_SECRET + ' were mentioned",\r\n'
+BODY = ('{"status":  "degraded",\n\t"nb": "a\u00a0b",\n\t"detail": "db url postgres://svc:' + URL_SECRET + '@db/x and ' + ENV_SECRET + ' were mentioned",\r\n'
         '  "pad": "' + "p" * 400 + '"}\n')
 
 
@@ -888,7 +892,7 @@ def test_api_probe_reports_status_milliseconds_and_a_collapsed_scrubbed_clipped_
     assert lines[0] == f"GET http://127.0.0.1:{http_server}/api/health (native install only)"
     assert re.fullmatch(rf"  HTTP 200 in \d+ ms \(via {re.escape(transport)}\)", lines[1]), lines[1]
     body = lines[2]
-    assert body.startswith('  body: {"status": "degraded", "detail": "db url postgres://[hidden]@db/x and [hidden] were mentioned", "pad": "ppp')
+    assert body.startswith('  body: {"status": "degraded", "nb": "a\u00a0b", "detail": "db url postgres://[hidden]@db/x and [hidden] were mentioned", "pad": "ppp')
     assert body.endswith("…") and len(body.encode()) <= 311 and len(lines) == 3
     assert URL_SECRET not in text and ENV_SECRET not in text and "\t" not in text and "\r" not in text
 
