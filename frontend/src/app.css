@@ -22,6 +22,8 @@
   --stale: #545d6b; --stale-tint: #eceef2;
   --danger: #c0262d; --danger-hover: #a51f25;
   --backdrop: rgba(10, 16, 28, 0.55);
+  /* loading skeletons: the grey shape and the lighter band that sweeps over it (neutral, never the accent; the dark values are themes.css's) */
+  --skeleton: #dde2ea; --skeleton-shine: #eef1f6;
   /* type: 12 / 13 / 14 / 16 / 18 / 22 / 28 */
   --font: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, "Liberation Mono", monospace; /* data only (the report text), never a label */
@@ -432,6 +434,30 @@
   .empty h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
   .empty p { margin: 0; max-width: 420px; font-size: var(--fs-sm); color: var(--text-2); }
   .empty button { margin-top: 8px; }
+
+  /* Loading skeletons (components/Skeleton.tsx). A region, the one role="status" of an area, fades in after 150 ms, so a fast load shows
+     nothing (both animations are CSS only, no timer). fill-mode both holds it at opacity 0 during the delay. data-instant is set at mount
+     on a region that follows another, so a chain of skeletons does not blink. The sweep is a ::after on each shape, in the theme-neutral
+     shine token; reduced motion drops the sweep and keeps the delayed fade (without the delay the flash would be back). */
+  .sk-region { animation: sk-in 120ms linear 150ms both; }
+  .sk-region[data-instant] { animation: none; }
+  .sk { position: relative; overflow: hidden; background: var(--skeleton); }
+  .sk::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--skeleton-shine), transparent); animation: sk-sweep 1.4s linear infinite; }
+  .sk-line { display: inline-block; vertical-align: middle; width: 8ch; height: 0.8em; border-radius: var(--radius-sm); } /* inside its own span, which keeps the text's line height in a flex or grid parent */
+  .sk-block { display: block; flex: none; width: 100%; height: 38px; border-radius: var(--radius); }
+  .sk-circle { display: inline-block; flex: none; vertical-align: middle; width: 16px; height: 16px; border-radius: 50%; }
+  .sk-field { display: grid; gap: 6px; font-size: var(--fs-sm); } /* a label line over a 38px field, as the real label is a grid */
+  .sk-stack { display: grid; gap: 14px; } /* the rows of a form card, as .form-card form */
+  .sk-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .sk-h1 { font-size: var(--fs-title); line-height: 1.25; } /* a title's height, as .page-head h1 */
+  .sk-sep::before { content: "/"; } /* the breadcrumb separator, drawn here so the skeleton holds no text */
+  .sk-table, .sk-tree { overflow: hidden; } /* a skeleton never scrolls: a narrow window would otherwise grow a scroll bar the real table may not have */
+  .sk-tree .node:hover { background: none; }
+  @keyframes sk-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes sk-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .sk::after { animation: none; display: none; }
+  }
 
   /* Discovery graph. The page is exactly one window tall (the shell: the bar, then the frame with main beside the sidebar), and
      the canvas takes what the header leaves, so nothing scrolls and nothing at the canvas edge is clipped. A canvas is never

@@ -910,3 +910,90 @@ describe("the loading bar (W7e)", () => {
     }
   });
 });
+
+describe("the loading skeletons (W7f)", () => {
+  // every rule that styles a skeleton piece: .sk, .sk-region, .sk-line, ... (not .skip-link)
+  const SK = /\.sk(-[\w-]+)?(?![\w-])/;
+  const mine = rules.filter((r) => SK.test(r.selector));
+  const only = (selector: string) => {
+    const found = mine.filter((r) => r.selector === selector && !r.at.some((a) => a.startsWith("@media"))); // the reduced-motion rule is checked on its own
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0];
+  };
+  const keyframes = (name: string) => rules.filter((r) => r.at.some((a) => a === `@keyframes ${name}`));
+  const reduced = (r: Rule) => r.at.some((a) => a.includes("prefers-reduced-motion: reduce"));
+
+  it("has two tokens in :root, both hex colours (the dark values are themes.css's)", () => {
+    expect(tok("skeleton")).toMatch(HEX);
+    expect(tok("skeleton-shine")).toMatch(HEX);
+    expect(tok("skeleton")).not.toBe(tok("skeleton-shine"));
+  });
+
+  it("every rule is inside the layer, holds no colour, no shadow, no blur, and never reaches for the accent", () => {
+    expect(mine.length, "the skeleton rules").toBeGreaterThan(8);
+    for (const rule of mine) {
+      expect(inLayer(rule), `"${rule.selector}" in @layer w6`).toBe(true);
+      expect(rule.body, `colour in "${rule.selector}"`).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
+      expect(rule.body, `shadow or blur in "${rule.selector}"`).not.toMatch(/box-shadow|text-shadow|filter|backdrop-filter/);
+      expect(rule.body, `accent in "${rule.selector}"`).not.toMatch(/var\(--accent|var\(--ring/);
+    }
+    for (const frame of [...keyframes("sk-in"), ...keyframes("sk-sweep")]) expect(inLayer(frame), `keyframe "${frame.selector}" in the layer`).toBe(true);
+  });
+
+  it("rounds with the radius tokens (4 to 8px) and 50% for circles only: no pill", () => {
+    for (const rule of mine) {
+      const radius = /border-radius:\s*([^;]+)/.exec(rule.body)?.[1].trim();
+      if (radius) expect(radius, `radius of "${rule.selector}"`).toMatch(/^(var\(--radius(-sm|-lg)?\)|50%)$/);
+    }
+    expect(only(".sk-circle").body).toMatch(/border-radius:\s*50%/);
+    expect(only(".sk-line").body).toMatch(/border-radius:\s*var\(--radius-sm\)/);
+    expect(only(".sk-block").body).toMatch(/border-radius:\s*var\(--radius\)/);
+  });
+
+  it("the shape is the base token on a clipped, positioned box (so the sweep stays inside it)", () => {
+    const base = only(".sk").body;
+    expect(base).toMatch(/background:\s*var\(--skeleton\)/);
+    expect(base).toMatch(/position:\s*relative/);
+    expect(base).toMatch(/overflow:\s*hidden/);
+    expect(base).not.toMatch(/animation/);
+  });
+
+  it("fades the region in after 150 ms, in pure CSS: opacity 0 to 1, the delayed state held at 0 by fill-mode both", () => {
+    expect(only(".sk-region").body).toMatch(/animation:\s*sk-in\s+120ms\s+linear\s+150ms\s+both\b/);
+    const [from, to] = [keyframes("sk-in").find((r) => r.selector === "from")!, keyframes("sk-in").find((r) => r.selector === "to")!];
+    expect(from.body).toMatch(/opacity:\s*0\b/);
+    expect(to.body).toMatch(/opacity:\s*1\b/);
+  });
+
+  it("sweeps on a ::after of each shape, a theme-neutral gradient from the shine token, 1.4s, not on the box itself", () => {
+    const sweep = only(".sk::after").body;
+    expect(sweep).toMatch(/animation:\s*sk-sweep\s+1\.4s\s+linear\s+infinite/);
+    expect(sweep).toMatch(/linear-gradient\([^)]*var\(--skeleton-shine\)/);
+    expect(sweep).toMatch(/position:\s*absolute/);
+    const [from, to] = [keyframes("sk-sweep").find((r) => r.selector === "from")!, keyframes("sk-sweep").find((r) => r.selector === "to")!];
+    expect(from.body).toMatch(/translateX\(-100%\)/);
+    expect(to.body).toMatch(/translateX\(100%\)/);
+  });
+
+  it("reduced motion stops the sweep and hides it, and leaves the region's delayed fade alone (without the delay the flash would be back)", () => {
+    const calm = mine.filter(reduced);
+    expect(calm.map((r) => r.selector)).toEqual([".sk::after"]);
+    expect(calm[0].body).toMatch(/animation:\s*none/);
+    expect(calm[0].body).toMatch(/display:\s*none/);
+    expect(rules.filter((r) => reduced(r) && r.selector.includes("sk-region"))).toEqual([]);
+    expect(calm[0].order, "after the rule it overrides").toBeGreaterThan(only(".sk::after").order);
+    expect(only(".sk-region").body).not.toMatch(/animation:\s*none/);
+  });
+
+  it("[data-instant] switches the region's fade off and nothing else: it follows the region rule at the same or a higher weight", () => {
+    const withAttr = mine.filter((r) => r.selector.includes("data-instant"));
+    expect(withAttr.map((r) => r.selector)).toEqual([".sk-region[data-instant]"]);
+    expect(withAttr[0].body).toMatch(/animation:\s*none/);
+    expect(withAttr[0].order).toBeGreaterThan(only(".sk-region").order);
+  });
+
+  it("the shapes keep their size in a flex row (blocks and circles never shrink)", () => {
+    expect(only(".sk-block").body).toMatch(/flex:\s*none/);
+    expect(only(".sk-circle").body).toMatch(/flex:\s*none/);
+  });
+});

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useSeries, useSite } from "../api/queries";
 import type { Metric, Series, SeriesTier, SummaryMetric } from "../api/types";
 import { useAppearance } from "../auth/AppearanceProvider";
+import { CHART_HEIGHT } from "../lib/chartBox";
 import { formatSiteClock, formatSiteDateTime, formatSiteTick } from "../lib/siteTime";
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { bucketMs, markIsolated } from "./dashboard/widgets/TimeSeriesWidget";
@@ -146,7 +147,7 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
       {data && data.points.length === 0 && <p className="muted">No data in this range.</p>}
       {/* The axis is drawn in the site's zone: wait for it rather than showing UTC for a moment, or for good. */}
       {data && data.points.length > 0 && !site.data && !site.error && <p className="muted">loading…</p>}
-      {data && data.points.length > 0 && option && <ReactECharts option={option} style={{ height: 320 }} notMerge />}
+      {data && data.points.length > 0 && option && <ReactECharts option={option} style={{ height: CHART_HEIGHT }} notMerge />}
     </section>
   );
 }
