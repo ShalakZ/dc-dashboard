@@ -81,7 +81,7 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
         </div>
         {/* Kept mounted and hidden, so aria-controls resolves; Enter would otherwise save the form while the user is only choosing. */}
         <div id={gridId} ref={grid} role="radiogroup" aria-label="Icon choices" className="icon-grid" hidden={!picking} onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }}>
-          <label className="icon-cell check" title="Automatic">
+          <label className="icon-cell icon-cell-auto check" title="Automatic">
             <input type="radio" name="asset-icon" checked={icon === null} onChange={() => setIcon(null)} />
             <Icon name={automatic} /><span className="sr-only">Automatic</span>
           </label>
