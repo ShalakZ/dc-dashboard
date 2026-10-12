@@ -340,6 +340,17 @@ describe("RowActions: closing", () => {
       expect(menu()).toBeNull();
     });
 
+    it("closing on a scroll puts the focus that was inside the menu on the trigger", async () => {
+      const { trigger } = mount();
+      trigger.focus();
+      await userEvent.keyboard("{Enter}");
+      expect(item("Edit")).toHaveFocus();
+      clock += 500;
+      fireEvent.scroll(window);
+      expect(menu()).toBeNull();
+      expect(trigger).toHaveFocus();
+    });
+
     it("a scroll that arrives right after it opened does not close it (a row scrolled into view, then clicked)", async () => {
       const { trigger } = mount();
       await userEvent.click(trigger);
@@ -357,6 +368,16 @@ describe("RowActions: closing", () => {
     await userEvent.click(trigger);
     fireEvent(window, new Event("resize"));
     expect(menu()).toBeNull();
+  });
+
+  it("closing on a resize puts the focus that was inside the menu on the trigger", async () => {
+    const { trigger } = mount();
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(item("Edit")).toHaveFocus();
+    fireEvent(window, new Event("resize"));
+    expect(menu()).toBeNull();
+    expect(trigger).toHaveFocus();
   });
 
   it("only one menu is open at a time", async () => {
@@ -462,6 +483,21 @@ describe("RowActions: the mouse", () => {
     enter(trigger);
     advance(1000);
     expect(menu()).not.toBeNull();
+  });
+
+  it("closing on a scroll or a resize does not take the focus from where it was outside the menu", () => {
+    render(page([{ name: "Boiler", items: ITEMS }]));
+    const trigger = screen.getByRole("button", { name: "Actions for Boiler" });
+    const after = screen.getByRole("button", { name: "after" });
+    for (const closeIt of [() => fireEvent.scroll(window), () => fireEvent(window, new Event("resize"))]) {
+      act(() => after.focus());
+      hoverOpen(trigger); // hover does not move the focus
+      expect(menu()).not.toBeNull();
+      advance(400); // past the settle time a scroll that began before it opened is given
+      closeIt();
+      expect(menu()).toBeNull();
+      expect(after).toHaveFocus();
+    }
   });
 
   it("a click on a hover-opened menu pins it: it stays open when the mouse leaves; a second click closes it", () => {

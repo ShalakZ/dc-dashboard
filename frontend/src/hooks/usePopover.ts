@@ -101,23 +101,30 @@ export function usePopover({ hover = true, closeOnScroll = false }: { hover?: bo
     };
     const onPointerDown = (event: PointerEvent) => { if (!inside(event.target)) hide(); };
     const onFocusIn = (event: FocusEvent) => { if (!inside(event.target)) hide(); };
+    // Scroll and resize also take the focus back to the trigger when it was inside the menu (PageDown on an item, a resize): a closed
+    // menu would otherwise leave it on <body>. A focus that was elsewhere (a hover-opened menu) is not touched.
+    const close = () => {
+      const hadFocus = inside(document.activeElement);
+      hide();
+      if (hadFocus) trigger.current?.focus({ preventScroll: true });
+    };
     const onScroll = (event: Event) => {
       if (performance.now() - openedAt.current < SETTLE_MS) return;
-      if (!(event.target instanceof Node && panel.current?.contains(event.target))) hide();
+      if (!(event.target instanceof Node && panel.current?.contains(event.target))) close();
     };
     document.addEventListener("keydown", onKey);
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("focusin", onFocusIn);
     if (closeOnScroll) {
       window.addEventListener("scroll", onScroll, true);
-      window.addEventListener("resize", hide);
+      window.addEventListener("resize", close);
     }
     return () => {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("focusin", onFocusIn);
       window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", hide);
+      window.removeEventListener("resize", close);
     };
   }, [open, closeOnScroll, hide, dismiss]);
 
