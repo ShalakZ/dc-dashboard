@@ -1,4 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { AppShellSkeleton } from "./components/AppShellSkeleton";
 import { MUTED_FIGURE } from "./lib/widgetFormat";
 import { AA, contrast, customProperties, NON_TEXT, parseRules, stripComments, type Rule } from "./test/cssTools";
 
@@ -1005,5 +1008,73 @@ describe("the loading skeletons (W7f)", () => {
     const narrow = mine.filter((r) => r.selector === ".sk-quad" && r.at.some((a) => a.startsWith("@media (max-width: 700px)")));
     expect(narrow).toHaveLength(1);
     expect(narrow[0].body).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
+  });
+});
+
+describe("the app-shell skeleton (W7h)", () => {
+  // every rule written for it: the placeholder sizes, the .sk-shell scope, the find box and the avatar
+  const mine = rules.filter((r) => /\.sk-(shell|find|avatar|[wh]-\d+)(?![\w-])/.test(r.selector));
+  const only = (selector: string) => {
+    const found = mine.filter((r) => r.selector === selector);
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0];
+  };
+  const markup = renderToStaticMarkup(createElement(AppShellSkeleton, { sidebar: "expanded" }));
+  const used = [...new Set(markup.match(/\bsk-[wh]-\d+\b/g) ?? [])].sort();
+
+  it("every rule is inside the layer and uses tokens for its colours", () => {
+    expect(mine.length, "the skeleton shell rules").toBeGreaterThan(8);
+    for (const rule of mine) {
+      expect(inLayer(rule), `"${rule.selector}" in @layer w6`).toBe(true);
+      expect(rule.body, `raw colour in "${rule.selector}"`).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
+    }
+  });
+
+  it("no rule in a .navbar or .side selector reaches for the accent (the accent is 2.09:1 on the navy)", () => {
+    const onNavy = mine.filter((r) => r.selector.includes(".navbar") || r.selector.includes(".side"));
+    expect(onNavy.length, "rules on the navy").toBeGreaterThan(3);
+    for (const rule of onNavy) expect(rule.body, `"${rule.selector}"`).not.toMatch(/var\(--accent/);
+  });
+
+  it("has a class for every placeholder size the component uses, and none it does not", () => {
+    expect(used.length, "size classes in the markup").toBeGreaterThan(3);
+    const declared = mine.filter((r) => /^\.sk-[wh]-\d+$/.test(r.selector)).map((r) => r.selector.slice(1)).sort();
+    expect(declared).toEqual(used);
+    for (const name of used) {
+      const [, axis, size] = /^sk-([wh])-(\d+)$/.exec(name)!;
+      expect(only(`.${name}`).body, `"${name}"`).toMatch(axis === "w" ? new RegExp(`^\\s*width:\\s*${size}ch;\\s*$`) : new RegExp(`^\\s*height:\\s*${size}px;\\s*$`));
+    }
+  });
+
+  it("the placeholders on the navy are the sidebar's hover colour and do not shine (a hand-over would restart the sweep)", () => {
+    expect(tok("side-bg-hover")).not.toBe(tok("side-bg"));
+    expect(tok("side-bg-hover")).not.toBe(tok("top-bg"));
+    expect(only(".sk-shell .navbar .sk, .sk-shell .side .sk").body).toMatch(/background:\s*var\(--side-bg-hover\)/);
+    expect(only(".sk-shell .navbar .sk::after, .sk-shell .side .sk::after").body).toMatch(/display:\s*none/);
+  });
+
+  it("the find box has the real field's size, border and ground, drawn after the navy placeholder rule so it wins", () => {
+    const find = only(".sk-shell .navbar .sk-find");
+    expect(find.body).toMatch(/height:\s*34px/);
+    expect(find.body).toMatch(/border:\s*1px solid var\(--top-find-border\)/);
+    expect(find.body).toMatch(/background:\s*var\(--top-find-bg\)/);
+    expect(find.body).toMatch(/border-radius:\s*var\(--radius\)/);
+    expect(find.order).toBeGreaterThan(only(".sk-shell .navbar .sk, .sk-shell .side .sk").order);
+  });
+
+  it("the avatar disc is the placeholder colour, not the gold of the real one, and follows the real .avatar rule", () => {
+    const avatar = only(".sk-avatar");
+    expect(avatar.body).toMatch(/background:\s*var\(--side-bg-hover\)/);
+    expect(avatar.order).toBeGreaterThan(rules.find((r) => r.selector === ".avatar")!.order);
+  });
+
+  it("a placeholder row takes no pointer and shows no hover colour", () => {
+    expect(only(".sk-shell .side-row").body).toMatch(/pointer-events:\s*none/);
+    expect(only(".sk-shell .side-row").body).toMatch(/cursor:\s*default/);
+  });
+
+  it("draws the brand name in CSS, so the markup holds no word of it", () => {
+    expect(only(".sk-shell .brand .lbl::before").body).toMatch(/content:\s*"DC Dashboard"/);
+    expect(markup).not.toContain("DC Dashboard");
   });
 });
