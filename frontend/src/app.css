@@ -515,6 +515,23 @@
   .dialog.confirm { width: min(480px, 100%); }
   .dialog.narrow { width: min(440px, 100%); }
 
+  /* The icon field of the asset dialog: the preview tile (the page header's), its caption and Change icon in one row, then a grid of
+     40px cells. A cell is a label around a native radio clipped inside it, so its rules are written to outrank the base `label` and
+     `.dialog label` rules (grid, bold, one column); the checked cell is marked by fill, border and ring, not by colour alone. */
+  .icon-field { display: grid; gap: 8px; }
+  .icon-field-label { font-size: var(--fs-sm); font-weight: 600; }
+  .icon-field-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .icon-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--text); }
+  .icon-field-row > button { flex: none; }
+  .icon-grid { display: grid; grid-template-columns: repeat(8, 40px); gap: 4px; justify-content: start; }
+  .icon-grid[hidden] { display: none; }
+  .dialog .icon-cell, .icon-grid .icon-cell { position: relative; display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-2); font-weight: 400; cursor: pointer; }
+  .icon-cell svg.i { width: 22px; height: 22px; }
+  .icon-cell:hover { border-color: var(--border-strong); background: var(--row-hover); color: var(--text); }
+  .icon-cell > input { position: absolute; top: 0; left: 0; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); }
+  .icon-cell:has(> input:checked) { border-color: var(--accent); background: var(--accent-tint); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-ink); }
+  .icon-cell:has(> input:focus-visible) { outline: 2px solid var(--ring); outline-offset: 2px; }
+
   /* Audit log: the detail is JSON with no spaces, so it must wrap or the page scrolls sideways */
   td code { overflow-wrap: anywhere; white-space: pre-wrap; }
 
