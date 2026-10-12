@@ -87,6 +87,20 @@ async function expectMenuReachable(page: Page, menu: Locator) {
       .map((item) => item.textContent ?? ""),
   );
   expect(hidden, "menu items covered by something else or cut off").toEqual([]);
+  // The menu stands beside its trigger, not over the rows around it: the triggers of the rows above and below still receive the pointer.
+  const covered = await menu.evaluate((el) => {
+    const row = document.getElementById(el.getAttribute("aria-labelledby") ?? "")?.closest("tr");
+    return [row?.previousElementSibling, row?.nextElementSibling]
+      .map((neighbour) => neighbour?.querySelector<HTMLElement>(".row-menu-btn"))
+      .filter((button): button is HTMLElement => !!button)
+      .filter((button) => {
+        const box = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return hit !== null && el.contains(hit);
+      })
+      .map((button) => button.getAttribute("aria-label") ?? "");
+  });
+  expect(covered, "the menu covers the Actions button of a neighbouring row").toEqual([]);
 }
 
 test("Sources: the row menu works from the keyboard", async ({ page }) => {
@@ -160,6 +174,30 @@ test("Sources: an open row menu is not clipped or covered, at 1600 and at 1024 p
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), { message: "the page's sideways overflow in pixels" })
     .toBeLessThanOrEqual(0);
+});
+
+test("Source points: the menu of the last row stays inside the window and leaves the Actions button of the row above uncovered", async ({ page }) => {
+  const sources = await getJson<{ id: number }[]>(page, "/api/sources");
+  let sourceId: number | undefined;
+  for (const source of sources) {
+    if ((await getJson<unknown[]>(page, `/api/sources/${source.id}/points`)).length >= 3) {
+      sourceId = source.id;
+      break;
+    }
+  }
+  expect(sourceId, "a source with at least three points (the simulator source of the first-run journey)").toBeDefined();
+  await page.goto(`/sources/${sourceId}/points`);
+  await expect(heading1(page, "Points")).toBeVisible();
+
+  const last = page.getByRole("button", { name: /^Actions for / }).last();
+  await last.scrollIntoViewIfNeeded();
+  const label = (await last.getAttribute("aria-label")) ?? "";
+  const menu = page.getByRole("menu", { name: label, exact: true });
+  await last.click();
+  await expect(menu).toBeVisible();
+  await expectMenuReachable(page, menu);
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
 });
 
 test("Sources: the trash button asks first, and Cancel keeps the source", async ({ page }) => {

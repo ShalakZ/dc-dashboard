@@ -135,18 +135,25 @@ describe("RowActions: placement", () => {
       return { x: 0, y: 0, toJSON: () => ({}), ...(this.getAttribute("role") === "menu" ? panel : trigger) } as DOMRect;
     });
 
-  it("puts the panel at the place placePanel gives, from the measured trigger and panel", async () => {
+  it("puts the panel beside the trigger, to its left, at the place placePanel gives", async () => {
     rects({ top: 100, bottom: 128, left: 972, right: 1000, width: 28, height: 28 }, { top: 0, bottom: 200, left: 0, right: 180, width: 180, height: 200 });
     const { trigger } = mount();
     await userEvent.click(trigger);
-    expect(menu()).toHaveStyle({ top: "132px", left: "820px", "max-height": "628px" }); // jsdom's window is 1024 x 768: 768 - 132 - 8
+    expect(menu()).toHaveStyle({ top: "100px", left: "788px", "max-height": "660px" }); // jsdom's window is 1024 x 768: 768 - 100 - 8; 972 - 4 - 180
   });
 
-  it("opens upward, clear of the top bar, when the row is near the bottom of the window", async () => {
+  it("puts its bottom edge on the trigger's bottom when the row is near the bottom of the window", async () => {
     rects({ top: 700, bottom: 728, left: 972, right: 1000, width: 28, height: 28 }, { top: 0, bottom: 200, left: 0, right: 180, width: 180, height: 200 });
     const { trigger } = mount();
     await userEvent.click(trigger);
-    expect(menu()).toHaveStyle({ top: "496px", left: "820px" }); // 700 - 4 - 200
+    expect(menu()).toHaveStyle({ top: "528px", left: "788px" }); // 728 - 200
+  });
+
+  it("falls back to below the trigger when there is no room at its left", async () => {
+    rects({ top: 100, bottom: 128, left: 20, right: 48, width: 28, height: 28 }, { top: 0, bottom: 200, left: 0, right: 180, width: 180, height: 200 });
+    const { trigger } = mount();
+    await userEvent.click(trigger);
+    expect(menu()).toHaveStyle({ top: "132px", left: "8px" });
   });
 });
 
