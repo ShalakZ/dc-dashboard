@@ -1,4 +1,4 @@
-"""The security faults of the OPC UA simulator (SIM_FAULT_POLICIES, UNTRUSTED_CERT, AUTH, CERT_HOSTS), driven by plain asyncua clients.
+"""The faults of the OPC UA simulator (SIM_FAULT_*), driven by plain asyncua clients.
 
 What each fault does to a client is recorded here as asyncua really does it, because the connection check and its hints are
 built on those facts.
@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import socket
 import time
+from datetime import datetime, timezone
 
 import asyncua
 import pytest
@@ -21,6 +22,7 @@ from dcdash.simulator.opcua import OpcUaSim
 from tests.helpers import free_port, opcua_server, write_client_certificate
 
 V_PATH = ["2:Panels", "2:LVP01", "2:V"]
+CURRENT_TIME = ua.NodeId(ua.ObjectIds.Server_ServerStatus_CurrentTime)
 
 
 def faults(**env: str) -> Faults:
@@ -236,6 +238,144 @@ def test_auth_required_without_a_password_is_refused_when_the_simulator_is_built
         OpcUaSim(Simulator(), free_port(), faults=faults(AUTH="required"))
     with pytest.raises(FaultConfigError, match="SIM_OPCUA_PASSWORD"):
         OpcUaSim(Simulator(), free_port(), password="", faults=faults(AUTH="required"))
+
+
+# ---- SLOW: every incoming message is answered late, Hello and OpenSecureChannel included ------------------------------------
+
+async def hello_took(srv: OpcUaSim) -> float:
+    client = Client(url(srv))
+    await client.connect_socket()
+    try:
+        started = time.perf_counter()
+        await client.send_hello()
+        return time.perf_counter() - started
+    finally:
+        client.disconnect_socket()
+
+
+async def test_slow_delays_every_message_hello_included_and_only_on_the_server_that_has_the_fault():
+    delay = 0.4
+    async with fault_server(SLOW=str(delay)) as slow, opcua_server() as plain:
+        assert delay - 0.05 <= await hello_took(slow) < delay + 1.0
+        assert await hello_took(plain) < delay - 0.1  # a fault-free server in the same process answers at once
+
+        started = time.perf_counter()
+        client = Client(url(slow), timeout=10)
+        async with client:
+            connected = time.perf_counter() - started
+            assert connected >= 4 * delay - 0.1  # Hello, OpenSecureChannel, CreateSession and ActivateSession each wait
+            started = time.perf_counter()
+            assert await read_voltage(client) == 400.0
+            assert time.perf_counter() - started >= delay - 0.05
+
+            started = time.perf_counter()  # the slow connection is still open: the other server is not held back by it
+            async with Client(url(plain)) as fast:
+                assert await read_voltage(fast) == 400.0
+            assert time.perf_counter() - started < delay
+
+
+# ---- DROP: each connection is closed that long after it was accepted ---------------------------------------------------------
+
+def port_of(srv: OpcUaSim) -> int:
+    return int(url(srv).split(":")[2].split("/")[0])
+
+
+def pending_drop_timers() -> list:
+    """Timers the DROP fault has scheduled and not cancelled (a peek into the event loop: there is no public list)."""
+    return [handle for handle in asyncio.get_running_loop()._scheduled if not handle.cancelled() and "_drop_connection" in repr(handle)]
+
+
+async def closed_after(reader: asyncio.StreamReader, started: float, limit: float) -> float:
+    assert await asyncio.wait_for(reader.read(1), limit) == b""  # the server sends nothing unasked: EOF means it closed
+    return time.perf_counter() - started
+
+
+async def test_drop_closes_each_connection_that_long_after_it_was_accepted_and_the_listener_stays_up():
+    drop = 0.8
+    async with fault_server(DROP=str(drop)) as srv:
+        first_reader, first_writer = await asyncio.open_connection("127.0.0.1", port_of(srv))
+        first_started = time.perf_counter()
+        with pytest.raises(TimeoutError):  # still open well before the interval
+            await asyncio.wait_for(first_reader.read(1), 0.3)
+        second_reader, second_writer = await asyncio.open_connection("127.0.0.1", port_of(srv))  # accepted 0.3 s after the first
+        second_started = time.perf_counter()
+
+        first = await closed_after(first_reader, first_started, drop + 1)
+        second = await closed_after(second_reader, second_started, drop + 1)
+        assert drop - 0.05 <= first < drop + 1 and drop - 0.05 <= second < drop + 1  # each counts from its own accept
+        assert second_started + second > first_started + first  # the second one lived on after the first was closed
+        first_writer.close(), second_writer.close()
+
+        async with Client(url(srv), timeout=3) as client:  # the listener is still there: a new client connects and reads in time
+            assert await read_voltage(client) == 400.0
+
+
+async def test_the_drop_timer_is_cancelled_when_the_client_closes_first_and_when_the_server_stops():
+    async with fault_server(DROP="30") as srv:
+        _, closing = await asyncio.open_connection("127.0.0.1", port_of(srv))
+        _, lingering = await asyncio.open_connection("127.0.0.1", port_of(srv))
+        await asyncio.sleep(0.1)
+        assert len(pending_drop_timers()) == 2
+        closing.close()
+        await closing.wait_closed()
+        await asyncio.sleep(0.2)
+        assert len(pending_drop_timers()) == 1
+    lingering.close()
+    assert not pending_drop_timers()  # the second connection was open when the server stopped, 30 s before its timer
+
+
+# ---- BAD: the chosen variables answer with a Bad status ---------------------------------------------------------------------
+
+async def test_bad_variables_read_back_their_status_after_every_refresh_and_the_others_stay_good():
+    async with fault_server(BAD="LVP01_kW:BadSensorFailure,LVP02_V:BadNodeIdUnknown") as srv:
+        async with Client(url(srv)) as client:
+            async def status(panel: str, signal: str):
+                node = await client.nodes.objects.get_child(["2:Panels", f"2:{panel}", f"2:{signal}"])
+                return (await node.read_data_value(raise_on_bad_status=False)).StatusCode_
+
+            for refreshes in range(2):  # refresh() rewrites every variable: the Bad ones must stay Bad
+                if refreshes:
+                    await srv.refresh()
+                broken = await status("LVP01", "kW")
+                assert (broken.name, f"0x{broken.value:08X}") == ("BadSensorFailure", "0x808C0000")
+                missing = await status("LVP02", "V")
+                assert (missing.name, f"0x{missing.value:08X}") == ("BadNodeIdUnknown", "0x80340000")
+                for panel, signal in (("LVP01", "V"), ("LVP02", "kW"), ("LVP03", "kW"), ("LVP10", "Hz")):
+                    assert (await status(panel, signal)).is_good()
+            with pytest.raises(ua.UaStatusCodeError) as refused:  # what a client that insists on a good value sees
+                await (await client.nodes.objects.get_child(["2:Panels", "2:LVP01", "2:kW"])).read_value()
+            assert refused.value.code == ua.StatusCodes.BadSensorFailure
+            assert await read_voltage(client) == 400.0
+
+
+# ---- SKEW: the server's clock and the timestamps it stamps are off by that many seconds ------------------------------------
+
+async def clock_offset(client: Client) -> float:
+    return ((await client.get_node(CURRENT_TIME).read_value()) - datetime.now(timezone.utc)).total_seconds()
+
+
+def skew_clock_tasks() -> list:
+    return [task for task in asyncio.all_tasks() if task.get_name() == "sim-skew-clock"]
+
+
+async def test_skew_keeps_current_time_and_the_point_stamps_off_by_that_much_for_seconds_and_stops_with_the_server():
+    async with fault_server(SKEW="900") as ahead, fault_server(SKEW="-900") as behind, opcua_server() as plain:
+        assert len(skew_clock_tasks()) == 2  # one writer per skewed server, none for the fault-free one
+        async with Client(url(ahead)) as late, Client(url(behind)) as early, Client(url(plain)) as real:
+            for round_ in range(2):  # asyncua's own writer would put the real time back within a second
+                if round_:
+                    await asyncio.sleep(2)
+                assert abs(await clock_offset(late) - 900) < 3
+                assert abs(await clock_offset(early) + 900) < 3
+                assert abs(await clock_offset(real)) < 3
+
+            for srv, client, skew in ((ahead, late, 900), (behind, early, -900)):
+                await srv.refresh()
+                stamped = await (await client.nodes.objects.get_child(V_PATH)).read_data_value()
+                for stamp in (stamped.SourceTimestamp, stamped.ServerTimestamp):
+                    assert abs((stamp - datetime.now(timezone.utc)).total_seconds() - skew) < 3
+                assert stamped.Value.Value == 400.0 and stamped.StatusCode_.is_good()
+    assert not skew_clock_tasks()
 
 
 # ---- nothing is shared between servers or left behind -----------------------------------------------------------------------

@@ -5,12 +5,14 @@ asyncua gives no hook between the socket and its message processing, so `_FaultS
 protocol factory returns a `_FaultProtocol` that carries this instance's `Faults`. Nothing is patched on an asyncua class, so
 servers with different faults can run in one process (the tests do) and nothing outlives `stop()`.
 
-The extension points the behavioural faults hook into are the empty `_before_message`, `_connection_opened`, `_connection_closed`
-of `_FaultProtocol` and `_after_start`, `_before_stop` of `_FaultServer`.
+The behavioural faults hang on `_FaultProtocol._before_message` (SLOW), `_connection_opened` and `_connection_closed` (DROP) and on
+`_FaultServer._after_start` and `_before_stop` (SKEW); BAD and the point timestamps are written by `OpcUaSim.refresh`.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import ipaddress
 import logging
 import socket
@@ -38,6 +40,7 @@ class _FaultProtocol(OPCUAProtocol):
     def __init__(self, *args, faults: Faults, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.faults = faults
+        self._drop_timer: asyncio.TimerHandle | None = None
 
     def connection_made(self, transport) -> None:
         super().connection_made(transport)
@@ -54,15 +57,26 @@ class _FaultProtocol(OPCUAProtocol):
             return
         await super()._process_one_msg(header, buf)
 
-    # -- extension points of the behavioural faults (empty here) --------------------------------------------------------------
+    # -- SLOW and DROP -------------------------------------------------------------------------------------------------------
     async def _before_message(self, header, buf) -> None:
-        """Runs before every incoming message is processed."""
+        """SLOW: every incoming message waits, Hello and OpenSecureChannel too (a slow link is slow from the first byte)."""
+        if self.faults.slow_seconds:
+            await asyncio.sleep(self.faults.slow_seconds)
 
     def _connection_opened(self) -> None:
-        """Runs when a client connection is accepted."""
+        """DROP: this connection is closed `drop_seconds` after it was accepted."""
+        if self.faults.drop_seconds:
+            self._drop_timer = asyncio.get_running_loop().call_later(self.faults.drop_seconds, self._drop_connection)
 
     def _connection_closed(self) -> None:
-        """Runs when a client connection is gone (whoever closed it), before asyncua cleans up."""
+        """Whoever closed the connection, its drop timer is no longer needed."""
+        if self._drop_timer is not None:
+            self._drop_timer.cancel()
+            self._drop_timer = None
+
+    def _drop_connection(self) -> None:
+        _logger.info("SIM_FAULT_DROP: closing the connection from %s", self.peer_name)
+        self.transport.close()
 
     # -- UNTRUSTED_CERT=1 -------------------------------------------------------------------------------------------------------
     @staticmethod
@@ -100,6 +114,9 @@ class _FaultServer(Server):
     def __init__(self, faults: Faults, **kwargs) -> None:
         super().__init__(**kwargs)
         self.faults = faults
+        self._clock_task: asyncio.Task | None = None
+        if faults.skew_seconds:
+            self.disable_clock()  # asyncua's own once-a-second CurrentTime writer would put the real time back
 
     async def start(self) -> None:
         """asyncua 1.1.8's Server.start(), with the binary server swapped for the fault one."""
@@ -122,12 +139,32 @@ class _FaultServer(Server):
         await self._before_stop()
         await super().stop()
 
-    # -- extension points of the behavioural faults (empty here) --------------------------------------------------------------
+    # -- SKEW (DROP needs no cleanup here: stopping closes every transport, and closing a connection cancels its timer) -------
     async def _after_start(self) -> None:
-        """Runs once the server listens."""
+        """SKEW: write the skewed CurrentTime now and then once a second, like asyncua's writer does with the real time."""
+        if self.faults.skew_seconds:
+            await self._write_skewed_time()
+            self._clock_task = asyncio.create_task(self._skewed_clock(), name="sim-skew-clock")
 
     async def _before_stop(self) -> None:
-        """Runs first in stop(); whatever _after_start began ends here."""
+        """Runs first in stop(): what _after_start began ends here."""
+        if self._clock_task is not None:
+            self._clock_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._clock_task
+            self._clock_task = None
+
+    async def _skewed_clock(self) -> None:
+        while True:
+            await asyncio.sleep(1)
+            await self._write_skewed_time()
+
+    async def _write_skewed_time(self) -> None:
+        now = datetime.now(timezone.utc) + timedelta(seconds=self.faults.skew_seconds)
+        await self.write_attribute_value(
+            ua.NodeId(ua.ObjectIds.Server_ServerStatus_CurrentTime),
+            ua.DataValue(ua.Variant(now, ua.VariantType.DateTime), SourceTimestamp=now, ServerTimestamp=now),
+        )
 
 
 @dataclass(frozen=True)

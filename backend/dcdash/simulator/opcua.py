@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from asyncua import Node, ua
 from asyncua.crypto.truststore import TrustStore
@@ -44,6 +44,7 @@ class OpcUaSim:
         self._users = _Users(sim, username, password)
         self._server: _FaultServer | None = None
         self._vars: dict[str, Node] = {}
+        self._bad = {address: ua.StatusCode(getattr(ua.StatusCodes, status)) for address, status in self.faults.bad_nodes}
         self.server_certificate: ServerCertificate | None = None  # made on first use and kept, so the thumbprint survives restarts
 
     async def start(self) -> None:
@@ -93,10 +94,21 @@ class OpcUaSim:
     async def refresh(self) -> None:
         now = datetime.now(timezone.utc)
         self.sim.advance(now)
+        stamp = now + timedelta(seconds=self.faults.skew_seconds)  # SKEW: the server stamps its points with its own, wrong, clock
+        stamped = self._server is not None and bool(self._bad or self.faults.skew_seconds)
         for address, var in self._vars.items():
             value = self.sim.read(address, now)
-            if value is not None:
+            if value is None:
+                continue
+            if not stamped:
                 await var.write_value(float(value))
+                continue
+            # BAD: asyncua nulls the value of a Bad DataValue, as the specification says a server must
+            data_value = ua.DataValue(
+                ua.Variant(float(value), ua.VariantType.Double), self._bad.get(address, ua.StatusCode()),
+                SourceTimestamp=stamp, ServerTimestamp=stamp,
+            )
+            await self._server.write_attribute_value(var.nodeid, data_value)
 
     async def run(self, period: float = 1.0) -> None:
         while True:
