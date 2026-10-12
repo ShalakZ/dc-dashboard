@@ -505,6 +505,13 @@ Nine specs run in one `playwright test` run against the dev-profile stack on `ht
   the asset page's title and quick find; Edit back to Automatic (the icon follows the kind again); the choice kept across a reload;
   Esc inside the open grid closing the dialog with nothing saved; Enter on a cell not saving; no horizontal scroll at 1440 and 1024 px
   with the dialog open. It creates one asset of its own and deletes it afterwards.
+- `w7h.spec.ts` (its own project, after `w7g`, at 1440 and 1024 px in fresh browser contexts) checks the first-load screen: the HTML the server
+  sends already holds the shell and carries the security headers; with `/api/me` held, the navy bar, the sidebar and one "Loading" status
+  are there (no bare "loading..." line) and the real shell replaces them with the same bar height, sidebar width and content corner (to 0.5 px)
+  and the same single loading bar that never restarts; with the app's script held, the static copy alone has the same navy and widths in four
+  looks, with the sidebar minimized and at 1024 px; the sign-in and setup pages (any case) show no shell; a signed-out deep link lands on the
+  sign-in page without the real shell appearing and returns to the page asked for; a slow start never shows an empty page; reduced motion;
+  no Content-Security-Policy violation on any of it.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1219,6 +1226,26 @@ summary's title). The `api` container applies the migration the first time it st
    downgrade drops `assets.icon`; nothing else changes, so only the icon choices are lost, and `upgrade` adds the column again with
    every asset on Automatic. A restart of the W7g `api` would run `alembic upgrade head` and apply `0008` again, so the W7g `api`
    must not be running once the schema is back at `0007`.
+
+### Upgrading to W7h (no migration)
+
+Schema stays at `0008`; nothing in the database or the API changes, so there is nothing to restore. The code to go back to is
+`45deb14` (`main` before W7h).
+
+W7h (a real first-load screen) is front end only, so only the `web` image changes. A refresh used to show a blank white page and then a
+bare "loading..." line until the sign-in check had answered. Now the navy top bar and the sidebar are painted as soon as the page's
+stylesheet has arrived (a static copy of the shell inside `index.html`, in the look this browser remembers and with the sidebar open or
+minimized as you left it); while the two sign-in requests are out, the same frame shows quiet placeholders and the loading bar runs along
+the top edge; then the real shell replaces it without anything moving. The sign-in and setup pages do not show the frame. Screen readers
+hear one "Loading" line. A first-ever visit in a browser shows Light and Navy and gold. The frame's content area stays empty until the
+page itself starts loading (its own grey shapes appear after the usual sixth of a second).
+
+1. **Back up first** (a habit here: nothing in the database changes), as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). Only `web` is rebuilt. `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+3. **Verify.** `docker compose exec api alembic current` still prints `0008 (head)`. In the browser's developer tools set the network
+   to "Slow 4G", reload any page and watch the navy bar and the sidebar appear before anything else; on `/login` no frame shows.
+4. **Going back.** Check out `45deb14` and rebuild as in step 2. There is no database step.
 
 ## Add a connector
 

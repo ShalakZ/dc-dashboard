@@ -89,3 +89,5 @@ Brief: `.superpowers/sdd/overnight-w7/W7h-first-load.md` (rulings H1 to H7). The
 ## Execution log
 
 (filled in by the controller)
+
+- Task 4 (implementer, 2026-10-13): `frontend/e2e/w7h.spec.ts` (eight tests, (a) to (h)) and the `w7h` project after `w7g`; README e2e bullet and "Upgrading to W7h (no migration)"; backlog section AB; roadmap row O-24 (built, not merged). Rehearsed on `vite preview` behind a header proxy, not run with the real runner or through Caddy; the controller runs the suite.
