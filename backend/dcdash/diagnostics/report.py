@@ -83,6 +83,7 @@ SUMMARY_CONFIG_FIELDS = ("endpoint", "url", "host", "port", "unit_id", "security
 JOURNAL_FETCH = (300, 1000)  # events read (summary, full): the journal lines and the distinct errors per source come from these
 MESSAGE_CHARS = 200
 KEY_STEPS = ("server_time", "read_points", "timing")  # steps of an all-OK check that a summary still shows
+SESSION_CONTEXT_STEPS = ("endpoints", "certificates")  # a failed session's hints point at these (thumbprint, offered token types)
 
 SECTION_TITLES = (
     "ENVIRONMENT", "SETTINGS", "SOURCES", "SOURCE HEALTH", "POINTS", "CONNECTION CHECKS", "JOURNAL", "SCANS",
@@ -1186,14 +1187,19 @@ class _Renderer:
             for number, step in enumerate(steps, start=1):
                 if step.ok is False:
                     lines.extend(self._step_lines(number, step))
+            if any(step.id == "session" and step.ok is False for step in steps):
+                lines.extend(  # the session hints say "the thumbprint in the certificates step": show it, with the full line allowance
+                    f"   {self.text(s.id, 30)}: {self.text(s.summary)}" for s in steps if s.ok and s.id in SESSION_CONTEXT_STEPS and s.summary
+                )
             skipped = [step.id for step in steps if step.ok is None]
             if skipped:
                 lines.append("   skipped: " + ", ".join(self.text(s, 30) for s in skipped))
             if check.state in ("ok", "failed"):
-                lines.extend(
-                    f"   {self.text(s.id, 30)}: {self.text(s.summary, 160)}"
-                    for s in steps if s.ok and s.id in KEY_STEPS and s.summary
-                )
+                for s in steps:
+                    if s.ok and s.id in KEY_STEPS and s.summary:
+                        lines.append(f"   {self.text(s.id, 30)}: {self.text(s.summary, 160)}")
+                        if s.hint:  # read_points: a passed step can still say who to ask about the bad points
+                            lines.append("      hint: " + self.text(s.hint, 300))
         if check.skew_seconds is not None:
             server, local = self.text(check.server_time, 40), self.text(check.local_time, 40)
             lines.append(f"   clock: server {server}, local {local}, skew {_signed(check.skew_seconds)}")
@@ -1203,6 +1209,8 @@ class _Renderer:
         mark = "ok" if step.ok else ("FAIL" if step.ok is False else "skipped")
         ms = f" {step.ms:.0f} ms" if step.ms is not None else ""
         lines = [f"   {number} {self.text(step.id, 30)} {mark}{ms}" + (f": {self.text(step.summary, 200)}" if step.summary else "")]
+        if step.ok and step.hint and step.id in KEY_STEPS:
+            lines.append("      hint: " + self.text(step.hint, 300))
         if step.ok is False:
             status = step.status_hex
             if step.status_name:

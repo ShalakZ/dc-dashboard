@@ -9,6 +9,16 @@ CLOCK_SKEW = "ClockSkew"  # pseudo status name: the server clock is more than 30
 
 _CLOCK_ALSO = " Also check that the clocks of both machines agree."
 
+# Codes a gateway sends when the OPC UA server itself works but the device behind it does not deliver a value.
+_DEVICE_FAULT = (
+    "The SCADA server answers, but the device behind it reports a fault (or has not delivered a value yet) for these points. Ask "
+    "the SCADA team which device or signal this is and whether it is in service."
+)
+DEVICE_FAULT_CODES = (
+    "BadSensorFailure", "BadDeviceFailure", "BadCommunicationError", "BadNoCommunication", "BadOutOfService",
+    "BadWaitingForInitialData",
+)
+
 _BY_STATUS: dict[str, str] = {
     "BadSecurityChecksFailed": (
         "The server refused the secure channel; usually it does not trust our client certificate. Ask the SCADA team to trust the "
@@ -36,8 +46,8 @@ _BY_STATUS: dict[str, str] = {
         "Regenerate it with a URI, or ask the SCADA team which they expect."
     ),
     "BadIdentityTokenRejected": (
-        "The server rejected the user identity. Check the user name and password, and that the endpoint allows user name and "
-        "password at all (see the user-token types in the endpoints step)."
+        "The server rejected the user identity. Ask the SCADA team whether this endpoint wants a user name and password (see the "
+        "user-token types in the endpoints step) and check the ones entered here."
     ),
     "BadIdentityTokenInvalid": (
         "The server could not use the identity we sent. Check that the source has a user name and a password, and that the endpoint "
@@ -77,7 +87,7 @@ _BY_STATUS: dict[str, str] = {
     ),
     "BadSecurityPolicyRejected": (
         "The server does not offer the security policy we asked for. See the endpoints step for what it offers and set the "
-        "source's security policy to one of those."
+        "source's security policy to one of those, or ask the SCADA team which to use."
     ),
     "BadSessionClosed": (
         "The server closed the session. Common causes: a limit on the number of sessions, an idle timeout, or a firewall that "
@@ -101,6 +111,7 @@ _BY_STATUS: dict[str, str] = {
         "The server rejected a timestamp. The clocks of the two machines differ too much; see the clock lines and fix the one that "
         "is wrong (a Docker Desktop VM clock drifts after the host sleeps)."
     ),
+    **dict.fromkeys(DEVICE_FAULT_CODES, _DEVICE_FAULT),
     CLOCK_SKEW: (
         "The clocks differ by over 5 minutes, which OPC UA does not tolerate. Local cause first: the Docker Desktop VM clock drifts "
         "after the host sleeps (restart Docker Desktop). If the report's browser-vs-container difference is also large, it is local; "
@@ -139,8 +150,9 @@ _TIMEOUT_AT_NETWORK_STEP = (
     "is down. Ask the network team whether this machine may reach it, and confirm the endpoint URL with the SCADA team."
 )
 _TIMEOUT_LATER = (
-    "The server accepted the connection but did not answer in time. It may be overloaded or a firewall may be dropping packets "
-    "after the first exchange; ask the SCADA team and the network team."
+    "The server accepted the connection but did not answer in time: it may be overloaded or a firewall may be dropping packets. "
+    "A session needs about four round trips, so answers of about a quarter of the timeout can still time out. Ask the SCADA team "
+    "and the network team."
 )
 _NETWORK_UNREACHABLE = (
     "There is no network route to that address. Check the address and ask the network team whether this machine may reach it."

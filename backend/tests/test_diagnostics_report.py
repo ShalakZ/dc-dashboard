@@ -138,6 +138,87 @@ def test_an_ok_check_keeps_the_steps_that_carry_news_in_a_summary():
     assert "   read_points: 2 of 20 points are bad" in lines_of(render(data, "summary", ident), "CONNECTION CHECKS")
 
 
+THUMBPRINT = "9F2C41D7A0B3E85C6D1F4A27B9C03E5D8A16F7B4"
+CERTIFICATES_SUMMARY = (
+    f"our certificate dcdash-client, SHA-1 thumbprint {THUMBPRINT}, URI urn:dcdash:collector, valid until 2027-10-12 (364 days); "
+    "server certificate dcdash-simulator, valid until 2031-10-12 (1826 days), names scada-gw.plant.local"
+)
+ENDPOINTS_SUMMARY = (
+    "3 endpoint(s); configured Basic256Sha256/SignAndEncrypt with user name and password is offered. Offered: None/None [Anonymous]; "
+    "Basic256Sha256/SignAndEncrypt [UserName]; Basic256Sha256/Sign [UserName]"
+)
+
+
+def refused_session_check(**kw) -> CheckInfo:
+    """A check that passed endpoints and certificates (with the summaries a real run has) and failed at the session."""
+    base = check()
+    steps = tuple(
+        replace(step, summary={"certificates": CERTIFICATES_SUMMARY, "endpoints": ENDPOINTS_SUMMARY}.get(step.id, step.summary))
+        if step.id in ("certificates", "endpoints") else (
+            replace(step, status_name="BadSecurityChecksFailed", status_hex="0x80130000",
+                    hint="The server refused the secure channel; ask the SCADA team to trust the thumbprint shown in the certificates step.")
+            if step.id == "session" else step)
+        for step in base.steps
+    )
+    return replace(base, steps=steps, **kw)
+
+
+def test_a_failed_session_brings_the_certificates_and_endpoints_lines_the_hints_refer_to():
+    data = ReportData(generated_at=NOW, checks=(refused_session_check(),), sources=(source(),))
+    section = lines_of(render(data, "summary", ident), "CONNECTION CHECKS")
+    assert f"   certificates: {CERTIFICATES_SUMMARY}" in section  # the whole line, thumbprint and the server certificate part
+    assert f"   endpoints: {ENDPOINTS_SUMMARY}" in section and "[UserName]" in section[section.index(f"   endpoints: {ENDPOINTS_SUMMARY}")]
+    assert section.index(f"   certificates: {CERTIFICATES_SUMMARY}") > next(i for i, line in enumerate(section) if "5 session FAIL" in line)
+    others = replace(data, checks=(check(fail_at="tcp", steps=(CheckStep("dns", True, ms=3.0, summary="dns fine"),
+                                                           CheckStep("tcp", False, error_class="ConnectionRefusedError"))),))
+    assert not any(line.startswith(("   certificates:", "   endpoints:")) for line in lines_of(render(others, "summary", ident), "CONNECTION CHECKS"))
+    ok = replace(data, checks=(check(fail_at=None),))
+    assert not any(line.startswith(("   certificates:", "   endpoints:")) for line in lines_of(render(ok, "summary", ident), "CONNECTION CHECKS"))
+    failed_later = replace(data, checks=(check(fail_at="read_points"),))
+    assert not any(line.startswith(("   certificates:", "   endpoints:")) for line in lines_of(render(failed_later, "summary", ident), "CONNECTION CHECKS"))
+
+
+def test_a_failed_endpoints_step_is_not_printed_twice_when_the_session_fails_too():
+    steps = tuple(
+        CheckStep(id=i, ok=True, ms=1.0, summary=f"{i} fine") for i in ("dns", "tcp")
+    ) + (
+        CheckStep("endpoints", False, ms=5.0, summary="not offered", error_class="ConfigMismatch", hint="ask"),
+        CheckStep("certificates", True, ms=5.0, summary=CERTIFICATES_SUMMARY),
+        CheckStep("session", False, ms=9.0, summary="", error_class="UaError", error_message="No matching endpoints"),
+    ) + tuple(CheckStep(id=i, ok=None) for i in STEP_IDS[5:])
+    data = ReportData(generated_at=NOW, checks=(check(fail_at="endpoints", steps=steps),), sources=(source(),))
+    section = lines_of(render(data, "summary", ident), "CONNECTION CHECKS")
+    assert sum(1 for line in section if line.startswith("   3 endpoints FAIL")) == 1 and "   endpoints: not offered" not in section
+    assert f"   certificates: {CERTIFICATES_SUMMARY}" in section
+
+
+def test_the_session_context_lines_fit_one_part_in_a_busy_report_and_keep_the_whole_thumbprint():
+    base = busy(40, 500, failing=33)
+    checks = tuple(c for c in base.checks if c.source_id != 33) + (refused_session_check(source_id=33, job_id=200),)
+    body = render(replace(base, checks=checks), "summary", ident)
+    parts = finalize(body, "abc1234-dirty", NOW)
+    assert len(parts.parts) == 1 and len(parts.parts[0].text) <= 12_000 and verify_paste(parts.text()).ok
+    section = lines_of(body, "CONNECTION CHECKS")
+    assert any(THUMBPRINT in line and line.startswith("   certificates:") for line in section)
+    assert any("[UserName]" in line and line.startswith("   endpoints:") for line in section)
+    assert all(len(line) <= 300 for line in section)
+
+
+def test_a_passed_read_points_step_still_shows_the_hint_about_the_bad_points():
+    hint = "The SCADA server answers, but the device behind it reports a fault. Ask the SCADA team which device or signal this is."
+    steps = tuple(
+        CheckStep(id=i, ok=True, ms=5.0, summary="read 5 point(s): 4 good, 1 bad; first bad: ns=2;i=2: BadSensorFailure (0x808C0000)"
+                  if i == "read_points" else "", hint=hint if i == "read_points" else None)
+        for i in STEP_IDS
+    )
+    data = ReportData(generated_at=NOW, checks=(check(fail_at=None, steps=steps),), sources=(source(),))
+    for detail in ("summary", "full"):
+        section = lines_of(render(data, detail, ident), "CONNECTION CHECKS")
+        shown = next(i for i, line in enumerate(section) if "BadSensorFailure (0x808C0000)" in line)
+        assert section[shown + 1] == f"      hint: {hint}", detail
+        assert sum(1 for line in section if "hint:" in line) == 1  # no other passed step grows a hint line
+
+
 def test_sources_without_a_check_are_listed_by_id_and_a_filtered_report_does_not_say_so():
     data = ReportData(generated_at=NOW, checks=(check(),), sources=(source(), source(4, "Spare"), source(5, "Third")))
     assert "no connection check has been run for 2 other sources: 4, 5" in lines_of(render(data, "summary", ident), "CONNECTION CHECKS")

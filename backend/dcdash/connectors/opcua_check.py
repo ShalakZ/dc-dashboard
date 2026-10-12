@@ -351,9 +351,10 @@ class OpcUaCheck:
                 problem = StepFailed(f"client certificate cannot be read: {type(exc).__name__}", error_class=type(exc).__name__)
             else:
                 detail["client"].update(facts)
+                uri = f"URI {facts['application_uri']}" if facts["application_uri"] else "no URI"  # the server compares it with ours
                 parts.append(
                     f"our certificate {facts['common_name'] or facts['subject']}, SHA-1 thumbprint {facts['thumbprint_sha1']}, "
-                    f"{_validity_words(facts)}"
+                    f"{uri}, {_validity_words(facts)}"
                 )
                 self._add_certificate_names(facts)
                 if facts["expired"] or facts["not_yet_valid"]:
@@ -400,11 +401,16 @@ class OpcUaCheck:
         return f"server certificate {facts['common_name'] or facts['subject']}, {_validity_words(facts)}, {host_words}"
 
     async def open_session(self) -> StepOutcome:
-        self.client = await self.connector._new_client()
         try:
+            self.client = await self.connector._new_client()
             await self.client.connect()
-        except Exception:
+        except ua.UaError as exc:
             self.client = None  # asyncua has already closed what it opened
+            if str(exc).startswith("No matching endpoints"):  # asyncua's own refusal, before any request: no status code, no hint
+                raise StepFailed(str(exc), error_class=type(exc).__name__, hint_key="BadSecurityPolicyRejected") from exc
+            raise
+        except Exception:
+            self.client = None
             raise
         auth = "user name and password" if self.config.username else "anonymous"
         policy, mode = self._wanted()

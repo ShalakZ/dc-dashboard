@@ -12,6 +12,7 @@ from dcdash.connectors.base import ConnectionCheck, Connector, ConnectorError
 from dcdash.connectors.simulator import SimulatorConfig, SimulatorConnector
 from dcdash.diagnostics import check as check_module
 from dcdash.diagnostics.check import Checker, StepFailed, StepOutcome, error_object
+from dcdash.diagnostics import hints as hints_module
 from dcdash.diagnostics.hints import CLOCK_SKEW, hint_for
 from dcdash.diagnostics.report import parse_check
 
@@ -69,6 +70,26 @@ def test_the_skew_hint_puts_the_local_cause_first_and_points_at_the_report():
     hint = hint_for(CLOCK_SKEW, None, "server_time")
     assert hint.index("Local cause first") < hint.index("SCADA team")
     assert "browser-vs-container" in hint
+
+
+@pytest.mark.parametrize("status", hints_module.DEVICE_FAULT_CODES)
+def test_the_codes_a_gateway_sends_for_a_faulty_device_say_to_ask_the_scada_team_which_device(status):
+    hint = hint_for(status, None, "read_points")
+    assert "device behind it" in hint and "Ask the SCADA team which device or signal" in hint
+
+
+def test_the_timeout_hint_says_the_handshake_needs_about_four_round_trips_and_still_fits_a_report_line():
+    for step in ("endpoints", "session"):
+        hint = hint_for(None, "TimeoutError", step)
+        assert "four round trips" in hint and "a quarter of the timeout" in hint and "SCADA team" in hint and len(hint) <= 300
+    assert "four round trips" not in hint_for(None, "TimeoutError", "tcp")  # a silent port is a firewall, not a slow handshake
+
+
+def test_the_uri_hint_names_both_uris_and_every_hint_that_blames_the_other_side_says_who_to_ask():
+    uri = hint_for("BadCertificateUriInvalid", None, "session")
+    assert "ApplicationUri our client announces" in uri and "URI in our client certificate" in uri and "SCADA team" in uri
+    for status in ("BadSecurityPolicyRejected", "BadIdentityTokenRejected", "BadUserAccessDenied", "BadSecurityChecksFailed"):
+        assert "SCADA team" in hint_for(status, None, "session"), status
 
 
 def test_unknown_failures_get_no_hint_and_every_hint_fits_a_report_line():
