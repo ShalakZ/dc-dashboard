@@ -21,6 +21,17 @@ const only = (selector: string) => {
 };
 const presetRule = (id: string) => only(`:root[data-theme="${id}"]`);
 const darkRule = () => only(':root[data-mode="dark"]');
+const comboRule = (id: string, mode: "light" | "dark") => only(`:root[data-theme="${id}"][data-mode="${mode}"]`);
+/** The five tokens the content accent is made of. */
+const ACCENT_SET = ["accent", "accent-hover", "accent-ink", "accent-tint", "ring"];
+// the accent in app.css's :root, and the values the dark block set before W7e (graphite's two looks are these, unchanged)
+const GRAPHITE_DARK = new Map([["accent", "#7ea7ff"], ["accent-hover", "#a3c0ff"], ["accent-tint", "#1e2a45"], ["accent-ink", "#b8ceff"], ["ring", "#7ea7ff"]]);
+/** CSS specificity of a selector without combinators or pseudo-functions: [ids, classes + attributes + pseudo-classes, types]. */
+const specificity = (selector: string): [number, number, number] => [
+  (selector.match(/#[\w-]+/g) ?? []).length,
+  (selector.match(/\.[\w-]+|\[[^\]]*\]|:[\w-]+/g) ?? []).length,
+  0,
+];
 const ISLAND = ":is(.widget-frame, .widget-preview)";
 const BILLING_INK = ':root[data-mode="dark"] table.billing td.muted, :root[data-mode="dark"] table.billing td.muted .muted';
 const BILLING_GROUND = ':root[data-mode="dark"] table.billing td.muted';
@@ -29,11 +40,12 @@ const AVATAR = ':root[data-mode="dark"] .prof-head .avatar';
 const CARD = ':root[data-mode="dark"] .widget-frame';
 const ATTRIBUTION = ".graph-canvas .react-flow__attribution a";
 
-/** The tokens the cascade gives an element under <html data-mode data-theme>: the base, the preset, then (dark only) the dark block. */
+/** The tokens the cascade gives an element under <html data-mode data-theme>: the base, the preset, the dark block (dark only), then the look's accent. */
 function cascade(themeId: string, mode: "light" | "dark") {
   const map = new Map(base);
   for (const [name, value] of customProperties(presetRule(themeId).body)) map.set(name, value);
   if (mode === "dark") for (const [name, value] of customProperties(darkRule().body)) map.set(name, value);
+  for (const [name, value] of customProperties(comboRule(themeId, mode).body)) map.set(name, value);
   return map;
 }
 
@@ -50,6 +62,8 @@ describe.each(combos)("$id, $mode", ({ id, mode }) => {
   const textPairs: Array<[string, () => string, () => string]> = [
     ["the bg on the accent (primary button)", () => tok("bg"), () => tok("accent")],
     ["accent on bg (link)", () => tok("accent"), () => tok("bg")],
+    ["accent on the surface ground (link in a card or a table head)", () => tok("accent"), () => tok("surface")],
+    ["the bg on the hovered accent (primary button hover)", () => tok("bg"), () => tok("accent-hover")],
     ["text on bg", () => tok("text"), () => tok("bg")],
     ["text-2 on bg", () => tok("text-2"), () => tok("bg")],
     ["disabled text and a placeholder on bg", () => tok("text-disabled"), () => tok("bg")],
@@ -109,6 +123,9 @@ describe.each(combos)("$id, $mode", ({ id, mode }) => {
     ["top bar: the quick find's border on the field ground (its inner edge)", () => tok("top-find-border"), () => tok("top-find-bg")],
     ["quick find: the active option's ring on the popup", () => tok("accent"), () => tok("bg")],
     ["the ring on bg (focus ring)", () => tok("ring"), () => tok("bg")],
+    ["the ring on the accent tint (focus ring on a selected row, the active quick-find option)", () => tok("ring"), () => tok("accent-tint")],
+    ["the marker on the accent tint (selected tree row)", () => tok("accent"), () => tok("accent-tint")],
+    ["the top bar's loading bar on the bar (its marker colour)", () => tok("side-accent"), () => tok("top-bg")],
   ];
   it.each(nonTextPairs)("%s reads at 3:1", (_name, fg, bg) => {
     expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(NON_TEXT);
@@ -138,6 +155,13 @@ describe("the presets", () => {
     }
   });
 
+  it("sets no accent token (the look's own block does, at a higher weight)", () => {
+    for (const { id } of THEMES) {
+      const names = [...customProperties(presetRule(id).body).keys()];
+      expect(names.filter((name) => ACCENT_SET.includes(name)), id).toEqual([]);
+    }
+  });
+
   it("navy and gold is today's navy with gold markers: only the marker, the brand mark and the avatar differ from app.css", () => {
     const navy = customProperties(presetRule("navy-gold").body);
     const changed = [...navy].filter(([name, value]) => base.get(name) !== value).map(([name]) => name);
@@ -154,10 +178,46 @@ describe("the presets", () => {
   });
 });
 
-describe("the dark block", () => {
-  const DARK_SET = sorted(colourTokens.filter((name) => !/^(side-|top-)/.test(name) && name !== "tooltip-text"));
+describe("the accent blocks (one per theme and mode)", () => {
+  it("each sets exactly the five accent tokens, as hex colours, with --ring equal to --accent", () => {
+    for (const { id, mode } of combos) {
+      const tokens = customProperties(comboRule(id, mode).body);
+      expect(sorted(tokens.keys()), `${id} ${mode}`).toEqual(ACCENT_SET);
+      for (const [name, value] of tokens) expect(value, `--${name} of ${id} ${mode}`).toMatch(HEX);
+      expect(tokens.get("ring"), `${id} ${mode}`).toBe(tokens.get("accent"));
+    }
+  });
 
-  it("sets every colour token of app.css except the bars' and the tooltip text, and nothing else", () => {
+  it("graphite keeps today's blue: app.css's values in light, the dark block's old values in dark", () => {
+    const light = customProperties(comboRule("graphite", "light").body);
+    for (const name of ACCENT_SET) expect(light.get(name), `--${name}`).toBe(base.get(name));
+    const dark = customProperties(comboRule("graphite", "dark").body);
+    for (const [name, value] of GRAPHITE_DARK) expect(dark.get(name), `--${name}`).toBe(value);
+  });
+
+  it("outweigh the presets and the dark block, so no two blocks set the same accent token at equal weight", () => {
+    const weight = (selector: string) => specificity(selector).join(".");
+    expect(weight(darkRule().selector)).toBe("0.2.0");
+    for (const { id } of THEMES) expect(weight(presetRule(id).selector), id).toBe("0.2.0");
+    for (const { id, mode } of combos) expect(weight(comboRule(id, mode).selector), `${id} ${mode}`).toBe("0.3.0");
+  });
+
+  it("leave the bars and the tooltip to the preset (no side-, top- or tooltip- token)", () => {
+    for (const { id, mode } of combos) {
+      const names = [...customProperties(comboRule(id, mode).body).keys()];
+      expect(names.filter((name) => /^(side|top|tooltip)-/.test(name)), `${id} ${mode}`).toEqual([]);
+    }
+  });
+
+  it("come after the dark block", () => {
+    for (const { id, mode } of combos) expect(comboRule(id, mode).order, `${id} ${mode}`).toBeGreaterThan(darkRule().order);
+  });
+});
+
+describe("the dark block", () => {
+  const DARK_SET = sorted(colourTokens.filter((name) => !/^(side-|top-)/.test(name) && name !== "tooltip-text" && !ACCENT_SET.includes(name)));
+
+  it("sets every colour token of app.css except the bars', the tooltip text and the accent (the accent blocks set that), and nothing else", () => {
     expect(sorted(customProperties(darkRule().body).keys())).toEqual(DARK_SET);
   });
 
@@ -192,9 +252,10 @@ describe("the dark block", () => {
 
 describe("the widget island", () => {
   const dark = () => customProperties(darkRule().body);
-  const ISLAND_SET = () => sorted([...dark().keys()].filter((name) => !["backdrop", "shadow-dialog", "shadow-tip", "shadow-pop", "tooltip-bg"].includes(name)));
+  // the dark block's content tokens plus the five accent tokens, which the look's accent block sets on <html> and the island must undo
+  const ISLAND_SET = () => sorted([...[...dark().keys()].filter((name) => !["backdrop", "shadow-dialog", "shadow-tip", "shadow-pop", "tooltip-bg"].includes(name)), ...ACCENT_SET]);
 
-  it("re-pins every content token the dark block sets, each to its light value in app.css, and asks for light controls", () => {
+  it("re-pins every content token the dark block sets and the five accent tokens, each to its light value in app.css, and asks for light controls", () => {
     const island = only(ISLAND);
     const pinned = customProperties(island.body);
     expect(sorted(pinned.keys())).toEqual(ISLAND_SET());
@@ -268,9 +329,9 @@ describe("the graph's credit link", () => {
 });
 
 describe("the file", () => {
-  it("is ordered: the four presets, then dark, the avatar, the island, the cards, then Billing, then the placeholder", () => {
+  it("is ordered: the four presets, then dark, the eight accent blocks, the avatar, the island, the cards, then Billing, then the placeholder", () => {
     const order = [
-      ...THEMES.map((t) => presetRule(t.id).order), darkRule().order, only(AVATAR).order, only(ISLAND).order, only(CARD).order,
+      ...THEMES.map((t) => presetRule(t.id).order), darkRule().order, ...combos.map(({ id, mode }) => comboRule(id, mode).order), only(AVATAR).order, only(ISLAND).order, only(CARD).order,
       only(BILLING_INK).order, only(BILLING_GROUND).order, only(PLACEHOLDER).order, only(ATTRIBUTION).order,
     ];
     expect(order).toEqual([...order].sort((a, b) => a - b));

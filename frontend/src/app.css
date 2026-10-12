@@ -1,6 +1,6 @@
 /* W6 design tokens (spec section 2). One :root block, unlayered; every component rule below uses var(--…) only. */
 :root {
-  /* content */
+  /* content (the accent family is the fallback for a page without data-theme and data-mode; themes.css sets it per look) */
   --accent: #1d5bd8; --accent-hover: #174bb5; --accent-tint: #e8effc; --accent-ink: #163f94;
   --bg: #ffffff; --surface: #f6f8fb; --row-hover: #fafbfd; --border: #e1e5ec; --border-strong: #cdd3dd;
   --field-border: #868fa0;   /* inputs, selects, textareas, checkboxes: 3.26:1 on white, 3.06:1 on --surface (WCAG 1.4.11) */
