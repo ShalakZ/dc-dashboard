@@ -6,7 +6,7 @@
 # The rules (see load_env): only variables whose name holds PASSWORD, SECRET, TOKEN or KEY; blank and # lines are skipped, "export " is optional,
 # the value starts after the first "=" (leading blanks dropped). A double-quoted value ends at the first unescaped quote, and BOTH its raw text and
 # the text with \" and \\ unescaped are hidden; a single-quoted value ends at the first quote; an unquoted value ends at the first blank-then-# (space or
-# tab) and loses trailing blanks. A value is read as it is written: $VAR is never expanded, the way compose would. Values of under 4 characters are ignored;
+# tab) and loses trailing blanks. A value is taken as written: a $VAR in it is NOT expanded (compose would expand it). Values of under 4 characters are ignored;
 # the part after the first ":" of a value is hidden too.
 plain	DB_PASSWORD=plain-pass-1\n	plain-pass-1
 crlf-line-ends	DB_PASSWORD=crlf-pass-2\r\nAPI_TOKEN=crlf-token-3\r\n	crlf-pass-2|crlf-token-3

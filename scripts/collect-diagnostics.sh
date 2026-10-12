@@ -135,7 +135,8 @@ function unescape_dq(v,    out, n, i, c, d) {  # a double-quoted .env value: \" 
 }
 function load_env(path,    line, eq, key, val, q, rest, i, n, c, raw) {
   # PASSWORD/SECRET/TOKEN/KEY values of 4+ characters: strip a trailing CR, skip blank and # lines, an optional "export ", split at the
-  # FIRST "=", one pair of matching quotes, an unquoted " #" tail cut off. Parsed here, never sourced; the values stay inside awk.
+  # FIRST "=", one pair of matching quotes, an unquoted " #" tail cut off. Parsed here, never sourced; the values stay inside awk. Values
+  # are taken as written: a $VAR in one is NOT expanded the way compose would (tests/fixtures/env_cases.tsv pins this reader and the ps1 twin).
   if (path == "") return
   while ((getline line < path) > 0) {
     if (++nline == 1) sub(/^\357\273\277/, "", line)

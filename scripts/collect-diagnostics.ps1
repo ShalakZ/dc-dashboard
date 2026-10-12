@@ -93,9 +93,9 @@ function Add-Line([string]$Text, [int]$Clip = 0, [string]$Prefix = "", [Collecti
   foreach ($l in $Text.Replace("`r", "").Split([char]10)) { $To.Add($Prefix + (Format-Line $l $Clip)) }
 }
 function Read-EnvSecrets([string]$Path) {   # the twin of load_env in collect-diagnostics.sh (backend/tests/fixtures/env_cases.tsv pins both)
-  # Values of PASSWORD/SECRET/TOKEN/KEY variables: Values counts them, Hide also holds the unescaped form of a double-quoted one (the form
+  # Values of PASSWORD/SECRET/TOKEN/KEY variables: Found counts them, Hide also holds the unescaped form of a double-quoted one (the form
   # compose hands to a container and a log quotes). Parsed, never sourced; like the sh copy it does NOT expand $VAR the way compose does.
-  $r = @{ Values = (New-Object 'System.Collections.Generic.List[string]'); Hide = (New-Object 'System.Collections.Generic.List[string]') }
+  $r = @{ Found = (New-Object 'System.Collections.Generic.List[string]'); Hide = (New-Object 'System.Collections.Generic.List[string]') }
   if (-not ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf))) { return $r }
   $blank = [char[]](32, 9)
   foreach ($raw in [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8).Split([char]10)) {   # lines end at LF only, as awk reads them
@@ -110,7 +110,7 @@ function Read-EnvSecrets([string]$Path) {   # the twin of load_env in collect-di
     elseif ($dq) { $v = [regex]::Match($v, '^"((?:[^"\\]|\\.|\\$)*)').Groups[1].Value }   # up to the first unescaped quote
     else { $m = [regex]::Match($v, '[ \t]#'); if ($m.Success) { $v = $v.Substring(0, $m.Index) }; $v = $v.TrimEnd($blank) }
     if ($v.Length -lt 4) { continue }
-    $r.Values.Add($v); $r.Hide.Add($v)
+    $r.Found.Add($v); $r.Hide.Add($v)
     if ($dq) { $u = [regex]::Replace($v, '\\(["\\])', '$1'); if ($u -cne $v) { $r.Hide.Add($u) } }
   }
   return $r
@@ -248,7 +248,7 @@ try {
   Add-Line "DCDASH-DIAG v$Version | collect-diagnostics.ps1 | PowerShell $($PSVersionTable.PSVersion)"
   Add-Line ("local time: " + $now.ToString("yyyy-MM-dd HH:mm:ss zzz", $Inv) + " (" + [TimeZoneInfo]::Local.Id + ")")
   Add-Line ("utc time:   " + $now.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss", $Inv))
-  $hides = "scrubbing: URL credentials, and $($EnvRead.Values.Count) secret value(s) read from .env ($(if ($EnvPath -and (Test-Path -LiteralPath $EnvPath)) { 'found' } else { 'not found' }))"
+  $hides = "scrubbing: URL credentials, and $($EnvRead.Found.Count) secret value(s) read from .env ($(if ($EnvPath -and (Test-Path -LiteralPath $EnvPath)) { 'found' } else { 'not found' }))"
   Add-Line $hides
   Add-Line "DCDASH-DIAG-LOGS v$Version | collect-diagnostics.ps1 | PowerShell $($PSVersionTable.PSVersion)" -To $LogLines
   Add-Line ("local time: " + $now.ToString("yyyy-MM-dd HH:mm:ss zzz", $Inv)) -To $LogLines
