@@ -490,6 +490,10 @@ are not re-tagged) and publishes only on `127.0.0.1` (ports 18080 and 18443 by d
 ports 80 and 443. They run in a Compose project whose name must start with `dcdash_e2e`, and they delete only
 that project's own volume; see "Practise a restore".
 
+### Debugging on the SCADA workstation
+
+The protocol for connecting to the real SCADA and debugging it by copy-paste (the Diagnostics page, the connection check, the report format, the offline `scripts/collect-diagnostics.ps1`) is in [docs/field-debugging.md](docs/field-debugging.md).
+
 ### Logs
 
 Every container keeps at most 5 log files of 10 MB (50 MB per service, set in `compose.yaml`). The collector logs
@@ -893,6 +897,15 @@ PowerShell: `$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'`). Without it every build
 attestation record is part of the id, and `up -d` recreates `api`, `collector`, `web` and `simulator` (about 12 s without service) even
 though nothing changed; `db` is kept after that first time (the one described above). The first run after adopting the variable recreates them once.
 
+**Build id.** The backend images carry the commit they were built from, so a diagnostics report (and Settings, and `GET /api/version`)
+proves which code produced it. `scripts/setup.sh`, `setup.ps1` and `e2e.sh` pass it on by themselves. For a hand-typed
+`docker compose build` or `up -d --build`, set the two variables first (bash:
+`export DCDASH_BUILD_ID=$(git describe --always --dirty) DCDASH_BUILD_TIME=$(git log -1 --format=%cI)`; PowerShell:
+`$env:DCDASH_BUILD_ID = git describe --always --dirty; $env:DCDASH_BUILD_TIME = git log -1 --format=%cI`); without them the images say
+`dev` / `unknown`. The id is the commit, with `-dirty` while tracked files differ from it, and the time is the commit's, never the
+clock of the build, so building the same tree again changes nothing. A new id (a new commit, or `-dirty` appearing) rebuilds the
+last image layer and recreates `api`, `collector` and `simulator` once. The `web` image carries no build id.
+
 ## Release notes
 
 One entry for each release that changes the database: the revision it leads to, what it changes, the pre-checks to run before it,
@@ -1032,6 +1045,24 @@ The `api` container applies it the first time it starts from the new image.
    - **Option b, restore the backup from step 1.** Everything collected since that backup is lost. The restore script is the one of
      the old commit (see step 5 of option b in "Upgrading and going back"). `--force` is needed: the volume
      still holds the W1a database (`0005`) and the dump's `.version` says `0004`, so the script refuses without it.
+
+### Upgrading to W8 (migration 0006)
+
+Schema `0005` to `0006`. Downgrade: **lossless** for every other table (the dropped table only holds diagnostics), so option a is open.
+The code to go back to is `b933bc7` (`main` before W8).
+
+W8 (field diagnostics) adds migration `0006`: one new table, `diag_events`, the persistent event journal behind the Diagnostics report
+(connection transitions, job results, check results, API errors), with two indexes. It runs in a moment and needs no pre-check. The
+collector's hourly housekeeping keeps at most 14 days and 20 000 rows of it. The `api` container applies the migration the first time it
+starts from the new image.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0005`).
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you.
+3. **Verify.** `docker compose exec api alembic current` prints `0006 (head)`; the Settings page shows "Version <id>".
+4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0005` and `<old commit>` = `b933bc7`. The `0006`
+   downgrade drops `diag_events`; nothing else changes, and `upgrade` creates it empty again. A restart of the W8 `api` would run
+   `alembic upgrade head` and apply `0006` again, so the W8 `api` must not be running once the schema is back at `0005`.
 
 ## Add a connector
 

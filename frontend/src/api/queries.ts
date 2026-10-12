@@ -6,7 +6,7 @@ import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
   FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
-  WidgetData, WidgetType, CollectorStatus, LiveStatus, SecretKeyStatus, TlsStatus,
+  WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
 
 export const keys = {
@@ -45,6 +45,7 @@ export const keys = {
   status: ["status"] as const,
   secretKey: ["secret-key"] as const,
   tlsStatus: ["tls-status"] as const,
+  version: ["version"] as const,
 };
 
 /** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today), `fleet` the Assets landing page's figures. */
@@ -90,6 +91,10 @@ export const useSecretKeyStatus = () =>
 /** Admins only (the app shell's notice and the Settings page). The collector checks the certificate hourly, so ten minutes is plenty. */
 export const useTlsStatus = () =>
   useQuery({ queryKey: keys.tlsStatus, queryFn: () => api.get<TlsStatus>("/api/tls/status"), refetchInterval: 600_000 });
+
+/** The build the api runs. It changes only when the image is rebuilt, which reloads the page, so it is read once. */
+export const useVersion = () =>
+  useQuery({ queryKey: keys.version, queryFn: () => api.get<VersionInfo>("/api/version"), staleTime: Infinity });
 
 export const useConnectors = (enabled: boolean) =>
   useQuery({ queryKey: keys.connectors, queryFn: () => api.get<Connector[]>("/api/connectors"), enabled, staleTime: Infinity });
@@ -355,3 +360,33 @@ export const useWidgetData = (type: WidgetType, config: WidgetConfig, preset: Ra
     },
     queryFn: () => api.post<WidgetData>("/api/widget-data", { type, config, range: preset }),
   });
+
+/**
+ * Queue the step-by-step connection check of a source: `{ job_id }`, which `useJob` then polls. A source with a check already queued
+ * or running answers 409 (the ApiError's `body.job_id` is that check); one that finished a moment ago answers 429. Both are sentences, not faults.
+ */
+export function useStartCheck(sourceId: number | null) {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: () => api.post<{ job_id: number }>(`/api/sources/${sourceId}/check`),
+    onSuccess: () => invalidate(keys.auditAll), // the start is audited ("source.checked")
+  });
+}
+
+/**
+ * One diagnostics report. An explicit request, never a query: every call writes an audit row, so a refocus or a remount must not make
+ * one. `client_time` is this browser's clock, which the report compares with the container's (the one witness outside the VM).
+ */
+export function buildReport({ detail, mask, source }: ReportParams): Promise<ReportReply> {
+  const query = new URLSearchParams({ detail, mask: mask ? "1" : "0", format: "json", client_time: new Date().toISOString() });
+  if (source !== null) query.set("source", String(source));
+  return api.get<ReportReply>(`/api/diagnostics/report?${query}`);
+}
+
+export function useBuildReport() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: buildReport,
+    onSuccess: () => invalidate(keys.auditAll), // the build is audited ("diagnostics.report")
+  });
+}

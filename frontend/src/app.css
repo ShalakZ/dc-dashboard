@@ -24,6 +24,7 @@
   --backdrop: rgba(10, 16, 28, 0.55);
   /* type: 12 / 13 / 14 / 16 / 18 / 22 / 28 */
   --font: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, "Liberation Mono", monospace; /* data only (the report text), never a label */
   --fs-xs: 12px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 16px; --fs-lg: 18px; --fs-title: 22px; --fs-figure: 28px;
   /* spacing, radius, elevation, motion, sizes */
   --row-y: 11px; --row-x: 14px; --gutter: 28px;          /* 22px below 1180px, see the media query in the layer */

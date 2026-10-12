@@ -83,4 +83,42 @@
   .audit-entry-page .actions svg.i, .audit-entry-page .back-line svg.i { width: 16px; height: 16px; margin-left: -4px; }
   .back-line { margin: 22px 0 14px; font-size: var(--fs-sm); }
   .audit-entry-page pre { margin: 0 0 22px; padding: 14px 16px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: var(--fs-sm); line-height: 1.5; }
+
+  /* Connection check (the Diagnostics page and the Sources row's dialog): the controls, then one block per step, each led by its state shape */
+  /* A block, not a grid: the live region below is empty until the first step, and an empty block's margin collapses into its neighbour's. */
+  .check-panel { min-width: 0; }
+  .check-panel > * { margin: 0; }
+  .check-panel > * + * { margin-top: 12px; }
+  .check-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+  .check-controls > label { min-width: 220px; }
+  .check-step > p { margin: 0; }
+  .check-line { font-weight: 600; }
+  .check-panel > .check-line { margin-top: 12px; } /* beats `.check-panel > *`: the verdict does not sit flush under the Run button */
+  /* The Sources row's dialog is taller than a 1024x768 window when a check fails (880px against 736px): the steps scroll, the Close row stays. */
+  .dialog:has(> .check-panel) { overflow: hidden; grid-template-rows: auto minmax(0, 1fr) auto; }
+  .dialog > .check-panel { min-height: 0; overflow: auto; }
+  .check-steps { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius); }
+  .check-step { display: grid; gap: 4px; padding: 10px 16px; }
+  .check-step + .check-step { border-top: 1px solid var(--border); }
+  .check-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+  .check-head .st { font-size: var(--fs-base); font-weight: 600; white-space: normal; }
+  .check-ms { flex: none; color: var(--text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+  .check-summary, .check-error, .check-hint { padding-left: 14px; overflow-wrap: anywhere; font-size: var(--fs-sm); }
+  .check-error { font-weight: 600; }
+  .check-hint { padding-left: 12px; border-left: 2px solid var(--border-strong); }
+  .check-step[data-state="failed"] .check-hint { border-left-color: var(--crit); }
+  .check-at { font-size: var(--fs-sm); }
+
+  /* Diagnostics: the report form, then the built parts. The text is data, so it may be monospace; nothing else on the page is. */
+  .diag-page .report-form { max-width: 560px; }
+  .report-form fieldset { display: grid; gap: 8px; margin: 0; padding: 10px 14px; }
+  .report-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 22px 0 14px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .report-built { margin: 0; font-weight: 600; }
+  .report-part { display: grid; gap: 8px; margin: 0 0 22px; }
+  .report-part-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+  .report-part-head h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
+  .report-text { height: 18em; font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.5; white-space: pre; overflow: auto; resize: vertical; }
+  .address-key { margin: 0 0 8px; }
+  .address-key > summary { width: fit-content; font-weight: 600; cursor: pointer; }
+  .address-key > p { margin: 8px 0; }
 }

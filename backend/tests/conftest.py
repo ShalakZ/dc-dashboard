@@ -15,9 +15,19 @@ from helpers import refresh_rollup  # noqa: E402  (imports dcdash, which needs t
 
 BACKEND = Path(__file__).resolve().parents[1]
 TABLES = (
-    "audit_log, widgets, dashboards, tariffs, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, "
+    "diag_events, audit_log, widgets, dashboards, tariffs, scan_findings, scans, scan_scopes, graph_layout, jobs, point_latest, "
     "readings, mappings, points, assets, sources, sessions, users, settings"
 )
+
+
+@pytest.fixture(autouse=True)
+def _journal_state():
+    """The journal keeps process-wide state (its rate limiter, its background writes); no test may inherit another's."""
+    from dcdash.core import journal
+
+    journal.reset_limits()
+    yield
+    journal.reset_limits()
 
 
 @pytest.fixture(scope="session")

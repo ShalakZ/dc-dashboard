@@ -70,3 +70,31 @@ async def test_shutting_down_does_not_wait_for_a_background_task_stuck_in_a_quer
     assert done, "_shut_down did not return: the stuck query was never released"
     assert loop.time() - started < 3
     assert pool.terminated and stuck.done()
+
+
+async def test_the_lifespan_publishes_its_pool_for_the_error_recorder_and_cancels_journal_writes_before_closing_it(app, monkeypatch):
+    from dcdash.core import journal
+
+    class Pool(_HangingPool):
+        def __init__(self):
+            super().__init__()
+            self.pending_at_close = None
+
+        async def close(self):
+            self.pending_at_close = len(journal._pending)
+
+    class Frozen:
+        async def execute(self, *args):
+            await asyncio.sleep(60)
+
+    pool = Pool()
+
+    async def fake_create_pool(*args, **kwargs):
+        return pool
+
+    monkeypatch.setattr(api_main, "create_pool", fake_create_pool)
+    async with api_main.lifespan(app):
+        assert app.state.pool is pool
+        assert journal.record_soon(Frozen(), "api", journal.HTTP_5XX, "x")
+        await asyncio.sleep(0)
+    assert pool.pending_at_close == 0

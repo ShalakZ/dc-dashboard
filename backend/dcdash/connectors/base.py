@@ -2,10 +2,13 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:  # diagnostics.check must stay importable without the connectors, so the import here is lazy
+    from dcdash.diagnostics.check import CheckResult, Publish
 
 GOOD = 0
 BAD = 1
@@ -25,6 +28,7 @@ class PointValue:
     ts: datetime
     value: float | None
     quality: int = GOOD
+    status: str | None = None  # why a reading is bad, when the source says (OPC UA: "BadNodeIdUnknown (0x80340000)")
 
 
 @dataclass(frozen=True)
@@ -102,8 +106,36 @@ class Connector(ABC):
     @abstractmethod
     async def read(self, addresses: list[str]) -> list[PointValue]: ...
 
+    async def check(self, points: list[str], publish: "Publish | None" = None) -> "CheckResult":
+        """The step-by-step connection check of this source. `points` are the addresses mapped to it (at most 200), `publish`
+        is awaited with the partial result after every step.
+
+        The default is one step, `test`, which runs `test()`; a connector with more to tell (OPC UA) overrides this with a
+        `Checker` of its own. Read-only, like everything a connector does. Never raises for a failed step.
+        """
+        from dcdash.diagnostics.check import Checker, StepFailed, StepOutcome
+
+        checker = Checker(
+            self.type, publish, known=[self.secret] if self.secret else [],
+            step_timeout=getattr(self.config, "timeout_seconds", None),
+        )
+
+        async def run_test() -> StepOutcome:
+            outcome = await self.test()
+            if not outcome.ok:
+                text = f"{outcome.status}: {outcome.message}" if outcome.message else outcome.status
+                raise StepFailed(text, summary=outcome.status, error_class="ConnectorError", hint=_ONLY_OPCUA_STEPS)
+            latency = "" if outcome.latency_ms is None else f" in {outcome.latency_ms:.0f} ms"
+            return StepOutcome(f"connected{latency}", hint=_ONLY_OPCUA_STEPS)
+
+        await checker.step("test", "Connection test", run_test)
+        return await checker.finish()
+
     async def close(self) -> None:
         return None
+
+
+_ONLY_OPCUA_STEPS = "A detailed step-by-step check exists for OPC UA sources only; this source type gets a single connection test."
 
 
 ConnectorFactory = Callable[[str, dict[str, Any], str | None], Connector]

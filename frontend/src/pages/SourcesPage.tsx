@@ -5,6 +5,7 @@ import { keys, useCollectorStatus, useInvalidate, useSecretKeyStatus, useSite, u
 import type { Source, SourceImpact } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { ConnectionCheck } from "../components/ConnectionCheck";
 import { JobStatus } from "../components/JobStatus";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
@@ -49,11 +50,14 @@ export function SourcesPage() {
   // The source as it was when Edit was pressed, not a lookup into the list: the list is fetched every 10 s with new objects, which would reset the open form.
   const [editing, setEditing] = useState<Source | null>(null);
   const [confirming, setConfirming] = useState<{ id: number; name: string; impact: SourceImpact } | null>(null);
+  // The source whose step-by-step connection check is open in a dialog.
+  const [checking, setChecking] = useState<{ id: number; name: string } | null>(null);
   const { run, busy, error: actionError } = useAction();
   // While a test or delete runs or a delete confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap).
-  const locked = busy || confirming !== null;
+  const locked = busy || confirming !== null || checking !== null;
   const openAdd = () => { if (!locked) setShowAdd(true); };
   const openEdit = (s: Source) => { if (!locked) setEditing(s); };
+  const openCheck = (s: Source) => { if (!locked) setChecking({ id: s.id, name: s.name }); };
 
   const testOne = (id: number) => run(async () => {
     const { job_id } = await api.post<{ job_id: number }>(`/api/sources/${id}/test`);
@@ -132,6 +136,12 @@ export function SourcesPage() {
           <SourceForm source={editing} onDone={() => setEditing(null)} />
         </Modal>
       )}
+      {checking && (
+        <Modal title={`Check connection: ${checking.name}`} onClose={() => setChecking(null)}>
+          <ConnectionCheck sourceId={checking.id} autoStart />
+          <div className="row"><button type="button" onClick={() => setChecking(null)}>Close</button></div>
+        </Modal>
+      )}
       {confirming && (
         <ConfirmDeleteDialog
           title={`Delete source "${confirming.name}"?`}
@@ -159,6 +169,7 @@ export function SourcesPage() {
                     <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
                     <td className="row-actions">
                       <button className="quiet" onClick={() => testOne(s.id)} disabled={locked}>Test</button>
+                      <button className="quiet" onClick={() => openCheck(s)} disabled={locked} aria-label="Check connection" title="Check connection">Check</button>
                       {hasRole("admin") && <button className="quiet" onClick={() => openEdit(s)} disabled={locked}>Edit</button>}
                       {hasRole("admin") && <Link className="quiet-link" to={`/sources/${s.id}/points`}>Points</Link>}
                       {hasRole("admin") && <button className="danger-quiet" onClick={() => remove(s.id, s.name)} disabled={locked}>Delete</button>}

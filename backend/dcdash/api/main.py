@@ -13,11 +13,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 
 from dcdash.api import (
-    assets, audit, auth, billing, dashboards, data, discovery, health, jobs, mappings, scans, settings, site,
-    sources, storage, stream, tariffs, tls, users, widget_data,
+    assets, audit, auth, billing, dashboards, data, diagnostics, discovery, health, jobs, mappings, scans, settings,
+    site, sources, storage, stream, tariffs, tls, users, widget_data,
 )
+from dcdash.api.error_recorder import ErrorRecorder
 from dcdash.api.settings import seed_general
 from dcdash.api.stream import Broadcaster
+from dcdash.core import journal
 from dcdash.core.config import get_settings
 from dcdash.core.db import dispose_engine, get_sessionmaker
 from dcdash.core.logscrub import install_log_scrub
@@ -36,6 +38,7 @@ async def _shut_down(tasks: list[asyncio.Task], pool: asyncpg.Pool) -> None:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await journal.cancel_pending()  # before the pool closes: a write still in flight would fail on a closed pool
         await pool.close()
         await dispose_engine()
 
@@ -77,6 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     install_log_scrub()  # a database error prints its statement parameters, which can hold a source's URL with its password
     broadcaster: Broadcaster = app.state.broadcaster
     pool = await create_pool()
+    app.state.pool = pool  # the error recorder writes to the journal through it
     scales_stale = asyncio.Event()
     seeded = False
 
@@ -124,6 +128,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.state.broadcaster = Broadcaster()
+    app.add_middleware(ErrorRecorder)
     for error in (OperationalError, InterfaceError, ConnectionError):
         app.add_exception_handler(error, _database_unavailable)
     app.add_exception_handler(RequestValidationError, _validation_error)
@@ -132,7 +137,7 @@ def create_app() -> FastAPI:
         health.router, auth.router, jobs.router, sources.router, assets.router,
         mappings.router, data.router, stream.router, users.router, settings.router, storage.router,
         scans.router, discovery.router, audit.router, site.router, tariffs.router, billing.router,
-        dashboards.router, widget_data.router, tls.router,
+        dashboards.router, widget_data.router, tls.router, diagnostics.router,
     ):
         app.include_router(router)
     return app

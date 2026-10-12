@@ -33,6 +33,7 @@ export const GROUPS: NavGroup[] = [
       { to: "/tariffs", label: "Tariffs", icon: "tariffs" },
       { to: "/storage", label: "Storage", icon: "storage" },
       { to: "/audit", label: "Audit", icon: "audit" },
+      { to: "/diagnostics", label: "Diagnostics", icon: "diagnostics" },
     ],
   },
 ];

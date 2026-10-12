@@ -17,6 +17,7 @@ const routes = (role: string) => ({
   "GET /api/assets": { body: [] },
   "GET /api/fleet/summary": { body: { power: { kw: null, counted: 0, of: 0 }, energy_today: null, cost_today: null, currency: "QAR", attention: { total: 0, items: [] } } },
   "GET /api/sources": { body: [] },
+  "GET /api/diagnostics/report": { body: { format: "DCDASH-REPORT v1", build_id: "t", detail: "summary", mask: false, checksum: "c", parts: [], legend: [] } },
   "GET /api/sources/4/points": { body: [] },
   "GET /api/billing/costs": { body: { month: "2026-10", timezone: "Asia/Qatar", currency: "QAR", days: [], assets: [] } },
   "GET /api/dashboards": { body: [] },
@@ -34,6 +35,19 @@ describe("App routes", () => {
     const calls = visit(role, "/tariffs");
     expect(await screen.findByText("Admins only")).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/tariffs")).toBe(false);
+  });
+
+  it.each(["viewer", "operator"])("keeps Diagnostics away from a %s, and asks the report route nothing", async (role) => {
+    const calls = visit(role, "/diagnostics");
+    expect(await screen.findByText("Admins only")).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/diagnostics/report")).toBe(false);
+  });
+
+  it("opens Diagnostics for an admin, without building a report on its own", async () => {
+    const calls = visit("admin", "/diagnostics");
+    expect(await screen.findByRole("heading", { level: 1, name: "Diagnostics" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Build report" })).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/diagnostics/report")).toBe(false);
   });
 
   it("opens Tariffs for an admin", async () => {

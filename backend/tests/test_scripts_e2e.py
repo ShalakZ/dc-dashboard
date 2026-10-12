@@ -15,22 +15,28 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "e2e.sh"
 
 
-def run_e2e(tmp_path: Path, *, running_normal_stack: bool = False, npm_status: int = 0, **env: str):
+def run_e2e(tmp_path: Path, *, running_normal_stack: bool = False, npm_status: int = 0, broken_git: bool = False, **env: str):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "calls.log"
     log.touch()
     programs = {
-        # `docker compose -p dcdash ... ps -q` prints a container id when the fake normal stack "is running"
+        # `docker compose -p dcdash ... ps -q` prints a container id when the fake normal stack "is running"; an `up` also
+        # writes down the build id it was started with
         "docker": f'echo "docker $*" >> "{log}"\n'
-                  'case "$*" in *" ps "*) [ -n "$FAKE_RUNNING" ] && echo 0123456789ab ;; esac\nexit 0\n',
+                  'case "$*" in *" ps "*) [ -n "$FAKE_RUNNING" ] && echo 0123456789ab ;; esac\n'
+                  f'case "$*" in *" up "*) echo "DCDASH_BUILD_ID=$DCDASH_BUILD_ID DCDASH_BUILD_TIME=$DCDASH_BUILD_TIME" >> "{tmp_path / "up-env.log"}" ;; esac\n'
+                  'exit 0\n',
         "npm": f'echo "npm $*" >> "{log}"\nexit "$FAKE_NPM_STATUS"\n',
     }
+    if broken_git:
+        programs["git"] = "echo 'fatal: git is broken' >&2\nexit 128\n"
     for name, body in programs.items():
         path = bin_dir / name
         path.write_text("#!/usr/bin/env bash\n" + body)
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
-    environment = {k: v for k, v in os.environ.items() if k not in ("COMPOSE_PROJECT_NAME", "E2E_COMPOSE_PROJECT")}
+    environment = {k: v for k, v in os.environ.items()
+                   if k not in ("COMPOSE_PROJECT_NAME", "E2E_COMPOSE_PROJECT") and not k.startswith("DCDASH_BUILD_")}
     environment.update(
         PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         FAKE_RUNNING="1" if running_normal_stack else "",
@@ -82,3 +88,44 @@ def test_a_running_normal_stack_stops_the_script_before_it_changes_anything(tmp_
     assert "docker compose --profile dev stop" in result.stderr  # and never with -v
     assert changing(calls) == [] and not any(c.startswith("npm") for c in calls)
     assert calls == ["docker compose -p dcdash --profile dev ps -q"]  # it only looked
+
+
+# ---- the build id the images carry (W8, part G / amendment M10) -------------------------------------------------------------
+
+def repo_git(*args: str) -> str | None:
+    """What git says about the repository the script runs in (None without git or outside a repository)."""
+    try:
+        done = subprocess.run(["git", *args], cwd=SCRIPT.parent, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.strip() if done.returncode == 0 and done.stdout.strip() else None
+
+
+def build_started_with(tmp_path: Path) -> list[str]:
+    log = tmp_path / "up-env.log"
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def test_the_stack_is_built_with_the_commit_and_its_commit_time(tmp_path):
+    result, _ = run_e2e(tmp_path)
+    assert result.returncode == 0, result.stderr
+    build_id = repo_git("describe", "--always", "--dirty") or "dev"
+    build_time = repo_git("log", "-1", "--format=%cI") or "unknown"
+    assert build_started_with(tmp_path) == [f"DCDASH_BUILD_ID={build_id} DCDASH_BUILD_TIME={build_time}"]
+    if build_id != "dev":  # a checkout with git: a real id and a commit time, not the clock
+        assert build_time != "unknown" and "T" in build_time
+
+
+def test_without_a_working_git_the_build_is_dev_and_unknown_and_the_run_goes_on(tmp_path):
+    result, calls = run_e2e(tmp_path, broken_git=True)
+    assert result.returncode == 0, result.stderr
+    assert build_started_with(tmp_path) == ["DCDASH_BUILD_ID=dev DCDASH_BUILD_TIME=unknown"]
+    assert "git is broken" not in result.stderr
+    assert "npm run e2e" in calls
+
+
+def test_the_build_id_is_set_before_the_stack_is_built():
+    lines = SCRIPT.read_text().splitlines()
+    up = next(i for i, line in enumerate(lines) if line == "compose up -d --build")
+    assert any(line.startswith("export DCDASH_BUILD_ID=") for line in lines[:up])
+    assert "git describe --always --dirty" in "\n".join(lines[:up]) and "git log -1 --format=%cI" in "\n".join(lines[:up])

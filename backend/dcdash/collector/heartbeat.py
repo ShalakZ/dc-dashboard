@@ -3,6 +3,7 @@ import logging
 
 import asyncpg
 
+from dcdash.core.build import build_info
 from dcdash.core.heartbeat import HEARTBEAT_KEY, HEARTBEAT_SECONDS
 
 log = logging.getLogger(__name__)
@@ -11,13 +12,15 @@ WRITE_TIMEOUT_SECONDS = 5.0
 
 
 async def beat(pool: asyncpg.Pool) -> None:
-    """Write one beat. Bounded for a slow or unreachable database; against a frozen one the write waits until it thaws or
-    `_close_down` terminates the pool (Task 2). No beat can be stored then anyway."""
+    """Write one beat (the database's time and the build id this collector runs). Bounded for a slow or unreachable database;
+    against a frozen one the write waits until it thaws or `_close_down` terminates the pool (Task 2). No beat can be stored
+    then anyway."""
     await asyncio.wait_for(
         pool.execute(
-            "INSERT INTO settings (key, value) VALUES ($1, jsonb_build_object('at', now())) "
+            "INSERT INTO settings (key, value) VALUES ($1, jsonb_build_object('at', now(), 'build_id', $2::text)) "
             "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             HEARTBEAT_KEY,
+            build_info().build_id,
         ),
         timeout=WRITE_TIMEOUT_SECONDS,
     )

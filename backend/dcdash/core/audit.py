@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import asyncpg
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -187,17 +187,22 @@ def clip_error(text: str, limit: int = 1000) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def scrub_strings(value: Any) -> Any:
-    """A JSON value with `scrub_url_credentials` applied to every string in it, however deep (keys are left alone).
+def scrub_strings(value: Any, known: Iterable[str] = ()) -> Any:
+    """A JSON value with `scrub_url_credentials(..., known)` applied to every string in it, however deep (keys are left alone).
 
-    For a stored result (a job's) that may quote a URL anywhere in it. Other values come back as they are.
+    For a stored result (a job's) or a journal detail that may quote a URL, or a source's password, anywhere in it. Other
+    values come back as they are.
     """
+    return _scrub_strings(value, tuple(known))
+
+
+def _scrub_strings(value: Any, known: tuple[str, ...]) -> Any:
     if isinstance(value, str):
-        return scrub_url_credentials(value)
+        return scrub_url_credentials(value, known)
     if isinstance(value, dict):
-        return {key: scrub_strings(item) for key, item in value.items()}
+        return {key: _scrub_strings(item, known) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return [scrub_strings(item) for item in value]
+        return [_scrub_strings(item, known) for item in value]
     return value
 
 
@@ -217,6 +222,17 @@ def hidden_parts(config: Mapping[str, Any]) -> dict[str, str]:
         if text:
             hidden[key] = text
     return hidden
+
+
+def hidden_values(config: Mapping[str, Any]) -> list[str]:
+    """What must not reach a stored text about this config: every `hidden_parts` value, and its percent-decoded form too (a URL
+    keeps `p%40ss` encoded, but the client library decodes the user info and may quote `p@ss`)."""
+    values: list[str] = []
+    for value in hidden_parts(config).values():
+        values.append(value)
+        if (decoded := unquote(value)) != value:
+            values.append(decoded)
+    return values
 
 
 def safe_config(config: Mapping[str, Any]) -> dict[str, Any]:

@@ -450,6 +450,7 @@ prompt, Save and reload, rename and duplicate name, two-tab conflict) were confi
   while the Discovery graph opts out with `main:has(.graph-page) { max-width: none }`. A wall screen is a
   stated use of the dashboards, so dashboards should opt out the same way (maybe a "fit to screen" choice).
   Billing, with its 31 day columns, would also gain from more width.
+  **Closed by W7a (2026-10-12).** Pages use the whole browser width (`main` has no 1200 px cap any more); the e2e case "Billing and Users use the whole width of a 1920 px window" covers it.
 - **S7-3 [ux] (owner)** Long asset names do not fit in a default-size widget: legends scroll or cut off
   and bar labels are shortened (`MV2-R2-LV-Panel-02`). Ideas: bigger default sizes per widget type, legends
   that wrap, labels that truncate with a tooltip. S7-2 gives more room.

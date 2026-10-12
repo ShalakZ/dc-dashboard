@@ -12,7 +12,7 @@ from dcdash.api.asset_names import AssetName, require_free_name
 from dcdash.api.assets import get_asset
 from dcdash.api.deps import get_db, notify, require_role
 from dcdash.api.sources import get_source
-from dcdash.core.audit import audit, hidden_parts, safe_config, scrub_url_credentials
+from dcdash.core.audit import audit, hidden_values, safe_config, scrub_url_credentials
 from dcdash.core.discovery import MappingGuess, PointInfo, guess_mapping, suggest_groups
 from dcdash.core.metrics import Metric, Scale, default_interval
 from dcdash.core.models import Asset, GraphLayout, Mapping, Point, Scan, ScanFinding, Source, User
@@ -101,7 +101,7 @@ def source_json(
 
     last_error = source.last_error
     if last_error is not None:
-        last_error = scrub_url_credentials(last_error, hidden_parts(source.config).values())
+        last_error = scrub_url_credentials(last_error, hidden_values(source.config))
     return {
         "id": source.id,
         "name": source.name,

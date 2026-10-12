@@ -11,10 +11,12 @@ async def _count(db) -> int:
     return await db.fetchval("SELECT count(*) FROM settings WHERE key = $1", HEARTBEAT_KEY)
 
 
-async def test_a_beat_stores_the_database_time(db):
+async def test_a_beat_stores_the_database_time_and_the_build_id(db, monkeypatch):
+    monkeypatch.setenv("DCDASH_BUILD_ID", "227bd6a-dirty")
     await beat(db)
     value = await db.fetchval("SELECT value FROM settings WHERE key = $1", HEARTBEAT_KEY)
-    assert set(value) == {"at"}
+    assert set(value) == {"at", "build_id"}
+    assert value["build_id"] == "227bd6a-dirty"
     age = await db.fetchval(
         "SELECT extract(epoch FROM now() - (value->>'at')::timestamptz) FROM settings WHERE key = $1", HEARTBEAT_KEY
     )
@@ -76,3 +78,9 @@ async def test_a_slow_write_is_abandoned(monkeypatch, caplog):
         stop.set()
         await asyncio.wait_for(task, timeout=2)
     assert any("heartbeat not written" in r.getMessage() for r in caplog.records)
+
+
+async def test_without_a_build_the_beat_says_dev(db, monkeypatch):
+    monkeypatch.delenv("DCDASH_BUILD_ID", raising=False)
+    await beat(db)
+    assert await db.fetchval("SELECT value->>'build_id' FROM settings WHERE key = $1", HEARTBEAT_KEY) == "dev"

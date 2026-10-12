@@ -298,3 +298,18 @@ Added by the whole-branch review and its re-review (2026-10-12; the Important fi
 - **Sources table at 1920:** names cut short ("OPC UA server at si…") with about 800 px of the row empty (the W6 column rule, visible now that pages use the full width): W7b (admin pages).
 - **Two "live" chips on an asset page:** the bar's "Live" (readings are fresh) and the page header's "live" (the stream is connected). Distinct meanings, similar words; the e2e specs read the header chip's text. Rename one when the status wording is next touched.
 - **`/assets/999999` shows "loading…" for about a second** before "Asset not found." (`retry: 1` in `main.tsx` retries the 404 once): skip retries for a 404 on this query.
+
+## S. W8 leftovers (plan review, task reports, the security and browser reviews of the wave, 2026-10-12; none of these blocks)
+
+- **Wave W8b is next** (brief parts H, I and the rest of E): dev-simulator fault switches (untrusted certificate, wrong password, some security policies only, slow answers, dropped connections, Bad status codes, skewed time; environment variables read only by `backend/dcdash/simulator/`), the blind-read acceptance test (an Opus reader gets only the pasted `summary` text per fault), `docs/field-debugging-examples/`, `scripts/collect-diagnostics.sh` and the shared scrubber fixture for the PowerShell and Python scrubbers (`core/logscrub.py`).
+- **Modbus has no step-by-step check yet.** A non-OPC UA source gets one generic `Connection test` step with the hint that the detailed check exists for OPC UA only. TCP connect, unit id, one test read and the exception-code names are the wanted steps.
+- **A secret shorter than 4 characters cannot be scrubbed** (`_MIN_KNOWN`): a password such as `abc` would appear in clear if an error quotes it. Options: reject such secrets on save (a policy call: some devices have short passwords), or flag them on the Sources list. The UI warning the plan promised was dropped because it needs a server-side flag.
+- **A pending `check_connection` job behind a dead collector blocks new checks** (the 409 guard has no age bound): the panel says "queued". Add an age limit (for example 2 minutes) after which the old job counts as dead.
+- **Accessibility:** Build report and Run connection check use `disabled` while pending, so focus falls to `<body>`; "Built a ... report" and "Copied part i of n" live regions mount together with their text (not reliably announced). Use `aria-disabled` and always-mounted `role=status` regions.
+- **Masker details:** an unbracketed IPv6 address with a port is aliased together with the port (two aliases for one host: stability only, nothing leaks); a dotless listed host name cut by a stored clip (`scad…`) survives as a fragment.
+- **`scripts/collect-diagnostics.ps1` prints `USERNAME` and `COMPUTERNAME` and the adapters' IPv4 addresses** (host facts for the person who helps; the report treats a user name as half a credential). Decide whether the script needs its own mask switch.
+- **Audit tail lines for `source.created` show only "…" as their detail** (nested config is not flattened); a short flattened summary would help.
+- **Build id:** the `web` image carries none (the API's `/api/version` is the proof); stacks built through `scratch.sh` or the vis helpers report `dev`/`unknown` unless the helper exports it; Settings shows the build time without a zone label.
+- **Sources table wants the W7b RowActions menu** (the row now has Test, Check, Browse/Points, Edit, Delete).
+- **Journal:** `source.online` events show an `x5 since` collapse in the report when a poll group restarts (reload) several times in a minute; consider not journalling a recovery caused only by a reload.
+

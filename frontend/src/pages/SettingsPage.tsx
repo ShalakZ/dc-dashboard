@@ -1,7 +1,7 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 import { ApiError } from "../api/client";
 import type { TlsStatus } from "../api/types";
-import { useGeneralSettings, usePutGeneralSettings, usePutSignInPolicy, useSignInPolicy, useTlsStatus } from "../api/queries";
+import { useGeneralSettings, usePutGeneralSettings, usePutSignInPolicy, useSignInPolicy, useTlsStatus, useVersion } from "../api/queries";
 import { daysLeftText } from "../components/CertificateNotice";
 import { PageHeader } from "../components/PageHeader";
 import { formatSiteDateTime } from "../lib/siteTime";
@@ -98,6 +98,15 @@ function SignInProtection() {
   );
 }
 
+/** "Version 227bd6a, built 2026-10-12 14:03:11": the commit the api image was built from and that commit's time on the site clock. Nothing while unknown. */
+function VersionLine({ timezone }: { timezone: string }) {
+  const version = useVersion();
+  if (!version.data) return null;
+  const { build_id, build_time } = version.data;
+  const built = build_time === "unknown" ? build_time : formatSiteDateTime(build_time, timezone);
+  return <p className="muted">Version {build_id}, built {built}</p>;
+}
+
 const ZONES: string[] = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
 
 export function SettingsPage() {
@@ -155,6 +164,7 @@ export function SettingsPage() {
               <span>Certificate: {certificateText(tls.data, settings.data.timezone)}</span>
             </p>
           )}
+          <VersionLine timezone={settings.data.timezone} />
         </div>
         <SignInProtection />
       </div>

@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -182,3 +182,16 @@ class AuditLog(Base):
     actor_id: Mapped[int | None]  # the user's id when the row was written; no foreign key, so it outlives the user
     actor_name: Mapped[str | None]  # filled by the audit_log_snapshot_actor trigger (migration 0005)
     ts: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+
+
+class DiagEvent(Base):
+    __tablename__ = "diag_events"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    ts: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+    level: Mapped[str]  # info | warning | error (a CHECK in migration 0006)
+    component: Mapped[str]  # collector | api | scan | job
+    source_id: Mapped[int | None]  # no foreign key: the journal outlives the source
+    kind: Mapped[str]
+    code: Mapped[str | None]
+    message: Mapped[str]
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")

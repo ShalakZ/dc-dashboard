@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 from asyncua import Client, Node, ua
@@ -26,6 +26,9 @@ from dcdash.connectors.base import (
     register,
     url_host_port,
 )
+
+if TYPE_CHECKING:
+    from dcdash.diagnostics.check import CheckResult, Publish
 
 _AUTH_CODES = {
     ua.StatusCodes.BadUserAccessDenied,
@@ -99,9 +102,8 @@ class OpcUaConnector(Connector):
         super().__init__(config, secret)
         self.config: OpcUaConfig = config
 
-    @asynccontextmanager
-    async def _session(self) -> AsyncIterator[Client]:
-        """A fresh client per call, always disconnected; a half-dead session is never reused."""
+    async def _new_client(self) -> Client:
+        """A client with the configured authentication and security, not yet connected."""
         client = Client(self.config.endpoint, timeout=self.config.timeout_seconds)
         if self.config.username:
             client.set_user(self.config.username)
@@ -113,6 +115,12 @@ class OpcUaConnector(Connector):
             await client.set_security_string(
                 f"Basic256Sha256,SignAndEncrypt,{self.config.client_cert},{self.config.client_key}"
             )
+        return client
+
+    @asynccontextmanager
+    async def _session(self) -> AsyncIterator[Client]:
+        """A fresh client per call, always disconnected; a half-dead session is never reused."""
+        client = await self._new_client()
         try:
             await asyncio.wait_for(client.connect(), self.config.timeout_seconds)
         except Exception as exc:  # noqa: BLE001 - translated into a typed status
@@ -137,6 +145,11 @@ class OpcUaConnector(Connector):
         except ConnectorError as exc:
             return ConnectionCheck(ok=False, status=exc.status, message=exc.message)
         return ConnectionCheck(ok=True, status="ok", latency_ms=(time.perf_counter() - started) * 1000)
+
+    async def check(self, points: list[str], publish: Publish | None = None) -> CheckResult:
+        from dcdash.connectors.opcua_check import run_check  # imported here: that module imports this one
+
+        return await run_check(self, points, publish)
 
     async def browse(self) -> list[PointDescriptor]:
         found: list[PointDescriptor] = []
@@ -167,15 +180,24 @@ class OpcUaConnector(Connector):
         async with self._session() as client:
             nodes = [client.get_node(a) for a in addresses]
             results = await client.read_attributes(nodes, ua.AttributeIds.Value)
-        out: list[PointValue] = []
-        for address, dv in zip(addresses, results, strict=True):
-            good = dv.StatusCode_ is None or dv.StatusCode_.is_good()
-            value = dv.Value.Value if good and dv.Value is not None else None
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                out.append(PointValue(address=address, ts=ts, value=float(value), quality=GOOD))
-            else:
-                out.append(PointValue(address=address, ts=ts, value=None, quality=BAD))
-        return out
+        return [_point_value(address, ts, dv) for address, dv in zip(addresses, results, strict=True)]
+
+
+def _status_text(code: ua.StatusCode) -> str:
+    """"BadNodeIdUnknown (0x80340000)": the name, and the hex because a code this asyncua does not know is only named "Bad"."""
+    return f"{code.name} (0x{code.value:08X})"
+
+
+def _point_value(address: str, ts: datetime, dv: ua.DataValue) -> PointValue:
+    """A DataValue as a PointValue. A reading that is not good, or good but not a number, is BAD and says why in `status`."""
+    code = dv.StatusCode_
+    if code is not None and not code.is_good():
+        return PointValue(address=address, ts=ts, value=None, quality=BAD, status=_status_text(code))
+    value = dv.Value.Value if dv.Value is not None else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return PointValue(address=address, ts=ts, value=float(value), quality=GOOD)
+    kind = dv.Value.VariantType.name if dv.Value is not None else "no value"
+    return PointValue(address=address, ts=ts, value=None, quality=BAD, status=f"Good, non-numeric ({kind})")
 
 
 async def _unit(var: Node) -> str | None:

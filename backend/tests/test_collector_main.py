@@ -244,3 +244,43 @@ async def test_the_collector_writes_its_heartbeat_as_soon_as_it_starts(db):
     finally:
         stop.set()
         await asyncio.wait_for(task, timeout=10)
+
+
+async def test_the_collector_journals_its_start_with_the_build_id(db, monkeypatch):
+    monkeypatch.setenv("DCDASH_BUILD_ID", "abc1234-dirty")
+    monkeypatch.setenv("DCDASH_BUILD_TIME", "2026-10-12T01:00:00+03:00")
+    stop = asyncio.Event()
+    task = asyncio.create_task(run(stop, sim_factory(create_sim_app(Simulator(), api_key="k"))))
+    try:
+        async def started() -> int:
+            return await db.fetchval("SELECT count(*) FROM diag_events WHERE kind = 'collector.started'")
+
+        await wait_for(started, 1)
+        event = await db.fetchrow("SELECT * FROM diag_events WHERE kind = 'collector.started'")
+        assert (event["level"], event["component"], event["source_id"]) == ("info", "collector", None)
+        assert event["message"] == "collector started, build abc1234-dirty"
+        assert event["detail"] == {"build_id": "abc1234-dirty", "build_time": "2026-10-12T01:00:00+03:00"}
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=10)
+
+
+async def test_close_down_cancels_the_journal_writes_in_flight_before_it_closes_the_pool():
+    from dcdash.core import journal
+
+    class Frozen:
+        async def execute(self, *args):
+            await asyncio.sleep(60)
+
+    seen = []
+
+    class Pool(_Pool):
+        async def close(self):
+            seen.append(len(journal._pending))
+            await super().close()
+
+    assert journal.record_soon(Frozen(), "collector", journal.SOURCE_OFFLINE, "x")
+    await asyncio.sleep(0)
+    pool = Pool()
+    await collector_main._close_down([], _Scheduler(), _Writer(), pool)
+    assert seen == [0] and pool.closed

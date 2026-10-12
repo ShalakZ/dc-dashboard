@@ -669,4 +669,62 @@ describe("SourcesPage look (W6)", () => {
     renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
     expect(await screen.findByText(long)).toHaveAttribute("title", long);
   });
+
+  describe("Check connection", () => {
+    const check = (steps: unknown[], done: boolean) => ({
+      source_id: 2, connector_type: "simulator", started_at: "2026-10-07T10:00:00+00:00", finished: done, ok: done ? true : null, first_failed: null, steps,
+      clock: { server_time: null, local_time: "2026-10-07T10:00:00+00:00", skew_seconds: null }, names: { hosts: [], uris: [] },
+    });
+    const testStep = { id: "test", name: "Connection test", ok: true, ms: 7, summary: "connected in 7 ms", error: null, hint: null, detail: {} };
+    const checkRoutes = (role: string) => ({
+      ...routes(role),
+      "POST /api/sources/2/check": { status: 202, body: { job_id: 31 } },
+      "GET /api/jobs/31": { body: { id: 31, kind: "check_connection", status: "done", result: check([testStep], true), created_at: "t", finished_at: "2026-10-07T10:00:03+00:00" } },
+    });
+
+    it.each(["operator", "admin"])("lets an %s check one source in a dialog that starts the check and shows its steps", async (role) => {
+      const calls = mockFetch(checkRoutes(role));
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Check connection" }));
+      const dialog = await screen.findByRole("dialog", { name: "Check connection: sim" });
+      expect(await within(dialog).findByText("Connection test")).toBeInTheDocument();
+      expect(within(dialog).getByText("connected in 7 ms")).toBeInTheDocument();
+      expect(within(dialog).getByText("Every step passed.")).toBeInTheDocument();
+      expect(calls.filter((c) => c.method === "POST" && c.path === "/api/sources/2/check")).toHaveLength(1);
+      await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("puts the focus on a control that still works: Close, not the Run button the auto-start has just disabled", async () => {
+      mockFetch(checkRoutes("operator"));
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Check connection" }));
+      const dialog = await screen.findByRole("dialog", { name: "Check connection: sim" });
+      expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Close" }));
+    });
+
+    it("shows the row button as Check (the table has no room for more) while its name stays Check connection", async () => {
+      mockFetch(checkRoutes("operator"));
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      const button = await screen.findByRole("button", { name: "Check connection" });
+      expect(button.textContent).toBe("Check");
+      expect(button).toHaveAttribute("aria-label", "Check connection");
+    });
+
+    it("keeps the Test button's name unambiguous and leaves Test untouched", async () => {
+      mockFetch(checkRoutes("operator"));
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await screen.findByRole("button", { name: "Check connection" });
+      expect(screen.getAllByRole("button", { name: /test/i }).map((b) => b.textContent)).toEqual(["Test all", "Test"]);
+    });
+
+    it("blocks the other row actions while its dialog is open", async () => {
+      mockFetch(checkRoutes("admin"));
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Check connection" }));
+      await screen.findByRole("dialog", { name: "Check connection: sim" });
+      expect(screen.getByRole("button", { name: "Edit", hidden: true })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Add source", hidden: true })).toBeDisabled();
+    });
+  });
 });

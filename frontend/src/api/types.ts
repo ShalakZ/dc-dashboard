@@ -43,6 +43,12 @@ export interface TlsStatus {
   checked_at: string | null;
   error: string | null;
 }
+/** GET /api/version (any signed-in user): the build the api runs. `dev` / `unknown` when the image was built without the build id. */
+export interface VersionInfo {
+  build_id: string;
+  build_time: string;
+  uptime_seconds: number;
+}
 export interface SourceIn {
   name: string; connector_type: string; config: Record<string, unknown>; secret?: string | null; enabled: boolean;
 }
@@ -251,3 +257,26 @@ export interface WidgetData {
   range: { preset: RangePreset; start: string; end: string }; tier: SeriesTier | null; bucket: "hour" | "day" | null;
   series: WidgetSeries[]; values: WidgetValue[]; missing: number[]; no_metric: number[];
 }
+
+/** One step of a connection check (backend diagnostics/check.py `Step.to_json`). `ok: null` = skipped (a step it needs failed). */
+export interface CheckStepError { class: string; status_name: string | null; status_hex: string | null; message: string }
+export interface CheckStep {
+  id: string; name: string; ok: boolean | null; ms: number | null; summary: string;
+  error: CheckStepError | null; hint: string | null; detail: Record<string, unknown>;
+}
+/** `result` of a `check_connection` job: rewritten after every step while the job is `running`, final when it is `done`. */
+export interface ConnectionCheckResult {
+  source_id: number | null; connector_type: string; started_at: string; finished: boolean; ok: boolean | null; first_failed: string | null;
+  steps: CheckStep[];
+  clock: { server_time: string | null; local_time: string; skew_seconds: number | null };
+  names: { hosts: string[]; uris: string[] };
+}
+
+/** GET /api/diagnostics/report?format=json (admin only). Part sizes are the server's (`chars` leaves out line breaks, as the part's footer does). */
+export type ReportDetail = "summary" | "full";
+export interface ReportPart { index: number; of: number; text: string; chars: number; lines: number }
+export interface ReportReply {
+  format: string; build_id: string; detail: ReportDetail; mask: boolean; checksum: string; parts: ReportPart[];
+  legend: { alias: string; original: string }[]; // empty unless mask; for the screen only, never in the text
+}
+export interface ReportParams { detail: ReportDetail; mask: boolean; source: number | null }

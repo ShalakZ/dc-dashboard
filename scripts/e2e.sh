@@ -33,6 +33,11 @@ fi
 
 compose() { docker compose -p "$project" --profile dev "$@"; }
 
+# The build id the backend images carry (see scripts/setup.sh): the commit and its commit time; dev / unknown without git.
+DCDASH_BUILD_ID="$(git describe --always --dirty 2>/dev/null || true)"
+DCDASH_BUILD_TIME="$(git log -1 --format=%cI 2>/dev/null || true)"
+export DCDASH_BUILD_ID="${DCDASH_BUILD_ID:-dev}" DCDASH_BUILD_TIME="${DCDASH_BUILD_TIME:-unknown}"
+
 compose down -v --remove-orphans
 compose up -d --build
 status=0

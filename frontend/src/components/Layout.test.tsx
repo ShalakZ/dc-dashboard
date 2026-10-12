@@ -309,7 +309,7 @@ describe("Layout sidebar landmarks and groups", () => {
     const linksOf = (group: string) => within(screen.getByRole("group", { name: group })).getAllByRole("link").map((a) => a.textContent);
     expect(linksOf("Monitor")).toEqual(["Assets", "Dashboards", "Billing"]);
     expect(linksOf("Operate")).toEqual(["Sources", "Scans", "Discovery"]);
-    expect(linksOf("Administer")).toEqual(["Users", "Settings", "Tariffs", "Storage", "Audit"]);
+    expect(linksOf("Administer")).toEqual(["Users", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"]);
   });
 
   it("marks the current page and no other link", async () => {
@@ -355,7 +355,7 @@ describe("Layout sidebar toggle", () => {
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     await profileButton();
     await userEvent.click(screen.getByRole("button", { name: "Minimize sidebar" }));
-    for (const name of ["Assets", "Dashboards", "Billing", "Sources", "Scans", "Discovery", "Users", "Settings", "Tariffs", "Storage", "Audit"]) {
+    for (const name of ["Assets", "Dashboards", "Billing", "Sources", "Scans", "Discovery", "Users", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"]) {
       expect(screen.getByRole("link", { name })).toBeInTheDocument();
     }
     expect(screen.getByRole("group", { name: "Monitor" })).toBeInTheDocument(); // the headings stay in the DOM too
