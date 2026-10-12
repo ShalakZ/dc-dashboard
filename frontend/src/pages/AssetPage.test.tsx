@@ -1,10 +1,12 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes, useLocation } from "react-router";
-import { useAssets } from "../api/queries";
+import { keys, useAssets } from "../api/queries";
 import { PARTIAL_TIP } from "../components/Figure";
 import { formatSiteClock } from "../lib/siteTime";
 import { mockFetch } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { iconHtml } from "../test/iconHtml";
 import { renderWithProviders } from "../test/render";
 import { AssetPage } from "./AssetPage";
@@ -524,6 +526,96 @@ describe("AssetPage", () => {
       renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
       await screen.findByRole("heading", { name: "Panel 1" });
       expect(figure()).toHaveTextContent(/^—$/);
+    });
+  });
+  describe("while the asset loads (S7)", () => {
+    const LABEL = "Loading the asset";
+    const holdSummary = () => holdFetch((method, path) => method === "GET" && path === "/api/assets/4/summary");
+    const holdList = () => holdFetch((method, path) => method === "GET" && path === "/api/assets");
+    // read from the outermost fetch, the one that holds: a held request has not reached the mock behind it
+    const summaryAsked = () => waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/api/assets/4/summary"))).toBe(true));
+    const region = () => screen.getByText(LABEL).parentElement!;
+    const show = () => renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    /** Renders nothing; lets a test make the summary query fetch again, as its 60 s poll does. */
+    let refetchSummary: () => void = () => {};
+    const SummaryRefetcher = () => {
+      const client = useQueryClient();
+      refetchSummary = () => void client.invalidateQueries({ queryKey: keys.summary(4) });
+      return null;
+    };
+    const showWithRefetcher = () => renderWithProviders(<><AssetPage /><SummaryRefetcher /></>, { route: "/assets/4", path: "/assets/:id" });
+
+    it("is the asset page's own wrapper as a status region while the summary is held, with the real content absent; then the page", async () => {
+      mockFetch(routes(null));
+      const held = holdSummary();
+      show();
+      await summaryAsked();
+      expect(region()).toHaveAttribute("role", "status");
+      expect(region()).toHaveClass("asset-page");
+      expect(document.querySelector("header.page-head .sk-line")).not.toBeNull();
+      expect(document.querySelectorAll(".tiles > .tile")).toHaveLength(3);
+      expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+      expect(screen.queryByText("Live power")).not.toBeInTheDocument();
+      expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+      held.release();
+      expect(await screen.findByRole("heading", { name: "Panel 1", level: 1 })).toBeInTheDocument();
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument()); // the chart's chunk may still be a moment behind
+    });
+
+    it("stays while only the asset list is held (the crumbs need it), then the page has its whole trail", async () => {
+      mockFetch(routes(null));
+      const held = holdList();
+      show();
+      await summaryAsked();
+      await new Promise((resolve) => setTimeout(resolve, 30)); // the summary has had time to arrive
+      expect(region()).toHaveClass("asset-page");
+      expect(screen.queryByRole("heading", { name: "Panel 1" })).not.toBeInTheDocument();
+      held.release();
+      const h1 = await screen.findByRole("heading", { name: "Panel 1", level: 1 });
+      const crumb = h1.closest("header")!.querySelector(".crumbs") as HTMLElement;
+      expect([...crumb.querySelectorAll("li > :not(.sep)")].map((el) => el.textContent)).toEqual(["Assets", "MV2", "Hall 1", "Panel 1"]);
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    });
+
+    it("gives way to Asset not found. for a 404, and to the message for any other error: no region left", async () => {
+      mockFetch({ ...routes(null), "GET /api/assets/4/summary": { status: 404, body: { detail: "no such asset" } } });
+      show();
+      expect(await screen.findByRole("alert")).toHaveTextContent("Asset not found.");
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("gives way to the message for any other error", async () => {
+      mockFetch({ ...routes(null), "GET /api/assets/4/summary": { status: 500, body: { detail: "the summary is down" } } });
+      show();
+      expect(await screen.findByRole("alert")).toHaveTextContent("the summary is down");
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("never comes back on a refetch of an asset that is on screen (the page stays)", async () => {
+      mockFetch(routes(null));
+      showWithRefetcher();
+      await screen.findByRole("heading", { name: "Panel 1" });
+      const held = holdSummary();
+      act(refetchSummary);
+      await summaryAsked();
+      expect(screen.getByRole("heading", { name: "Panel 1" })).toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      held.release();
+    });
+
+    it("a summary that failed never brings the skeleton back when it is tried again: today's muted line shows, then the error (not 'not found')", async () => {
+      mockFetch({ ...routes(null), "GET /api/assets/4/summary": { status: 500, body: { detail: "the summary is down" } } });
+      showWithRefetcher();
+      await screen.findByRole("alert");
+      const held = holdSummary();
+      act(refetchSummary);
+      expect(await screen.findByText("loading…")).toHaveClass("muted");
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      held.release();
+      expect(await screen.findByRole("alert")).toHaveTextContent("the summary is down");
     });
   });
 });

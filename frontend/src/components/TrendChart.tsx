@@ -9,6 +9,7 @@ import { formatSiteClock, formatSiteDateTime, formatSiteTick } from "../lib/site
 import { rangeToQuery, type Range } from "../lib/timeRange";
 import { bucketMs, markIsolated } from "./dashboard/widgets/TimeSeriesWidget";
 import { RangePicker } from "./RangePicker";
+import { ChartBlock } from "./Skeleton";
 
 type SeriesPoint = Series["points"][number];
 type Query = { start: string; end: string; buckets: number };
@@ -112,7 +113,7 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
   const chosenMapping = mappings.some((m) => m.mapping_id === mappingId) ? mappingId : undefined;
   // A refetch resets the chart and closes an open tooltip, so it waits while a mouse rests on the chart (touch never pauses).
   const [hover, setHover] = useState(false);
-  const { data, error, isFetching, dataUpdatedAt } = useSeries(assetId, metric, range, mappings.length > 1 ? chosenMapping : undefined, hover);
+  const { data, error, isFetching, dataUpdatedAt, errorUpdateCount } = useSeries(assetId, metric, range, mappings.length > 1 ? chosenMapping : undefined, hover);
   const site = useSite();
   const timezone = site.data?.timezone;
   // Memoised: every stream message re-renders the asset page, and a new option object would make the chart redraw and close a tooltip.
@@ -145,8 +146,9 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
       {error && <p className="error" role="alert">{error.message}</p>}
       {site.error && <p className="error" role="alert">Could not load the site time zone: {site.error.message}</p>}
       {data && data.points.length === 0 && <p className="muted">No data in this range.</p>}
-      {/* The axis is drawn in the site's zone: wait for it rather than showing UTC for a moment, or for good. */}
-      {data && data.points.length > 0 && !site.data && !site.error && <p className="muted">loading…</p>}
+      {/* The chart's box while the series is on its way (a series that failed before and is tried again by its poll shows nothing, as it always did:
+          the box and the error would take turns), and while the site's zone is awaited: the axis is drawn in that zone, not in UTC for a moment, or for good. */}
+      {((!data && !error && errorUpdateCount === 0) || (data && data.points.length > 0 && !site.data && !site.error)) && <ChartBlock label="Loading the chart" />}
       {data && data.points.length > 0 && option && <ReactECharts option={option} style={{ height: CHART_HEIGHT }} notMerge />}
     </section>
   );

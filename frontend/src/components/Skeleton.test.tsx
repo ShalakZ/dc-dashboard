@@ -2,8 +2,8 @@ import { render, screen } from "@testing-library/react";
 import { StrictMode, type ReactElement } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
 import {
-  ChartBlock, FormSkeleton, PageHeaderSkeleton, PageSkeleton, resetSkeletonClock, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton,
-  TreeSkeleton, TrendSkeleton,
+  AssetSkeleton, ChartBlock, FleetSkeleton, FormSkeleton, PageHeaderSkeleton, PageSkeleton, resetSkeletonClock, Skeleton, SkeletonRegion,
+  TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton,
 } from "./Skeleton";
 
 const FOCUSABLE = "button, a, input, select, textarea, [tabindex]";
@@ -302,6 +302,99 @@ describe("PageSkeleton", () => {
       if (!child.classList.contains("sr-only")) expect(child, "a shape inside the region").toHaveAttribute("aria-hidden", "true");
     }
     expect(container.querySelector(FOCUSABLE)).toBeNull();
+  });
+});
+
+/** The children of a composite's region: the label, then bare bodies that are all out of the accessibility tree. */
+function bodiesOf(region: Element) {
+  const bodies = [...region.children].filter((child) => !child.classList.contains("sr-only"));
+  for (const body of bodies) expect(body, "a shape inside the region").toHaveAttribute("aria-hidden", "true");
+  return bodies;
+}
+
+describe("FleetSkeleton", () => {
+  beforeEach(resetSkeletonClock);
+
+  it("is one region around the four fleet tiles (the second with its note line), the kinds and the attention table", () => {
+    const { container } = render(<FleetSkeleton label="Loading the fleet summary" />);
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(container.firstElementChild).toBe(screen.getByRole("status"));
+    expect(container.textContent).toBe("Loading the fleet summary");
+    bodiesOf(container.firstElementChild!);
+    const tiles = [...container.querySelectorAll(".tiles.fleet-tiles > .tile")];
+    expect(tiles.map((t) => t.querySelector(":scope > small") !== null)).toEqual([false, true, false, false]);
+    expect(container.querySelector(FOCUSABLE)).toBeNull();
+  });
+
+  it("draws the section headings as real .section-title h2s that are out of the accessibility tree, and five kinds in a .kind-list", () => {
+    const { container } = render(<FleetSkeleton label="Loading the fleet summary" />);
+    const titles = [...container.querySelectorAll("h2")];
+    expect(titles).toHaveLength(2); // By kind, Needs attention
+    for (const title of titles) {
+      expect(title).toHaveClass("section-title");
+      expect(title).toHaveAttribute("aria-hidden", "true");
+      expect(title.querySelector(".sk-line")).not.toBeNull();
+    }
+    expect(screen.queryAllByRole("heading")).toHaveLength(0);
+    const kinds = container.querySelectorAll("ul.kind-list > li");
+    expect(kinds).toHaveLength(5);
+    for (const kind of kinds) {
+      expect(kind.querySelector(".kind-name .sk-circle")).not.toBeNull();
+      expect(kind.querySelector(".kind-name .sk-line")).not.toBeNull();
+      expect(kind.querySelector(".kind-count .sk-line")).not.toBeNull();
+    }
+  });
+
+  it("ends with the attention table as the real one is laid out: four columns (Asset, Where, Problem, Last reading), three rows", () => {
+    const { container } = render(<FleetSkeleton label="Loading the fleet summary" />);
+    const wrap = container.querySelector(".table-wrap")!;
+    expect(wrap.querySelectorAll("thead th")).toHaveLength(4);
+    expect(wrap.querySelectorAll("tbody tr")).toHaveLength(3);
+    expect(wrap).toBe(container.firstElementChild!.lastElementChild);
+  });
+});
+
+describe("AssetSkeleton", () => {
+  beforeEach(resetSkeletonClock);
+
+  it("is one region that IS the asset page wrapper, with bare aria-hidden bodies inside", () => {
+    const { container } = render(<AssetSkeleton label="Loading the asset" />);
+    const region = screen.getByRole("status");
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(container.firstElementChild).toBe(region);
+    expect(region).toHaveClass("sk-region", "asset-page");
+    expect(container.textContent).toBe("Loading the asset");
+    bodiesOf(region);
+    expect(container.querySelector(FOCUSABLE)).toBeNull();
+  });
+
+  it("holds the header with crumbs, an icon block and a sub line, then three tiles without notes", () => {
+    const { container } = render(<AssetSkeleton label="Loading the asset" />);
+    const head = container.querySelector("header.page-head")!;
+    expect(head.querySelector(".crumbs")).not.toBeNull();
+    expect(head.querySelector(".page-title > .sk-block")).not.toBeNull();
+    expect(head.querySelector("p.sub .sk-line")).not.toBeNull();
+    const tiles = container.querySelectorAll(".tiles > .tile");
+    expect(tiles).toHaveLength(3);
+    expect(container.querySelector(".tiles")).not.toHaveClass("fleet-tiles");
+    for (const tile of tiles) expect(tile.querySelector(":scope > small")).toBeNull();
+  });
+
+  it("puts the Trend and Metrics headings in as aria-hidden h2s holding a line, direct children of the wrapper (so .asset-page > h2 styles them), around the trend frame and the metrics table", () => {
+    const { container } = render(<AssetSkeleton label="Loading the asset" />);
+    const region = container.firstElementChild!;
+    const kids = [...region.children].filter((child) => !child.classList.contains("sr-only"));
+    expect(kids.map((child) => child.tagName + (child.className ? `.${child.className.split(" ")[0]}` : ""))).toEqual([
+      "HEADER.page-head", "DIV.tiles", "H2", "DIV.trend-frame", "H2", "DIV.table-wrap",
+    ]);
+    for (const h2 of region.querySelectorAll(":scope > h2")) {
+      expect(h2).toHaveAttribute("aria-hidden", "true");
+      expect(h2.querySelector(".sk-line")).not.toBeNull();
+    }
+    expect(screen.queryAllByRole("heading")).toHaveLength(0);
+    const table = region.querySelector(".table-wrap")!;
+    expect(table.querySelectorAll("thead th")).toHaveLength(4);
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(3);
   });
 });
 

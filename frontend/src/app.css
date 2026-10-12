@@ -339,6 +339,7 @@
   .tree-filter input[type="search"] { width: 100%; min-height: 34px; padding: 0 10px 0 32px; font-size: var(--fs-sm); text-overflow: ellipsis; }
   .tree-filter svg.i { position: absolute; left: 22px; top: 19px; width: 16px; height: 16px; color: var(--text-2); pointer-events: none; }
   .tree-scroll { flex: 1; min-height: 0; overflow: auto; padding: 2px 0 8px; }
+  .tree-body > .sk-region { flex: 1; min-height: 0; display: flex; flex-direction: column; } /* the loading region stands in for the filter and the scroll area, so .tree-scroll keeps its flex chain */
   .tree-empty { margin: 0; padding: 8px 16px; font-size: var(--fs-sm); }
   ul.tree, ul.tree ul { list-style: none; margin: 0; padding: 0; }
   ul.tree ul { margin-left: 21px; border-left: 1px solid var(--border); }

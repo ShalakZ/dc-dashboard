@@ -1,3 +1,4 @@
+import type { UseQueryResult } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { useAssets, useFleetSummary, useSite } from "../api/queries";
 import type { Asset, AttentionItem, FleetSummary } from "../api/types";
@@ -6,6 +7,7 @@ import { EnergyTile } from "../components/EnergyTile";
 import { Icon } from "../components/Icon";
 import { fmt } from "../components/MetricsTable";
 import { PageHeader } from "../components/PageHeader";
+import { FleetSkeleton } from "../components/Skeleton";
 import { kindIcon } from "../lib/kindIcon";
 import { cleanKind, kindKey } from "../lib/kinds";
 import { formatSiteDateTime } from "../lib/siteTime";
@@ -82,11 +84,8 @@ function Attention({ attention, timezone }: { attention: FleetSummary["attention
   );
 }
 
-/** The body of the page for a site that has assets: the four tiles, the kinds, the readings that need attention. */
-function Fleet({ assets }: { assets: readonly Asset[] }) {
-  const { data, error, isLoading } = useFleetSummary();
-  const site = useSite();
-  if (isLoading) return <p className="muted">loading…</p>;
+/** The body of the page for a site that has assets and whose figures are in or have failed: the four tiles, the kinds, the readings that need attention. */
+function Fleet({ assets, fleet: { data, error }, timezone }: { assets: readonly Asset[]; fleet: UseQueryResult<FleetSummary>; timezone: string | undefined }) {
   if (error || !data) return <p className="error" role="alert">{error?.message ?? "The fleet summary is not available."}</p>;
   return (
     <>
@@ -109,25 +108,34 @@ function Fleet({ assets }: { assets: readonly Asset[] }) {
           <li key={name}><span className="kind-name"><Icon name={kindIcon(name)} />{name}</span> <span className="kind-count">{count}</span></li>
         ))}
       </ul>
-      <Attention attention={data.attention} timezone={site.data?.timezone} />
+      <Attention attention={data.attention} timezone={timezone} />
     </>
   );
 }
 
-/** `/assets` itself, the Assets workspace's landing page: the whole site at a glance. A site with no assets gets the empty card and asks for no figures. */
+/**
+ * `/assets` itself, the Assets workspace's landing page: the whole site at a glance. A site with no assets gets the empty card and asks for no figures.
+ * The fleet query is read here, not in `Fleet`, so the one skeleton covers both waits (the list, then the figures) without the region remounting.
+ */
 export function AssetsSummary() {
   const { data: assets = [], isLoading } = useAssets();
+  const fleet = useFleetSummary(assets.length > 0);
+  const site = useSite(); // asked for here, with the figures, not when they arrive: the time column should not show a dash while the zone follows them
   const ctx = useAssetsContext();
+  const waiting = isLoading || (assets.length > 0 && fleet.isLoading);
   return (
     <>
       <PageHeader title="Assets" actions={assetActions(ctx, null)} />
-      {isLoading ? <p className="muted">loading…</p> : assets.length === 0 ? (
+      {waiting ? (
+        // A poll that finds the query without data (it failed before) sets it pending again for a second: the error and a skeleton would take turns at every poll.
+        fleet.errorUpdateCount === 0 ? <FleetSkeleton label="Loading the fleet summary" /> : <p className="muted">loading…</p>
+      ) : assets.length === 0 ? (
         <div className="empty">
           <span className="empty-icon"><svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 7.5 12 12l9-4.5L12 3Z" /><path d="m3 12 9 4.5 9-4.5" /><path d="m3 16.5 9 4.5 9-4.5" /></svg></span>
           <p className="empty-title">No assets yet.</p>
         </div>
       ) : (
-        <Fleet assets={assets} />
+        <Fleet assets={assets} fleet={fleet} timezone={site.data?.timezone} />
       )}
     </>
   );

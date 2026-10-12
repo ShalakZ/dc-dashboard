@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo } from "react";
+import { lazy, Suspense, useEffect, useMemo } from "react";
 import { useParams } from "react-router";
 import { ApiError } from "../api/client";
 import { useAssets, useSummary } from "../api/queries";
@@ -9,6 +9,7 @@ import { Icon } from "../components/Icon";
 import { fmt, MetricsTable } from "../components/MetricsTable";
 import { PageHeader } from "../components/PageHeader";
 import { Pending } from "../components/Pending";
+import { AssetSkeleton, SkeletonRegion, TrendSkeleton } from "../components/Skeleton";
 import { useStream } from "../hooks/useStream";
 import { kindIcon } from "../lib/kindIcon";
 import { rollupNote, rollupPower } from "../lib/rollup";
@@ -17,7 +18,10 @@ import { assetActions, useAssetsContext } from "./AssetsPage";
 
 const NOT_FOUND = "Asset not found."; // one sentence for an id that cannot be one and for an asset the API does not know
 
-const TrendChart = lazy(() => import("../components/TrendChart").then((m) => ({ default: m.TrendChart })));
+// One request for the chart's chunk, shared by the lazy component and the page's early start of it.
+let chunk: Promise<{ default: typeof import("../components/TrendChart").TrendChart }> | null = null;
+const loadTrendChart = () => (chunk ??= import("../components/TrendChart").then((m) => ({ default: m.TrendChart })));
+const TrendChart = lazy(loadTrendChart);
 
 export function AssetPage() {
   const id = parseAssetId(useParams().id);
@@ -28,8 +32,10 @@ export function AssetPage() {
 
 function AssetView({ id }: { id: number }) {
   const workspace = useAssetsContext(); // null when the page is mounted alone: then it has no admin buttons
-  const { data, error, isLoading } = useSummary(id);
-  const { data: assets } = useAssets();
+  const { data, error, isLoading, errorUpdateCount } = useSummary(id);
+  const { data: assets, isLoading: assetsLoading } = useAssets();
+  // The chart's chunk starts loading with the page, so by the time the summary is in, its fallback is rarely needed.
+  useEffect(() => { loadTrendChart().catch(() => {}); }, []);
   const trail = useMemo(() => assetTrail(assets ?? [], id), [assets, id]);
   const wanted = useMemo(() => {
     const ids = (data?.metrics ?? []).map((m) => m.point_id);
@@ -39,7 +45,11 @@ function AssetView({ id }: { id: number }) {
   }, [data]);
   const { values: live, connected } = useStream(wanted);
 
-  if (isLoading) return <p className="muted">loading…</p>;
+  // The crumbs need the asset list too. A summary that failed before and is tried again by its poll is pending for a second, with no error:
+  // the skeleton would take turns with the error at every poll, so that case keeps the plain line.
+  if (isLoading || (assetsLoading && !error)) {
+    return errorUpdateCount === 0 ? <AssetSkeleton label="Loading the asset" /> : <p className="muted">loading…</p>;
+  }
   if (error instanceof ApiError && error.status === 404) return <p className="error" role="alert">{NOT_FOUND}</p>;
   if (error || !data) return <p className="error" role="alert">{error?.message ?? "not found"}</p>;
   const power = data.metrics.find((m) => m.metric === "active_power_kw");
@@ -79,7 +89,7 @@ function AssetView({ id }: { id: number }) {
         <CostTile cost={data.cost_today ?? null} currency={data.currency ?? null} />
       </div>
       <h2>Trend</h2>
-      <Suspense fallback={<><Pending /><p className="muted">loading chart…</p></>}>
+      <Suspense fallback={<><Pending /><SkeletonRegion label="Loading the chart"><TrendSkeleton /></SkeletonRegion></>}>
         <TrendChart assetId={id} metrics={data.metrics} />
       </Suspense>
       <h2>Metrics</h2>

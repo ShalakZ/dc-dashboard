@@ -202,3 +202,46 @@ export function PageSkeleton({ label }: { label: string }) {
     </SkeletonRegion>
   );
 }
+
+// Name widths of the kinds in the fleet summary's row, a fixed pattern.
+const KIND_WIDTHS = ["5ch", "7ch", "4ch", "6ch", "5ch"];
+
+/**
+ * The fleet summary under its header: the four tiles (the second, "Live power", always has its note line), "By kind" and a row of kinds,
+ * "Needs attention" and its table. One region; the headings are real `.section-title` h2s that no one can read.
+ */
+export function FleetSkeleton({ label }: { label: string }) {
+  return (
+    <SkeletonRegion label={label}>
+      <TilesSkeleton count={4} fleet notes={[1]} />
+      <h2 className="section-title" aria-hidden="true"><Skeleton width="8ch" /></h2>
+      <ul className="kind-list" aria-hidden="true">
+        {KIND_WIDTHS.map((width, i) => (
+          <li key={i}>
+            <span className="kind-name"><Skeleton variant="circle" width={16} /><Skeleton width={width} /></span>
+            <span className="kind-count"><Skeleton width="2ch" /></span>
+          </li>
+        ))}
+      </ul>
+      <h2 className="section-title" aria-hidden="true"><Skeleton width="15ch" /></h2>
+      <TableSkeleton columns={4} rows={3} />
+    </SkeletonRegion>
+  );
+}
+
+/**
+ * The asset page under the workspace's pane: the region IS the page's `div.asset-page`, so `.asset-page > h2` styles the two heading
+ * placeholders. The header carries crumbs, the icon block and the sub line; three tiles without notes; the trend frame; the metrics table.
+ */
+export function AssetSkeleton({ label }: { label: string }) {
+  return (
+    <SkeletonRegion label={label} className="asset-page">
+      <PageHeaderSkeleton crumbs icon sub />
+      <TilesSkeleton count={3} />
+      <h2 aria-hidden="true"><Skeleton width="6ch" /></h2>
+      <TrendSkeleton />
+      <h2 aria-hidden="true"><Skeleton width="8ch" /></h2>
+      <TableSkeleton columns={4} rows={3} />
+    </SkeletonRegion>
+  );
+}

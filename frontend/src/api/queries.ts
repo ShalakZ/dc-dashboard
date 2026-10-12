@@ -55,9 +55,12 @@ const COST_DEPENDENT = [keys.billing, keys.widgetData, keys.assets, keys.fleet] 
 
 export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets") });
 
-/** The Assets landing page: live power, today's energy and cost over the whole site, and the readings that need attention. */
-export const useFleetSummary = () =>
-  useQuery({ queryKey: keys.fleet, queryFn: () => api.get<FleetSummary>("/api/fleet/summary"), refetchInterval: 15_000 });
+/**
+ * The Assets landing page: live power, today's energy and cost over the whole site, and the readings that need attention.
+ * `enabled` is false until the asset list says there is something to count (a site with no assets asks for no figures).
+ */
+export const useFleetSummary = (enabled = true) =>
+  useQuery({ queryKey: keys.fleet, queryFn: () => api.get<FleetSummary>("/api/fleet/summary"), refetchInterval: 15_000, enabled });
 
 export const useSummary = (id: number) =>
   useQuery({ queryKey: keys.summary(id), queryFn: () => api.get<Summary>(`/api/assets/${id}/summary`), refetchInterval: 60_000 });

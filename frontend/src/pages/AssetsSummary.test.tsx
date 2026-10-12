@@ -1,6 +1,8 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { useQueryClient } from "@tanstack/react-query";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Outlet, Route, Routes } from "react-router";
+import { keys } from "../api/queries";
 import type { Asset, AttentionItem, FleetSummary } from "../api/types";
 import { authed } from "../test/dashboardFixtures";
 import { holdFetch } from "../test/holdFetch";
@@ -42,13 +44,23 @@ function stub({ role = "viewer", list = assets, fleet = fleetOf(), fleetReply }:
     "GET /api/fleet/summary": fleetReply ?? { body: fleet },
   });
 }
+/** Renders nothing; gives the tests a way to make the fleet query fetch again, as its 15 s poll does. */
+let refetchFleet: () => void = () => {};
+function FleetRefetcher() {
+  const client = useQueryClient();
+  refetchFleet = () => void client.invalidateQueries({ queryKey: keys.fleet });
+  return null;
+}
 function mount(role: Role) {
   renderWithProviders(
-    <Routes>
-      <Route path="/assets" element={<Workspace admin={role === "admin"} />}>
-        <Route index element={<AssetsSummary />} />
-      </Route>
-    </Routes>,
+    <>
+      <Routes>
+        <Route path="/assets" element={<Workspace admin={role === "admin"} />}>
+          <Route index element={<AssetsSummary />} />
+        </Route>
+      </Routes>
+      <FleetRefetcher />
+    </>,
     { route: "/assets", path: "*" },
   );
 }
@@ -308,18 +320,92 @@ describe("AssetsSummary", () => {
   });
 
   describe("while the figures load or fail", () => {
-    it("shows the header and 'loading…' while the fleet request is in flight, then the page", async () => {
+    const FLEET = "Loading the fleet summary";
+    const fleetAsked = () => waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/api/fleet/summary"))).toBe(true));
+    const statusOf = (label: string) => screen.getByText(label).parentElement!;
+
+    it("shows the header and the fleet skeleton while the fleet request is in flight, then the page", async () => {
       stub({ fleet: fleetOf({ power: { kw: 3, counted: 1, of: 1 } }) });
       const held = holdFetch((_method, path) => path === "/api/fleet/summary");
       mount("viewer");
-      // The asset list shows its own "loading…" first: wait for the held fleet request to go out, so this one is the fleet's.
-      await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/api/fleet/summary"))).toBe(true));
-      expect(screen.getByText("loading…")).toBeInTheDocument();
+      await fleetAsked();
+      expect(statusOf(FLEET)).toHaveAttribute("role", "status");
+      expect(document.querySelectorAll(".tiles.fleet-tiles > .tile")).toHaveLength(4);
+      expect(screen.queryByText("loading…")).not.toBeInTheDocument();
       expect(screen.getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
       expect(screen.queryByRole("heading", { name: "By kind" })).not.toBeInTheDocument();
       held.release();
       await ready();
+      expect(screen.queryByText(FLEET)).not.toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("shows the header at once and the same skeleton while the asset list is in flight, and asks for no figures until the list says there are assets", async () => {
+      const calls = stub({ fleet: fleetOf({ power: { kw: 3, counted: 1, of: 1 } }) });
+      const held = holdFetch((_method, path) => path === "/api/assets");
+      mount("viewer");
+      expect(screen.getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+      expect(statusOf(FLEET)).toHaveAttribute("role", "status");
+      expect(document.querySelectorAll(".tiles.fleet-tiles > .tile")).toHaveLength(4);
+      expect(screen.queryByText("No assets yet.")).not.toBeInTheDocument();
+      expect(calls.filter((c) => c.path === "/api/fleet/summary")).toHaveLength(0);
+      held.release();
+      await ready();
+      expect(calls.filter((c) => c.path === "/api/fleet/summary")).toHaveLength(1);
+    });
+
+    it("is ONE region from the asset list to the fleet figures: the very element stays, so the fade does not start again", async () => {
+      stub({ fleet: fleetOf({ power: { kw: 3, counted: 1, of: 1 } }) });
+      const assetsHeld = holdFetch((_method, path) => path === "/api/assets");
+      const fleetHeld = holdFetch((_method, path) => path === "/api/fleet/summary");
+      mount("viewer");
+      const region = statusOf(FLEET);
+      assetsHeld.release();
+      await fleetAsked(); // the list is in, the figures are on their way
+      expect(statusOf(FLEET)).toBe(region);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText("No assets yet.")).not.toBeInTheDocument();
+      fleetHeld.release();
+      await ready();
+      expect(region.isConnected).toBe(false);
+    });
+
+    it("ends the skeleton with the empty card for a site with no assets (no region left)", async () => {
+      show({ list: [] });
+      expect(await screen.findByText("No assets yet.")).toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("ends the skeleton with the failure as an alert, and no region", async () => {
+      show({ fleetReply: { status: 500, body: { detail: "the fleet figures are not available" } } });
+      expect(await screen.findByRole("alert")).toHaveTextContent("the fleet figures are not available");
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("a fleet request that failed never brings the skeleton back when it is tried again: today's muted line shows, then the error", async () => {
+      show({ fleetReply: { status: 500, body: { detail: "the fleet figures are not available" } } });
+      await screen.findByRole("alert");
+      const held = holdFetch((_method, path) => path === "/api/fleet/summary");
+      act(refetchFleet);
+      await fleetAsked();
+      expect(await screen.findByText("loading…")).toHaveClass("muted");
+      expect(screen.queryByText(FLEET)).not.toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.queryByText("No assets yet.")).not.toBeInTheDocument();
+      held.release();
+      expect(await screen.findByRole("alert")).toHaveTextContent("the fleet figures are not available");
       expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    });
+
+    it("a fleet request that succeeded never shows the skeleton on a refetch (the figures stay)", async () => {
+      show({ fleet: fleetOf({ power: { kw: 3, counted: 1, of: 1 } }) });
+      await ready();
+      const held = holdFetch((_method, path) => path === "/api/fleet/summary");
+      act(refetchFleet);
+      await fleetAsked();
+      expect(screen.getByRole("heading", { name: "By kind" })).toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      held.release();
     });
 
     it("shows the failure as an alert under the header, and the admin's Add asset stays", async () => {

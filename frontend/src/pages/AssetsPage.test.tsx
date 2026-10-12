@@ -83,6 +83,86 @@ describe("AssetsPage", () => {
     expect(screen.queryByRole("button", { name: "Add asset" })).not.toBeInTheDocument();
   });
 
+  describe("while the asset list loads", () => {
+    const holdAssets = () => holdFetch((method, path) => method === "GET" && path === "/api/assets");
+    const tree = () => screen.getByRole("region", { name: "Asset tree" });
+    const regionOf = (label: string) => screen.getByText(label).parentElement!;
+
+    it("shows the layout at once: the tree column with its status region, and the index page in the pane with its own", async () => {
+      mockFetch(authed("admin"));
+      const held = holdAssets();
+      renderWorkspace("/assets");
+      expect(tree().closest(".assets-layout")).not.toBeNull();
+      expect(within(tree()).getByText("Loading the asset tree").parentElement).toHaveAttribute("role", "status");
+      const pane = document.querySelector(".assets-detail") as HTMLElement;
+      expect(within(pane).getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument(); // the Outlet's page is mounted
+      expect(within(pane).getByText("Loading the fleet summary").parentElement).toHaveAttribute("role", "status");
+      expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+      held.release();
+      expect(await screen.findByRole("link", { name: "Site" })).toBeInTheDocument();
+    });
+
+    it("keeps every way to add an asset disabled until the list is there: the tree's +, the page's Add asset and a node's +", async () => {
+      mockFetch(authed("admin"));
+      const held = holdAssets();
+      renderWorkspace("/assets");
+      await screen.findByRole("button", { name: "Add a top-level asset" }); // an admin's: the account is known a moment after the layout
+      expect(screen.getByRole("button", { name: "Add a top-level asset" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Add asset" })).toBeDisabled();
+      await userEvent.click(screen.getByRole("button", { name: "Add asset" })); // a disabled button does nothing: no form opens without the parent list
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      held.release();
+      await screen.findByRole("link", { name: "Site" });
+      expect(screen.getByRole("button", { name: "Add a top-level asset" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Add asset" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Add child of Site" })).toBeEnabled();
+    });
+
+    it("after the release the tree has its rows and its column holds no region (the pane's own may still be waiting)", async () => {
+      mockFetch(authed("viewer"));
+      const held = holdAssets();
+      renderWorkspace("/assets");
+      const before = tree();
+      held.release();
+      const site = await screen.findByRole("link", { name: "Site" });
+      expect(within(site.closest("li")!).getByRole("link", { name: "Room A" })).toBeInTheDocument();
+      expect(tree()).toBe(before); // the same column, filled
+      expect(within(tree()).queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.getByRole("searchbox", { name: "Filter assets" })).toBeInTheDocument();
+    });
+
+    it("puts a stored tree width on the skeleton column", async () => {
+      localStorage.setItem("dcdash.assetTreeWidth", "340");
+      mockFetch(authed("viewer"));
+      const held = holdAssets();
+      renderWorkspace("/assets");
+      expect(tree().style.getPropertyValue("--tree-user-w")).toBe("340px");
+      held.release();
+      await screen.findByRole("link", { name: "Site" });
+      expect(tree().style.getPropertyValue("--tree-user-w")).toBe("340px");
+    });
+
+    it("on an asset's URL the pane holds the asset's skeleton (the crumbs need the list), then the asset", async () => {
+      mockFetch(authed("viewer"));
+      const held = holdAssets();
+      renderWorkspace("/assets/2");
+      expect(regionOf("Loading the asset")).toHaveClass("asset-page");
+      expect(screen.queryByRole("heading", { name: "Room A" })).not.toBeInTheDocument();
+      held.release();
+      expect(await screen.findByRole("heading", { name: "Room A", level: 1 })).toBeInTheDocument();
+      expect(screen.queryByText("Loading the asset")).not.toBeInTheDocument();
+    });
+
+    it("an assets error still replaces the whole layout with the error", async () => {
+      mockFetch({ ...authed("viewer"), "GET /api/assets": { status: 500, body: { detail: "assets are down" } } });
+      renderWorkspace("/assets");
+      expect(await screen.findByRole("alert")).toHaveTextContent("assets are down");
+      expect(screen.queryByRole("region", { name: "Asset tree" })).not.toBeInTheDocument();
+      expect(document.querySelector(".assets-layout")).toBeNull();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+  });
+
   it("lets an admin add a child asset", async () => {
     const calls = mockFetch({
       ...authed("admin"),
@@ -202,7 +282,8 @@ describe("AssetsPage", () => {
     const show = async (role = "viewer", route = "/assets") => {
       mockFetch(authed(role, deep));
       renderWorkspace(route);
-      await screen.findByRole("link", { name: "Site" });
+      // in the tree: on an asset's URL the page's crumbs hold a "Site" link too, and they arrive in the same commit
+      await within(await screen.findByRole("region", { name: "Asset tree" })).findByRole("link", { name: "Site" });
     };
     const column = () => screen.getByRole("region", { name: "Asset tree" });
     const link = (name: string) => screen.queryByRole("link", { name });
