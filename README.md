@@ -1137,6 +1137,35 @@ the server. The `api` container applies the migration the first time it starts f
    again with every account on the defaults. A restart of the W7d `api` would run `alembic upgrade head` and apply `0007` again, so the
    W7d `api` must not be running once the schema is back at `0006`.
 
+### Upgrading to W7e (no migration)
+
+Schema stays at `0007`; nothing in the database or the API changes, so there is nothing to undo there. The code to go back to is
+`499fdc5` (`main` before W7e).
+
+W7e (theme polish) is front end only:
+
+- **Buttons, links, hover and selection take the theme colour.** The Add asset button, the links, the breadcrumb links, the selected
+  tree row, the pressed toggles and the focus ring follow the Theme colour in the profile panel, in Light and in Dark. They used to be
+  the same blue in every theme. **The default look changes:** Navy and gold's buttons were a vivid blue (`#1d5bd8`) and are now a
+  navy blue (`#2a4590`) in Light mode and a soft blue in Dark mode; Graphite keeps its blue. The dashboard widgets keep their light
+  blue in every theme.
+- **The profile panel has two dropdowns,** Mode and Theme colour, instead of seven round buttons.
+- **A thin bar runs along the top edge while a page loads or you change pages,** in the theme's marker colour (gold on Navy and gold
+  and on Maroon and gold, light blue on Graphite, dark brown on Desert gold). Pages that refresh themselves in the background
+  (the status chip, the summary) do not show it. With "reduce motion" switched on in the system it is a full line that appears and
+  disappears instead of sweeping. The sign-in and setup pages do not have it.
+- **The Assets tree, the asset's title, the "By kind" list and quick find carry an icon** that follows the asset's kind (Site,
+  Building, Room, Row, Rack, Panel, Meter, Circuit, UPS, PDU, generator, transformer, chiller, and a plain cube for any other kind).
+  The four tiles (Assets, Live power, Energy today, Cost today) have an icon of their own beside their caption.
+
+1. **Back up first** (a habit here: nothing in the database changes), as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+3. **Verify.** `docker compose exec api alembic current` still prints `0007 (head)`; the profile panel shows the Mode and Theme
+   colour dropdowns, and choosing Maroon and gold turns the Add asset button maroon in Light mode.
+4. **Going back.** Check out `499fdc5` and rebuild as in step 2. There is no database step: the stored Mode and Theme colour choices
+   are the same in both versions.
+
 ## Add a connector
 
 Create `backend/dcdash/connectors/<name>.py` with a `Connector` subclass
