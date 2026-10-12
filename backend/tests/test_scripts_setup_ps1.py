@@ -244,6 +244,28 @@ def test_with_an_existing_env_the_flag_changes_nothing_and_says_so(install):
 
 
 @needs_powershell
+@pytest.mark.parametrize("flag", ["-Timezone Asia/Qatar", ""])
+@pytest.mark.parametrize("value, words", [("Africa/Ciro", "refused by Settings"), ("Egypt Standard Time", "not an IANA zone name")])
+def test_a_bad_shell_variable_is_refused_even_when_the_env_exists_and_a_flag_is_given(install, flag, value, words):
+    # with an .env the flag is not exported, and Compose reads the shell variable: a name the api refuses would crash-loop it
+    original = b"DCDASH_DB_PASSWORD=keep\r\nDCDASH_TIMEZONE=Africa/Cairo\r\n"
+    (install.root / ".env").write_bytes(original)
+    proc = install.file_form(flag, env=(f"DCDASH_TIMEZONE={value}",))
+    assert proc.returncode != 0, _said(proc)
+    assert (install.root / ".env").read_bytes() == original and install.calls() == [] and install.up_zone() == []
+    assert words in _said(proc) and "DCDASH_TIMEZONE" in _said(proc)
+
+
+@needs_powershell
+def test_a_valid_shell_variable_that_differs_gets_the_override_warning_next_to_the_flag_note(install):
+    (install.root / ".env").write_bytes(b"DCDASH_DB_PASSWORD=keep\r\nDCDASH_TIMEZONE=UTC\r\n")
+    proc = install.file_form("-Timezone Asia/Qatar", env=("DCDASH_TIMEZONE=Africa/Cairo",))
+    assert proc.returncode == 0, _said(proc)
+    assert "only seeds the first start" in _said(proc) and "overrides .env (UTC)" in _said(proc)
+    assert "compose up -d --build" in install.calls()
+
+
+@needs_powershell
 def test_a_shell_variable_that_differs_from_the_existing_env_gets_the_override_warning(install):
     (install.root / ".env").write_bytes(b"DCDASH_DB_PASSWORD=keep\r\nDCDASH_TIMEZONE=UTC\r\n")
     proc = install.file_form("", env=("DCDASH_TIMEZONE=Africa/Cairo",))
@@ -284,3 +306,30 @@ def test_a_normal_folder_says_nothing_about_onedrive(install):
     assert proc.returncode == 0, _said(proc)
     assert "onedrive" not in _said(proc).lower()
 
+
+
+
+SHOW_SESSION = (
+    "Write-Host ('after: zone=[' + $env:DCDASH_TIMEZONE + '] id=[' + $env:DCDASH_BUILD_ID + '] time=[' + $env:DCDASH_BUILD_TIME"
+    " + '] attest=[' + $env:BUILDX_NO_DEFAULT_ATTESTATIONS + ']')"
+)
+
+
+@needs_powershell
+def test_run_in_process_it_leaves_the_session_variables_as_they_were(install):
+    # the README form: the variables the script sets for `docker compose up` must not stay in the user's window
+    proc = install.in_process_form(f"-Timezone:Africa/Cairo; {SHOW_SESSION}")
+    assert proc.returncode == 0, _said(proc)
+    assert install.up_zone() == ["DCDASH_TIMEZONE=Africa/Cairo"]  # docker did see the chosen zone ...
+    assert "after: zone=[] id=[] time=[] attest=[]" in _said(proc)  # ... and nothing is left behind
+
+
+@needs_powershell
+def test_run_in_process_it_puts_back_the_values_the_session_had(install):
+    proc = install.in_process_form(
+        f"-Timezone:Africa/Cairo; {SHOW_SESSION}",
+        env=("DCDASH_TIMEZONE=Asia/Qatar", "DCDASH_BUILD_ID=mine", "DCDASH_BUILD_TIME=then", "BUILDX_NO_DEFAULT_ATTESTATIONS=0"),
+    )
+    assert proc.returncode == 0, _said(proc)
+    assert install.up_zone() == ["DCDASH_TIMEZONE=Africa/Cairo"]  # the flag wins for the first start
+    assert "after: zone=[Asia/Qatar] id=[mine] time=[then] attest=[0]" in _said(proc)

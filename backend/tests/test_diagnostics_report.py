@@ -1192,10 +1192,10 @@ async def test_hung_lookups_cost_one_timeout_not_one_per_host(db, session, monke
         return []
 
     monkeypatch.setattr(report, "_resolve", hang)
-    monkeypatch.setattr(report, "DNS_LOOKUP_SECONDS", 0.2)
+    monkeypatch.setattr(report, "DNS_LOOKUP_SECONDS", 0.3)
     started = time.monotonic()
     found = await report._dns_lookups(session, None)
-    assert time.monotonic() - started < 0.6
+    assert time.monotonic() - started < 0.8  # three serial timeouts would be 0.9
     assert [lookup.ok for lookup in found] == [False] * 3
     assert all(lookup.error.startswith("TimeoutError") and lookup.ms >= 150 for lookup in found)
 

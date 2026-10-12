@@ -6,7 +6,7 @@ is Report-Only and keeps `script-src 'self'` strict, that both Caddyfiles import
 `handle_errors` (Caddy's own error answer, such as the 502 while the api restarts, would carry none otherwise), and that the
 Dockerfile copies the snippet to the path the Caddyfiles import. frontend/e2e/headers.spec.ts and scripts/check_tls.sh check the real responses.
 Also here: both files open with one global options block that keeps the admin API requests (the web healthcheck polls them every few
-seconds) out of the access log.
+seconds) out of Caddy's default (runtime) log, where the admin API writes them (not an access log).
 """
 import re
 import shlex
@@ -205,7 +205,8 @@ def test_the_import_appears_only_at_the_site_level_and_in_handle_errors(name):
 @pytest.mark.parametrize("name", list(CADDYFILES))
 def test_the_global_options_block_keeps_the_admin_api_out_of_the_access_log(name):
     # The web healthcheck polls 127.0.0.1:2019 every few seconds; each poll is an `admin.api` "received request" line in
-    # `docker compose logs web` that buries everything else (found on the first real install, W8c).
+    # `docker compose logs web` that buries everything else (found on the first real install, W8c). It is the default (runtime) log of
+    # the admin API, not an access log.
     text = (ROOT / "deploy" / name).read_text()
     first = next(line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#"))
     assert first == "{", f"{name}: the global options block must come first (Caddy rejects it anywhere else)"

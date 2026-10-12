@@ -69,6 +69,8 @@ project_name() {
 if [ -f .env ]; then
   # An .env without a database password can start nothing and cannot open an existing volume: leave it as it is and stop.
   grep -q '^DCDASH_DB_PASSWORD=.' .env || { echo ".env exists but has no DCDASH_DB_PASSWORD; it was not changed. Restore or fix it, then run this script again." >&2; exit 1; }
+  # The flag is not exported here, but Compose reads the shell variable before .env: a name the api refuses would crash-loop it.
+  if [ -n "${DCDASH_TIMEZONE:-}" ]; then check_zone "$DCDASH_TIMEZONE" "DCDASH_TIMEZONE"; fi
   if [ "$flag_given" = 1 ]; then
     echo "note: .env already exists, so --timezone changes nothing: the zone only seeds the first start. Change it on the Settings page." >&2
   fi

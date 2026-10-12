@@ -71,11 +71,18 @@ function Get-ComposeProject {
     return $nameLine.Matches[0].Groups[1].Value
 }
 
+# This script is usually run in the user's own PowerShell window: the variables it sets for `docker compose up` must not stay there.
+$SessionVars = @("DCDASH_TIMEZONE", "DCDASH_BUILD_ID", "DCDASH_BUILD_TIME", "BUILDX_NO_DEFAULT_ATTESTATIONS")
+$SessionBefore = @{}
+foreach ($Name in $SessionVars) { $SessionBefore[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+
 if (Test-Path .env) {
     # An .env without a database password can start nothing and cannot open an existing volume: leave it as it is and stop.
     if (-not (Select-String -Path .env -Pattern '^DCDASH_DB_PASSWORD=.' -Quiet)) {
         throw ".env exists but has no DCDASH_DB_PASSWORD; it was not changed. Restore or fix it, then run this script again."
     }
+    # The flag is not exported here, but Compose reads the shell variable before .env: a name the api refuses would crash-loop it.
+    if ($env:DCDASH_TIMEZONE) { Assert-ZoneName $env:DCDASH_TIMEZONE "DCDASH_TIMEZONE" }
     if ($TimezoneGiven) {
         Write-Host "note: .env already exists, so -Timezone changes nothing: the zone only seeds the first start. Change it on the Settings page."
     }
@@ -140,4 +147,8 @@ try {
 } catch { }
 # Without this, re-running on an unchanged tree recreates api, collector, web and simulator: default attestations change the image id on every build.
 $env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'
-docker compose @ComposeArgs up -d --build
+try {
+    docker compose @ComposeArgs up -d --build
+} finally {
+    foreach ($Name in $SessionVars) { [Environment]::SetEnvironmentVariable($Name, $SessionBefore[$Name]) }
+}

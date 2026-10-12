@@ -58,6 +58,7 @@ def test_the_runbook_headings_exist(level, title):
         "scripts/setup.sh --timezone Africa/Cairo",
         "scripts/timezones.txt",
         "unknown timezone: <name>",
+        "(a name that is not on the list is still refused)",
         "Do not install inside OneDrive",
     ],
 )

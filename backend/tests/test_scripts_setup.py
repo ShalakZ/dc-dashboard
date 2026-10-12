@@ -259,7 +259,7 @@ def test_sh_switches_off_default_attestations_before_the_stack_is_started():
 def test_ps1_switches_off_default_attestations_before_the_stack_is_started():
     lines = (SCRIPT.parent / "setup.ps1").read_text().splitlines()
     setting = lines.index("$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'")
-    up = next(i for i, line in enumerate(lines) if line == "docker compose @ComposeArgs up -d --build")
+    up = next(i for i, line in enumerate(lines) if line.strip() == "docker compose @ComposeArgs up -d --build")  # inside try/finally
     assert setting < up
 
 
@@ -315,7 +315,7 @@ def test_sh_exports_the_build_id_before_the_stack_is_started():
 
 def test_ps1_sets_the_build_id_before_the_stack_is_started():
     lines = (SCRIPT.parent / "setup.ps1").read_text().splitlines()
-    up = next(i for i, line in enumerate(lines) if line == "docker compose @ComposeArgs up -d --build")
+    up = next(i for i, line in enumerate(lines) if line.strip() == "docker compose @ComposeArgs up -d --build")  # inside try/finally
     before = "\n".join(lines[:up])
     assert '$env:DCDASH_BUILD_ID = "dev"' in before and '$env:DCDASH_BUILD_TIME = "unknown"' in before  # the fallbacks come first
     assert before.index('$env:DCDASH_BUILD_ID = "dev"') < before.index("git describe --always --dirty")
@@ -410,11 +410,29 @@ def test_with_an_existing_env_the_flag_changes_nothing_and_says_so(tmp_path):
     assert started(calls)
 
 
+@pytest.mark.parametrize("flag", [("--timezone", "Asia/Qatar"), ("--timezone=Asia/Qatar",), ()])
+@pytest.mark.parametrize("value, words", [("Africa/Ciro", "refused by Settings"), ("Egypt Standard Time", "not an IANA zone name")])
+def test_a_bad_shell_variable_is_refused_even_when_the_env_exists_and_a_flag_is_given(tmp_path, flag, value, words):
+    # with an .env the flag is not exported, and Compose reads the shell variable: a name the api refuses would crash-loop it
+    original = "DCDASH_DB_PASSWORD=keep\nDCDASH_TIMEZONE=Africa/Cairo\n"
+    result, root, calls = run_setup(tmp_path, env_file=original, args=flag, shell_timezone=value)
+    assert result.returncode != 0
+    assert (root / ".env").read_text() == original and calls == [] and not started(calls)
+    assert words in result.stderr and "DCDASH_TIMEZONE" in result.stderr
+
+
 def test_a_shell_variable_that_differs_from_the_existing_env_gets_the_override_warning(tmp_path):
     result, _, _ = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\nDCDASH_TIMEZONE=UTC\n", shell_timezone="Africa/Cairo")
     assert result.returncode == 0, result.stderr
     assert "overrides" in result.stderr and "Africa/Cairo" in result.stderr and "UTC" in result.stderr
     assert up_zone(tmp_path) == ["DCDASH_TIMEZONE=Africa/Cairo"]  # it does override, which is what the warning says
+
+
+def test_a_valid_shell_variable_that_differs_gets_the_override_warning_next_to_the_flag_note(tmp_path):
+    result, _, calls = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\nDCDASH_TIMEZONE=UTC\n", args=("--timezone", "Asia/Qatar"),
+                                 shell_timezone="Africa/Cairo")
+    assert result.returncode == 0, result.stderr
+    assert "only seeds the first start" in result.stderr and "overrides .env (UTC)" in result.stderr and started(calls)
 
 
 def test_a_shell_variable_equal_to_the_existing_env_is_not_a_warning(tmp_path):

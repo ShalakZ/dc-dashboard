@@ -53,7 +53,7 @@ exact, `africa/cairo` is refused) or a Windows name (`Egypt Standard Time`) with
 and the collector restart forever. The zone must have a whole-hour UTC offset in both January and July (`Asia/Qatar`, `Africa/Cairo` and
 `Europe/London` do, `Asia/Kolkata` does not, and the script refuses it); see "Dashboards and billing". Without a flag or variable the zone is `UTC`. The zone only
 seeds the database on the FIRST start: editing `DCDASH_TIMEZONE` in `.env` later does not change an existing database. Change the
-timezone of a running installation on the Settings page. If `.env` already exists, the flag changes nothing and the script says so.
+timezone of a running installation on the Settings page. If `.env` already exists, the flag changes nothing and the script says so (a name that is not on the list is still refused).
 
 **Do not install inside OneDrive** (or another synced folder; on a managed laptop `Desktop` and `Documents` often are): `.env` and the backups would
 be copied to the cloud, and bind mounts on synced paths can be slow or locked. Use a plain local folder such as `C:\dcdash`. The setup
