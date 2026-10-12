@@ -1,7 +1,8 @@
 # Host facts for field debugging when the web app itself is down: one text file to copy and paste to whoever helps.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect-diagnostics.ps1 [host:port ...] [-OutDir DIR] [-ProjectDir DIR]
-# Prints the report and saves dcdash-diag-<yyyyMMdd-HHmmss>.txt in -OutDir (default: the current folder). Each host:port gets a DNS
-# lookup and a TCP connect (3 s timeout). Sections: HOST DISKS NETWORK CLOCK TARGETS LOCAL PORTS TOOLS ON PATH SERVICES DATABASE API LOGS.
+# Prints the report and saves dcdash-diag-<yyyyMMdd-HHmmss>.txt in -OutDir (default: the logs folder inside the project folder, else
+# inside the current folder; created if missing). Each host:port gets a DNS lookup and a TCP connect (3 s timeout).
+# Sections: HOST DISKS NETWORK CLOCK TARGETS LOCAL PORTS TOOLS ON PATH SERVICES DATABASE API LOGS.
 # -ProjectDir is the folder with compose.yaml and .env (default: the current folder, else the script's parent folder, if one of them has
 # a compose.yaml). With docker and a compose.yaml it reads container status, the database and the service logs, and ALSO saves
 # dcdash-diag-<same time>-logs.txt (the last 300 lines per service; saved, never printed). Without them those sections say so.
@@ -16,7 +17,7 @@
 # Exit codes: 0 report written, 1 a file could not be saved (the report was still printed).
 param(
   [Parameter(Position = 0, ValueFromRemainingArguments = $true)][string[]]$Targets,
-  [string]$OutDir = (Get-Location).Path,
+  [string]$OutDir,   # empty: <project folder>\logs, resolved once the project folder is known
   [string]$ProjectDir,
   [string]$ScrubSelfTest,
   [string]$ScrubFile,
@@ -171,7 +172,8 @@ if ($ScrubFile) {
 $Docker = $null
 if ($DockerPath) { if (Test-Path -LiteralPath $DockerPath -PathType Leaf) { $Docker = $DockerPath } }
 else { $c = Get-Command docker -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { $Docker = $c.Source } }
-$OutFull = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutDir)
+$OutBase = $(if ($OutDir) { $OutDir } elseif ($Root) { Join-Path $Root "logs" } else { Join-Path (Get-Location).Path "logs" })
+$OutFull = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutBase)
 $Stamp = (Get-Date).ToString("yyyyMMdd-HHmmss", $Inv)
 $MainFile = Join-Path $OutFull "dcdash-diag-$Stamp.txt"
 $LogsFile = Join-Path $OutFull "dcdash-diag-$Stamp-logs.txt"
@@ -196,6 +198,13 @@ function Get-TextLines([string]$Text) { return $Text.Replace("`r", "").Split([ch
 function Read-Text([string]$Path, [Text.Encoding]$Enc) {   # shared read access: a child that outlived its kill may still hold the file
   $fs = New-Object IO.FileStream($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
   try { return (New-Object IO.StreamReader($fs, $Enc, $true)).ReadToEnd() } finally { $fs.Dispose() }
+}
+function Test-InsideOneDrive([string]$Path) {   # the folder name says OneDrive, or the folder lies under the sync root Windows publishes
+  if ($Path -match 'OneDrive') { return $true }
+  foreach ($base in $env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer) {
+    if ($base -and ($Path.TrimEnd('\') + '\').StartsWith($base.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
 }
 function Test-Tcp([Net.IPAddress]$Addr, [int]$Port, [int]$Ms = 3000) {
   $c = New-Object Net.Sockets.TcpClient -ArgumentList $Addr.AddressFamily
@@ -259,6 +268,10 @@ Section "HOST" {
   $os = Get-CimInstance Win32_OperatingSystem
   Add-Line "os: $($os.Caption) $($os.Version) $($os.OSArchitecture)"
   Add-Line "computer: $env:COMPUTERNAME  user: $env:USERNAME  cpus: $([Environment]::ProcessorCount)"
+  Add-Line "project folder: $(if ($Root) { $Root } else { 'none found' })"
+  if ($Root -and (Test-InsideOneDrive $Root)) {
+    Add-Line "WARNING: inside OneDrive: .env (the database password and the key that decrypts stored credentials) and these files sync to the cloud; install outside synced folders (docs/field-debugging.md)"
+  }
   $up = (Get-Date) - $os.LastBootUpTime
   Add-Line ("uptime: {0}d {1}h {2}m (booted {3})" -f $up.Days, $up.Hours, $up.Minutes, $os.LastBootUpTime.ToString("yyyy-MM-dd HH:mm", $Inv))
   Add-Line ("memory: {0} MB free of {1} MB" -f [int]($os.FreePhysicalMemory / 1KB), [int]($os.TotalVisibleMemorySize / 1KB))
@@ -362,9 +375,10 @@ Section "SERVICES" {
 Section "DATABASE" {
   $done = $false
   if ($script:Containers) {
-    $r = Invoke-Docker @("compose", "exec", "-T", "db", "pg_isready") $CommandTimeoutSeconds
+    # the user and database compose.yaml gives db (its own healthcheck uses the same); a bare pg_isready makes the server log a FATAL for "root"
+    $r = Invoke-Docker @("compose", "exec", "-T", "db", "pg_isready", "-U", "dcdash", "-d", "dcdash") $CommandTimeoutSeconds
     if ($r) {
-      Add-Line "docker compose exec -T db pg_isready (exit code $($r.ExitCode)):"
+      Add-Line "docker compose exec -T db pg_isready -U dcdash -d dcdash (exit code $($r.ExitCode)):"
       foreach ($l in @(Get-TextLines ($r.Out + "`n" + $r.Err) | Where-Object { $_.Trim() })) { Add-Line $l -Clip 300 -Prefix "  " }
       $done = $true
     }
@@ -375,7 +389,13 @@ Section "DATABASE" {
 Section "API" {
   try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
   foreach ($url in "http://127.0.0.1/api/health", "http://127.0.0.1:8000/api/health") {
-    $note = $(if ($url -match ':8000') { " (native install only)" } else { "" })
+    $native = $url -match ':8000'
+    if ($native -and $script:Containers) {   # SERVICES ran first: under Docker only the web container publishes a port
+      Add-Line "GET $url"
+      Add-Line "  n/a (Docker install: the api is not published on the host)"
+      continue
+    }
+    $note = $(if ($native) { " (native install only)" } else { "" })
     $sw = [Diagnostics.Stopwatch]::StartNew(); $code = $null; $body = ""; $err = $null
     try {
       $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 3

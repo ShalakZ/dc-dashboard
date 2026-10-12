@@ -134,7 +134,7 @@ def test_report_has_every_section_and_the_stdout_carries_the_same_checksum(run):
     for name in SECTIONS:
         assert re.search(rf"^== {name}\b", text, re.M), name
     assert "section failed" not in text
-    assert re.search(r"^w32tm /query /status \(exit code \d+\):$", text, re.M)  # the clock check still runs, now under a time limit
+    assert re.search(r"^w32tm /query /status \(exit code -?\d+\):$", text, re.M)  # still runs under a time limit; w32tm exits negative while the Windows Time service is stopped
     assert text.splitlines()[0].startswith("DCDASH-DIAG v1 | collect-diagnostics.ps1 | PowerShell 5.")
     assert re.search(r"^local time: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d\d:\d\d", text, re.M)
     assert re.search(r"^utc time: +\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$", text, re.M)
@@ -331,7 +331,8 @@ def _fake_docker(fake: Path, answers: bool) -> Path:
         f'if "%1 %2 %3"=="compose config --services" (type "{can("services.txt")}" & exit /b 0)',
         f'if "%1 %2 %3"=="compose ps -a" (type "{can("ps.txt")}" & exit /b 0)',
         f'if "%1 %2 %3 %4 %5"=="compose logs --no-color --tail 300" (type "{can("log-%~6.txt")}" & exit /b 0)',
-        'if "%1 %2 %3 %4 %5"=="compose exec -T db pg_isready" (echo /var/run/postgresql:5432 - accepting connections& exit /b 0)',
+        # the bare `pg_isready` falls through to `unexpected`: the real server logs `FATAL: role "root" does not exist` for it
+        'if "%1 %2 %3 %4 %5 %6 %7 %8 %9"=="compose exec -T db pg_isready -U dcdash -d dcdash" (echo /var/run/postgresql:5432 - accepting connections& exit /b 0)',
         "echo unexpected: %* 1>&2",
         "exit /b 9",
     ])
@@ -396,7 +397,7 @@ def test_no_credential_appears_anywhere(docker_run):
 def test_the_canned_facts_show_and_only_the_last_30_lines_go_into_the_report(docker_run):
     main, logs = _main_and_logs(docker_run[1])
     assert "docker compose ps -a in " in main and "dcdash-db-1" in main and "dcdash-api-1" in main and "(healthy)" in main
-    assert "docker compose exec -T db pg_isready (exit code 0):" in main
+    assert "docker compose exec -T db pg_isready -U dcdash -d dcdash (exit code 0):" in main
     assert "/var/run/postgresql:5432 - accepting connections" in main
     assert "services: db, api" in main
     assert "-- api (last 30 of 300 lines read)" in main and "-- db (last 3 of 3 lines read)" in main
@@ -426,7 +427,7 @@ def test_only_the_fake_docker_ran_with_the_expected_read_only_commands(docker_ru
     _, _, argv, project = docker_run
     commands = [re.sub(r"^CD=.*? ARGS=", "", a) for a in argv]
     assert commands == [
-        "compose ps -a", "compose exec -T db pg_isready", "compose config --services",
+        "compose ps -a", "compose exec -T db pg_isready -U dcdash -d dcdash", "compose config --services",
         "compose logs --no-color --tail 300 db", "compose logs --no-color --tail 300 api",
     ]
     assert all(a.split(" ARGS=")[0].lower() == "cd=" + _win(project).lower() for a in argv), "docker runs in the project folder"
@@ -466,6 +467,85 @@ def test_a_hung_docker_costs_one_timeout_and_one_line(hung_docker_run):
     assert elapsed < 60
 
 
+# ---- W8c part 1: logs folder, pg_isready as dcdash, no native probe under Docker, OneDrive ----------------------------
+
+@needs_powershell
+@pytest.mark.parametrize("with_compose", [True, False], ids=["compose-project", "no-compose-project"])
+def test_without_outdir_the_files_go_to_logs_in_the_project_folder(scratch, with_compose):
+    cwd, project = scratch(), scratch("dcdash-diag-project-")
+    if with_compose:
+        (project / "compose.yaml").write_text("services: {}\n")
+    # a docker that does not exist: the real Docker Desktop must never be called
+    proc = _run_script(["-DockerPath", _win(cwd / "no-such-docker.exe")], cwd, project)
+    saved = sorted((project / "logs").glob("dcdash-diag-*.txt"))
+    assert proc.returncode == 0, proc.stderr
+    assert len(saved) == 1 and re.fullmatch(r"dcdash-diag-\d{8}-\d{6}\.txt", saved[0].name)
+    assert list(cwd.iterdir()) == [], "nothing in the working directory"
+    assert re.search(rf"^saved: {re.escape(_win(project))}\\logs\\dcdash-diag-\d{{8}}-\d{{6}}\.txt$", proc.stdout, re.M | re.I), proc.stdout
+
+
+@needs_powershell
+def test_the_database_is_asked_as_the_user_compose_gives_it(docker_run):
+    proc, files, argv, _ = docker_run
+    main, _ = _main_and_logs(files)
+    assert "compose exec -T db pg_isready -U dcdash -d dcdash" in [re.sub(r"^CD=.*? ARGS=", "", a) for a in argv]
+    assert "/var/run/postgresql:5432 - accepting connections" in main, "the bare call (no -U) is refused by the fake docker"
+    assert "unexpected" not in main
+
+
+@needs_powershell
+def test_under_docker_the_native_api_probe_is_skipped(docker_run):
+    main, _ = _main_and_logs(docker_run[1])
+    assert "(native install only)" not in main
+    lines = main.splitlines()
+    at = lines.index("GET http://127.0.0.1:8000/api/health")
+    assert lines[at + 1] == "  n/a (Docker install: the api is not published on the host)"
+    assert any(l.startswith("GET http://127.0.0.1/api/health") for l in lines), "the web port is still probed"
+
+
+@needs_powershell
+def test_without_containers_the_native_api_probe_stays(run):
+    text = _report(run)
+    assert "GET http://127.0.0.1:8000/api/health (native install only)" in text
+    assert "n/a (Docker install" not in text
+
+
+@needs_powershell
+def test_the_host_section_names_the_project_folder_and_warns_inside_onedrive(scratch):
+    synced = scratch("dcdash-diag-project-") / "OneDrive - Test" / "proj"
+    plain = scratch("dcdash-diag-project-")
+    for project in (synced, plain):
+        project.mkdir(parents=True, exist_ok=True)
+    out_dir = scratch()
+    texts = {}
+    for name, project in (("synced", synced), ("plain", plain)):
+        _run_script(["-OutDir", _win(out_dir / name), "-DockerPath", _win(out_dir / "no-such-docker.exe")], out_dir, project)
+        texts[name] = next((out_dir / name).glob("dcdash-diag-*.txt")).read_text(encoding="utf-8")
+    for name, project in (("synced", synced), ("plain", plain)):
+        lines = texts[name].splitlines()
+        at = lines.index(f"project folder: {_win(project)}")
+        assert at > lines.index("== HOST ==") and at < lines.index("== DISKS ==")
+        warning = lines[at + 1]
+        if name == "synced":
+            assert warning.startswith("WARNING: inside OneDrive: .env") and "install outside synced folders" in warning
+        else:
+            assert "OneDrive" not in warning and not any("inside OneDrive" in l for l in lines)
+
+
+@needs_powershell
+def test_a_project_folder_under_the_onedrive_environment_folder_warns_too(scratch):
+    synced_root, out_dir = scratch("dcdash-diag-sync-"), scratch()
+    project = synced_root / "dcdash-diag-project"
+    project.mkdir()
+    # the variable is set INSIDE PowerShell (one set in WSL would not reach it); the folder name itself has no "OneDrive" in it
+    command = (f"$env:OneDrive = '{_win(synced_root)}'; & '{_win(SCRIPT)}' -OutDir '{_win(out_dir)}' "
+               f"-ProjectDir '{_win(project)}' -DockerPath '{_win(out_dir / 'no-such-docker.exe')}'")
+    subprocess.run([POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+                   capture_output=True, text=True, timeout=120, cwd=str(out_dir))
+    text = next(out_dir.glob("dcdash-diag-*.txt")).read_text(encoding="utf-8")
+    assert re.search(r"^WARNING: inside OneDrive: ", text, re.M)
+
+
 # ---- the script itself --------------------------------------------------------------------------------------------------
 
 def _code() -> str:
@@ -481,7 +561,7 @@ def test_script_sticks_to_powershell_51_syntax_and_stays_small():
     assert "Out-File" not in code and not re.search(r">\s*\$", code), "UTF-16 on PowerShell 5.1"
     assert "UTF8Encoding $false" in code and "WriteAllText" in code
     assert text.isascii(), "PowerShell 5.1 reads a script without a BOM as ANSI: use [char]0x2026 and friends"
-    assert len(text.splitlines()) <= 450
+    assert len(text.splitlines()) <= 700
 
 
 def test_a_timed_out_command_gets_a_second_try_at_deleting_its_raw_output():
