@@ -361,6 +361,20 @@ describe("RowActions: closing", () => {
       fireEvent.scroll(window);
       expect(menu()).toBeNull();
     });
+
+    it("a scroll inside the settle time that really moved the trigger closes it (the panel would hang beside another row)", async () => {
+      const { trigger } = mount();
+      let top = 276;
+      vi.spyOn(trigger, "getBoundingClientRect").mockImplementation(() => ({ top, bottom: top + 28, left: 100, right: 128, width: 28, height: 28, x: 100, y: top, toJSON: () => ({}) }));
+      await userEvent.click(trigger);
+      expect(menu()).not.toBeNull();
+      clock += 100;
+      fireEvent.scroll(window);
+      expect(menu()).not.toBeNull(); // the trigger did not move: a late event of a scroll that was already over
+      top = 156;
+      fireEvent.scroll(window);
+      expect(menu()).toBeNull(); // it moved 120 px: closed at once
+    });
   });
 
   it("a resize closes it", async () => {

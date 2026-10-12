@@ -96,11 +96,12 @@ async function expectMenuReachable(page: Page, menu: Locator) {
       .filter((button) => {
         const box = button.getBoundingClientRect();
         const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-        return hit !== null && el.contains(hit);
+        const inView = box.top >= 0 && box.bottom <= window.innerHeight;
+        return inView && (hit === null || !button.contains(hit));
       })
       .map((button) => button.getAttribute("aria-label") ?? "");
   });
-  expect(covered, "the menu covers the Actions button of a neighbouring row").toEqual([]);
+  expect(covered, "something covers the Actions button of a neighbouring row").toEqual([]);
 }
 
 test("Sources: the row menu works from the keyboard", async ({ page }) => {

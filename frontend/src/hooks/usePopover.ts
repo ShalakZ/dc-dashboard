@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 const DWELL_MS = 200; // a mouse has to rest (and have moved) over the trigger this long before hover opens it
 const LEAVE_MS = 150; // grace to cross the gap between the trigger and its panel
 const SETTLE_MS = 300; // a scroll that began before it opened (the row was scrolled into view, then clicked) must not close it: its event arrives late
+const MOVED_PX = 2; // ...but one that really moved the trigger since it opened does close it, or the fixed panel would hang beside another row
 
 /** The popover that is open now. Opening another one closes it: a row menu and a tip never stand open side by side. */
 let current: { id: symbol; hide: () => void } | null = null;
@@ -42,6 +43,7 @@ export function usePopover({ hover = true, closeOnScroll = false }: { hover?: bo
   const dwell = useRef<ReturnType<typeof setTimeout>>(undefined);
   const leave = useRef<ReturnType<typeof setTimeout>>(undefined);
   const openedAt = useRef(0);
+  const openedTop = useRef(0);
 
   const clearTimers = useCallback(() => {
     clearTimeout(dwell.current);
@@ -61,6 +63,7 @@ export function usePopover({ hover = true, closeOnScroll = false }: { hover?: bo
     now.current.open = true;
     now.current.pinned = pinned;
     openedAt.current = performance.now();
+    openedTop.current = trigger.current?.getBoundingClientRect().top ?? 0;
     setOpen(true);
   }, [clearTimers, hide]);
   const dismiss = useCallback(() => {
@@ -109,7 +112,8 @@ export function usePopover({ hover = true, closeOnScroll = false }: { hover?: bo
       if (hadFocus) trigger.current?.focus({ preventScroll: true });
     };
     const onScroll = (event: Event) => {
-      if (performance.now() - openedAt.current < SETTLE_MS) return;
+      const settling = performance.now() - openedAt.current < SETTLE_MS;
+      if (settling && Math.abs((trigger.current?.getBoundingClientRect().top ?? 0) - openedTop.current) < MOVED_PX) return;
       if (!(event.target instanceof Node && panel.current?.contains(event.target))) close();
     };
     document.addEventListener("keydown", onKey);
