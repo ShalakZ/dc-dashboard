@@ -1,6 +1,8 @@
-import { lazy, Suspense, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { useDashboard, useSite } from "../api/queries";
+import { ApiError } from "../api/client";
+import { keys, useDashboard, useSite } from "../api/queries";
 import type { Dashboard } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { Crumbs } from "../components/Crumbs";
@@ -30,6 +32,12 @@ function DashboardScreen({ id }: { id: number }) {
   const [epoch, setEpoch] = useState(0);
   const canEdit = hasRole("operator");
   const dashboard = newest(saved, query.data);
+  const queryClient = useQueryClient();
+  const loadError = query.error;
+  // A dashboard that is gone may still be what the sidebar's Dashboards link points at: ask again which one is the default.
+  useEffect(() => {
+    if (loadError instanceof ApiError && loadError.status === 404) void queryClient.invalidateQueries({ queryKey: keys.defaultDashboard });
+  }, [loadError, queryClient]);
 
   if (query.isLoading || site.isLoading) return <p className="muted">loading…</p>;
   const failure = query.error ?? site.error;

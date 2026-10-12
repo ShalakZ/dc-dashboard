@@ -331,9 +331,19 @@ export const useBillingCosts = (month: string | null) =>
 export const useDashboards = () =>
   useQuery({ queryKey: keys.dashboardList, queryFn: () => api.get<DashboardListItem[]>("/api/dashboards") });
 
-/** The dashboard people land on (null = none). The server answers null for a stale or unusable value too. */
+/**
+ * The dashboard people land on (null = none). The server answers null for a stale or unusable value too.
+ * The sidebar keeps this query alive for the whole session, so it looks again by itself (on focus, once stale, and every minute):
+ * another admin may delete the dashboard or pick a new default while a control-room screen stays open.
+ */
 export const useDefaultDashboard = () =>
-  useQuery({ queryKey: keys.defaultDashboard, queryFn: () => api.get<DefaultDashboard>("/api/dashboards/default"), staleTime: 30_000 });
+  useQuery({
+    queryKey: keys.defaultDashboard,
+    queryFn: () => api.get<DefaultDashboard>("/api/dashboards/default"),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true, // the app turns this off for every query (main.tsx)
+    refetchInterval: 60_000,
+  });
 
 export function usePutDefaultDashboard() {
   const client = useQueryClient();
