@@ -27,6 +27,7 @@ const BILLING_GROUND = ':root[data-mode="dark"] table.billing td.muted';
 const PLACEHOLDER = ':root[data-mode="dark"] .dash-grid-edit .react-grid-item.react-grid-placeholder';
 const AVATAR = ':root[data-mode="dark"] .prof-head .avatar';
 const CARD = ':root[data-mode="dark"] .widget-frame';
+const ATTRIBUTION = ".graph-canvas .react-flow__attribution a";
 
 /** The tokens the cascade gives an element under <html data-mode data-theme>: the base, the preset, then (dark only) the dark block. */
 function cascade(themeId: string, mode: "light" | "dark") {
@@ -260,11 +261,17 @@ describe("the widget cards in dark", () => {
   });
 });
 
+describe("the graph's credit link", () => {
+  it("reads in --text-2 (React Flow's own #999 is 2.68:1 on the surface), set here because its stylesheet is unlayered and would beat a layered rule", () => {
+    expect(only(ATTRIBUTION).body).toMatch(/color:\s*var\(--text-2\)/);
+  });
+});
+
 describe("the file", () => {
   it("is ordered: the four presets, then dark, the avatar, the island, the cards, then Billing, then the placeholder", () => {
     const order = [
       ...THEMES.map((t) => presetRule(t.id).order), darkRule().order, only(AVATAR).order, only(ISLAND).order, only(CARD).order,
-      only(BILLING_INK).order, only(BILLING_GROUND).order, only(PLACEHOLDER).order,
+      only(BILLING_INK).order, only(BILLING_GROUND).order, only(PLACEHOLDER).order, only(ATTRIBUTION).order,
     ];
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(rules).toHaveLength(order.length);

@@ -142,11 +142,8 @@ describe("the shell (W6 sidebar)", () => {
     }
   });
 
-  it("the graph's attribution link reads in --text-2, in the layer (React Flow's own #999 is 2.68:1 on the surface)", () => {
-    const rule = rules.find((r) => r.selector === ".graph-canvas .react-flow__attribution a");
-    expect(rule, "a rule for the attribution link").toBeDefined();
-    expect(inLayer(rule!)).toBe(true);
-    expect(rule!.body).toMatch(/color:\s*var\(--text-2\)/);
+  it("leaves the attribution link's colour to themes.css: React Flow's stylesheet is unlayered, so a layered rule would lose", () => {
+    expect(rules.some((r) => r.selector === ".graph-canvas .react-flow__attribution a")).toBe(false);
   });
 
   it("every placeholder is --text-disabled at full opacity, in the layer (Chrome's own grey is 3.86:1 on the dark field)", () => {

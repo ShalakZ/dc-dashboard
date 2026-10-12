@@ -84,3 +84,7 @@
 
 /* The editor's drag placeholder is frozen black in app.css and sits on the page, not on a card: invisible on a dark page (1.18:1). */
 :root[data-mode="dark"] .dash-grid-edit .react-grid-item.react-grid-placeholder { background: #fff; }
+
+/* React Flow's own stylesheet is unlayered and colours the credit link #999 (2.68:1 on the --surface ground app.css gives it), and an unlayered
+   rule always beats a rule inside @layer w6: so the link's colour is set here, in both modes. */
+.graph-canvas .react-flow__attribution a { color: var(--text-2); }

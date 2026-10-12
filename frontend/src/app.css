@@ -425,7 +425,6 @@
     --xy-edge-label-background-color: var(--bg); --xy-edge-label-color: var(--text-2);
     --xy-attribution-background-color: var(--surface);
   }
-  .graph-canvas .react-flow__attribution a { color: var(--text-2); } /* React Flow's #999 is 2.68:1 on the --surface ground above */
   .graph-canvas .react-flow__controls button { min-height: 0; border-radius: 0; font-weight: 400; opacity: 1; } /* opacity 1: React Flow dims a disabled zoom button itself, the base disabled rule must not dim it twice */
   .gpanel { width: 320px; flex: none; align-content: start; overflow: auto; margin: 0; }
   .gpanel h2 { margin: 0; font-size: 16px; }
