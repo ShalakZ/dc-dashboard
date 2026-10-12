@@ -1,4 +1,5 @@
-import { asCheckResult, checkVerdict, copyText, describeStepError, formatMs, partSize, reportFileName, reportText, saveTextFile, stepLabel, stepState } from "./diagnostics";
+import { ApiError } from "../api/client";
+import { asCheckResult, checkVerdict, copyText, describeStepError, formatMs, partSize, reportErrorText, reportFileName, reportText, saveTextFile, stepLabel, stepState } from "./diagnostics";
 
 const result = (over: Record<string, unknown> = {}) => ({
   source_id: 3, connector_type: "opcua", started_at: "2026-10-12T10:00:00+00:00", finished: true, ok: true, first_failed: null,
@@ -61,8 +62,26 @@ describe("report helpers", () => {
   ];
 
   it("shows the server's sizes with thousands separators and singular units", () => {
-    expect(partSize(parts[0])).toBe("12,034 characters, 210 lines");
-    expect(partSize(parts[1])).toBe("1 character, 1 line");
+    expect(partSize(parts[0])).toBe("12,034 characters of content, 210 lines");
+    expect(partSize(parts[1])).toBe("1 character of content, 1 line");
+  });
+
+  describe("reportErrorText", () => {
+    const fallback = "Try again; if it keeps failing, run the offline script described in docs/field-debugging.md (scripts/collect-diagnostics.ps1) and paste its output.";
+
+    it("wraps the server's detail in a sentence that says what to do next, capitalised", () => {
+      expect(reportErrorText(new ApiError(500, "internal error"))).toBe(`The report could not be built (Internal error). ${fallback}`);
+      expect(reportErrorText(new ApiError(500, "report failed."))).toBe(`The report could not be built (Report failed). ${fallback}`);
+    });
+
+    it("says plainly that only administrators can build a report", () => {
+      expect(reportErrorText(new ApiError(403, "admin role required"))).toBe("Only administrators can build a report.");
+    });
+
+    it("says the server could not be reached when the request itself failed", () => {
+      expect(reportErrorText(new TypeError("Failed to fetch"))).toBe("Could not reach the server.");
+      expect(reportErrorText(new Error("NetworkError when attempting to fetch resource."))).toBe("Could not reach the server.");
+    });
   });
 
   it("joins the parts with one blank line, as format=text does", () => {

@@ -49,7 +49,7 @@ export function ConnectionCheck({ sourceId, autoStart = false }: { sourceId?: nu
   // and a Run button that the start disables a moment later would take the focus with it.
   const [starting, setStarting] = useState(autoStart);
   const start = useStartCheck(id);
-  const { job, timedOut, error: pollError } = useJob(jobId, CHECK_MAX_WAIT_MS);
+  const { job, timedOut, error: pollError, errorStatus: pollStatus } = useJob(jobId, CHECK_MAX_WAIT_MS);
 
   const run = () => {
     if (id === null) return;
@@ -88,7 +88,8 @@ export function ConnectionCheck({ sourceId, autoStart = false }: { sourceId?: nu
   const result = job ? asCheckResult(job.result) : null;
   const failure = status === "failed" ? String((job?.result as { error?: unknown } | null)?.error ?? "unknown error") : null;
   const refused = start.error instanceof ApiError && (start.error.status === 409 || start.error.status === 429);
-  const sentence = start.error instanceof ApiError && start.error.status === 429 ? start.error.message : null;
+  // 429: one right after a finish. 409 without a job to follow: the server's own sentence.
+  const sentence = start.error instanceof ApiError && (start.error.status === 429 || (start.error.status === 409 && activeJobOf(start.error) === null)) ? start.error.message : null;
   const stamp = job?.finished_at ?? result?.started_at ?? null;
   const when = stamp && site.data ? formatSiteDateTime(stamp, site.data.timezone) : null;
 
@@ -118,7 +119,7 @@ export function ConnectionCheck({ sourceId, autoStart = false }: { sourceId?: nu
       </div>
       {start.isError && !refused && <p className="error" role="alert">{start.error.message}</p>}
       {sentence && <p className="muted" role="status">{sentence.charAt(0).toUpperCase() + sentence.slice(1).replace(/\.$/, "")}.</p>}
-      {pollError && <p className="error" role="alert">{pollError}</p>}
+      {pollError && <p className="error" role="alert">{pollStatus === 404 ? "The check could not be found; run it again." : pollError}</p>}
       {failure !== null && <p className="error" role="alert">The check failed: {failure}</p>}
       {line && <p className="check-line" role="status">{line}</p>}
       {timedOut && <p className="warning" role="status">Still not finished after 2 minutes. The collector may be busy or stopped; the steps below are what it reported so far.</p>}

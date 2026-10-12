@@ -703,6 +703,14 @@ describe("SourcesPage look (W6)", () => {
       expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Close" }));
     });
 
+    it("shows the row button as Check (the table has no room for more) while its name stays Check connection", async () => {
+      mockFetch(checkRoutes("operator"));
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      const button = await screen.findByRole("button", { name: "Check connection" });
+      expect(button.textContent).toBe("Check");
+      expect(button).toHaveAttribute("aria-label", "Check connection");
+    });
+
     it("keeps the Test button's name unambiguous and leaves Test untouched", async () => {
       mockFetch(checkRoutes("operator"));
       renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });

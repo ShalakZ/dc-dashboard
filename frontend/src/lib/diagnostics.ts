@@ -1,3 +1,4 @@
+import { ApiError } from "../api/client";
 import type { CheckStep, CheckStepError, ConnectionCheckResult, ReportPart, ReportReply } from "../api/types";
 
 /** The check polls for this long before the page says it is still going (a full OPC UA check has a 60 s budget of its own). */
@@ -54,8 +55,23 @@ export function checkVerdict(result: ConnectionCheckResult): string {
 /** "1 character", "12,034 characters". */
 const count = (n: number, noun: string) => `${n.toLocaleString("en-US")} ${noun}${n === 1 ? "" : "s"}`;
 
-/** "12,034 characters, 210 lines": the server's figures, which are the ones in the part's footer line (line breaks are not counted). */
-export const partSize = (part: Pick<ReportPart, "chars" | "lines">): string => `${count(part.chars, "character")}, ${count(part.lines, "line")}`;
+/**
+ * "12,034 characters of content, 210 lines": the server's figures, which are the ones in the part's footer line. They count the
+ * content between the header line and the footer (line breaks are not counted), so the text of a part is a little longer.
+ */
+export const partSize = (part: Pick<ReportPart, "chars" | "lines">): string =>
+  `${count(part.chars, "character")} of content, ${count(part.lines, "line")}`;
+
+/** What the page says when the report could not be built: what to do next, and for the usual causes the plain reason. */
+export function reportErrorText(error: unknown): string {
+  if (error instanceof ApiError && error.status === 403) return "Only administrators can build a report.";
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof ApiError) && (error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(message))) {
+    return "Could not reach the server.";
+  }
+  const detail = (message.charAt(0).toUpperCase() + message.slice(1)).replace(/\.$/, "");
+  return `The report could not be built (${detail}). Try again; if it keeps failing, run the offline script described in docs/field-debugging.md (scripts/collect-diagnostics.ps1) and paste its output.`;
+}
 
 /** The whole report as one text, exactly what `format=text` returns: the parts with one blank line between them. */
 export const reportText = (report: Pick<ReportReply, "parts">): string => report.parts.map((p) => p.text).join("\n\n");

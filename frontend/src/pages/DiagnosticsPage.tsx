@@ -3,7 +3,7 @@ import { useBuildReport, useSources } from "../api/queries";
 import type { ReportDetail, ReportReply } from "../api/types";
 import { ConnectionCheck } from "../components/ConnectionCheck";
 import { PageHeader } from "../components/PageHeader";
-import { copyText, partSize, reportFileName, reportText, saveTextFile } from "../lib/diagnostics";
+import { copyText, partSize, reportErrorText, reportFileName, reportText, saveTextFile } from "../lib/diagnostics";
 
 const DETAIL_HELP: Record<ReportDetail, string> = {
   summary: "Summary: one paste with the latest connection check, the sources and the newest events. Start with this one.",
@@ -41,7 +41,7 @@ function ReportResult({ report }: { report: ReportReply }) {
     <>
       <div className="report-bar">
         <p role="status" className="report-built">
-          Built a {report.detail} report in {n} {n === 1 ? "part" : "parts"}, {characters.toLocaleString("en-US")} characters, build {report.build_id}
+          Built a {report.detail} report in {n} {n === 1 ? "part" : "parts"}, {characters.toLocaleString("en-US")} characters of content, build {report.build_id}
           {report.mask ? ", host names and addresses hidden." : "."}
         </p>
         <button type="button" onClick={() => saveTextFile(reportFileName(report), reportText(report))}>Download .txt</button>
@@ -115,7 +115,7 @@ export function DiagnosticsPage() {
             <button type="submit" className="primary" disabled={build.isPending}>Build report</button>
             {build.isPending && <span className="muted" role="status">Building the report…</span>}
           </div>
-          {build.isError && <p className="error" role="alert">{build.error.message}</p>}
+          {build.isError && <p className="error" role="alert">{reportErrorText(build.error)}</p>}
         </form>
         {build.data ? <ReportResult report={build.data} /> : !build.isPending && <p className="muted">Nothing built yet. Choose the detail and press Build report.</p>}
       </div>

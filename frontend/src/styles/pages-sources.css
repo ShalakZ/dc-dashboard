@@ -24,7 +24,12 @@
 
   /* Row actions: quiet buttons at the right of the row. The cell stays a table cell (it must not be display: flex). */
   td.row-actions, th.row-actions { display: table-cell; } /* belt: no other rule may turn the cell into a flex box and tear the row */
-  td.row-actions { padding-top: 6px; padding-bottom: 6px; text-align: right; white-space: nowrap; }
+  /* The buttons may wrap onto a second line (Points and Delete) instead of widening the table: at 1440px, with the sidebar open, the
+     wrap is 1146px wide and the nine columns with one nowrap line of buttons needed 1233px, so Points was cut off and Delete sat behind
+     a sideways scroll. The cell's smallest width is now its widest button (about 65px, 265px less than before), which absorbs the 87px
+     of overflow and the Status minimum below. A button is an atomic inline, so the line breaks between buttons and never inside one. */
+  td.row-actions { min-width: 150px; padding-top: 6px; padding-bottom: 6px; text-align: right; white-space: normal; }
+  td.row-actions > * { white-space: nowrap; }
   td.row-actions > * { vertical-align: middle; }
   td.row-actions :is(.quiet, .danger-quiet, .quiet-link) { padding: 0 7px; }
   td.row-actions > * + * { margin-left: 2px; }
@@ -36,6 +41,7 @@
   .st.job::before, .st.note::before { margin-top: 0.4em; }
   .st-off.job::before, .st-off.note::before { margin-top: 0.6em; }
   .st.note { min-width: 90px; max-width: 240px; }
+  .table-wrap.dense td .st.note { min-width: 150px; } /* Sources: "not polled (no mapped points); last check: online" was five short lines at 90px, now three */
   .st.plain { font-size: var(--fs-base); font-weight: 400; } /* a status word that sits in a row of body text */
   .job-line { margin: 0 0 14px; }
 

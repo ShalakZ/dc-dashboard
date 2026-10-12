@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { Job } from "../api/types";
 
 const FINISHED = new Set(["done", "failed"]);
@@ -23,6 +23,7 @@ export function useJob(jobId: number | null, maxWaitMs = DEFAULT_MAX_WAIT_MS) {
     queryKey: ["jobs", jobId],
     enabled: jobId !== null,
     queryFn: () => api.get<Job>(`/api/jobs/${jobId}`),
+    retry: (failures, err) => !(err instanceof ApiError && err.status === 404) && failures < 1, // a job that is gone is not worth asking again
     refetchInterval: (query) => (timedOut || (query.state.data && FINISHED.has(query.state.data.status)) ? false : 1000),
   });
   const job = data ?? null;
@@ -32,5 +33,6 @@ export function useJob(jobId: number | null, maxWaitMs = DEFAULT_MAX_WAIT_MS) {
     running: jobId !== null && !finished && !timedOut,
     timedOut: jobId !== null && !finished && timedOut,
     error: error ? error.message : null,
+    errorStatus: error instanceof ApiError ? error.status : null,
   };
 }

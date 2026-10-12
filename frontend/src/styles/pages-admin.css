@@ -93,6 +93,10 @@
   .check-controls > label { min-width: 220px; }
   .check-step > p { margin: 0; }
   .check-line { font-weight: 600; }
+  .check-panel > .check-line { margin-top: 12px; } /* beats `.check-panel > *`: the verdict does not sit flush under the Run button */
+  /* The Sources row's dialog is taller than a 1024x768 window when a check fails (880px against 736px): the steps scroll, the Close row stays. */
+  .dialog:has(> .check-panel) { overflow: hidden; grid-template-rows: auto minmax(0, 1fr) auto; }
+  .dialog > .check-panel { min-height: 0; overflow: auto; }
   .check-steps { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius); }
   .check-step { display: grid; gap: 4px; padding: 10px 16px; }
   .check-step + .check-step { border-top: 1px solid var(--border); }

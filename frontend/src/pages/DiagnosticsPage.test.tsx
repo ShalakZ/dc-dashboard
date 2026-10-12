@@ -74,10 +74,10 @@ describe("DiagnosticsPage report", () => {
     expect(first).toHaveValue("FIRST PART\nline");
     expect(first).toHaveAttribute("readonly");
     expect(second).toHaveValue("SECOND PART\nEND OF REPORT x");
-    expect(screen.getByText("12,034 characters, 210 lines")).toBeInTheDocument();
-    expect(screen.getByText("1 character, 1 line")).toBeInTheDocument();
+    expect(screen.getByText("12,034 characters of content, 210 lines")).toBeInTheDocument();
+    expect(screen.getByText("1 character of content, 1 line")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 3, name: "Part 2 of 2" })).toBeInTheDocument();
-    expect(screen.getByText(/Built a full report in 2 parts, 12,035 characters, build 227bd6a\./)).toBeInTheDocument();
+    expect(screen.getByText(/Built a full report in 2 parts, 12,035 characters of content, build 227bd6a\./)).toBeInTheDocument();
   });
 
   it("copies the exact text of the part whose button is pressed", async () => {
@@ -157,7 +157,27 @@ describe("DiagnosticsPage report", () => {
     mockFetch(routes(undefined, { "GET /api/diagnostics/report": { status: 500, body: { detail: "report failed" } } }));
     renderWithProviders(<DiagnosticsPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Build report" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("report failed");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The report could not be built (Report failed). Try again; if it keeps failing, run the offline script described in docs/field-debugging.md (scripts/collect-diagnostics.ps1) and paste its output.",
+    );
+    expect(build()).toBeEnabled();
+  });
+
+  it("says in one sentence that only administrators can build a report", async () => {
+    mockFetch(routes(undefined, { "GET /api/diagnostics/report": { status: 403, body: { detail: "admin role required" } } }));
+    renderWithProviders(<DiagnosticsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Build report" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/^Only administrators can build a report\.$/);
+  });
+
+  it("says the server could not be reached when the request fails", async () => {
+    mockFetch(routes());
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).includes("/api/diagnostics/report") ? Promise.reject(new TypeError("Failed to fetch")) : inner(input, init)));
+    renderWithProviders(<DiagnosticsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Build report" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/^Could not reach the server\.$/);
     expect(build()).toBeEnabled();
   });
 
@@ -176,6 +196,27 @@ describe("DiagnosticsPage report", () => {
 });
 
 describe("DiagnosticsPage connection check", () => {
+  it("re-enables Run and says so when the job it follows is gone (404)", async () => {
+    mockFetch(routes(undefined, {
+      "POST /api/sources/5/check": { status: 409, body: { detail: "a connection check is already running", job_id: 999999 } },
+      "GET /api/jobs/999999": { status: 404, body: { detail: "job not found" } },
+    }));
+    renderWithProviders(<DiagnosticsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Run connection check" }));
+    expect(await screen.findByText("The check could not be found; run it again.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run connection check" })).toBeEnabled();
+  });
+
+  it("shows the server's sentence for a 409 that names no job to follow", async () => {
+    mockFetch(routes(undefined, {
+      "POST /api/sources/5/check": { status: 409, body: { detail: "a connection check for this source is already running" } },
+    }));
+    renderWithProviders(<DiagnosticsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Run connection check" }));
+    expect(await screen.findByText("A connection check for this source is already running.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run connection check" })).toBeEnabled();
+  });
+
   it("carries the check panel, which lists the sources", async () => {
     mockFetch(routes());
     renderWithProviders(<DiagnosticsPage />);

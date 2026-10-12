@@ -98,7 +98,7 @@ test.describe("W8: field diagnostics", () => {
     await expect(box).toHaveValue(/== SOURCES ==/);
     await expect(box).toHaveValue(/\bsim\b/); // the seeded source is listed
     await expect(box).toHaveValue(/CONNECTION CHECKS/);
-    await expect(page.getByText(/^[\d,]+ characters, [\d,]+ lines$/)).toBeVisible();
+    await expect(page.getByText(/^[\d,]+ characters of content, [\d,]+ lines$/)).toBeVisible();
     await expect(page.getByText(/^Built a summary report in 1 part, /)).toBeVisible();
     await expect(page.getByText("Address key")).toHaveCount(0); // not masked
 

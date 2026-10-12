@@ -169,7 +169,7 @@ export function SourcesPage() {
                     <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
                     <td className="row-actions">
                       <button className="quiet" onClick={() => testOne(s.id)} disabled={locked}>Test</button>
-                      <button className="quiet" onClick={() => openCheck(s)} disabled={locked}>Check connection</button>
+                      <button className="quiet" onClick={() => openCheck(s)} disabled={locked} aria-label="Check connection" title="Check connection">Check</button>
                       {hasRole("admin") && <button className="quiet" onClick={() => openEdit(s)} disabled={locked}>Edit</button>}
                       {hasRole("admin") && <Link className="quiet-link" to={`/sources/${s.id}/points`}>Points</Link>}
                       {hasRole("admin") && <button className="danger-quiet" onClick={() => remove(s.id, s.name)} disabled={locked}>Delete</button>}
