@@ -1,6 +1,7 @@
 import type { CostToday } from "../api/types";
 import { fmtCost } from "../lib/billing";
 import { Figure } from "./Figure";
+import { Icon } from "./Icon";
 
 /**
  * Today's cost for the asset page. A dash means "no rate", never zero; an asset with no energy figure at all says so in
@@ -10,7 +11,7 @@ import { Figure } from "./Figure";
 export function CostTile({ cost, currency }: { cost: CostToday | null; currency: string | null }) {
   return (
     <div className="tile">
-      <div className="muted">Cost today</div>
+      <div className="muted tile-label"><Icon name="currency" />Cost today</div>
       {cost === null && <div className="big none">no cost data</div>}
       {cost !== null && cost.cost === null && (
         <>

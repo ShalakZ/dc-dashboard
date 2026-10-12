@@ -5,6 +5,7 @@ import { useAssets } from "../api/queries";
 import { PARTIAL_TIP } from "../components/Figure";
 import { formatSiteClock } from "../lib/siteTime";
 import { mockFetch } from "../test/fetchMock";
+import { iconHtml } from "../test/iconHtml";
 import { renderWithProviders } from "../test/render";
 import { AssetPage } from "./AssetPage";
 
@@ -248,6 +249,20 @@ describe("AssetPage", () => {
       renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
       expect(await screen.findByRole("alert")).toHaveTextContent(/^summary unavailable$/);
     });
+  });
+
+  it("puts the icon of the asset's kind in a tile beside the title, and an icon in each tile caption", async () => {
+    mockFetch(routes({ kwh: 3.25, estimated: false, no_data: false }));
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+    const heading = await screen.findByRole("heading", { name: "Panel 1" });
+    expect(heading.parentElement).toHaveClass("page-title");
+    expect(heading.previousElementSibling).toHaveClass("page-tile");
+    expect(heading.previousElementSibling!.querySelector("svg")!.innerHTML).toBe(iconHtml("kindPanel"));
+    await screen.findByText("Cost today");
+    const captions = Array.from(screen.getByText("Live power").closest(".tiles")!.children).map((tile) => tile.firstElementChild!);
+    expect(captions.map((c) => c.textContent)).toEqual(["Live power", "Energy today", "Cost today"]);
+    expect(captions.map((c) => c.className)).toEqual(Array(3).fill("muted tile-label"));
+    expect(captions.map((c) => c.querySelector("svg")!.innerHTML)).toEqual([iconHtml("rate"), iconHtml("energy"), iconHtml("currency")]);
   });
 
   it("lays the three tiles out in one .tiles grid, in the order Live power, Energy today, Cost today", async () => {

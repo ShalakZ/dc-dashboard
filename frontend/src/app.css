@@ -1,6 +1,6 @@
 /* W6 design tokens (spec section 2). One :root block, unlayered; every component rule below uses var(--…) only. */
 :root {
-  /* content */
+  /* content (the accent family is the fallback for a page without data-theme and data-mode; themes.css sets it per look) */
   --accent: #1d5bd8; --accent-hover: #174bb5; --accent-tint: #e8effc; --accent-ink: #163f94;
   --bg: #ffffff; --surface: #f6f8fb; --row-hover: #fafbfd; --border: #e1e5ec; --border-strong: #cdd3dd;
   --field-border: #868fa0;   /* inputs, selects, textareas, checkboxes: 3.26:1 on white, 3.06:1 on --surface (WCAG 1.4.11) */
@@ -62,6 +62,20 @@
   main:has(.assets-layout) .shell-notices { padding-inline: var(--gutter); }
   .skip-link { position: absolute; left: -9999px; top: 0; }
   .skip-link:focus { left: 8px; top: 8px; z-index: 2000; padding: 4px 8px; background: var(--bg); border: 1px solid var(--border-strong); outline-offset: 0; } /* the ring stays on the link, not out on the navy sidebar */
+
+  /* The loading bar along the top edge, in the theme's marker colour (src/lib/progress.ts picks the phase, TopProgress sets data-phase).
+     z-index 46: above the top bar (45), below the sidebar tip (50), the pop-ups and the dialogs (1000). It never takes a click. run
+     eases towards 85 percent and waits; finish replaces that running transition from where it is. reset is width 0 with no transition,
+     so a restart during finish or fade does not sweep backwards. */
+  .top-progress { position: fixed; inset: 0 0 auto 0; height: 3px; z-index: 46; pointer-events: none; }
+  .top-progress > span { display: block; height: 100%; width: 0; opacity: 0; background: var(--side-accent); }
+  .top-progress[data-phase="reset"] > span { width: 0; opacity: 1; }
+  .top-progress[data-phase="run"] > span { width: 85%; opacity: 1; transition: width 30s cubic-bezier(0, 0.9, 0.1, 1); }
+  .top-progress[data-phase="finish"] > span { width: 100%; opacity: 1; transition: width 150ms ease-out; }
+  .top-progress[data-phase="fade"] > span { width: 100%; opacity: 0; transition: opacity 200ms linear; }
+  @media (prefers-reduced-motion: reduce) {
+    .top-progress[data-phase] > span { width: 100%; transition: none; } /* a full line that appears and disappears; the opacity above still decides which */
+  }
 
   /* The sidebar, under the top bar. Its focus ring is --side-accent (--ring equals --accent, which the navy cannot show); no rule with
      .side in its selector may use var(--accent…), app.css.test.ts checks. z-index 40 keeps the sticky tree column below it, the bar
@@ -150,15 +164,16 @@
   .prof-item svg.i { width: 16px; height: 16px; color: var(--text-2); }
   .prof-item:hover, .prof-item:focus-visible { background: var(--accent-tint); text-decoration: none; }
   .prof-item:focus-visible { outline-offset: -2px; }
-  /* The appearance choice: two groups of native radios. `.check` on the label opts it out of the radio-label grid rule, so the swatch and the name stay on one line. */
-  .prof-group { margin: 0; padding: 4px 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; } /* the base fieldset's radius would curl the ends of the rule */
-  .prof-group legend { padding: 4px 10px; color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; }
-  .prof-group .prof-opt { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; font-size: var(--fs-sm); font-weight: 400; }
-  .prof-group .error { margin: 0; padding: 4px 10px; font-size: var(--fs-xs); font-weight: 600; }
-  /* A swatch is the preset's panel colour with its marker colour as a dot; the checked one is also ringed, so the colour is not the only sign. */
-  .prof-opt .swatch { position: relative; flex: none; width: 14px; height: 14px; border-radius: var(--radius-sm); background: var(--sw-bg); box-shadow: 0 0 0 1px var(--border-strong); }
-  .prof-opt .swatch::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--sw-dot); }
-  .prof-opt input:checked ~ .swatch { box-shadow: 0 0 0 2px var(--ring); }
+  /* The appearance choice: two labelled native selects. The Theme colour one has a chip of the preset beside it: the preset's panel
+     colour with its marker colour as a dot. */
+  .prof-field { display: grid; gap: 6px; padding: 8px 10px 10px; border-bottom: 1px solid var(--border); }
+  .prof-field label { color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; }
+  .prof-field select { width: 100%; min-width: 0; min-height: 36px; font-size: var(--fs-sm); }
+  .prof-field .error { margin: 0; font-size: var(--fs-xs); font-weight: 600; }
+  .prof-pick { display: flex; align-items: center; gap: 8px; }
+  .prof-pick select { flex: 1; }
+  .prof-pick .swatch { position: relative; flex: none; width: 14px; height: 14px; border-radius: var(--radius-sm); background: var(--sw-bg); box-shadow: 0 0 0 1px var(--border-strong); }
+  .prof-pick .swatch::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--sw-dot); }
 
   /* The quick find: a field on the chip's lighter navy (its focus ring is the bar's, --side-accent) and a white popup under it (which
      takes the content's ring, above). The field's selector outranks the base input rule, which comes later in the file. The shortcut
@@ -244,6 +259,7 @@
   button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-tint); color: var(--accent-ink); }
   .primary { border-color: var(--accent); background: var(--accent); color: var(--bg); }
   .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+  .primary:disabled { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); opacity: 1; } /* a disabled primary must not read as a faded accent fill */
   button.danger { border-color: var(--danger); background: var(--danger); color: var(--bg); }
   button.danger:hover:not(:disabled) { border-color: var(--danger-hover); background: var(--danger-hover); }
   .quiet { min-height: 30px; padding: 0 10px; border-color: transparent; background: none; color: var(--accent); }
@@ -288,6 +304,8 @@
   /* Asset page tiles; .tiles is the grid they sit in from 4a on */
   .tile { max-width: 360px; margin: 0 0 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); }
   .tile > .muted:first-child { font-size: var(--fs-sm); }
+  .tile-label { display: flex; align-items: center; gap: 6px; }
+  .tile-label svg.i { width: 16px; height: 16px; color: var(--accent); }
   .tile .big { margin-top: 2px; font-size: var(--fs-figure); font-weight: 600; font-variant-numeric: tabular-nums; }
   .tile .big small { font-size: var(--fs-base); font-weight: 400; }
   .tile .big.none { font-size: var(--fs-base); font-weight: 400; color: var(--text-2); } /* "no energy data": words, not a measurement, so not set as the figure */
@@ -334,6 +352,9 @@
   .twisty svg.i { width: 16px; height: 16px; transition: transform var(--motion); }
   .twisty[aria-expanded="false"] svg.i { transform: rotate(-90deg); }
   .twisty-sp { flex: none; width: 20px; }
+  .node-icon { flex: 0 1 16px; min-width: 0; display: grid; place-items: center; width: 16px; height: 16px; overflow: hidden; color: var(--text-2); } /* the kind's icon: it gives way after the kind label and the name's minimum, so a deep row keeps its + */
+  .node-icon svg.i { width: 16px; height: 16px; }
+  .node.is-selected .node-icon { color: var(--accent); }
   .node .add { flex: none; display: grid; place-items: center; width: 24px; height: 24px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
   .node .add:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg); color: var(--accent); }
   .node .add svg.i { width: 14px; height: 14px; }
@@ -354,6 +375,11 @@
   .page-head > * { grid-column: 1; margin: 0; }
   .page-head h1 { font-size: var(--fs-title); font-weight: 600; line-height: 1.25; letter-spacing: -0.2px; }
   .page-head .crumbs { margin-bottom: 4px; }
+  .page-title { display: flex; align-items: center; gap: 12px; min-width: 0; } /* an icon beside the title: a tile (40) and a gap (12) */
+  .page-title h1 { margin: 0; min-width: 0; } /* the grid's margin reset does not reach a nested h1 */
+  .page-tile { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius); background: var(--accent-tint); color: var(--accent); }
+  .page-tile svg.i { width: 22px; height: 22px; }
+  .page-head:has(.page-title) > .sub { padding-left: 52px; } /* under the title, not under the tile */
   .page-head .sub { margin-top: 2px; font-size: var(--fs-sm); color: var(--text-2); }
   .page-head > .actions { grid-column: 2; grid-row: 1 / span 3; align-self: end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   /* A titled block under the page header (Users, Settings, Storage, Audit entry, Scans): one rule, so no page file can restyle another's */

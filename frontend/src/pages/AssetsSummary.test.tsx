@@ -5,6 +5,7 @@ import type { Asset, AttentionItem, FleetSummary } from "../api/types";
 import { authed } from "../test/dashboardFixtures";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
+import { iconHtml } from "../test/iconHtml";
 import { renderWithProviders } from "../test/render";
 import { type AssetsContext } from "./AssetsPage";
 import { AssetsSummary } from "./AssetsSummary";
@@ -80,6 +81,15 @@ describe("AssetsSummary", () => {
   });
 
   describe("the tiles", () => {
+    it("carry an icon in each caption (Assets, Live power, Energy today, Cost today) and keep the caption text", async () => {
+      show();
+      await ready();
+      const captions = Array.from(document.querySelectorAll(".fleet-tiles > .tile > .muted:first-child"));
+      expect(captions.map((c) => c.textContent)).toEqual(["Assets", "Live power", "Energy today", "Cost today"]);
+      expect(captions.map((c) => c.className)).toEqual(Array(4).fill("muted tile-label"));
+      expect(captions.map((c) => c.querySelector("svg")?.innerHTML)).toEqual([iconHtml("assets"), iconHtml("rate"), iconHtml("energy"), iconHtml("currency")]);
+    });
+
     it("are four, in order: Assets, Live power, Energy today, Cost today", async () => {
       show();
       await ready();
@@ -156,6 +166,18 @@ describe("AssetsSummary", () => {
       await ready();
       // "panel" twice and " Panel " once; "Rack" and "rack" once each (a tie: code-point order, so "Rack"); one Room and one Site (a tie in count: by kind).
       expect(listed()).toEqual([["panel", "3"], ["Rack", "2"], ["Room", "1"], ["Site", "1"]]);
+    });
+
+    it("draws the icon of each kind inside .kind-name, so the name and the count stay the item's two children", async () => {
+      show();
+      await ready();
+      const items = within(document.querySelector("ul.kind-list") as HTMLElement).getAllByRole("listitem");
+      const icons = items.map((li) => [li.children[0].textContent, li.children[0].querySelector("svg")?.innerHTML, li.children.length]);
+      expect(icons).toEqual([
+        ["panel", iconHtml("kindPanel"), 2], ["Rack", iconHtml("kindRack"), 2], ["Room", iconHtml("kindRoom"), 2], ["Site", iconHtml("kindSite"), 2],
+      ]);
+      expect(items[0].children[0]).toHaveClass("kind-name");
+      expect(items[0].querySelector("svg")).toHaveAttribute("aria-hidden", "true");
     });
 
     it("is a plain list, not a list of links", async () => {

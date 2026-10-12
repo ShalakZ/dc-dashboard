@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import type { Asset } from "../api/types";
 import { buildTree } from "../lib/tree";
+import { iconHtml } from "../test/iconHtml";
 import { AssetTree } from "./AssetTree";
 
 const KEY = "dcdash.assetTreeFolded";
@@ -663,5 +664,47 @@ describe("AssetTree width", () => {
     expect(stored()).toBeNull();
     expect(userWidth()).toBe("");
     expect(column().getAttribute("style") ?? "").not.toContain("--tree-user-w");
+  });
+});
+
+describe("AssetTree kind icons", () => {
+  const kinded: Asset[] = [
+    { id: 1, parent_id: null, name: "Main", kind: "Panel", sort_order: 1 },
+    { id: 2, parent_id: 1, name: "Rack 1", kind: "Rack", sort_order: 2 },
+    { id: 3, parent_id: 1, name: "Rack 2", kind: "rack", sort_order: 3 },
+    { id: 4, parent_id: null, name: "Odd", kind: "", sort_order: 4 },
+  ];
+  const showKinded = () => render(<MemoryRouter><AssetTree nodes={buildTree(kinded)} selectedId={null} /></MemoryRouter>);
+  const rowOf = (name: string) => screen.getByRole("link", { name }).closest(".node") as HTMLElement;
+  const iconOf = (name: string) => rowOf(name).querySelector(".node-icon svg") as SVGElement;
+
+  it("gives every row exactly one .node-icon holding one aria-hidden svg, between the twisty and the name", () => {
+    showKinded();
+    for (const name of ["Main", "Rack 1", "Rack 2", "Odd"]) {
+      const row = rowOf(name);
+      const holders = row.querySelectorAll(".node-icon");
+      expect(holders).toHaveLength(1);
+      expect(holders[0].querySelectorAll("svg")).toHaveLength(1);
+      expect(holders[0].querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+      expect(holders[0].previousElementSibling?.className).toMatch(/twisty/);
+      expect(holders[0].nextElementSibling).toBe(screen.getByRole("link", { name }));
+    }
+  });
+
+  it("draws the icon of the node's kind: a Panel and a Rack differ, both spellings of Rack agree, a blank kind is the generic one", () => {
+    showKinded();
+    expect(iconOf("Main").innerHTML).toBe(iconHtml("kindPanel"));
+    expect(iconOf("Rack 1").innerHTML).toBe(iconHtml("kindRack"));
+    expect(iconOf("Rack 2").innerHTML).toBe(iconHtml("kindRack"));
+    expect(iconOf("Main").innerHTML).not.toBe(iconOf("Rack 1").innerHTML);
+    expect(iconOf("Odd").innerHTML).toBe(iconHtml("kindGeneric"));
+  });
+
+  it("leaves the link text and the accessible name as the asset's name (the icon is decoration beside the link, not inside it)", () => {
+    showKinded();
+    const link = screen.getByRole("link", { name: "Main" });
+    expect(link).toHaveTextContent(/^Main$/);
+    expect(link.querySelector("svg")).toBeNull();
+    expect(screen.getByRole("button", { name: "Children of Main" })).toBeInTheDocument();
   });
 });

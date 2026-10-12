@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
 import { signOut, userBlock } from "./shell";
 
@@ -7,8 +7,8 @@ import { signOut, userBlock } from "./shell";
 // stat widget through the API (with a run suffix) and removes them again; whatever happens, afterAll puts the admin's choice back to
 // Light and Navy and gold, which is what a re-run and the later gallery expect.
 //
-// Locators: the panel is `#profile-panel` (hidden while closed, so a radio is only ever looked up through it, inside its group); the
-// groups are `Mode` and `Theme colour`, the radios are matched with `exact: true`. The look is read from <html data-mode data-theme>.
+// Locators: the panel is `#profile-panel` (hidden while closed, so a control is only ever looked up through it); the two selects are
+// labelled `Mode` and `Theme colour` and matched with `exact: true`. The look is read from <html data-mode data-theme>.
 // The choice is saved in the background, so every choice waits for the PUT before the test reloads or reads the account.
 
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost/";
@@ -62,9 +62,8 @@ async function setAdminLook(browser: Browser, look: Look): Promise<void> {
 
 const html = (page: Page) => page.locator("html");
 const panelOf = (page: Page) => page.locator("#profile-panel");
-const modeGroup = (page: Page) => panelOf(page).getByRole("group", { name: "Mode", exact: true });
-const themeGroup = (page: Page) => panelOf(page).getByRole("group", { name: "Theme colour", exact: true });
-const radio = (group: Locator, label: string) => group.getByLabel(label, { exact: true });
+const modeSelect = (page: Page) => panelOf(page).getByLabel("Mode", { exact: true });
+const themeSelect = (page: Page) => panelOf(page).getByLabel("Theme colour", { exact: true });
 
 async function expectLook(page: Page, look: Look): Promise<void> {
   await expect(html(page)).toHaveAttribute("data-mode", look.mode);
@@ -76,7 +75,7 @@ const mirrorOf = (page: Page) => page.evaluate((key) => JSON.parse(window.localS
 const isSave = (r: { url(): string; request(): { method(): string } }) => new URL(r.url()).pathname === "/api/me/preferences" && r.request().method() === "PUT";
 
 /** Runs `act` (a choice in the panel) and waits for the PUT it causes; the choice must be a change, or no PUT is sent. */
-async function saving(page: Page, act: () => Promise<void>): Promise<void> {
+async function saving(page: Page, act: () => Promise<unknown>): Promise<void> {
   const [response] = await Promise.all([page.waitForResponse(isSave), act()]);
   expect(response.ok(), `saving the look: ${response.status()}`).toBe(true);
 }
@@ -144,26 +143,27 @@ test.describe.serial("W7d: appearance", () => {
       await expect(page.locator(".side")).toHaveCSS("background-color", SIDE_NAVY);
     });
 
-    await test.step("the panel has the two groups with their radios, and the current choice is checked", async () => {
+    await test.step("the panel has the two selects with their options, and the current choice is selected", async () => {
       await openPanel(page);
-      await expect(modeGroup(page).getByRole("radio")).toHaveCount(3);
-      await expect(themeGroup(page).getByRole("radio")).toHaveCount(4);
-      for (const label of ["Light", "Dark", "Match my device"]) await expect(radio(modeGroup(page), label)).toBeVisible();
-      for (const label of ["Navy and gold", "Maroon and gold", "Graphite", "Desert gold"]) await expect(radio(themeGroup(page), label)).toBeVisible();
-      await expect(radio(modeGroup(page), "Light")).toBeChecked();
-      await expect(radio(themeGroup(page), "Navy and gold")).toBeChecked();
+      await expect(modeSelect(page)).toBeVisible();
+      await expect(themeSelect(page)).toBeVisible();
+      await expect(modeSelect(page).locator("option")).toHaveText(["Light", "Dark", "Match my device"]);
+      await expect(themeSelect(page).locator("option")).toHaveText(["Navy and gold", "Maroon and gold", "Graphite", "Desert gold"]);
+      await expect(modeSelect(page)).toHaveValue("light");
+      await expect(themeSelect(page)).toHaveValue("navy-gold");
+      await expect(panelOf(page).getByRole("radio")).toHaveCount(0);
     });
 
     await test.step("Dark applies at once, the panel stays open, and the choice is mirrored in the browser", async () => {
-      await saving(page, () => radio(modeGroup(page), "Dark").check());
+      await saving(page, () => modeSelect(page).selectOption("dark"));
       await expect(html(page)).toHaveAttribute("data-mode", "dark");
       await expect(page.locator("body")).toHaveCSS("background-color", PAGE_DARK);
       await expect(panelOf(page)).toBeVisible();
-      await expect(radio(modeGroup(page), "Dark")).toBeChecked();
+      await expect(modeSelect(page)).toHaveValue("dark");
     });
 
     await test.step("Maroon and gold turns the side panel maroon", async () => {
-      await saving(page, () => radio(themeGroup(page), "Maroon and gold").check());
+      await saving(page, () => themeSelect(page).selectOption("maroon-gold"));
       await expectLook(page, MAROON_DARK);
       await expect(page.locator(".side")).toHaveCSS("background-color", SIDE_MAROON);
       expect(await mirrorOf(page)).toEqual(MAROON_DARK);
@@ -221,8 +221,8 @@ test.describe.serial("W7d: appearance", () => {
     await expectLook(page, DEFAULT_LOOK);
     await openPanel(page);
 
-    await saving(page, () => radio(modeGroup(page), "Match my device").check());
-    await expect(radio(modeGroup(page), "Match my device")).toBeChecked();
+    await saving(page, () => modeSelect(page).selectOption("system"));
+    await expect(modeSelect(page)).toHaveValue("system");
     await expect(html(page)).toHaveAttribute("data-mode", "light"); // the device is light
     expect(await mirrorOf(page)).toEqual({ mode: "system", theme: "navy-gold" });
 
@@ -239,7 +239,7 @@ test.describe.serial("W7d: appearance", () => {
     await expect(html(page)).toHaveAttribute("data-theme", "navy-gold");
 
     await openPanel(page);
-    await saving(page, () => radio(modeGroup(page), "Light").check());
+    await saving(page, () => modeSelect(page).selectOption("light"));
     await expect(html(page)).toHaveAttribute("data-mode", "light");
     await page.emulateMedia({ colorScheme: "light" });
     await page.emulateMedia({ colorScheme: "dark" });
@@ -247,10 +247,14 @@ test.describe.serial("W7d: appearance", () => {
     await expect(html(page), "Light stays Light when the device changes").toHaveAttribute("data-mode", "light");
   });
 
-  test("keyboard: Tab walks the two groups, an arrow changes the choice and stays in the group, Esc closes to the trigger", async ({ page, browser }) => {
+  test("keyboard: Tab walks the two selects, an arrow on a closed select changes the choice once and stays on it, Esc closes to the trigger", async ({ page, browser }) => {
     test.setTimeout(180_000);
     await setAdminLook(browser, DEFAULT_LOOK);
     await signIn(page, ADMIN);
+    const saves: unknown[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "PUT" && new URL(request.url()).pathname === "/api/me/preferences") saves.push(request.postDataJSON());
+    });
     const trigger = userBlock(page);
     const password = panelOf(page).getByRole("link", { name: "Password", exact: true });
     const signOutButton = panelOf(page).getByRole("button", { name: "Sign out", exact: true });
@@ -265,35 +269,39 @@ test.describe.serial("W7d: appearance", () => {
       await expect(trigger).toBeFocused();
     });
 
-    await test.step("Tab from the trigger reaches the Mode group, then Theme colour, then Password, then Sign out", async () => {
+    await test.step("Tab from the trigger reaches Mode, then Theme colour, then Password, then Sign out", async () => {
       await page.keyboard.press("Enter");
       await expect(panelOf(page)).toBeVisible();
       await page.keyboard.press("Tab");
-      await expect(radio(modeGroup(page), "Light")).toBeFocused();
+      await expect(modeSelect(page)).toBeFocused();
       await page.keyboard.press("Tab");
-      await expect(radio(themeGroup(page), "Navy and gold")).toBeFocused();
+      await expect(themeSelect(page)).toBeFocused();
       await page.keyboard.press("Tab");
       await expect(password).toBeFocused();
       await page.keyboard.press("Tab");
       await expect(signOutButton).toBeFocused();
       for (let back = 0; back < 3; back++) await page.keyboard.press("Shift+Tab");
-      await expect(radio(modeGroup(page), "Light")).toBeFocused();
+      await expect(modeSelect(page)).toBeFocused();
     });
 
-    await test.step("ArrowDown on a radio picks the next one and keeps the focus in the group; ArrowUp goes back", async () => {
+    // On a closed select Chromium changes the value by one per arrow press (and fires one change each); the panel's own arrow walk
+    // ignores a select, so the focus stays on it. Escape inside an OPEN popup is not asserted: it keeps the highlighted option.
+    await test.step("ArrowDown on the closed Mode select picks the next option and saves once; ArrowUp goes back and saves again", async () => {
       await saving(page, () => page.keyboard.press("ArrowDown"));
-      await expect(radio(modeGroup(page), "Dark")).toBeChecked();
-      await expect(radio(modeGroup(page), "Dark")).toBeFocused();
+      await expect(modeSelect(page)).toHaveValue("dark");
+      await expect(modeSelect(page)).toBeFocused();
       await expect(html(page)).toHaveAttribute("data-mode", "dark");
       await expect(panelOf(page)).toBeVisible();
+      expect(saves).toEqual([{ mode: "dark" }]);
 
       await saving(page, () => page.keyboard.press("ArrowUp"));
-      await expect(radio(modeGroup(page), "Light")).toBeChecked();
-      await expect(radio(modeGroup(page), "Light")).toBeFocused();
+      await expect(modeSelect(page)).toHaveValue("light");
+      await expect(modeSelect(page)).toBeFocused();
       await expect(html(page)).toHaveAttribute("data-mode", "light");
+      expect(saves).toEqual([{ mode: "dark" }, { mode: "light" }]);
     });
 
-    await test.step("Esc closes the panel from inside a group and the focus returns to the trigger", async () => {
+    await test.step("Esc on the closed select closes the panel and the focus returns to the trigger", async () => {
       await page.keyboard.press("Escape");
       await expect(panelOf(page)).toBeHidden();
       await expect(trigger).toBeFocused();

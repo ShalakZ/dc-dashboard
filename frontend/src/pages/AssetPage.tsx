@@ -5,9 +5,12 @@ import { useAssets, useSummary } from "../api/queries";
 import { CostTile } from "../components/CostTile";
 import type { Crumb } from "../components/Crumbs";
 import { EnergyTile } from "../components/EnergyTile";
+import { Icon } from "../components/Icon";
 import { fmt, MetricsTable } from "../components/MetricsTable";
 import { PageHeader } from "../components/PageHeader";
+import { Pending } from "../components/Pending";
 import { useStream } from "../hooks/useStream";
+import { kindIcon } from "../lib/kindIcon";
 import { rollupNote, rollupPower } from "../lib/rollup";
 import { assetTrail, parseAssetId } from "../lib/tree";
 import { assetActions, useAssetsContext } from "./AssetsPage";
@@ -60,13 +63,14 @@ function AssetView({ id }: { id: number }) {
     <div className="asset-page">
       <PageHeader
         title={data.asset.name}
+        icon={kindIcon(data.asset.kind)}
         crumbs={crumbs}
         sub={sub || undefined}
         actions={chip || buttons ? <>{chip}{buttons}</> : undefined}
       />
       <div className="tiles">
         <div className="tile">
-          <div className="muted">Live power</div>
+          <div className="muted tile-label"><Icon name="rate" />Live power</div>
           <div className="big">{power ? `${fmt(livePower)} kW` : rollup?.kw != null ? `${fmt(rollup.kw)} kW` : "—"}</div>
           {note && <small className="muted" title={note.title}>{note.text}</small>}
           {note?.silent && <div className="muted"><small>Not reporting: {note.silent}</small></div>}
@@ -75,7 +79,7 @@ function AssetView({ id }: { id: number }) {
         <CostTile cost={data.cost_today ?? null} currency={data.currency ?? null} />
       </div>
       <h2>Trend</h2>
-      <Suspense fallback={<p className="muted">loading chart…</p>}>
+      <Suspense fallback={<><Pending /><p className="muted">loading chart…</p></>}>
         <TrendChart assetId={id} metrics={data.metrics} />
       </Suspense>
       <h2>Metrics</h2>

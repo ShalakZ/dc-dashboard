@@ -375,6 +375,30 @@ describe("the resizable asset tree column (W7a)", () => {
   });
 });
 
+describe("a disabled primary button does not look like the accent", () => {
+  const disabled = () => {
+    const found = rules.filter((r) => r.selector === ".primary:disabled");
+    expect(found, 'exactly one rule for ".primary:disabled"').toHaveLength(1);
+    return found[0];
+  };
+
+  it("takes the neutral ground, border and disabled text at full opacity, in the layer", () => {
+    const rule = disabled();
+    expect(inLayer(rule)).toBe(true);
+    expect(rule.body).toMatch(/background:\s*var\(--surface\)/);
+    expect(rule.body).toMatch(/border-color:\s*var\(--border-strong\)/);
+    expect(rule.body).toMatch(/color:\s*var\(--text-disabled\)/);
+    expect(rule.body).toMatch(/opacity:\s*1\s*(?:;|$)/);
+    expect(rule.body).not.toMatch(/--accent/);
+  });
+
+  it("outranks both the .primary fill and the base disabled rule (0,2,0 against 0,1,0 and 0,0,1)", () => {
+    const base = rules.find((r) => r.selector === ".primary")!;
+    expect(base.body).toMatch(/background:\s*var\(--accent\)/);
+    expect(disabled().order).toBeGreaterThan(base.order);
+  });
+});
+
 describe("a deep row of the asset tree keeps a readable name (review M-1)", () => {
   const unconditional = (selector: string) => {
     const found = rules.filter((r) => r.selector === selector && !r.at.some((a) => a.startsWith("@media")));
@@ -389,6 +413,15 @@ describe("a deep row of the asset tree keeps a readable name (review M-1)", () =
     expect(kind.body).toMatch(/min-width:\s*0/);
     expect(kind.body).toMatch(/overflow:\s*hidden/);
     expect(kind.body).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it("the kind icon is 16 px but gives way after the kind label (shrinkable, no minimum, clipped), so a deep row keeps its +", () => {
+    const icon = unconditional(".node-icon");
+    expect(inLayer(icon)).toBe(true);
+    expect(icon.body).toMatch(/flex:\s*0\s+1\s+16px/);
+    expect(icon.body).toMatch(/min-width:\s*0/);
+    expect(icon.body).toMatch(/overflow:\s*hidden/);
+    expect(icon.body).toMatch(/width:\s*16px/);
   });
 
   it("the name link keeps at least 6 characters before its ellipsis, whatever the depth", () => {
@@ -815,5 +848,65 @@ describe("the row menu, the trash button and the info tip (W7b)", () => {
   it("the tip and menu buttons keep a hit area of 24px or more", () => {
     expect(only(".tip-btn").body).toMatch(/width:\s*24px;\s*height:\s*24px/);
     expect(only(".icon-btn").body).toMatch(/width:\s*28px;\s*height:\s*28px/);
+  });
+});
+
+describe("the loading bar (W7e)", () => {
+  const mine = rules.filter((r) => r.selector.includes(".top-progress"));
+  const only = (selector: string) => {
+    const found = mine.filter((r) => r.selector === selector);
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0];
+  };
+  const fill = (phase: string) => only(`.top-progress[data-phase="${phase}"] > span`).body;
+  const zIndex = (selector: string) => Number(/z-index:\s*(\d+)/.exec(rules.find((r) => r.selector === selector)?.body ?? "")?.[1]);
+
+  it("every rule is inside the layer, uses tokens only, and the marker colour is the sidebar's (no accent: it never touches .navbar or .side)", () => {
+    expect(mine.length, "the rules of the bar").toBeGreaterThan(5);
+    for (const rule of mine) {
+      expect(inLayer(rule), `"${rule.selector}" in @layer w6`).toBe(true);
+      expect(rule.body, `colour in "${rule.selector}"`).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
+      expect(rule.selector, "a bar rule that reaches into the shell").not.toMatch(/\.navbar|\.side/);
+    }
+    expect(only(".top-progress > span").body).toMatch(/background:\s*var\(--side-accent\)/);
+  });
+
+  it("is a 3px line fixed to the top edge, above the top bar (45), below the sidebar tip (50) and the dialogs, and never takes a click", () => {
+    const bar = only(".top-progress").body;
+    expect(bar).toMatch(/position:\s*fixed/);
+    expect(bar).toMatch(/inset:\s*0 0 auto 0/);
+    expect(bar).toMatch(/height:\s*3px/);
+    expect(bar).toMatch(/pointer-events:\s*none/);
+    expect(zIndex(".top-progress")).toBeGreaterThan(zIndex(".navbar"));
+    expect(zIndex(".top-progress")).toBeLessThan(zIndex(".side-tip"));
+    expect(zIndex(".top-progress")).toBeLessThan(zIndex(".dialog-backdrop"));
+  });
+
+  it("draws each phase: hidden at rest, zero with no transition on reset, a slow sweep to 85 percent on run, the rest and the fade after", () => {
+    expect(only(".top-progress > span").body).toMatch(/width:\s*0\b/);
+    expect(only(".top-progress > span").body).toMatch(/opacity:\s*0\b/);
+    expect(only(".top-progress > span").body).not.toMatch(/transition/);
+    expect(fill("reset")).toMatch(/width:\s*0\b/);
+    expect(fill("reset")).toMatch(/opacity:\s*1\b/);
+    expect(fill("reset")).not.toMatch(/transition/); // or a restart would sweep backwards
+    expect(fill("run")).toMatch(/width:\s*85%/);
+    expect(fill("run")).toMatch(/transition:\s*width 30s cubic-bezier\(/);
+    expect(fill("finish")).toMatch(/width:\s*100%/);
+    expect(fill("finish")).toMatch(/transition:\s*width 150ms/);
+    expect(fill("fade")).toMatch(/width:\s*100%/);
+    expect(fill("fade")).toMatch(/opacity:\s*0\b/);
+    expect(fill("fade")).toMatch(/transition:\s*opacity 200ms/);
+  });
+
+  it("reduced motion shows a full line with no width movement", () => {
+    const calm = rules.filter((r) => r.at.some((a) => a.includes("prefers-reduced-motion: reduce")) && r.selector.includes(".top-progress"));
+    expect(calm).toHaveLength(1);
+    expect(calm[0].body).toMatch(/width:\s*100%/);
+    expect(calm[0].body).toMatch(/transition:\s*none/);
+    const specificity = (selector: string) => [...selector.matchAll(/\[[^\]]+\]|\.[\w-]+/g)].length; // classes and attributes: enough for these selectors
+    for (const phase of ["reset", "run", "finish", "fade"]) {
+      expect(specificity(calm[0].selector), `reduced motion beats the ${phase} rule`).toBeGreaterThanOrEqual(specificity(`.top-progress[data-phase="${phase}"] > span`));
+      expect(css.indexOf(calm[0].selector), "after the phase rules").toBeGreaterThan(css.indexOf(`.top-progress[data-phase="${phase}"] > span`));
+    }
   });
 });

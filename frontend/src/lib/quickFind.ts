@@ -1,6 +1,7 @@
 import type { Asset } from "../api/types";
 
-export interface FindHit { kind: "asset" | "page"; key: string; label: string; detail: string | null; to: string }
+/** `assetKind` is the asset's kind text, set on asset hits only (the popup picks the row's icon from it). */
+export interface FindHit { kind: "asset" | "page"; key: string; label: string; detail: string | null; to: string; assetKind?: string }
 
 const SEPARATOR = " / ";
 const DEFAULT_LIMIT = { assets: 8, pages: 5 };
@@ -55,6 +56,7 @@ export function findHits(
     label: asset.name,
     detail: above.length > 0 ? above.join(SEPARATOR) : null,
     to: `/assets/${asset.id}`,
+    assetKind: asset.kind,
   }));
 
   const pageHits: FindHit[] = pages

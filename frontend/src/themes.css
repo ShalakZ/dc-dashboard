@@ -1,9 +1,11 @@
 /* W7d appearance: the four theme presets and the dark mode, as token overrides on <html data-theme data-mode> (src/lib/appearance.ts
    and public/theme-init.js set the two attributes). Unlayered and loaded after app.css. This is the one place besides app.css's :root
    where raw colours are allowed. A preset and the dark block have the same weight, so file order decides: the presets come first and
-   the only token both set is --tooltip-bg, which dark must win. Contrast of every pair in every look: themes.css.test.ts. */
+   the only token both set is --tooltip-bg, which dark must win. W7e: the content accent (buttons, links, selection, focus ring) follows
+   the theme, one block per theme and mode after the dark block; they are heavier than both, and no other block sets an accent token,
+   so no two blocks ever compete for one. Contrast of every pair in every look: themes.css.test.ts. */
 
-/* Presets. Each sets the same twenty tokens (the bars, the avatar, the tooltip); the content accent stays blue in all of them. */
+/* Presets. Each sets the same twenty tokens (the bars, the avatar, the tooltip). The content accent comes from the look's own block below. */
 :root[data-theme="navy-gold"] {
   --side-bg: #283354; --side-bg-hover: #313d63; --side-bg-active: #3a4772;
   --side-text: #b8c2dc; --side-text-strong: #ffffff; --side-muted: #9aa6c4; --side-rule: #3a4569;
@@ -37,14 +39,14 @@
   --top-live: #0b5c2b; --top-stale: #6e3700;
 }
 
-/* Dark mode: the content tokens, deeper shadows, and dark scroll bars, date pickers and selects. The page is a dark grey, never black.
-   The bars keep their preset. --bg is the text colour of a primary or danger button, so it reads as dark ink on the light fill. The
-   tooltip bubble gets a lighter ground than the page, or the presets' near-black ones would vanish on it. */
+/* Dark mode: the neutral content tokens, deeper shadows, and dark scroll bars, date pickers and selects. The page is a dark grey, never
+   black. The bars keep their preset; the accent comes from the look's own block below. --bg is the text colour of a primary or danger
+   button, so it reads as dark ink on the light fill. The tooltip bubble gets a lighter ground than the page, or the presets' near-black
+   ones would vanish on it. */
 :root[data-mode="dark"] {
   color-scheme: dark;
   --bg: #15181e; --surface: #1c2027; --row-hover: #1b1f26; --border: #2b313b; --border-strong: #3a414d;
   --field-border: #6f7888; --text: #e4e7ed; --text-2: #a3abb8; --text-disabled: #8a93a1;
-  --accent: #7ea7ff; --accent-hover: #a3c0ff; --accent-tint: #1e2a45; --accent-ink: #b8ceff; --ring: #7ea7ff;
   --ok: #6cd396; --ok-tint: #14301f;
   --warn: #f0b35c; --warn-tint: #332512; --warn-line: #5e4519; --warn-ink: #f4cb8e; --warn-bg: #2a2011; --warn-icon: #f0b35c;
   --crit: #ff8b8b; --crit-tint: #3a1b1f;
@@ -56,11 +58,24 @@
   --tooltip-bg: #3f4653;
 }
 
+/* The content accent per look. Light: the preset's deep colour on white (links and buttons with white text, 5.9 to 10.9:1). Dark: its soft
+   light colour with dark ink on it (7.5 to 10.4:1); gold stays on the bars and the loading bar. Graphite keeps the blue it always had.
+   --ring equals --accent. A page without both attributes keeps app.css's blue. */
+:root[data-theme="navy-gold"][data-mode="light"] { --accent: #2a4590; --accent-hover: #213a7a; --accent-tint: #e8edf8; --accent-ink: #1d3370; --ring: #2a4590; }
+:root[data-theme="navy-gold"][data-mode="dark"] { --accent: #9fb4f5; --accent-hover: #bccaf8; --accent-tint: #1f2a4d; --accent-ink: #c3d0fa; --ring: #9fb4f5; }
+:root[data-theme="maroon-gold"][data-mode="light"] { --accent: #7d0849; --accent-hover: #650639; --accent-tint: #f8e8f0; --accent-ink: #650639; --ring: #7d0849; }
+:root[data-theme="maroon-gold"][data-mode="dark"] { --accent: #f0a0c4; --accent-hover: #f5bbd5; --accent-tint: #3b1a2b; --accent-ink: #f8c8dd; --ring: #f0a0c4; }
+:root[data-theme="graphite"][data-mode="light"] { --accent: #1d5bd8; --accent-hover: #174bb5; --accent-tint: #e8effc; --accent-ink: #163f94; --ring: #1d5bd8; }
+:root[data-theme="graphite"][data-mode="dark"] { --accent: #7ea7ff; --accent-hover: #a3c0ff; --accent-tint: #1e2a45; --accent-ink: #b8ceff; --ring: #7ea7ff; }
+:root[data-theme="desert-gold"][data-mode="light"] { --accent: #7a5c00; --accent-hover: #634a00; --accent-tint: #fbf1cc; --accent-ink: #5a4300; --ring: #7a5c00; }
+:root[data-theme="desert-gold"][data-mode="dark"] { --accent: #e6c34a; --accent-hover: #eed279; --accent-tint: #33290d; --accent-ink: #f0d878; --ring: #e6c34a; }
+
 /* The avatar's ground is the preset's own: in desert gold and graphite it is nearly the page's colour (1.05:1 and 1.87:1), so the disc needs an edge. */
 :root[data-mode="dark"] .prof-head .avatar { box-shadow: 0 0 0 1px var(--border-strong); }
 
 /* The widget island stays light in dark mode (the widgets' restyle is a separate session): the content tokens go back to app.css's
-   light values and the controls to light, so a .muted, a link or a native button inside a white widget keeps today's contrast. */
+   light values and the controls to light, so a .muted, a link or a native button inside a white widget keeps today's contrast. The
+   accent is pinned too, in every theme: set on the element itself, it beats the look's value inherited from <html>. */
 :is(.widget-frame, .widget-preview) {
   color-scheme: light;
   --bg: #ffffff; --surface: #f6f8fb; --row-hover: #fafbfd; --border: #e1e5ec; --border-strong: #cdd3dd;
