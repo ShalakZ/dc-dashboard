@@ -89,12 +89,14 @@ class _ReportingProtocol(UASocketProtocol):
         self._closed_here = False
 
     def _why_lost(self) -> Exception | None:
-        """What to raise for a request on this connection, or None while it is open (or was closed by this client)."""
+        """What a request on this connection fails with, or None while it is open."""
         if self.state != self.CLOSED:
             return None
         if self._refusal is not None:
             return ua.UaStatusCodeError(self._refusal.value)
-        return None if self._closed_here else ConnectionResetError("connection closed by the server")
+        if self._closed_here:  # asyncua closes the socket itself when it cannot use an answer
+            return ConnectionResetError("connection closed by this client after an answer from the server it could not use")
+        return ConnectionResetError("connection closed by the server")
 
     def _process_received_message(self, msg: Any) -> None:
         if isinstance(msg, ua.ErrorMessage) and msg.Error is not None:
@@ -108,9 +110,8 @@ class _ReportingProtocol(UASocketProtocol):
     def connection_lost(self, exc: Exception | None) -> None:
         super().connection_lost(exc)
         for future in list(self._callbackmap.values()):
-            error = self._why_lost()
-            if error is not None and not future.done():
-                future.set_exception(error)
+            if not future.done():
+                future.set_exception(self._why_lost())
 
     async def send_hello(self, url: str, max_messagesize: int = 0, max_chunkcount: int = 0) -> Any:
         if (error := self._why_lost()) is not None:

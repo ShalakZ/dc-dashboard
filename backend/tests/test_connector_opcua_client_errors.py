@@ -77,6 +77,18 @@ class CloseAfterHello(asyncio.Protocol):
             self.transport.close()
 
 
+class GarbageAfterHello(CloseAfterHello):
+    """Answers the OpenSecureChannel with a chunk of the declared size that makes no sense and keeps the connection open: asyncua
+    then closes the socket itself, which must not leave the request waiting for its timeout."""
+
+    def data_received(self, data):
+        self.messages += 1
+        if self.messages == 1:
+            self.transport.write(uatcp_to_binary(ua.MessageType.Acknowledge, ua.Acknowledge()))
+        else:
+            self.transport.write(b"OPNF" + (8 + 64).to_bytes(4, "little") + b"\xff" * 64)
+
+
 def test_the_client_fix_is_written_for_asyncua_1_1_8():
     assert asyncua.__version__ == "1.1.8", (
         f"asyncua is {asyncua.__version__}: dcdash.connectors.opcua.ReportingClient copies lines of asyncua 1.1.8's "
@@ -120,19 +132,26 @@ async def test_a_refused_secure_channel_is_reported_by_status_everywhere_not_as_
 # -- a connection that closes -----------------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("handler", [CloseAtOnce, CloseAfterHello], ids=["closed at once", "closed after the hello"])
-async def test_a_closed_connection_is_a_reset_not_a_timeout(handler):
+@pytest.mark.parametrize(
+    "handler, words",
+    [
+        (CloseAtOnce, "closed by the server"), (CloseAfterHello, "closed by the server"),
+        (GarbageAfterHello, "could not use"),
+    ],
+    ids=["closed at once", "closed after the hello", "unusable answer"],
+)
+async def test_a_closed_connection_is_a_reset_not_a_timeout(handler, words):
     async with raw_server(handler) as url:
         connector = create_connector("opcua", _cfg(url))
 
         check, seconds = await _timed(connector.test())
-        assert (check.ok, check.status) == (False, "unreachable") and "closed by the server" in check.message
+        assert (check.ok, check.status) == (False, "unreachable") and words in check.message
         assert seconds < FAST
 
         result, seconds = await _timed(connector.check([]))
         assert seconds < 2 * FAST
         endpoints = _by_id(result)["endpoints"]
-        assert endpoints.error["class"] == "ConnectionResetError" and "closed by the server" in endpoints.error["message"]
+        assert endpoints.error["class"] == "ConnectionResetError" and words in endpoints.error["message"]
         assert endpoints.hint == hint_for(None, "ConnectionResetError", "endpoints") and endpoints.hint
         session = _by_id(result)["session"]
         assert session.error["class"] == "ConnectionResetError" and session.hint == endpoints.hint
@@ -228,10 +247,28 @@ async def test_the_uri_comes_from_the_public_certificate_only(tmp_path):
     garbage.write_text("not a certificate")
     assert await _certificate_uri(str(garbage)) is None
     assert await _certificate_uri(str(tmp_path / "missing.pem")) is None
-    # the key file is not a certificate: it is never parsed for anything, and a policy of none does not read either file
-    assert await _certificate_uri(key_path) is None
+    # a policy of none announces asyncua's default and reads no file
     plain = await create_connector("opcua", _cfg("opc.tcp://127.0.0.1:1/", client_cert=cert_path))._new_client()
     assert plain.application_uri == Client("opc.tcp://x").application_uri
+
+
+async def test_connecting_reads_the_certificate_for_its_uri_and_never_the_key_file(tmp_path, monkeypatch):
+    from dcdash.connectors import opcua_check
+
+    read: list[str] = []
+    original = opcua_check.load_certificate
+
+    async def recording(source):
+        read.append(str(source))
+        return await original(source)
+
+    monkeypatch.setattr(opcua_check, "load_certificate", recording)
+    async with uri_checking_server() as url:
+        config = _secure(tmp_path, url)
+        connector = create_connector("opcua", config)
+        await connector._new_client()
+        assert (await connector.test()).ok
+    assert read and set(read) == {config["client_cert"]} and config["client_key"] not in read
 
 
 def test_the_uri_hint_names_both_uris():
