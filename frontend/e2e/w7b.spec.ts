@@ -458,7 +458,8 @@ test.describe("W7b: the sign-in protection switch", () => {
       });
     } finally {
       // Whatever happened above: protection on again, through the API (a failing page step must not leave the site unprotected).
-      await page.request.put("/api/settings/sign-in", { data: { ...found, enabled: true } }).catch(() => undefined);
+      // putOn asserts that the answer is ok: a restore that failed is a failure of this test, not something to swallow.
+      await putOn(page.request, found);
     }
   });
 });

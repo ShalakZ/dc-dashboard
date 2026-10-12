@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
-import { checkRange, FIELDS, StoragePage, validate } from "./StoragePage";
+import { checkRange, FIELDS, sizeText, StoragePage, validate } from "./StoragePage";
 
 const base = {
   "GET /api/setup": { body: { needed: false } },
@@ -305,12 +305,31 @@ describe("StoragePage summary tiles and explanations", () => {
     expect(tileOf("Database size")).toHaveTextContent("5.0 GiB");
     expect(tileOf("Readings (raw)")).toHaveTextContent("2.0 GiB");
     expect(tileOf("Readings (raw)")).toHaveTextContent("compressed 1.0 GiB of 4.0 GiB, ratio 0.25");
-    expect(tileOf("Rollups")).toHaveTextContent("1 min 0.0 GiB, 1 h 0.0 GiB");
-    expect(tileOf("Growth per day")).toHaveTextContent("0.1 GiB / day");
+    expect(tileOf("Rollups")).toHaveTextContent("1 min 1.0 MiB, 1 h 1.0 MiB"); // under 1 GiB: MiB
+    expect(tileOf("Growth per day")).toHaveTextContent("100.0 MiB / day");
     expect(tileOf("Projected full")).toHaveTextContent("973 days");
     expect(tileOf("Projected full")).toHaveTextContent("5% of 100.0 GiB");
     expect(document.querySelector(".storage-page dl")).toBeNull();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("reads a small database in MiB, not as 0.0 GiB, and groups the digits of a long projection", async () => {
+    mockFetch({ ...routes(), "GET /api/storage": { body: { ...stats, database_bytes: 40 * 1024 ** 2, growth_bytes_per_day: 0, days_until_full: 71_615.4, used_pct: 0.01 } } });
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByText("Database size");
+    expect(tileOf("Database size")).toHaveTextContent("40.0 MiB");
+    expect(tileOf("Database size")).not.toHaveTextContent("GiB");
+    expect(tileOf("Growth per day")).toHaveTextContent("0.0 MiB / day");
+    expect(tileOf("Projected full")).toHaveTextContent("71,615 days");
+  });
+
+  it("sizeText: MiB below 1 GiB, GiB from there, and never 1024.0 MiB", () => {
+    expect(sizeText(0)).toBe("0.0 MiB");
+    expect(sizeText(5 * 1024 ** 2)).toBe("5.0 MiB");
+    expect(sizeText(1024 ** 3 - 1024 ** 2)).toBe("1023.0 MiB");
+    expect(sizeText(1024 ** 3 - 1024 ** 2 / 100)).toBe("1.0 GiB"); // 1023.99 MiB
+    expect(sizeText(1024 ** 3)).toBe("1.0 GiB");
+    expect(sizeText(5 * 1024 ** 3)).toBe("5.0 GiB");
   });
 
   it("says nothing is compressed yet instead of a ratio when no chunk is compressed", async () => {

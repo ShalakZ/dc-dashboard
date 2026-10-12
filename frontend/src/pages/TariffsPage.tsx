@@ -209,7 +209,7 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
   };
 
   return (
-    <tr ref={row}>
+    <tr ref={row} onKeyDown={(e) => { if (editing && e.key === "Escape") { e.preventDefault(); setEditing(false); } }}>
       {tariff.asset_id !== null && <td className="asset-cell" title={where ?? undefined}>{where}</td>}
       <td className="date-cell">
         {editing ? <input ref={fromInput} type="date" aria-label="Effective from" value={from} onChange={(e) => setFrom(e.target.value)} /> : tariff.effective_from}

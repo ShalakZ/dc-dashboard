@@ -1,7 +1,7 @@
 import { hashKey, keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiQuery, type AuditFilters } from "../lib/auditFilters";
 import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
-import { api } from "./client";
+import { ApiError, api } from "./client";
 import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
   FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
@@ -171,6 +171,13 @@ export function usePutSignInPolicy() {
     mutationFn: ({ confirm, ...body }: SignInValues & { enabled?: boolean; confirm?: boolean }) =>
       api.put<SignInPolicy>(`/api/settings/sign-in${confirm ? "?confirm=true" : ""}`, body),
     onSuccess: () => invalidate(keys.signInPolicy, keys.auditAll),
+    // A 409 that asks for confirmation means the page's switch no longer matches the server (another admin changed it, or the page is old):
+    // read the policy again, so the switch shows the real state. The page still shows the server's text.
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409 && (error.body as { needs_confirmation?: unknown } | null)?.needs_confirmation === true) {
+        void invalidate(keys.signInPolicy);
+      }
+    },
   });
 }
 

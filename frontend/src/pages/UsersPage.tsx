@@ -66,6 +66,7 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
             <form
               ref={form}
               className="reset-form"
+              onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); closeReset(); } }}
               onSubmit={(e) => {
                 e.preventDefault();
                 patch.mutate(

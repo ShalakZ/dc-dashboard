@@ -157,6 +157,44 @@ describe("sign-in policy queries", () => {
   });
 });
 
+describe("sign-in policy: a 409 that asks for confirmation", () => {
+  const answer = (enabled: boolean) => ({
+    max_failures: 5, block_minutes: 5, enabled,
+    limits: { max_failures: [3, 20], block_minutes: [1, 60] },
+    defaults: { max_failures: 5, block_minutes: 5 },
+  });
+
+  it("refetches the policy, so a stale switch shows the server's state; the error still reaches the caller", async () => {
+    let enabled = false; // what the page first read
+    const calls = mockFetch({
+      "GET /api/settings/sign-in": () => ({ body: answer(enabled) }),
+      "PUT /api/settings/sign-in": () => {
+        enabled = true; // someone switched it on in the meantime
+        return { status: 409, body: { detail: "Sign-in protection is on. Switching it off needs confirmation: reload the Settings page and switch it off again.", needs_confirmation: true } };
+      },
+    });
+    const { result } = renderHook(() => ({ policy: useSignInPolicy(), put: usePutSignInPolicy() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.policy.data?.enabled).toBe(false));
+    await expect(result.current.put.mutateAsync({ max_failures: 5, block_minutes: 5, enabled: false })).rejects.toThrow("needs confirmation");
+    await waitFor(() => expect(result.current.policy.data?.enabled).toBe(true));
+    expect(calls.filter((c) => c.method === "GET" && c.path === "/api/settings/sign-in")).toHaveLength(2);
+  });
+
+  it("does not refetch for any other refusal", async () => {
+    const calls = mockFetch({
+      "GET /api/settings/sign-in": () => ({ body: answer(true) }),
+      "PUT /api/settings/sign-in": () => ({ status: 422, body: { detail: "max_failures must be at least 3" } }),
+    });
+    const { result } = renderHook(() => ({ policy: useSignInPolicy(), put: usePutSignInPolicy() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.policy.data?.enabled).toBe(true));
+    await act(async () => {
+      await expect(result.current.put.mutateAsync({ max_failures: 1, block_minutes: 5 })).rejects.toThrow();
+      await new Promise((resolve) => setTimeout(resolve, 50)); // time for a refetch that would wrongly start
+    });
+    expect(calls.filter((c) => c.method === "GET" && c.path === "/api/settings/sign-in")).toHaveLength(1);
+  });
+});
+
 describe("sign-in switch and rows per day", () => {
   const jsonReply = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 

@@ -460,6 +460,26 @@ describe("TariffsPage", () => {
     expect(calls.some((c) => c.method === "PATCH")).toBe(false);
   });
 
+  it("Escape ends an edit like Cancel: no request, the old rate shown, the focus back on the menu button", async () => {
+    const calls = open();
+    const row = (await screen.findByText("2026-10-01")).closest("tr")!;
+    await edit(row);
+    await userEvent.type(within(row).getByLabelText("Rate per kWh"), "9");
+    await userEvent.keyboard("{Escape}");
+    expect(within(row).getByText("0.15")).toBeInTheDocument();
+    expect(within(row).queryByLabelText("Rate per kWh")).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+    expect(within(row).getByRole("button", { name: "Actions for rate from 2026-10-01 (site default)" })).toHaveFocus();
+  });
+
+  it("Escape on a row that is not being edited does nothing", async () => {
+    open();
+    const row = (await screen.findByText("2026-10-01")).closest("tr")!;
+    within(row).getByRole("button", { name: "Actions for rate from 2026-10-01 (site default)" }).focus();
+    await userEvent.keyboard("{Escape}");
+    expect(within(row).getByText("0.15")).toBeInTheDocument();
+  });
+
   it("puts the focus on the Effective from input when Edit is chosen, and gives it back to the menu button after Cancel and after Save", async () => {
     open();
     const row = (await screen.findByText("2026-10-01")).closest("tr")!;

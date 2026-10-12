@@ -155,6 +155,21 @@ describe("describeAudit: updates with before and after", () => {
     ).toBe("Changed the sign-in protection: max failures");
   });
 
+  it("says how many blocks switching the protection off ended, when the subject carries the count", () => {
+    const off = (blocks_ended: unknown) =>
+      describeAudit(entry("settings.sign_in_changed", { blocks_ended, before: { enabled: true }, after: { enabled: false } })).summary;
+    expect(off(3)).toBe("Sign-in protection switched off (3 blocks ended)");
+    expect(off(1)).toBe("Sign-in protection switched off (1 block ended)");
+    expect(off(0)).toBe("Sign-in protection switched off");
+    expect(off("3")).toBe("Sign-in protection switched off");
+    expect(off(undefined)).toBe("Sign-in protection switched off");
+    const withNumbers = describeAudit(
+      entry("settings.sign_in_changed", { blocks_ended: 2, before: { block_minutes: 5, enabled: true }, after: { block_minutes: 10, enabled: false } }),
+    );
+    expect(withNumbers.summary).toBe("Sign-in protection switched off (2 blocks ended): block minutes");
+    expect(withNumbers.facts).toEqual([{ label: "Blocks ended", value: "2" }]);
+  });
+
   it("does not claim a switch when `enabled` is not a real change or not a boolean", () => {
     const same = describeAudit(
       entry("settings.sign_in_changed", { before: { max_failures: 5, enabled: true }, after: { max_failures: 6, enabled: true } }),

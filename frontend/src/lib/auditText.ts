@@ -281,14 +281,16 @@ const RULES: Record<string, Rule> = {
   "scope.deleted": { summary: (c) => `Deleted scan ${thing("scope", c.d, "scope_id")}` },
 
   "settings.sign_in_changed": {
-    summary: ({ sides, fields }) => {
+    summary: ({ d, sides, fields }) => {
       // audit_change keeps only the changed fields, so `enabled` is in `after` exactly when the switch was thrown.
       const now = sides ? get(sides.after, "enabled") : undefined;
       if (!sides || typeof now !== "boolean" || stable(get(sides.before, "enabled")) === stable(now)) {
         return withFields("Changed the sign-in protection", fields);
       }
       const numbers = fieldList(diff(sides).changes.filter((change) => change.field !== "Enabled"));
-      return withFields(`Sign-in protection switched ${now ? "on" : "off"}`, numbers);
+      // Switching off ends every current block; the subject says how many.
+      const ended = idOf(d.blocks_ended); // a positive whole number, which is all this needs
+      return withFields(`Sign-in protection switched ${now ? "on" : "off"}${ended !== null ? ` (${count(ended, "block")} ended)` : ""}`, numbers);
     },
     link: page("/settings", "Open Settings"),
   },

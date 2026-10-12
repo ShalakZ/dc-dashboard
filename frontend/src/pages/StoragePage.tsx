@@ -7,7 +7,11 @@ import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/type
 import { storageLoss } from "../lib/impact";
 import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 
-const gib = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GiB`;
+/** A size as text, one decimal: GiB from 1 GiB up, MiB below it (a small database would read 0.0 GiB). */
+export function sizeText(bytes: number): string {
+  const mib = bytes / 1024 ** 2;
+  return mib < 1023.95 ? `${mib.toFixed(1)} MiB` : `${(bytes / 1024 ** 3).toFixed(1)} GiB`; // 1023.95 MiB would round to 1024.0 MiB
+}
 export const FIELDS: [keyof StorageSettings, string][] = [
   ["raw_retention_days", "Raw retention (days)"],
   ["compress_after_days", "Compress after (days)"],
@@ -47,7 +51,7 @@ const summary = (d: StorageSettings) =>
 // days_until_full is null both when the database is already over capacity and when it is not growing.
 export function projection(usedPct: number, daysUntilFull: number | null): string {
   if (usedPct >= 100) return "full";
-  return daysUntilFull === null ? "not growing" : `${Math.round(daysUntilFull)} days`;
+  return daysUntilFull === null ? "not growing" : `${Math.round(daysUntilFull).toLocaleString("en-US")} days`;
 }
 
 const DAY_MS = 86_400_000;
@@ -213,16 +217,16 @@ export function StoragePage() {
         </div>
       )}
       <div className="tiles storage-tiles">
-        <Tile title="Database size" tip={TILE_HELP.database} big={gib(s.database_bytes)} />
+        <Tile title="Database size" tip={TILE_HELP.database} big={sizeText(s.database_bytes)} />
         <Tile
           title="Readings (raw)"
           tip={TILE_HELP.readings}
-          big={gib(s.readings_bytes_total)}
-          note={s.readings_bytes_uncompressed ? `compressed ${gib(s.readings_bytes_compressed)} of ${gib(s.readings_bytes_uncompressed)}, ratio ${ratio}` : "nothing compressed yet"}
+          big={sizeText(s.readings_bytes_total)}
+          note={s.readings_bytes_uncompressed ? `compressed ${sizeText(s.readings_bytes_compressed)} of ${sizeText(s.readings_bytes_uncompressed)}, ratio ${ratio}` : "nothing compressed yet"}
         />
-        <Tile title="Rollups" tip={TILE_HELP.rollups} big={gib(s.rollup_1m_bytes + s.rollup_1h_bytes)} note={`1 min ${gib(s.rollup_1m_bytes)}, 1 h ${gib(s.rollup_1h_bytes)}`} />
-        <Tile title="Growth per day" tip={TILE_HELP.growth} big={`${gib(s.growth_bytes_per_day)} / day`} />
-        <Tile title="Projected full" tip={TILE_HELP.projected} big={projection(s.used_pct, s.days_until_full)} note={`${s.used_pct}% of ${gib(s.disk_capacity_bytes)}`} />
+        <Tile title="Rollups" tip={TILE_HELP.rollups} big={sizeText(s.rollup_1m_bytes + s.rollup_1h_bytes)} note={`1 min ${sizeText(s.rollup_1m_bytes)}, 1 h ${sizeText(s.rollup_1h_bytes)}`} />
+        <Tile title="Growth per day" tip={TILE_HELP.growth} big={`${sizeText(s.growth_bytes_per_day)} / day`} />
+        <Tile title="Projected full" tip={TILE_HELP.projected} big={projection(s.used_pct, s.days_until_full)} note={`${s.used_pct}% of ${sizeText(s.disk_capacity_bytes)}`} />
       </div>
       <p className="muted">
         Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.

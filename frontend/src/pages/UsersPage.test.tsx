@@ -273,6 +273,26 @@ describe("UsersPage reset password", () => {
     expect(trigger()).toHaveFocus();
   });
 
+  it("Escape does what Cancel does: closes the form without a request and gives the focus back to the menu button", async () => {
+    const calls = open();
+    await reset();
+    const input = within(opsRow()).getByLabelText("New password for ops");
+    await userEvent.type(input, "half");
+    await userEvent.keyboard("{Escape}");
+    expect(within(opsRow()).queryByLabelText("New password for ops")).not.toBeInTheDocument();
+    expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(0);
+    expect(trigger()).toHaveFocus();
+  });
+
+  it("Escape on the form's own buttons closes it too", async () => {
+    open();
+    await reset();
+    within(opsRow()).getByRole("button", { name: "Save" }).focus();
+    await userEvent.keyboard("{Escape}");
+    expect(within(opsRow()).queryByLabelText("New password for ops")).not.toBeInTheDocument();
+    expect(trigger()).toHaveFocus();
+  });
+
   it("shows the API's text when the new password is refused, and keeps the form", async () => {
     open({ "PATCH /api/users/2": { status: 422, body: { detail: "password too weak" } } });
     await reset();

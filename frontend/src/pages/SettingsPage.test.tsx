@@ -318,6 +318,30 @@ describe("SettingsPage sign-in protection switch", () => {
     expect(puts()).toHaveLength(1);
   });
 
+  it("a page that still shows OFF while the server says ON: the 409 brings the switch back to the server's state and the server's text stays", async () => {
+    let stored = policy(5, 5, false);
+    const text = "Sign-in protection is on. Switching it off needs confirmation: reload the Settings page and switch it off again.";
+    const calls = mockFetch({
+      ...base,
+      "GET /api/settings/general": { body: { timezone: "UTC" } },
+      "GET /api/settings/sign-in": () => ({ body: stored }),
+      "PUT /api/settings/sign-in": () => {
+        stored = policy(5, 5, true); // someone switched it on in the meantime
+        return { status: 409, body: { detail: text, needs_confirmation: true } };
+      },
+    });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    const sw = await theSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
+    expect(screen.getByText(WARNING)).toBeInTheDocument();
+    await save(); // OFF to OFF: no dialog, sent without confirm
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(sw).toBeChecked());
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+    expect(within(section()).getByRole("alert")).toHaveTextContent(text);
+    expect(calls.filter((c) => c.method === "GET" && c.path === "/api/settings/sign-in")).toHaveLength(2);
+  });
+
   it("clears the saved marker when the switch is touched", async () => {
     open(policy(5, 5, false));
     const sw = await theSwitch();
