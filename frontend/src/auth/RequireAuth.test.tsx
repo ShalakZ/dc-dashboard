@@ -1,9 +1,33 @@
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useLayoutEffect, type ComponentProps } from "react";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { RETURN_KEY, useAuth } from "./AuthProvider";
 import { RequireAuth } from "./RequireAuth";
+
+// What the page looks like in the commit that holds a <Navigate>: its effect only starts the route change afterwards, so a layout effect that runs in
+// the same commit sees the last frame the visitor gets before the route changes. An empty page there is a white flash between two screens.
+// `pending` counts the mounted <Pending /> (it makes the loading bar run), which a redirect must not keep.
+const redirects = vi.hoisted(() => [] as { to: string; shell: boolean; pending: number }[]);
+const pendingMounted = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../components/Pending", () => ({
+  Pending: () => {
+    useLayoutEffect(() => {
+      pendingMounted.count += 1;
+      return () => { pendingMounted.count -= 1; };
+    }, []);
+    return null;
+  },
+}));
+vi.mock("react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router")>();
+  function Navigate(props: ComponentProps<typeof actual.Navigate>) {
+    useLayoutEffect(() => { redirects.push({ to: String(props.to), shell: document.querySelector(".sk-shell") !== null, pending: pendingMounted.count }); }, [props.to]);
+    return <actual.Navigate {...props} />;
+  }
+  return { ...actual, Navigate };
+});
 
 /** Keeps the answers to the given paths waiting; `release(path)` lets one through. Call it after `mockFetch`. */
 function hold(...paths: string[]) {
@@ -29,7 +53,10 @@ function SignOut() {
 }
 
 describe("RequireAuth", () => {
-  beforeEach(() => sessionStorage.clear());
+  beforeEach(() => {
+    sessionStorage.clear();
+    redirects.length = 0;
+  });
 
   it("shows the shell skeleton, not the bare line, while the sign-in check is out, then the page", async () => {
     mockFetch(signedIn);
@@ -74,6 +101,31 @@ describe("RequireAuth", () => {
     expect(await screen.findByText("setup page")).toBeInTheDocument();
     expect(container.querySelector(".top-progress")).not.toBeInTheDocument();
     expect(container.querySelector(".sk-shell")).not.toBeInTheDocument();
+  });
+
+  it("keeps the shell skeleton (and no Pending) in the frame that carries the redirect to /setup, so the last frame is not an empty page", async () => {
+    mockFetch({ "GET /api/setup": { body: { needed: true } }, "GET /api/me": { status: 401, body: { detail: "x" } } });
+    renderWithProviders(<RequireAuth><p>the page</p></RequireAuth>, { route: "/assets" });
+    expect(await screen.findByText("setup page")).toBeInTheDocument();
+    expect(redirects).toEqual([{ to: "/setup", shell: true, pending: 0 }]);
+  });
+
+  it("keeps the shell skeleton (and no Pending) in the frame that carries the redirect to /login, for a lost session and for an explicit sign-out", async () => {
+    mockFetch({ "GET /api/setup": { body: { needed: false } }, "GET /api/me": { status: 401, body: { detail: "not authenticated" } } });
+    const lost = renderWithProviders(<RequireAuth><p>the page</p></RequireAuth>, { route: "/assets" });
+    expect(await screen.findByText("login page")).toBeInTheDocument();
+    expect(redirects).toEqual([{ to: "/login", shell: true, pending: 0 }]);
+    expect(sessionStorage.getItem(RETURN_KEY)).toBe("/assets"); // the page asked for is still remembered
+    lost.unmount();
+
+    redirects.length = 0;
+    sessionStorage.clear();
+    mockFetch({ ...signedIn, "POST /api/logout": { status: 204 } });
+    renderWithProviders(<RequireAuth><SignOut /></RequireAuth>, { route: "/assets" });
+    await userEvent.click(await screen.findByRole("button", { name: "sign out now" }));
+    expect(await screen.findByText("login page")).toBeInTheDocument();
+    expect(redirects).toEqual([{ to: "/login", shell: true, pending: 0 }]);
+    await waitFor(() => expect(sessionStorage.getItem(RETURN_KEY)).toBeNull()); // and nothing is remembered
   });
 
   it("sends a 401 from /api/me to /login and remembers the page asked for", async () => {

@@ -10,14 +10,16 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   const { user, setupNeeded, signedOutOnPurpose, loading } = useAuth();
   const location = useLocation();
   let body: ReactNode = children;
+  // A <Navigate> renders nothing and changes the route in an effect, so the frame in between would be an empty page: the skeleton stays in it
+  // (without Pending, which would start the bar for a page that is about to go).
   if (loading) {
     body = <><Pending /><AppShellSkeleton /></>;
   } else if (setupNeeded) {
-    body = <Navigate to="/setup" replace />;
+    body = <><AppShellSkeleton /><Navigate to="/setup" replace /></>;
   } else if (!user) {
     // An explicit sign-out leaves nothing behind (the next sign-in lands on /); a lost session remembers where it was.
     if (!signedOutOnPurpose) sessionStorage.setItem(RETURN_KEY, location.pathname + location.search);
-    body = <Navigate to="/login" replace />;
+    body = <><AppShellSkeleton /><Navigate to="/login" replace /></>;
   }
   // The one loading bar lives here, above whatever is shown, so the same element carries on from the sign-in check into the shell.
   return <><TopProgress />{body}</>;
