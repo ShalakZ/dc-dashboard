@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.x509.oid import NameOID
 
 from dcdash.connectors.base import GOOD, url_host_port
-from dcdash.connectors.opcua import OpcUaConnector, ReportingClient, _point_value, _status_text
+from dcdash.connectors.opcua import OpcUaConnector, ReportingClient, _point_value, _status_text, close_quietly
 from dcdash.core.audit import hidden_values
 from dcdash.diagnostics.check import Checker, CheckResult, Publish, StepFailed, StepOutcome
 from dcdash.diagnostics.hints import CLOCK_SKEW, hint_for
@@ -254,13 +254,7 @@ class OpcUaCheck:
         client, self.client = self.client, None
         if client is None:
             return
-        try:
-            async with asyncio.timeout(self.config.timeout_seconds):
-                await client.disconnect()
-        except Exception:  # noqa: BLE001 - the session may be half open, or already gone
-            pass
-        with contextlib.suppress(Exception):
-            client.disconnect_socket()
+        await close_quietly(client, self.config.timeout_seconds)  # the session may be half open, or already gone
 
     # -- steps --------------------------------------------------------------------------------------------------------------
 

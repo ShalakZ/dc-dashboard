@@ -133,14 +133,15 @@ async def test_a_refused_secure_channel_is_reported_by_status_everywhere_not_as_
 
 
 @pytest.mark.parametrize(
-    "handler, words",
+    "handler, words, error_class",
     [
-        (CloseAtOnce, "closed by the server"), (CloseAfterHello, "closed by the server"),
-        (GarbageAfterHello, "could not use"),
+        (CloseAtOnce, "closed by the server", "ConnectionResetError"),
+        (CloseAfterHello, "closed by the server", "ConnectionResetError"),
+        (GarbageAfterHello, "could not use", "UnusableAnswerError"),
     ],
     ids=["closed at once", "closed after the hello", "unusable answer"],
 )
-async def test_a_closed_connection_is_a_reset_not_a_timeout(handler, words):
+async def test_a_closed_connection_is_a_reset_not_a_timeout(handler, words, error_class):
     async with raw_server(handler) as url:
         connector = create_connector("opcua", _cfg(url))
 
@@ -151,10 +152,18 @@ async def test_a_closed_connection_is_a_reset_not_a_timeout(handler, words):
         result, seconds = await _timed(connector.check([]))
         assert seconds < 2 * FAST
         endpoints = _by_id(result)["endpoints"]
-        assert endpoints.error["class"] == "ConnectionResetError" and words in endpoints.error["message"]
-        assert endpoints.hint == hint_for(None, "ConnectionResetError", "endpoints") and endpoints.hint
+        assert endpoints.error["class"] == error_class and words in endpoints.error["message"]
+        assert endpoints.hint == hint_for(None, error_class, "endpoints") and endpoints.hint
         session = _by_id(result)["session"]
-        assert session.error["class"] == "ConnectionResetError" and session.hint == endpoints.hint
+        assert session.error["class"] == error_class and session.hint == endpoints.hint
+
+
+async def test_an_answer_this_client_hung_up_on_is_not_blamed_on_a_reset_by_the_network():
+    async with raw_server(GarbageAfterHello) as url:
+        step = _by_id(await create_connector("opcua", _cfg(url)).check([]))["endpoints"]
+    assert step.hint and "not usable OPC UA" in step.hint and "OPC UA port" in step.hint and "proxy" in step.hint
+    assert "reset" not in step.hint and "SCADA team" in step.hint and len(step.hint) <= 300
+    assert step.hint != hint_for(None, "ConnectionResetError", "endpoints")
 
 
 async def test_a_connection_lost_during_a_session_fails_the_next_request_at_once():
@@ -275,3 +284,59 @@ def test_the_uri_hint_names_both_uris():
     hint = hint_for("BadCertificateUriInvalid", None, "session")
     assert "announces" in hint and "certificate" in hint and "two URIs" in hint
 
+
+
+# -- a connect that fails leaves nothing behind -----------------------------------------------------------------------------------
+
+
+def _client_tasks() -> list[str]:
+    """The background tasks of an asyncua session (the watchdog and the channel renewal) that are still running."""
+    wanted = ("_monitor_server_loop", "_renew_channel_loop")
+    return [t.get_coro().__qualname__ for t in asyncio.all_tasks() if not t.done() and any(n in t.get_coro().__qualname__ for n in wanted)]
+
+
+async def _until(condition, seconds: float = 3.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while not condition():
+        if time.monotonic() > deadline:
+            return False
+        await asyncio.sleep(0.05)
+    return True
+
+
+@pytest.mark.parametrize("timeout, where", [(0.8, "before CreateSession answers"), (1.0, "after CreateSession answered")])
+async def test_a_connect_that_runs_out_of_time_closes_what_it_opened(timeout, where):
+    """With answers 0.3 s late the handshake needs 0.3 s per request: 0.8 s cancels the connect before the session exists, 1.0 s
+    after it (asyncua has then started its watchdog and channel renewal, which would poll the server for good)."""
+    async with opcua_server(faults=Faults.from_env({"SIM_FAULT_SLOW": "0.3"})) as srv:
+        connector = create_connector("opcua", _cfg(srv.endpoint, timeout_seconds=timeout))
+        for _ in range(3):
+            check = await connector.test()
+            assert (check.ok, check.status) == (False, "timeout"), where
+        assert await _until(lambda: not srv._server.bserver.clients), f"{len(srv._server.bserver.clients)} connections left ({where})"
+        assert await _until(lambda: not _client_tasks()), _client_tasks()
+
+
+async def test_a_refused_login_stays_a_refused_login_when_the_server_then_hangs_up():
+    """Some servers close the connection soon after a bad password: asyncua's clean-up (CloseSession) is then still waiting for its
+    answer and fails with a reset, which used to replace the refusal. (Answers 0.2 s late, so the hang-up 0.1 s after the refusal
+    lands while the CloseSession request waits.)"""
+    env = {"SIM_FAULT_AUTH": "required", "SIM_FAULT_SLOW": "0.2"}
+    async with opcua_server(password="right-pw", faults=Faults.from_env(env)) as srv:
+        users, loop = srv._users, asyncio.get_running_loop()
+        asked = users.get_user
+
+        def refuse_and_hang_up(*args, **kwargs):
+            user = asked(*args, **kwargs)
+            if user is None:
+                loop.call_later(0.1, lambda: [client.transport.close() for client in list(srv._server.bserver.clients)])
+            return user
+
+        users.get_user = refuse_and_hang_up
+        config = _cfg(srv.endpoint, username="sim")
+        check = await create_connector("opcua", config, secret="wrong-pw").test()
+        assert (check.ok, check.status) == (False, "auth_failed"), check
+        result = await create_connector("opcua", config, secret="wrong-pw").check([])
+    session = _by_id(result)["session"]
+    assert session.ok is False and session.error["status_name"] in ("BadUserAccessDenied", "BadIdentityTokenRejected"), session.error
+    assert session.error["class"] != "ConnectionResetError"

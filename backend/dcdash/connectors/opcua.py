@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -74,6 +75,11 @@ def _translate(exc: BaseException) -> ConnectorError:
     return ConnectorError("protocol_error", str(exc))
 
 
+class UnusableAnswerError(ConnectionResetError):
+    """asyncua closed the connection itself because the server's answer was not OPC UA it could read (a wrong port, a TLS proxy, a
+    server bug). A `ConnectionResetError` for everything that handles connection errors; its own class name for the hints."""
+
+
 class _ReportingProtocol(UASocketProtocol):
     """asyncua's client protocol, made to say why a connection ended.
 
@@ -95,7 +101,7 @@ class _ReportingProtocol(UASocketProtocol):
         if self._refusal is not None:
             return ua.UaStatusCodeError(self._refusal.value)
         if self._closed_here:  # asyncua closes the socket itself when it cannot use an answer
-            return ConnectionResetError("connection closed by this client after an answer from the server it could not use")
+            return UnusableAnswerError("connection closed by this client after an answer from the server it could not use")
         return ConnectionResetError("connection closed by the server")
 
     def _process_received_message(self, msg: Any) -> None:
@@ -153,6 +159,35 @@ class ReportingClient(Client):
         self.uaclient = _ReportingUaClient(stock._timeout)
         self.uaclient.pre_request_hook = stock.pre_request_hook
         self.nodes = Shortcuts(self.uaclient)
+        self._login_error: Exception | None = None
+
+    async def activate_session(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await super().activate_session(*args, **kwargs)
+        except Exception as exc:
+            self._login_error = exc
+            raise
+
+    async def connect(self) -> None:
+        # A refused login is followed by asyncua's clean-up (CloseSession). A server that hangs up after the refusal makes that
+        # request fail with a reset, which replaces the refusal: report the refusal, it is what the owner has to act on.
+        self._login_error = None
+        try:
+            await super().connect()
+        except Exception as exc:
+            if self._login_error is not None and exc is not self._login_error:
+                raise self._login_error from None
+            raise
+
+
+async def close_quietly(client: Client, seconds: float = 1.0) -> None:
+    """Close a client that may be half open, without raising and without waiting longer than `seconds` for the server: disconnect
+    (this also stops the watchdog and channel renewal asyncua starts with a session), then drop the socket whatever happened."""
+    with contextlib.suppress(Exception):
+        async with asyncio.timeout(seconds):
+            await client.disconnect()
+    with contextlib.suppress(Exception):
+        client.disconnect_socket()
 
 
 async def _certificate_uri(path: str) -> str | None:
@@ -223,6 +258,9 @@ class OpcUaConnector(Connector):
         try:
             await asyncio.wait_for(client.connect(), self.config.timeout_seconds)
         except Exception as exc:  # noqa: BLE001 - translated into a typed status
+            # A connect that ran out of time is cancelled where it stands, past asyncua's own clean-up; what it opened (socket,
+            # channel, a session with its watchdog) would stay and poll the server for good.
+            await close_quietly(client)
             raise _translate(exc) from exc
         try:
             yield client

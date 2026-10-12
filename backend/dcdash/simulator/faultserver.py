@@ -133,7 +133,11 @@ class _FaultServer(Server):
             _logger.exception("%s error starting server", self)
             await self.iserver.stop()
             raise
-        await self._after_start()
+        try:
+            await self._after_start()
+        except Exception:
+            await self.stop()  # the listener is up: it is nobody's to close if the caller never gets a started server
+            raise
 
     async def stop(self) -> None:
         await self._before_stop()

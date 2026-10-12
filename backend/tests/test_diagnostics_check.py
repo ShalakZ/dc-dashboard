@@ -83,6 +83,9 @@ def test_the_timeout_hint_says_the_handshake_needs_about_four_round_trips_and_st
         hint = hint_for(None, "TimeoutError", step)
         assert "four round trips" in hint and "a quarter of the timeout" in hint and "SCADA team" in hint and len(hint) <= 300
     assert "four round trips" not in hint_for(None, "TimeoutError", "tcp")  # a silent port is a firewall, not a slow handshake
+    for step in ("server_time", "namespaces", "read_points", "timing"):  # the session is open there: the handshake is not the question
+        later = hint_for(None, "TimeoutError", step)
+        assert "four round trips" not in later and "did not answer" in later and "SCADA team" in later, step
 
 
 def test_the_uri_hint_names_both_uris_and_every_hint_that_blames_the_other_side_says_who_to_ask():

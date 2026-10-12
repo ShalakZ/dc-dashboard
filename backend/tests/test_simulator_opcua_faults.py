@@ -378,6 +378,23 @@ async def test_skew_keeps_current_time_and_the_point_stamps_off_by_that_much_for
     assert not skew_clock_tasks()
 
 
+async def test_a_server_that_fails_after_its_listener_is_up_does_not_leave_the_listener_behind(monkeypatch):
+    async def failing(self):
+        raise RuntimeError("the first skewed time could not be written")
+
+    monkeypatch.setattr("dcdash.simulator.faultserver._FaultServer._after_start", failing)
+    srv = OpcUaSim(Simulator(), free_port(), faults=faults(SKEW="900"))
+    port = int(srv.endpoint.rsplit(":", 1)[1].split("/")[0])
+    try:
+        with pytest.raises(RuntimeError, match="first skewed time"):
+            await srv.start()
+        with pytest.raises(OSError):  # nothing listens any more
+            await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), 2)
+    finally:
+        with contextlib.suppress(Exception):
+            await srv.stop()
+
+
 # ---- nothing is shared between servers or left behind -----------------------------------------------------------------------
 
 def asyncua_internals() -> tuple:

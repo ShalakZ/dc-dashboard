@@ -135,6 +135,11 @@ _BY_CLASS: dict[str, str] = {
         "The connection was reset by the other end or by something in between. Ask the SCADA team whether the service accepts "
         "this client, and the network team about a firewall or load balancer."
     ),
+    "UnusableAnswerError": (  # opcua.UnusableAnswerError: this client hung up on an answer it could not read
+        "The server's answer was not usable OPC UA: check that the port is the OPC UA port, and that nothing like a TLS proxy or "
+        "another protocol listens there. Ask the SCADA team for the exact endpoint URL and port, and the network team whether a "
+        "proxy sits in between."
+    ),
     "ConnectionAbortedError": (
         "The connection was cut during the exchange. Ask the SCADA team and the network team whether a firewall or the server's "
         "session limit closed it."
@@ -150,6 +155,10 @@ _TIMEOUT_AT_NETWORK_STEP = (
     "is down. Ask the network team whether this machine may reach it, and confirm the endpoint URL with the SCADA team."
 )
 _TIMEOUT_LATER = (
+    "The server accepted the connection but did not answer in time: it may be overloaded or a firewall may be dropping packets. "
+    "Ask the SCADA team and the network team."
+)
+_TIMEOUT_HANDSHAKE = (  # the steps that open the session: it needs several requests under one timeout
     "The server accepted the connection but did not answer in time: it may be overloaded or a firewall may be dropping packets. "
     "A session needs about four round trips, so answers of about a quarter of the timeout can still time out. Ask the SCADA team "
     "and the network team."
@@ -176,7 +185,9 @@ def hint_for(status_name: str | None, exc_class: str | None, step_id: str) -> st
         if text is not None:
             return text
         if exc_class == "TimeoutError":
-            return _TIMEOUT_AT_NETWORK_STEP if step_id in ("dns", "tcp") else _TIMEOUT_LATER
+            if step_id in ("dns", "tcp"):
+                return _TIMEOUT_AT_NETWORK_STEP
+            return _TIMEOUT_HANDSHAKE if step_id in ("endpoints", "session") else _TIMEOUT_LATER
         if exc_class == "OSError":
             return _NETWORK_UNREACHABLE
     return None
