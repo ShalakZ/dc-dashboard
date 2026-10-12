@@ -695,6 +695,14 @@ describe("SourcesPage look (W6)", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
+    it("puts the focus on a control that still works: Close, not the Run button the auto-start has just disabled", async () => {
+      mockFetch(checkRoutes("operator"));
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      await userEvent.click(await screen.findByRole("button", { name: "Check connection" }));
+      const dialog = await screen.findByRole("dialog", { name: "Check connection: sim" });
+      expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Close" }));
+    });
+
     it("keeps the Test button's name unambiguous and leaves Test untouched", async () => {
       mockFetch(checkRoutes("operator"));
       renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });

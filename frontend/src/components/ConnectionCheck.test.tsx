@@ -179,6 +179,22 @@ describe("ConnectionCheck", () => {
     expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });
 
+  it("keeps one live region from the start, so the first step is announced when it is added", async () => {
+    mockFetch({
+      ...auth(),
+      "POST /api/sources/5/check": { status: 202, body: { job_id: 47 } },
+      "GET /api/jobs/47": job(47, "done", check([step("test", "Connection test")], { finished: true, ok: true }), "2026-10-12T10:00:05+00:00"),
+    });
+    const { container } = renderWithProviders(<ConnectionCheck sourceId={5} />);
+    const region = container.querySelector('[aria-live="polite"]');
+    expect(region).not.toBeNull();
+    expect(region!.querySelector("ol")).toBeNull(); // nothing in it yet
+    await userEvent.click(run());
+    const list = await screen.findByRole("list", { name: "Check steps" });
+    expect(container.querySelector('[aria-live="polite"]')).toBe(region); // the same element, now holding the step
+    expect(region!.contains(list)).toBe(true);
+  });
+
   it("has no select for a fixed source", async () => {
     mockFetch(auth());
     renderWithProviders(<ConnectionCheck sourceId={5} />);

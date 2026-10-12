@@ -45,6 +45,9 @@ export function ConnectionCheck({ sourceId, autoStart = false }: { sourceId?: nu
   const id = sourceId ?? picked ?? sources.data?.[0]?.id ?? null;
   const [jobId, setJobId] = useState<number | null>(null);
   const [followed, setFollowed] = useState(false); // the job shown is one that was already running when the button was pressed
+  // With autoStart the button is disabled from the first render: the dialog around it focuses its first working control when it opens,
+  // and a Run button that the start disables a moment later would take the focus with it.
+  const [starting, setStarting] = useState(autoStart);
   const start = useStartCheck(id);
   const { job, timedOut, error: pollError } = useJob(jobId, CHECK_MAX_WAIT_MS);
 
@@ -67,6 +70,7 @@ export function ConnectionCheck({ sourceId, autoStart = false }: { sourceId?: nu
     if (autoStart && id !== null && !queued.current) {
       queued.current = true;
       run();
+      setStarting(false); // in the same render as the pending request
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart, id]);
@@ -110,7 +114,7 @@ export function ConnectionCheck({ sourceId, autoStart = false }: { sourceId?: nu
             </select>
           </label>
         )}
-        <button type="button" className="primary" onClick={run} disabled={id === null || start.isPending || active}>Run connection check</button>
+        <button type="button" className="primary" onClick={run} disabled={id === null || start.isPending || active || starting}>Run connection check</button>
       </div>
       {start.isError && !refused && <p className="error" role="alert">{start.error.message}</p>}
       {sentence && <p className="muted" role="status">{sentence.charAt(0).toUpperCase() + sentence.slice(1).replace(/\.$/, "")}.</p>}
@@ -118,11 +122,14 @@ export function ConnectionCheck({ sourceId, autoStart = false }: { sourceId?: nu
       {failure !== null && <p className="error" role="alert">The check failed: {failure}</p>}
       {line && <p className="check-line" role="status">{line}</p>}
       {timedOut && <p className="warning" role="status">Still not finished after 2 minutes. The collector may be busy or stopped; the steps below are what it reported so far.</p>}
-      {result && result.steps.length > 0 && (
-        <ol className="check-steps" aria-label="Check steps" aria-live="polite" aria-relevant="additions">
-          {result.steps.map((step) => <Step key={step.id} step={step} />)}
-        </ol>
-      )}
+      {/* Always mounted: a screen reader announces what is added to a live region, not a region that appears with its content. */}
+      <div className="check-live" aria-live="polite" aria-relevant="additions">
+        {result && result.steps.length > 0 && (
+          <ol className="check-steps" aria-label="Check steps">
+            {result.steps.map((step) => <Step key={step.id} step={step} />)}
+          </ol>
+        )}
+      </div>
       {status === "done" && when && <p className="check-at muted">Checked at {when}</p>}
     </div>
   );
