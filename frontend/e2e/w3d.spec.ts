@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { navLink, signOut, userBlock } from "./shell";
+import { expectNoRowAction, navLink, rowAction, signOut, userBlock } from "./shell";
 
 // W3d (sign-in protection and Users: the admin sets how many failed sign-ins block an account and for how long, a blocked account shows
 // on the Users page and can be unblocked, an account can be deleted and its past audit entries keep its name; and no screen or API answer
@@ -149,10 +149,10 @@ test("W3d: block, unblock and delete an account, and a source never shows the cr
     }
 
     await createUser(page, VICTIM);
-    // Your own account cannot be deleted from here; a row that is not blocked offers no Unblock.
+    // Your own account cannot be deleted from here; a row that is not blocked offers no Unblock (checked in its open menu).
     await expect(page.getByRole("button", { name: "Delete admin", exact: true })).toBeDisabled();
     await expect(userRow(page, VICTIM.username).getByRole("button", { name: `Delete ${VICTIM.username}` })).toBeEnabled();
-    await expect(page.getByRole("button", { name: `Unblock ${VICTIM.username}` })).toHaveCount(0);
+    await expectNoRowAction(page, userRow(page, VICTIM.username), "Unblock");
   });
 
   await test.step("Settings: 3 failed sign-ins block an account for 1 minute", async () => {
@@ -184,9 +184,9 @@ test("W3d: block, unblock and delete an account, and a source never shows the cr
     await page.goto("/users"); // a fresh load, so the list is not an earlier answer
     const row = userRow(page, VICTIM.username);
     await expect(row.getByText("blocked", { exact: true })).toBeVisible();
-    await row.getByRole("button", { name: `Unblock ${VICTIM.username}` }).click();
+    await (await rowAction(page, row, "Unblock")).click();
     await expect(row.getByText("blocked", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: `Unblock ${VICTIM.username}` })).toHaveCount(0);
+    await expectNoRowAction(page, row, "Unblock");
 
     await signIn(victimPage, VICTIM, VICTIM.role);
     await signOut(victimPage);
@@ -240,7 +240,7 @@ test("W3d: block, unblock and delete an account, and a source never shows the cr
     const apiBodies = recordApiBodies(page);
     await navLink(page, "Sources").click();
     await expect(page.getByRole("heading", { name: "Sources", exact: true })).toBeVisible();
-    await sourceRow(page, SOURCE).getByRole("button", { name: "Edit", exact: true }).click();
+    await (await rowAction(page, sourceRow(page, SOURCE), "Edit")).click();
     let dialog = page.getByRole("dialog", { name: `Edit source ${SOURCE}` });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText(/^The user name and password stored in Url are hidden/)).toBeVisible();
@@ -267,7 +267,7 @@ test("W3d: block, unblock and delete an account, and a source never shows the cr
     expect(renameEntry.detail.after).not.toHaveProperty("config_credentials");
 
     // Ticking Remove and saving drops them, and the audit row says the credentials changed (never what they were).
-    await sourceRow(page, RENAMED).getByRole("button", { name: "Edit", exact: true }).click();
+    await (await rowAction(page, sourceRow(page, RENAMED), "Edit")).click();
     dialog = page.getByRole("dialog", { name: `Edit source ${RENAMED}` });
     await expect(dialog.getByText(/^The user name and password stored in Url are hidden/)).toBeVisible();
     await dialog.getByLabel("Remove the credentials stored in Url", { exact: true }).check();
@@ -286,7 +286,7 @@ test("W3d: block, unblock and delete an account, and a source never shows the cr
     expect(JSON.stringify(removalEntry)).not.toContain(SECRET);
 
     // Open again: nothing is hidden, so neither the note nor the checkbox is offered.
-    await sourceRow(page, RENAMED).getByRole("button", { name: "Edit", exact: true }).click();
+    await (await rowAction(page, sourceRow(page, RENAMED), "Edit")).click();
     dialog = page.getByRole("dialog", { name: `Edit source ${RENAMED}` });
     await expect(dialog.getByLabel("Url", { exact: true })).toBeVisible();
     await expect(dialog.getByText(/^The user name and password stored in/)).toHaveCount(0);

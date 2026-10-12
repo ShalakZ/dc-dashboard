@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { navLink, userBlock } from "./shell";
+import { navLink, rowAction, userBlock } from "./shell";
 
 // W8 (field diagnostics): the admin Diagnostics page (a pasteable report with a header and a checksum line per part, a masked variant with
 // an address key, Copy and Download), the audit row a build leaves, and the step-by-step connection check, which an operator reaches
@@ -185,7 +185,7 @@ test.describe("W8: field diagnostics", () => {
 
     await navLink(page, "Sources").click();
     const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "sim", exact: true }) });
-    await row.getByRole("button", { name: "Check connection" }).click();
+    await (await rowAction(page, row, "Check connection")).click();
     const dialog = page.getByRole("dialog", { name: "Check connection: sim", exact: true });
     await expect(dialog).toBeVisible();
     await untilChecked(dialog); // the dialog queued the check by itself

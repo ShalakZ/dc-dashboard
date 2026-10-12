@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { navLink } from "./shell";
+import { navLink, rowAction } from "./shell";
 
 async function drag(page: Page, from: Locator, to: Locator | { x: number; y: number }) {
   const a = (await from.boundingBox())!;
@@ -78,7 +78,8 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
   await page.getByLabel("Ports").fill("9000, 4840, 5020");
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("cell", { name: "sim", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Scan", exact: true }).click();
+  const scopeRow = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "sim", exact: true }) });
+  await (await rowAction(page, scopeRow, "Scan")).click();
   await expect(page.getByText("1 hosts × 3 ports (3 probes)")).toBeVisible();
   await page.getByRole("button", { name: "Start scan" }).click();
   const findings = page.getByRole("table").filter({ has: page.getByRole("columnheader", { name: "Outcome" }) });
