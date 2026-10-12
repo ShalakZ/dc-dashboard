@@ -11,7 +11,6 @@ import { QuickFind } from "./QuickFind";
 import { RoleChangedNotice } from "./RoleChangedNotice";
 import { SiteClock } from "./SiteClock";
 import { StatusChip } from "./StatusChip";
-import { TopProgress } from "./TopProgress";
 
 export { ROLE_LABEL } from "./navItems";
 
@@ -120,7 +119,6 @@ export function Layout() {
       >
         Skip to content
       </a>
-      <TopProgress />
       <div className="shell" data-sidebar={sidebar} ref={shellRef}>
         <header className="navbar">
           <div className="brand">
