@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Host facts for field debugging when the web app itself is down: one text file to copy and paste to whoever helps.
-# Usage: bash scripts/collect-diagnostics.sh [host:port ...] [--project-dir DIR] [--out-dir DIR]
+# Usage: bash scripts/collect-diagnostics.sh [host:port ...] [--project-dir DIR] [--out-dir DIR] [--raw-logs]
 #        bash scripts/collect-diagnostics.sh --scrub-self-test FILE      check the scrubber against the shared fixture, collect nothing
 #        bash scripts/collect-diagnostics.sh --scrub-stdin [--env-file FILE]   filter stdin to stdout through the scrubber
-# Prints the report and saves dcdash-diag-<yyyyMMdd-HHmmss>.txt in --out-dir (default: the current folder). Each host:port gets a DNS
-# lookup and a TCP connect (3 s timeout). Sections: HOST DISKS NETWORK CLOCK TARGETS "LOCAL PORTS" "TOOLS ON PATH" SERVICES DATABASE API
-# LOGS. When docker and a compose.yaml exist, SERVICES/DATABASE/LOGS ask `docker compose` (ps -a, config --services, logs, exec: nothing
-# else, never inspect) and the LAST 300 LINES PER SERVICE go to a second file, dcdash-diag-<stamp>-logs.txt (header DCDASH-DIAG-LOGS v1,
-# same footer rule), which is saved but never printed; the report names its path. Read-only, needs no internet and none of the
-# application; POSIX tools only (awk, sed, df, date, getent), no Python, no jq. The files are UTF-8 with LF line breaks, saved for their
-# owner only (umask 077). The last line of each is `END OF DIAGNOSTICS <12 hex>`: the first 12 hex characters of the SHA-256 of every
-# line before it, joined by LF (no trailing LF), so a paste can be verified.
+# Prints the report and saves dcdash-diag-<yyyyMMdd-HHmmss>.txt in --out-dir (default: the logs folder inside the project folder, else
+# inside the current folder; created if missing). Each host:port gets a DNS lookup and a TCP connect (3 s timeout). Sections: HOST DISKS
+# NETWORK CLOCK TARGETS "LOCAL PORTS" "TOOLS ON PATH" SERVICES "DOCKER CLOCK" DATABASE API LOGS. When docker and a compose.yaml exist,
+# SERVICES/DOCKER CLOCK/DATABASE/LOGS ask `docker compose` (ps -a, config --services, logs, exec: nothing else, never inspect) and the LAST
+# 300 KEPT LINES PER SERVICE go to a second file, dcdash-diag-<stamp>-logs.txt (header DCDASH-DIAG-LOGS v1, same footer rule), which is
+# saved but never printed; the report names its path. The logs are read as `--tail 2000`, then the ROUTINE lines are dropped (access lines
+# with a 2xx/3xx status, Caddy admin API requests, TimescaleDB refresh chatter; a line with error, warn, fatal, traceback, exception or
+# panic is never dropped) and each service block says how many; --raw-logs keeps them. DOCKER CLOCK compares the date inside the db
+# container with this machine's (Docker/WSL2 clock drift is a local cause). --mask exists only in the PowerShell script. Read-only,
+# needs no internet and none of the application; POSIX tools only (awk, sed, df, date, getent), no Python, no jq. The files are UTF-8
+# with LF line breaks, saved for their owner only (umask 077). The last line of each is `END OF DIAGNOSTICS <12 hex>`: the first 12 hex
+# characters of the SHA-256 of every line before it, joined by LF (no trailing LF), so a paste can be verified.
 # Every output line passes through `emit`: cut at 64 KB, then scrubbed (known secrets from the project's .env, then user:password in
 # URLs), then clipped. The .env is only parsed by awk, never sourced, and its values are never printed (only their count).
 # Every external command runs under `timeout` (10 s, `compose logs` 30 s); after the first docker command that does not answer the rest of
@@ -202,11 +206,37 @@ END {
 }
 AWK_END
 
+# The routine-line filter for the log tails, in awk, mawk-safe (no \d \s \S \b, no {n}, no IGNORECASE); run it under LC_ALL=C. stdin or a file
+# operand in, the lines to keep out; "<lines read> <lines dropped>" goes to the file named by -v counts=. -v raw=1 keeps everything. Blank
+# lines are neither read nor kept. The matching is on the text after the `service-1  | ` prefix that `docker compose logs` adds. A line with
+# error, warn, fatal, traceback, exception or panic (any case) is NEVER routine. Routine: (a) a uvicorn access line with a 2xx/3xx status,
+# (b) a Caddy admin API request, (c) TimescaleDB's continuous aggregate refresh and checkpoint chatter. Everything else stays.
+IFS= read -r -d '' FILTER_PROGRAM <<'AWK_END' || true
+function routine(t,    low) {
+  low = tolower(t)
+  if (low ~ /error|warn|fatal|traceback|exception|panic/) return 0
+  if ((low " ") ~ /^[ \t]*info:[ \t]+[^ ]+ - "[a-z]+ [^ ]+ http\/[0-9](\.[0-9])?" [23][0-9][0-9][^0-9a-z_]/) return 1
+  if (index(low, "\"logger\":\"admin.api\"") > 0 && index(low, "\"msg\":\"received request\"") > 0) return 1
+  if (low ~ /^[^ ]+ [^ ]+ [^ ]+ \[[0-9]+\] log:[ \t]+(continuous aggregate refresh|deleted [0-9]+ row[(]s[)] from materialization table|inserted [0-9]+ row[(]s[)] into materialization table|checkpoint (starting|complete):)/) return 1
+  return 0
+}
+NF {
+  read++
+  t = $0; sub(/^[^|]*[|] ?/, "", t)
+  if (raw != 1 && routine(t)) { dropped++; next }
+  print
+}
+END { print read + 0, dropped + 0 > counts }
+AWK_END
+
 usage() {
   cat <<'USAGE'
-Usage: collect-diagnostics.sh [host:port ...] [--project-dir DIR] [--out-dir DIR]
+Usage: collect-diagnostics.sh [host:port ...] [--project-dir DIR] [--out-dir DIR] [--raw-logs]
        collect-diagnostics.sh --scrub-self-test FILE
        collect-diagnostics.sh --scrub-stdin [--env-file FILE] [--project-dir DIR]
+  --out-dir DIR  where the report goes (default: the logs folder inside the project folder, else inside the current folder)
+  --raw-logs     keep the routine log lines (2xx/3xx access lines, Caddy admin API requests, TimescaleDB refresh chatter)
+  --mask         not in the shell twin (use the PowerShell script)
 USAGE
 }
 usage_error() { echo "collect-diagnostics.sh: $1" >&2; usage >&2; exit 2; }
@@ -221,7 +251,7 @@ set_option() {
 }
 
 parse_args() {
-  TARGET_ARGS=(); PROJECT_ARG=""; OUT_DIR=$PWD; SELF_TEST_FILE=""; ENV_FILE_ARG=""; STDIN_MODE=0
+  TARGET_ARGS=(); PROJECT_ARG=""; OUT_DIR=""; SELF_TEST_FILE=""; ENV_FILE_ARG=""; STDIN_MODE=0; RAW_LOGS=0
   while [ $# -gt 0 ]; do
     case $1 in
       --project-dir|--out-dir|--scrub-self-test|--env-file)
@@ -229,6 +259,8 @@ parse_args() {
         set_option "$1" "$2"; shift 2 ;;
       --project-dir=*|--out-dir=*|--scrub-self-test=*|--env-file=*) set_option "${1%%=*}" "${1#*=}"; shift ;;
       --scrub-stdin) STDIN_MODE=1; shift ;;
+      --raw-logs) RAW_LOGS=1; shift ;;
+      --mask) usage_error "--mask is not in the shell twin (use the PowerShell script: collect-diagnostics.ps1 -Mask)" ;;
       -h|--help) usage; exit 0 ;;
       --) shift; TARGET_ARGS+=("$@"); break ;;
       -*) usage_error "unknown option: $1" ;;
@@ -602,6 +634,33 @@ section_services() {
   fi
 }
 
+section_docker_clock() {   # the date inside the db container against this machine's, read between two host readings (whole seconds: +-1 s is noise)
+  local t0 hms t1 started took vm drift2 drift sign first line
+  if [ ! -e "$WORK/containers" ]; then emit "skipped (no containers)"; return; fi
+  read -r t0 hms <<< "$(date -u '+%s %H:%M:%S')"
+  now_ms; started=$NOW_MS
+  docker_run "$DOCKER_SECS" compose exec -T db date -u +%s || return 0   # docker_run said why when it fails
+  now_ms; took=$(( NOW_MS - started ))
+  t1=$(date -u +%s)
+  if [ "$DOCKER_RC" -ne 0 ]; then
+    first=$({ cat "$WORK/docker.err"; cat "$WORK/docker.out"; } | "$AWK" 'NF { print; exit }')
+    emit "could not read the Docker VM clock (exit code $DOCKER_RC): $first" 300
+    return
+  fi
+  vm=$(tr -d ' \r\n' < "$WORK/docker.out")
+  if ! [[ $vm =~ ^[0-9]{9,11}$ ]]; then
+    first=$({ cat "$WORK/docker.out"; cat "$WORK/docker.err"; } | "$AWK" 'NF { print; exit }')
+    emit "could not read the Docker VM clock (the answer is not a number): $first" 300
+    return
+  fi
+  drift2=$(( 2 * vm - t0 - t1 ))   # in half seconds: the docker call sits between the two host readings
+  if [ "$drift2" -ge 0 ]; then drift=$(( (drift2 + 1) / 2 )); else drift=$(( -((-drift2 + 1) / 2) )); fi
+  sign=+; [ "$drift" -lt 0 ] && sign=   # a negative number brings its own minus
+  line="docker VM minus host = ${sign}${drift} s (host utc $hms, the docker call took $took ms)"
+  if [ "${drift#-}" -gt 30 ]; then line="$line: Docker/WSL2 clock drift (typical after the host slept), a local cause, not the SCADA"; fi
+  emit "$line"
+}
+
 section_database() {
   if [ -e "$WORK/containers" ] && docker_run "$DOCKER_SECS" compose exec -T db pg_isready -U dcdash -d dcdash; then
     emit "docker compose exec -T db pg_isready -U dcdash -d dcdash (exit code $DOCKER_RC):"
@@ -614,7 +673,12 @@ section_database() {
 
 section_api() {
   api_probe http://127.0.0.1/api/health
-  api_probe http://127.0.0.1:8000/api/health "native install only"
+  if [ -e "$WORK/containers" ]; then   # SERVICES ran first: under Docker only the web container publishes a port
+    emit "GET http://127.0.0.1:8000/api/health"
+    emit "  n/a (Docker install: the api is not published on the host)"
+  else
+    api_probe http://127.0.0.1:8000/api/health "native install only"
+  fi
 }
 
 logs_header() {   # the first lines of the second file
@@ -623,10 +687,15 @@ logs_header() {   # the first lines of the second file
   emit "DCDASH-DIAG-LOGS v$VERSION | collect-diagnostics.sh | bash ${BASH_VERSION%%(*}" 0 logs
   emit "local time: $(date '+%Y-%m-%d %H:%M:%S') ${z:0:3}:${z:3:2}" 0 logs
   emit "scrubbing: URL credentials, and $KNOWN_COUNT secret value(s) read from the .env file; each line is cut at 1000 bytes" 0 logs
+  if [ "${RAW_LOGS:-0}" = 1 ]; then
+    emit "filter: unfiltered (--raw-logs): every line the tail returned is kept, routine ones included" 0 logs
+  else
+    emit "filter: routine lines are dropped (see --raw-logs): 2xx/3xx access lines, Caddy admin API requests, TimescaleDB refresh chatter; a line with error, warn, fatal, traceback, exception or panic is never dropped" 0 logs
+  fi
 }
 
 section_logs() {
-  local svc list n shown
+  local svc list n dropped kept shown raw_lines note
   if [ -z "$DOCKER_BIN" ] || [ "$HAS_COMPOSE" != 1 ]; then emit "container sections skipped (see SERVICES); no logs file"; return; fi
   if ! docker_run "$DOCKER_SECS" compose config --services; then emit "no logs read, no logs file"; return; fi
   if [ "$DOCKER_RC" -ne 0 ]; then
@@ -636,21 +705,29 @@ section_logs() {
   list=$("$AWK" '{ sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, "") } $0 ~ /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ && ++n <= 30 { print }' "$WORK/docker.out")
   emit "services: $(printf '%s\n' "$list" | "$AWK" 'NF { s = s (s == "" ? "" : ", ") $0 } END { print (s == "" ? "none" : s) }')"
   for svc in $list; do
-    docker_run $(( 10#$DOCKER_SECS * 3 )) compose logs --no-color --tail 300 "$svc" || break
-    "$AWK" 'NF' "$WORK/docker.out" | tail -n 300 > "$WORK/svc.tail"
-    n=$("$AWK" 'END { print NR }' "$WORK/svc.tail")
+    docker_run $(( 10#$DOCKER_SECS * 3 )) compose logs --no-color --tail 2000 "$svc" || break
+    : > "$WORK/svc.counts"
+    "$AWK" -v raw="${RAW_LOGS:-0}" -v counts="$WORK/svc.counts" "$FILTER_PROGRAM" "$WORK/docker.out" > "$WORK/svc.kept"
+    read -r n dropped < "$WORK/svc.counts"
+    n=${n:-0}; dropped=${dropped:-0}   # lines read, lines dropped as routine
+    tail -n 300 "$WORK/svc.kept" > "$WORK/svc.tail"
     if [ "$DOCKER_RC" -ne 0 ] && [ "$n" -eq 0 ]; then
       emit "-- ${svc}: docker compose logs failed (exit code $DOCKER_RC): $(head -n 1 "$WORK/docker.err")" 300
       continue
     fi
-    shown=$(( n < 30 ? n : 30 ))
-    emit "-- $svc (last $shown of $n lines read)"
+    kept=$(( n - dropped ))
+    shown=$(( kept < 30 ? kept : 30 ))
+    raw_lines=$("$AWK" 'END { print NR }' "$WORK/docker.out"); note=""
+    [ "$raw_lines" -ge 2000 ] && note=" (tail limit reached; older lines not read)"
+    if [ "${RAW_LOGS:-0}" = 1 ]; then emit "-- $svc (last $shown of $kept lines read; unfiltered)$note"
+    else emit "-- $svc (last $shown of $kept kept lines; dropped $dropped routine lines of $n read)$note"
+    fi
     tail -n 30 "$WORK/svc.tail" | sed 's/^/  /' | emit_lines 242
     [ -s "$WORK/logs.txt" ] || logs_header
     emit "== $svc ==" 0 logs
     emit_lines 1000 logs < "$WORK/svc.tail"
   done
-  if [ -s "$WORK/logs.txt" ]; then emit "logs file (the last 300 lines per service, saved next to this report): $LOGS_FILE"
+  if [ -s "$WORK/logs.txt" ]; then emit "logs file (the last 300 kept lines per service, saved next to this report): $LOGS_FILE"
   else emit "no logs read, no logs file"
   fi
 }
@@ -684,6 +761,7 @@ collect() {
   trap 'rm -rf "$WORK"' EXIT
   trap 'exit 130' INT TERM HUP
   STAMP=$(date +%Y%m%d-%H%M%S)
+  [ -n "$OUT_DIR" ] || OUT_DIR=${PROJECT_DIR:-$PWD}/logs   # not given: the logs folder of the project, else of the current folder
   OUT_ABS=$(mkdir -p "$OUT_DIR" 2> /dev/null && cd "$OUT_DIR" 2> /dev/null && pwd)
   LOGS_FILE=${OUT_ABS:-$OUT_DIR}/dcdash-diag-$STAMP-logs.txt
   report_header
@@ -696,6 +774,7 @@ collect() {
   run_section "TOOLS ON PATH" section_tools
   # State shared between sections lives in files under $WORK (sections run in subshells): docker.down, containers, logs.txt.
   run_section "SERVICES" section_services
+  run_section "DOCKER CLOCK" section_docker_clock
   run_section "DATABASE" section_database
   run_section "API" section_api
   run_section "LOGS" section_logs

@@ -34,10 +34,30 @@ scripts\setup.ps1
 
 The first run creates `.env` with a database password and an encryption key,
 then builds and starts the stack. Keep `.env`: without its key, stored source
-credentials cannot be decrypted. Keep a copy of `.env` with every backup (see "What the backup does not contain"). Set `DCDASH_TIMEZONE` in `.env` (for example
-`Asia/Qatar`) so that "today" starts at local midnight. The zone must have a whole-hour UTC offset in
-both January and July (`Asia/Qatar` and `Europe/London` do, `Asia/Kolkata` does not); see
-"Dashboards and billing".
+credentials cannot be decrypted. Keep a copy of `.env` with every backup (see "What the backup does not contain").
+
+**Choose the timezone on the first run**, so that "today" starts at local midnight from the first start:
+
+```powershell
+scripts\setup.ps1 -Timezone Africa/Cairo
+```
+
+```bash
+scripts/setup.sh --timezone Africa/Cairo          # or: DCDASH_TIMEZONE=Africa/Cairo scripts/setup.sh
+```
+
+(`--timezone=Africa/Cairo` and `-Timezone:Africa/Cairo` work too, and both scripts also read `DCDASH_TIMEZONE` from the
+environment; the flag wins over the variable. Every other argument still goes to `docker compose`.) The script checks the name against
+the list in `scripts/timezones.txt` before it writes `.env` or starts anything, and refuses a typo (`Africa/Ciro`; the spelling is
+exact, `africa/cairo` is refused) or a Windows name (`Egypt Standard Time`) with a message: a wrong name in `.env` would make the api
+and the collector restart forever. The zone must have a whole-hour UTC offset in both January and July (`Asia/Qatar`, `Africa/Cairo` and
+`Europe/London` do, `Asia/Kolkata` does not, and the script refuses it); see "Dashboards and billing". Without a flag or variable the zone is `UTC`. The zone only
+seeds the database on the FIRST start: editing `DCDASH_TIMEZONE` in `.env` later does not change an existing database. Change the
+timezone of a running installation on the Settings page. If `.env` already exists, the flag changes nothing and the script says so (a name that is not on the list is still refused).
+
+**Do not install inside OneDrive** (or another synced folder; on a managed laptop `Desktop` and `Documents` often are): `.env` and the backups would
+be copied to the cloud, and bind mounts on synced paths can be slow or locked. Use a plain local folder such as `C:\dcdash`. The setup
+scripts print a warning when the folder looks like OneDrive.
 
 Later starts need only `docker compose up -d`. The exception is a start after you pulled a new
 version: starting `api` migrates the database, so read "Upgrading and going back" (and the release
@@ -131,7 +151,7 @@ UI screens, besides Assets, Sources and Points:
   failed sign-ins shows `blocked`, and **Unblock** lets it in at once; see "If you are blocked from signing in".
 - **Settings** (admin): site timezone (IANA name). It decides where a day and a month start for energy
   totals, Billing and dashboard ranges, and it must have a whole-hour UTC offset in both January and
-  July (Settings refuses any other zone). `DCDASH_TIMEZONE` in `.env` only seeds this on first start.
+  July (Settings refuses any other zone). `DCDASH_TIMEZONE` in `.env` (or the `-Timezone` / `--timezone` flag of the setup script) only seeds this on first start.
   **Sign-in protection** sets how many failed sign-ins block an account (3 to 20) and for how many minutes
   (1 to 60); a change is applied at once. It is on by default and an administrator can switch it off (this asks
   for a confirmation and is audited); the two numbers are kept while it is off. While it is off a password can be
@@ -509,12 +529,19 @@ that project's own volume; see "Practise a restore".
 
 ### Debugging on the SCADA workstation
 
-The protocol for connecting to the real SCADA and debugging it by copy-paste (the Diagnostics page, the connection check, the report format, the offline `scripts/collect-diagnostics.ps1` / `scripts/collect-diagnostics.sh`, the simulator fault switches `SIM_FAULT_*` for rehearsing a failure) is in [docs/field-debugging.md](docs/field-debugging.md).
+The protocol for connecting to the real SCADA and debugging it by copy-paste (the Diagnostics page, the connection check, the report format, the offline `scripts/collect-diagnostics.ps1` / `scripts/collect-diagnostics.sh`, the simulator fault switches `SIM_FAULT_*` for rehearsing a failure) is in [docs/field-debugging.md](docs/field-debugging.md). The offline scripts save their files in the git-ignored `logs/` folder of the project, leave routine lines out of the log tails (`-RawLogs` / `--raw-logs` keeps them), compare the Docker clock with the computer's, and the PowerShell script can hide host names, addresses and the user name with `-Mask`.
 
 ### Logs
 
 Every container keeps at most 5 log files of 10 MB (50 MB per service, set in `compose.yaml`). The collector logs
 `asyncua`, `pymodbus` and `httpx` at WARNING and above only. Read it with `docker compose logs --since 10m collector`.
+
+### If the api or the collector restarts forever
+
+`docker compose ps` shows `api` or `collector` restarting, and `docker compose logs api` ends in `unknown timezone: <name>`: the name in
+`DCDASH_TIMEZONE` is not an IANA zone name (a typo, a different case such as `africa/cairo`, or a Windows name such as `Egypt Standard
+Time`). Fix the value in `.env` (for example `DCDASH_TIMEZONE=Africa/Cairo`; a `DCDASH_TIMEZONE` variable set in your shell beats `.env`) and run `docker compose up -d`. `scripts/setup.ps1` and
+`scripts/setup.sh` refuse such a name before they start anything, so this happens only when `.env` was edited by hand.
 
 ### Stopping
 

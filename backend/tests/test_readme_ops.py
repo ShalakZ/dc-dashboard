@@ -54,6 +54,12 @@ def test_the_runbook_headings_exist(level, title):
         "exit 5",
         "git rev-parse",
         "18443",
+        "scripts\\setup.ps1 -Timezone Africa/Cairo",
+        "scripts/setup.sh --timezone Africa/Cairo",
+        "scripts/timezones.txt",
+        "unknown timezone: <name>",
+        "(a name that is not on the list is still refused)",
+        "Do not install inside OneDrive",
     ],
 )
 def test_the_readme_mentions(text):

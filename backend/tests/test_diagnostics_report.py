@@ -1,6 +1,9 @@
 """The diagnostics report: `render` on fixture data (no database), `gather` on a seeded database."""
 import asyncio
 import re
+import socket
+import threading
+import time
 from dataclasses import fields, replace
 from datetime import datetime, timedelta, timezone
 
@@ -16,7 +19,7 @@ from dcdash.core.db import get_sessionmaker
 from dcdash.diagnostics import report
 from dcdash.diagnostics.redact import Masker, finalize, scrub, verify_paste
 from dcdash.diagnostics.report import (
-    AuditEntry, CheckInfo, CheckStep, Environment, Event, PointRow, PointsInfo, PolicyJob, ReportData, ScanInfo,
+    AuditEntry, CheckInfo, CheckStep, DnsLookup, Environment, Event, PointRow, PointsInfo, PolicyJob, ReportData, ScanInfo,
     SettingsInfo, SourceHealth, SourceInfo, StorageInfo, Unavailable, gather, load_known, mask_names, render,
 )
 from helpers import make_asset, make_mapping, make_point, make_source
@@ -24,6 +27,19 @@ from helpers import make_asset, make_mapping, make_point, make_source
 NOW = datetime(2026, 10, 12, 10, 0, 0, tzinfo=timezone.utc)
 STEP_IDS = ("dns", "tcp", "endpoints", "certificates", "session", "server_time", "namespaces", "read_points", "timing")
 SESSION_FAILURE = "LATEST CHECK: source 3 \"Main SCADA\" FAILED at session: BadUserAccessDenied (0x801F0000)"
+
+
+REAL_RESOLVE = report._resolve
+
+
+@pytest.fixture(autouse=True)
+def no_real_dns(monkeypatch):
+    """A report of a database with named sources must never ask the real resolver (a dead one costs 3 s per report)."""
+
+    async def refuse(host: str) -> list[str]:
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(report, "_resolve", refuse)
 
 
 def ident(value: str) -> str:
@@ -1084,3 +1100,215 @@ def test_the_dns_servers_are_the_first_three_nameserver_lines_and_a_missing_file
     assert report._dns_servers() == ()
     monkeypatch.setattr(report, "RESOLV_CONF", str(tmp_path / "missing"))
     assert report._dns_servers() is None
+
+
+# --- the lookups from inside the API container (W8c finding 6) ---------------------------------------------------------------------
+
+NO_SUCH_NAME = "gaierror [Errno -2] Name or service not known"
+CLUSTER_NAMES_HINT = (
+    "dns lookup: names that only the cluster knows often do not resolve from Docker on Windows; use an address the workstation can "
+    "reach (docs/field-debugging.md, First connection day)"
+)
+
+
+def fake_resolver(monkeypatch, answers: dict[str, list[str] | BaseException]) -> list[str]:
+    """Patch the lookup: a name in `answers` gets that answer (an exception is raised), any other name is not found. Returns the log."""
+    asked: list[str] = []
+
+    async def resolve(host: str) -> list[str]:
+        asked.append(host)
+        answer = answers.get(host, socket.gaierror(-2, "Name or service not known"))
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(report, "_resolve", resolve)
+    return asked
+
+
+async def test_each_source_host_that_is_a_name_gets_a_lookup_and_a_failure_keeps_its_error_text(db, session, monkeypatch):
+    await make_source(db, "Main", "opcua", {"endpoint": "opc.tcp://scada01:4840/x"})
+    await make_source(db, "Meter", "modbus", {"host": "plc.plant.local", "port": 502})
+    fake_resolver(monkeypatch, {"scada01": ["10.0.0.5", "10.0.0.6"]})
+    found = await report._dns_lookups(session, None)
+    assert [(lookup.host, lookup.ok, lookup.addresses) for lookup in found] == [
+        ("scada01", True, ("10.0.0.5", "10.0.0.6")), ("plc.plant.local", False, ()),
+    ]
+    assert found[0].error is None and found[1].error == NO_SUCH_NAME and all(lookup.ms >= 0 for lookup in found)
+
+
+async def test_the_error_text_of_a_failed_lookup_is_clipped_to_120_characters(db, session, monkeypatch):
+    await make_source(db, "Main", "opcua", {"endpoint": "opc.tcp://scada01:4840/x"})
+    fake_resolver(monkeypatch, {"scada01": OSError("x" * 500)})
+    (lookup,) = await report._dns_lookups(session, None)
+    assert not lookup.ok and lookup.error.startswith("OSError xxx") and len(lookup.error) <= 120
+
+
+async def test_literal_addresses_and_urns_are_not_looked_up_and_a_name_is_asked_once(db, session, monkeypatch):
+    await make_source(db, "A", "opcua", {"endpoint": "opc.tcp://opuser:Pw-Secret-1@Scada01:4840/x"})
+    await make_source(db, "B", "opcua", {"endpoint": "opc.tcp://10.1.2.3:4840/x"})
+    await make_source(db, "C", "modbus", {"host": "192.168.0.7", "port": 502})
+    await make_source(db, "D", "opcua", {"endpoint": "opc.tcp://[fd00::5]:4840/x"})
+    await make_source(db, "E", "modbus", {"host": "scada01"})
+    await make_source(db, "F", "simulator", {"url": "urn:vendor:scada01"})
+    await make_source(db, "G", "simulator", {"url": "http://simulator:9000"})
+    asked = fake_resolver(monkeypatch, {"scada01": ["10.0.0.5"], "simulator": ["172.20.0.9"]})
+    found = await report._dns_lookups(session, None)
+    assert [lookup.host for lookup in found] == ["scada01", "simulator"] and sorted(asked) == ["scada01", "simulator"]
+    assert "Pw-Secret-1" not in repr(found) and "opuser" not in repr(found)  # the host comes out of a URL, never its credentials
+
+
+async def test_an_address_only_source_list_and_an_empty_one_need_no_lookup(db, session, monkeypatch):
+    asked = fake_resolver(monkeypatch, {})
+    assert await report._dns_lookups(session, None) == ()
+    await make_source(db, "A", "opcua", {"endpoint": "opc.tcp://10.1.2.3:4840/x"})
+    await make_source(db, "B", "modbus", {"host": "192.168.0.7", "port": 502})
+    assert await report._dns_lookups(session, None) == () and asked == []
+
+
+async def test_at_most_eight_names_are_looked_up_the_first_by_source_id(db, session, monkeypatch):
+    for i in range(10):
+        await make_source(db, f"S{i}", "modbus", {"host": f"plc{i:02d}.plant.local"})
+    asked = fake_resolver(monkeypatch, {})
+    found = await report._dns_lookups(session, None)
+    expected = [f"plc{i:02d}.plant.local" for i in range(8)]
+    assert [lookup.host for lookup in found] == expected and sorted(asked) == expected
+
+
+async def test_a_source_filter_limits_the_lookups_to_that_source(db, session, monkeypatch):
+    await make_source(db, "A", "modbus", {"host": "plc-a.plant.local"})
+    second = await make_source(db, "B", "modbus", {"host": "plc-b.plant.local"})
+    fake_resolver(monkeypatch, {})
+    assert [lookup.host for lookup in await report._dns_lookups(session, second)] == ["plc-b.plant.local"]
+    assert await report._dns_lookups(session, 9999) == ()
+
+
+async def test_hung_lookups_cost_one_timeout_not_one_per_host(db, session, monkeypatch):
+    for i in range(3):
+        await make_source(db, f"S{i}", "modbus", {"host": f"plc{i}.plant.local"})
+
+    async def hang(host: str) -> list[str]:
+        await asyncio.sleep(10)
+        return []
+
+    monkeypatch.setattr(report, "_resolve", hang)
+    monkeypatch.setattr(report, "DNS_LOOKUP_SECONDS", 0.3)
+    started = time.monotonic()
+    found = await report._dns_lookups(session, None)
+    assert time.monotonic() - started < 0.8  # three serial timeouts would be 0.9
+    assert [lookup.ok for lookup in found] == [False] * 3
+    assert all(lookup.error.startswith("TimeoutError") and lookup.ms >= 150 for lookup in found)
+
+
+async def test_the_real_lookup_runs_on_its_own_thread_pool_and_returns_the_unique_addresses_in_order(monkeypatch):
+    threads: list[str] = []
+    real = socket.getaddrinfo
+
+    def fake(host, port, **kwargs):
+        if host != "plc.test":
+            return real(host, port, **kwargs)
+        threads.append(threading.current_thread().name)
+        v4, v6 = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0)), (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("fd00::5", 0, 0, 0))
+        return [v4, v6, v4]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+    assert await REAL_RESOLVE("plc.test") == ["10.0.0.5", "fd00::5"]
+    assert threads and threads[0].startswith("dns-lookup")
+    assert "127.0.0.1" in await REAL_RESOLVE("127.0.0.1")
+
+
+async def test_gather_looks_the_names_up_after_the_environment_section(db, session, monkeypatch):
+    await make_source(db, "Main", "opcua", {"endpoint": "opc.tcp://scada01:4840/x"})
+    order: list[str] = []
+    real_environment, real_lookups = report._environment, report._dns_lookups
+
+    async def environment(*args):
+        order.append("environment")
+        return await real_environment(*args)
+
+    async def lookups(*args):
+        order.append("dns")
+        return await real_lookups(*args)
+
+    monkeypatch.setattr(report, "_environment", environment)
+    monkeypatch.setattr(report, "_dns_lookups", lookups)
+    data = await gather(session, detail="summary")
+    assert order == ["environment", "dns"]
+    assert [(lookup.host, lookup.ok, lookup.error) for lookup in data.dns_lookups] == [("scada01", False, NO_SUCH_NAME)]
+
+
+async def test_a_failing_source_query_makes_only_the_lookups_unavailable(db, session, monkeypatch):
+    await make_source(db, "Main", "opcua", {"endpoint": "opc.tcp://scada01:4840/x"})
+
+    async def broken(db_, source_id):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(report, "_dns_hosts", broken)
+    data = await gather(session, detail="summary")
+    assert data.dns_lookups == Unavailable("RuntimeError") and not isinstance(data.environment, Unavailable)
+    lines = lines_of(render(data, "summary", ident), "ENVIRONMENT")
+    assert "dns lookups: not tried" in lines and not any(line.startswith("section unavailable") for line in lines)
+
+
+def lookups_in(servers=("10.0.0.2",), *found) -> list[str]:
+    data = ReportData(generated_at=NOW, environment=env(dns_servers=servers), dns_lookups=tuple(found))
+    return lines_of(render(data, "summary", ident), "ENVIRONMENT")
+
+
+def test_the_environment_shows_one_line_per_lookup_and_the_cluster_hint_after_any_failure():
+    lines = lookups_in(
+        ("10.0.0.2",), DnsLookup("scada01", True, ("10.0.0.5", "10.0.0.6"), 12.4), DnsLookup("plc.plant.local", False, (), 3000.0, NO_SUCH_NAME)
+    )
+    start = lines.index("dns servers: 10.0.0.2")
+    assert lines[start + 1:start + 4] == [
+        "dns lookup scada01: OK in 12 ms -> 10.0.0.5, 10.0.0.6", f"dns lookup plc.plant.local: FAILED in 3000 ms: {NO_SUCH_NAME}", CLUSTER_NAMES_HINT,
+    ]
+    assert lines[start + 4].startswith("clock:")
+
+
+def test_only_working_lookups_add_no_hint_and_no_gathered_lookups_add_no_line():
+    lines = lookups_in(("10.0.0.2",), DnsLookup("scada01", True, ("10.0.0.5",), 3.0))
+    assert "dns lookup scada01: OK in 3 ms -> 10.0.0.5" in lines and not any(line.startswith("dns lookup:") for line in lines)
+    data = ReportData(generated_at=NOW, environment=env())  # the lookups were not gathered at all (a fixture)
+    assert not any("dns lookup" in line for line in lines_of(render(data, "summary", ident), "ENVIRONMENT"))
+
+
+def test_no_names_and_an_unavailable_step_are_said_in_one_line_each():
+    assert "dns lookups: none needed (every source host is an address)" in lookups_in(("10.0.0.2",))
+    data = ReportData(generated_at=NOW, environment=env(), dns_lookups=Unavailable("RuntimeError"))
+    assert "dns lookups: not tried" in lines_of(render(data, "summary", ident), "ENVIRONMENT")
+
+
+def test_the_embedded_resolver_is_explained_only_when_it_is_the_only_server():
+    note = (
+        "dns servers: 127.0.0.11 (Docker's embedded resolver; it forwards to the resolvers of the Docker host, which this container "
+        "cannot see: compare with the DNS servers in the offline script's NETWORK section)"
+    )
+    assert note in lookups_in(("127.0.0.11",))
+    assert "dns servers: 127.0.0.11, 10.0.0.2" in lookups_in(("127.0.0.11", "10.0.0.2"))
+    assert "dns servers: 10.0.0.2" in lookups_in(("10.0.0.2",))
+
+
+def test_a_masked_report_shows_neither_the_looked_up_host_nor_its_addresses():
+    data = ReportData(
+        generated_at=NOW, environment=env(dns_servers=("127.0.0.11",)),
+        dns_lookups=(
+            DnsLookup("scada01.meeza.local", True, ("10.0.0.5", "fd00::5"), 9.0), DnsLookup("plc.plant.local", False, (), 3000.0, NO_SUCH_NAME),
+        ),
+    )
+    hosts, uris = mask_names(data)
+    assert hosts == ["scada01.meeza.local", "plc.plant.local"]
+    body = render(data, "summary", Masker(hosts, uris).mask, masked=True)
+    for hidden in ("scada01", "meeza", "plc.plant", "10.0.0.5", "fd00::5", "127.0.0.11"):
+        assert hidden not in body, hidden
+    assert re.search(r"^dns lookup HOST-\d+: OK in 9 ms -> HOST-\d+, HOST-\d+$", body, re.M)
+    assert re.search(r"^dns lookup HOST-\d+: FAILED in 3000 ms: gaierror", body, re.M)
+
+
+def test_a_busy_summary_with_eight_failing_lookups_is_still_one_part():
+    failing = tuple(DnsLookup(f"scada{i:02d}.plant.example.com", False, (), 3000.0, NO_SUCH_NAME) for i in range(8))
+    data = replace(busy(40, 500, failing=33), dns_lookups=failing)
+    body = render(data, "summary", ident)
+    parts = finalize(body, "abc1234-dirty", NOW)
+    assert len(parts.parts) == 1 and len(parts.parts[0].text) <= 12_000 and verify_paste(parts.text()).ok
+    assert sum(1 for line in body.split("\n") if line.startswith("dns lookup scada")) == 8 and CLUSTER_NAMES_HINT in body

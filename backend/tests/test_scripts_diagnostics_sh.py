@@ -484,7 +484,7 @@ def test_header_and_every_section_in_order(skeleton):
     assert text.splitlines()[0].startswith("DCDASH-DIAG v1 | collect-diagnostics.sh | bash ")
     assert re.search(r"^local time: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d\d:\d\d \(", text, re.M)
     assert re.search(r"^utc time: +\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$", text, re.M)
-    names = ("HOST", "DISKS", "NETWORK", "CLOCK", "TARGETS", "LOCAL PORTS", "TOOLS ON PATH", "SERVICES", "DATABASE", "API", "LOGS")
+    names = ("HOST", "DISKS", "NETWORK", "CLOCK", "TARGETS", "LOCAL PORTS", "TOOLS ON PATH", "SERVICES", "DOCKER CLOCK", "DATABASE", "API", "LOGS")
     positions = [text.index(f"\n== {name}") for name in names]
     assert positions == sorted(positions)
     assert f"project folder: {skeleton.project} (no compose.yaml)" in text
@@ -607,26 +607,46 @@ DOCKER_TOOLS = [*BASE_TOOLS, "sleep", "sha256sum"]
 
 
 def _fake_docker(folder: Path, log: Path) -> Path:
-    """A `docker` that answers the four compose calls the script may make with canned text full of credentials, and logs its argv."""
+    """A `docker` that answers the compose calls the script may make with canned text full of credentials, and logs its argv.
+
+    It reads optional files from the folder of the argv log: services.txt (what `config --services` prints), log-<service>.txt (what `logs`
+    prints, cut to --tail like the real thing), offset.txt (seconds the Docker VM clock runs ahead of this machine), answer.txt (a fixed
+    answer to the clock question instead) and stopped.txt (the db container is not running, so `exec` fails). `pg_isready` without `-U dcdash -d dcdash` exits 9, like a server that logs a FATAL for "root".
+    """
     cwd_log = log.with_name("docker-cwd.log")
+    data = log.parent
     script = f"""#!/bin/sh
 echo "$*" >> "{log}"
 echo "$PWD" >> "{cwd_log}"
 [ "$1" = compose ] || exit 64
 case "$2" in
-  config) printf 'db\\napi\\nworker\\nbad name\\n' ;;
+  config)
+    if [ -f "{data}/services.txt" ]; then cat "{data}/services.txt"; else printf 'db\\napi\\nworker\\nbad name\\n'; fi
+    ;;
   ps)
     printf 'NAME              IMAGE         COMMAND                  SERVICE   STATUS\\n'
     printf 'dcdash-db-1       postgres:16   "docker-entrypoint.sh"   db        Up 2 days (healthy)\\n'
     printf 'dcdash-worker-1   dcdash-app    "run --db postgres://dcdash:{URL_SECRET}@db/dcdash"   worker    Exited (1) 3 minutes ago\\n'
     ;;
   exec)
-    echo "/var/run/postgresql:5432 - accepting connections"
-    echo "note: used postgres://dcdash:{URL_SECRET}@db/dcdash with {ENV_SECRET}" >&2
+    case "$*" in
+      "compose exec -T db pg_isready -U dcdash -d dcdash")
+        echo "/var/run/postgresql:5432 - accepting connections"
+        echo "note: used postgres://dcdash:{URL_SECRET}@db/dcdash with {ENV_SECRET}" >&2
+        ;;
+      "compose exec -T db date -u +%s")
+        if [ -f "{data}/stopped.txt" ]; then echo "Error response from daemon: container is not running" >&2; exit 1; fi
+        if [ -f "{data}/answer.txt" ]; then cat "{data}/answer.txt"; exit 0; fi
+        off=0; [ -f "{data}/offset.txt" ] && off=$(cat "{data}/offset.txt")
+        echo $(( $(date -u +%s) + off ))
+        ;;
+      *) echo "unexpected: $*" >&2; exit 9 ;;
+    esac
     ;;
   logs)
     svc="$6"
     if [ "$svc" = worker ]; then echo "Error response from daemon: {ENV_SECRET} was rejected" >&2; exit 1; fi
+    if [ -f "{data}/log-$svc.txt" ]; then tail -n "$5" "{data}/log-$svc.txt"; exit 0; fi
     i=1
     {{
       echo "$svc-1  | early line with postgres://dcdash:{URL_SECRET}@db/dcdash and {ENV_SECRET}"
@@ -661,10 +681,16 @@ class Compose:
 
 def _compose_run(tmp_path: Path, *, seconds: str | None = None, with_compose_file: bool = True, with_docker: bool = True,
                  extra_tools: list[str] | None = None, extra_env: dict[str, str] | None = None, awk: str | None = None,
-                 without: tuple[str, ...] = ()) -> Compose:
+                 without: tuple[str, ...] = (), files: dict[str, str] | None = None, args: tuple[str, ...] = (),
+                 default_out: bool = False) -> Compose:
+    """`files` are written next to the argv log for the fake docker (see `_fake_docker`); `default_out` passes no --out-dir."""
     project, out_dir, cwd, log = tmp_path / "project", tmp_path / "out", tmp_path / "cwd", tmp_path / "docker-argv.log"
-    for folder in (project, out_dir, cwd):
+    if default_out:
+        out_dir = project / "logs"
+    for folder in (project, cwd) if default_out else (project, out_dir, cwd):
         folder.mkdir()
+    for name, text in (files or {}).items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
     (project / ".env").write_bytes(ENV_TEXT.encode())
     if with_compose_file:
         (project / "compose.yaml").write_text("services: {}\n")
@@ -675,12 +701,12 @@ def _compose_run(tmp_path: Path, *, seconds: str | None = None, with_compose_fil
         _fake_docker(bin_dir, log)
     env = {"DCDASH_DIAG_DOCKER_SECONDS": seconds} if seconds else {}
     started = time.monotonic()
-    proc = _run(["--project-dir", str(project), "--out-dir", str(out_dir)], cwd, path=str(bin_dir), exact_path=True, timeout=90,
-                extra_env={**env, **(extra_env or {})})
+    proc = _run(["--project-dir", str(project), *([] if default_out else ["--out-dir", str(out_dir)]), *args], cwd, path=str(bin_dir),
+                exact_path=True, timeout=90, extra_env={**env, **(extra_env or {})})
     elapsed = time.monotonic() - started
-    files = {f.name: f.read_text(encoding="utf-8") for f in out_dir.iterdir()}
-    main = next((t for n, t in files.items() if re.fullmatch(r"dcdash-diag-\d{8}-\d{6}\.txt", n)), "")
-    logs = next((t for n, t in files.items() if re.fullmatch(r"dcdash-diag-\d{8}-\d{6}-logs\.txt", n)), "")
+    saved = {f.name: f.read_text(encoding="utf-8") for f in out_dir.iterdir()}
+    main = next((t for n, t in saved.items() if re.fullmatch(r"dcdash-diag-\d{8}-\d{6}\.txt", n)), "")
+    logs = next((t for n, t in saved.items() if re.fullmatch(r"dcdash-diag-\d{8}-\d{6}-logs\.txt", n)), "")
     argv = log.read_text().splitlines() if log.exists() else []
     cwds = log.with_name("docker-cwd.log").read_text().splitlines() if log.with_name("docker-cwd.log").exists() else []
     return Compose(proc, main, logs, proc.out, argv, cwds, project, out_dir, elapsed)
@@ -740,10 +766,10 @@ def test_services_database_and_logs_show_the_canned_facts(compose_run):
     logs = _section(main, "LOGS")
     assert "services: db, api, worker" in logs  # the name with a space is not a service name
     for svc in ("db", "api"):
-        assert f"-- {svc} (last 30 of {LINES_PER_SERVICE} lines read)" in logs
+        assert f"-- {svc} (last 30 of {LINES_PER_SERVICE} kept lines; dropped 0 routine lines of {LINES_PER_SERVICE} read)" in logs
         assert f"  {svc}-1  | the very last line" in logs
     assert "-- worker: docker compose logs failed (exit code 1): Error response from daemon: [hidden] was rejected" in logs
-    assert f"logs file (the last 300 lines per service, saved next to this report): {compose_run.out_dir}/dcdash-diag-" in logs
+    assert f"logs file (the last 300 kept lines per service, saved next to this report): {compose_run.out_dir}/dcdash-diag-" in logs
     assert logs.splitlines()[-2].endswith("-logs.txt") and FOOTER.fullmatch(logs.splitlines()[-1])
 
 
@@ -761,8 +787,8 @@ def test_the_logs_file_holds_far_more_lines_than_the_report(compose_run):
 
 def test_docker_is_only_asked_for_config_services_ps_logs_and_exec_in_the_project_folder(compose_run):
     run = compose_run
-    assert run.argv == ["compose ps -a", "compose exec -T db pg_isready -U dcdash -d dcdash", "compose config --services",
-                        *(f"compose logs --no-color --tail 300 {svc}" for svc in SERVICES)]
+    assert run.argv == ["compose ps -a", "compose exec -T db date -u +%s", "compose exec -T db pg_isready -U dcdash -d dcdash",
+                        "compose config --services", *(f"compose logs --no-color --tail 2000 {svc}" for svc in SERVICES)]
     assert {os.path.realpath(c) for c in run.cwds} == {os.path.realpath(run.project)}
 
 
@@ -794,7 +820,7 @@ def test_without_timeout_docker_runs_unbounded_and_the_report_says_so_once(tmp_p
     assert run.proc.rc == 0 and _verifies(run.main) and _verifies(run.logs), run.proc.err
     assert run.main.count("note: timeout is missing, so no command here has a time limit") == 1
     assert "(exit code 0):" in _section(run.main, "DATABASE") and "docker did not answer" not in run.main
-    assert len(run.argv) == 6
+    assert len(run.argv) == 7
 
 
 def test_the_script_only_names_four_compose_commands_and_no_inspect():
@@ -889,6 +915,286 @@ def test_a_docker_that_cannot_be_run_is_reported_once(tmp_path):
     (project / "compose.yaml").write_text("services: {}\n")
     result = _run(["--project-dir", str(project), "--out-dir", str(tmp_path / "out")], cwd, path=str(bin_dir), exact_path=True)
     assert result.rc == 0 and len(re.findall(r"docker could not be run \(exit code 12[67]\); container sections skipped", result.out)) == 1, result.out[-1500:]
+
+
+# ---- W8c: the logs folder, the pg_isready pin, no native probe under Docker, the routine-line filter and DOCKER CLOCK ----------------
+
+def test_the_report_goes_to_the_logs_folder_of_the_project_when_no_out_dir_is_given(tmp_path):
+    run = _compose_run(tmp_path, default_out=True)
+    assert run.proc.rc == 0, run.proc.err
+    assert run.out_dir == run.project / "logs" and run.main and run.logs
+    assert sorted(p.name for p in (tmp_path / "cwd").iterdir()) == [] and sorted(p.name for p in run.project.iterdir()) == [".env", "compose.yaml", "logs"]
+    assert f"saved: {run.out_dir}/dcdash-diag-" in run.stdout
+    assert stat.S_IMODE(run.out_dir.stat().st_mode) & 0o077 == 0
+    assert all(stat.S_IMODE(p.stat().st_mode) & 0o077 == 0 for p in run.out_dir.iterdir())
+
+
+def test_a_project_folder_without_compose_yaml_still_gets_the_logs_folder(tmp_path):
+    run = _compose_run(tmp_path, default_out=True, with_compose_file=False)
+    assert run.proc.rc == 0, run.proc.err
+    assert run.main and f"saved: {run.project}/logs/dcdash-diag-" in run.stdout
+    assert [p.name for p in (tmp_path / "cwd").iterdir()] == []
+
+
+def test_with_no_project_folder_at_all_the_logs_folder_is_inside_the_current_folder(tmp_path):
+    scripts = tmp_path / "copy" / "scripts"     # the parent of this copy has no compose.yaml, so no project folder is found
+    scripts.mkdir(parents=True)
+    shutil.copy(SCRIPT, scripts / "collect-diagnostics.sh")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    proc = subprocess.run([BASH, str(scripts / "collect-diagnostics.sh")], capture_output=True, cwd=cwd, timeout=120,
+                          env={**os.environ, "PATH": _with_fake(os.environ["PATH"])})
+    assert proc.returncode == 0, proc.stderr
+    assert "project folder: none" in proc.stdout.decode()
+    assert len(list((cwd / "logs").glob("dcdash-diag-*.txt"))) == 1 and f"saved: {cwd}/logs/dcdash-diag-".encode() in proc.stdout
+
+
+def test_an_explicit_out_dir_is_used_as_given(tmp_path):
+    run = _compose_run(tmp_path)
+    assert run.main and not (run.project / "logs").exists()
+
+
+def test_the_db_check_names_its_user_and_the_bare_form_is_refused_by_the_fake(compose_run):
+    assert "compose exec -T db pg_isready -U dcdash -d dcdash" in compose_run.argv
+    assert "compose exec -T db pg_isready" not in compose_run.argv
+    assert "exit code 9" not in compose_run.main and "unexpected" not in compose_run.main
+
+
+def test_under_docker_the_native_api_probe_is_not_made_and_says_so(compose_run):
+    api = _section(compose_run.main, "API")
+    assert "(native install only)" not in api
+    assert "\nGET http://127.0.0.1:8000/api/health\n  n/a (Docker install: the api is not published on the host)" in api
+    assert "GET http://127.0.0.1/api/health\n" in api
+
+
+def test_without_containers_the_native_api_probe_stays(tmp_path):
+    run = _compose_run(tmp_path, with_docker=False)
+    api = _section(run.main, "API")
+    assert "GET http://127.0.0.1:8000/api/health (native install only)" in api and "n/a (Docker install" not in api
+
+
+# ---- the filter itself, on each awk ---------------------------------------------------------------------------------------------------
+
+ROUTINE_LINES = [
+    'api-1  | INFO:     127.0.0.1:55514 - "GET /api/health HTTP/1.1" 200 OK',
+    'api-1  | INFO:     10.0.0.2:1 - "POST /api/readings HTTP/1.0" 204 No Content',
+    'api-1  | INFO:     127.0.0.1:55514 - "GET /static/app.js HTTP/1.1" 304 Not Modified',
+    'api-1  | INFO:     127.0.0.1:55514 - "GET /login HTTP/1.1" 302 Found',
+    'web-1  | {"level":"info","ts":1791796886.854908,"logger":"admin.api","msg":"received request","method":"GET","host":"127.0.0.1:2019","uri":"/config/","remote_ip":"127.0.0.1","remote_port":"44074","headers":{"User-Agent":["Wget"]}}',
+    'db-1  | 2026-10-12 09:21:11.968 UTC [214072] LOG:  continuous aggregate refresh (individual invalidation) on "readings_1m" in window [ 2026-10-12 09:19:00+00, 2026-10-12 09:20:00+00 ]',
+    'db-1  | 2026-10-12 09:21:11.969 UTC [214072] LOG:  deleted 0 row(s) from materialization table "_timescaledb_internal._materialized_hypertable_2"',
+    'db-1  | 2026-10-12 09:21:11.970 UTC [214072] LOG:  inserted 13 row(s) into materialization table "_timescaledb_internal._materialized_hypertable_2"',
+    "db-1  | 2026-10-12 09:30:00.100 UTC [27] LOG:  checkpoint starting: time",
+    "db-1  | 2026-10-12 09:30:01.500 UTC [27] LOG:  checkpoint complete: wrote 14 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.403 s",
+]
+KEPT_LINES = [
+    'api-1  | INFO:     127.0.0.1:55514 - "GET /api/sources HTTP/1.1" 500 Internal Server Error',
+    'api-1  | INFO:     127.0.0.1:55514 - "GET /api/sources HTTP/1.1" 503 Service Unavailable',
+    'api-1  | INFO:     127.0.0.1:55514 - "GET /api/nothing HTTP/1.1" 404 Not Found',
+    'api-1  | INFO:     127.0.0.1:55514 - "POST /api/login HTTP/1.1" 401 Unauthorized',
+    'api-1  | INFO:     127.0.0.1:55514 - "GET /ws HTTP/1.1" 101 Switching Protocols',
+    'api-1  | INFO:     127.0.0.1:55514 - "GET /api/error-log HTTP/1.1" 200 OK',
+    "api-1  | ERROR:    Exception in ASGI application",
+    "api-1  | Traceback (most recent call last):",
+    "api-1  | INFO:     Started server process [1]",
+    "api-1  | INFO:     Application startup complete.",
+    "api-1  | the GET method was refused",
+    "plain GET line without a compose prefix",
+    'web-1  | {"level":"error","ts":1.7e9,"logger":"admin.api","msg":"received request","error":"boom"}',
+    'web-1  | {"level":"info","ts":1.7e9,"logger":"http.log.access.log0","msg":"handled request","request":{"method":"GET","uri":"/"}}',
+    "db-1  | 2026-10-12 09:21:12.001 UTC [215] FATAL:  role \"root\" does not exist",
+    "db-1  | 2026-10-12 09:21:12.002 UTC [214072] LOG:  database system is ready to accept connections",
+    "db-1  | 2026-10-12 09:21:12.003 UTC [214072] ERROR:  continuous aggregate refresh failed",
+    "db-1  | 2026-10-12 09:21:12.004 UTC [214072] WARNING:  skipping checkpoint",
+    "db-1  | 2026-10-12 09:21:12.005 UTC [214072] PANIC:  could not write to file",
+]
+
+
+def _filter(awk_path, tmp_path, lines: list[str], *, raw: bool = False) -> tuple[list[str], str]:
+    """Run the script's own FILTER_PROGRAM on these lines; returns the kept lines and the counts file ("<read> <dropped>")."""
+    counts = tmp_path / "counts.txt"
+    driver = tmp_path / "filter.sh"
+    driver.write_text('source "$1"; export LC_ALL=C; awk -v raw="$3" -v counts="$2" "$FILTER_PROGRAM"\n')
+    proc = subprocess.run([BASH, str(driver), str(SCRIPT), str(counts), "1" if raw else "0"], input=("\n".join(lines) + "\n").encode(),
+                          capture_output=True, cwd=tmp_path, env={**os.environ, "PATH": _with_fake(awk_path)}, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.decode().splitlines(), counts.read_text().strip()
+
+
+def test_the_filter_drops_only_routine_lines_and_never_a_line_with_a_warning_word(awk_path, tmp_path):
+    mixed = [line for pair in zip(ROUTINE_LINES * 2, KEPT_LINES * 2) for line in pair]
+    mixed += ["", "   "]   # blank lines are not lines read
+    kept, counts = _filter(awk_path, tmp_path, [*mixed, *ROUTINE_LINES, *KEPT_LINES])
+    expected = [line for line in [*mixed, *ROUTINE_LINES, *KEPT_LINES] if line.strip() and line not in ROUTINE_LINES]
+    assert kept == expected
+    total = len([l for l in [*mixed, *ROUTINE_LINES, *KEPT_LINES] if l.strip()])
+    assert counts == f"{total} {total - len(expected)}"
+
+
+def test_the_filter_keeps_everything_in_raw_mode(awk_path, tmp_path):
+    kept, counts = _filter(awk_path, tmp_path, [*ROUTINE_LINES, *KEPT_LINES], raw=True)
+    assert kept == [*ROUTINE_LINES, *KEPT_LINES] and counts == f"{len(ROUTINE_LINES) + len(KEPT_LINES)} 0"
+
+
+# ---- the filter inside a run ------------------------------------------------------------------------------------------------------------
+
+def _api_log() -> str:
+    health = 'api-1  | INFO:     127.0.0.1:5{i:04d} - "GET /api/health HTTP/1.1" 200 OK'
+    lines = [health.format(i=i) for i in range(60)]
+    lines += ['api-1  | INFO:     127.0.0.1:55100 - "GET /static/app.js HTTP/1.1" 304 Not Modified',
+              'api-1  | INFO:     127.0.0.1:55101 - "GET /api/sources HTTP/1.1" 500 Internal Server Error',
+              'api-1  | INFO:     127.0.0.1:55102 - "GET /api/sources HTTP/1.1" 503 Service Unavailable',
+              'api-1  | INFO:     127.0.0.1:55103 - "GET /api/nothing HTTP/1.1" 404 Not Found']
+    lines += [health.format(i=i) for i in range(60, 120)]
+    lines += ['api-1  | INFO:     127.0.0.1:55104 - "GET /login HTTP/1.1" 302 Found',
+              'api-1  | INFO:     127.0.0.1:55105 - "POST /api/login HTTP/1.1" 401 Unauthorized',
+              "api-1  | ERROR:    Exception in ASGI application", "api-1  | Traceback (most recent call last):",
+              "api-1  | the GET method was refused"]
+    return "\n".join(lines) + "\n"
+
+
+API_KEPT = [line for line in _api_log().splitlines() if "200 OK" not in line and "304" not in line and "302" not in line]
+CADDY_ADMIN = '{"level":"info","ts":1.7e9,"logger":"admin.api","msg":"received request","method":"GET","uri":"/config/"}'
+CADDY_ERROR = '{"level":"error","ts":1.7e9,"logger":"admin.api","msg":"received request","error":"boom"}'
+CADDY_OTHER = '{"level":"info","ts":1.7e9,"logger":"http.log.access.log0","msg":"handled request","request":{"method":"GET","uri":"/"}}'
+DB_CHATTER = "".join(
+    f"db-1  | 2026-10-12 09:21:{i:02d}.968 UTC [214072] LOG:  {text}\n" for i in range(10) for text in (
+        'continuous aggregate refresh (individual invalidation) on "readings_1m" in window [ 2026-10-12 09:19:00+00, 2026-10-12 09:20:00+00 ]',
+        'deleted 0 row(s) from materialization table "_timescaledb_internal._materialized_hypertable_2"',
+        'inserted 13 row(s) into materialization table "_timescaledb_internal._materialized_hypertable_2"'))
+FILTER_FILES = {
+    "services.txt": "api\nweb\ndb\n",
+    "log-api.txt": _api_log(),
+    "log-web.txt": "".join(f"web-1  | {CADDY_ADMIN}\n" for _ in range(60)) + f"web-1  | {CADDY_ERROR}\nweb-1  | {CADDY_OTHER}\n",
+    "log-db.txt": DB_CHATTER + "db-1  | 2026-10-12 09:30:00.100 UTC [27] LOG:  checkpoint starting: time\n"
+                 "db-1  | 2026-10-12 09:30:01.500 UTC [27] LOG:  checkpoint complete: wrote 3 buffers (0.0%); write=0.1 s\n"
+                 "db-1  | 2026-10-12 09:21:12.001 UTC [215] FATAL:  role \"root\" does not exist\n",
+}
+
+
+@pytest.fixture(scope="module", params=["system awk", "mawk", "gawk"])
+def filter_run(request, tmp_path_factory):
+    awk = None
+    if request.param != "system awk":
+        awk = shutil.which(request.param)
+        if awk is None:
+            pytest.skip(f"{request.param} is not installed")
+    return _compose_run(tmp_path_factory.mktemp("filter"), files=FILTER_FILES, awk=awk)
+
+
+def _block(report: str, svc: str) -> list[str]:
+    """The indented lines under `-- <svc> (` in the LOGS section."""
+    lines = _section(report, "LOGS").splitlines()
+    start = next(i for i, l in enumerate(lines) if l.startswith(f"-- {svc} ("))
+    block = []
+    for line in lines[start + 1:]:
+        if not line.startswith("  "):
+            break
+        block.append(line)
+    return block
+
+
+def test_the_report_and_the_logs_file_hold_the_kept_lines_in_file_order_and_no_routine_line(filter_run):
+    run = filter_run
+    assert run.proc.rc == 0 and _verifies(run.main) and _verifies(run.logs), run.proc.err
+    assert [l.strip() for l in _block(run.main, "api")] == API_KEPT
+    assert [l for l in run.logs.splitlines() if l.startswith("api-1  |")] == API_KEPT
+    for text in (run.main, run.logs):
+        assert "200 OK" not in text and "304 Not Modified" not in text and "302 Found" not in text
+        assert "received request\",\"method\"" not in text and "continuous aggregate refresh" not in text and "checkpoint" not in text
+    assert [l.strip() for l in _block(run.main, "web")] == [f"web-1  | {CADDY_ERROR}", f"web-1  | {CADDY_OTHER}"]
+    assert [l.strip() for l in _block(run.main, "db")] == ['db-1  | 2026-10-12 09:21:12.001 UTC [215] FATAL:  role "root" does not exist']
+
+
+def test_each_block_header_says_what_was_dropped(filter_run):
+    logs = _section(filter_run.main, "LOGS")
+    assert f"-- api (last {len(API_KEPT)} of {len(API_KEPT)} kept lines; dropped 122 routine lines of {len(API_KEPT) + 122} read)\n" in logs
+    assert "-- web (last 2 of 2 kept lines; dropped 60 routine lines of 62 read)\n" in logs
+    assert "-- db (last 1 of 1 kept lines; dropped 32 routine lines of 33 read)\n" in logs
+    assert "tail limit reached" not in logs
+
+
+def test_the_logs_file_header_says_routine_lines_are_dropped(filter_run):
+    head = "\n".join(filter_run.logs.splitlines()[:6])
+    assert "routine lines are dropped (see --raw-logs)" in head and "unfiltered" not in head
+
+
+def test_raw_logs_keeps_every_line_and_says_so(tmp_path):
+    run = _compose_run(tmp_path, files=FILTER_FILES, args=("--raw-logs",))
+    assert run.proc.rc == 0 and _verifies(run.main) and _verifies(run.logs), run.proc.err
+    raw_api = _api_log().splitlines()
+    assert [l for l in run.logs.splitlines() if l.startswith("api-1  |")] == raw_api
+    assert len([l for l in run.logs.splitlines() if "received request" in l]) == 61
+    assert "-- api (last 30 of 129 lines read; unfiltered)\n" in _section(run.main, "LOGS")
+    assert any("200 OK" in l for l in _block(run.main, "api"))
+    head = "\n".join(run.logs.splitlines()[:6])
+    assert "unfiltered" in head and "routine lines are dropped" not in head
+
+
+@pytest.mark.parametrize("count, reached", [(2500, True), (2000, True), (1999, False)])
+def test_the_tail_is_2000_lines_then_the_file_keeps_300_and_the_header_notes_the_limit(tmp_path, count, reached):
+    text = "".join(f"api-1  | 2026-10-12 12:00:00 request number {i} served\n" for i in range(count))
+    run = _compose_run(tmp_path, files={"services.txt": "api\n", "log-api.txt": text})
+    assert run.proc.rc == 0 and _verifies(run.logs), run.proc.err
+    read = min(count, 2000)
+    header = f"-- api (last 30 of {read} kept lines; dropped 0 routine lines of {read} read)"
+    logs = _section(run.main, "LOGS")
+    assert (header + " (tail limit reached; older lines not read)\n" in logs) if reached else (header + "\n" in logs)
+    in_logs = [l for l in run.logs.splitlines() if l.startswith("api-1  |")]
+    assert len(in_logs) == 300 and in_logs[-1].endswith(f"request number {count - 1} served")
+    assert len(_block(run.main, "api")) == 30
+
+
+# ---- DOCKER CLOCK ------------------------------------------------------------------------------------------------------------------
+
+CLOCK_LINE = re.compile(r"^docker VM minus host = ([+-]\d+) s \(host utc \d\d:\d\d:\d\d, the docker call took \d+ ms\)(.*)$", re.M)
+
+
+@pytest.mark.parametrize("offset", [0, 120, -90])
+def test_docker_clock_shows_the_difference_and_names_drift_only_above_30_seconds(tmp_path, offset):
+    run = _compose_run(tmp_path, files={"offset.txt": str(offset)})
+    section = _section(run.main, "DOCKER CLOCK")
+    match = CLOCK_LINE.search(section)
+    assert run.proc.rc == 0 and match, section
+    assert abs(int(match.group(1)) - offset) <= 10
+    if abs(offset) > 30:
+        assert "Docker/WSL2 clock drift" in match.group(2) and "not the SCADA" in match.group(2)
+    else:
+        assert "drift" not in section
+    assert _verifies(run.main) and "compose exec -T db date -u +%s" in run.argv
+
+
+def test_docker_clock_sits_between_services_and_database(tmp_path):
+    run = _compose_run(tmp_path)
+    text = run.main
+    assert text.index("\n== SERVICES") < text.index("\n== DOCKER CLOCK") < text.index("\n== DATABASE")
+
+
+def test_docker_clock_without_containers_is_skipped_and_docker_is_not_asked(tmp_path):
+    run = _compose_run(tmp_path, with_compose_file=False)
+    assert "skipped (no containers)" in _section(run.main, "DOCKER CLOCK") and run.argv == []
+
+
+def test_docker_clock_with_stopped_containers_says_why_it_could_not_read_it(tmp_path):
+    run = _compose_run(tmp_path, files={"stopped.txt": "x"})
+    section = _section(run.main, "DOCKER CLOCK")
+    assert run.proc.rc == 0 and _verifies(run.main)
+    assert "could not read the Docker VM clock (exit code 1): Error response from daemon: container is not running" in section
+
+
+def test_docker_clock_ignores_an_answer_that_is_not_a_number(tmp_path):
+    run = _compose_run(tmp_path, files={"answer.txt": "date: invalid option -- 'u'\n"})
+    section = _section(run.main, "DOCKER CLOCK")
+    assert run.proc.rc == 0 and "docker VM minus host =" not in section
+    assert "could not read the Docker VM clock (the answer is not a number): date: invalid option -- 'u'" in section
+
+
+def test_usage_names_the_new_switches_and_mask_is_refused_with_a_pointer_to_powershell(tmp_path):
+    helped = _run(["--help"], tmp_path)
+    assert helped.rc == 0 and "--raw-logs" in helped.out and "--mask" in helped.out
+    assert "not in the shell twin (use the PowerShell script)" in helped.out
+    refused = _run(["--mask"], tmp_path)
+    assert refused.rc == 2 and "not in the shell twin" in refused.err
 
 
 # ---- the API probe: curl, wget or bash alone, against a real local server --------------------------------------------------------------

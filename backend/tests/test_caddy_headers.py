@@ -5,6 +5,8 @@ is Report-Only and keeps `script-src 'self'` strict, that both Caddyfiles import
 `:80` redirect block of Caddyfile.tls included, so the redirect carries the headers too) and again inside each block's
 `handle_errors` (Caddy's own error answer, such as the 502 while the api restarts, would carry none otherwise), and that the
 Dockerfile copies the snippet to the path the Caddyfiles import. frontend/e2e/headers.spec.ts and scripts/check_tls.sh check the real responses.
+Also here: both files open with one global options block that keeps the admin API requests (the web healthcheck polls them every few
+seconds) out of Caddy's default (runtime) log, where the admin API writes them (not an access log).
 """
 import re
 import shlex
@@ -72,6 +74,27 @@ def handle_errors_bodies(text: str) -> list[tuple[str, list[str] | None]]:
         if depth == 0 and address:
             found.append((address, body))
             address = ""
+    assert depth == 0, "unbalanced braces"
+    return found
+
+
+def global_blocks(text: str) -> list[list[str]]:
+    """The lines (nested ones included) of every global options block, a bare `{` at the top level, in file order."""
+    found: list[list[str]] = []
+    depth = 0
+    body: list[str] | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if depth == 0 and line == "{":
+            body = []
+        elif body is not None and depth >= 1 and not (depth == 1 and line == "}"):
+            body.append(line)
+        depth += line.count("{") - line.count("}")
+        if depth == 0 and body is not None:
+            found.append(body)
+            body = None
     assert depth == 0, "unbalanced braces"
     return found
 
@@ -177,6 +200,29 @@ def test_the_import_appears_only_at_the_site_level_and_in_handle_errors(name):
     every_import = len([line for line in text.splitlines() if line.strip().startswith("import ")])
     assert site_level == in_errors == len(CADDYFILES[name])
     assert every_import == site_level + in_errors
+
+
+@pytest.mark.parametrize("name", list(CADDYFILES))
+def test_the_global_options_block_keeps_the_admin_api_out_of_the_access_log(name):
+    # The web healthcheck polls 127.0.0.1:2019 every few seconds; each poll is an `admin.api` "received request" line in
+    # `docker compose logs web` that buries everything else (found on the first real install, W8c). It is the default (runtime) log of
+    # the admin API, not an access log.
+    text = (ROOT / "deploy" / name).read_text()
+    first = next(line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#"))
+    assert first == "{", f"{name}: the global options block must come first (Caddy rejects it anywhere else)"
+    found = global_blocks(text)
+    assert len(found) == 1, f"{name}: exactly one global options block"
+    body = found[0]
+    assert "log {" in body and "exclude admin.api" in body, body
+    assert body.index("log {") < body.index("exclude admin.api")
+    if name == "Caddyfile.tls":
+        assert "auto_https off" in body  # the TLS file's existing option stays in the same block
+
+
+def test_the_web_healthcheck_still_polls_the_admin_api_which_is_why_it_is_excluded_from_the_log():
+    compose = (ROOT / "compose.yaml").read_text()
+    web = compose[compose.index("\n  web:"):]
+    assert "http://127.0.0.1:2019/config/" in web
 
 
 # ---- the image --------------------------------------------------------------------------------------------------------

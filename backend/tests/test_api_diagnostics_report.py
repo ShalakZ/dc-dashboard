@@ -6,6 +6,7 @@ detail, mask and format.
 """
 import json
 import re
+import socket
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -43,6 +44,16 @@ def other_database_password(monkeypatch):
 def no_resolv_conf(monkeypatch, tmp_path):
     """The nameservers of the machine running the tests (a public address in WSL) would show up in every masked report."""
     monkeypatch.setattr(report, "RESOLV_CONF", str(tmp_path / "no-resolv.conf"))
+
+
+@pytest.fixture(autouse=True)
+def no_real_dns(monkeypatch):
+    """The names of the sources below must not reach the real resolver (a dead one costs 3 s per report)."""
+
+    async def refuse(host: str) -> list[str]:
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(report, "_resolve", refuse)
 
 
 async def ask(client, **params):
@@ -114,6 +125,7 @@ async def test_an_empty_database_gives_every_section_and_masking_finds_nothing_i
         joined = "\n".join(part["text"] for part in body["parts"])
         assert [line for line in body_lines(joined) if line.startswith("== ")] == [f"== {name} ==" for name in SECTIONS]
         assert "no sources configured" in joined and "no connection check has been run" in joined
+        assert "dns lookups: none needed (every source host is an address)" in joined
         assert body["legend"] == [] and not re.search(r"(?:HOST|URN)-\d", joined)  # nothing in the environment looks like a host
         assert verify_paste(joined).ok
     assert len(await audit_rows(db)) == 2
@@ -127,6 +139,27 @@ async def test_the_dns_servers_of_the_container_are_in_the_environment_and_a_mas
     plain, masked = (await ask(client)).text, (await ask(client, mask=1)).text
     assert "dns servers: 10.99.88.77" in plain
     assert "10.99.88.77" not in masked and re.search(r"dns servers: HOST-\d+", masked)
+
+
+async def test_the_environment_looks_up_each_source_host_name_and_a_masked_report_hides_the_name_and_the_addresses(client, db, monkeypatch):
+    async def resolve(host: str) -> list[str]:
+        if host == HOST_B:
+            return ["192.0.2.55", "192.0.2.56"]
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(report, "_resolve", resolve)
+    await login_as(client, db, "admin")
+    await make_source(db, "Main", "opcua", {"endpoint": URL_B})
+    await make_source(db, "Spare", "modbus", {"host": "plc-9.plant.example", "port": 502})
+    await make_source(db, "Raw", "modbus", {"host": HOST_C, "port": 502})
+    plain, masked = (await ask(client)).text, (await ask(client, mask=1)).text
+    assert f"dns lookup {HOST_B}: OK in" in plain and "-> 192.0.2.55, 192.0.2.56" in plain
+    assert "dns lookup plc-9.plant.example: FAILED in" in plain and "names that only the cluster knows" in plain
+    assert f"dns lookup {HOST_C}" not in plain and URL_PASSWORD not in plain
+    for hidden in (HOST_B, "plc-9.plant.example", "192.0.2.55", "192.0.2.56"):
+        assert hidden not in masked, hidden
+    assert re.search(r"dns lookup HOST-\d+: OK in \d+ ms -> HOST-\d+, HOST-\d+", masked)
+    assert verify_paste(plain).ok and verify_paste(masked).ok
 
 
 async def test_the_json_carries_the_parts_the_checksum_and_the_legend_only_for_a_masked_report(client, db):

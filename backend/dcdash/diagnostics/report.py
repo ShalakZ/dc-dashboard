@@ -16,13 +16,19 @@ The body is sized for `redact.finalize`: a `summary` fits one part, a `full` rep
 the tails are trimmed first (JOURNAL, AUDIT TAIL, SCANS, API ERRORS, POINTS), then the distinct errors per source, then the sources
 that look healthy; the LATEST CHECK verdict, the CONNECTION CHECKS of the failing sources and the header facts always stay.
 """
+import asyncio
 import importlib.metadata
+import ipaddress
 import json
 import platform
+import socket
+import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, text
@@ -92,6 +98,13 @@ AUDIT_VALUE_FIELDS = frozenset(
 )
 RESOLV_CONF = "/etc/resolv.conf"
 DNS_SERVERS_SHOWN = 3
+EMBEDDED_RESOLVER = "127.0.0.11"  # Docker's own resolver: the only nameserver a container on a user-defined network lists
+# One lookup per source host that is a name, run from inside this container (what the collector, on the same network, would get).
+DNS_LOOKUP_SECONDS = 3.0
+DNS_LOOKUP_MAX_HOSTS = 8
+DNS_ADDRESSES_SHOWN = 3
+# A DEDICATED pool: `wait_for` cannot stop a thread stuck in getaddrinfo, and a hung lookup must not starve the default executor.
+_DNS_POOL = ThreadPoolExecutor(max_workers=DNS_LOOKUP_MAX_HOSTS, thread_name_prefix="dns-lookup")
 
 SECTION_TITLES = (
     "ENVIRONMENT", "SETTINGS", "SOURCES", "SOURCE HEALTH", "POINTS", "CONNECTION CHECKS", "JOURNAL", "SCANS",
@@ -139,6 +152,15 @@ class Environment:
     database_time: datetime | None = None
     client_time: datetime | None = None  # the browser's clock, when the Diagnostics page sent it (M1)
     dns_servers: tuple[str, ...] | None = None  # the nameservers of this container's resolv.conf; None: the file cannot be read
+
+
+@dataclass(frozen=True)
+class DnsLookup:
+    host: str
+    ok: bool
+    addresses: tuple[str, ...] = ()
+    ms: float = 0.0
+    error: str | None = None  # the exception class and message, clipped; None when the lookup worked
 
 
 @dataclass(frozen=True)
@@ -298,6 +320,8 @@ class ReportData:
     source_id: int | None = None
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     environment: Environment | Unavailable = field(default_factory=Environment)
+    # None: not gathered (a fixture); (): no source host is a name; Unavailable: the step failed. Rendered inside ENVIRONMENT.
+    dns_lookups: tuple[DnsLookup, ...] | None | Unavailable = None
     settings: SettingsInfo | Unavailable = field(default_factory=SettingsInfo)
     sources: tuple[SourceInfo, ...] | Unavailable = ()
     health: tuple[SourceHealth, ...] | Unavailable = ()
@@ -356,6 +380,7 @@ async def gather(
         source_id=source_id,
         generated_at=generated,
         environment=await _guard(db, lambda: _environment(db, client_time)),
+        dns_lookups=await _guard(db, lambda: _dns_lookups(db, source_id)),  # after the environment: adds nothing to its clock sample
         settings=await _guard(db, lambda: _settings(db)),
         sources=await _guard(db, lambda: _sources(db, source_id)),
         health=await _guard(db, lambda: _health(db, source_id)),
@@ -425,6 +450,8 @@ def mask_names(data: ReportData, source_hosts: Iterable[str] | None = None) -> t
             for key, value in source.config:
                 if key in HOST_FIELDS and value:
                     hosts.setdefault(value)
+    if isinstance(data.dns_lookups, tuple):  # no source has this name any more when an edit moved it, and it is in the lookup lines
+        hosts.update(dict.fromkeys(lookup.host for lookup in data.dns_lookups))
     if not isinstance(data.checks, Unavailable):
         for check in sorted(data.checks, key=lambda c: c.source_id):
             hosts.update(dict.fromkeys(check.hosts))
@@ -494,6 +521,63 @@ def _dns_servers() -> tuple[str, ...] | None:
         if len(parts) >= 2 and parts[0] == "nameserver":
             servers.append(parts[1])
     return tuple(servers[:DNS_SERVERS_SHOWN])
+
+
+def _host_of(value: str) -> str | None:
+    """The host name of a source's endpoint/url/host value, or None when it is no name to look up: an address, a `urn:` value or
+    something urlsplit cannot read. The credentials of a URL are removed first and are never part of the result."""
+    value = without_credentials(value.strip())
+    if not value or value.lower().startswith("urn:"):
+        return None
+    try:
+        host = urlsplit(value if "://" in value else f"//{value}").hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    try:
+        ipaddress.ip_address(host.partition("%")[0])
+    except ValueError:
+        return host
+    return None
+
+
+async def _dns_hosts(db: AsyncSession, source_id: int | None) -> list[str]:
+    """The distinct host names (not addresses) of the sources' endpoints, in source-id order, at most DNS_LOOKUP_MAX_HOSTS."""
+    query = select(Source.config).order_by(Source.id)
+    if source_id is not None:
+        query = query.where(Source.id == source_id)
+    hosts: dict[str, None] = {}
+    for config in (await db.scalars(query)).all():
+        for key in HOST_FIELDS:
+            value = config.get(key) if isinstance(config, Mapping) else None
+            if isinstance(value, str) and (host := _host_of(value)):
+                hosts.setdefault(host)
+    return list(hosts)[:DNS_LOOKUP_MAX_HOSTS]
+
+
+async def _resolve(host: str) -> list[str]:
+    """The unique addresses `host` resolves to, in the resolver's order (tests patch this)."""
+    found = await asyncio.get_running_loop().run_in_executor(_DNS_POOL, lambda: socket.getaddrinfo(host, None, type=socket.SOCK_STREAM))
+    return list(dict.fromkeys(info[4][0] for info in found))
+
+
+async def _lookup(host: str) -> DnsLookup:
+    started = time.monotonic()
+    try:
+        found = await asyncio.wait_for(_resolve(host), DNS_LOOKUP_SECONDS)
+        error = None if found else "no address returned"
+    except TimeoutError:
+        found, error = [], f"TimeoutError no answer within {DNS_LOOKUP_SECONDS:g} s"
+    except Exception as exc:
+        found, error = [], clip(" ".join(f"{type(exc).__name__} {exc}".split()), 120)
+    return DnsLookup(host, error is None, tuple(found[:DNS_ADDRESSES_SHOWN]), (time.monotonic() - started) * 1000, error)
+
+
+async def _dns_lookups(db: AsyncSession, source_id: int | None) -> tuple[DnsLookup, ...]:
+    """A real lookup from this container for every source host that is a name, all at once (a dead resolver costs one timeout)."""
+    hosts = await _dns_hosts(db, source_id)
+    return tuple(await asyncio.gather(*(_lookup(host) for host in hosts)))
 
 
 async def _environment(db: AsyncSession, client_time: datetime | None) -> Environment:
@@ -1072,8 +1156,35 @@ class _Renderer:
             + ", TimescaleDB " + (self.text(env.timescale, 20) if env.timescale else "not installed")
         )
         servers = "unknown" if env.dns_servers is None else (", ".join(self.text(item, 64) for item in env.dns_servers) or "none listed")
+        if env.dns_servers == (EMBEDDED_RESOLVER,):
+            servers += (
+                " (Docker's embedded resolver; it forwards to the resolvers of the Docker host, which this container cannot see: "
+                "compare with the DNS servers in the offline script's NETWORK section)"
+            )
         lines.append(f"dns servers: {servers}")
+        lines.extend(self._dns_lookups(data.dns_lookups))
         lines.extend(self._clocks(env))
+        return lines
+
+    def _dns_lookups(self, lookups: tuple[DnsLookup, ...] | None | Unavailable) -> list[str]:
+        if lookups is None:
+            return []
+        if isinstance(lookups, Unavailable):
+            return ["dns lookups: not tried"]
+        if not lookups:
+            return ["dns lookups: none needed (every source host is an address)"]
+        lines = []
+        for lookup in lookups:
+            host, took = self.text(lookup.host, 100), f"{lookup.ms:.0f} ms"
+            if lookup.ok:
+                lines.append(f"dns lookup {host}: OK in {took} -> " + ", ".join(self.text(address, 64) for address in lookup.addresses))
+            else:
+                lines.append(f"dns lookup {host}: FAILED in {took}: {self.text(lookup.error or 'no answer', 120)}")
+        if not all(lookup.ok for lookup in lookups):
+            lines.append(
+                "dns lookup: names that only the cluster knows often do not resolve from Docker on Windows; use an address the "
+                "workstation can reach (docs/field-debugging.md, First connection day)"
+            )
         return lines
 
     def _site_time(self, env: Environment, moment: datetime) -> str:

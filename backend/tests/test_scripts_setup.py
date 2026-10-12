@@ -31,7 +31,8 @@ case "$*" in
     case " $FAKE_VOLUMES " in *" $proj "*) echo "${proj}_dbdata" ;; esac ;;
   *" up "*)  # a marker, so a test can tell what came before it on stderr; and the build id the images would be built with
     echo "fake docker: up called" >&2
-    echo "DCDASH_BUILD_ID=$DCDASH_BUILD_ID DCDASH_BUILD_TIME=$DCDASH_BUILD_TIME" >> "$UP_ENV_LOG" ;;
+    echo "DCDASH_BUILD_ID=$DCDASH_BUILD_ID DCDASH_BUILD_TIME=$DCDASH_BUILD_TIME" >> "$UP_ENV_LOG"
+    echo "DCDASH_TIMEZONE=${DCDASH_TIMEZONE-<unset>}" >> "$TZ_LOG" ;;
 esac
 exit 0
 """
@@ -61,13 +62,15 @@ def make_git_repo(root: Path, *, dirty: bool) -> None:
 def run_setup(tmp_path: Path, *, env_file: str | None = None, volumes: tuple[str, ...] = (),
               docker_down: bool = False, project: str | None = None, args: tuple[str, ...] = (),
               config_fails: bool = False, config_nameless: bool = False, git_repo: bool | str = False,
-              broken_git: bool = False):
+              broken_git: bool = False, shell_timezone: str | None = None, repo_name: str = "repo"):
     """`volumes` are the Compose projects that have a database volume; `project` is COMPOSE_PROJECT_NAME, if any.
     `git_repo` makes the copy a git repository with one commit ("dirty": with an uncommitted change); `broken_git` puts a git on
-    PATH that fails. Neither: the copy is not in a repository at all. What `docker compose up` saw as build id: `up_env(tmp_path)`."""
-    root = tmp_path / "repo"
+    PATH that fails. Neither: the copy is not in a repository at all. What `docker compose up` saw as build id: `up_env(tmp_path)`,
+    as zone: `up_zone(tmp_path)`. `shell_timezone` is DCDASH_TIMEZONE in the environment of the script."""
+    root = tmp_path / repo_name
     (root / "scripts").mkdir(parents=True)
     shutil.copy(SCRIPT, root / "scripts" / "setup.sh")
+    shutil.copy(SCRIPT.parent / "timezones.txt", root / "scripts" / "timezones.txt")
     if git_repo:
         make_git_repo(root, dirty=git_repo == "dirty")
     if env_file is not None:
@@ -85,11 +88,14 @@ def run_setup(tmp_path: Path, *, env_file: str | None = None, volumes: tuple[str
     # GIT_*: the harness must not inherit a repository from the environment; the ceiling keeps git from finding one above tmp_path
     env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "DCDASH_", "GIT_"))}
     env.update(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", CALLS_LOG=str(log), UP_ENV_LOG=str(tmp_path / "up-env.log"),
+               TZ_LOG=str(tmp_path / "up-zone.log"),
                GIT_CEILING_DIRECTORIES=str(tmp_path),
                FAKE_VOLUMES=" ".join(volumes), FAKE_DOCKER_DOWN="1" if docker_down else "",
                FAKE_CONFIG_FAILS="1" if config_fails else "", FAKE_CONFIG_NAMELESS="1" if config_nameless else "")
     if project:
         env["COMPOSE_PROJECT_NAME"] = project
+    if shell_timezone is not None:
+        env["DCDASH_TIMEZONE"] = shell_timezone
     result = subprocess.run(["bash", str(root / "scripts" / "setup.sh"), *args], capture_output=True, text=True,
                             env=env, timeout=60, cwd=tmp_path)
     return result, root, log.read_text().splitlines()
@@ -98,6 +104,12 @@ def run_setup(tmp_path: Path, *, env_file: str | None = None, volumes: tuple[str
 def up_env(tmp_path: Path) -> list[str]:
     """One `DCDASH_BUILD_ID=... DCDASH_BUILD_TIME=...` line for each `docker compose ... up` the script ran."""
     log = tmp_path / "up-env.log"
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def up_zone(tmp_path: Path) -> list[str]:
+    """The DCDASH_TIMEZONE that each `docker compose ... up` saw in its environment (`<unset>` when there was none)."""
+    log = tmp_path / "up-zone.log"
     return log.read_text().splitlines() if log.exists() else []
 
 
@@ -226,13 +238,13 @@ def test_a_project_name_that_cannot_be_read_prints_unknown_and_the_stack_still_s
     assert started(calls)
 
 
-def test_ps1_prints_the_project():
+def test_ps1_prints_the_project():  # the arguments are @ComposeArgs: -Timezone is cut out of $args first (see test_scripts_setup_ps1.py)
     text = (SCRIPT.parent / "setup.ps1").read_text()
     line = text.index('Write-Host "starting Compose project: $ProjectName"')
-    assert line < text.index("docker compose @args up")  # before the stack is started
+    assert line < text.index("docker compose @ComposeArgs up")  # before the stack is started
     before = text[:line]
     # $project (the loop variable above) and $Project are one variable in PowerShell, so the line uses its own name
-    assert '$ProjectName = "unknown"' in before and "$ProjectName = Get-ComposeProject @args" in before and "catch { }" in before
+    assert '$ProjectName = "unknown"' in before and "$ProjectName = Get-ComposeProject @ComposeArgs" in before and "catch { }" in before
 
 
 def test_sh_switches_off_default_attestations_before_the_stack_is_started():
@@ -247,7 +259,7 @@ def test_sh_switches_off_default_attestations_before_the_stack_is_started():
 def test_ps1_switches_off_default_attestations_before_the_stack_is_started():
     lines = (SCRIPT.parent / "setup.ps1").read_text().splitlines()
     setting = lines.index("$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '1'")
-    up = next(i for i, line in enumerate(lines) if line == "docker compose @args up -d --build")
+    up = next(i for i, line in enumerate(lines) if line.strip() == "docker compose @ComposeArgs up -d --build")  # inside try/finally
     assert setting < up
 
 
@@ -303,10 +315,145 @@ def test_sh_exports_the_build_id_before_the_stack_is_started():
 
 def test_ps1_sets_the_build_id_before_the_stack_is_started():
     lines = (SCRIPT.parent / "setup.ps1").read_text().splitlines()
-    up = next(i for i, line in enumerate(lines) if line == "docker compose @args up -d --build")
+    up = next(i for i, line in enumerate(lines) if line.strip() == "docker compose @ComposeArgs up -d --build")  # inside try/finally
     before = "\n".join(lines[:up])
     assert '$env:DCDASH_BUILD_ID = "dev"' in before and '$env:DCDASH_BUILD_TIME = "unknown"' in before  # the fallbacks come first
     assert before.index('$env:DCDASH_BUILD_ID = "dev"') < before.index("git describe --always --dirty")
     assert "git describe --always --dirty" in before and "git log -1 --format=%cI" in before
     assert "$env:DCDASH_BUILD_ID = " in before.split("git describe --always --dirty", 1)[1]  # and git's answer replaces them
     assert "Get-Date" not in before  # never the wall clock
+
+
+# ---- the timezone for the first .env (W8c, finding 9) -------------------------------------------------------------------------
+
+def env_zone(root: Path) -> str:
+    return next(l for l in (root / ".env").read_text().splitlines() if l.startswith("DCDASH_TIMEZONE=")).split("=", 1)[1]
+
+
+def test_the_default_zone_is_utc_and_the_stack_sees_it(tmp_path):
+    result, root, calls = run_setup(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert env_zone(root) == "UTC" and up_zone(tmp_path) == ["DCDASH_TIMEZONE=UTC"]
+    assert "timezone: UTC (it seeds Settings on the first start only; change it there later)" in result.stderr.splitlines()
+
+
+def test_the_environment_variable_sets_the_zone_of_the_new_env(tmp_path):
+    result, root, _ = run_setup(tmp_path, shell_timezone="Africa/Cairo")
+    assert result.returncode == 0, result.stderr
+    assert env_zone(root) == "Africa/Cairo" and up_zone(tmp_path) == ["DCDASH_TIMEZONE=Africa/Cairo"]
+    assert "timezone: Africa/Cairo" in result.stderr
+
+
+@pytest.mark.parametrize("flag", [("--timezone", "Asia/Qatar"), ("--timezone=Asia/Qatar",)])
+def test_the_flag_beats_the_environment_variable_and_is_what_the_stack_sees(tmp_path, flag):
+    result, root, _ = run_setup(tmp_path, args=flag, shell_timezone="Africa/Cairo")
+    assert result.returncode == 0, result.stderr
+    assert env_zone(root) == "Asia/Qatar"
+    assert up_zone(tmp_path) == ["DCDASH_TIMEZONE=Asia/Qatar"]  # a shell variable beats .env in Compose, so the script sets it
+
+
+def test_the_flag_is_not_passed_to_docker_compose_and_the_other_arguments_are(tmp_path):
+    result, _, calls = run_setup(tmp_path, args=("-p", "other", "--timezone", "Asia/Qatar", "--profile", "dev"))
+    assert result.returncode == 0, result.stderr
+    assert not any("timezone" in c.lower() or "Qatar" in c for c in calls), calls
+    assert "docker compose -p other --profile dev config --no-interpolate" in calls
+    assert "docker compose -p other --profile dev up -d --build" in calls
+
+
+def test_the_flag_alone_leaves_an_empty_argument_list_for_docker_compose(tmp_path):
+    result, _, calls = run_setup(tmp_path, args=("--timezone", "Asia/Qatar"))
+    assert result.returncode == 0, result.stderr
+    assert "docker compose up -d --build" in calls
+
+
+@pytest.mark.parametrize("value, words", [
+    ("Egypt Standard Time", "not an IANA zone name"),
+    ("Asia/Kolkata", "refused by Settings"),
+    ("Africa/Ciro", "refused by Settings"),
+    ("africa/cairo", "refused by Settings"),
+    ("Africa/Cairo\nUTC", "not an IANA zone name"),
+    ("a#b", "refused by Settings"),
+    ("", "empty"),
+])
+@pytest.mark.parametrize("how", ["flag", "variable"])
+def test_a_bad_zone_is_refused_before_any_docker_call_and_before_the_env_is_written(tmp_path, value, words, how):
+    if how == "variable" and value == "":
+        pytest.skip("an empty DCDASH_TIMEZONE is the same as none")
+    if how == "flag":
+        result, root, calls = run_setup(tmp_path, args=("--timezone", value))
+    else:
+        result, root, calls = run_setup(tmp_path, shell_timezone=value)
+    assert result.returncode != 0
+    assert not (root / ".env").exists() and calls == [] and not started(calls)
+    assert words in result.stderr and ("--timezone" if how == "flag" else "DCDASH_TIMEZONE") in result.stderr
+
+
+def test_a_flag_without_a_value_is_refused(tmp_path):
+    result, root, calls = run_setup(tmp_path, args=("--timezone",))
+    assert result.returncode != 0 and not (root / ".env").exists() and calls == []
+    assert "--timezone needs a value" in result.stderr
+
+
+def test_a_bad_flag_is_refused_even_when_the_env_exists(tmp_path):
+    result, root, calls = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\n", args=("--timezone", "Africa/Ciro"))
+    assert result.returncode != 0 and calls == []
+    assert (root / ".env").read_text() == "DCDASH_DB_PASSWORD=keep\n"
+
+
+def test_with_an_existing_env_the_flag_changes_nothing_and_says_so(tmp_path):
+    result, root, calls = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\nDCDASH_TIMEZONE=Africa/Cairo\n",
+                                    args=("--timezone", "Asia/Qatar"))
+    assert result.returncode == 0, result.stderr
+    assert (root / ".env").read_text() == "DCDASH_DB_PASSWORD=keep\nDCDASH_TIMEZONE=Africa/Cairo\n"
+    assert up_zone(tmp_path) == ["DCDASH_TIMEZONE=<unset>"]  # .env decides
+    assert "only seeds the first start" in result.stderr and "Settings" in result.stderr
+    assert started(calls)
+
+
+@pytest.mark.parametrize("flag", [("--timezone", "Asia/Qatar"), ("--timezone=Asia/Qatar",), ()])
+@pytest.mark.parametrize("value, words", [("Africa/Ciro", "refused by Settings"), ("Egypt Standard Time", "not an IANA zone name")])
+def test_a_bad_shell_variable_is_refused_even_when_the_env_exists_and_a_flag_is_given(tmp_path, flag, value, words):
+    # with an .env the flag is not exported, and Compose reads the shell variable: a name the api refuses would crash-loop it
+    original = "DCDASH_DB_PASSWORD=keep\nDCDASH_TIMEZONE=Africa/Cairo\n"
+    result, root, calls = run_setup(tmp_path, env_file=original, args=flag, shell_timezone=value)
+    assert result.returncode != 0
+    assert (root / ".env").read_text() == original and calls == [] and not started(calls)
+    assert words in result.stderr and "DCDASH_TIMEZONE" in result.stderr
+
+
+def test_a_shell_variable_that_differs_from_the_existing_env_gets_the_override_warning(tmp_path):
+    result, _, _ = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\nDCDASH_TIMEZONE=UTC\n", shell_timezone="Africa/Cairo")
+    assert result.returncode == 0, result.stderr
+    assert "overrides" in result.stderr and "Africa/Cairo" in result.stderr and "UTC" in result.stderr
+    assert up_zone(tmp_path) == ["DCDASH_TIMEZONE=Africa/Cairo"]  # it does override, which is what the warning says
+
+
+def test_a_valid_shell_variable_that_differs_gets_the_override_warning_next_to_the_flag_note(tmp_path):
+    result, _, calls = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\nDCDASH_TIMEZONE=UTC\n", args=("--timezone", "Asia/Qatar"),
+                                 shell_timezone="Africa/Cairo")
+    assert result.returncode == 0, result.stderr
+    assert "only seeds the first start" in result.stderr and "overrides .env (UTC)" in result.stderr and started(calls)
+
+
+def test_a_shell_variable_equal_to_the_existing_env_is_not_a_warning(tmp_path):
+    result, _, _ = run_setup(tmp_path, env_file="DCDASH_DB_PASSWORD=keep\nDCDASH_TIMEZONE=Africa/Cairo\n", shell_timezone="Africa/Cairo")
+    assert result.returncode == 0, result.stderr
+    assert "overrides" not in result.stderr
+
+
+def test_a_refused_zone_is_checked_before_the_volume_lookup_refuses_anything_else(tmp_path):
+    result, root, calls = run_setup(tmp_path, volumes=("dcdash",), args=("--timezone", "Africa/Ciro"))
+    assert result.returncode != 0 and calls == [] and not (root / ".env").exists()
+    assert "Africa/Ciro" in result.stderr
+
+
+def test_sh_warns_about_a_folder_inside_onedrive_and_still_runs(tmp_path):
+    result, root, calls = run_setup(tmp_path, repo_name="OneDrive - Test")
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.count("OneDrive") >= 1 and "warning" in result.stderr.lower() and "synced" in result.stderr
+    assert (root / ".env").exists() and started(calls)
+
+
+def test_sh_says_nothing_about_onedrive_elsewhere(tmp_path):
+    result, _, _ = run_setup(tmp_path)
+    assert "onedrive" not in result.stderr.lower()
