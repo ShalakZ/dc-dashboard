@@ -3,13 +3,20 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from asyncua import Node, Server, ua
+from asyncua import Node, ua
+from asyncua.crypto.truststore import TrustStore
+from asyncua.crypto.validator import CertificateValidator, CertificateValidatorOptions
 from asyncua.server.user_managers import User, UserRole
 
-from dcdash.simulator.faults import FaultConfigError, Faults
+from dcdash.simulator.faultserver import ServerCertificate, _FaultServer, make_server_certificate
+from dcdash.simulator.faults import UNTRUSTED_AT_SESSION, FaultConfigError, Faults
 from dcdash.simulator.model import PANELS, SIGNALS, Simulator
 
 OPCUA_NAMESPACE = "urn:dcdash:simulator"
+POLICY_TYPES = {
+    "none": ua.SecurityPolicyType.NoSecurity,
+    "basic256sha256": ua.SecurityPolicyType.Basic256Sha256_SignAndEncrypt,
+}
 
 
 class _Users:
@@ -35,14 +42,15 @@ class OpcUaSim:
         self.sim = sim
         self.endpoint = f"opc.tcp://0.0.0.0:{port}/dcdash/"
         self._users = _Users(sim, username, password)
-        self._server: Server | None = None
+        self._server: _FaultServer | None = None
         self._vars: dict[str, Node] = {}
+        self.server_certificate: ServerCertificate | None = None  # made on first use and kept, so the thumbprint survives restarts
 
     async def start(self) -> None:
-        server = Server(user_manager=self._users)
+        server = _FaultServer(self.faults, user_manager=self._users)
         await server.init()
         server.set_endpoint(self.endpoint)
-        server.set_security_policy([ua.SecurityPolicyType.NoSecurity])
+        await self._apply_security_faults(server)
         idx = await server.register_namespace(OPCUA_NAMESPACE)
         panels = await server.nodes.objects.add_object(idx, "Panels")
         self._vars = {}
@@ -60,6 +68,22 @@ class OpcUaSim:
                 self._vars[f"{panel}_{signal}"] = var
         await server.start()
         self._server = server
+
+    async def _apply_security_faults(self, server: _FaultServer) -> None:
+        faults = self.faults
+        server.set_security_policy([POLICY_TYPES[policy] for policy in faults.offered_policies])
+        if faults.needs_server_certificate:
+            if self.server_certificate is None:
+                self.server_certificate = make_server_certificate(server.get_application_uri(), faults.cert_hosts)
+            await server.load_certificate(self.server_certificate.der)
+            await server.load_private_key(self.server_certificate.key_der)
+        if faults.auth_required:
+            server.set_identity_tokens([ua.UserNameIdentityToken])  # no anonymous login; _Users then checks the password
+        if faults.untrusted_cert and faults.untrusted_cert_at == UNTRUSTED_AT_SESSION:
+            # asyncua's own check, which refuses at CreateSession (a real stack refuses earlier: see _FaultProtocol); no trusted
+            # certificate at all, so every client certificate fails
+            options = CertificateValidatorOptions.TRUSTED | CertificateValidatorOptions.PEER_CLIENT
+            server.set_certificate_validator(CertificateValidator(options, TrustStore([], [])))
 
     async def stop(self) -> None:
         if self._server is not None:

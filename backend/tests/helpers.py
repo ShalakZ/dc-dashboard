@@ -4,16 +4,21 @@ import os
 import socket
 import subprocess
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import asyncpg
 import httpx
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from dcdash.api.security import hash_password
 from dcdash.connectors.simulator import SimulatorConfig, SimulatorConnector
 from dcdash.core.crypto import encrypt
+from dcdash.simulator.faults import Faults
 from dcdash.simulator.model import Simulator
 from dcdash.simulator.modbus import ModbusSim
 from dcdash.simulator.opcua import OpcUaSim
@@ -126,10 +131,37 @@ def free_ports(count: int) -> list[int]:
     return ports
 
 
+def write_client_certificate(directory: Path, *, stem: str = "client", uri: str = "urn:dcdash:collector",
+                             key_usage: bool = False) -> tuple[str, str]:
+    """A fresh self-signed OPC UA client certificate and its key as PEM files in `directory`; returns (certificate path, key path).
+
+    `key_usage` adds the key-usage and client-auth extensions a real application certificate carries (many do not).
+    """
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, stem)])
+    start = datetime.now(timezone.utc) - timedelta(days=1)
+    builder = (
+        x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+        .serial_number(x509.random_serial_number()).not_valid_before(start).not_valid_after(start + timedelta(days=365))
+        .add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(uri), x509.DNSName("localhost")]), critical=False)
+    )
+    if key_usage:
+        builder = builder.add_extension(x509.KeyUsage(
+            digital_signature=True, content_commitment=True, key_encipherment=True, data_encipherment=True, key_agreement=False,
+            key_cert_sign=False, crl_sign=False, encipher_only=False, decipher_only=False,
+        ), critical=True).add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
+    certificate = builder.sign(key, hashes.SHA256())
+    cert_path, key_path = directory / f"{stem}.pem", directory / f"{stem}-key.pem"
+    cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+                                           serialization.NoEncryption()))
+    return str(cert_path), str(key_path)
+
+
 @contextlib.asynccontextmanager
-async def opcua_server(sim: Simulator | None = None, password: str | None = None):
-    """Run an in-process OPC UA simulator server on a free port."""
-    srv = OpcUaSim(sim or Simulator(), free_port(), password=password)
+async def opcua_server(sim: Simulator | None = None, password: str | None = None, faults: Faults | None = None):
+    """Run an in-process OPC UA simulator server on a free port (optionally with fault switches on)."""
+    srv = OpcUaSim(sim or Simulator(), free_port(), password=password, faults=faults)
     await srv.start()
     await srv.refresh()
     try:
