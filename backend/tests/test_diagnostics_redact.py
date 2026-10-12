@@ -683,6 +683,10 @@ def test_a_listed_ip_address_does_not_swallow_a_following_label():
 
 def test_the_public_opc_foundation_names_are_never_aliased_so_namespace_zero_stays_recognisable():
     masker = Masker(["opcfoundation.org"], ["http://opcfoundation.org/UA/", "http://opcfoundation.org/UA/DI/", "urn:scada:srv:app"])
-    text = "ns 0 http://opcfoundation.org/UA/ and http://opcfoundation.org/UA/DI/ on opcfoundation.org, urn:opcfoundation.org:2008:x"
+    text = "ns 0 http://opcfoundation.org/UA/ and http://opcfoundation.org/UA/DI/ on opcfoundation.org"
     assert masker.mask(text) == text
+    # a `urn:opcfoundation.org:<server>` application URI names a server, and a look-alike authority is not the foundation's
+    hidden = Masker([], ["urn:opcfoundation.org:HIDDENBOX:app", "http://opcfoundation.org.evil.example/UA/", "http://evilopcfoundation.org/UA/"])
+    out = hidden.mask("a urn:opcfoundation.org:HIDDENBOX:app b http://opcfoundation.org.evil.example/UA/ c http://evilopcfoundation.org/UA/")
+    assert "HIDDENBOX" not in out and "evil" not in out, out
     assert masker.mask("app urn:scada:srv:app on http://plc.plant:4840") == "app URN-1 on http://HOST-1:4840"

@@ -134,7 +134,8 @@ _URN = re.compile(rf"(?<![\w.-])(urn:)({_NAME_CHARS}+)", re.IGNORECASE)
 _PORT = re.compile(r"(.+):\d{1,5}")
 # Names that mean the same on every installation and say nothing about this one: the standard OPC UA namespaces
 # (http://opcfoundation.org/UA/...). Hiding them would make namespace 0 unrecognisable.
-_PUBLIC = re.compile(r"(?:[a-z][a-z0-9+.-]*://|urn:)?(?:[\w-]+\.)*opcfoundation\.org(?:[/:].*)?", re.IGNORECASE)
+# Only the bare authority and its /UA namespace URIs: a `urn:opcfoundation.org:<anything>` application URI can carry a server name.
+_PUBLIC = re.compile(r"(?:[a-z][a-z0-9+.-]*://)?(?:www\.)?opcfoundation\.org(?:/UA(?:/[\w./-]*)?)?/?", re.IGNORECASE)
 _SUFFIX = r"(?:\.[A-Za-z0-9-]+)*"  # a listed short host name also covers the labels of the FQDN it starts
 _BRACKET_PORT = re.compile(r"\[([^\]]+)\](?::\d{1,5})?")
 
