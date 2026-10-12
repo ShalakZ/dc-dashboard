@@ -54,11 +54,11 @@
   .tariffs-page .inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 14px; margin: 12px 0 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
   .tariffs-page .inline-form .has-tip:not(.asset-field) { flex: none; } /* a label and its tip travel together */
   .tariffs-page .inline-form .asset-field { flex: 1 1 260px; min-width: 0; }
-  .tariffs-page .inline-form .asset-field select { width: 100%; }
+  .tariffs-page .inline-form .asset-field select { width: calc(100% + 28px); } /* the whole wrapper: the label keeps 28px free for the ? tip (app.css) and the field gives them back */
   .tariffs-page .inline-form input[type="date"] { width: 170px; }
   .tariffs-page .inline-form input[type="number"] { width: 130px; }
   .tariffs-page .inline-form .currency-field input { width: 110px; }
-  .tariffs-page .inline-form button { min-height: 38px; }
+  .tariffs-page .inline-form button:not(.icon-btn) { min-height: 38px; } /* not the ? tips: they stay 24px and keep their place on the label line */
   .tariffs-page .inline-form .saved { align-self: center; padding-bottom: 8px; }
   .tariffs-page .inline-form p.error { flex: 0 0 100%; margin: 0; font-size: var(--fs-sm); font-weight: 600; }
 }

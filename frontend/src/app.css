@@ -262,7 +262,12 @@
   .tip-bubble { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; width: max-content; max-width: min(320px, 80vw); padding: 8px 12px; border-radius: var(--radius); background: var(--tooltip-bg); color: var(--tooltip-text); box-shadow: var(--shadow-tip); font-size: var(--fs-sm); font-weight: 400; line-height: 1.45; text-align: left; white-space: normal; }
   .tip-bubble[data-align="end"] { left: auto; right: 0; } /* a tip at the right end of a line opens leftwards, so the page gets no sideways scroll */
   .has-tip { position: relative; }
-  .has-tip > .tip { position: absolute; top: 0; right: 0; } /* a tip at the end of a label line without being inside the <label> */
+  /* A tip at the end of a label line without being inside the <label>. The label keeps 28px free on the right, so a long label wraps
+     before the tip instead of running under it, and the field takes the room back with a negative margin, so it still spans the whole
+     wrapper. The tip box is as tall as the label's first line (--fs-sm at the 1.4 line height), which centres the 24px button on it. */
+  .has-tip > label { padding-right: 28px; }
+  .has-tip > label > :is(input, select, textarea) { margin-right: -28px; }
+  .has-tip > .tip { position: absolute; top: 0; right: 0; height: calc(var(--fs-sm) * 1.4); }
 
   /* Plain text colours (colour only: they also style text inside the widgets) */
   .error { color: var(--crit); }

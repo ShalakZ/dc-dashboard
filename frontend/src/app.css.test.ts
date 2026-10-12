@@ -712,6 +712,15 @@ describe("the page style files (src/styles/*.css)", () => {
     expect(bare).toEqual([]);
   });
 
+  it("the Tariffs form bars size their Save and Add buttons, not the ? tips in the same bar (a 38px tip would sit 10px below its label line)", () => {
+    const billing = parsed.find((p) => p.file === "pages-billing.css")!;
+    const onButtons = billing.rules.flatMap((r) => selectorParts(r.selector).filter((part) => /\.inline-form button/.test(part)).map((part) => ({ part, body: r.body })));
+    expect(onButtons.length, "a rule that sizes the buttons of the form bars").toBeGreaterThan(0);
+    for (const { part, body } of onButtons) {
+      if (/(min-)?(height|width)\s*:/.test(body)) expect(part, "spares the icon buttons").toContain(":not(.icon-btn)");
+    }
+  });
+
   it("the checks above can see a clash (the helpers are exercised on a small example)", () => {
     const sample = parseRules(".row-actions { display: flex; } td.row-actions, .users-page .row-actions :is(a, b), .x:hover, .y::before { color: red; }");
     expect([...bareClasses(sample)].sort()).toEqual(["row-actions", "users-page", "x", "y"]); // a page root is "bare" too; only it is named in no other file
@@ -819,6 +828,14 @@ describe("the row menu, the trash button and the info tip (W7b)", () => {
     expect(placed).toMatch(/position:\s*absolute/);
     expect(placed).toMatch(/top:\s*0/);
     expect(placed).toMatch(/right:\s*0/);
+  });
+
+  it("a tip never covers its label and sits on the label's first line: the label keeps 28px free, the field gives them back, the tip box is one label line high", () => {
+    const reserved = /padding-right:\s*(\d+)px/.exec(only(".has-tip > label").body)?.[1];
+    expect(Number(reserved), "room reserved at the right of the label").toBeGreaterThanOrEqual(24 + 4); // the 24px button and a 4px gap
+    expect(only(".has-tip > label > :is(input, select, textarea)").body).toMatch(new RegExp(`margin-right:\\s*-${reserved}px`));
+    expect(only(".has-tip > .tip").body).toMatch(/height:\s*calc\(var\(--fs-sm\)\s*\*\s*1\.4\)/); // the label's font size at the 1.4 line height of the page
+    expect(only("label").body).toMatch(/font-size:\s*var\(--fs-sm\)/);
   });
 
   it("the tip and menu buttons keep a hit area of 24px or more", () => {
