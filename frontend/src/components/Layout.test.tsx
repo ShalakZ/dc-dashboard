@@ -150,6 +150,52 @@ describe("Layout phase 3 links", () => {
   });
 });
 
+describe("Layout Dashboards entry and the default dashboard", () => {
+  const dashboardsLink = () => screen.getByRole("link", { name: "Dashboards" });
+
+  it("opens the default dashboard when one is set, and the list when none is", async () => {
+    mockFetch({ ...routes("viewer"), "GET /api/dashboards/default": { body: { dashboard_id: 7 } } });
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    await waitFor(() => expect(dashboardsLink()).toHaveAttribute("href", "/dashboards/7"));
+  });
+
+  it("keeps the list as its target while the default is unknown or cannot be read", async () => {
+    mockFetch({ ...routes("viewer"), "GET /api/dashboards/default": { status: 500, body: { detail: "boom" } } });
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    expect(dashboardsLink()).toHaveAttribute("href", "/dashboards"); // still pending
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(dashboardsLink()).toHaveAttribute("href", "/dashboards"); // failed
+  });
+
+  it.each([["/dashboards"], ["/dashboards/3"], ["/dashboards/9"]])("is the current page on %s whatever the default is", async (route) => {
+    mockFetch({ ...routes("viewer"), "GET /api/dashboards/default": { body: { dashboard_id: 7 } } });
+    renderWithProviders(<Layout />, { route, path: "*" });
+    await profileButton();
+    await waitFor(() => expect(dashboardsLink()).toHaveAttribute("href", "/dashboards/7"));
+    expect(dashboardsLink()).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Assets" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("matches whole path segments: /dashboardsX is not the Dashboards page", async () => {
+    mockFetch(routes("viewer"));
+    renderWithProviders(<Layout />, { route: "/dashboardsX", path: "*" });
+    await profileButton();
+    expect(dashboardsLink()).not.toHaveAttribute("aria-current");
+  });
+
+  it("still names the minimized strip's tooltip Dashboards", async () => {
+    mockFetch({ ...routes("viewer"), "GET /api/dashboards/default": { body: { dashboard_id: 7 } } });
+    localStorage.setItem("dcdash.sidebar", "minimized");
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    await waitFor(() => expect(dashboardsLink()).toHaveAttribute("href", "/dashboards/7"));
+    act(() => dashboardsLink().focus());
+    expect(document.getElementById("side-tip")).toHaveTextContent("Dashboards");
+  });
+});
+
 describe("Layout skip link and page width", () => {
   it("starts with a skip link that moves focus to the main area", async () => {
     mockFetch(routes("viewer"));

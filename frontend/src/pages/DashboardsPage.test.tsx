@@ -18,7 +18,7 @@ function Probe() {
   return <output data-testid="location">{`${location.pathname}|${JSON.stringify(location.state)}`}</output>;
 }
 function open(role: Role, over: Routes = {}) {
-  const calls = mockFetch({ ...authed(role), "GET /api/dashboards": { body: items }, ...over });
+  const calls = mockFetch({ ...authed(role), "GET /api/dashboards": { body: items }, "GET /api/dashboards/default": { body: { dashboard_id: null } }, ...over });
   renderWithProviders(<><DashboardsPage /><Probe /></>, { route: "/dashboards", path: "*" });
   return calls;
 }
@@ -100,6 +100,78 @@ describe("DashboardsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete Hall A" }));
     await waitFor(() => expect(screen.queryByRole("link", { name: "Hall A" })).not.toBeInTheDocument());
     expect(screen.getByRole("link", { name: "Hall B" })).toBeInTheDocument();
+  });
+
+  describe("the default dashboard", () => {
+    const withDefault = { "GET /api/dashboards/default": { body: { dashboard_id: 3 } } };
+
+    it("marks the default row with a Default badge beside the name link, not inside it", async () => {
+      open("viewer", withDefault);
+      const link = await screen.findByRole("link", { name: "Hall A" });
+      const badge = within(link.closest("tr")!).getByText("Default");
+      await waitFor(() => expect(badge).toBeInTheDocument());
+      expect(link).not.toContainElement(badge);
+      expect(link).toHaveAccessibleName("Hall A");
+      expect(within(screen.getByRole("link", { name: "Hall B" }).closest("tr")!).queryByText("Default")).not.toBeInTheDocument();
+    });
+
+    it("shows no badge when none is set", async () => {
+      open("viewer");
+      await screen.findByRole("link", { name: "Hall A" });
+      expect(screen.queryByText("Default")).not.toBeInTheDocument();
+    });
+
+    it("gives an administrator a menu per row: Make default on others, Clear default on the default", async () => {
+      open("admin", withDefault);
+      await userEvent.click(await screen.findByRole("button", { name: "Actions for Hall B" }));
+      expect(screen.getByRole("menuitem", { name: "Make default" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(screen.getByRole("button", { name: "Actions for Hall A" }));
+      expect(await screen.findByRole("menuitem", { name: "Clear default" })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: "Make default" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Delete Hall A" })).toBeInTheDocument(); // the trash stays
+    });
+
+    it("sends the id when making a default, and null when clearing it, and shows the badge move", async () => {
+      let current: number | null = null;
+      const calls = open("admin", {
+        "GET /api/dashboards/default": () => ({ body: { dashboard_id: current } }),
+        "PUT /api/dashboards/default": ({ body }) => {
+          current = (body as { dashboard_id: number | null }).dashboard_id;
+          return { body: { dashboard_id: current } };
+        },
+      });
+      await userEvent.click(await screen.findByRole("button", { name: "Actions for Hall B" }));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Make default" }));
+      expect(await within(screen.getByRole("link", { name: "Hall B" }).closest("tr")!).findByText("Default")).toBeInTheDocument();
+      expect(calls.filter((c) => c.method === "PUT").map((c) => c.body)).toEqual([{ dashboard_id: 4 }]);
+      await userEvent.click(screen.getByRole("button", { name: "Actions for Hall B" }));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Clear default" }));
+      await waitFor(() => expect(screen.queryByText("Default")).not.toBeInTheDocument());
+      expect(calls.filter((c) => c.method === "PUT").map((c) => c.body)).toEqual([{ dashboard_id: 4 }, { dashboard_id: null }]);
+    });
+
+    it("shows the server's message when setting the default fails", async () => {
+      open("admin", { "PUT /api/dashboards/default": { status: 404, body: { detail: "dashboard not found" } } });
+      await userEvent.click(await screen.findByRole("button", { name: "Actions for Hall A" }));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Make default" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("dashboard not found");
+    });
+
+    it("keeps the menu from an operator, who may only delete", async () => {
+      open("operator", withDefault);
+      await screen.findByRole("link", { name: "Hall A" });
+      expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+    });
+
+    it("warns when the dashboard to delete is the default", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      open("admin", withDefault);
+      await userEvent.click(await screen.findByRole("button", { name: "Delete Hall A" }));
+      expect(confirm).toHaveBeenCalledWith('Delete dashboard "Hall A" and its widgets? It is the default dashboard: nobody will land on it any more.');
+      await userEvent.click(screen.getByRole("button", { name: "Delete Hall B" }));
+      expect(confirm).toHaveBeenLastCalledWith('Delete dashboard "Hall B" and its widgets?');
+    });
   });
 
   it("keeps the Dashboards heading while loading and when the list cannot be loaded", async () => {

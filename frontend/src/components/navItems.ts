@@ -4,8 +4,12 @@ import type { IconName } from "./Icon";
 /** The role written out next to the user's name. Lives here, not in Layout, so the profile menu can import it without a cycle. */
 export const ROLE_LABEL: Record<Role, string> = { admin: "Administrator", operator: "Operator", viewer: "Viewer" };
 
-export interface NavItem { to: string; label: string; icon: IconName }
+/** `match`: the item is the current page on this path and everything below it (whole segments), not only on `to`. */
+export interface NavItem { to: string; label: string; icon: IconName; match?: string }
 export interface NavGroup { id: string; title: string; min?: Role; items: NavItem[] }
+
+/** The list of dashboards; the Dashboards item opens the default dashboard instead when one is set (Layout). */
+export const DASHBOARDS_PATH = "/dashboards";
 
 // Role gating is the old bar's, link for link; a group whose links are all gated away is not rendered.
 export const GROUPS: NavGroup[] = [
@@ -13,7 +17,7 @@ export const GROUPS: NavGroup[] = [
     id: "nav-monitor", title: "Monitor",
     items: [
       { to: "/assets", label: "Assets", icon: "assets" },
-      { to: "/dashboards", label: "Dashboards", icon: "dashboards" },
+      { to: DASHBOARDS_PATH, label: "Dashboards", icon: "dashboards", match: DASHBOARDS_PATH },
       { to: "/billing", label: "Billing", icon: "billing" },
     ],
   },

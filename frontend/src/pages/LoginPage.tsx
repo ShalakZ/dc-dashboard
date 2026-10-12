@@ -28,7 +28,7 @@ export function LoginPage() {
     setError(null);
     try {
       await login(username, password);
-      const returnTo = sessionStorage.getItem(RETURN_KEY) ?? "/assets";
+      const returnTo = sessionStorage.getItem(RETURN_KEY) ?? "/";
       sessionStorage.removeItem(RETURN_KEY);
       navigate(returnTo, { replace: true });
     } catch (e) {
