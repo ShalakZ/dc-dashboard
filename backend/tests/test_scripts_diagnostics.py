@@ -26,7 +26,7 @@ SCRIPT = ROOT / "scripts" / "collect-diagnostics.ps1"
 POWERSHELL = shutil.which("powershell.exe")
 needs_powershell = pytest.mark.skipif(POWERSHELL is None, reason="powershell.exe is not available")
 ENV_CASES = load_env_cases()
-SECTIONS = ("HOST", "DISKS", "NETWORK", "CLOCK", "TARGETS", "LOCAL PORTS", "TOOLS ON PATH", "SERVICES", "DATABASE", "API", "LOGS")
+SECTIONS = ("HOST", "DISKS", "NETWORK", "CLOCK", "TARGETS", "LOCAL PORTS", "TOOLS ON PATH", "SERVICES", "DOCKER CLOCK", "DATABASE", "API", "LOGS")
 
 
 def _wslpath(flag: str, path: str) -> str:
@@ -134,6 +134,8 @@ def test_report_has_every_section_and_the_stdout_carries_the_same_checksum(run):
     for name in SECTIONS:
         assert re.search(rf"^== {name}\b", text, re.M), name
     assert "section failed" not in text
+    positions = [text.index(f"== {name}") for name in SECTIONS]
+    assert positions == sorted(positions), "DOCKER CLOCK sits between SERVICES and DATABASE"
     assert re.search(r"^w32tm /query /status \(exit code -?\d+\):$", text, re.M)  # still runs under a time limit; w32tm exits negative while the Windows Time service is stopped
     assert text.splitlines()[0].startswith("DCDASH-DIAG v1 | collect-diagnostics.ps1 | PowerShell 5.")
     assert re.search(r"^local time: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d\d:\d\d", text, re.M)
@@ -319,31 +321,38 @@ def _write_cmd(path: Path, lines: list[str]) -> None:
     path.write_bytes("\r\n".join(["@echo off", *lines, ""]).encode("utf-8"))
 
 
-def _fake_docker(fake: Path, answers: bool) -> Path:
-    """A docker.cmd that logs its working folder and arguments to argv.log, then serves canned text (or hangs)."""
+def _fake_docker(fake: Path, answers: bool, *, logs: dict[str, list[str]] | None = None, clock_offset: int = 0, stopped: bool = False) -> Path:
+    """A docker.cmd that logs its working folder and arguments to argv.log, then serves canned text (or hangs).
+    `logs` maps each service to its canned log (default: db and api). The Docker VM clock (`date -u +%s`) is the Windows clock read
+    AT CALL TIME plus clock_offset seconds, so no WSL clock is involved; with `stopped` every `exec` fails like one on a stopped container."""
     log = _win(fake / "argv.log")
     head = [f'echo CD=%CD% ARGS=%* >> "{log}"']
     if not answers:
         _write_cmd(fake / "docker.cmd", head + ["ping -n 20 127.0.0.1 >nul", "exit /b 0"])
         return fake / "docker.cmd"
+    logs = {"db": _DB_LOG, "api": _API_LOG} if logs is None else logs
     can = lambda name: _win(fake / name)
     _write_cmd(fake / "docker.cmd", head + [
         f'if "%1 %2 %3"=="compose config --services" (type "{can("services.txt")}" & exit /b 0)',
         f'if "%1 %2 %3"=="compose ps -a" (type "{can("ps.txt")}" & exit /b 0)',
-        f'if "%1 %2 %3 %4 %5"=="compose logs --no-color --tail 300" (type "{can("log-%~6.txt")}" & exit /b 0)',
+        f'if "%1 %2 %3 %4 %5"=="compose logs --no-color --tail 2000" (type "{can("log-%~6.txt")}" & exit /b 0)',
+        *(['if "%1 %2"=="compose exec" (echo service "db" is not running 1>&2 & exit /b 1)'] if stopped else []),
+        'if "%1 %2 %3 %4 %5 %6 %7"=="compose exec -T db date -u +%%s" goto clock',   # a lone % in a .cmd is eaten: %% is one
         # the bare `pg_isready` falls through to `unexpected`: the real server logs `FATAL: role "root" does not exist` for it
         'if "%1 %2 %3 %4 %5 %6 %7 %8 %9"=="compose exec -T db pg_isready -U dcdash -d dcdash" (echo /var/run/postgresql:5432 - accepting connections& exit /b 0)',
         "echo unexpected: %* 1>&2",
         "exit /b 9",
+        ":clock",
+        f'for /f "usebackq" %%o in ("{can("offset.txt")}") do powershell -NoProfile -Command "[DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + %%o"',
+        "exit /b 0",
     ])
-    (fake / "services.txt").write_bytes(b"db\r\napi\r\n")
-    (fake / "ps.txt").write_bytes(
-        b"NAME           IMAGE         COMMAND   SERVICE   STATUS\r\n"
-        b"dcdash-db-1    postgres:16   postgres  db        Up 2 hours (healthy)\r\n"
-        b"dcdash-api-1   dcdash-api    uvicorn   api       Up 2 hours\r\n"
-    )
-    (fake / "log-db.txt").write_bytes("\r\n".join(_DB_LOG).encode("utf-8"))
-    (fake / "log-api.txt").write_bytes("\r\n".join(_API_LOG).encode("utf-8"))
+    (fake / "services.txt").write_bytes(("\r\n".join(logs) + "\r\n").encode("utf-8"))
+    status = "Exited (0) 2 hours ago" if stopped else "Up 2 hours"
+    rows = [f"dcdash-{svc}-1   image   command   {svc}   {status}" + (" (healthy)" if svc == "db" and not stopped else "") for svc in logs]
+    (fake / "ps.txt").write_bytes(("\r\n".join(["NAME           IMAGE         COMMAND   SERVICE   STATUS", *rows]) + "\r\n").encode("utf-8"))
+    (fake / "offset.txt").write_text(str(clock_offset))
+    for svc, lines in logs.items():
+        (fake / f"log-{svc}.txt").write_bytes("\r\n".join(lines).encode("utf-8"))
     return fake / "docker.cmd"
 
 
@@ -400,7 +409,8 @@ def test_the_canned_facts_show_and_only_the_last_30_lines_go_into_the_report(doc
     assert "docker compose exec -T db pg_isready -U dcdash -d dcdash (exit code 0):" in main
     assert "/var/run/postgresql:5432 - accepting connections" in main
     assert "services: db, api" in main
-    assert "-- api (last 30 of 300 lines read)" in main and "-- db (last 3 of 3 lines read)" in main
+    assert "-- api (last 30 of 400 kept lines; dropped 0 routine lines of 400 read)" in main
+    assert "-- db (last 3 of 3 kept lines; dropped 0 routine lines of 3 read)" in main
     assert "api line 371" in main and "api line 370" not in main  # 400 lines came back, the last 300 are kept, the last 30 shown
     assert "api line 101" in logs and "api line 100" not in logs and "api line 370" in logs
     assert "== db ==" in logs and "== api ==" in logs
@@ -427,8 +437,8 @@ def test_only_the_fake_docker_ran_with_the_expected_read_only_commands(docker_ru
     _, _, argv, project = docker_run
     commands = [re.sub(r"^CD=.*? ARGS=", "", a) for a in argv]
     assert commands == [
-        "compose ps -a", "compose exec -T db pg_isready -U dcdash -d dcdash", "compose config --services",
-        "compose logs --no-color --tail 300 db", "compose logs --no-color --tail 300 api",
+        "compose ps -a", "compose exec -T db date -u +%s", "compose exec -T db pg_isready -U dcdash -d dcdash", "compose config --services",
+        "compose logs --no-color --tail 2000 db", "compose logs --no-color --tail 2000 api",
     ]
     assert all(a.split(" ARGS=")[0].lower() == "cd=" + _win(project).lower() for a in argv), "docker runs in the project folder"
 
@@ -544,6 +554,194 @@ def test_a_project_folder_under_the_onedrive_environment_folder_warns_too(scratc
                    capture_output=True, text=True, timeout=120, cwd=str(out_dir))
     text = next(out_dir.glob("dcdash-diag-*.txt")).read_text(encoding="utf-8")
     assert re.search(r"^WARNING: inside OneDrive: ", text, re.M)
+
+
+# ---- W8c part 2: the routine-line filter and DOCKER CLOCK --------------------------------------------------------------
+
+def _prefixed(service: str, lines: list[str]) -> list[str]:
+    return [f"{service}-1  | {line}" for line in lines]   # what `docker compose logs` puts in front of every line
+
+
+def _access(request: str, status: str, port: int = 55514) -> str:
+    return f'INFO:     127.0.0.1:{port} - "{request} HTTP/1.1" {status}'
+
+
+_ADMIN = '{"level":"info","ts":1791796886.85,"logger":"admin.api","msg":"received request","method":"GET","host":"127.0.0.1:2019","uri":"/config/","remote_ip":"127.0.0.1","headers":{"User-Agent":["Wget"]}}'
+_ADMIN_ERROR = '{"level":"error","ts":1791796887.1,"logger":"admin.api","msg":"received request","error":"boom"}'
+_CADDY_ACCESS = '{"level":"info","ts":1791796888.2,"logger":"http.log.access","msg":"handled request","request":{"uri":"/api/health"}}'
+_PG = "2026-10-12 09:21:11.968 UTC [214072] LOG:  "
+_API_KEPT = [  # a 2xx line with the word "warn" in it stays: the keep-always words beat every routine pattern
+    _access("GET /api/diagnostics/warnings", "200 OK"), _access("GET /api/sources", "500 Internal Server Error"),
+    _access("GET /api/missing", "404 Not Found"), _access("POST /api/login", "401 Unauthorized"),
+    "ERROR:    Exception in ASGI application", "Traceback (most recent call last):", "the GET method was refused",
+]
+_FILTER_API = [
+    *[_access("GET /api/health", "200 OK", 55000 + i) for i in range(60)],
+    _access("GET /api/readings", "304 Not Modified"), *_API_KEPT[:2], _access("GET /", "302 Found"), *_API_KEPT[2:4],
+    *[_access("GET /api/health", "200 OK", 55100 + i) for i in range(60)], *_API_KEPT[4:],
+]
+_FILTER_WEB = [*[_ADMIN] * 30, _ADMIN_ERROR, *[_ADMIN] * 30, _CADDY_ACCESS]
+_FILTER_DB = [
+    *[_PG + 'continuous aggregate refresh (individual invalidation) on "readings_1m" in window [ 2026-10-12 09:19:00+00, 2026-10-12 09:20:00+00 ]',
+      _PG + 'deleted 0 row(s) from materialization table "_timescaledb_internal._materialized_hypertable_2"',
+      _PG + 'inserted 13 row(s) into materialization table "_timescaledb_internal._materialized_hypertable_2"'] * 10,
+    _PG + "checkpoint starting: time", _PG + "checkpoint complete: wrote 12 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled",
+    *_DB_LOG,
+]
+_FILTER_LOGS = {
+    "db": _prefixed("db", _FILTER_DB), "api": _prefixed("api", _FILTER_API), "web": _prefixed("web", _FILTER_WEB),
+    "worker": _prefixed("worker", [f"worker line {i:04d}" for i in range(1, 2001)]),   # exactly as many lines as --tail asks for
+}
+
+
+def _fake_run(scratch, extra_args: list[str] | None = None, **fake_kwargs) -> tuple[subprocess.CompletedProcess, dict[str, str]]:
+    fake, project, out_dir = scratch("dcdash-diag-fake-"), scratch("dcdash-diag-project-"), scratch()
+    _compose_project(project)
+    docker = _fake_docker(fake, answers=True, **fake_kwargs)
+    proc = _run_script(["-OutDir", _win(out_dir), "-DockerPath", _win(docker), *(extra_args or [])], out_dir, project)
+    return proc, {f.name: f.read_bytes().decode("utf-8") for f in sorted(out_dir.glob("dcdash-diag-*.txt"))}
+
+
+@pytest.fixture(scope="module")
+def filter_run(scratch):
+    return _fake_run(scratch, logs=_FILTER_LOGS)
+
+
+@pytest.fixture(scope="module")
+def raw_run(scratch):
+    return _fake_run(scratch, ["-RawLogs"], logs=_FILTER_LOGS)
+
+
+@pytest.fixture(scope="module")
+def drift_run(scratch):
+    return _fake_run(scratch, clock_offset=120)
+
+
+@pytest.fixture(scope="module")
+def stopped_run(scratch):
+    return _fake_run(scratch, stopped=True)
+
+
+def _block(main: str, service: str) -> list[str]:
+    """The header line and the indented log lines of one service in the LOGS section."""
+    lines = main.splitlines()
+    start = next(i for i, l in enumerate(lines) if l.startswith(f"-- {service} ("))
+    end = next((i for i in range(start + 1, len(lines)) if not lines[i].startswith("  ")), len(lines))
+    return lines[start:end]
+
+
+def _logs_block(logs: str, service: str) -> list[str]:
+    lines = logs.splitlines()
+    start = lines.index(f"== {service} ==") + 1
+    end = next((i for i in range(start, len(lines)) if lines[i].startswith(("== ", "END OF DIAGNOSTICS"))), len(lines))
+    return lines[start:end]
+
+
+def _section(text: str, name: str) -> list[str]:
+    lines = text.splitlines()
+    start = lines.index(f"== {name} ==") + 1
+    end = next((i for i in range(start, len(lines)) if lines[i].startswith("== ")), len(lines))
+    return [l for l in lines[start:end] if l]
+
+
+@needs_powershell
+def test_routine_lines_are_dropped_and_every_failure_stays_in_the_report(filter_run):
+    proc, files = filter_run
+    assert proc.returncode == 0, proc.stderr
+    main, _ = _main_and_logs(files)
+    api = _block(main, "api")
+    assert api[0] == "-- api (last 7 of 7 kept lines; dropped 122 routine lines of 129 read)"
+    assert [l.strip() for l in api[1:]] == _prefixed("api", _API_KEPT)   # file order: 2xx with "warn", 500, 404, 401, ERROR, Traceback, prose
+    assert not any(token in "\n".join(api) for token in ("/api/health", "304 Not Modified", "302 Found"))
+    web = _block(main, "web")
+    assert web[0] == "-- web (last 2 of 2 kept lines; dropped 60 routine lines of 62 read)"
+    assert [l.strip() for l in web[1:]] == _prefixed("web", [_ADMIN_ERROR, _CADDY_ACCESS])
+    db = _block(main, "db")
+    assert db[0] == "-- db (last 3 of 3 kept lines; dropped 32 routine lines of 35 read)"
+    assert [l.strip() for l in db[1:]] == [
+        'db-1  | FATAL:  password authentication failed for user "dcdash" ([hidden])',
+        "db-1  | connection to postgresql://[hidden]@db:5432/dcdash lost",
+        "db-1  | database system is ready to accept connections",
+    ]
+    assert "continuous aggregate refresh" not in main and "materialization table" not in main and "checkpoint" not in main
+
+
+@needs_powershell
+def test_the_logs_file_is_filtered_the_same_way_and_says_so(filter_run):
+    _, logs = _main_and_logs(filter_run[1])
+    assert "routine lines are dropped (see -RawLogs)" in logs and "unfiltered" not in logs
+    assert _logs_block(logs, "api") == _prefixed("api", _API_KEPT)
+    assert _logs_block(logs, "web") == _prefixed("web", [_ADMIN_ERROR, _CADDY_ACCESS])
+    assert len(_logs_block(logs, "db")) == 3 and '"logger":"admin.api","msg":"received request","method"' not in logs
+    worker = _logs_block(logs, "worker")
+    assert len(worker) == 300 and worker[0] == "worker-1  | worker line 1701" and worker[-1] == "worker-1  | worker line 2000"
+
+
+@needs_powershell
+def test_a_block_that_reaches_the_tail_limit_says_older_lines_were_not_read(filter_run):
+    main, _ = _main_and_logs(filter_run[1])
+    worker = _block(main, "worker")
+    assert worker[0] == ("-- worker (last 30 of 2000 kept lines; dropped 0 routine lines of 2000 read) "
+                         "(tail limit reached; older lines not read)")
+    assert len(worker) == 31 and worker[1] == "  worker-1  | worker line 1971"
+    assert main.count("tail limit reached") == 1
+
+
+@needs_powershell
+def test_no_credential_survives_the_filter(filter_run):
+    proc, files = filter_run
+    everything = proc.stdout + proc.stderr + "".join(files.values())
+    for secret in ("Hq7-db-pass", "Zk-9999-secret", "Zz9-urlpw"):
+        assert secret not in everything, secret
+    _assert_footer_verifies(_main_and_logs(files)[0])
+    _assert_footer_verifies(_main_and_logs(files)[1])
+
+
+@needs_powershell
+def test_raw_logs_drops_nothing_and_says_unfiltered(raw_run):
+    proc, files = raw_run
+    assert proc.returncode == 0, proc.stderr
+    main, logs = _main_and_logs(files)
+    assert "unfiltered" in logs and "routine lines are dropped" not in logs
+    assert _block(main, "api")[0] == "-- api (last 30 of 129 lines read; unfiltered)"
+    assert _block(main, "web")[0] == "-- web (last 30 of 62 lines read; unfiltered)"
+    assert len(_logs_block(logs, "api")) == 129 and len(_logs_block(logs, "web")) == 62 and len(_logs_block(logs, "db")) == 35
+    assert any('"logger":"admin.api"' in l for l in _logs_block(logs, "web")[:5])
+    assert "(tail limit reached; older lines not read)" in _block(main, "worker")[0]
+
+
+@needs_powershell
+def test_docker_clock_reads_the_vm_between_two_host_readings(filter_run):
+    main, _ = _main_and_logs(filter_run[1])
+    (line,) = _section(main, "DOCKER CLOCK")
+    match = re.fullmatch(r"docker VM minus host = ([+-]\d+) s \(host utc \d\d:\d\d:\d\d, the docker call took (\d+) ms\)", line)
+    assert match, line
+    assert abs(int(match.group(1))) <= 10 and "drift" not in line
+
+
+@needs_powershell
+def test_docker_clock_names_drift_as_a_local_cause(drift_run):
+    proc, files = drift_run
+    assert proc.returncode == 0, proc.stderr
+    main, _ = _main_and_logs(files)
+    (line,) = _section(main, "DOCKER CLOCK")
+    match = re.fullmatch(r"docker VM minus host = ([+-]\d+) s \(host utc \d\d:\d\d:\d\d, the docker call took \d+ ms\): "
+                         r"Docker/WSL2 clock drift \(typical after the host slept\), a local cause, not the SCADA", line)
+    assert match, line
+    assert 110 <= int(match.group(1)) <= 130
+
+
+@needs_powershell
+def test_docker_clock_with_stopped_containers_gives_the_reason(stopped_run):
+    main, _ = _main_and_logs(stopped_run[1])
+    assert _section(main, "DOCKER CLOCK") == ['could not read the Docker VM clock (exit code 1): service "db" is not running']
+    assert "section failed" not in main
+
+
+@needs_powershell
+def test_docker_clock_without_containers_is_skipped(run, hung_docker_run):
+    assert _section(_report(run), "DOCKER CLOCK") == ["skipped (no containers)"]
+    assert _section(next(iter(hung_docker_run[1].values())), "DOCKER CLOCK") == ["skipped (no containers)"]
 
 
 # ---- the script itself --------------------------------------------------------------------------------------------------

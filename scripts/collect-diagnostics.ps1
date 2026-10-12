@@ -1,11 +1,15 @@
 # Host facts for field debugging when the web app itself is down: one text file to copy and paste to whoever helps.
-# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect-diagnostics.ps1 [host:port ...] [-OutDir DIR] [-ProjectDir DIR]
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect-diagnostics.ps1 [host:port ...] [-OutDir DIR] [-ProjectDir DIR] [-RawLogs]
 # Prints the report and saves dcdash-diag-<yyyyMMdd-HHmmss>.txt in -OutDir (default: the logs folder inside the project folder, else
 # inside the current folder; created if missing). Each host:port gets a DNS lookup and a TCP connect (3 s timeout).
-# Sections: HOST DISKS NETWORK CLOCK TARGETS LOCAL PORTS TOOLS ON PATH SERVICES DATABASE API LOGS.
+# Sections: HOST DISKS NETWORK CLOCK TARGETS LOCAL PORTS TOOLS ON PATH SERVICES DOCKER CLOCK DATABASE API LOGS.
 # -ProjectDir is the folder with compose.yaml and .env (default: the current folder, else the script's parent folder, if one of them has
 # a compose.yaml). With docker and a compose.yaml it reads container status, the database and the service logs, and ALSO saves
-# dcdash-diag-<same time>-logs.txt (the last 300 lines per service; saved, never printed). Without them those sections say so.
+# dcdash-diag-<same time>-logs.txt (the last 300 kept lines per service; saved, never printed). Without them those sections say so.
+# DOCKER CLOCK compares the clock inside the db container with this computer's (a Docker/WSL2 VM that slept drifts; that is not the SCADA).
+# Per service the last 2000 log lines are read and the ROUTINE ones are dropped (2xx/3xx uvicorn access lines, Caddy admin API requests,
+# TimescaleDB refresh and checkpoint chatter; a line with error, warn, fatal, traceback, exception or panic is never dropped), the count
+# of dropped lines is printed, then the last 300 (file) / 30 (screen) remain. -RawLogs keeps every line.
 # Every line is cut at 64 KB, scrubbed (URL credentials "://user:pass@" and the secret values of the project's .env become [hidden]) and
 # clipped; the report only says HOW MANY .env values it hides. Every external command has a time limit, so a hung docker cannot hang this.
 # Read-only, needs no internet and none of the application. PowerShell 5.1 compatible.
@@ -23,6 +27,7 @@ param(
   [string]$ScrubFile,
   [string]$EnvFile,
   [string]$DockerPath,
+  [switch]$RawLogs,   # keep the routine log lines too
   [int]$CommandTimeoutSeconds = 10   # the limit of one external command (docker compose logs: three times as long); tests shorten it
 )
 $ErrorActionPreference = "Stop"
@@ -38,6 +43,9 @@ $Known = @()   # the values to hide, longest first (Get-KnownValues)
 $DockerDown = $false
 $Containers = $false
 $LogServices = 0
+$KeepAlways = 'error|warn|fatal|traceback|exception|panic'   # a log line with one of these words is never routine
+$RoutinePg = '^\S+ \S+ \S+ \[\d+\] LOG:\s+(continuous aggregate refresh|deleted \d+ row\(s\) from materialization table|inserted \d+ row\(s\) into materialization table|checkpoint (starting|complete):)'
+$TailLines = 2000   # docker compose logs --tail: read this many, drop the routine ones, keep the last 300
 $OldEnc = $null
 try { if ([Console]::IsOutputRedirected) { $OldEnc = [Console]::OutputEncoding; [Console]::OutputEncoding = $Utf8 } } catch { }   # piped output is UTF-8
 function Stop-Script([int]$Code) {   # every way out: puts the console code page back
@@ -206,6 +214,13 @@ function Test-InsideOneDrive([string]$Path) {   # the folder name says OneDrive,
   }
   return $false
 }
+function Test-Routine([string]$Line) {   # a log line nobody needs to read (Decision 1 of the W8c plan); anything that could be a failure is kept
+  if ($Line -match $KeepAlways) { return $false }
+  $t = $Line -replace '^[A-Za-z0-9][A-Za-z0-9_.-]*\s*\|\s?', ''   # the "api-1  | " docker compose puts in front of every line
+  if ($t -match '^\s*INFO:\s+\S+ - "[A-Z]+ \S+ HTTP/\d(\.\d)?" [23]\d\d\b') { return $true }   # a uvicorn access line that went well
+  if ($t.Contains('"logger":"admin.api"') -and $t.Contains('"msg":"received request"')) { return $true }   # Caddy: the healthcheck asking its admin API
+  return [bool]($t -match $RoutinePg)
+}
 function Test-Tcp([Net.IPAddress]$Addr, [int]$Port, [int]$Ms = 3000) {
   $c = New-Object Net.Sockets.TcpClient -ArgumentList $Addr.AddressFamily
   $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -262,6 +277,7 @@ try {
   Add-Line "DCDASH-DIAG-LOGS v$Version | collect-diagnostics.ps1 | PowerShell $($PSVersionTable.PSVersion)" -To $LogLines
   Add-Line ("local time: " + $now.ToString("yyyy-MM-dd HH:mm:ss zzz", $Inv)) -To $LogLines
   Add-Line "$hides; each line is cut at 1000 characters" -To $LogLines
+  Add-Line $(if ($RawLogs) { "service logs: the last $TailLines lines per service, unfiltered (-RawLogs), then the last 300" } else { "service logs: the last $TailLines lines per service; routine lines are dropped (see -RawLogs), then the last 300 kept" }) -To $LogLines
 } catch { Add-Line "header failed: $($_.Exception.Message)" }
 
 Section "HOST" {
@@ -372,6 +388,24 @@ Section "SERVICES" {
   }
 }
 
+Section "DOCKER CLOCK" {   # after SERVICES (it needs to know there are containers); the app report cannot see the host clock
+  if (-not $script:Containers) { Add-Line "skipped (no containers)"; return }
+  $t0 = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $r = Invoke-Docker @("compose", "exec", "-T", "db", "date", "-u", "+%s") $CommandTimeoutSeconds
+  $t1 = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  if (-not $r) { return }
+  $answer = $r.Out.Trim()
+  if ($r.ExitCode -ne 0 -or $answer -notmatch '^\d{9,11}$') {
+    $first = @(Get-TextLines ($r.Err + "`n" + $r.Out) | Where-Object { $_.Trim() } | Select-Object -First 1)
+    Add-Line "could not read the Docker VM clock (exit code $($r.ExitCode)): $(if ($first.Count -gt 0) { $first[0].Trim() })" -Clip 300
+    return
+  }
+  $drift = [int][math]::Round([int64]$answer - ($t0 + $t1) / 2000.0)   # the VM answered somewhere between the two readings: take the middle
+  $line = "docker VM minus host = $(if ($drift -lt 0) { '-' } else { '+' })$([math]::Abs($drift)) s (host utc $([DateTimeOffset]::FromUnixTimeMilliseconds($t0).ToString('HH:mm:ss', $Inv)), the docker call took $($t1 - $t0) ms)"
+  if ([math]::Abs($drift) -gt 30) { $line += ": Docker/WSL2 clock drift (typical after the host slept), a local cause, not the SCADA" }
+  Add-Line $line
+}
+
 Section "DATABASE" {
   $done = $false
   if ($script:Containers) {
@@ -423,18 +457,21 @@ Section "LOGS" {
   $names = @(Get-TextLines $r.Out | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[A-Za-z0-9][A-Za-z0-9_.-]*$' } | Select-Object -First 30)
   Add-Line "services: $(Join-Or $names 'none')"
   foreach ($svc in $names) {
-    $r = Invoke-Docker @("compose", "logs", "--no-color", "--tail", "300", $svc) ($CommandTimeoutSeconds * 3)
+    $r = Invoke-Docker @("compose", "logs", "--no-color", "--tail", "$TailLines", $svc) ($CommandTimeoutSeconds * 3)
     if (-not $r) { break }
-    $tail = @(Get-TextLines $r.Out | Where-Object { $_.Trim() } | Select-Object -Last 300)
-    if ($r.ExitCode -ne 0 -and $tail.Count -eq 0) { Add-Line "-- ${svc}: docker compose logs failed (exit code $($r.ExitCode)): $($r.Err.Trim())" -Clip 300; continue }
+    $got = @(Get-TextLines $r.Out | Where-Object { $_.Trim() })
+    if ($r.ExitCode -ne 0 -and $got.Count -eq 0) { Add-Line "-- ${svc}: docker compose logs failed (exit code $($r.ExitCode)): $($r.Err.Trim())" -Clip 300; continue }
+    $kept = $(if ($RawLogs) { $got } else { @(foreach ($l in $got) { if (-not (Test-Routine $l)) { $l } }) })
+    $tail = @($kept | Select-Object -Last 300)
     $show = @($tail | Select-Object -Last 30)
-    Add-Line "-- $svc (last $($show.Count) of $($tail.Count) lines read)"
+    $what = $(if ($RawLogs) { "lines read; unfiltered)" } else { "kept lines; dropped $($got.Count - $kept.Count) routine lines of $($got.Count) read)" })
+    Add-Line "-- $svc (last $($show.Count) of $($kept.Count) $what$(if ($got.Count -ge $TailLines) { ' (tail limit reached; older lines not read)' })"
     foreach ($l in $show) { Add-Line $l -Clip 240 -Prefix "  " }
     Add-Line "== $svc ==" -To $LogLines
     foreach ($l in $tail) { Add-Line $l -Clip 1000 -To $LogLines }
     $script:LogServices++
   }
-  Add-Line $(if ($script:LogServices -gt 0) { "logs file (the last 300 lines per service, saved next to this report): $LogsFile" } else { "no logs read, no logs file" })
+  Add-Line $(if ($script:LogServices -gt 0) { "logs file (the last 300 kept lines per service, saved next to this report): $LogsFile" } else { "no logs read, no logs file" })
 }
 
 function Get-Report($List) {
