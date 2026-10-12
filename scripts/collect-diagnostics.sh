@@ -4,12 +4,19 @@
 #        bash scripts/collect-diagnostics.sh --scrub-self-test FILE      check the scrubber against the shared fixture, collect nothing
 #        bash scripts/collect-diagnostics.sh --scrub-stdin [--env-file FILE]   filter stdin to stdout through the scrubber
 # Prints the report and saves dcdash-diag-<yyyyMMdd-HHmmss>.txt in --out-dir (default: the current folder). Each host:port gets a DNS
-# lookup and a TCP connect (3 s timeout). Read-only, needs no internet and none of the application; POSIX tools only (awk, sed, df,
-# date, getent), no Python, no jq. The file is UTF-8 with LF line breaks. Its last line is `END OF DIAGNOSTICS <12 hex>`: the first 12
-# hex characters of the SHA-256 of every line before it, joined by LF (no trailing LF), so a paste can be verified.
+# lookup and a TCP connect (3 s timeout). Sections: HOST DISKS NETWORK CLOCK TARGETS "LOCAL PORTS" "TOOLS ON PATH" SERVICES DATABASE API
+# LOGS. When docker and a compose.yaml exist, SERVICES/DATABASE/LOGS ask `docker compose` (ps -a, config --services, logs, exec: nothing
+# else, never inspect) and the LAST 300 LINES PER SERVICE go to a second file, dcdash-diag-<stamp>-logs.txt (header DCDASH-DIAG-LOGS v1,
+# same footer rule), which is saved but never printed; the report names its path. Read-only, needs no internet and none of the
+# application; POSIX tools only (awk, sed, df, date, getent), no Python, no jq. The files are UTF-8 with LF line breaks. The last line of
+# each is `END OF DIAGNOSTICS <12 hex>`: the first 12 hex characters of the SHA-256 of every line before it, joined by LF (no trailing
+# LF), so a paste can be verified.
 # Every output line passes through `emit`: cut at 64 KB, then scrubbed (known secrets from the project's .env, then user:password in
 # URLs), then clipped. The .env is only parsed by awk, never sourced, and its values are never printed (only their count).
-# Exit codes: 0 report written, 1 the file could not be saved (the report was still printed) or the self-test failed, 2 bad usage,
+# Every external command runs under `timeout` (10 s, `compose logs` 30 s); after the first docker command that does not answer the rest of
+# the docker calls are skipped. Without `timeout` commands run unbounded (TOOLS ON PATH says so). DCDASH_DIAG_DOCKER_SECONDS shortens the
+# docker limit and exists only so the tests can prove that skip without waiting 10 s.
+# Exit codes: 0 report written, 1 a file could not be saved (the report was still printed) or the self-test failed, 2 bad usage,
 # 3 awk is missing (nothing is collected: the scrubber needs it).
 # Tests source this file and set WORK, AWK, ENV_FILE (and ICONV_BIN, TIMEOUT_BIN) themselves, so main only runs when it is executed.
 set -u
@@ -240,6 +247,9 @@ init_work() {
   WORK=$(mktemp -d 2>/dev/null) || { WORK=${TMPDIR:-/tmp}/dcdash-diag.$$; (umask 077; mkdir -p "$WORK"); }
   TIMEOUT_BIN=$(type -P timeout)
   ICONV_BIN=$(type -P iconv)
+  DOCKER_BIN=$(type -P docker)
+  DOCKER_SECS=${DCDASH_DIAG_DOCKER_SECONDS:-10}
+  case $DOCKER_SECS in ''|*[!0-9]*|0|0[0-9]*) DOCKER_SECS=10 ;; esac
   : > "$WORK/main.txt"
 }
 
@@ -279,6 +289,7 @@ emit_lines() {
   else
     awk_scrub file "$CAP_BYTES" "${1:-0}" 1 "$lead" >> "$file"
   fi
+  return 0   # older iconv versions exit 1 when -c drops a byte: that is not a failure of the section that wrote the line
 }
 emit() { printf '%s\n' "$1" | emit_lines "${2:-0}" "${3:-main}"; }   # emit TEXT [CLIP [SINK]]; a TEXT with newlines is several lines
 
@@ -311,6 +322,93 @@ sha256_12() {   # first 12 hex of the SHA-256 of a file, nothing when no tool ex
   else return 1
   fi
   [[ ${out:0:12} =~ ^[0-9a-f]{12}$ ]] && printf '%s' "${out:0:12}"
+}
+
+docker_run() {   # docker_run SECONDS ARGS...: docker in the project folder; output in $WORK/docker.out and docker.err, exit code in DOCKER_RC
+  # Fails (so the caller skips its docker part) once docker is marked down; the first command that times out or cannot be run marks it
+  # down in a FILE (sections run in subshells) and says so once. stdin is /dev/null: timeout runs the command in a background process
+  # group, and a docker that touched the terminal would stop there and look like a hang.
+  local secs=$1; shift
+  [ -e "$WORK/docker.down" ] && return 1
+  (cd "$PROJECT_DIR" 2> /dev/null && run_limited "$secs" "$DOCKER_BIN" "$@") < /dev/null > "$WORK/docker.out" 2> "$WORK/docker.err"
+  DOCKER_RC=$?
+  if [ "$DOCKER_RC" -eq 124 ] && [ -n "${TIMEOUT_BIN:-}" ]; then
+    : > "$WORK/docker.down"; emit "docker did not answer within ${secs} s; container sections skipped"; return 1
+  elif [ "$DOCKER_RC" -eq 126 ] || [ "$DOCKER_RC" -eq 127 ]; then
+    : > "$WORK/docker.down"; emit "docker could not be run (exit code $DOCKER_RC); container sections skipped"; return 1
+  fi
+  return 0
+}
+
+docker_text() { { cat "$WORK/docker.out"; cat "$WORK/docker.err"; } | "$AWK" 'NF { print "  " $0 }'; }   # what the last docker call printed, indented, blank lines dropped
+
+# A minimal HTTP/1.0 client for machines with neither curl nor wget. The URL parts arrive as arguments, never inside the script text; no
+# line reads for more than 3 s and at most 64 KB are kept. Exit 7 = connect failed (bash prints why), 124 = the answer stopped coming.
+HTTP_TCP_CLIENT='exec 3<>"/dev/tcp/$1/$2" || exit 7
+printf "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: dcdash-diag\r\nAccept: */*\r\nConnection: close\r\n\r\n" "$3" "$4" >&3
+n=0
+while [ $n -lt 16 ]; do
+  IFS= read -r -t 3 -d "" -n 4096 chunk <&3; rc=$?
+  printf "%s" "$chunk"
+  [ $rc -eq 0 ] || break
+  n=$((n + 1))
+done
+[ $rc -gt 128 ] && exit 124
+exit 0'
+
+http_get() {   # http_get URL -> HTTP_CODE ("" = no answer), HTTP_ERR, HTTP_MS, HTTP_VIA; the body (at most 64 KB) lands in $WORK/api.body
+  local url=$1 t0 rc out rest hostport host port path
+  HTTP_CODE=""; HTTP_ERR=""; HTTP_VIA=""
+  : > "$WORK/api.body"; : > "$WORK/api.err"
+  now_ms; t0=$NOW_MS
+  if type -P curl > /dev/null; then
+    HTTP_VIA=curl
+    out=$(run_limited 4 curl -sS --noproxy '*' -m 3 -o "$WORK/api.body" -w '%{http_code}' "$url" 2> "$WORK/api.err" < /dev/null); rc=$?
+    if [ $rc -eq 0 ]; then HTTP_CODE=$out
+    elif [ $rc -eq 124 ] && [ -n "${TIMEOUT_BIN:-}" ]; then HTTP_ERR="no answer within 3000 ms"
+    else HTTP_ERR=$(tail -n 1 "$WORK/api.err" | sed 's/^curl: ([0-9]*) //')
+    fi
+  elif type -P wget > /dev/null; then
+    HTTP_VIA=wget
+    run_limited 4 wget -nv -S --content-on-error --no-proxy -T 3 -t 1 --max-redirect=0 -O "$WORK/api.body" "$url" 2> "$WORK/api.err" > /dev/null < /dev/null
+    rc=$?
+    HTTP_CODE=$(sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*$/\1/p' "$WORK/api.err" | tail -n 1)
+    if [ -n "$HTTP_CODE" ]; then :
+    elif [ $rc -eq 124 ] && [ -n "${TIMEOUT_BIN:-}" ]; then HTTP_ERR="no answer within 3000 ms"
+    elif "$AWK" '/nrecognized option|nvalid option|^Usage/ { f = 1 } END { exit !f }' "$WORK/api.err"; then HTTP_VIA=""   # a wget that lacks these options (busybox): use bash instead
+    else HTTP_ERR=$(tail -n 1 "$WORK/api.err")
+    fi
+  fi
+  if [ -z "$HTTP_VIA" ]; then
+    HTTP_VIA="bash /dev/tcp"
+    rest=${url#http://}
+    if [ "$rest" = "$url" ]; then HTTP_ERR="only http:// addresses can be read without curl or wget"
+    else
+      hostport=${rest%%/*}; path=/; [[ $rest == */* ]] && path=/${rest#*/}
+      host=${hostport%:*}; port=80; [[ $hostport == *:* ]] && port=${hostport##*:}
+      run_limited 4 "$BASH" -c "$HTTP_TCP_CLIENT" _ "$host" "$port" "$path" "$hostport" < /dev/null > "$WORK/api.raw" 2> "$WORK/api.err"; rc=$?
+      HTTP_CODE=$("$AWK" 'NR == 1 && /^HTTP\/[0-9.]+ [0-9][0-9][0-9]/ { print substr($2, 1, 3) }' "$WORK/api.raw")
+      "$AWK" '{ sub(/\r$/, "") } inbody { print; next } $0 == "" { inbody = 1 }' "$WORK/api.raw" > "$WORK/api.body"
+      if [ -n "$HTTP_CODE" ]; then :
+      elif [ $rc -eq 124 ]; then HTTP_ERR="no answer within 3000 ms"
+      elif [ $rc -eq 7 ]; then out=$(tail -n 1 "$WORK/api.err"); HTTP_ERR=${out##*: }
+      else HTTP_ERR="the answer is not HTTP"
+      fi
+    fi
+  fi
+  [ -n "$HTTP_CODE" ] || [ -n "$HTTP_ERR" ] || HTTP_ERR="no answer"
+  now_ms; HTTP_MS=$(( NOW_MS - t0 ))
+}
+
+api_probe() {   # api_probe URL [NOTE]: three lines, the body collapsed with ASCII whitespace only and shown after scrubbing (clip = "  body: " + 300 + the ellipsis)
+  emit "GET ${1}${2:+ ($2)}"
+  http_get "$1"
+  if [ -n "$HTTP_CODE" ]; then
+    emit "  HTTP $HTTP_CODE in $HTTP_MS ms (via $HTTP_VIA)"
+    { printf '  body: '; head -c 65536 "$WORK/api.body" | tr -s '[:space:]' ' '; echo; } | emit_lines 311
+  else
+    emit "  FAILED in $HTTP_MS ms (via $HTTP_VIA): $HTTP_ERR" 300
+  fi
 }
 
 # ---- sections ------------------------------------------------------------------------------------------------------------------
@@ -467,7 +565,7 @@ section_local_ports() {
 
 section_tools() {
   local name path
-  for name in docker python3 python curl systemctl ss netstat ip getent timeout iconv sha256sum; do
+  for name in docker python3 python curl wget systemctl ss netstat ip getent timeout iconv sha256sum; do
     path=$(type -P "$name")
     emit "${name}: ${path:-not found}"
   done
@@ -475,20 +573,103 @@ section_tools() {
   emit "awk: $("$AWK" -W version 2>&1 | head -n 1)"
 }
 
-finish_report() {
-  local sum footer file dir
-  sum=$(sha256_12 "$WORK/main.txt")
+section_services() {
+  local out rc rows where
+  if [ -z "$DOCKER_BIN" ]; then emit "container sections skipped: docker not found"
+  elif [ "$HAS_COMPOSE" != 1 ]; then
+    where=${PROJECT_DIR:-"the current folder or the parent folder of this script; use --project-dir"}
+    emit "container sections skipped: no compose.yaml in $where"
+  elif docker_run "$DOCKER_SECS" compose ps -a; then
+    emit "docker compose ps -a in $PROJECT_DIR (exit code $DOCKER_RC):"
+    docker_text | emit_lines 302
+    # a header and at least one row mean there is a compose project with containers to ask more about
+    if [ "$DOCKER_RC" -eq 0 ] && "$AWK" 'NF { n++ } END { exit !(n > 1) }' "$WORK/docker.out"; then : > "$WORK/containers"; fi
+  fi
+  [ -e "$WORK/containers" ] && return
+  if ! type -P systemctl > /dev/null; then emit "systemd units dcdash*, postgres*, docker: none found (systemctl not found)"; return; fi
+  out=$(run_limited 10 systemctl list-units --no-legend --all --plain --no-pager < /dev/null 2>&1); rc=$?
+  if [ $rc -eq 124 ] && [ -n "${TIMEOUT_BIN:-}" ]; then emit "systemctl list-units did not answer within 10 s"; return; fi
+  if [ $rc -ne 0 ]; then emit "systemctl list-units failed (exit code $rc): $(printf '%s\n' "$out" | head -n 1)" 300; return; fi
+  rows=$(printf '%s\n' "$out" | "$AWK" '$1 ~ /^(dcdash|postgres)/ || $1 ~ /^docker\.(service|socket)$/ { printf "  %s  %s %s %s\n", $1, $2, $3, $4 }')
+  if [ -z "$rows" ]; then emit "systemd units dcdash*, postgres*, docker: none found"
+  else emit "systemd units dcdash*, postgres*, docker:"; printf '%s\n' "$rows" | emit_lines 300
+  fi
+}
+
+section_database() {
+  if [ -e "$WORK/containers" ] && docker_run "$DOCKER_SECS" compose exec -T db pg_isready -U dcdash -d dcdash; then
+    emit "docker compose exec -T db pg_isready -U dcdash -d dcdash (exit code $DOCKER_RC):"
+    docker_text | emit_lines 302
+    return
+  fi
+  tcp_connect 127.0.0.1 5432
+  if [ -z "$TCP_ERR" ]; then emit "tcp 127.0.0.1:5432 OK in ${TCP_MS} ms"; else emit "tcp 127.0.0.1:5432 FAILED in ${TCP_MS} ms: $TCP_ERR"; fi
+}
+
+section_api() {
+  api_probe http://127.0.0.1/api/health
+  api_probe http://127.0.0.1:8000/api/health "native install only"
+}
+
+logs_header() {   # the first lines of the second file
+  local z
+  z=$(date +%z)
+  emit "DCDASH-DIAG-LOGS v$VERSION | collect-diagnostics.sh | bash ${BASH_VERSION%%(*}" 0 logs
+  emit "local time: $(date '+%Y-%m-%d %H:%M:%S') ${z:0:3}:${z:3:2}" 0 logs
+  emit "scrubbing: URL credentials, and $KNOWN_COUNT secret value(s) read from the .env file; each line is cut at 1000 bytes" 0 logs
+}
+
+section_logs() {
+  local svc list n shown
+  if [ -z "$DOCKER_BIN" ] || [ "$HAS_COMPOSE" != 1 ]; then emit "container sections skipped (see SERVICES); no logs file"; return; fi
+  if ! docker_run "$DOCKER_SECS" compose config --services; then emit "no logs read, no logs file"; return; fi
+  if [ "$DOCKER_RC" -ne 0 ]; then
+    emit "docker compose config --services failed (exit code $DOCKER_RC): $(head -n 1 "$WORK/docker.err")" 300
+    emit "no logs read, no logs file"; return
+  fi
+  list=$("$AWK" '{ sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, "") } $0 ~ /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ && ++n <= 30 { print }' "$WORK/docker.out")
+  emit "services: $(printf '%s\n' "$list" | "$AWK" 'NF { s = s (s == "" ? "" : ", ") $0 } END { print (s == "" ? "none" : s) }')"
+  for svc in $list; do
+    docker_run $(( 10#$DOCKER_SECS * 3 )) compose logs --no-color --tail 300 "$svc" || break
+    "$AWK" 'NF' "$WORK/docker.out" | tail -n 300 > "$WORK/svc.tail"
+    n=$("$AWK" 'END { print NR }' "$WORK/svc.tail")
+    if [ "$DOCKER_RC" -ne 0 ] && [ "$n" -eq 0 ]; then
+      emit "-- ${svc}: docker compose logs failed (exit code $DOCKER_RC): $(head -n 1 "$WORK/docker.err")" 300
+      continue
+    fi
+    shown=$(( n < 30 ? n : 30 ))
+    emit "-- $svc (last $shown of $n lines read)"
+    tail -n 30 "$WORK/svc.tail" | sed 's/^/  /' | emit_lines 242
+    [ -s "$WORK/logs.txt" ] || logs_header
+    emit "== $svc ==" 0 logs
+    emit_lines 1000 logs < "$WORK/svc.tail"
+  done
+  if [ -s "$WORK/logs.txt" ]; then emit "logs file (the last 300 lines per service, saved next to this report): $LOGS_FILE"
+  else emit "no logs read, no logs file"
+  fi
+}
+
+seal() {   # seal NAME: $WORK/NAME.txt plus the footer line -> $WORK/NAME.final
+  local sum footer
+  sum=$(sha256_12 "$WORK/$1.txt")
   if [ -n "$sum" ]; then footer="END OF DIAGNOSTICS $sum"
   else footer="END OF DIAGNOSTICS unchecked (no sha256sum, shasum or openssl found)"; fi
-  { cat "$WORK/main.txt"; printf '\n%s\n' "$footer"; } > "$WORK/final.txt"
-  cat "$WORK/final.txt"
-  if dir=$(mkdir -p "$OUT_DIR" 2>/dev/null && cd "$OUT_DIR" 2>/dev/null && pwd) && file=$dir/dcdash-diag-$STAMP.txt && cp "$WORK/final.txt" "$file" 2>/dev/null; then
-    echo "saved: $file"
-  else
-    echo "could not save the report in $OUT_DIR" >&2
-    return 1
+  { cat "$WORK/$1.txt"; printf '\n%s\n' "$footer"; } > "$WORK/$1.final"
+}
+
+finish_report() {
+  local rc=0
+  seal main
+  cat "$WORK/main.final"
+  if [ -z "$OUT_ABS" ]; then echo "could not save the report in $OUT_DIR" >&2; return 1; fi
+  if [ -s "$WORK/logs.txt" ]; then
+    seal logs
+    if cp "$WORK/logs.final" "$LOGS_FILE" 2> /dev/null; then echo "saved: $LOGS_FILE"; else echo "could not save the logs file $LOGS_FILE" >&2; rc=1; fi
   fi
-  # B1b: write the logs file here too (dcdash-diag-$STAMP-logs.txt from $WORK/logs.txt, header DCDASH-DIAG-LOGS v1, same footer rule).
+  if cp "$WORK/main.final" "$OUT_ABS/dcdash-diag-$STAMP.txt" 2> /dev/null; then echo "saved: $OUT_ABS/dcdash-diag-$STAMP.txt"
+  else echo "could not save the report in $OUT_DIR" >&2; rc=1
+  fi
+  return $rc
 }
 
 collect() {
@@ -496,6 +677,8 @@ collect() {
   trap 'rm -rf "$WORK"' EXIT
   trap 'exit 130' INT TERM HUP
   STAMP=$(date +%Y%m%d-%H%M%S)
+  OUT_ABS=$(mkdir -p "$OUT_DIR" 2> /dev/null && cd "$OUT_DIR" 2> /dev/null && pwd)
+  LOGS_FILE=${OUT_ABS:-$OUT_DIR}/dcdash-diag-$STAMP-logs.txt
   report_header
   run_section "HOST" section_host
   run_section "DISKS" section_disks
@@ -504,8 +687,11 @@ collect() {
   run_section "TARGETS (DNS lookup, then TCP connect with a 3 s timeout)" section_targets
   run_section "LOCAL PORTS" section_local_ports
   run_section "TOOLS ON PATH" section_tools
-  # B1b: SERVICES, DATABASE, API and LOGS go here, in this order, as run_section calls with section_<name> functions.
-  # Docker state shared between sections (the "docker did not answer" skip) must live in a file under $WORK: sections run in subshells.
+  # State shared between sections lives in files under $WORK (sections run in subshells): docker.down, containers, logs.txt.
+  run_section "SERVICES" section_services
+  run_section "DATABASE" section_database
+  run_section "API" section_api
+  run_section "LOGS" section_logs
   finish_report
 }
 

@@ -1,18 +1,23 @@
 """scripts/collect-diagnostics.sh is the Linux twin of collect-diagnostics.ps1: host facts with no application and no internet.
 
 The scrubber is awk, and Ubuntu's awk is mawk while a dev box may have gawk, so the scrubber tests run on both (a temp bin dir whose
-`awk` is a symlink). Nothing here calls the real `docker`: a fake one sits first on PATH and leaves a marker file if it is ever called.
+`awk` is a symlink). Nothing here calls the real `docker`: a fake one sits first on PATH and leaves a marker file if it is ever called
+(except in the runs below that build their own PATH, where the only `docker` is a fake that logs its argv). WSL's Docker Desktop
+integration puts the real docker in /usr/bin, so such a run uses a folder of symlinks to just the tools it needs as the WHOLE path.
 Every run passes `--project-dir` pointing at an empty temp folder (the default would resolve to this repo and its real .env).
 """
 import atexit
 import hashlib
+import http.server
 import os
 import random
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,12 +91,26 @@ def _only_tools(tmp_path: Path, names: list[str]) -> str:
     return str(only)
 
 
-BASE_TOOLS = ["bash", "awk", "sed", "head", "tr", "cat", "cp", "cut", "date", "df", "dirname", "getconf", "getent", "hostname",
+BASE_TOOLS = ["bash", "awk", "sed", "head", "tail", "tr", "cat", "cp", "cut", "date", "df", "dirname", "getconf", "getent", "hostname",
               "id", "iconv", "ip", "mkdir", "mktemp", "readlink", "rm", "sort", "ss", "uname", "timeout"]
 
 
-def _run(args: list[str], cwd: Path, *, stdin: bytes | None = None, path: str | None = None, timeout: int = 120) -> Result:
-    env = {**os.environ, "PATH": _with_fake(path if path is not None else os.environ["PATH"])}
+def _bin_dir(tmp_path: Path, name: str, tools: list[str]) -> Path:
+    """A folder named `name` holding symlinks to just these tools (the whole PATH of a run that must not see anything else)."""
+    folder = tmp_path / name
+    folder.mkdir()
+    for tool in tools:
+        found = shutil.which(tool)
+        if found:
+            (folder / tool).symlink_to(found)
+    return folder
+
+
+def _run(args: list[str], cwd: Path, *, stdin: bytes | None = None, path: str | None = None, timeout: int = 120,
+         exact_path: bool = False, extra_env: dict[str, str] | None = None) -> Result:
+    """`exact_path` uses `path` as the whole PATH: no marker docker in front, for the runs that bring their own fake docker or none."""
+    base = path if path is not None else os.environ["PATH"]
+    env = {**os.environ, "PATH": base if exact_path else _with_fake(base), **(extra_env or {})}
     proc = subprocess.run([BASH, str(SCRIPT), *args], capture_output=True, input=stdin, cwd=cwd, env=env, timeout=timeout)
     return Result(proc.returncode, proc.stdout, proc.stderr.decode("utf-8", "replace"))
 
@@ -337,6 +356,15 @@ def test_invalid_utf8_is_dropped_so_the_report_stays_valid_utf8(awk_path, tmp_pa
     assert files["main.txt"].decode("utf-8") == "badbyte"
 
 
+def test_an_iconv_that_exits_1_after_dropping_a_byte_does_not_fail_the_section(awk_path, tmp_path):
+    fake = tmp_path / "iconv"
+    fake.write_text(f'#!/bin/sh\n{shutil.which("iconv")} "$@"\nexit 1\n')
+    fake.chmod(0o755)
+    files = _emit(tmp_path, awk_path, f'ICONV_BIN={fake}; emit_lines < "$WORK/in.dat"; echo "rc=$?" > "$WORK/rc.txt"',
+                  inputs={"in.dat": b"bad\xffbyte\n"})
+    assert files["main.txt"] == b"badbyte" and files["rc.txt"] == b"rc=0\n"
+
+
 # ---- a run of the skeleton ---------------------------------------------------------------------------------------------------------
 
 @dataclass
@@ -391,7 +419,8 @@ def test_header_and_every_section_in_order(skeleton):
     assert text.splitlines()[0].startswith("DCDASH-DIAG v1 | collect-diagnostics.sh | bash ")
     assert re.search(r"^local time: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d\d:\d\d \(", text, re.M)
     assert re.search(r"^utc time: +\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$", text, re.M)
-    positions = [text.index(f"\n== {name}") for name in ("HOST", "DISKS", "NETWORK", "CLOCK", "TARGETS", "LOCAL PORTS", "TOOLS ON PATH")]
+    names = ("HOST", "DISKS", "NETWORK", "CLOCK", "TARGETS", "LOCAL PORTS", "TOOLS ON PATH", "SERVICES", "DATABASE", "API", "LOGS")
+    positions = [text.index(f"\n== {name}") for name in names]
     assert positions == sorted(positions)
     assert f"project folder: {skeleton.project} (no compose.yaml)" in text
     assert "scrubber: 0 secret-like value(s)" in text
@@ -407,9 +436,15 @@ def test_closed_port_shows_a_refusal_with_milliseconds_and_a_bad_name_a_dns_fail
     assert "target badtarget\n  invalid (expected host:port)" in text
 
 
-def test_nothing_is_listed_for_sections_that_belong_to_the_next_task_yet(skeleton):
-    # B1b adds SERVICES, DATABASE, API and LOGS; this documents that the skeleton stops at TOOLS ON PATH.
-    assert "== SERVICES" not in _report(skeleton)
+def test_without_a_compose_project_the_container_sections_are_skipped_and_no_logs_file_is_written(skeleton):
+    text = _report(skeleton)
+    assert f"\ncontainer sections skipped: no compose.yaml in {skeleton.project}\n" in text  # the fake docker is on PATH: it is the folder that lacks the file
+    assert "container sections skipped (see SERVICES); no logs file" in text
+    assert re.search(r"^tcp 127\.0\.0\.1:5432 (OK|FAILED) in \d+ ms", text, re.M)
+    assert re.search(r"^GET http://127\.0\.0\.1/api/health\n  (HTTP \d{3} in \d+ ms \(via [^)]+\)|FAILED in \d+ ms \(via [^)]+\): )", text, re.M)
+    assert "GET http://127.0.0.1:8000/api/health (native install only)" in text
+    assert re.search(r"^(systemd units dcdash\*, postgres\*, docker:|systemctl list-units failed)", text, re.M)
+    assert [n for n in skeleton.names if n.endswith("-logs.txt")] == []
 
 
 def test_env_values_never_reach_the_report_even_inside_the_project_path(tmp_path, quiet_cwd):
@@ -493,3 +528,391 @@ def test_the_awk_scrubber_agrees_with_the_python_one_on_random_long_lines(awk_pa
     assert len(got) == len(lines)
     for line, scrubbed in zip(lines, got):
         assert scrubbed == scrub_url_credentials(line, known)
+
+
+# ---- SERVICES, DATABASE, API and LOGS against a fake docker that logs its argv -----------------------------------------------------
+
+URL_SECRET = "UrlPassw0rd1"
+ENV_SECRET = "Env-Pa55word!"
+OTHER_SECRET = "other-secret-9"
+ENV_TEXT = f"POSTGRES_PASSWORD={ENV_SECRET}\r\nAPP_SECRET_KEY={OTHER_SECRET}\r\nPORT=80\r\n"
+SERVICES = ["db", "api", "worker"]
+LINES_PER_SERVICE = 120
+DOCKER_TOOLS = [*BASE_TOOLS, "sleep", "sha256sum"]
+
+
+def _fake_docker(folder: Path, log: Path) -> Path:
+    """A `docker` that answers the four compose calls the script may make with canned text full of credentials, and logs its argv."""
+    cwd_log = log.with_name("docker-cwd.log")
+    script = f"""#!/bin/sh
+echo "$*" >> "{log}"
+echo "$PWD" >> "{cwd_log}"
+[ "$1" = compose ] || exit 64
+case "$2" in
+  config) printf 'db\\napi\\nworker\\nbad name\\n' ;;
+  ps)
+    printf 'NAME              IMAGE         COMMAND                  SERVICE   STATUS\\n'
+    printf 'dcdash-db-1       postgres:16   "docker-entrypoint.sh"   db        Up 2 days (healthy)\\n'
+    printf 'dcdash-worker-1   dcdash-app    "run --db postgres://dcdash:{URL_SECRET}@db/dcdash"   worker    Exited (1) 3 minutes ago\\n'
+    ;;
+  exec)
+    echo "/var/run/postgresql:5432 - accepting connections"
+    echo "note: used postgres://dcdash:{URL_SECRET}@db/dcdash with {ENV_SECRET}" >&2
+    ;;
+  logs)
+    svc="$6"
+    if [ "$svc" = worker ]; then echo "Error response from daemon: {ENV_SECRET} was rejected" >&2; exit 1; fi
+    i=1
+    {{
+      echo "$svc-1  | early line with postgres://dcdash:{URL_SECRET}@db/dcdash and {ENV_SECRET}"
+      while [ $i -le {LINES_PER_SERVICE - 5} ]; do echo "$svc-1  | 2026-10-12 12:00:00 INFO request $i served"; i=$((i + 1)); done
+      echo "$svc-1  | late line with postgres://dcdash:{URL_SECRET}@db/dcdash"
+      echo "$svc-1  | late line says {ENV_SECRET} and {OTHER_SECRET}"
+      echo "$svc-1  | long line {"y" * 1500}"
+      echo "$svc-1  | the very last line"
+    }} | tail -n "$5"
+    ;;
+  *) exit 65 ;;
+esac
+"""
+    fake = folder / "docker"
+    fake.write_text(script)
+    fake.chmod(0o755)
+    return fake
+
+
+@dataclass
+class Compose:
+    proc: Result
+    main: str
+    logs: str
+    stdout: str
+    argv: list[str]
+    cwds: list[str]
+    project: Path
+    out_dir: Path
+    elapsed: float
+
+
+def _compose_run(tmp_path: Path, *, seconds: str | None = None, with_compose_file: bool = True, with_docker: bool = True,
+                 extra_tools: list[str] | None = None, extra_env: dict[str, str] | None = None, awk: str | None = None,
+                 without: tuple[str, ...] = ()) -> Compose:
+    project, out_dir, cwd, log = tmp_path / "project", tmp_path / "out", tmp_path / "cwd", tmp_path / "docker-argv.log"
+    for folder in (project, out_dir, cwd):
+        folder.mkdir()
+    (project / ".env").write_bytes(ENV_TEXT.encode())
+    if with_compose_file:
+        (project / "compose.yaml").write_text("services: {}\n")
+    bin_dir = _bin_dir(tmp_path, "bin", [t for t in [*DOCKER_TOOLS, *(extra_tools or [])] if t not in without and (awk is None or t != "awk")])
+    if awk is not None:
+        (bin_dir / "awk").symlink_to(awk)
+    if with_docker:
+        _fake_docker(bin_dir, log)
+    env = {"DCDASH_DIAG_DOCKER_SECONDS": seconds} if seconds else {}
+    started = time.monotonic()
+    proc = _run(["--project-dir", str(project), "--out-dir", str(out_dir)], cwd, path=str(bin_dir), exact_path=True, timeout=90,
+                extra_env={**env, **(extra_env or {})})
+    elapsed = time.monotonic() - started
+    files = {f.name: f.read_text(encoding="utf-8") for f in out_dir.iterdir()}
+    main = next((t for n, t in files.items() if re.fullmatch(r"dcdash-diag-\d{8}-\d{6}\.txt", n)), "")
+    logs = next((t for n, t in files.items() if re.fullmatch(r"dcdash-diag-\d{8}-\d{6}-logs\.txt", n)), "")
+    argv = log.read_text().splitlines() if log.exists() else []
+    cwds = log.with_name("docker-cwd.log").read_text().splitlines() if log.with_name("docker-cwd.log").exists() else []
+    return Compose(proc, main, logs, proc.out, argv, cwds, project, out_dir, elapsed)
+
+
+def _verifies(text: str) -> bool:
+    lines = text.split("\n")
+    match = FOOTER.fullmatch(lines[-2])
+    return lines[-1] == "" and bool(match) and hashlib.sha256("\n".join(lines[:-2]).encode()).hexdigest()[:12] == match.group(1)
+
+
+def _section(text: str, name: str) -> str:
+    start = text.index(f"\n== {name}")
+    nxt = text.find("\n== ", start + 4)
+    return text[start:nxt if nxt != -1 else len(text)]
+
+
+@pytest.fixture(scope="module")
+def compose_run(tmp_path_factory):
+    return _compose_run(tmp_path_factory.mktemp("compose"))
+
+
+def test_compose_run_writes_both_files_and_both_footers_verify(compose_run):
+    run = compose_run
+    assert run.proc.rc == 0, run.proc.err
+    assert run.main and run.logs, sorted(p.name for p in run.out_dir.iterdir())
+    assert _verifies(run.main) and _verifies(run.logs)
+    assert "section failed" not in run.main
+    assert run.logs.startswith("DCDASH-DIAG-LOGS v1 | collect-diagnostics.sh | bash ")
+    assert run.stdout.startswith(run.main.split("\n")[0]) and run.stdout.count("\nsaved: ") == 2
+    assert not DOCKER_MARKER.exists()
+
+
+def test_no_credential_reaches_either_file_or_stdout_and_the_hiding_is_visible(compose_run):
+    run = compose_run
+    for where, text in (("report", run.main), ("logs file", run.logs), ("stdout", run.stdout)):
+        for secret in (URL_SECRET, ENV_SECRET, OTHER_SECRET):
+            assert secret not in text, f"{secret} in the {where}"
+        assert "postgres://dcdash:" not in text, where
+    assert "[hidden]" in run.main and "[hidden]" in run.logs
+    assert "scrubber: 2 secret-like value(s)" in run.main
+
+
+def test_services_database_and_logs_show_the_canned_facts(compose_run):
+    main = compose_run.main
+    services = _section(main, "SERVICES")
+    assert f"docker compose ps -a in {compose_run.project} (exit code 0):" in services
+    assert "  dcdash-worker-1   dcdash-app" in services and "Exited (1) 3 minutes ago" in services and "Up 2 days (healthy)" in services
+    assert "systemd units" not in services, "the systemd fallback is only for machines without containers"
+    database = _section(main, "DATABASE")
+    assert "docker compose exec -T db pg_isready -U dcdash -d dcdash (exit code 0):" in database
+    assert "  /var/run/postgresql:5432 - accepting connections" in database and "tcp 127.0.0.1" not in database
+    logs = _section(main, "LOGS")
+    assert "services: db, api, worker" in logs  # the name with a space is not a service name
+    for svc in ("db", "api"):
+        assert f"-- {svc} (last 30 of {LINES_PER_SERVICE} lines read)" in logs
+        assert f"  {svc}-1  | the very last line" in logs
+    assert "-- worker: docker compose logs failed (exit code 1): Error response from daemon: [hidden] was rejected" in logs
+    assert f"logs file (the last 300 lines per service, saved next to this report): {compose_run.out_dir}/dcdash-diag-" in logs
+    assert logs.splitlines()[-2].endswith("-logs.txt") and FOOTER.fullmatch(logs.splitlines()[-1])
+
+
+def test_the_logs_file_holds_far_more_lines_than_the_report(compose_run):
+    run = compose_run
+    for svc in ("db", "api"):
+        in_main = [l for l in run.main.splitlines() if l.startswith(f"  {svc}-1  |")]
+        in_logs = [l for l in run.logs.splitlines() if l.startswith(f"{svc}-1  |")]
+        assert len(in_main) == 30 and len(in_logs) == LINES_PER_SERVICE
+        assert "early line with postgres://[hidden]@db/dcdash and [hidden]" in "\n".join(in_logs)
+        assert "early line" not in "\n".join(in_main)
+    assert "== db ==" in run.logs and "== api ==" in run.logs and "== worker ==" not in run.logs
+    assert len(run.logs.splitlines()) > len(_section(run.main, "LOGS").splitlines())
+
+
+def test_docker_is_only_asked_for_config_services_ps_logs_and_exec_in_the_project_folder(compose_run):
+    run = compose_run
+    assert run.argv == ["compose ps -a", "compose exec -T db pg_isready -U dcdash -d dcdash", "compose config --services",
+                        *(f"compose logs --no-color --tail 300 {svc}" for svc in SERVICES)]
+    assert {os.path.realpath(c) for c in run.cwds} == {os.path.realpath(run.project)}
+
+
+def test_long_log_lines_are_clipped_at_240_in_the_report_and_1000_in_the_logs_file(compose_run):
+    long_main = [l for l in compose_run.main.splitlines() if "long line yyy" in l]
+    long_logs = [l for l in compose_run.logs.splitlines() if "long line yyy" in l]
+    assert len(long_main) == 2 and len(long_logs) == 2
+    assert all(len(l.encode()) <= 242 and l.endswith("…") for l in long_main)  # two spaces of indent plus 240
+    assert all(len(l.encode()) <= 1000 and l.endswith("…") for l in long_logs)
+
+
+@pytest.mark.parametrize("awk_name", ["mawk", "gawk"])
+def test_the_whole_run_gives_the_same_facts_on_mawk_and_gawk(awk_name, tmp_path):
+    found = shutil.which(awk_name)
+    if found is None:
+        pytest.skip(f"{awk_name} is not installed")
+    run = _compose_run(tmp_path, awk=found)
+    assert run.proc.rc == 0 and _verifies(run.main) and _verifies(run.logs), run.proc.err
+    assert "section failed" not in run.main
+    for text in (run.main, run.logs, run.stdout):
+        assert not [s for s in (URL_SECRET, ENV_SECRET, OTHER_SECRET) if s in text]
+    assert len([l for l in run.main.splitlines() if l.startswith("  db-1  |")]) == 30
+    assert len([l for l in run.logs.splitlines() if l.startswith("db-1  |")]) == LINES_PER_SERVICE
+    assert "Exited (1) 3 minutes ago" in run.main and "(exit code 0):" in _section(run.main, "DATABASE")
+
+
+def test_without_timeout_docker_runs_unbounded_and_the_report_says_so_once(tmp_path):
+    run = _compose_run(tmp_path, without=("timeout",))
+    assert run.proc.rc == 0 and _verifies(run.main) and _verifies(run.logs), run.proc.err
+    assert run.main.count("note: timeout is missing, so no command here has a time limit") == 1
+    assert "(exit code 0):" in _section(run.main, "DATABASE") and "docker did not answer" not in run.main
+    assert len(run.argv) == 6
+
+
+def test_the_script_only_names_four_compose_commands_and_no_inspect():
+    code = "\n".join(_code_lines())
+    assert set(re.findall(r"\bcompose (\w+)", code)) <= {"config", "ps", "logs", "exec"}
+    assert "inspect" not in code and "docker info" not in code and "docker version" not in code
+
+
+def test_without_docker_the_container_sections_say_so_and_the_database_falls_back_to_a_tcp_connect(tmp_path):
+    run = _compose_run(tmp_path, with_docker=False)
+    assert run.proc.rc == 0, run.proc.err
+    assert run.logs == "" and _verifies(run.main)
+    assert "\ncontainer sections skipped: docker not found\n" in run.main
+    assert re.search(r"^systemd units dcdash\*, postgres\*, docker: none found \(systemctl not found\)$", run.main, re.M)
+    assert re.search(r"^tcp 127\.0\.0\.1:5432 (OK|FAILED) in \d+ ms", _section(run.main, "DATABASE"), re.M)
+    assert "container sections skipped (see SERVICES); no logs file" in _section(run.main, "LOGS")
+    assert run.argv == [] and "section failed" not in run.main
+
+
+def test_without_a_compose_file_docker_is_never_asked(tmp_path):
+    run = _compose_run(tmp_path, with_compose_file=False)
+    assert run.proc.rc == 0 and run.argv == [], run.argv
+    assert f"\ncontainer sections skipped: no compose.yaml in {run.project}\n" in run.main
+    assert run.logs == "" and "no logs file" in _section(run.main, "LOGS")
+    assert not [p for p in run.out_dir.iterdir() if p.name.endswith("-logs.txt")]
+
+
+def test_systemd_units_are_listed_when_there_are_no_containers(tmp_path):
+    bin_dir = _bin_dir(tmp_path, "sysbin", DOCKER_TOOLS)
+    fake = bin_dir / "systemctl"
+    fake.write_text("#!/bin/sh\ncat <<'UNITS'\n  dcdash-collector.service  loaded active running DC Dashboard collector\n"
+                    "  postgresql@16-main.service loaded failed failed PostgreSQL Cluster\n  ssh.service loaded active running OpenBSD Secure Shell\n"
+                    "  docker.service loaded active running Docker Application Container Engine\n  docker.socket loaded active running Docker Socket\n"
+                    "UNITS\n")
+    fake.chmod(0o755)
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    result = _run(["--project-dir", str(cwd), "--out-dir", str(tmp_path / "out")], cwd, path=str(bin_dir), exact_path=True)
+    services = _section(result.out, "SERVICES")
+    assert result.rc == 0
+    assert "systemd units dcdash*, postgres*, docker:" in services
+    assert "  dcdash-collector.service  loaded active running" in services
+    assert "  postgresql@16-main.service  loaded failed failed" in services
+    assert "  docker.service  loaded active running" in services and "docker.socket" in services and "ssh.service" not in services
+
+
+def test_a_systemctl_that_fails_is_reported_not_hidden(tmp_path):
+    bin_dir = _bin_dir(tmp_path, "sysfail", DOCKER_TOOLS)
+    (bin_dir / "systemctl").write_text("#!/bin/sh\necho 'System has not been booted with systemd as init system (PID 1).' >&2\nexit 1\n")
+    (bin_dir / "systemctl").chmod(0o755)
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    result = _run(["--project-dir", str(cwd), "--out-dir", str(tmp_path / "out")], cwd, path=str(bin_dir), exact_path=True)
+    assert result.rc == 0
+    assert "systemctl list-units failed (exit code 1): System has not been booted with systemd as init system (PID 1)." in result.out
+
+
+def test_a_docker_that_does_not_answer_is_skipped_once_and_the_run_still_finishes(tmp_path):
+    # the fake sleeps 8 s on every call; the run shortens the limit to 1 s through DCDASH_DIAG_DOCKER_SECONDS (a knob meant for this test)
+    project, out_dir, cwd, log = tmp_path / "project", tmp_path / "out", tmp_path / "cwd", tmp_path / "argv.log"
+    for folder in (project, out_dir, cwd):
+        folder.mkdir()
+    (project / "compose.yaml").write_text("services: {}\n")
+    (project / ".env").write_text(f"X_PASSWORD={ENV_SECRET}\n")
+    bin_dir = _bin_dir(tmp_path, "slowbin", DOCKER_TOOLS)
+    sleep = shutil.which("sleep")
+    slow = bin_dir / "docker"
+    slow.write_text(f'#!/bin/sh\necho "$*" >> "{log}"\nexec {sleep} 8\n')
+    slow.chmod(0o755)
+    started = time.monotonic()
+    result = _run(["--project-dir", str(project), "--out-dir", str(out_dir)], cwd, path=str(bin_dir), exact_path=True, timeout=60,
+                  extra_env={"DCDASH_DIAG_DOCKER_SECONDS": "1"})
+    elapsed = time.monotonic() - started
+    text = result.out
+    assert result.rc == 0 and elapsed < 7, (result.err, elapsed)
+    assert text.count("docker did not answer within 1 s; container sections skipped") == 1
+    assert log.read_text().splitlines() == ["compose ps -a"], "after the first timeout docker is not called again"
+    assert re.search(r"^tcp 127\.0\.0\.1:5432 (OK|FAILED) in \d+ ms", _section(text, "DATABASE"), re.M)
+    assert "no logs read, no logs file" in _section(text, "LOGS")
+    assert not list(out_dir.glob("*-logs.txt")) and _verifies(next(out_dir.glob("dcdash-diag-*.txt")).read_text())
+    assert ENV_SECRET not in text
+    assert "section failed" not in text
+
+
+def test_a_docker_that_cannot_be_run_is_reported_once(tmp_path):
+    bin_dir = _bin_dir(tmp_path, "brokenbin", DOCKER_TOOLS)
+    (bin_dir / "docker").write_text("#!/nonexistent/interpreter\n")
+    (bin_dir / "docker").chmod(0o755)
+    project, cwd = tmp_path / "project", tmp_path / "cwd"
+    project.mkdir()
+    cwd.mkdir()
+    (project / "compose.yaml").write_text("services: {}\n")
+    result = _run(["--project-dir", str(project), "--out-dir", str(tmp_path / "out")], cwd, path=str(bin_dir), exact_path=True)
+    assert result.rc == 0 and len(re.findall(r"docker could not be run \(exit code 12[67]\); container sections skipped", result.out)) == 1, result.out[-1500:]
+
+
+# ---- the API probe: curl, wget or bash alone, against a real local server --------------------------------------------------------------
+
+BODY = ('{"status":  "degraded",\n\t"detail": "db url postgres://svc:' + URL_SECRET + '@db/x and ' + ENV_SECRET + ' were mentioned",\r\n'
+        '  "pad": "' + "p" * 400 + '"}\n')
+
+
+class _Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        code = 503 if self.path.startswith("/bad") else 200
+        body = BODY.encode()
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture(scope="module")
+def http_server():
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server.server_address[1]
+    server.shutdown()
+
+
+@pytest.fixture
+def silent_port():
+    """A port that accepts connections (the kernel completes the handshake) and never answers."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(5)
+    yield sock.getsockname()[1]
+    sock.close()
+
+
+TRANSPORTS = {"curl": ["curl"], "wget": ["wget"], "bash /dev/tcp": []}
+
+
+def _probe(tmp_path: Path, transport: str, url: str, note: str = "") -> tuple[str, float]:
+    """Source the script and run api_probe with a PATH that offers just one way of making an HTTP request."""
+    tools = _bin_dir(tmp_path, "probe-" + transport.replace(" ", "").replace("/", ""), [*BASE_TOOLS, *TRANSPORTS[transport]])
+    work = tmp_path / "probe_work"
+    work.mkdir()
+    env_file = tmp_path / "probe.env"
+    env_file.write_text(f"X_PASSWORD={ENV_SECRET}\n")
+    driver = tmp_path / "probe.sh"
+    driver.write_text('source "$1"; export LC_ALL=C; AWK=$(type -P awk); ICONV_BIN=$(type -P iconv); TIMEOUT_BIN=$(type -P timeout)\n'
+                      'WORK=$2; ENV_FILE=$3; : > "$WORK/main.txt"; api_probe "$4" "$5"\n')
+    started = time.monotonic()
+    proc = subprocess.run([BASH, str(driver), str(SCRIPT), str(work), str(env_file), url, note], capture_output=True, cwd=tmp_path,
+                          env={**os.environ, "PATH": str(tools)}, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return (work / "main.txt").read_text(encoding="utf-8"), time.monotonic() - started
+
+
+@pytest.mark.parametrize("transport", list(TRANSPORTS))
+def test_api_probe_reports_status_milliseconds_and_a_collapsed_scrubbed_clipped_body(transport, http_server, tmp_path):
+    if transport != "bash /dev/tcp" and shutil.which(transport) is None:
+        pytest.skip(f"{transport} is not installed")
+    text, _ = _probe(tmp_path, transport, f"http://127.0.0.1:{http_server}/api/health", "native install only")
+    lines = text.split("\n")
+    assert lines[0] == f"GET http://127.0.0.1:{http_server}/api/health (native install only)"
+    assert re.fullmatch(rf"  HTTP 200 in \d+ ms \(via {re.escape(transport)}\)", lines[1]), lines[1]
+    body = lines[2]
+    assert body.startswith('  body: {"status": "degraded", "detail": "db url postgres://[hidden]@db/x and [hidden] were mentioned", "pad": "ppp')
+    assert body.endswith("…") and len(body.encode()) <= 311 and len(lines) == 3
+    assert URL_SECRET not in text and ENV_SECRET not in text and "\t" not in text and "\r" not in text
+
+
+@pytest.mark.parametrize("transport", list(TRANSPORTS))
+def test_api_probe_still_shows_the_body_of_an_error_status(transport, http_server, tmp_path):
+    if transport != "bash /dev/tcp" and shutil.which(transport) is None:
+        pytest.skip(f"{transport} is not installed")
+    text, _ = _probe(tmp_path, transport, f"http://127.0.0.1:{http_server}/bad")
+    assert re.search(r"^  HTTP 503 in \d+ ms", text, re.M) and '  body: {"status": "degraded"' in text
+
+
+@pytest.mark.parametrize("transport", list(TRANSPORTS))
+def test_api_probe_names_a_refused_connection(transport, tmp_path):
+    if transport != "bash /dev/tcp" and shutil.which(transport) is None:
+        pytest.skip(f"{transport} is not installed")
+    text, _ = _probe(tmp_path, transport, "http://127.0.0.1:1/api/health")
+    assert re.search(rf"^  FAILED in \d+ ms \(via {re.escape(transport)}\): .*(refused|connect)", text, re.M | re.I), text
+
+
+@pytest.mark.parametrize("transport", list(TRANSPORTS))
+def test_api_probe_gives_up_after_three_seconds(transport, silent_port, tmp_path):
+    if transport != "bash /dev/tcp" and shutil.which(transport) is None:
+        pytest.skip(f"{transport} is not installed")
+    text, elapsed = _probe(tmp_path, transport, f"http://127.0.0.1:{silent_port}/api/health")
+    assert 2.5 < elapsed < 6.5, elapsed
+    assert re.search(rf"^  FAILED in \d{{4}} ms \(via {re.escape(transport)}\): ", text, re.M), text
