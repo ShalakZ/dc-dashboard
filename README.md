@@ -490,6 +490,10 @@ are not re-tagged) and publishes only on `127.0.0.1` (ports 18080 and 18443 by d
 ports 80 and 443. They run in a Compose project whose name must start with `dcdash_e2e`, and they delete only
 that project's own volume; see "Practise a restore".
 
+### Debugging on the SCADA workstation
+
+The protocol for connecting to the real SCADA and debugging it by copy-paste (the Diagnostics page, the connection check, the report format, the offline `scripts/collect-diagnostics.ps1`) is in [docs/field-debugging.md](docs/field-debugging.md).
+
 ### Logs
 
 Every container keeps at most 5 log files of 10 MB (50 MB per service, set in `compose.yaml`). The collector logs
