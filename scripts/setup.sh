@@ -1,8 +1,63 @@
 #!/usr/bin/env bash
 # Generates .env on first run, then starts the stack. Extra arguments go to
 # docker compose, e.g. scripts/setup.sh --profile dev
+# --timezone <zone> (or the DCDASH_TIMEZONE environment variable) sets the site timezone of the NEW .env, e.g.
+# scripts/setup.sh --timezone Africa/Cairo; the flag wins. It only seeds the first start; Settings changes it later.
 set -euo pipefail
+zones_file="$(cd "$(dirname "$0")" && pwd)/timezones.txt"
 cd "$(dirname "$0")/.."
+
+case "$PWD" in
+  *[Oo]ne[Dd]rive*)
+    echo "warning: this folder is inside OneDrive ($PWD). .env (the database password and the key that decrypts stored source credentials) and the backups would be synced to the cloud, and bind mounts on synced paths can be slow or locked. Install outside any synced folder, for example ~/dcdash." >&2 ;;
+esac
+
+# --timezone is ours; every other argument goes to docker compose (the positional parameters from here on).
+compose_args=()
+flag_given=0
+flag_zone=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --timezone)
+      [ $# -ge 2 ] || { echo "--timezone needs a value (a zone name like Africa/Cairo)" >&2; exit 1; }
+      flag_given=1; flag_zone="$2"; shift 2 ;;
+    --timezone=*)
+      flag_given=1; flag_zone="${1#--timezone=}"; shift ;;
+    *)
+      compose_args+=("$1"); shift ;;
+  esac
+done
+set -- ${compose_args[@]+"${compose_args[@]}"}  # the +form keeps an empty list working under set -u on bash < 4.4
+
+# The zone has to be on the allowlist (scripts/timezones.txt: the names Settings accepts) BEFORE anything is started: the api and
+# the collector read DCDASH_TIMEZONE at import, and a name they refuse crash-loops both on the first start.
+check_zone() {  # $1 = the zone, $2 = where it came from
+  local zone="$1" origin="$2" listed=0
+  if [ -z "$zone" ]; then
+    echo "$origin is empty: give a zone name like Africa/Cairo, or leave it out to start with UTC" >&2; exit 1
+  fi
+  [ -f "$zones_file" ] || { echo "cannot read $zones_file (the list of accepted timezones)" >&2; exit 1; }
+  # A name has no space, newline or '#'; grep -x would read a newline in the value as a second pattern, so those never get to it.
+  case "$zone" in
+    *[!A-Za-z0-9_+/-]*) ;;
+    *) if grep -Fxq -- "$zone" "$zones_file"; then listed=1; fi ;;
+  esac
+  [ "$listed" = 1 ] && return 0
+  zone="$(printf '%s' "$zone" | tr '\n\r' '  ')"
+  case "$zone" in
+    *" "*)
+      echo "$origin: '$zone' is not an IANA zone name (use a name like Africa/Cairo, not a Windows name like \"Egypt Standard Time\"). Leave it out to start with UTC and change it on the Settings page after the first start." >&2 ;;
+    *)
+      echo "$origin: timezone '$zone' is unknown to this release or refused by Settings (the UTC offset must be a whole number of hours in January and July, and the name must be spelled exactly as in the IANA list, for example Africa/Cairo). Leave it out to start with UTC and change it on the Settings page after the first start." >&2 ;;
+  esac
+  exit 1
+}
+requested=""
+if [ "$flag_given" = 1 ]; then
+  check_zone "$flag_zone" "--timezone"; requested="$flag_zone"
+elif [ -n "${DCDASH_TIMEZONE:-}" ]; then
+  check_zone "$DCDASH_TIMEZONE" "DCDASH_TIMEZONE"; requested="$DCDASH_TIMEZONE"
+fi
 
 # The Compose project name that the given `docker compose ...` command line acts on (nothing if it cannot say).
 project_name() {
@@ -14,6 +69,14 @@ project_name() {
 if [ -f .env ]; then
   # An .env without a database password can start nothing and cannot open an existing volume: leave it as it is and stop.
   grep -q '^DCDASH_DB_PASSWORD=.' .env || { echo ".env exists but has no DCDASH_DB_PASSWORD; it was not changed. Restore or fix it, then run this script again." >&2; exit 1; }
+  if [ "$flag_given" = 1 ]; then
+    echo "note: .env already exists, so --timezone changes nothing: the zone only seeds the first start. Change it on the Settings page." >&2
+  fi
+  # Compose reads a shell variable before .env, so a stale one wins for this start.
+  env_zone="$(sed -n 's/^DCDASH_TIMEZONE=//p' .env | head -n 1 | tr -d '\r')"
+  if [ -n "${DCDASH_TIMEZONE:-}" ] && [ "$DCDASH_TIMEZONE" != "${env_zone:-UTC}" ]; then
+    echo "warning: the DCDASH_TIMEZONE variable in this shell ($DCDASH_TIMEZONE) overrides .env (${env_zone:-UTC}) for this start." >&2
+  fi
 else
   # No .env but the database volume already exists: the volume was created with the password of the .env that is gone, so a
   # new random password would never open it (the api would crash-loop) and the new key could not decrypt the stored source
@@ -37,9 +100,13 @@ else
   done
   db_password=$(openssl rand -hex 24)
   secret_key=$(openssl rand -base64 32 | tr '+/' '-_')
-  printf 'DCDASH_DB_PASSWORD=%s\nDCDASH_SECRET_KEY=%s\nDCDASH_TIMEZONE=UTC\n' \
-    "$db_password" "$secret_key" > .env
+  zone="${requested:-UTC}"
+  printf 'DCDASH_DB_PASSWORD=%s\nDCDASH_SECRET_KEY=%s\nDCDASH_TIMEZONE=%s\n' \
+    "$db_password" "$secret_key" "$zone" > .env
   echo "Created .env"
+  # A shell variable beats .env in Compose, so the chosen zone wins over a stale one for this first start.
+  export DCDASH_TIMEZONE="$zone"
+  echo "timezone: $zone (it seeds Settings on the first start only; change it there later)" >&2
 fi
 PROJECT="$(project_name docker compose "$@" 2>/dev/null || true)"
 echo "starting Compose project: ${PROJECT:-unknown}" >&2
