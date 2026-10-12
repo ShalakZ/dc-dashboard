@@ -39,6 +39,12 @@ def other_database_password(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def no_resolv_conf(monkeypatch, tmp_path):
+    """The nameservers of the machine running the tests (a public address in WSL) would show up in every masked report."""
+    monkeypatch.setattr(report, "RESOLV_CONF", str(tmp_path / "no-resolv.conf"))
+
+
 async def ask(client, **params):
     return await client.get("/api/diagnostics/report", params=params)
 
@@ -111,6 +117,16 @@ async def test_an_empty_database_gives_every_section_and_masking_finds_nothing_i
         assert body["legend"] == [] and not re.search(r"(?:HOST|URN)-\d", joined)  # nothing in the environment looks like a host
         assert verify_paste(joined).ok
     assert len(await audit_rows(db)) == 2
+
+
+async def test_the_dns_servers_of_the_container_are_in_the_environment_and_a_masked_report_aliases_them(client, db, tmp_path, monkeypatch):
+    conf = tmp_path / "resolv.conf"
+    conf.write_text("nameserver 10.99.88.77\n")
+    monkeypatch.setattr(report, "RESOLV_CONF", str(conf))
+    await login_as(client, db, "admin")
+    plain, masked = (await ask(client)).text, (await ask(client, mask=1)).text
+    assert "dns servers: 10.99.88.77" in plain
+    assert "10.99.88.77" not in masked and re.search(r"dns servers: HOST-\d+", masked)
 
 
 async def test_the_json_carries_the_parts_the_checksum_and_the_legend_only_for_a_masked_report(client, db):

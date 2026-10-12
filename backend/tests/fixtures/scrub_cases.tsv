@@ -1,0 +1,44 @@
+# Shared scrubber fixture: ONE list of cases that the Python scrubber (core/audit.py scrub_url_credentials, used by core/logscrub.py), the
+# PowerShell copy in scripts/collect-diagnostics.ps1 and the awk copy in scripts/collect-diagnostics.sh must all satisfy.
+# Columns, separated by ONE TAB: name, known values (joined by "|", or "-" for none), input, expected output. The known column has no escapes.
+# Escapes in input and expected, decoded in ONE left-to-right pass: \t is a tab, \r is a carriage return, \\ is one backslash;
+# "(empty)" stands for the empty string. Lines starting with # are comments. The file is UTF-8; read it as UTF-8 explicitly.
+# The rules (see scrub_url_credentials): every known value of 4 or more characters, and the part after the first ":" of each (when it is 4
+# or more characters), becomes [hidden], literally (never as a pattern) and case-sensitively, longest first and equal lengths in
+# character order; then, in every run of non-whitespace text, everything from the first "://" to the last "@" becomes "://[hidden]@"
+# (only when an "@" follows the "://" in that run). A run that holds two URLs, or an e-mail address after a URL, is over-masked: that is the
+# safe direction and part of the contract. Whitespace is ASCII only (space, tab, CR, LF, VT, FF): a no-break space inside a run does not split it.
+plain-text-is-unchanged	-	collector started, 10 sources, 60 points	collector started, 10 sources, 60 points
+empty-string	-	(empty)	(empty)
+http-url-with-credentials	-	GET http://svc:Zq9-pw@host:9000/x failed	GET http://[hidden]@host:9000/x failed
+opc-tcp-url-with-credentials	-	source 3 went offline: opc.tcp://sim:s3cret@10.0.0.5:4840/dcdash/ timed out	source 3 went offline: opc.tcp://[hidden]@10.0.0.5:4840/dcdash/ timed out
+postgres-url	-	could not connect to postgresql://dcdash:Hq7-db-pass@db:5432/dcdash: refused	could not connect to postgresql://[hidden]@db:5432/dcdash: refused
+user-only-url	-	retry opc.tcp://operator@10.0.0.5:4840/ later	retry opc.tcp://[hidden]@10.0.0.5:4840/ later
+already-scrubbed-is-unchanged	-	http://[hidden]@host:9000/x	http://[hidden]@host:9000/x
+at-sign-without-scheme-is-unchanged	-	mail admin@example.org about it	mail admin@example.org about it
+scheme-without-at-is-unchanged	-	connected to opc.tcp://10.0.0.5:4840/dcdash/ in 12 ms	connected to opc.tcp://10.0.0.5:4840/dcdash/ in 12 ms
+url-in-quotes-and-parens	-	connect("opc.tcp://u:p4ss-word@h:4840") raised	connect("opc.tcp://[hidden]@h:4840") raised
+two-urls-separated-by-a-space	-	a=http://u1:pass-one@h1/x b=http://u2:pass-two@h2/y	a=http://[hidden]@h1/x b=http://[hidden]@h2/y
+two-urls-in-one-run-over-mask-to-the-last-at	-	a=http://u1:pass-one@h1/x,b=http://u2:pass-two@h2/y	a=http://[hidden]@h2/y
+mail-address-after-a-url-in-the-same-run-over-masks	-	http://u:pw-1234@h/x?mail=a@b.example	http://[hidden]@b.example
+whitespace-runs-and-tabs-are-kept	-	http://u:pw-1234@h/x\t\tdone    ok	http://[hidden]@h/x\t\tdone    ok
+ipv6-host	-	http://u:pw-1234@[::1]:8080/x	http://[hidden]@[::1]:8080/x
+urls-with-no-user-info-in-a-path-with-at-sign-later-in-another-run	-	file:///C:/x then ssh://git@host/repo.git	file:///C:/x then ssh://[hidden]@host/repo.git
+repeated-scheme-separators	-	a://b://c@x	a://[hidden]@x
+known-value-alone	Zq9-pw	password=Zq9-pw failed	password=[hidden] failed
+known-user-colon-password-hides-both-forms	svc:Zq9-pw	bad Zq9-pw and svc:Zq9-pw	bad [hidden] and [hidden]
+known-value-shorter-than-four-is-ignored	abc	abc stays abc	abc stays abc
+known-password-part-shorter-than-four-is-ignored	svc:abc	svc:abc and abc	[hidden] and abc
+known-longest-first	abcd|abcd-efgh	x abcd-efgh y abcd z	x [hidden] y [hidden] z
+known-then-url	Zq9-pw	http://u:Zq9-pw@h/x and Zq9-pw	http://[hidden]@h/x and [hidden]
+known-appears-twice-on-a-line	tok-1234	tok-1234 tok-1234	[hidden] [hidden]
+non-ascii-text-around-a-url	-	Fehler: opc.tcp://u:pä-ss@h:4840/ nicht erreichbar — été	Fehler: opc.tcp://[hidden]@h:4840/ nicht erreichbar — été
+a-log-line-from-the-collector	Zq9-pw	2026-10-12T04:00:01Z WARNING dcdash.collector source 3 went offline: opc.tcp://svc:Zq9-pw@10.0.0.5:4840/ timed out	2026-10-12T04:00:01Z WARNING dcdash.collector source 3 went offline: opc.tcp://[hidden]@10.0.0.5:4840/ timed out
+nbsp-inside-a-url-does-not-split-the-run	-	http://user:pa ss@host rest	http://[hidden]@host rest
+a-carriage-return-splits-runs	-	a://b\rc@d	a://b\rc@d
+backslash-t-in-the-text-is-not-a-tab	-	x://a\\tb@h	x://[hidden]@h
+known-value-with-regex-characters-is-literal	a.b*c+(d)$&^[x]	pw=a.b*c+(d)$&^[x] and axb*c+(d)$&^[x]	pw=[hidden] and axb*c+(d)$&^[x]
+known-value-is-case-sensitive	Secret-99	Secret-99 SECRET-99 secret-99	[hidden] SECRET-99 secret-99
+empty-user-info	-	http://@h/x	http://[hidden]@h/x
+at-sign-before-the-scheme-does-not-count	-	u@h then x://y	u@h then x://y
+known-equal-length-overlap-goes-in-character-order	abcd|bcde	abcde	[hidden]e

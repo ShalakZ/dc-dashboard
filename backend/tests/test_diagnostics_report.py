@@ -138,6 +138,92 @@ def test_an_ok_check_keeps_the_steps_that_carry_news_in_a_summary():
     assert "   read_points: 2 of 20 points are bad" in lines_of(render(data, "summary", ident), "CONNECTION CHECKS")
 
 
+THUMBPRINT = "9F2C41D7A0B3E85C6D1F4A27B9C03E5D8A16F7B4"
+CERTIFICATES_SUMMARY = (
+    f"our certificate dcdash-client, SHA-1 thumbprint {THUMBPRINT}, URI urn:dcdash:collector, valid until 2027-10-12 (364 days); "
+    "server certificate dcdash-simulator, valid until 2031-10-12 (1826 days), names scada-gw.plant.local"
+)
+ENDPOINTS_SUMMARY = (
+    "3 endpoint(s); configured Basic256Sha256/SignAndEncrypt with user name and password is offered. Offered: None/None [Anonymous]; "
+    "Basic256Sha256/SignAndEncrypt [UserName]; Basic256Sha256/Sign [UserName]"
+)
+
+
+def refused_session_check(**kw) -> CheckInfo:
+    """A check that passed endpoints and certificates (with the summaries a real run has) and failed at the session."""
+    base = check()
+    steps = tuple(
+        replace(step, summary={"certificates": CERTIFICATES_SUMMARY, "endpoints": ENDPOINTS_SUMMARY}.get(step.id, step.summary))
+        if step.id in ("certificates", "endpoints") else (
+            replace(step, status_name="BadSecurityChecksFailed", status_hex="0x80130000",
+                    hint="The server refused the secure channel; ask the SCADA team to trust the thumbprint shown in the certificates step.")
+            if step.id == "session" else step)
+        for step in base.steps
+    )
+    return replace(base, steps=steps, **kw)
+
+
+def test_a_failed_session_brings_the_certificates_and_endpoints_lines_the_hints_refer_to():
+    data = ReportData(generated_at=NOW, checks=(refused_session_check(),), sources=(source(),))
+    section = lines_of(render(data, "summary", ident), "CONNECTION CHECKS")
+    assert f"   certificates: {CERTIFICATES_SUMMARY}" in section  # the whole line, thumbprint and the server certificate part
+    assert f"   endpoints: {ENDPOINTS_SUMMARY}" in section and "[UserName]" in section[section.index(f"   endpoints: {ENDPOINTS_SUMMARY}")]
+    assert section.index(f"   certificates: {CERTIFICATES_SUMMARY}") > next(i for i, line in enumerate(section) if "5 session FAIL" in line)
+    long = replace(data, checks=(refused_session_check(),))
+    long_steps = tuple(replace(s, summary=s.summary + " and more " * 60) if s.id == "certificates" else s for s in long.checks[0].steps)
+    clipped = lines_of(render(replace(long, checks=(replace(long.checks[0], steps=long_steps),)), "summary", ident), "CONNECTION CHECKS")
+    line = next(line for line in clipped if line.startswith("   certificates:"))
+    assert len(line) == 300 and THUMBPRINT in line  # a 600-character summary is cut at the line limit, after the thumbprint
+    others = replace(data, checks=(check(fail_at="tcp", steps=(CheckStep("dns", True, ms=3.0, summary="dns fine"),
+                                                           CheckStep("tcp", False, error_class="ConnectionRefusedError"))),))
+    assert not any(line.startswith(("   certificates:", "   endpoints:")) for line in lines_of(render(others, "summary", ident), "CONNECTION CHECKS"))
+    ok = replace(data, checks=(check(fail_at=None),))
+    assert not any(line.startswith(("   certificates:", "   endpoints:")) for line in lines_of(render(ok, "summary", ident), "CONNECTION CHECKS"))
+    failed_later = replace(data, checks=(check(fail_at="read_points"),))
+    assert not any(line.startswith(("   certificates:", "   endpoints:")) for line in lines_of(render(failed_later, "summary", ident), "CONNECTION CHECKS"))
+
+
+def test_a_failed_endpoints_step_is_not_printed_twice_when_the_session_fails_too():
+    steps = tuple(
+        CheckStep(id=i, ok=True, ms=1.0, summary=f"{i} fine") for i in ("dns", "tcp")
+    ) + (
+        CheckStep("endpoints", False, ms=5.0, summary="not offered", error_class="ConfigMismatch", hint="ask"),
+        CheckStep("certificates", True, ms=5.0, summary=CERTIFICATES_SUMMARY),
+        CheckStep("session", False, ms=9.0, summary="", error_class="UaError", error_message="No matching endpoints"),
+    ) + tuple(CheckStep(id=i, ok=None) for i in STEP_IDS[5:])
+    data = ReportData(generated_at=NOW, checks=(check(fail_at="endpoints", steps=steps),), sources=(source(),))
+    section = lines_of(render(data, "summary", ident), "CONNECTION CHECKS")
+    assert sum(1 for line in section if line.startswith("   3 endpoints FAIL")) == 1 and "   endpoints: not offered" not in section
+    assert f"   certificates: {CERTIFICATES_SUMMARY}" in section
+
+
+def test_the_session_context_lines_fit_one_part_in_a_busy_report_and_keep_the_whole_thumbprint():
+    base = busy(40, 500, failing=33)
+    checks = tuple(c for c in base.checks if c.source_id != 33) + (refused_session_check(source_id=33, job_id=200),)
+    body = render(replace(base, checks=checks), "summary", ident)
+    parts = finalize(body, "abc1234-dirty", NOW)
+    assert len(parts.parts) == 1 and len(parts.parts[0].text) <= 12_000 and verify_paste(parts.text()).ok
+    section = lines_of(body, "CONNECTION CHECKS")
+    assert any(THUMBPRINT in line and line.startswith("   certificates:") for line in section)
+    assert any("[UserName]" in line and line.startswith("   endpoints:") for line in section)
+    assert all(len(line) <= 300 for line in section)
+
+
+def test_a_passed_read_points_step_still_shows_the_hint_about_the_bad_points():
+    hint = "The SCADA server answers, but the device behind it reports a fault. Ask the SCADA team which device or signal this is."
+    steps = tuple(
+        CheckStep(id=i, ok=True, ms=5.0, summary="read 5 point(s): 4 good, 1 bad; first bad: ns=2;i=2: BadSensorFailure (0x808C0000)"
+                  if i == "read_points" else "", hint=hint if i == "read_points" else None)
+        for i in STEP_IDS
+    )
+    data = ReportData(generated_at=NOW, checks=(check(fail_at=None, steps=steps),), sources=(source(),))
+    for detail in ("summary", "full"):
+        section = lines_of(render(data, detail, ident), "CONNECTION CHECKS")
+        shown = next(i for i, line in enumerate(section) if "BadSensorFailure (0x808C0000)" in line)
+        assert section[shown + 1] == f"      hint: {hint}", detail
+        assert sum(1 for line in section if "hint:" in line) == 1  # no other passed step grows a hint line
+
+
 def test_sources_without_a_check_are_listed_by_id_and_a_filtered_report_does_not_say_so():
     data = ReportData(generated_at=NOW, checks=(check(),), sources=(source(), source(4, "Spare"), source(5, "Third")))
     assert "no connection check has been run for 2 other sources: 4, 5" in lines_of(render(data, "summary", ident), "CONNECTION CHECKS")
@@ -315,12 +401,12 @@ def test_every_text_from_the_database_goes_through_the_transform():
         id=mark("stepbad"), ok=False, ms=9.0, summary=mark("stepsum"), error_class=mark("errcls"),
         status_name=mark("status"), status_hex=mark("hex"), error_message=mark("errmsg"), hint=mark("hint"),
     )
-    step_ok = CheckStep(id="read_points", ok=True, ms=3.0, summary=mark("oksum"))
+    step_ok = CheckStep(id="read_points", ok=True, ms=3.0, summary=mark("oksum"), hint=f"{mark('hintone')}\n{mark('hinttwo')}")
     data = ReportData(
         generated_at=NOW,
         environment=env(
             build_id=mark("build"), build_time=mark("btime"), collector_build_id=mark("cbuild"), python=mark("py"), system=mark("sys"),
-            asyncua=mark("ua"), pymodbus=mark("pm"), postgres=mark("pg"), timescale=mark("ts"),
+            asyncua=mark("ua"), pymodbus=mark("pm"), postgres=mark("pg"), timescale=mark("ts"), dns_servers=(mark("dns"),),
         ),
         settings=SettingsInfo(((mark("setkey"), mark("setval")),)),
         sources=(source(name=mark("name"), connector_type=mark("ctype"), status=mark("status2"), last_error=mark("lasterr"),
@@ -335,7 +421,18 @@ def test_every_text_from_the_database_goes_through_the_transform():
         journal=(ev("j"),),
         scans=(ScanInfo(1, mark("scanstatus"), mark("scanstage"), NOW, NOW, (("hosts", 3),), ((mark("outcome"), 2),), mark("scanerr")),),
         storage=StorageInfo(jobs=(PolicyJob(mark("proc"), mark("hyper"), True, mark("jobstatus"), NOW, NOW, 0),)),
-        audit=(AuditEntry(NOW, mark("actor"), mark("action"), {"k": mark("auditdet")}),),
+        audit=(
+            AuditEntry(NOW, mark("actor"), mark("action"), {"k": mark("auditdet")}),
+            AuditEntry(NOW, "admin", "source.updated", {
+                "source_id": 3, "name": mark("audname"),
+                "before": {"name": mark("audbeforename"), "config": {"endpoint": mark("audbeforeurl"), "security_policy": "none"}},
+                "after": {"name": mark("audaftername"), "config": {"endpoint": mark("audafterurl"), "security_policy": "none"}},
+            }),
+            AuditEntry(NOW, "admin", "source.created", {
+                "source_id": 4, "name": mark("audcreated"), "connector_type": mark("audtype"),
+                "config": {"endpoint": mark("audcreatedurl"), "security_policy": mark("audpolicy")},
+            }),
+        ),
         api_errors=(ev("api"),),
     )
     for detail in ("summary", "full"):
@@ -832,3 +929,148 @@ async def test_a_journal_row_written_by_the_writer_shows_up_in_a_report(db, sess
 ])
 def test_the_build_time_is_printed_in_utc_when_it_can_be_read(stamp, shown):
     assert f"(built {shown})" in environment_lines(build_time=stamp)
+
+
+# --- the audit tail names what a source edit changed (blind-read gap G1) -----------------------------------------------------------
+
+
+def audit_update(before, after, **subject) -> AuditEntry:
+    """A source.updated row the way the API writes it: only the changed top-level fields, config as a whole on both sides."""
+    return AuditEntry(NOW, "admin", "source.updated", {"source_id": 3, "name": "SCADA main", "before": before, "after": after, **subject})
+
+
+def audit_lines(*entries: AuditEntry, transform=ident, detail="summary", **kw) -> list[str]:
+    return lines_of(render(ReportData(generated_at=NOW, audit=entries, **kw), detail, transform), "AUDIT TAIL")
+
+
+CONFIG = {"endpoint": "opc.tcp://scada.plant.local:4840/", "security_policy": "none", "timeout_seconds": 5.0, "username": "svc"}
+
+
+@pytest.mark.parametrize("detail", ["summary", "full"])
+def test_a_security_policy_edit_shows_the_policy_pair_and_not_the_fields_that_stayed(detail):
+    entry = audit_update({"config": CONFIG}, {"config": {**CONFIG, "security_policy": "basic256sha256"}})
+    [line] = audit_lines(entry, detail=detail)
+    assert "changed: config.security_policy none -> basic256sha256" in line
+    assert "config.endpoint" not in line and "timeout_seconds" not in line and "source_id" in line and "SCADA main" in line
+
+
+def test_a_password_edit_says_the_secret_changed_and_a_user_name_or_key_edit_never_shows_what_it_holds():
+    password = audit_update({"secret": "set"}, {"secret": "changed"})
+    login = audit_update({"config": CONFIG}, {"config": {**CONFIG, "username": "reader-two", "client_key": "/certs/k2.pem"}})
+    removed = audit_update({"secret": "set"}, {"secret": "none"})
+    first, second, third = audit_lines(password, login, removed)
+    assert "changed: secret changed" in first and "->" not in first
+    assert "config.username changed" in second and "config.client_key changed" in second
+    assert "reader-two" not in second and "k2.pem" not in second and "svc" not in second
+    assert "changed: secret changed" in third  # a removed secret is still a change of the secret, nothing else is said about it
+
+
+def test_more_than_four_changed_fields_show_four_and_count_the_rest_in_a_line_that_fits():
+    before = {"name": "A", "enabled": True, "config": {"endpoint": "opc.tcp://a.plant.local:4840", "security_policy": "none", "root_node": "i=85", "timeout_seconds": 5.0}}
+    after = {"name": "B", "enabled": False, "config": {"endpoint": "opc.tcp://b.plant.local:4840", "security_policy": "basic256sha256", "root_node": "i=86", "timeout_seconds": 9.0}}
+    [line] = audit_lines(audit_update(before, after))
+    assert line.count(" -> ") == 4 and "(+2 more)" in line and len(line) <= 300
+    assert "enabled true -> false" in "".join(audit_lines(audit_update({"enabled": True}, {"enabled": False})))
+
+
+@pytest.mark.parametrize("detail", ["summary", "full"])
+def test_a_created_source_is_summed_up_by_name_type_endpoint_and_policy_without_its_secret(detail):
+    entry = AuditEntry(NOW, "admin", "source.created", {
+        "source_id": 4, "connector_type": "opcua", "name": "SCADA main", "enabled": True, "config": CONFIG, "secret": "set",
+    })
+    [line] = audit_lines(entry, detail=detail)
+    for part in ("created:", "name=SCADA main", "connector_type=opcua", "config.endpoint=opc.tcp://scada.plant.local:4840/", "config.security_policy=none"):
+        assert part in line, line
+    assert "svc" not in line and "secret" not in line and len(line) <= 300
+
+
+def test_a_value_in_an_audit_pair_goes_through_the_known_values_and_the_mask_before_it_is_clipped():
+    old, new = "opc.tcp://old-gw.plant.local:4840/", "opc.tcp://new-gw.plant.local:4840/"
+    entries = (
+        audit_update({"config": {"host": "plc-old-7"}, "name": "pw-xx12 line"}, {"config": {"host": "plc-new-8"}, "name": "pw-xx12 line two"}),
+        audit_update({"config": {"endpoint": old}}, {"config": {"endpoint": new}}),
+        AuditEntry(NOW, "admin", "source.created", {"source_id": 5, "name": "other", "config": {"endpoint": "opc.tcp://third.plant.local:4840/"}}),
+    )
+    data = ReportData(generated_at=NOW, audit=entries)
+    masker = Masker(*mask_names(data))
+    body = render(data, "summary", lambda value: masker.mask(scrub(value, ["pw-xx12"])), masked=True)
+    audit = "\n".join(lines_of(body, "AUDIT TAIL"))
+    for hidden in ("old-gw", "new-gw", "third.plant", "plc-old-7", "plc-new-8", "pw-xx12"):
+        assert hidden not in audit, (hidden, audit)
+    assert "HOST-" in audit and "[hidden]" in audit
+    # the old host belongs to no source any more, yet it is listed for the masker
+    assert "opc.tcp://old-gw.plant.local:4840/" in mask_names(data)[0]
+
+
+# --- a passed check with bad points, and several bad statuses (blind-read gap G2) ------------------------------------------------
+
+
+def read_points_check(summary, hint=None, bad=2, total=10, **kw) -> CheckInfo:
+    steps = tuple(
+        CheckStep(id=i, ok=True, ms=5.0, summary=summary if i == "read_points" else "", hint=hint if i == "read_points" else None,
+                  points_bad=bad if i == "read_points" else None, points_total=total if i == "read_points" else None)
+        for i in STEP_IDS
+    )
+    return check(fail_at=None, steps=steps, **kw)
+
+
+def test_the_verdict_of_a_passed_check_says_how_many_points_answered_a_bad_status():
+    data = ReportData(generated_at=NOW, checks=(read_points_check("read 10 point(s): 8 good, 2 bad"),), sources=(source(),))
+    first = render(data, "summary", ident).split("\n")[0]
+    assert first == 'LATEST CHECK: source 3 "Main SCADA" all steps OK, but 2 of 10 points answered a Bad status'
+    assert "all steps OK, but 2 of 10 points answered a Bad status" in "\n".join(lines_of(render(data, "full", ident), "CONNECTION CHECKS"))
+    clean = ReportData(generated_at=NOW, checks=(read_points_check("read 10 point(s): 10 good, 0 bad", bad=0),), sources=(source(),))
+    assert render(clean, "summary", ident).split("\n")[0].endswith("all steps OK")
+
+
+def test_the_bad_point_counts_come_from_the_detail_of_the_read_points_step():
+    def parsed(detail):
+        step = {"id": "read_points", "ok": True, "summary": "x", "detail": detail}
+        return report.parse_check(1, 3, "done", {"finished": True, "ok": True, "steps": [step]}, NOW, NOW).steps[0]
+
+    assert (parsed({"good": 8, "bad": 2, "bad_status": 1}).points_bad, parsed({"good": 8, "bad": 2, "bad_status": 1}).points_total) == (1, 10)
+    assert (parsed({"good": 8, "bad": 2}).points_bad, parsed({"good": 8, "bad": 2}).points_total) == (2, 10)  # an older result
+    assert parsed({}).points_bad is None and parsed({"good": "x", "bad": True}).points_total is None
+
+
+@pytest.mark.parametrize("detail", ["summary", "full"])
+def test_a_summary_with_three_bad_statuses_is_not_cut_and_each_status_gets_its_own_hint_line(detail):
+    summary = (
+        "read 12 point(s) in 3 request(s) of up to 100 node(s): 9 good, 3 bad; bad: BadSensorFailure ns=2;s=Panels.LVP01.kW; "
+        "BadNodeIdUnknown ns=2;s=Panels.LVP02.V; BadDeviceFailure ns=2;s=Panels.LVP03.kW"
+    )
+    hint = "BadSensorFailure, BadDeviceFailure: Ask the SCADA team which device or signal this is.\nBadNodeIdUnknown: The node id does not exist on this server."
+    data = ReportData(generated_at=NOW, checks=(read_points_check(summary, hint, bad=3, total=12),), sources=(source(),))
+    section = lines_of(render(data, detail, ident), "CONNECTION CHECKS")
+    assert any(summary in line for line in section), section
+    hints = [line for line in section if "hint:" in line]
+    assert hints == [f"      hint: {part}" for part in hint.split("\n")]
+
+
+# --- the nameservers of the API container (blind-read gap G3) -----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("servers", "expected"),
+    [(("127.0.0.11", "10.0.0.2"), "dns servers: 127.0.0.11, 10.0.0.2"), (None, "dns servers: unknown"), ((), "dns servers: none listed")],
+)
+def test_the_environment_names_the_dns_servers_of_the_container(servers, expected):
+    assert expected in environment_lines(dns_servers=servers).split("\n")
+
+
+def test_dns_servers_pass_through_the_mask():
+    data = ReportData(generated_at=NOW, environment=env(dns_servers=("10.20.30.40",)))
+    masker = Masker()
+    body = render(data, "summary", masker.mask, masked=True)
+    assert "10.20.30.40" not in body and "dns servers: HOST-1" in body
+
+
+def test_the_dns_servers_are_the_first_three_nameserver_lines_and_a_missing_file_is_unknown(tmp_path, monkeypatch):
+    conf = tmp_path / "resolv.conf"
+    conf.write_text("# Generated by Docker\nsearch plant.local\nnameserver 127.0.0.11 # embedded\nnameserver 10.0.0.2\nnameserver 10.0.0.3\nnameserver 10.0.0.4\noptions ndots:0\n")
+    monkeypatch.setattr(report, "RESOLV_CONF", str(conf))
+    assert report._dns_servers() == ("127.0.0.11", "10.0.0.2", "10.0.0.3")
+    conf.write_text("search plant.local\n")
+    assert report._dns_servers() == ()
+    monkeypatch.setattr(report, "RESOLV_CONF", str(tmp_path / "missing"))
+    assert report._dns_servers() is None

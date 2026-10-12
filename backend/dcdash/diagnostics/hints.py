@@ -9,6 +9,16 @@ CLOCK_SKEW = "ClockSkew"  # pseudo status name: the server clock is more than 30
 
 _CLOCK_ALSO = " Also check that the clocks of both machines agree."
 
+# Codes a gateway sends when the OPC UA server itself works but the device behind it does not deliver a value.
+_DEVICE_FAULT = (
+    "The SCADA server answers, but the device behind it reports a fault (or has not delivered a value yet) for these points. Ask "
+    "the SCADA team which device or signal this is and whether it is in service."
+)
+DEVICE_FAULT_CODES = (
+    "BadSensorFailure", "BadDeviceFailure", "BadCommunicationError", "BadNoCommunication", "BadOutOfService",
+    "BadWaitingForInitialData",
+)
+
 _BY_STATUS: dict[str, str] = {
     "BadSecurityChecksFailed": (
         "The server refused the secure channel; usually it does not trust our client certificate. Ask the SCADA team to trust the "
@@ -31,12 +41,13 @@ _BY_STATUS: dict[str, str] = {
         "Also check that the clocks of both machines agree."
     ),
     "BadCertificateUriInvalid": (
-        "The ApplicationUri in our certificate does not match what the client announces. Regenerate the client certificate with "
-        "the right application URI, or ask the SCADA team what they expect."
+        "The server compares two URIs and they differ: the ApplicationUri our client announces and the URI in our client "
+        "certificate. We announce the certificate's own URI (certificates step), so a certificate without one cannot match. "
+        "Regenerate it with a URI, or ask the SCADA team which they expect."
     ),
     "BadIdentityTokenRejected": (
-        "The server rejected the user identity. Check the user name and password, and that the endpoint allows user name and "
-        "password at all (see the user-token types in the endpoints step)."
+        "The server rejected the user identity. Ask the SCADA team whether this endpoint wants a user name and password (see the "
+        "user-token types in the endpoints step) and check the ones entered here."
     ),
     "BadIdentityTokenInvalid": (
         "The server could not use the identity we sent. Check that the source has a user name and a password, and that the endpoint "
@@ -76,7 +87,7 @@ _BY_STATUS: dict[str, str] = {
     ),
     "BadSecurityPolicyRejected": (
         "The server does not offer the security policy we asked for. See the endpoints step for what it offers and set the "
-        "source's security policy to one of those."
+        "source's security policy to one of those, or ask the SCADA team which to use."
     ),
     "BadSessionClosed": (
         "The server closed the session. Common causes: a limit on the number of sessions, an idle timeout, or a firewall that "
@@ -100,6 +111,7 @@ _BY_STATUS: dict[str, str] = {
         "The server rejected a timestamp. The clocks of the two machines differ too much; see the clock lines and fix the one that "
         "is wrong (a Docker Desktop VM clock drifts after the host sleeps)."
     ),
+    **dict.fromkeys(DEVICE_FAULT_CODES, _DEVICE_FAULT),
     CLOCK_SKEW: (
         "The clocks differ by over 5 minutes, which OPC UA does not tolerate. Local cause first: the Docker Desktop VM clock drifts "
         "after the host sleeps (restart Docker Desktop). If the report's browser-vs-container difference is also large, it is local; "
@@ -123,6 +135,11 @@ _BY_CLASS: dict[str, str] = {
         "The connection was reset by the other end or by something in between. Ask the SCADA team whether the service accepts "
         "this client, and the network team about a firewall or load balancer."
     ),
+    "UnusableAnswerError": (  # opcua.UnusableAnswerError: this client hung up on an answer it could not read
+        "The server's answer was not usable OPC UA: check that the port is the OPC UA port, and that nothing like a TLS proxy or "
+        "another protocol listens there. Ask the SCADA team for the exact endpoint URL and port, and the network team whether a "
+        "proxy sits in between."
+    ),
     "ConnectionAbortedError": (
         "The connection was cut during the exchange. Ask the SCADA team and the network team whether a firewall or the server's "
         "session limit closed it."
@@ -138,8 +155,13 @@ _TIMEOUT_AT_NETWORK_STEP = (
     "is down. Ask the network team whether this machine may reach it, and confirm the endpoint URL with the SCADA team."
 )
 _TIMEOUT_LATER = (
-    "The server accepted the connection but did not answer in time. It may be overloaded or a firewall may be dropping packets "
-    "after the first exchange; ask the SCADA team and the network team."
+    "The server accepted the connection but did not answer in time: it may be overloaded or a firewall may be dropping packets. "
+    "Ask the SCADA team and the network team."
+)
+_TIMEOUT_HANDSHAKE = (  # the steps that open the session: it needs several requests under one timeout
+    "The server accepted the connection but did not answer in time: it may be overloaded or a firewall may be dropping packets. "
+    "A session needs about four round trips, so answers of about a quarter of the timeout can still time out. Ask the SCADA team "
+    "and the network team."
 )
 _NETWORK_UNREACHABLE = (
     "There is no network route to that address. Check the address and ask the network team whether this machine may reach it."
@@ -163,7 +185,9 @@ def hint_for(status_name: str | None, exc_class: str | None, step_id: str) -> st
         if text is not None:
             return text
         if exc_class == "TimeoutError":
-            return _TIMEOUT_AT_NETWORK_STEP if step_id in ("dns", "tcp") else _TIMEOUT_LATER
+            if step_id in ("dns", "tcp"):
+                return _TIMEOUT_AT_NETWORK_STEP
+            return _TIMEOUT_HANDSHAKE if step_id in ("endpoints", "session") else _TIMEOUT_LATER
         if exc_class == "OSError":
             return _NETWORK_UNREACHABLE
     return None

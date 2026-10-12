@@ -6,6 +6,7 @@ whose volume is dcdash_e2e_dbdata, a name that is not the normal project's is th
 running normal stack stops the script before it changes anything.
 """
 import os
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -15,7 +16,8 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "e2e.sh"
 
 
-def run_e2e(tmp_path: Path, *, running_normal_stack: bool = False, npm_status: int = 0, broken_git: bool = False, **env: str):
+def run_e2e(tmp_path: Path, *, running_normal_stack: bool = False, npm_status: int = 0, broken_git: bool = False,
+            script: Path = SCRIPT, **env: str):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "calls.log"
@@ -36,14 +38,14 @@ def run_e2e(tmp_path: Path, *, running_normal_stack: bool = False, npm_status: i
         path.write_text("#!/usr/bin/env bash\n" + body)
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
     environment = {k: v for k, v in os.environ.items()
-                   if k not in ("COMPOSE_PROJECT_NAME", "E2E_COMPOSE_PROJECT") and not k.startswith("DCDASH_BUILD_")}
+                   if k not in ("COMPOSE_PROJECT_NAME", "E2E_COMPOSE_PROJECT") and not k.startswith(("DCDASH_BUILD_", "SIM_FAULT_"))}
     environment.update(
         PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         FAKE_RUNNING="1" if running_normal_stack else "",
         FAKE_NPM_STATUS=str(npm_status),
         **env,
     )
-    result = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=environment, timeout=60)
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=environment, timeout=60)
     return result, log.read_text().splitlines()
 
 
@@ -88,6 +90,71 @@ def test_a_running_normal_stack_stops_the_script_before_it_changes_anything(tmp_
     assert "docker compose --profile dev stop" in result.stderr  # and never with -v
     assert changing(calls) == [] and not any(c.startswith("npm") for c in calls)
     assert calls == ["docker compose -p dcdash --profile dev ps -q"]  # it only looked
+
+
+def test_a_fault_switch_in_the_environment_stops_the_script_before_any_docker_call(tmp_path):
+    result, calls = run_e2e(tmp_path, SIM_FAULT_SLOW="1.5")  # the simulator it starts would inherit it
+    assert result.returncode != 0
+    assert "SIM_FAULT_SLOW" in result.stderr and len(result.stderr.strip().splitlines()) == 1
+    assert calls == []  # not even the look at the normal stack
+
+
+def test_an_empty_fault_switch_is_no_fault_and_the_run_goes_on(tmp_path):
+    result, calls = run_e2e(tmp_path, SIM_FAULT_SLOW="", SIM_FAULT_AUTH="")
+    assert result.returncode == 0, result.stderr
+    assert "npm run e2e" in calls
+
+
+def test_the_fault_guards_sit_before_the_first_docker_command():
+    code = [line for line in SCRIPT.read_text().splitlines() if not line.lstrip().startswith("#")]
+    first_docker = next(i for i, line in enumerate(code) if "docker compose" in line)
+    assert next(i for i, line in enumerate(code) if "compgen -e SIM_FAULT_" in line) < first_docker
+    assert next(i for i, line in enumerate(code) if ".env" in line and "SIM_FAULT_" in line) < first_docker
+
+
+# ---- a fault left in the project's .env (compose hands it to the simulator just the same) ----------------------------------
+
+def tree_with_env(tmp_path: Path, env_text: str) -> Path:
+    """A copy of the script in a tree of its own: its `cd ..` lands there, so the .env is the test's and never the real one."""
+    root = tmp_path / "tree"
+    (root / "scripts").mkdir(parents=True)
+    (root / "frontend").mkdir()
+    shutil.copy(SCRIPT, root / "scripts" / "e2e.sh")
+    (root / ".env").write_text(env_text)
+    return root / "scripts" / "e2e.sh"
+
+
+@pytest.mark.parametrize("line, name", [
+    ("SIM_FAULT_SLOW=7.77", "SIM_FAULT_SLOW"),
+    ("export SIM_FAULT_DROP=7.77", "SIM_FAULT_DROP"),
+    ("  SIM_FAULT_AUTH = r7e77", "SIM_FAULT_AUTH"),
+    ('SIM_FAULT_SKEW="7777"', "SIM_FAULT_SKEW"),
+    ("SIM_FAULT_BAD='LVP01_kW:BadSensorFailure7'", "SIM_FAULT_BAD"),
+    ("SIM_FAULT_SLOW=7.77\r", "SIM_FAULT_SLOW"),
+], ids=["plain", "export", "blanks", "double-quoted", "single-quoted", "crlf"])
+def test_a_fault_switch_in_the_env_file_stops_the_script_before_any_docker_call(tmp_path, line, name):
+    script = tree_with_env(tmp_path, f"DCDASH_DB_PASSWORD=x\n{line}\n")
+    result, calls = run_e2e(tmp_path, script=script)
+    assert result.returncode != 0
+    assert name in result.stderr and len(result.stderr.strip().splitlines()) == 1
+    assert "7.77" not in result.stderr and "7777" not in result.stderr and "r7e77" not in result.stderr and "BadSensorFailure7" not in result.stderr
+    assert calls == []
+
+
+def test_empty_commented_and_unrelated_fault_lines_in_the_env_file_do_not_stop_the_script(tmp_path):
+    script = tree_with_env(tmp_path, 'SIM_FAULT_SLOW=\nSIM_FAULT_AUTH=""\nSIM_FAULT_DROP=\'\' # none\nSIM_FAULT_SKEW= # none\n'
+                                     "# SIM_FAULT_BAD=LVP01_kW:BadSensorFailure\nOTHER_SIM_FAULT_X=1\nNOTE=SIM_FAULT_SLOW=1\n")
+    result, calls = run_e2e(tmp_path, script=script)
+    assert result.returncode == 0, result.stderr
+    assert "npm run e2e" in calls
+
+
+def test_a_missing_env_file_is_no_fault(tmp_path):
+    script = tree_with_env(tmp_path, "")
+    (script.parent.parent / ".env").unlink()
+    result, calls = run_e2e(tmp_path, script=script)
+    assert result.returncode == 0, result.stderr
+    assert "npm run e2e" in calls
 
 
 # ---- the build id the images carry (W8, part G / amendment M10) -------------------------------------------------------------

@@ -1,0 +1,60 @@
+DCDASH-REPORT v1 | PART 1 OF 1 | build ede8a20 | 2026-10-12T04:09:43Z
+LATEST CHECK: source 1 "SCADA main" FAILED at certificates: CertificateTimeInvalid: the client certificate is expired (2025-09-07 to 2026-09-07)
+== ENVIRONMENT ==
+generated: 2026-10-12T04:09:43Z, site time 2026-10-12 04:09:43 UTC (UTC)
+report: detail=summary, not masked, source filter: all
+api: build ede8a20 (built 2026-10-12T03:57:50Z), up 10 min
+collector: build ede8a20, last heartbeat 10 s ago
+build check: OK (api and collector run the same build)
+runtime: Python 3.12.15, Linux x86_64 microsoft-standard-WSL2, asyncua 1.1.8, pymodbus 3.8.6
+database: PostgreSQL 16.15, TimescaleDB 2.30.2
+dns servers: 127.0.0.11
+clock: database minus container = +0.0 s (both run on one VM clock, so this cannot show drift)
+clock: browser minus container = +0.0 s
+clock: last server time seen 2026-10-12T04:09:35.855723+00:00 (source 1, check job 27), skew -0.3 s against the container clock
+== SETTINGS ==
+general.timezone=UTC billing.currency=(not set) sign_in.max_failures=5 sign_in.block_minutes=5 env.timezone=UTC env.session_hours=12 env.scan_max_hosts=1024 env.scan_extra_ports=(empty)
+== SOURCES ==
+#1 "SCADA main" opcua status=online secret=no authentication=none endpoint=opc.tcp://scada-gw.plant.local:4840/dcdash/ security_policy=basic256sha256
+== SOURCE HEALTH ==
+#1 "SCADA main": 10.4 reads/min, 17.3% bad, newest reading 7 s ago
+   2026-10-12T04:09:37Z warning job check.finished code=CertificateTimeInvalid: connection check failed at certificates: CertificateTimeInvalid {"first_failed":"certificates","job_id":27,"ok":false,"skew_seconds":-0.335,"steps":9,"steps_ok":8}
+== POINTS ==
+60 points: good 4, unmapped 56
+== CONNECTION CHECKS ==
+#1 "SCADA main" (opcua): job 27 done, 2026-10-12T04:09:37Z: FAILED at certificates: CertificateTimeInvalid: the client certificate is expired (2025-09-07 to 2026-09-07)
+   ok: dns 0 ms, tcp 1 ms, endpoints 2 ms, session 33 ms, server_time 0 ms, namespaces 1 ms, read_points 2 ms, timing 810 ms
+   4 certificates FAIL 1 ms: our certificate dcdash-collector, SHA-1 thumbprint 6C97648B7A51EB1638627C386FA79397D665E451, URI urn:dcdash:collector, EXPIRED on 2026-09-07; server certificate dcdash-simulator, valid until 2031-10-10 (1823 days), names scada-gw.plant.local
+      error: CertificateTimeInvalid: the client certificate is expired (2025-09-07 to 2026-09-07)
+      hint: A certificate is expired or not valid yet. Check the dates in the certificates step and renew the one that is out of date. Also check that the clocks of both machines agree.
+   server_time: the server's clock is 0.3 s behind ours
+   read_points: read 4 point(s) in 3 request(s) of up to 100 node(s): 4 good, 0 bad
+   timing: 5 reads of 4 node(s): min 0 ms, avg 1 ms, max 1 ms
+   clock: server 2026-10-12T04:09:35.855723+00:00, local 2026-10-12T04:09:36.190960+00:00, skew -0.3 s
+== JOURNAL ==
+2026-10-12T04:09:37Z warning job check.finished source=1 code=CertificateTimeInvalid: connection check failed at certificates: CertificateTimeInvalid {"first_failed":"certificates","job_id":27,"ok":false,"skew_seconds":-0.335,"steps":9,"steps_ok":8}
+2026-10-12T04:08:58Z info collector source.online source=1: source is online {"failures":0,"interval":5,"offline_seconds":null}
+== SCANS ==
+no scans
+== STORAGE AND RETENTION ==
+database 11.3 MB; readings 376.0 KB (compressed 0 bytes of 0 bytes); 1m rollup 88.0 KB; 1h rollup 72.0 KB
+disk: capacity 100.0 GB, used 0.01%, growth 376.0 KB/day, full in over 10 years, warning at 80%: no
+retention: raw 30 d, compress after 7 d, 1m rollup 730 d
+rows per day (hourly tier): 10-06=0, 10-07=0, 10-08=0, 10-09=0, 10-10=0, 10-11=0, 10-12=1905
+policy jobs: 5 in all, 0 not scheduled or failing
+journal: 2 events kept, oldest 2026-10-12T04:08:58Z
+== AUDIT TAIL ==
+2026-10-12T04:09:36Z admin source.checked {"job_id":27,"name":"SCADA main","source_id":1}
+2026-10-12T04:08:58Z admin source.updated {"name":"SCADA main","source_id":1} changed: config.client_key changed, config.client_cert /certs/opcua-client.pem -> /certs/expired-client.pem, config.security_policy none -> basic256sha256, enabled false -> true
+2026-10-12T04:08:52Z admin source.updated {"name":"SCADA main","source_id":1} changed: enabled true -> false
+2026-10-12T04:08:47Z admin diagnostics.report {"chars":4912,"detail":"summary","mask":false,"parts":1,"source_id":null}
+2026-10-12T04:08:43Z admin source.checked {"job_id":26,"name":"SCADA main","source_id":1}
+2026-10-12T04:08:05Z admin source.updated {"name":"SCADA main","source_id":1} changed: enabled false -> true
+2026-10-12T04:07:57Z admin source.updated {"name":"SCADA main","source_id":1} changed: enabled true -> false
+2026-10-12T04:07:52Z admin diagnostics.report {"chars":5012,"detail":"summary","mask":false,"parts":1,"source_id":null}
+2026-10-12T04:07:48Z admin source.checked {"job_id":25,"name":"SCADA main","source_id":1}
+2026-10-12T04:07:10Z admin source.updated {"name":"SCADA main","source_id":1} changed: config.timeout_seconds 3.0 -> 5.0, enabled false -> true
+== API ERRORS ==
+no server errors recorded
+--- PART 1 OF 1 | chars=4939 lines=57 ---
+END OF REPORT e7d4f94a64eb

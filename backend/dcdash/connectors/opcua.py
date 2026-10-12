@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,6 +13,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 from asyncua import Client, Node, ua
+from asyncua.client.ua_client import UaClient, UASocketProtocol
+from asyncua.common.shortcuts import Shortcuts
 from pydantic import BaseModel, Field
 
 from dcdash.connectors.base import (
@@ -66,7 +69,135 @@ def _translate(exc: BaseException) -> ConnectorError:
         return ConnectorError("timeout", "timed out")
     if isinstance(exc, (ConnectionError, OSError)):
         return ConnectorError("unreachable", str(exc) or exc.__class__.__name__)
+    code = exc.code if isinstance(exc, ua.UaStatusCodeError) else None
+    if isinstance(code, int) and not isinstance(code, bool):
+        return ConnectorError("protocol_error", _status_text(ua.StatusCode(code)))  # a refusal by name, not asyncua's long doc text
     return ConnectorError("protocol_error", str(exc))
+
+
+class UnusableAnswerError(ConnectionResetError):
+    """asyncua closed the connection itself because the server's answer was not OPC UA it could read (a wrong port, a TLS proxy, a
+    server bug). A `ConnectionResetError` for everything that handles connection errors; its own class name for the hints."""
+
+
+class _ReportingProtocol(UASocketProtocol):
+    """asyncua's client protocol, made to say why a connection ended.
+
+    Stock asyncua drops the status of a server ERR message (what a real server answers to a certificate it does not trust) and
+    leaves every waiting request alone when the socket closes, so a refusal or a dropped connection looks like a timeout. Here a
+    closed connection fails the waiting requests at once, with the ERR status if one arrived, else with a ConnectionResetError.
+    Instance state only: nothing in asyncua is patched.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._refusal: ua.StatusCode | None = None  # the status of a server ERR message
+        self._closed_here = False
+
+    def _why_lost(self) -> Exception | None:
+        """What a request on this connection fails with, or None while it is open."""
+        if self.state != self.CLOSED:
+            return None
+        if self._refusal is not None:
+            return ua.UaStatusCodeError(self._refusal.value)
+        if self._closed_here:  # asyncua closes the socket itself when it cannot use an answer
+            return UnusableAnswerError("connection closed by this client after an answer from the server it could not use")
+        return ConnectionResetError("connection closed by the server")
+
+    def _process_received_message(self, msg: Any) -> None:
+        if isinstance(msg, ua.ErrorMessage) and msg.Error is not None:
+            self._refusal = msg.Error
+        super()._process_received_message(msg)
+
+    def disconnect_socket(self) -> None:
+        self._closed_here = True
+        super().disconnect_socket()
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        super().connection_lost(exc)
+        for future in list(self._callbackmap.values()):
+            if not future.done():
+                future.set_exception(self._why_lost())
+
+    async def send_hello(self, url: str, max_messagesize: int = 0, max_chunkcount: int = 0) -> Any:
+        if (error := self._why_lost()) is not None:
+            raise error
+        return await super().send_hello(url, max_messagesize, max_chunkcount)
+
+    def _send_request(
+        self, request: Any, timeout: float = 1, message_type: ua.MessageType = ua.MessageType.SecureMessage
+    ) -> Any:
+        # Stock asyncua writes to the dead transport and waits for the timeout. Closing the channel stays as it is: it is
+        # the clean-up after a failure and must not replace the failure.
+        if message_type != ua.MessageType.SecureClose and (error := self._why_lost()) is not None:
+            raise error
+        return super()._send_request(request, timeout, message_type)
+
+    async def send_request(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await super().send_request(*args, **kwargs)
+        except ConnectionError:
+            if (error := self._why_lost()) is not None:
+                raise error from None  # stock asyncua turns every failure of a closed connection into "Connection is closed"
+            raise
+
+
+class _ReportingUaClient(UaClient):
+    def _make_protocol(self) -> UASocketProtocol:
+        self.protocol = _ReportingProtocol(self._timeout, security_policy=self.security_policy)
+        self.protocol.pre_request_hook = self._pre_request_hook
+        return self.protocol
+
+
+class ReportingClient(Client):
+    """An asyncua `Client` whose failures name their cause (see `_ReportingProtocol`). Written against asyncua 1.1.8: a test
+    fails when the version changes, because this copies a few lines of its `Client.__init__` and `UaClient._make_protocol`."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        stock = self.uaclient
+        self.uaclient = _ReportingUaClient(stock._timeout)
+        self.uaclient.pre_request_hook = stock.pre_request_hook
+        self.nodes = Shortcuts(self.uaclient)
+        self._login_error: Exception | None = None
+
+    async def activate_session(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await super().activate_session(*args, **kwargs)
+        except Exception as exc:
+            self._login_error = exc
+            raise
+
+    async def connect(self) -> None:
+        # A refused login is followed by asyncua's clean-up (CloseSession). A server that hangs up after the refusal makes that
+        # request fail with a reset, which replaces the refusal: report the refusal, it is what the owner has to act on.
+        self._login_error = None
+        try:
+            await super().connect()
+        except Exception as exc:
+            if self._login_error is not None and exc is not self._login_error:
+                raise self._login_error from None
+            raise
+
+
+async def close_quietly(client: Client, seconds: float = 1.0) -> None:
+    """Close a client that may be half open, without raising and without waiting longer than `seconds` for the server: disconnect
+    (this also stops the watchdog and channel renewal asyncua starts with a session), then drop the socket whatever happened."""
+    with contextlib.suppress(Exception):
+        async with asyncio.timeout(seconds):
+            await client.disconnect()
+    with contextlib.suppress(Exception):
+        client.disconnect_socket()
+
+
+async def _certificate_uri(path: str) -> str | None:
+    """The first URI among the alternative names of the public certificate at `path` (the key is never read), or None."""
+    from dcdash.connectors.opcua_check import certificate_facts, load_certificate  # imported here: that module imports this one
+
+    try:
+        return certificate_facts(await load_certificate(path))["application_uri"]
+    except Exception:  # noqa: BLE001 - asyncua reads the file next and reports a bad one in its own way
+        return None
 
 
 @register
@@ -104,7 +235,7 @@ class OpcUaConnector(Connector):
 
     async def _new_client(self) -> Client:
         """A client with the configured authentication and security, not yet connected."""
-        client = Client(self.config.endpoint, timeout=self.config.timeout_seconds)
+        client = ReportingClient(self.config.endpoint, timeout=self.config.timeout_seconds)
         if self.config.username:
             client.set_user(self.config.username)
             client.set_password(self.secret or "")
@@ -112,6 +243,9 @@ class OpcUaConnector(Connector):
             for path in (self.config.client_cert, self.config.client_key):
                 if not Path(path).is_file():
                     raise ConnectorError("protocol_error", f"client certificate not found: {path}")
+            # The server compares the ApplicationUri we announce with the one in the certificate; asyncua's default is not it
+            if (uri := await _certificate_uri(self.config.client_cert)) is not None:
+                client.application_uri = uri
             await client.set_security_string(
                 f"Basic256Sha256,SignAndEncrypt,{self.config.client_cert},{self.config.client_key}"
             )
@@ -123,7 +257,13 @@ class OpcUaConnector(Connector):
         client = await self._new_client()
         try:
             await asyncio.wait_for(client.connect(), self.config.timeout_seconds)
-        except Exception as exc:  # noqa: BLE001 - translated into a typed status
+        except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 - translated into a typed status
+            # A connect that ran out of time, or that the scheduler cancelled because its source was edited, stops where it
+            # stands, past asyncua's own clean-up; what it opened (socket, channel, a session with its watchdog) would stay and
+            # poll the server for good.
+            await close_quietly(client)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             raise _translate(exc) from exc
         try:
             yield client

@@ -1,0 +1,67 @@
+DCDASH-REPORT v1 | PART 1 OF 1 | build ede8a20 | 2026-10-12T04:07:00Z
+LATEST CHECK: source 1 "SCADA main" FAILED at endpoints: ConnectionResetError: connection closed by the server
+== ENVIRONMENT ==
+generated: 2026-10-12T04:07:00Z, site time 2026-10-12 04:07:00 UTC (UTC)
+report: detail=summary, not masked, source filter: all
+api: build ede8a20 (built 2026-10-12T03:57:50Z), up 7 min
+collector: build ede8a20, last heartbeat 10 s ago
+build check: OK (api and collector run the same build)
+runtime: Python 3.12.15, Linux x86_64 microsoft-standard-WSL2, asyncua 1.1.8, pymodbus 3.8.6
+database: PostgreSQL 16.15, TimescaleDB 2.30.2
+dns servers: 127.0.0.11
+clock: database minus container = +0.0 s (both run on one VM clock, so this cannot show drift)
+clock: browser minus container = +0.0 s
+== SETTINGS ==
+general.timezone=UTC billing.currency=(not set) sign_in.max_failures=5 sign_in.block_minutes=5 env.timezone=UTC env.session_hours=12 env.scan_max_hosts=1024 env.scan_extra_ports=(empty)
+== SOURCES ==
+#1 "SCADA main" opcua status=offline last_seen=2026-10-12T03:59:40Z secret=no authentication=none endpoint=opc.tcp://scada-gw.plant.local:4840/dcdash/ security_policy=none
+   last error: connection closed by the server
+== SOURCE HEALTH ==
+#1 "SCADA main": 10.4 reads/min, 0.0% bad, newest reading 7 min ago
+   2026-10-12T04:06:53Z warning job check.finished code=ConnectionResetError: connection check failed at endpoints: ConnectionResetError {"first_failed":"endpoints","job_id":24,"ok":false,"skew_seconds":null,"steps":9,"steps_ok":3}
+   2026-10-12T04:06:15Z warning collector source.offline code=unreachable: unreachable: connection closed by the server {"backoff_seconds":10.0,"error":"unreachable: connection closed by the server","failures":1,"interval":5}
+== POINTS ==
+60 points: stale 4, unmapped 56
+worst points (bad first, then stale, then no data):
+   #1 "SCADA main" ns=2;i=9 (LVP01 A) stale value=38.19, last reading 7 min ago
+   #1 "SCADA main" ns=2;i=7 (LVP01 V) stale value=400, last reading 7 min ago
+   #1 "SCADA main" ns=2;i=3 (LVP01 kW) stale value=25.135, last reading 7 min ago
+   #1 "SCADA main" ns=2;i=15 (LVP02 kW) stale value=32.416, last reading 7 min ago
+== CONNECTION CHECKS ==
+#1 "SCADA main" (opcua): job 24 done, 2026-10-12T04:06:53Z: FAILED at endpoints: ConnectionResetError: connection closed by the server
+   ok: dns 0 ms, tcp 1 ms, certificates 0 ms
+   3 endpoints FAIL 302 ms
+      error: ConnectionResetError: connection closed by the server
+      hint: The connection was reset by the other end or by something in between. Ask the SCADA team whether the service accepts this client, and the network team about a firewall or load balancer.
+   5 session FAIL 301 ms
+      error: ConnectionResetError: connection closed by the server
+      hint: The connection was reset by the other end or by something in between. Ask the SCADA team whether the service accepts this client, and the network team about a firewall or load balancer.
+   certificates: our certificate: not used (security policy none); server certificate: not checked (no endpoint list)
+   skipped: server_time, namespaces, read_points, timing
+== JOURNAL ==
+2026-10-12T04:06:53Z warning job check.finished source=1 code=ConnectionResetError: connection check failed at endpoints: ConnectionResetError {"first_failed":"endpoints","job_id":24,"ok":false,"skew_seconds":null,"steps":9,"steps_ok":3}
+2026-10-12T04:06:15Z warning collector source.offline source=1 code=unreachable: unreachable: connection closed by the server {"backoff_seconds":10.0,"error":"unreachable: connection closed by the server","failures":1,"interval":5}
+== SCANS ==
+no scans
+== STORAGE AND RETENTION ==
+database 11.3 MB; readings 368.0 KB (compressed 0 bytes of 0 bytes); 1m rollup 88.0 KB; 1h rollup 72.0 KB
+disk: capacity 100.0 GB, used 0.01%, growth 368.0 KB/day, full in over 10 years, warning at 80%: no
+retention: raw 30 d, compress after 7 d, 1m rollup 730 d
+rows per day (hourly tier): 10-06=0, 10-07=0, 10-08=0, 10-09=0, 10-10=0, 10-11=0, 10-12=1819
+policy jobs: 5 in all, 0 not scheduled or failing
+journal: 2 events kept, oldest 2026-10-12T04:06:15Z
+== AUDIT TAIL ==
+2026-10-12T04:06:53Z admin source.checked {"job_id":24,"name":"SCADA main","source_id":1}
+2026-10-12T04:06:15Z admin source.updated {"name":"SCADA main","source_id":1} changed: config.timeout_seconds 1.0 -> 3.0, enabled false -> true
+2026-10-12T04:06:09Z admin source.updated {"name":"SCADA main","source_id":1} changed: enabled true -> false
+2026-10-12T04:06:04Z admin diagnostics.report {"chars":5336,"detail":"summary","mask":false,"parts":1,"source_id":null}
+2026-10-12T04:05:57Z admin source.checked {"job_id":23,"name":"SCADA main","source_id":1}
+2026-10-12T04:05:17Z admin source.updated {"name":"SCADA main","source_id":1} changed: config.timeout_seconds 5.0 -> 1.0, enabled false -> true
+2026-10-12T04:05:10Z admin source.updated {"name":"SCADA main","source_id":1} changed: enabled true -> false
+2026-10-12T04:05:06Z admin diagnostics.report {"chars":5849,"detail":"summary","mask":false,"parts":1,"source_id":null}
+2026-10-12T04:05:01Z admin source.checked {"job_id":22,"name":"SCADA main","source_id":1}
+2026-10-12T04:04:24Z admin source.updated {"name":"SCADA main","source_id":1} changed: enabled false -> true
+== API ERRORS ==
+no server errors recorded
+--- PART 1 OF 1 | chars=5192 lines=64 ---
+END OF REPORT f20cd5d79502

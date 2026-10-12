@@ -1,0 +1,35 @@
+# Shared .env fixture: how scripts/collect-diagnostics.sh (load_env, awk) and scripts/collect-diagnostics.ps1 (Read-EnvSecrets) must read a .env.
+# Both tests feed every case through the real script (sh: --scrub-stdin --env-file; ps1: -ScrubFile with -EnvFile): one line "keep <secret> keep"
+# per secret must come out as "keep [hidden] keep" (the word "keep" proves that text next to a secret survives).
+# Columns, separated by ONE TAB: name, the .env text, the secret values that must be hidden (joined by "|", no escapes in this column).
+# Escapes in the .env text, decoded in ONE left-to-right pass: \n is a line feed, \r a carriage return, \t a tab, \\ one backslash.
+# The rules (see load_env): only variables whose name holds PASSWORD, SECRET, TOKEN or KEY; blank and # lines are skipped, "export " is optional,
+# the value starts after the first "=" (leading blanks dropped). A double-quoted value ends at the first unescaped quote, and BOTH its raw text and
+# the text with \" and \\ unescaped are hidden; a single-quoted value ends at the first quote; an unquoted value ends at the first blank-then-# (space or
+# tab) and loses trailing blanks. A value is taken as written: a $VAR in it is NOT expanded (compose would expand it). Values of under 4 characters are ignored;
+# the part after the first ":" of a value is hidden too.
+plain	DB_PASSWORD=plain-pass-1\n	plain-pass-1
+crlf-line-ends	DB_PASSWORD=crlf-pass-2\r\nAPI_TOKEN=crlf-token-3\r\n	crlf-pass-2|crlf-token-3
+export-prefix	export API_TOKEN=exp-tok-4\n	exp-tok-4
+export-prefix-and-double-quotes	export A_PASSWORD="exp-q-3030"\n	exp-q-3030
+blanks-around-the-equals-sign	  SECRET_KEY = padded-val-5  \n	padded-val-5
+blanks-before-a-quote	A_PASSWORD=   "spaced-quote-3333"\n	spaced-quote-3333
+comment-after-a-space	API_TOKEN=tok-six-66 # a note\n	tok-six-66
+comment-after-a-tab	API_TOKEN=tok-seven-77\t# a note\n	tok-seven-77
+a-hash-without-a-blank-is-part-of-the-value	DB_PASSWORD=ab#cd-8888\n	ab#cd-8888
+equals-signs-inside-the-value	A_TOKEN=base64==padd-2424=\n	base64==padd-2424=
+dollar-signs-are-not-expanded	A_PASSWORD=pw-$HOME-2222\nB_PASSWORD="pw-${X}-2323"\n	pw-$HOME-2222|pw-${X}-2323
+double-quoted-with-blanks	DB_PASSWORD="two words 99"\n	two words 99
+double-quoted-escapes-hide-both-forms	A_PASSWORD="a\\"b\\\\c-1010"\n	a\"b\\c-1010|a"b\c-1010
+double-quoted-ending-in-an-escaped-backslash	A_PASSWORD="end-bs-2929\\\\"\n	end-bs-2929\\|end-bs-2929\
+double-quoted-closes-at-the-first-unescaped-quote	A_PASSWORD="first-1111" tail"x"\n	first-1111
+double-quoted-with-a-comment-after	A_PASSWORD="quoted-1212" # comment\n	quoted-1212
+double-quoted-and-never-closed	A_PASSWORD="unterm-2727\n	unterm-2727
+single-quoted-with-a-comment-after	A_TOKEN='sq\\n-1313' # tail\n	sq\n-1313
+single-quoted-with-double-quotes-inside	A_KEY='say "hi" 1414'\n	say "hi" 1414
+single-quoted-and-never-closed	A_PASSWORD='unterm-2828\n	unterm-2828
+quotes-with-crlf-line-ends	A_PASSWORD="q-quoted-2525"\r\nB_PASSWORD='sq-2626'\r\n	q-quoted-2525|sq-2626
+a-colon-also-hides-the-part-after-it	SIM_PASSWORD=user:pw-after-1515\n	user:pw-after-1515|pw-after-1515
+short-values-and-other-names-are-skipped	A_PASSWORD=abc\nOTHER_NAME=not-secret-1717\nB_PASSWORD=wxyz-1616\n	wxyz-1616
+blank-and-comment-lines	\n# A_PASSWORD=commented-out-3131\n   # B_PASSWORD=also-commented\nC_PASSWORD=live-3232\n	live-3232
+duplicate-keys-are-all-hidden	A_PASSWORD=first-dup-2020\nA_PASSWORD=second-dup-2121\n	first-dup-2020|second-dup-2121

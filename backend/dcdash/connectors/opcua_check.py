@@ -17,7 +17,6 @@ import ipaddress
 import math
 import socket
 import time
-from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,7 +28,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.x509.oid import NameOID
 
 from dcdash.connectors.base import GOOD, url_host_port
-from dcdash.connectors.opcua import OpcUaConnector, _point_value, _status_text
+from dcdash.connectors.opcua import OpcUaConnector, ReportingClient, _point_value, _status_text, close_quietly
 from dcdash.core.audit import hidden_values
 from dcdash.diagnostics.check import Checker, CheckResult, Publish, StepFailed, StepOutcome
 from dcdash.diagnostics.hints import CLOCK_SKEW, hint_for
@@ -40,6 +39,7 @@ TIMING_READS = 5
 TIMING_PAUSE = 0.2  # seconds between the timing reads
 TIMING_NODES = 10
 MAX_POINT_LINES = 20  # points listed in the detail of read_points, bad ones first
+MAX_BAD_KINDS = 3  # distinct bad statuses read_points names in its summary and gives a hint line each
 SKEW_WARN_SECONDS = 60.0
 SKEW_FAIL_SECONDS = 300.0
 CERT_WARN_DAYS = 30
@@ -169,6 +169,16 @@ def _validity_words(facts: dict[str, Any]) -> str:
     return f"valid until {facts['not_after'][:10]} ({facts['days_left']} days)"
 
 
+def _read_hints(kinds: list[tuple[str, str]]) -> str | None:
+    """One line per hint text, newline apart ("BadSensorFailure, BadDeviceFailure: Ask ..."): the report prints each as a line of
+    its own, since two hints joined into one would be cut at the line limit. Statuses with the same hint share a line."""
+    lines: dict[str, list[str]] = {}
+    for name, _address in kinds:
+        if hint := hint_for(name, None, "read_points"):
+            lines.setdefault(hint, []).append(name)
+    return "\n".join(f"{', '.join(names)}: {hint}" for hint, names in lines.items()) or None
+
+
 # -- the check --------------------------------------------------------------------------------------------------------------
 
 
@@ -254,13 +264,7 @@ class OpcUaCheck:
         client, self.client = self.client, None
         if client is None:
             return
-        try:
-            async with asyncio.timeout(self.config.timeout_seconds):
-                await client.disconnect()
-        except Exception:  # noqa: BLE001 - the session may be half open, or already gone
-            pass
-        with contextlib.suppress(Exception):
-            client.disconnect_socket()
+        await close_quietly(client, self.config.timeout_seconds)  # the session may be half open, or already gone
 
     # -- steps --------------------------------------------------------------------------------------------------------------
 
@@ -286,7 +290,7 @@ class OpcUaCheck:
         return StepOutcome(f"connected to {_hostport(host, port)}", {"remote_address": str(peer[0]) if peer else None})
 
     async def get_endpoints(self) -> StepOutcome:
-        client = Client(self.config.endpoint, timeout=self.config.timeout_seconds)
+        client = ReportingClient(self.config.endpoint, timeout=self.config.timeout_seconds)
         endpoints = await client.connect_and_get_server_endpoints()
         self.endpoints = list(endpoints)
         rows = []
@@ -351,9 +355,10 @@ class OpcUaCheck:
                 problem = StepFailed(f"client certificate cannot be read: {type(exc).__name__}", error_class=type(exc).__name__)
             else:
                 detail["client"].update(facts)
+                uri = f"URI {facts['application_uri']}" if facts["application_uri"] else "no URI"  # the server compares it with ours
                 parts.append(
                     f"our certificate {facts['common_name'] or facts['subject']}, SHA-1 thumbprint {facts['thumbprint_sha1']}, "
-                    f"{_validity_words(facts)}"
+                    f"{uri}, {_validity_words(facts)}"
                 )
                 self._add_certificate_names(facts)
                 if facts["expired"] or facts["not_yet_valid"]:
@@ -400,11 +405,16 @@ class OpcUaCheck:
         return f"server certificate {facts['common_name'] or facts['subject']}, {_validity_words(facts)}, {host_words}"
 
     async def open_session(self) -> StepOutcome:
-        self.client = await self.connector._new_client()
         try:
+            self.client = await self.connector._new_client()
             await self.client.connect()
-        except Exception:
+        except ua.UaError as exc:
             self.client = None  # asyncua has already closed what it opened
+            if str(exc).startswith("No matching endpoints"):  # asyncua's own refusal, before any request: no status code, no hint
+                raise StepFailed(str(exc), error_class=type(exc).__name__, hint_key="BadSecurityPolicyRejected") from exc
+            raise
+        except Exception:
+            self.client = None
             raise
         auth = "user name and password" if self.config.username else "anonymous"
         policy, mode = self._wanted()
@@ -498,14 +508,15 @@ class OpcUaCheck:
             "chunk_size": chunk, "server_max_nodes_per_read": limit, "requests": requests,
         }
         summary = f"read {len(rows)} point(s) in {requests} request(s) of up to {chunk} node(s): {len(good)} good, {len(bad)} bad"
+        first: dict[str, str] = {}  # each distinct bad status with the first point that answered it
+        for row in bad:
+            first.setdefault(_status_name(row["status"]), row["address"])
+        kinds = list(first.items())[:MAX_BAD_KINDS]
         if bad:
-            summary += f"; first bad: {bad[0]['address']}: {bad[0]['status']}"
-        hints = []
-        for name, _count in Counter(_status_name(row["status"]) for row in bad).most_common(3):
-            hint = hint_for(name, None, "read_points")
-            if hint and hint not in hints:
-                hints.append(hint)
-        return StepOutcome(_clip(summary), detail, " ".join(hints) or None)
+            summary += "; bad: " + "; ".join(f"{name} {_clip(address, 40)}" for name, address in kinds)
+            summary += f" (+{len(first) - len(kinds)} more kinds)" if len(first) > len(kinds) else ""
+        detail["bad_status"] = sum(1 for row in bad if _status_name(row["status"]).startswith("Bad"))  # a Bad code, not "non-numeric"
+        return StepOutcome(_clip(summary), detail, _read_hints(kinds))
 
     async def _read_optional(self, nodeids: list[ua.NodeId], attr: ua.AttributeIds) -> list[ua.DataValue | None]:
         """An attribute for each node, or Nones when the server cannot say: it is extra information, not the point of the step."""

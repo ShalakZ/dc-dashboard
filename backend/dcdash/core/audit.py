@@ -134,18 +134,19 @@ def strip_credentials(url: str) -> str:
     return _split(url)[1]
 
 
-_WHITESPACE_RUNS = re.compile(r"(\s+)")
+_WHITESPACE_RUNS = re.compile(r"(\s+)", re.ASCII)  # ASCII only: a no-break space inside a password must not split the run
 _MIN_KNOWN = 4  # a shorter known value ("f") would mangle ordinary words around it
 
 
 def _known_values(known: Iterable[str]) -> list[str]:
-    """The values to hide, longest first: each known value, and the password part (after the first ":") of each."""
+    """The values to hide, longest first (equal lengths in character order, so the result never depends on the hash seed):
+    each known value, and the password part (after the first ":") of each."""
     values: set[str] = set()
     for value in known:
         for candidate in (value, value.partition(":")[2]):
             if len(candidate) >= _MIN_KNOWN:
                 values.add(candidate)
-    return sorted(values, key=len, reverse=True)
+    return sorted(values, key=lambda value: (-len(value), value))
 
 
 def _scrub_run(run: str) -> str:

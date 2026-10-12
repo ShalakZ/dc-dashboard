@@ -1,0 +1,67 @@
+DCDASH-REPORT v1 | PART 1 OF 1 | build ede8a20 | 2026-10-12T04:04:11Z
+LATEST CHECK: source 1 "SCADA main" FAILED at endpoints: ConfigMismatch: the None/None endpoint does not accept anonymous (configured)
+== ENVIRONMENT ==
+generated: 2026-10-12T04:04:11Z, site time 2026-10-12 04:04:11 UTC (UTC)
+report: detail=summary, not masked, source filter: all
+api: build ede8a20 (built 2026-10-12T03:57:50Z), up 5 min
+collector: build ede8a20, last heartbeat 4 s ago
+build check: OK (api and collector run the same build)
+runtime: Python 3.12.15, Linux x86_64 microsoft-standard-WSL2, asyncua 1.1.8, pymodbus 3.8.6
+database: PostgreSQL 16.15, TimescaleDB 2.30.2
+dns servers: 127.0.0.11
+clock: database minus container = +0.0 s (both run on one VM clock, so this cannot show drift)
+clock: browser minus container = +0.0 s
+== SETTINGS ==
+general.timezone=UTC billing.currency=(not set) sign_in.max_failures=5 sign_in.block_minutes=5 env.timezone=UTC env.session_hours=12 env.scan_max_hosts=1024 env.scan_extra_ports=(empty)
+== SOURCES ==
+#1 "SCADA main" opcua status=offline last_seen=2026-10-12T03:59:40Z secret=no authentication=none endpoint=opc.tcp://scada-gw.plant.local:4840/dcdash/ security_policy=none
+   last error: The user identity token is valid but the server has rejected …
+== SOURCE HEALTH ==
+#1 "SCADA main": 22.8 reads/min, 0.0% bad, newest reading 4 min ago
+   2026-10-12T04:04:06Z warning job check.finished code=ConfigMismatch: connection check failed at endpoints: ConfigMismatch {"first_failed":"endpoints","job_id":21,"ok":false,"skew_seconds":null,"steps":9,"steps_ok":3}
+   2026-10-12T04:03:29Z warning collector source.offline code=auth_failed: auth_failed: The user identity token is valid but the server has rejected it.(BadIdentityTokenRejected) {"backoff_seconds":10.0,"error":"auth_failed: The user identity token is valid but the server has rejected …
+== POINTS ==
+60 points: stale 4, unmapped 56
+worst points (bad first, then stale, then no data):
+   #1 "SCADA main" ns=2;i=9 (LVP01 A) stale value=38.19, last reading 4 min ago
+   #1 "SCADA main" ns=2;i=7 (LVP01 V) stale value=400, last reading 4 min ago
+   #1 "SCADA main" ns=2;i=3 (LVP01 kW) stale value=25.135, last reading 4 min ago
+   #1 "SCADA main" ns=2;i=15 (LVP02 kW) stale value=32.416, last reading 4 min ago
+== CONNECTION CHECKS ==
+#1 "SCADA main" (opcua): job 21 done, 2026-10-12T04:04:06Z: FAILED at endpoints: ConfigMismatch: the None/None endpoint does not accept anonymous (configured)
+   ok: dns 0 ms, tcp 0 ms, certificates 0 ms
+   3 endpoints FAIL 2 ms: anonymous not accepted on None/None; offered: None/None [UserName]
+      error: ConfigMismatch: the None/None endpoint does not accept anonymous (configured)
+      hint: The endpoint wants a user name and password and the source has none. Ask the SCADA team for a read-only account and enter it on the source.
+   5 session FAIL 2 ms
+      error: BadIdentityTokenRejected: BadIdentityTokenRejected (0x80210000): The user identity token is valid but the server has rejected it.(BadIdentityTokenRejected)
+      hint: The server rejected the user identity. Ask the SCADA team whether this endpoint wants a user name and password (see the user-token types in the endpoints step) and check the ones entered here.
+   certificates: our certificate: not used (security policy none); server certificate: none offered
+   skipped: server_time, namespaces, read_points, timing
+== JOURNAL ==
+2026-10-12T04:04:06Z warning job check.finished source=1 code=ConfigMismatch: connection check failed at endpoints: ConfigMismatch {"first_failed":"endpoints","job_id":21,"ok":false,"skew_seconds":null,"steps":9,"steps_ok":3}
+2026-10-12T04:03:29Z warning collector source.offline source=1 code=auth_failed: auth_failed: The user identity token is valid but the server has rejected it.(BadIdentityTokenRejected) {"backoff_seconds":10.0,"error":"auth_failed: The user identity token is valid but the server has rejected …
+== SCANS ==
+no scans
+== STORAGE AND RETENTION ==
+database 11.2 MB; readings 368.0 KB (compressed 0 bytes of 0 bytes); 1m rollup 88.0 KB; 1h rollup 24.0 KB
+disk: capacity 100.0 GB, used 0.01%, growth 368.0 KB/day, full in over 10 years, warning at 80%: no
+retention: raw 30 d, compress after 7 d, 1m rollup 730 d
+rows per day (hourly tier): 10-06=0, 10-07=0, 10-08=0, 10-09=0, 10-10=0, 10-11=0, 10-12=1819
+policy jobs: 5 in all, 0 not scheduled or failing
+journal: 2 events kept, oldest 2026-10-12T04:03:29Z
+== AUDIT TAIL ==
+2026-10-12T04:04:06Z admin source.checked {"job_id":21,"name":"SCADA main","source_id":1}
+2026-10-12T04:03:29Z admin source.updated {"name":"SCADA main","source_id":1} changed: config.username changed, secret changed, enabled false -> true
+2026-10-12T04:03:22Z admin source.updated {"name":"SCADA main","source_id":1} changed: enabled true -> false
+2026-10-12T04:03:18Z admin diagnostics.report {"chars":5563,"detail":"summary","mask":true,"parts":1,"source_id":null}
+2026-10-12T04:03:18Z admin diagnostics.report {"chars":5531,"detail":"summary","mask":false,"parts":1,"source_id":null}
+2026-10-12T04:03:13Z admin source.checked {"job_id":20,"name":"SCADA main","source_id":1}
+2026-10-12T04:02:33Z admin source.updated {"name":"SCADA main","source_id":1} changed: config.username changed, secret changed, config.security_policy basic256sha256 -> none, enabled false -> true
+2026-10-12T04:02:27Z admin source.updated {"name":"SCADA main","source_id":1} changed: enabled true -> false
+2026-10-12T04:02:23Z admin diagnostics.report {"chars":5717,"detail":"summary","mask":true,"parts":1,"source_id":null}
+2026-10-12T04:02:23Z admin diagnostics.report {"chars":5891,"detail":"summary","mask":false,"parts":1,"source_id":null}
+== API ERRORS ==
+no server errors recorded
+--- PART 1 OF 1 | chars=5601 lines=64 ---
+END OF REPORT 70e4bb7592da
