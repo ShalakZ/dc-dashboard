@@ -8,6 +8,7 @@ import { AssetsSummary } from "./pages/AssetsSummary";
 import { AuditEntryPage } from "./pages/AuditEntryPage";
 import { AuditPage } from "./pages/AuditPage";
 import { BillingPage } from "./pages/BillingPage";
+import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
@@ -50,6 +51,7 @@ export function App() {
         <Route path="/storage" element={<RequireRole min="admin"><StoragePage /></RequireRole>} />
         <Route path="/audit" element={<RequireRole min="admin"><AuditPage /></RequireRole>} />
         <Route path="/audit/:id" element={<RequireRole min="admin"><AuditEntryPage /></RequireRole>} />
+        <Route path="/diagnostics" element={<RequireRole min="admin"><DiagnosticsPage /></RequireRole>} />
         <Route path="/password" element={<PasswordPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

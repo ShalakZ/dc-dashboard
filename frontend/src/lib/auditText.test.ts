@@ -324,7 +324,7 @@ describe("describeAudit: creations, deletions and events", () => {
       "Generated a diagnostics report (full, masked, source #4)",
     );
     expect(report({}).summary).toBe("Generated a diagnostics report (summary, not masked)");
-    expect(report({ detail: "summary", mask: false, source_id: 4, parts: 1, chars: 5 }).link).toBeNull();
+    expect(report({ detail: "summary", mask: false, source_id: 4, parts: 1, chars: 5 }).link).toEqual({ to: "/diagnostics", label: "Open Diagnostics" });
   });
 
   it("leaves the failed password change as it was", () => {

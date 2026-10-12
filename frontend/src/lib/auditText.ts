@@ -204,13 +204,14 @@ const RULES: Record<string, Rule> = {
   "dashboard.updated": changed("dashboard", "dashboard_id", ownDashboard),
   "dashboard.deleted": removed("dashboard", "dashboard_id"),
 
-  // The report text is never stored: this row says only how it was asked for. No link yet: the Diagnostics page is a later task.
+  // The report text is never stored: this row says only how it was asked for.
   "diagnostics.report": {
     summary: ({ d }) => {
       const source = idOf(d.source_id);
       const detail = d.detail === "full" ? "full" : "summary";
       return `Generated a diagnostics report (${detail}, ${d.mask === true ? "masked" : "not masked"}${source !== null ? `, source #${source}` : ""})`;
     },
+    link: page("/diagnostics", "Open Diagnostics"),
   },
 
   "discovery.accepted": {

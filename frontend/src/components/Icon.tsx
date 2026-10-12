@@ -14,6 +14,7 @@ export const ICONS = {
   tariffs: <><path d="M3 12V4h8l10 10-8 8L3 12Z" /><circle cx="7.5" cy="8.5" r="1.5" /></>,
   storage: <><ellipse cx="12" cy="5.5" rx="8" ry="2.5" /><path d="M4 5.5v13c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-13" /><path d="M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" /></>,
   audit: <><path d="M9 4h10v16H5V8" /><path d="M9 4 5 8h4V4Z" /><path d="M9 13l2 2 4-4" /></>,
+  diagnostics: <><path d="M3 12h4l2-6 4 12 2-6h6" /></>,
   password: <><circle cx="8" cy="15" r="4" /><path d="m11 12 9-9M17 6l3 3M15 8l2 2" /></>,
   signOut: <><path d="M14 4h5v16h-5" /><path d="M10 8l-4 4 4 4M6 12h10" /></>,
   collapse: <><path d="M4 4v16" /><path d="m15 7-5 5 5 5" /><path d="M10 12h10" /></>,

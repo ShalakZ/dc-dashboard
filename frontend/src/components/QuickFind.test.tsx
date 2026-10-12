@@ -153,7 +153,7 @@ describe("QuickFind matches", () => {
     expect(await screen.findByRole("option", { name: new RegExp(`^${query}$`, "i") })).toBeInTheDocument();
   });
 
-  it.each(["users", "settings", "sources", "scans", "discovery", "tariffs", "storage", "audit"])("never lists the %s page to a viewer", async (query) => {
+  it.each(["users", "settings", "sources", "scans", "discovery", "tariffs", "storage", "audit", "diagnostics"])("never lists the %s page to a viewer", async (query) => {
     const { user, input } = await mount({ role: "viewer" });
     await user.type(input, query);
     expect(await screen.findByRole("status")).toHaveTextContent("No match");

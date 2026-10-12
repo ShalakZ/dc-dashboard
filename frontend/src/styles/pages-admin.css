@@ -101,4 +101,17 @@
   .check-hint { padding-left: 12px; border-left: 2px solid var(--border-strong); }
   .check-step[data-state="failed"] .check-hint { border-left-color: var(--crit); }
   .check-at { font-size: var(--fs-sm); }
+
+  /* Diagnostics: the report form, then the built parts. The text is data, so it may be monospace; nothing else on the page is. */
+  .diag-page .report-form { max-width: 560px; }
+  .report-form fieldset { display: grid; gap: 8px; margin: 0; padding: 10px 14px; }
+  .report-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 22px 0 14px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .report-built { margin: 0; font-weight: 600; }
+  .report-part { display: grid; gap: 8px; margin: 0 0 22px; }
+  .report-part-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+  .report-part-head h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
+  .report-text { height: 18em; font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.5; white-space: pre; overflow: auto; resize: vertical; }
+  .address-key { margin: 0 0 8px; }
+  .address-key > summary { width: fit-content; font-weight: 600; cursor: pointer; }
+  .address-key > p { margin: 8px 0; }
 }
