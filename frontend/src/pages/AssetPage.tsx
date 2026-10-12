@@ -11,7 +11,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Pending } from "../components/Pending";
 import { AssetSkeleton, SkeletonRegion, TrendSkeleton } from "../components/Skeleton";
 import { useStream } from "../hooks/useStream";
-import { kindIcon } from "../lib/kindIcon";
+import { assetIcon } from "../lib/assetIcons";
 import { rollupNote, rollupPower } from "../lib/rollup";
 import { assetTrail, parseAssetId } from "../lib/tree";
 import { assetActions, useAssetsContext } from "./AssetsPage";
@@ -60,9 +60,9 @@ function AssetView({ id }: { id: number }) {
   const note = rollup && rollupNote(rollup, sources);
   const chip = wanted.size > 0 ? <span className={connected ? "chip chip-ok" : "chip chip-warn"}>{connected ? "live" : "reconnecting…"}</span> : null;
   const buttons = assetActions(workspace, data.asset);
-  // The ancestors come from the cached list. Until the list has the asset (just created, or not loaded) the trail is Assets / the asset, which the page always knows.
+  // The ancestors come from the cached list. Until the list has the asset (just created, or not loaded) the trail is Assets Tree / the asset, which the page always knows.
   const crumbs: Crumb[] = [
-    { label: "Assets", to: "/assets" },
+    { label: "Assets Tree", to: "/assets" },
     ...trail.slice(0, -1).map((a) => ({ label: a.name, to: `/assets/${a.id}` })),
     { label: data.asset.name },
   ];
@@ -73,7 +73,7 @@ function AssetView({ id }: { id: number }) {
     <div className="asset-page">
       <PageHeader
         title={data.asset.name}
-        icon={kindIcon(data.asset.kind)}
+        icon={assetIcon(data.asset)}
         crumbs={crumbs}
         sub={sub || undefined}
         actions={chip || buttons ? <>{chip}{buttons}</> : undefined}

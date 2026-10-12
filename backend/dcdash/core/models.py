@@ -65,6 +65,7 @@ class Asset(Base):
     name: Mapped[str]
     kind: Mapped[str] = mapped_column(default="generic")
     sort_order: Mapped[int] = mapped_column(default=0)
+    icon: Mapped[str | None]  # an id from core/asset_icons.py; NULL = Automatic (the icon follows the kind)
 
 
 class Mapping(Base):

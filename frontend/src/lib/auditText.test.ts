@@ -309,6 +309,50 @@ describe("describeAudit: creations, deletions and events", () => {
     expect(describeAudit(entry("tariff.deleted", { tariff_id: 1, asset_id: null, rate_per_kwh: 0.1, effective_from: "2026-01-01" })).link).toBeNull();
   });
 
+  describe("an asset's icon reads as the catalogue label", () => {
+    const update = (before: Record<string, unknown>, after: Record<string, unknown>) =>
+      describeAudit(entry("asset.updated", { asset_id: 7, name: "Hall pump", before, after }));
+
+    it("reads null to a chosen icon as Automatic to the label", () => {
+      const view = update({ icon: null }, { icon: "server" });
+      expect(view.changes).toEqual([{ field: "Icon", before: "Automatic", after: "Server" }]);
+      expect(view.summary).toBe("Changed asset Hall pump: icon");
+    });
+
+    it("reads one icon to another by both labels, and a cleared icon as Automatic", () => {
+      expect(update({ icon: "server" }, { icon: "fueltank" }).changes).toEqual([{ field: "Icon", before: "Server", after: "Fuel tank" }]);
+      expect(update({ icon: "ups" }, { icon: null }).changes).toEqual([{ field: "Icon", before: "UPS", after: "Automatic" }]);
+    });
+
+    it("treats a missing key as Automatic and shows an id this front end does not know as stored", () => {
+      expect(update({}, { icon: "camera" }).changes).toEqual([{ field: "Icon", before: "Automatic", after: "Camera" }]);
+      expect(update({ icon: "zzz" }, { icon: null }).changes).toEqual([{ field: "Icon", before: "zzz", after: "Automatic" }]);
+      expect(update({ icon: "__proto__" }, { icon: "constructor" }).changes).toEqual([{ field: "Icon", before: "__proto__", after: "constructor" }]);
+    });
+
+    it("leaves other fields as they were and counts an unchanged icon as unchanged", () => {
+      const view = update({ name: "A", icon: "pump" }, { name: "B", icon: "pump" });
+      expect(view.changes).toEqual([{ field: "Name", before: "A", after: "B" }]);
+      expect(view.unchanged).toBe(1);
+    });
+
+    it("shows the icon of a created asset as its label, Automatic for null, the raw id when unknown", () => {
+      const created = (icon: unknown) =>
+        describeAudit(entry("asset.created", { asset_id: 8, name: "Rack 1", parent_id: null, kind: "Rack", sort_order: 0, icon }));
+      const fact = (view: ReturnType<typeof describeAudit>) => view.facts.find((f) => f.label === "Icon");
+      expect(fact(created("server"))).toEqual({ label: "Icon", value: "Server" });
+      expect(fact(created(null))).toEqual({ label: "Icon", value: "Automatic" });
+      expect(fact(created("zzz"))).toEqual({ label: "Icon", value: "zzz" });
+      expect(created("server").facts).toContainEqual({ label: "Kind", value: "Rack" });
+      expect(created("server").summary).toBe("Created asset Rack 1");
+    });
+
+    it("shows no Icon fact for an older created row that has no icon key", () => {
+      const view = describeAudit(entry("asset.created", { asset_id: 8, name: "Rack 1", kind: "Rack" }));
+      expect(view.facts.map((f) => f.label)).toEqual(["Asset id", "Name", "Kind"]);
+    });
+  });
+
   it("links a created mapping and an accepted discovery to the asset, and only from integer ids", () => {
     const created = describeAudit(entry("mapping.created", { mapping_id: 4, point_id: 11, asset_id: 7, metric: "power", scale: 1 }));
     expect(created.link).toEqual({ to: "/assets/7", label: "Open asset #7" });

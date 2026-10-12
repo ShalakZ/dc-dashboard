@@ -7,8 +7,10 @@ export const ROLE_LEVEL: Record<Role, number> = { viewer: 0, operator: 1, admin:
 export type Preferences = Appearance;
 export interface User { id: number; username: string; role: Role; preferences: Preferences }
 
-export interface Asset { id: number; parent_id: number | null; name: string; kind: string; sort_order: number }
-export interface AssetIn { name: string; parent_id: number | null; kind: string; sort_order: number }
+/** `icon` is the chosen icon id (lib/assetIcons.ts), null for Automatic. Optional in the type because many fixtures build an Asset by hand; the API always sends it. */
+export interface Asset { id: number; parent_id: number | null; name: string; kind: string; sort_order: number; icon?: string | null }
+/** `icon`: a catalogue id, null to go back to Automatic, left out to leave it as it is (the server treats an absent key as unchanged). */
+export interface AssetIn { name: string; parent_id: number | null; kind: string; sort_order: number; icon?: string | null }
 /** What deleting an asset takes with it (the 409 body of DELETE /api/assets/{id} without confirm=true). */
 export interface AssetImpact { assets: number; mappings: number; tariffs: number }
 /** What deleting a source takes with it (the 409 body of DELETE /api/sources/{id} without confirm=true). */
@@ -95,7 +97,7 @@ export interface RollupSource {
   asset_id: number; name: string; path: string; point_id: number; value: number | null; ts: string | null; stale: boolean;
 }
 export interface Summary {
-  asset: { id: number; name: string; parent_id: number | null; kind: string };
+  asset: { id: number; name: string; parent_id: number | null; kind: string; icon?: string | null };
   metrics: SummaryMetric[];
   /** Set only for an asset with no power meter of its own whose sub-assets have some (optional so older fixtures type-check). */
   power_rollup?: { sources: RollupSource[] } | null;
@@ -225,7 +227,7 @@ export interface CostFigure { kwh: number; cost: number | null; estimated: boole
 export interface CostToday { cost: number | null; estimated: boolean; partial: boolean; no_data: boolean }
 /** One asset with a reading that needs attention, as the fleet summary lists it (`path` runs from the root down and ends with `name`). */
 export interface AttentionItem { asset_id: number; name: string; path: string; problem: "bad" | "stale"; points: number; last_ts: string }
-/** GET /api/fleet/summary: the Assets landing page. `power.kw` is null (never 0) when no meter is counted; `attention.total` counts all, `items` is cut at 25. */
+/** GET /api/fleet/summary: the Assets Tree landing page. `power.kw` is null (never 0) when no meter is counted; `attention.total` counts all, `items` is cut at 25. */
 export interface FleetSummary {
   power: { kw: number | null; counted: number; of: number };
   energy_today: { kwh: number; estimated: boolean; no_data: boolean } | null;

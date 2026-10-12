@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.asset_names import AssetName, require_free_name
 from dcdash.api.deps import get_db, notify, require_role
+from dcdash.core.asset_icons import AssetIcon
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Asset, Mapping, Tariff, User
 from dcdash.core.pg import CONFIG_CHANNEL
@@ -22,6 +23,7 @@ class AssetIn(BaseModel):
     parent_id: int | None = None
     kind: str = "generic"
     sort_order: int = 0
+    icon: AssetIcon | None = None
 
 
 class AssetPatch(BaseModel):
@@ -29,6 +31,7 @@ class AssetPatch(BaseModel):
     parent_id: int | None = None
     kind: str | None = None
     sort_order: int | None = None
+    icon: AssetIcon | None = None  # absent = unchanged, null = Automatic
 
 
 class AssetOut(BaseModel):
@@ -38,6 +41,7 @@ class AssetOut(BaseModel):
     name: str
     kind: str
     sort_order: int
+    icon: str | None  # as stored: an id this server no longer lists is still shown, never an error
 
 
 async def get_asset(db: AsyncSession, asset_id: int) -> Asset:
@@ -70,7 +74,10 @@ async def _subtree_impact(db: AsyncSession, asset_id: int) -> dict[str, int]:
 
 
 def _asset_values(asset: Asset) -> dict[str, Any]:
-    return {"name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind, "sort_order": asset.sort_order}
+    return {
+        "name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind, "sort_order": asset.sort_order,
+        "icon": asset.icon,
+    }
 
 
 def _counted(n: int, noun: str) -> str:
@@ -113,6 +120,8 @@ async def update_asset(
     if parent_id != asset.parent_id or name != asset.name:  # only a rename or a move is checked: old twins stay editable
         await require_free_name(db, parent_id, name, exclude_id=asset.id)
     asset.parent_id = parent_id
+    if "icon" in changes:  # null here means Automatic, so it is set before the loop that skips nulls
+        asset.icon = changes.pop("icon")
     for field, value in changes.items():
         if value is not None:
             setattr(asset, field, value)

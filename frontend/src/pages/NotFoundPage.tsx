@@ -10,7 +10,7 @@ export function NotFoundPage() {
         <span className="empty-icon" aria-hidden="true">
           <svg className="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /><path d="M8.5 11h5" /></svg>
         </span>
-        <p>There is nothing at this address. <Link to="/assets">Back to Assets</Link></p>
+        <p>There is nothing at this address. <Link to="/assets">Back to Assets Tree</Link></p>
       </div>
     </section>
   );

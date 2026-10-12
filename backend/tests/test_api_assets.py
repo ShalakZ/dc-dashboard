@@ -243,6 +243,7 @@ async def test_asset_create_and_update_are_audited(client, db):
     created = await rows_for(db, "asset.created")
     assert created[1]["detail"] == {
         "asset_id": child["id"], "name": "LV Panel 1", "parent_id": parent["id"], "kind": "generic", "sort_order": 0,
+        "icon": None,
     }
     assert created[1]["actor_name"] == "admin"
     assert (await client.patch(f"/api/assets/{child['id']}", json={"name": "Panel 1", "parent_id": None})).status_code == 200

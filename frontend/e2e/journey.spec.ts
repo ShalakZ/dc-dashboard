@@ -37,7 +37,7 @@ test("first-run journey: setup, simulator source, map two points, live values", 
   await expect(page.getByRole("cell", { name: "LVP01_kWh", exact: true })).toBeVisible();
 
   // 4. Create an asset
-  await navLink(page, "Assets").click();
+  await navLink(page, "Assets Tree").click();
   await page.getByRole("button", { name: "Add asset" }).click();
   await page.getByLabel("Name").fill("MV2");
   await page.getByRole("button", { name: "Save" }).click();
@@ -58,7 +58,7 @@ test("first-run journey: setup, simulator source, map two points, live values", 
   }
 
   // 6. Live values on the asset page within 10 s
-  await navLink(page, "Assets").click();
+  await navLink(page, "Assets Tree").click();
   // A tree node is a link to the asset page: one click opens it, and the tree stays beside it.
   await treeLink(page, "MV2").click();
   await expect(page).toHaveURL(/\/assets\/\d+$/);

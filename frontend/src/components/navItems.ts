@@ -16,7 +16,7 @@ export const GROUPS: NavGroup[] = [
   {
     id: "nav-monitor", title: "Monitor",
     items: [
-      { to: "/assets", label: "Assets", icon: "assets" },
+      { to: "/assets", label: "Assets Tree", icon: "assets" },
       { to: DASHBOARDS_PATH, label: "Dashboards", icon: "dashboards", match: DASHBOARDS_PATH },
       { to: "/billing", label: "Billing", icon: "billing" },
     ],

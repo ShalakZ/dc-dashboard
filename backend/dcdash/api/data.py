@@ -122,7 +122,7 @@ async def summary(asset_id: int, db: AsyncSession = Depends(get_db)) -> dict[str
     tz = await current_timezone(db)
     energy, cost, nothing_recorded = await _energy_cost_today(db, tree, now, tz, [asset_id])
     return {
-        "asset": {"id": asset.id, "name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind},
+        "asset": {"id": asset.id, "name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind, "icon": asset.icon},
         "metrics": metrics,
         "power_rollup": power_rollup,
         "energy_today": None if energy is None else {

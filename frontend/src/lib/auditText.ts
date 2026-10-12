@@ -1,4 +1,5 @@
 import type { AuditEntry } from "../api/types";
+import { assetIconLabel } from "./assetIcons";
 
 /** One field whose value changed; the texts are already formatted ("—" = absent or null). */
 export interface AuditChange { field: string; before: string; after: string }
@@ -61,10 +62,17 @@ function stable(value: unknown): string {
   return JSON.stringify(value ?? null) ?? "null";
 }
 
+/** How a field's value reads: an asset's icon id as its catalogue label ("Automatic" when null or absent, the raw id when unlisted). */
+function fieldValue(key: string, value: unknown): string {
+  if (key !== "icon") return formatValue(value);
+  if (value === null || value === undefined) return "Automatic";
+  return (typeof value === "string" ? assetIconLabel(value) : null) ?? formatValue(value);
+}
+
 // What a field is called, and how its value reads, where the stored form is not for people.
 function describeChange(key: string, before: unknown, after: unknown): AuditChange {
   if (key === "widgets_hash") return { field: "Widget layout", before: "earlier layout", after: "the widget layout changed" };
-  return { field: humanise(key), before: formatValue(before), after: formatValue(after) };
+  return { field: humanise(key), before: fieldValue(key, before), after: fieldValue(key, after) };
 }
 
 function diff(sides: Sides): { changes: AuditChange[]; unchanged: number } {
@@ -389,7 +397,7 @@ function build(entry: AuditEntry): AuditView {
     unchanged,
     facts: Object.keys(detail)
       .filter((key) => !hidden.includes(key))
-      .map((key) => ({ label: factLabel(action, key), value: formatValue(get(detail, key)) })),
+      .map((key) => ({ label: factLabel(action, key), value: fieldValue(key, get(detail, key)) })),
     link: rule?.link ? rule.link(context) : null,
   };
 }

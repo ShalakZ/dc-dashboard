@@ -700,6 +700,24 @@ describe("AssetTree kind icons", () => {
     expect(iconOf("Odd").innerHTML).toBe(iconHtml("kindGeneric"));
   });
 
+  it("draws the icon an asset was given over its kind, keeps the kind icon for no icon or an unknown one, and never throws", () => {
+    const chosen: Asset[] = [
+      { id: 1, parent_id: null, name: "Chosen", kind: "Panel", sort_order: 1, icon: "server" },
+      { id: 2, parent_id: null, name: "Plain", kind: "Panel", sort_order: 2 },
+      { id: 3, parent_id: null, name: "Cleared", kind: "Panel", sort_order: 3, icon: null },
+      { id: 4, parent_id: null, name: "Unknown", kind: "Rack", sort_order: 4, icon: "zzz" },
+      { id: 5, parent_id: null, name: "Proto", kind: "Rack", sort_order: 5, icon: "__proto__" },
+      { id: 6, parent_id: null, name: "Ctor", kind: "Rack", sort_order: 6, icon: "constructor" },
+      { id: 7, parent_id: null, name: "Empty", kind: "Rack", sort_order: 7, icon: "" },
+    ];
+    render(<MemoryRouter><AssetTree nodes={buildTree(chosen)} selectedId={null} /></MemoryRouter>);
+    expect(iconOf("Chosen").innerHTML).toBe(iconHtml("kindServer"));
+    expect(iconOf("Chosen").innerHTML).not.toBe(iconHtml("kindPanel"));
+    expect(iconOf("Plain").innerHTML).toBe(iconHtml("kindPanel"));
+    expect(iconOf("Cleared").innerHTML).toBe(iconHtml("kindPanel"));
+    for (const name of ["Unknown", "Proto", "Ctor", "Empty"]) expect(iconOf(name).innerHTML).toBe(iconHtml("kindRack"));
+  });
+
   it("leaves the link text and the accessible name as the asset's name (the icon is decoration beside the link, not inside it)", () => {
     showKinded();
     const link = screen.getByRole("link", { name: "Main" });
@@ -717,7 +735,7 @@ describe("AssetTree while the list loads", () => {
   it("keeps the column and its header and shows one status region, with the filter slot and the rows as placeholders inside it", () => {
     render(loadingUi());
     expect(column()).toBeInTheDocument();
-    expect(screen.getByText("Assets", { selector: ".tree-title" })).toBeInTheDocument();
+    expect(screen.getByText("Assets Tree", { selector: ".tree-title" })).toBeInTheDocument();
     const region = screen.getByText("Loading the asset tree").parentElement!;
     expect(region).toHaveAttribute("role", "status");
     expect(screen.getAllByRole("status")).toHaveLength(1);

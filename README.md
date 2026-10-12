@@ -116,7 +116,7 @@ Report-Only and has to be changed in the same commit, and so does the header nam
 
 Open `http://localhost/`. The first visit asks you to create the admin
 account. Then: Sources → Add source → Test → Points → Browse points → Map;
-Assets → open the asset to see live and historical values.
+Assets Tree → open the asset to see live and historical values.
 
 To include the SCADA simulator (10 LV panels), add the dev profile:
 
@@ -143,7 +143,7 @@ the user `sim` with that password. Modbus needs none.
 | `simulator` | Stand-in SCADA, dev profile only: HTTP `:9000`, OPC UA `opc.tcp://simulator:4840/dcdash/` (user `sim`), Modbus TCP `simulator:5020` (unit 1); all three bound to `127.0.0.1` on the host |
 | `web` | Caddy: serves the UI, proxies `/api` to `api` |
 
-UI screens, besides Assets, Sources and Points:
+UI screens, besides Assets Tree, Sources and Points:
 
 - **Users** (admin): create users, change roles, deactivate / reactivate, reset a password, delete a user
   (after a confirmation; never yourself and never the last administrator). Deactivating signs that user out
@@ -366,7 +366,7 @@ Dashboards entry then opens it directly and so does the first page after signing
 away from when your session expired still wins; a deliberate sign-out forgets the page, so signing in
 again lands on the default). The list of all dashboards stays one click away: the **Dashboards** crumb
 above the dashboard, or the Quick find entry. With no default set, the entry opens the list and the first
-page is Assets. Deleting the default dashboard clears the choice (the audit row says so); choosing, switching
+page is Assets Tree. Deleting the default dashboard clears the choice (the audit row says so); choosing, switching
 and clearing it are audited as `dashboard.default_changed`. An open page learns of a change within a minute
 or when you return to its window.
 
@@ -490,7 +490,7 @@ Nine specs run in one `playwright test` run against the dev-profile stack on `ht
   administrators only) and sign-in protection with the Users page (a blocked account, Unblock, Delete, and no screen or API answer showing
   the password stored inside a source's URL).
 - `w7a.spec.ts` (last, at 1600×1000) checks the Assets workspace and the shell: a tree node opens its asset with one click and the tree
-  stays, the "Assets" crumb returns to the summary, the tree column resizes by keyboard and keeps its width and its folds across a reload,
+  stays, the "Assets Tree" crumb returns to the summary, the tree column resizes by keyboard and keeps its width and its folds across a reload,
   quick find (Ctrl+K) and its Esc keys, the "Live" status chip, Billing and Users at the full width of a 1920 px window, the summary's four
   tiles and "Needs attention", and the profile panel's Sign out with its Cancel.
 - `w7f.spec.ts` (its own project, after `w7e`, at 1600×1000) holds a page's first data request and checks the loading skeletons: one status
@@ -499,6 +499,12 @@ Nine specs run in one `playwright test` run against the dev-profile stack on `ht
   and 1024 px); the stored tree width while the asset list loads; no flash for an answer within 40 ms and a fade-in from nothing for a
   slow one; no skeleton on a poll, and none after a failed poll; the error alert replacing the skeleton; no sweep under reduced motion;
   the dark token in dark mode.
+- `w7g.spec.ts` (its own project, after `w7f`, at 1600×1000) checks the asset icons and the new page name: the sidebar entry, the first
+  crumb and the tree heading read "Assets Tree"; the Add asset dialog's Icon field (a collapsed grid, the caption "Automatic (Generic)"
+  that follows the Kind, the arrow keys changing the choice and the caption, Server chosen and saved) and the same icon in the tree row,
+  the asset page's title and quick find; Edit back to Automatic (the icon follows the kind again); the choice kept across a reload;
+  Esc inside the open grid closing the dialog with nothing saved; Enter on a cell not saving; no horizontal scroll at 1440 and 1024 px
+  with the dialog open. It creates one asset of its own and deletes it afterwards.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1192,6 +1198,27 @@ system the shapes do not shimmer. Sign-in, setup, Password and Diagnostics are u
 3. **Verify.** `docker compose exec api alembic current` still prints `0007 (head)`. In the browser's developer tools set the network
    to "Slow 4G", open the Users page and watch grey bars take the place of the table until the list arrives.
 4. **Going back.** Check out `10feba7` and rebuild as in step 2. There is no database step.
+
+### Upgrading to W7g (migration 0008)
+
+Schema `0007` to `0008`. Downgrade: **lossless** for everything else (it only loses the icon choices described below), so option a
+is open. The code to go back to is `15be434` (`main` before W7g).
+
+W7g (asset icons) adds migration `0008`: one new column, `assets.icon`, a nullable text that holds the icon an admin chose for an
+asset. It runs in a moment and needs no pre-check. Every existing asset starts on "Automatic", which changes nothing: the icon still
+follows the asset's kind. In the Add asset and Edit asset dialogs the new Icon field shows the icon in a small tile and, under Change
+icon, a grid of 28 icons to choose from; the choice shows in the Assets Tree, the asset page's title and quick find, and the audit log
+records the change. The Assets page is now called "Assets Tree" (the sidebar entry, the first breadcrumb, the tree heading and the
+summary's title). The `api` container applies the migration the first time it starts from the new image.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0007`).
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+3. **Verify.** `docker compose exec api alembic current` prints `0008 (head)`; the Add asset dialog shows an Icon field.
+4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0007` and `<old commit>` = `15be434`. The `0008`
+   downgrade drops `assets.icon`; nothing else changes, so only the icon choices are lost, and `upgrade` adds the column again with
+   every asset on Automatic. A restart of the W7g `api` would run `alembic upgrade head` and apply `0008` again, so the W7g `api`
+   must not be running once the schema is back at `0007`.
 
 ## Add a connector
 

@@ -125,7 +125,7 @@ export function AssetsSummary() {
   const waiting = isLoading || (assets.length > 0 && fleet.isLoading);
   return (
     <>
-      <PageHeader title="Assets" actions={assetActions(ctx, null)} />
+      <PageHeader title="Assets Tree" actions={assetActions(ctx, null)} />
       {waiting ? (
         // A poll that finds the query without data (it failed before) sets it pending again for a second: the error and a skeleton would take turns at every poll.
         fleet.errorUpdateCount === 0 ? <FleetSkeleton label="Loading the fleet summary" /> : <p className="muted">loading…</p>

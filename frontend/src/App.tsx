@@ -30,7 +30,7 @@ const DashboardsPage = lazy(() => import("./pages/DashboardsPage").then((m) => (
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const loading = <><Pending /><PageSkeleton label="Loading the page" /></>; // Pending: the loading bar waits for it too (a skeleton alone is no load)
 
-/** `/`: the default dashboard when one is set, else Assets. Waits for the answer, so Assets is not shown first; an error falls back to Assets. */
+/** `/`: the default dashboard when one is set, else Assets Tree. Waits for the answer, so Assets Tree is not shown first; an error falls back to Assets Tree. */
 function HomeRedirect() {
   const { data, isPending } = useDefaultDashboard();
   if (isPending) return loading;

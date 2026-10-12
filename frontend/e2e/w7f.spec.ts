@@ -273,7 +273,7 @@ test.describe("W7f: loading skeletons", () => {
     await test.step("the summary page", async () => {
       const fleet = await hold(page, "/api/fleet/summary");
       await page.goto("/assets");
-      await expect(heading1(page, "Assets")).toBeVisible(); // the header does not wait
+      await expect(heading1(page, "Assets Tree")).toBeVisible(); // the header does not wait
       await expect(skeleton(page, "Loading the fleet summary")).toBeVisible();
       await expect(page.locator(".tile").filter({ hasText: "Live power" })).toHaveCount(0);
       await expect(page.getByRole("heading", { name: "Needs attention" })).toHaveCount(0);

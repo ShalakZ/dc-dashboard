@@ -39,7 +39,7 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
 
   await test.step("assets: a + on a branch, Kind picked from a list, one spelling per kind", async () => {
     await page.goto("/assets");
-    await expect(page.getByRole("heading", { name: "Assets", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Assets Tree", exact: true })).toBeVisible();
     const mv2 = (await getJson<ApiAsset[]>(page, "/api/assets")).find((a) => a.name === "MV2");
     expect(mv2, "the asset MV2 from the journey").toBeTruthy();
 

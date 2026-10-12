@@ -328,9 +328,9 @@
   .tree-resize::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 2px; }
   .tree-resize:hover::after, .tree-resize:focus-visible::after, .tree-col.is-resizing .tree-resize::after { background: var(--ring); }
   .tree-resize:focus-visible { outline-offset: -2px; } /* the column is overflow: hidden, so a ring outside the handle would be clipped */
-  .tree-head { display: flex; align-items: center; gap: 4px; flex: none; height: 52px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--border); }
+  .tree-head { display: flex; align-items: center; gap: 2px; flex: none; height: 52px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--border); }
   .tree-col[data-state="minimized"] .tree-head { justify-content: center; padding: 0; border-bottom: 0; }
-  .tree-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; font-size: var(--fs-md); font-weight: 600; white-space: nowrap; } /* a p, never a heading: the page's h1 is "Assets" */
+  .tree-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-md); font-weight: 600; white-space: nowrap; } /* a p, never a heading: the page's h1 is "Assets Tree" */
   .tree-toggle svg.i { transition: transform var(--motion); }
   .tree-col[data-state="minimized"] .tree-toggle svg.i { transform: rotate(180deg); }
   .tree-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -514,6 +514,24 @@
   .dialog tr.conflict td { background: var(--crit-tint); }
   .dialog.confirm { width: min(480px, 100%); }
   .dialog.narrow { width: min(440px, 100%); }
+
+  /* The icon field of the asset dialog: the preview tile (the page header's), its caption and Change icon in one row, then a grid of
+     32 px cells. A cell is a label around a native radio clipped inside it, so its rules are written to outrank the base `label` and
+     `.dialog label` rules (grid, bold, one column); the checked cell is marked by fill, border and ring, not by colour alone. */
+  .icon-field { display: grid; gap: 8px; }
+  .icon-field-label { font-size: var(--fs-sm); font-weight: 600; }
+  .icon-field-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .icon-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--text); }
+  .icon-field-row > button { flex: none; }
+  .icon-grid { display: grid; grid-template-columns: repeat(10, 32px); gap: 4px; justify-content: start; } /* 29 cells in 3 rows: the open dialog still fits a 1024 x 640 window */
+  .icon-grid[hidden] { display: none; }
+  .dialog .icon-cell, .icon-grid .icon-cell { position: relative; display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-2); font-weight: 400; cursor: pointer; }
+  .icon-cell svg.i { width: 20px; height: 20px; }
+  .icon-cell:hover { border-color: var(--border-strong); background: var(--row-hover); color: var(--text); }
+  .icon-cell > input { position: absolute; top: 0; left: 0; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); }
+  .dialog .icon-cell-auto, .icon-grid .icon-cell-auto { border-style: dashed; } /* the first cell, Automatic: it shows the kind's own icon, so a dashed edge tells it from the same icon in the list */
+  .icon-cell:has(> input:checked) { border-color: var(--accent); background: var(--accent-tint); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-ink); }
+  .icon-cell:has(> input:focus-visible) { outline: 2px solid var(--ring); outline-offset: 1px; } /* the 4 px gap holds a 2 + 1 px ring; the global ring (2 px offset) would touch the next cell */
 
   /* Audit log: the detail is JSON with no spaces, so it must wrap or the page scrolls sideways */
   td code { overflow-wrap: anywhere; white-space: pre-wrap; }

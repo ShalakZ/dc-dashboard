@@ -87,7 +87,7 @@ async def test_summary_shows_scaled_latest_values(client, db):
 
     summary = (await client.get(f"/api/assets/{asset}/summary")).json()
 
-    assert summary["asset"] == {"id": asset, "name": "LV Panel 1", "parent_id": None, "kind": "generic"}
+    assert summary["asset"] == {"id": asset, "name": "LV Panel 1", "parent_id": None, "kind": "generic", "icon": None}
     metrics = {m["metric"]: m for m in summary["metrics"]}
     assert metrics["active_power_kw"]["value"] == pytest.approx(51.2)
     assert metrics["active_power_kw"]["unit"] == "kW" and metrics["active_power_kw"]["quality"] == 0
