@@ -37,7 +37,12 @@ $Known = @()   # the values to hide, longest first (Get-KnownValues)
 $DockerDown = $false
 $Containers = $false
 $LogServices = 0
-try { [Console]::OutputEncoding = $Utf8 } catch { }   # no console when redirected
+$OldEnc = $null
+try { if ([Console]::IsOutputRedirected) { $OldEnc = [Console]::OutputEncoding; [Console]::OutputEncoding = $Utf8 } } catch { }   # piped output is UTF-8
+function Stop-Script([int]$Code) {   # every way out: puts the console code page back
+  if ($OldEnc) { try { [Console]::OutputEncoding = $OldEnc } catch { } }
+  exit $Code
+}
 
 # ---- the scrubber: a second copy of core/audit.py scrub_url_credentials, tested against the shared fixture ----
 function Get-KnownValues([string[]]$Values) {
@@ -130,7 +135,7 @@ function ConvertTo-Escapes([string]$S) {
 
 if ($ScrubSelfTest) {   # before any collection: no docker, no files written
   $ok = 0; $bad = 0; $no = 0
-  try { $rows = [IO.File]::ReadAllLines($ScrubSelfTest, [Text.Encoding]::UTF8) } catch { [Console]::Error.WriteLine("cannot read the fixture: $($_.Exception.Message)"); exit 1 }
+  try { $rows = [IO.File]::ReadAllLines($ScrubSelfTest, [Text.Encoding]::UTF8) } catch { [Console]::Error.WriteLine("cannot read the fixture: $($_.Exception.Message)"); Stop-Script 1 }
   foreach ($row in $rows) {
     $no++
     if ($row.Length -eq 0 -or $row[0] -ceq '#') { continue }
@@ -145,7 +150,7 @@ if ($ScrubSelfTest) {   # before any collection: no docker, no files written
     } catch { Write-Host "case $($c[0]) FAIL $($_.Exception.Message)"; $bad++ }
   }
   Write-Host "SCRUB SELF-TEST $ok OK $bad FAILED"
-  exit $(if ($bad -eq 0) { 0 } else { 1 })
+  Stop-Script $(if ($bad -eq 0) { 0 } else { 1 })
 }
 
 # ---- where things are ----
@@ -162,8 +167,8 @@ $EnvSecrets = Read-EnvSecrets $EnvPath
 $Known = Get-KnownValues $EnvSecrets
 if ($ScrubFile) {
   try { foreach ($l in [IO.File]::ReadAllLines($ScrubFile, [Text.Encoding]::UTF8)) { Write-Host (Format-Line $l 0 0) } }
-  catch { [Console]::Error.WriteLine("cannot read ${ScrubFile}: $($_.Exception.Message)"); exit 1 }
-  exit 0
+  catch { [Console]::Error.WriteLine("cannot read ${ScrubFile}: $($_.Exception.Message)"); Stop-Script 1 }
+  Stop-Script 0
 }
 $Docker = $null
 if ($DockerPath) { if (Test-Path -LiteralPath $DockerPath -PathType Leaf) { $Docker = $DockerPath } }
@@ -380,7 +385,7 @@ Section "API" {
     if ($err) { Add-Line "  FAILED in $($sw.ElapsedMilliseconds) ms: $err" }
     else {
       Add-Line "  HTTP $code in $($sw.ElapsedMilliseconds) ms"
-      Add-Line ("body: " + ($body.Substring(0, [Math]::Min($body.Length, 65536)) -replace '\s+', ' ')) -Clip 306 -Prefix "  "
+      Add-Line ("body: " + ($body.Substring(0, [Math]::Min($body.Length, 65536)) -creplace '[ \t\n\v\f\r]+', ' ')) -Clip 306 -Prefix "  "
     }
   }
 }
@@ -422,6 +427,6 @@ try {
   Write-Host "saved: $MainFile"
 } catch {
   [Console]::Error.WriteLine("could not save the report: $($_.Exception.Message)")
-  exit 1
+  Stop-Script 1
 }
-exit 0
+Stop-Script 0

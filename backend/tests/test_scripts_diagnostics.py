@@ -465,5 +465,7 @@ def test_script_never_dumps_the_environment_or_evaluates_text():
     assert not re.search(r"\bsource\b|\.\s+\.env|(^|\s)env(\s|$)", code, re.M), "the .env is parsed, never sourced or evaluated"
     assert not re.search(r"\bcompose\b[^\n]{0,20}\bconfig\b(?!\W+--services)", code), "compose config without --services prints the secrets"
     assert not re.search(r'"config"(?!, "--services")', code)
+    # an API body is collapsed to one line with ASCII whitespace only: \s also matches a no-break space and would split a password's run
+    assert "-replace '\\s+'" not in code and "-creplace '[ \\t\\n\\v\\f\\r]+'" in code
     assert "Invoke-Limited" in code and "WaitForExit" in code and "Start-Process" in code  # external commands have a time limit
     assert "-UseBasicParsing" in code and "-MaximumRedirection 0" in code and "Tls12" in code
