@@ -73,7 +73,7 @@ function iconDialog(page: Page, title: "Add asset" | "Edit asset") {
     preview: field.locator(".icon-preview svg"),
     radio: (name: string) => grid.getByRole("radio", { name, exact: true }),
     /** The cell to click: the label around the radio carries the catalogue name as its title. */
-    cell: (name: string) => grid.getByTitle(name, { exact: true }),
+    cell: (name: string) => (name === "Automatic" ? grid.getByTitle(/^Automatic: follows the kind/) : grid.getByTitle(name, { exact: true })), // Automatic's title says what it does
     name: dialog.getByLabel("Name", { exact: true }),
     kind: dialog.getByLabel(/^Kind/), // a label that wraps a <select> has the option texts in its text
     newKind: dialog.getByLabel("New kind", { exact: true }),
@@ -141,6 +141,7 @@ test.describe.serial("W7g: asset icons and the Assets Tree name", () => {
       await expect(form.radio("Automatic")).toBeFocused();
       await expect(form.dialog, "opening the grid must not submit the form").toBeVisible();
       autoHtml = await form.cell("Automatic").locator("svg").innerHTML();
+      await expect(form.cell("Automatic"), "a dashed edge tells Automatic from the same icon in the list").toHaveCSS("border-top-style", "dashed");
       expect(await form.preview.innerHTML(), "the preview draws the same icon as the Automatic cell").toBe(autoHtml);
     });
 
@@ -303,6 +304,8 @@ test.describe.serial("W7g: asset icons and the Assets Tree name", () => {
         expect(measured.dialog, `the dialog scrolls sideways by ${measured.dialog} px`).toBeLessThanOrEqual(0);
         expect(measured.gridRight, "the grid ends inside the dialog").toBeLessThanOrEqual(measured.dialogRight);
         expect(measured.dialogRight, "the dialog ends inside the window").toBeLessThanOrEqual(measured.viewport);
+        const save = await form.dialog.getByRole("button", { name: "Save", exact: true }).boundingBox();
+        expect(save!.y + save!.height, `Save sits at ${save!.y + save!.height} px in a ${height} px window with the grid open`).toBeLessThanOrEqual(height);
       });
     }
   });

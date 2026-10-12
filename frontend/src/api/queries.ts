@@ -50,13 +50,13 @@ export const keys = {
   version: ["version"] as const,
 };
 
-/** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today), `fleet` the Assets landing page's figures. */
+/** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today), `fleet` the Assets Tree landing page's figures. */
 const COST_DEPENDENT = [keys.billing, keys.widgetData, keys.assets, keys.fleet] as const;
 
 export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets") });
 
 /**
- * The Assets landing page: live power, today's energy and cost over the whole site, and the readings that need attention.
+ * The Assets Tree landing page: live power, today's energy and cost over the whole site, and the readings that need attention.
  * `enabled` is false until the asset list says there is something to count (a site with no assets asks for no figures).
  */
 export const useFleetSummary = (enabled = true) =>

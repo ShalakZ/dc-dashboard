@@ -198,7 +198,8 @@ describe("AssetForm Icon", () => {
     for (const c of cells()) {
       const label = c.closest("label")!;
       expect(c).toHaveAccessibleName(label.textContent!);
-      expect(label).toHaveAttribute("title", label.textContent!);
+      // Automatic says what it does; the others are titled with their name
+      expect(label).toHaveAttribute("title", label.textContent === "Automatic" ? expect.stringMatching(/^Automatic: follows the kind \(/) : label.textContent!);
       expect(label.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
     }
     expect(cells().map((c) => c.closest("label")!.querySelector("svg")!.innerHTML).slice(1)).toEqual(ASSET_ICONS.map((e) => iconHtml(e.icon)));

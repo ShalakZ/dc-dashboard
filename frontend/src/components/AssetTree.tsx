@@ -283,7 +283,7 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
       style={width.shown === null ? undefined : ({ "--tree-user-w": `${width.shown}px` } as CSSProperties)}
     >
       <div className="tree-head">
-        {!minimized && <p className="tree-title">Assets Tree</p>}
+        {!minimized && <p className="tree-title" title="Assets Tree">Assets Tree</p>}
         {!minimized && onAddTop && (
           <button type="button" className="icon-btn" aria-label="Add a top-level asset" title="Add a top-level asset" disabled={disabled} onClick={onAddTop}>
             <Plus />

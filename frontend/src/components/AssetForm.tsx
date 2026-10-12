@@ -18,7 +18,8 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
   const [kind, setKind] = useState(initial?.kind?.trim() ? initial.kind : resolveKind(DEFAULT_KIND, options));
   const [other, setOther] = useState(false); // "Other…" picked
   const [typed, setTyped] = useState("");
-  const [icon, setIcon] = useState<string | null>(initial?.icon ?? null); // a catalogue id, null for Automatic; a stored id the catalogue lacks stays as it is until the user picks
+  const [startIcon] = useState<string | null>(initial?.icon || null); // at mount: a refetch while the dialog is open must not change what counts as edited; a blank stored value counts as Automatic
+  const [icon, setIcon] = useState<string | null>(startIcon); // a catalogue id, null for Automatic; a stored id the catalogue lacks stays as it is until the user picks
   const [picking, setPicking] = useState(false);
   const grid = useRef<HTMLDivElement>(null);
   const [labelId, captionId, gridId] = [useId(), useId(), useId()];
@@ -47,7 +48,7 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
     setSubmitting(true);
     try {
       const body: AssetIn = { name, parent_id: parent === "" ? null : Number(parent), kind: stored, sort_order: Number(sortOrder) || 0 };
-      if (icon !== (initial?.icon ?? null)) body.icon = icon; // only a change: a stored id the server later drops must not turn every edit into a 422
+      if (icon !== startIcon) body.icon = icon; // only a change: a stored id the server later drops must not turn every edit into a 422
       await onSubmit(body);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -81,7 +82,7 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
         </div>
         {/* Kept mounted and hidden, so aria-controls resolves; Enter would otherwise save the form while the user is only choosing. */}
         <div id={gridId} ref={grid} role="radiogroup" aria-label="Icon choices" className="icon-grid" hidden={!picking} onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }}>
-          <label className="icon-cell icon-cell-auto check" title="Automatic">
+          <label className="icon-cell icon-cell-auto check" title={`Automatic: follows the kind (${iconLabelFor(automatic)})`}>
             <input type="radio" name="asset-icon" checked={icon === null} onChange={() => setIcon(null)} />
             <Icon name={automatic} /><span className="sr-only">Automatic</span>
           </label>
