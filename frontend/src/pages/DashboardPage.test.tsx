@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useDefaultDashboard } from "../api/queries";
 import type { Role, WidgetType } from "../api/types";
 import { downloadCsv } from "../lib/download";
 import { authed, config, dashboard, dataFor, valueRow, valuesData, widget, widgetDataRoute } from "../test/dashboardFixtures";
@@ -264,5 +265,20 @@ describe("DashboardPage (view)", () => {
   it("shows the API error when the dashboard cannot be loaded", async () => {
     open("viewer", { "GET /api/dashboards/3": { status: 404, body: { detail: "dashboard not found" } } });
     expect(await screen.findByRole("alert")).toHaveTextContent("dashboard not found");
+  });
+
+  it("asks again which dashboard is the default when its page answers 404, so the sidebar stops pointing here", async () => {
+    // What the sidebar link reads. The server's first answer is the old default; once asked again it says there is none.
+    const Probe = () => <p data-testid="default">{String(useDefaultDashboard().data?.dashboard_id)}</p>;
+    let asked = 0;
+    const calls = mockFetch({
+      ...authed("viewer"),
+      "GET /api/dashboards/3": { status: 404, body: { detail: "dashboard not found" } },
+      "GET /api/dashboards/default": () => ({ body: { dashboard_id: ++asked === 1 ? 3 : null } }),
+    });
+    renderWithProviders(<><DashboardPage /><Probe /></>, { route: "/dashboards/3", path: "/dashboards/:id" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("dashboard not found");
+    await waitFor(() => expect(screen.getByTestId("default")).toHaveTextContent("null"));
+    expect(calls.filter((c) => c.path === "/api/dashboards/default")).toHaveLength(2);
   });
 });

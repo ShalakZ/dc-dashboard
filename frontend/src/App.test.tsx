@@ -103,6 +103,43 @@ describe("App routes", () => {
   });
 });
 
+describe("the home route", () => {
+  const home = (role: string, over: Record<string, unknown> = {}) => {
+    const calls = mockFetch({ ...routes(role), ...over } as ReturnType<typeof routes>);
+    renderWithProviders(<App />, { route: "/", path: "*" });
+    return calls;
+  };
+
+  it("opens the default dashboard, and never flashes /assets first", async () => {
+    const calls = home("viewer", { "GET /api/dashboards/default": { body: { dashboard_id: 3 } } });
+    expect(await screen.findByRole("heading", { name: "Hall A" })).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/fleet/summary")).toBe(false); // the Assets page was never rendered
+  });
+
+  it("opens Assets when there is no default", async () => {
+    home("viewer");
+    expect(await screen.findByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+  });
+
+  it("opens Assets when the default cannot be read", async () => {
+    home("viewer", { "GET /api/dashboards/default": { status: 500, body: { detail: "boom" } } });
+    expect(await screen.findByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+  });
+
+  it("lists the dashboards on /dashboards even when a default is set", async () => {
+    mockFetch({ ...routes("viewer"), "GET /api/dashboards/default": { body: { dashboard_id: 3 } } });
+    renderWithProviders(<App />, { route: "/dashboards", path: "*" });
+    expect(await screen.findByRole("heading", { name: "Dashboards", level: 1 })).toBeInTheDocument();
+  });
+
+  it("asks a signed-out visitor for the sign-in page without calling the default endpoint", async () => {
+    const calls = mockFetch({ ...routes("viewer"), "GET /api/me": { status: 401, body: { detail: "x" } } });
+    renderWithProviders(<App />, { route: "/", path: "*" });
+    expect(await screen.findByText("login page")).toBeInTheDocument(); // the harness's stub for /login
+    expect(calls.some((c) => c.path === "/api/dashboards/default")).toBe(false);
+  });
+});
+
 describe("the Assets workspace", () => {
   const site = { id: 1, parent_id: null, name: "Site", kind: "site", sort_order: 0 };
   beforeEach(() => {

@@ -1,5 +1,7 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { keys } from "../api/queries";
 import { RequireRole } from "../auth/RequireAuth";
 import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
@@ -147,6 +149,77 @@ describe("Layout phase 3 links", () => {
     expect(screen.getByRole("link", { name: "Billing" })).toHaveAttribute("href", "/billing");
     if (role === "admin") expect(screen.getByRole("link", { name: "Tariffs" })).toHaveAttribute("href", "/tariffs");
     else expect(screen.queryByRole("link", { name: "Tariffs" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Layout Dashboards entry and the default dashboard", () => {
+  const dashboardsLink = () => screen.getByRole("link", { name: "Dashboards" });
+
+  it("opens the default dashboard when one is set, and the list when none is", async () => {
+    mockFetch({ ...routes("viewer"), "GET /api/dashboards/default": { body: { dashboard_id: 7 } } });
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    await waitFor(() => expect(dashboardsLink()).toHaveAttribute("href", "/dashboards/7"));
+  });
+
+  it("follows a default that changes while it stays mounted: when asked again, and by itself every minute", async () => {
+    let defaultId: number | null = 7;
+    mockFetch({ ...routes("viewer"), "GET /api/dashboards/default": () => ({ body: { dashboard_id: defaultId } }) });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] }); // before the render, so the query's interval is the fake one
+    try {
+      const Ask = () => {
+        const client = useQueryClient();
+        return <button onClick={() => void client.invalidateQueries({ queryKey: keys.defaultDashboard })}>ask again</button>;
+      };
+      renderWithProviders(<><Layout /><Ask /></>, { route: "/assets", path: "/assets" });
+      await profileButton();
+      await waitFor(() => expect(dashboardsLink()).toHaveAttribute("href", "/dashboards/7"));
+
+      defaultId = 9; // another admin picked a new default
+      await userEvent.click(screen.getByRole("button", { name: "ask again" }));
+      await waitFor(() => expect(dashboardsLink()).toHaveAttribute("href", "/dashboards/9"));
+
+      defaultId = null; // and then deleted it
+      act(() => { vi.advanceTimersByTime(60_000); });
+      await waitFor(() => expect(dashboardsLink()).toHaveAttribute("href", "/dashboards"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the list as its target while the default is unknown or cannot be read", async () => {
+    mockFetch({ ...routes("viewer"), "GET /api/dashboards/default": { status: 500, body: { detail: "boom" } } });
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    expect(dashboardsLink()).toHaveAttribute("href", "/dashboards"); // still pending
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(dashboardsLink()).toHaveAttribute("href", "/dashboards"); // failed
+  });
+
+  it.each([["/dashboards"], ["/dashboards/3"], ["/dashboards/9"]])("is the current page on %s whatever the default is", async (route) => {
+    mockFetch({ ...routes("viewer"), "GET /api/dashboards/default": { body: { dashboard_id: 7 } } });
+    renderWithProviders(<Layout />, { route, path: "*" });
+    await profileButton();
+    await waitFor(() => expect(dashboardsLink()).toHaveAttribute("href", "/dashboards/7"));
+    expect(dashboardsLink()).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Assets" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("matches whole path segments: /dashboardsX is not the Dashboards page", async () => {
+    mockFetch(routes("viewer"));
+    renderWithProviders(<Layout />, { route: "/dashboardsX", path: "*" });
+    await profileButton();
+    expect(dashboardsLink()).not.toHaveAttribute("aria-current");
+  });
+
+  it("still names the minimized strip's tooltip Dashboards", async () => {
+    mockFetch({ ...routes("viewer"), "GET /api/dashboards/default": { body: { dashboard_id: 7 } } });
+    localStorage.setItem("dcdash.sidebar", "minimized");
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    await waitFor(() => expect(dashboardsLink()).toHaveAttribute("href", "/dashboards/7"));
+    act(() => dashboardsLink().focus());
+    expect(document.getElementById("side-tip")).toHaveTextContent("Dashboards");
   });
 });
 

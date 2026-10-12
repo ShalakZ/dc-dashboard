@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FocusEvent, type PointerEvent } from "react";
-import { NavLink, Outlet } from "react-router";
+import { Link, NavLink, Outlet, useLocation } from "react-router";
+import { useDefaultDashboard } from "../api/queries";
 import { useAuth } from "../auth/AuthProvider";
 import { initialSidebar, saveSidebar, type SidebarState } from "../lib/sidebarState";
 import { CertificateNotice } from "./CertificateNotice";
 import { Icon, ICONS } from "./Icon";
-import { GROUPS } from "./navItems";
+import { DASHBOARDS_PATH, GROUPS, type NavItem } from "./navItems";
 import { ProfileMenu } from "./ProfileMenu";
 import { QuickFind } from "./QuickFind";
 import { RoleChangedNotice } from "./RoleChangedNotice";
@@ -85,6 +86,13 @@ export function Layout() {
   const minimized = sidebar === "minimized";
   const { tip, bind, scrolled, keep, leave } = useSideTip(minimized);
   const shellRef = useRef<HTMLDivElement>(null);
+  const defaultId = useDefaultDashboard().data?.dashboard_id; // pending or failed: undefined, so the Dashboards item opens the list
+  const { pathname } = useLocation();
+
+  /** Where an item leads: Dashboards goes straight to the default dashboard when there is one. */
+  const target = (item: NavItem) => (item.to === DASHBOARDS_PATH && typeof defaultId === "number" ? `${DASHBOARDS_PATH}/${defaultId}` : item.to);
+  /** NavLink cannot mark an item current on a path other than its own target, so an item with a `match` computes it here. */
+  const current = (item: NavItem) => item.match !== undefined && (pathname === item.match || pathname.startsWith(`${item.match}/`));
 
   // The width transition starts one frame after the first paint, so a remembered state does not animate in.
   useEffect(() => {
@@ -134,12 +142,19 @@ export function Layout() {
                 {GROUPS.filter((group) => !group.min || hasRole(group.min)).map((group) => (
                   <div className="nav-group" role="group" aria-labelledby={group.id} key={group.id}>
                     <span className="nav-heading" id={group.id}>{group.title}</span>
-                    {group.items.map((item) => (
-                      <NavLink to={item.to} className="side-row" key={item.to} {...bind(item.label)}>
-                        <Icon name={item.icon} />
-                        <span className="lbl">{item.label}</span>
-                      </NavLink>
-                    ))}
+                    {group.items.map((item) => {
+                      const content = (
+                        <>
+                          <Icon name={item.icon} />
+                          <span className="lbl">{item.label}</span>
+                        </>
+                      );
+                      return item.match !== undefined ? (
+                        <Link to={target(item)} className="side-row" key={item.to} aria-current={current(item) ? "page" : undefined} {...bind(item.label)}>{content}</Link>
+                      ) : (
+                        <NavLink to={target(item)} className="side-row" key={item.to} {...bind(item.label)}>{content}</NavLink>
+                      );
+                    })}
                   </div>
                 ))}
               </div>

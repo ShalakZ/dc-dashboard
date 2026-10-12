@@ -8,13 +8,14 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_role
 from dcdash.api.settings import current_timezone
 from dcdash.core.cost import Cost, HourCost, cost_by_hour, load_tariffs, no_data, rate_at, summarize
 from dcdash.core.csvout import write_csv
-from dcdash.core.energy import hourly_energy
+from dcdash.core.energy import hourly_energy, load_meters
 from dcdash.core.settings_store import get_currency
 from dcdash.core.timeutil import local_days, month_bounds, validate_whole_hour_zone
 from dcdash.core.tree import AssetTree
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/api", tags=["billing"], dependencies=[Depends(requir
 
 MONTH_PATTERN = r"^\d{4}-(0[1-9]|1[0-2])$"
 CSV_HEADER = ("asset", "date", "kwh", "cost", "currency", "estimated", "partial", "no_data")
+_FIRST_BUCKET = text("SELECT min(bucket) FROM readings_1h WHERE point_id = ANY(CAST(:ids AS integer[]))")
 
 
 def _now() -> datetime:
@@ -128,6 +130,19 @@ async def month_costs(db: AsyncSession, month: str | None) -> dict[str, Any]:
         "days": [day.isoformat() for day, _, _ in days],
         "assets": assets,
     }
+
+
+@router.get("/billing/months")
+async def months(db: AsyncSession = Depends(get_db)) -> dict[str, str | None]:
+    """The site-local month of the first energy reading of any metered point: where the Billing month picker starts.
+    The zone is not checked for whole hours; naming a month does not need that."""
+    meters = await load_meters(db, await AssetTree.load(db))
+    first = None
+    if meters:
+        first = await db.scalar(_FIRST_BUCKET, {"ids": sorted({m.point_id for m in meters.values()})})
+    if first is None:
+        return {"first_month": None}
+    return {"first_month": first.astimezone(ZoneInfo(await current_timezone(db))).strftime("%Y-%m")}
 
 
 @router.get("/billing/costs")

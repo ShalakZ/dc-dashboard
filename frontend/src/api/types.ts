@@ -202,6 +202,8 @@ export type RangePreset = "1h" | "6h" | "24h" | "7d" | "30d" | "today" | "yester
 
 export interface Site { timezone: string; currency: string | null }
 export interface BillingSettings { currency: string | null }
+/** The site-local month (`YYYY-MM`) of the first energy reading; `null` when there is none. */
+export interface BillingMonths { first_month: string | null }
 
 export interface Tariff {
   id: number; asset_id: number | null; asset_name: string | null; asset_path: string | null; rate_per_kwh: number;
@@ -245,6 +247,8 @@ export interface Widget { id: number; type: WidgetType; title: string; config: W
 export type WidgetIn = Omit<Widget, "id">;
 export interface Dashboard { id: number; name: string; range: RangePreset; updated_at: string; widgets: Widget[] }
 export interface DashboardListItem { id: number; name: string; range: RangePreset; widget_count: number; updated_at: string }
+/** The dashboard people land on; `null` when none is set. */
+export interface DefaultDashboard { dashboard_id: number | null }
 export interface DashboardIn { name: string; range?: RangePreset }
 export interface DashboardSave { name: string; range: RangePreset; updated_at: string; widgets: WidgetIn[] }
 

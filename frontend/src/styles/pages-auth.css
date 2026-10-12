@@ -22,8 +22,10 @@
 
   /* Dashboards list: the name truncates with an ellipsis (the link carries a title), the figures and the row action stay compact */
   .dashboards-table td.name { width: 55%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .dashboards-table td.name a { font-weight: 600; }
+  .dashboards-table .name-row { display: flex; align-items: center; gap: 8px; } /* the link ellipsizes, the badge never leaves the cell */
+  .dashboards-table .name-row a { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+  .dashboards-table .badge { flex: none; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-ink); font-size: var(--fs-xs); font-weight: 600; line-height: 1.4; }
   .dashboards-table td.when { white-space: nowrap; color: var(--text-2); }
   .dashboards-table :is(th, td).act { width: 1%; text-align: right; white-space: nowrap; }
-  .dashboards-table td.act .trash-btn { margin-left: auto; } /* a block-level box: text-align does not move it to the column's right edge */
+  .dashboards-table .act-row { display: flex; align-items: center; justify-content: flex-end; gap: 2px; } /* a flex row: the menu and the bin sit together at the column's right edge */
 }

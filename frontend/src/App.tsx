@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router";
+import { useDefaultDashboard } from "./api/queries";
 import { RequireAuth, RequireRole } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { AssetPage } from "./pages/AssetPage";
@@ -27,13 +28,20 @@ const DashboardsPage = lazy(() => import("./pages/DashboardsPage").then((m) => (
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const loading = <p className="muted">loading…</p>;
 
+/** `/`: the default dashboard when one is set, else Assets. Waits for the answer, so Assets is not shown first; an error falls back to Assets. */
+function HomeRedirect() {
+  const { data, isPending } = useDefaultDashboard();
+  if (isPending) return loading;
+  return <Navigate to={data?.dashboard_id ? `/dashboards/${data.dashboard_id}` : "/assets"} replace />;
+}
+
 export function App() {
   return (
     <Routes>
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
-        <Route path="/" element={<Navigate to="/assets" replace />} />
+        <Route path="/" element={<HomeRedirect />} />
         <Route path="/assets" element={<AssetsPage />}>
           <Route index element={<AssetsSummary />} />
           <Route path=":id" element={<AssetPage />} />

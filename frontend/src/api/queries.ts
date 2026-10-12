@@ -3,7 +3,7 @@ import { apiQuery, type AuditFilters } from "../lib/auditFilters";
 import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { ApiError, api } from "./client";
 import type {
-  Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
+  Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
   FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
@@ -38,7 +38,9 @@ export const keys = {
   fleet: ["fleet-summary"] as const,
   billing: ["billing"] as const,
   billingCosts: (month: string | null) => ["billing", "costs", month] as const,
+  billingMonths: ["billing", "months"] as const,
   dashboardList: ["dashboards", "list"] as const,
+  defaultDashboard: ["dashboards", "default"] as const,
   dashboard: (id: number) => ["dashboards", "detail", id] as const,
   widgetData: ["widget-data"] as const,
   collectorStatus: ["collector-status"] as const,
@@ -287,6 +289,10 @@ export function usePutBillingSettings() {
   });
 }
 
+/** Where the Billing month picker starts; the first month with energy data, or null. */
+export const useBillingMonths = () =>
+  useQuery({ queryKey: keys.billingMonths, queryFn: () => api.get<BillingMonths>("/api/billing/months"), staleTime: 60_000 });
+
 export const useTariffs = () => useQuery({ queryKey: keys.tariffs, queryFn: () => api.get<Tariff[]>("/api/tariffs") });
 
 export function useCreateTariff() {
@@ -325,6 +331,32 @@ export const useBillingCosts = (month: string | null) =>
 export const useDashboards = () =>
   useQuery({ queryKey: keys.dashboardList, queryFn: () => api.get<DashboardListItem[]>("/api/dashboards") });
 
+/**
+ * The dashboard people land on (null = none). The server answers null for a stale or unusable value too.
+ * The sidebar keeps this query alive for the whole session, so it looks again by itself (when the tab becomes visible again, once stale, and every minute):
+ * another admin may delete the dashboard or pick a new default while a control-room screen stays open.
+ */
+export const useDefaultDashboard = () =>
+  useQuery({
+    queryKey: keys.defaultDashboard,
+    queryFn: () => api.get<DefaultDashboard>("/api/dashboards/default"),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true, // the app turns this off for every query (main.tsx); react-query fires it when the tab becomes visible again
+    refetchInterval: 60_000,
+  });
+
+export function usePutDefaultDashboard() {
+  const client = useQueryClient();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: DefaultDashboard) => api.put<DefaultDashboard>("/api/dashboards/default", body),
+    onSuccess: (saved) => {
+      client.setQueryData(keys.defaultDashboard, saved);
+      return invalidate(keys.auditAll);
+    },
+  });
+}
+
 export const useDashboard = (id: number) =>
   useQuery({ queryKey: keys.dashboard(id), queryFn: () => api.get<Dashboard>(`/api/dashboards/${id}`) });
 
@@ -357,6 +389,7 @@ export function useDeleteDashboard() {
     mutationFn: (id: number) => api.del(`/api/dashboards/${id}`),
     onSuccess: (_data, id) => {
       client.removeQueries({ queryKey: keys.dashboard(id) });
+      client.invalidateQueries({ queryKey: keys.defaultDashboard });
       return client.invalidateQueries({ queryKey: keys.dashboardList });
     },
   });

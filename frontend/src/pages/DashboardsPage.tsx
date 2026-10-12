@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { useDashboards, useDeleteDashboard, useSite } from "../api/queries";
+import { useDashboards, useDefaultDashboard, useDeleteDashboard, usePutDefaultDashboard, useSite } from "../api/queries";
 import type { DashboardListItem } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { CreateDashboardDialog } from "../components/dashboard/CreateDashboardDialog";
 import { PageHeader } from "../components/PageHeader";
+import { RowActions } from "../components/RowActions";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { formatSiteDateTime } from "../lib/siteTime";
@@ -12,9 +13,12 @@ import { formatSiteDateTime } from "../lib/siteTime";
 export function DashboardsPage() {
   const { hasRole } = useAuth();
   const canEdit = hasRole("operator");
+  const isAdmin = hasRole("admin");
   const list = useDashboards();
   const site = useSite();
   const remove = useDeleteDashboard();
+  const defaultId = useDefaultDashboard().data?.dashboard_id ?? null;
+  const setDefault = usePutDefaultDashboard();
   const { run, error: actionError } = useAction();
   const [creating, setCreating] = useState(false);
 
@@ -22,7 +26,8 @@ export function DashboardsPage() {
   const timezone = site.data?.timezone;
 
   const confirmDelete = (d: DashboardListItem) => run(async () => {
-    if (!window.confirm(`Delete dashboard "${d.name}" and its widgets?`)) return;
+    const warning = d.id === defaultId ? " It is the default dashboard: nobody will land on it any more." : "";
+    if (!window.confirm(`Delete dashboard "${d.name}" and its widgets?${warning}`)) return;
     await remove.mutateAsync(d.id);
   });
 
@@ -51,10 +56,29 @@ export function DashboardsPage() {
             <tbody>
               {list.data.map((d) => (
                 <tr key={d.id}>
-                  <td className="name"><Link to={`/dashboards/${d.id}`} title={d.name}>{d.name}</Link></td>
+                  <td className="name">
+                    <div className="name-row">
+                      <Link to={`/dashboards/${d.id}`} title={d.name}>{d.name}</Link>
+                      {d.id === defaultId && <span className="badge">Default</span>}
+                    </div>
+                  </td>
                   <td className="num">{d.widget_count}</td>
                   <td className="when">{formatSiteDateTime(d.updated_at, timezone)}</td>
-                  {canEdit && <td className="act"><TrashButton label={`Delete ${d.name}`} onClick={() => confirmDelete(d)} /></td>}
+                  {canEdit && (
+                    <td className="act">
+                      <div className="act-row">
+                        {isAdmin && (
+                          <RowActions
+                            label={`Actions for ${d.name}`}
+                            items={[d.id === defaultId
+                              ? { label: "Clear default", onSelect: () => run(() => setDefault.mutateAsync({ dashboard_id: null })) }
+                              : { label: "Make default", onSelect: () => run(() => setDefault.mutateAsync({ dashboard_id: d.id })) }]}
+                          />
+                        )}
+                        <TrashButton label={`Delete ${d.name}`} onClick={() => confirmDelete(d)} />
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

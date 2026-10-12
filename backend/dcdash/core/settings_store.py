@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 GENERAL_KEY = "general"
 BILLING_KEY = "billing"
 SIGN_IN_KEY = "sign_in"
+DEFAULT_DASHBOARD_KEY = "default_dashboard"
 
 _CURRENCY = re.compile(r"[A-Z]{3}")
 

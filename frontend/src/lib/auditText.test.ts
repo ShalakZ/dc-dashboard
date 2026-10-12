@@ -9,7 +9,7 @@ const entry = (action: string, detail: unknown, extra: Partial<AuditEntry> = {})
 // Every action the backend writes (the Python parity test keeps this list and the table in step).
 const ALL_ACTIONS = [
   "asset.created", "asset.updated", "asset.deleted", "billing.currency_changed",
-  "dashboard.created", "dashboard.updated", "dashboard.deleted", "diagnostics.report", "discovery.accepted",
+  "dashboard.created", "dashboard.updated", "dashboard.deleted", "dashboard.default_changed", "diagnostics.report", "discovery.accepted",
   "login.failed", "login.locked", "login.succeeded", "login.unblocked", "mapping.created", "mapping.updated", "mapping.deleted",
   "password.change_failed", "password.changed", "scan.finished", "scan.started",
   "scope.created", "scope.updated", "scope.deleted", "settings.sign_in_changed", "settings.timezone_changed", "setup.completed",
@@ -106,6 +106,32 @@ describe("describeAudit: updates with before and after", () => {
     expect(view.changes).toContainEqual({ field: "Widgets", before: "3", after: "4" });
     expect(view.changes.some((c) => c.after === "the widget layout changed")).toBe(true);
     expect(view.link).toEqual({ to: "/dashboards/4", label: "Open dashboard Ops" });
+  });
+
+  it("writes the default dashboard change as a sentence and links to the new default", () => {
+    const side = (id: number | null, name: string | null) => ({ dashboard_id: id, dashboard: name });
+    const made = describeAudit(entry("dashboard.default_changed", { before: side(null, null), after: side(4, "Ops") }));
+    expect(made.summary).toBe("Made dashboard Ops the default dashboard");
+    expect(made.link).toEqual({ to: "/dashboards/4", label: "Open dashboard Ops" });
+    const moved = describeAudit(entry("dashboard.default_changed", { before: side(4, "Ops"), after: side(6, "Plant") }));
+    expect(moved.summary).toBe("Changed the default dashboard from Ops to Plant");
+    expect(moved.link).toEqual({ to: "/dashboards/6", label: "Open dashboard Plant" });
+    const cleared = describeAudit(entry("dashboard.default_changed", { before: side(6, "Plant"), after: side(null, null) }));
+    expect(cleared.summary).toBe("Cleared the default dashboard (was Plant)");
+    expect(cleared.link).toBeNull();
+    expect(describeAudit(entry("dashboard.default_changed", {})).summary).toBe("Changed the default dashboard");
+    // A link is built from an integer id only.
+    expect(describeAudit(entry("dashboard.default_changed", { before: side(null, null), after: side("4" as never, "Ops") })).link).toBeNull();
+  });
+
+  it("says when a deleted dashboard was the default", () => {
+    expect(describeAudit(entry("dashboard.deleted", { dashboard_id: 4, name: "Ops", widgets: 1, was_default: true })).summary).toBe(
+      "Deleted dashboard Ops (it was the default dashboard)",
+    );
+    expect(describeAudit(entry("dashboard.deleted", { dashboard_id: 4, name: "Ops", widgets: 1 })).summary).toBe("Deleted dashboard Ops");
+    expect(describeAudit(entry("dashboard.deleted", { dashboard_id: 4, name: "Ops", widgets: 1, was_default: "yes" })).summary).toBe(
+      "Deleted dashboard Ops",
+    );
   });
 
   it("writes the two single-value settings as from-to sentences, with 'not set' for a missing side", () => {
@@ -502,7 +528,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(41);
+    expect(ALL_ACTIONS).toHaveLength(42);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }

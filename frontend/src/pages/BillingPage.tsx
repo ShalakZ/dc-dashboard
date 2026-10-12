@@ -1,11 +1,13 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { useBillingCosts, useSite } from "../api/queries";
+import { useBillingCosts, useBillingMonths, useSite } from "../api/queries";
 import type { BillingCosts, CostFigure } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ESTIMATED_TIP, Figure, PARTIAL_TIP } from "../components/Figure";
 import { PageHeader } from "../components/PageHeader";
-import { depthsByAsset, fmtCost, fmtKwh, fmtRate, monthLabel, shiftMonth } from "../lib/billing";
+import {
+  clampMonth, depthsByAsset, fmtCost, fmtKwh, fmtRate, MONTH_NAMES, monthLabel, monthsOfYear, shiftMonth, yearsBetween,
+} from "../lib/billing";
 import { downloadCsv } from "../lib/download";
 import { formatSiteDay, siteMonth } from "../lib/siteTime";
 
@@ -114,6 +116,38 @@ function BillingTable({ costs, isAdmin }: { costs: BillingCosts; isAdmin: boolea
   );
 }
 
+/**
+ * The Year and Month selects. Their bounds widen to the month on screen, so they always hold it even when a time-zone change
+ * leaves it outside [first month with data, current month]; picking clamps into those same bounds.
+ */
+function MonthJump({ month, firstMonth, current, onPick }: {
+  month: string; firstMonth: string | null; current: string | null; onPick: (month: string) => void;
+}) {
+  const yearId = useId();
+  const monthId = useId();
+  const low = [month, firstMonth, current].filter((m): m is string => m !== null).sort()[0];
+  const high = current !== null && current > month ? current : month;
+  const year = Number(month.slice(0, 4));
+  const monthNumber = Number(month.slice(5));
+  const pick = (y: number, m: number) => onPick(clampMonth(`${y}-${String(m).padStart(2, "0")}`, low, high));
+  return (
+    <div className="billing-jump">
+      <span className="jump-field">
+        <label htmlFor={yearId}>Year</label>
+        <select id={yearId} value={year} disabled={current === null} onChange={(e) => pick(Number(e.target.value), monthNumber)}>
+          {yearsBetween(low, high).map((y) => <option key={y} value={y}>{y}</option>)}
+        </select>
+      </span>
+      <span className="jump-field">
+        <label htmlFor={monthId}>Month</label>
+        <select id={monthId} value={monthNumber} disabled={current === null} onChange={(e) => pick(year, Number(e.target.value))}>
+          {monthsOfYear(year, low, high).map((m) => <option key={m} value={m}>{MONTH_NAMES[m - 1]}</option>)}
+        </select>
+      </span>
+    </div>
+  );
+}
+
 export function BillingPage() {
   const { hasRole } = useAuth();
   const site = useSite();
@@ -124,6 +158,8 @@ export function BillingPage() {
   const current = site.data ? siteMonth(new Date(), site.data.timezone) : null;
   const month = picked ?? current;
   const costs = useBillingCosts(month);
+  // The first month with data only narrows what Previous and the selects offer; while it is unknown (pending, failed, none) nothing is limited.
+  const firstMonth = useBillingMonths().data?.first_month ?? null;
 
   const exportCsv = async () => {
     if (month === null) return;
@@ -149,11 +185,14 @@ export function BillingPage() {
       {site.isError && <p className="error" role="alert">{site.error.message}</p>}
       {month !== null && (
         <div className="row billing-bar">
-          <button type="button" onClick={() => setPicked(shiftMonth(month, -1))}><ChevronIcon dir="left" />Previous month</button>
+          <button type="button" onClick={() => setPicked(shiftMonth(month, -1))} disabled={firstMonth !== null && month <= firstMonth}>
+            <ChevronIcon dir="left" />Previous month
+          </button>
           <strong className="month-label" aria-live="polite">{monthLabel(month)}</strong>
           <button type="button" onClick={() => setPicked(shiftMonth(month, 1))} disabled={current !== null && month >= current}>
             Next month<ChevronIcon dir="right" />
           </button>
+          <MonthJump month={month} firstMonth={firstMonth} current={current} onPick={setPicked} />
         </div>
       )}
       {exportError && <p className="error" role="alert">{exportError}</p>}

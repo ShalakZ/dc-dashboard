@@ -202,7 +202,25 @@ const RULES: Record<string, Rule> = {
 
   "dashboard.created": made("dashboard", "dashboard_id", ownDashboard),
   "dashboard.updated": changed("dashboard", "dashboard_id", ownDashboard),
-  "dashboard.deleted": removed("dashboard", "dashboard_id"),
+  "dashboard.deleted": {
+    summary: (c) => `Deleted ${thing("dashboard", c.d, "dashboard_id")}${c.d.was_default === true ? " (it was the default dashboard)" : ""}`,
+  },
+  // before/after carry the dashboard's id and name, null when there was none.
+  "dashboard.default_changed": {
+    summary: ({ sides }) => {
+      const from = sides ? text(get(sides.before, "dashboard")) : null;
+      const to = sides ? text(get(sides.after, "dashboard")) : null;
+      if (from && to) return `Changed the default dashboard from ${from} to ${to}`;
+      if (to) return `Made dashboard ${to} the default dashboard`;
+      if (from) return `Cleared the default dashboard (was ${from})`;
+      return "Changed the default dashboard";
+    },
+    link: ({ sides }) => {
+      const id = sides ? idOf(get(sides.after, "dashboard_id")) : null;
+      const name = sides ? text(get(sides.after, "dashboard")) : null;
+      return id === null ? null : { to: `/dashboards/${id}`, label: name ? `Open dashboard ${name}` : `Open dashboard #${id}` };
+    },
+  },
 
   // The report text is never stored: this row says only how it was asked for.
   "diagnostics.report": {
