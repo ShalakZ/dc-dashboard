@@ -139,6 +139,30 @@ async def test_patch_refuses_a_bad_icon_and_changes_nothing(client, db, bad):
     assert len(await audit_rows(db, "asset.%")) == audit_before
 
 
+async def test_a_save_that_fails_after_the_icon_is_set_changes_nothing(client, db):
+    await login_as(client, db)
+    parent = (await add(client, "P")).json()
+    asset = (await add(client, "A", parent["id"], icon="rack")).json()
+    await add(client, "Twin", parent["id"])
+    audit_before = await db.fetchval("SELECT count(*) FROM audit_log")
+    url = f"/api/assets/{asset['id']}"
+    assert (await client.patch(url, json={"icon": "server", "parent_id": 999999})).status_code == 404
+    assert (await client.patch(f"/api/assets/{parent['id']}", json={"icon": "server", "parent_id": asset["id"]})).status_code == 422
+    assert (await client.patch(url, json={"icon": "server", "name": "Twin"})).status_code == 409
+    assert await db.fetchval("SELECT icon FROM assets WHERE id = $1", asset["id"]) == "rack"
+    assert await db.fetchval("SELECT icon FROM assets WHERE id = $1", parent["id"]) is None
+    assert await db.fetchval("SELECT count(*) FROM audit_log") == audit_before
+    assert (await client.patch(url, json={"icon": "server"})).json()["icon"] == "server"  # the next good save still works
+
+
+async def test_the_422_for_a_bad_icon_names_the_field_and_does_not_echo_the_value(client, db):
+    await login_as(client, db)
+    response = await client.post("/api/assets", json={"name": "A", "icon": "SECRETVALUE12345"})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "icon"]
+    assert "SECRETVALUE12345" not in response.text
+
+
 # --- roles --------------------------------------------------------------------------------------------------------------
 
 async def test_roles_on_the_icon(client, db):
@@ -248,9 +272,9 @@ async def test_discovery_creates_an_asset_with_no_icon(client, db):
     response = await client.post(
         "/api/discovery/accept",
         json={
-            "source_id": source, "new_asset": {"name": "LVP01"},
+            "source_id": source, "new_asset": {"name": "LVP01", "icon": "server"},  # the discovery model has no icon field
             "points": [{"point_id": point, "metric": "active_power_kw"}],
         },
     )
-    assert response.status_code in (200, 201), response.text
+    assert response.status_code == 201, response.text
     assert await db.fetchval("SELECT icon FROM assets WHERE name = 'LVP01'") is None
