@@ -67,7 +67,7 @@ async def test_0007_differs_from_0006_by_exactly_the_column_and_its_check(db):
         assert down.returncode == 0, down.stderr
         at_0006 = await snapshot(db)
         assert await column(db) is None
-        up = run_alembic("upgrade", "head")
+        up = run_alembic("upgrade", "0007")  # not head: later migrations add to other tables
         assert up.returncode == 0, up.stderr
         at_0007 = await snapshot(db)
     finally:
@@ -91,7 +91,7 @@ async def test_upgrade_gives_an_existing_account_empty_preferences_and_downgrade
         await db.execute("INSERT INTO audit_log (user_id, action) VALUES ($1, 'kept')", uid)
         users_before = [tuple(r) for r in await db.fetch(USERS)]
 
-        up = run_alembic("upgrade", "head")
+        up = run_alembic("upgrade", "0007")
         assert up.returncode == 0, up.stderr
         assert await db.fetchval("SELECT preferences FROM users WHERE id = $1", uid) == {}
         assert [tuple(r) for r in await db.fetch(USERS)] == users_before
@@ -104,15 +104,12 @@ async def test_upgrade_gives_an_existing_account_empty_preferences_and_downgrade
         assert [tuple(r) for r in await db.fetch(USERS)] == users_before
         assert await db.fetchval("SELECT action FROM audit_log") == "kept"
 
-        up = run_alembic("upgrade", "head")
+        up = run_alembic("upgrade", "0007")
         assert up.returncode == 0, up.stderr
         assert await db.fetchval("SELECT preferences FROM users WHERE id = $1", uid) == {}  # defaults again
     finally:
         run_alembic("upgrade", "head")
 
 
-def test_the_migration_follows_0006_and_is_the_only_head():
-    assert "0006 -> 0007" in run_alembic("history", "-r", "0006:0007").stdout
-    heads = run_alembic("heads")
-    assert heads.returncode == 0, heads.stderr
-    assert [line.split()[0] for line in heads.stdout.splitlines() if line.strip()] == ["0007"]
+def test_the_migration_follows_0006():
+    assert "0006 -> 0007" in run_alembic("history", "-r", "0006:0007").stdout  # the one head is pinned by the newest migration's test
