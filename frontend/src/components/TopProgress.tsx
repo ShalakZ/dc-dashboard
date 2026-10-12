@@ -3,8 +3,12 @@ import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react"
 import { useLocation } from "react-router";
 import { progress, type Progress } from "../lib/progress";
 
-/** Initial loads only: polling and background refetches of a query that has data never show the bar. */
-const initialLoad = (query: Query) => query.state.data === undefined;
+/**
+ * Initial loads only: polling and background refetches of a query that has data never show the bar. A query that has failed
+ * before is not an initial load either: with no data it goes back to `pending` on every refetch, but `errorUpdateCount` survives
+ * (the retries of the first load do not count, only a final failure does), so a poll that keeps failing does not flash the bar.
+ */
+const initialLoad = (query: Query) => query.state.data === undefined && query.state.errorUpdateCount === 0;
 
 /** The loading bar along the top edge. It draws the phase of `progress`, which this component feeds from the route and React Query. */
 export function TopProgress({ store = progress }: { store?: Progress }) {

@@ -259,6 +259,7 @@
   button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-tint); color: var(--accent-ink); }
   .primary { border-color: var(--accent); background: var(--accent); color: var(--bg); }
   .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+  .primary:disabled { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); opacity: 1; } /* a disabled primary must not read as a faded accent fill */
   button.danger { border-color: var(--danger); background: var(--danger); color: var(--bg); }
   button.danger:hover:not(:disabled) { border-color: var(--danger-hover); background: var(--danger-hover); }
   .quiet { min-height: 30px; padding: 0 10px; border-color: transparent; background: none; color: var(--accent); }
@@ -351,7 +352,7 @@
   .twisty svg.i { width: 16px; height: 16px; transition: transform var(--motion); }
   .twisty[aria-expanded="false"] svg.i { transform: rotate(-90deg); }
   .twisty-sp { flex: none; width: 20px; }
-  .node-icon { flex: none; display: grid; place-items: center; width: 16px; height: 16px; color: var(--text-2); } /* the kind's icon: the name still ellipsises first */
+  .node-icon { flex: 0 1 16px; min-width: 0; display: grid; place-items: center; width: 16px; height: 16px; overflow: hidden; color: var(--text-2); } /* the kind's icon: it gives way after the kind label and the name's minimum, so a deep row keeps its + */
   .node-icon svg.i { width: 16px; height: 16px; }
   .node.is-selected .node-icon { color: var(--accent); }
   .node .add { flex: none; display: grid; place-items: center; width: 24px; height: 24px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }

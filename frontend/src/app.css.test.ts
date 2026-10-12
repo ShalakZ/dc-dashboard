@@ -375,6 +375,30 @@ describe("the resizable asset tree column (W7a)", () => {
   });
 });
 
+describe("a disabled primary button does not look like the accent", () => {
+  const disabled = () => {
+    const found = rules.filter((r) => r.selector === ".primary:disabled");
+    expect(found, 'exactly one rule for ".primary:disabled"').toHaveLength(1);
+    return found[0];
+  };
+
+  it("takes the neutral ground, border and disabled text at full opacity, in the layer", () => {
+    const rule = disabled();
+    expect(inLayer(rule)).toBe(true);
+    expect(rule.body).toMatch(/background:\s*var\(--surface\)/);
+    expect(rule.body).toMatch(/border-color:\s*var\(--border-strong\)/);
+    expect(rule.body).toMatch(/color:\s*var\(--text-disabled\)/);
+    expect(rule.body).toMatch(/opacity:\s*1\s*(?:;|$)/);
+    expect(rule.body).not.toMatch(/--accent/);
+  });
+
+  it("outranks both the .primary fill and the base disabled rule (0,2,0 against 0,1,0 and 0,0,1)", () => {
+    const base = rules.find((r) => r.selector === ".primary")!;
+    expect(base.body).toMatch(/background:\s*var\(--accent\)/);
+    expect(disabled().order).toBeGreaterThan(base.order);
+  });
+});
+
 describe("a deep row of the asset tree keeps a readable name (review M-1)", () => {
   const unconditional = (selector: string) => {
     const found = rules.filter((r) => r.selector === selector && !r.at.some((a) => a.startsWith("@media")));
@@ -389,6 +413,15 @@ describe("a deep row of the asset tree keeps a readable name (review M-1)", () =
     expect(kind.body).toMatch(/min-width:\s*0/);
     expect(kind.body).toMatch(/overflow:\s*hidden/);
     expect(kind.body).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it("the kind icon is 16 px but gives way after the kind label (shrinkable, no minimum, clipped), so a deep row keeps its +", () => {
+    const icon = unconditional(".node-icon");
+    expect(inLayer(icon)).toBe(true);
+    expect(icon.body).toMatch(/flex:\s*0\s+1\s+16px/);
+    expect(icon.body).toMatch(/min-width:\s*0/);
+    expect(icon.body).toMatch(/overflow:\s*hidden/);
+    expect(icon.body).toMatch(/width:\s*16px/);
   });
 
   it("the name link keeps at least 6 characters before its ellipsis, whatever the depth", () => {

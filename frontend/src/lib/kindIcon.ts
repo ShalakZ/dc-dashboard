@@ -6,14 +6,14 @@ type KindIcon = Extract<IconName, `kind${string}`>;
 // and the voltage-class words (a weak hint: "LV Meter" is a meter, "MV Room" a room) come last. Words match WHOLE tokens only:
 // "Panelling" must not look like a panel, so the aliases ("panelboard") are listed instead of guessing at substrings.
 const TABLE: ReadonlyArray<readonly [KindIcon, ReadonlySet<string>]> = [
-  ["kindUps", new Set(["ups", "battery", "batteries", "bess"])],
+  ["kindUps", new Set(["ups", "battery", "batteries", "bess", "rectifier", "inverter"])],
   ["kindPdu", new Set(["pdu", "rpp", "rpdu", "strip"])],
   ["kindGenerator", new Set(["generator", "genset", "gen"])],
   ["kindTransformer", new Set(["transformer", "trafo", "xfmr", "substation"])],
   ["kindChiller", new Set(["chiller", "crac", "crah", "cooling", "cooler", "ahu", "fan"])],
-  ["kindCircuit", new Set(["circuit", "breaker", "feeder", "ats", "sts", "busway", "busbar", "mcb", "mccb"])],
+  ["kindCircuit", new Set(["circuit", "breaker", "feeder", "ats", "sts", "busway", "busbar", "mcb", "mccb", "transfer"])],
   ["kindPanel", new Set(["panel", "panelboard", "switchboard", "switchgear", "mdb"])],
-  ["kindMeter", new Set(["meter", "metering", "sensor"])],
+  ["kindMeter", new Set(["meter", "submeter", "metering", "sensor"])],
   ["kindRack", new Set(["rack", "cabinet", "enclosure"])],
   ["kindRow", new Set(["row", "aisle", "pod"])],
   ["kindRoom", new Set(["room", "hall", "suite", "floor", "cage", "zone"])],
@@ -25,7 +25,7 @@ const TABLE: ReadonlyArray<readonly [KindIcon, ReadonlySet<string>]> = [
 // A kind is a short label; the clamp keeps the boundary regexes linear on absurd input.
 const MAX_KIND_CHARS = 200;
 
-/** The words of a kind: split at camelCase and digit boundaries ("LVPanel", "DC1"), lower-cased, "data" + "centre" joined. */
+/** The words of a kind: split at camelCase and digit boundaries ("LVPanel", "DC1"), lower-cased, "data" + "centre" joined, "distribution" + "unit" made one "pdu". */
 function words(kind: string): string[] {
   const spaced = kind
     .slice(0, MAX_KIND_CHARS)
@@ -37,7 +37,9 @@ function words(kind: string): string[] {
   const tokens = spaced.normalize("NFC").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((token) => token !== "");
   const joined: string[] = [];
   for (const token of tokens) {
-    if (joined.length > 0 && joined[joined.length - 1] === "data" && /^cent(?:er|re)s?$/.test(token)) joined[joined.length - 1] = `data${token}`;
+    const last = joined[joined.length - 1];
+    if (last === "data" && /^cent(?:er|re)s?$/.test(token)) joined[joined.length - 1] = `data${token}`;
+    else if (last === "distribution" && /^units?$/.test(token)) joined[joined.length - 1] = "pdu";
     else joined.push(token);
   }
   return joined;

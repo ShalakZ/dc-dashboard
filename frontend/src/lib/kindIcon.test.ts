@@ -60,6 +60,15 @@ describe("kindIcon: matching", () => {
     ["Data Center", "kindSite"],
     ["Data Centre", "kindSite"],
     ["Data Hall A", "kindRoom"],
+    // long forms: "distribution" + "unit" is one word (a PDU), and these words belong to the equipment, not to the place
+    ["Power Distribution Unit", "kindPdu"],
+    ["Distribution Units", "kindPdu"],
+    ["Distribution Board", "kindPanel"],
+    ["Automatic Transfer Switch", "kindCircuit"],
+    ["Submeter", "kindMeter"],
+    ["Sub-meter", "kindMeter"],
+    ["DC Rectifier", "kindUps"],
+    ["Inverter 2", "kindUps"],
   ])("%s is %s", (kind, icon) => {
     expect(kindIcon(kind)).toBe(icon);
   });

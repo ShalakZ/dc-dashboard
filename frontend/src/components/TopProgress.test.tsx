@@ -107,6 +107,55 @@ describe("TopProgress: loads", () => {
     expect(phase()).toBe("finish");
   });
 
+  it("does not show the refetches of a query whose first load failed (a failing poll)", async () => {
+    let calls = 0;
+    const second = deferred();
+    function Probe() {
+      useQuery({
+        queryKey: ["failing-poll"],
+        queryFn: () => { calls += 1; return calls === 1 ? Promise.reject(new Error("503")) : second.promise; },
+      });
+      return null;
+    }
+    const { client, clock, store, phase, tick } = setup(<Probe />);
+    await waitFor(() => expect(client.getQueryState(["failing-poll"])?.status).toBe("error")); // rejected at once, so the count of 1 is too brief to wait for
+    await waitFor(() => expect(store.getCount("fetching")).toBe(0));
+    await tick(SETTLE_MS + SHOW_DELAY_MS); // whatever the first load did is over
+    const armed = clock.scheduled;
+    let refetch!: Promise<unknown>;
+    act(() => { refetch = client.refetchQueries({ queryKey: ["failing-poll"] }); });
+    await waitFor(() => expect(client.isFetching()).toBe(1)); // the refetch is in flight and, with no data, is back to "pending"
+    expect(client.getQueryState(["failing-poll"])?.status).toBe("pending");
+    await act(async () => { await new Promise((done) => setTimeout(done, 20)); }); // long enough for the bar to have heard of it
+    await tick(SHOW_DELAY_MS * 3);
+    expect(store.getCount("fetching")).toBe(0);
+    expect(phase()).toBe("idle");
+    expect(clock.scheduled, "no timer was armed by the refetch").toBe(armed);
+    await act(async () => { second.resolve("late"); await refetch; });
+  });
+
+  it("still shows a retry wait: the first load is not over until it has really failed", async () => {
+    let calls = 0;
+    function Probe() {
+      useQuery({
+        queryKey: ["retrying"],
+        queryFn: () => { calls += 1; return Promise.reject(new Error("503")); },
+        retry: 1,
+        retryDelay: 60,
+      });
+      return null;
+    }
+    const { store, phase, tick } = setup(<Probe />);
+    await waitFor(() => expect(calls).toBe(1));
+    expect(store.getCount("fetching")).toBe(1); // failed once, now waiting to retry
+    await tick(SHOW_DELAY_MS);
+    expect(phase()).toBe("run");
+    await waitFor(() => expect(calls).toBe(2), { timeout: 2000 });
+    await waitFor(() => expect(store.getCount("fetching")).toBe(0));
+    await tick(SETTLE_MS);
+    expect(phase()).toBe("finish");
+  });
+
   it("shows a running mutation", async () => {
     const reply = deferred();
     function Probe() {
