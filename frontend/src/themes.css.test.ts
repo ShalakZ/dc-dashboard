@@ -25,6 +25,8 @@ const ISLAND = ":is(.widget-frame, .widget-preview)";
 const BILLING_INK = ':root[data-mode="dark"] table.billing td.muted, :root[data-mode="dark"] table.billing td.muted .muted';
 const BILLING_GROUND = ':root[data-mode="dark"] table.billing td.muted';
 const PLACEHOLDER = ':root[data-mode="dark"] .dash-grid-edit .react-grid-item.react-grid-placeholder';
+const AVATAR = ':root[data-mode="dark"] .prof-head .avatar';
+const CARD = ':root[data-mode="dark"] .widget-frame';
 
 /** The tokens the cascade gives an element under <html data-mode data-theme>: the base, the preset, then (dark only) the dark block. */
 function cascade(themeId: string, mode: "light" | "dark") {
@@ -49,7 +51,7 @@ describe.each(combos)("$id, $mode", ({ id, mode }) => {
     ["accent on bg (link)", () => tok("accent"), () => tok("bg")],
     ["text on bg", () => tok("text"), () => tok("bg")],
     ["text-2 on bg", () => tok("text-2"), () => tok("bg")],
-    ["disabled text on bg", () => tok("text-disabled"), () => tok("bg")],
+    ["disabled text and a placeholder on bg", () => tok("text-disabled"), () => tok("bg")],
     ["chip ok", () => tok("ok"), () => tok("ok-tint")],
     ["chip warning", () => tok("warn"), () => tok("warn-tint")],
     ["chip critical", () => tok("crit"), () => tok("crit-tint")],
@@ -86,6 +88,14 @@ describe.each(combos)("$id, $mode", ({ id, mode }) => {
   it.each(textPairs)("%s reads at 4.5:1", (_name, fg, bg) => {
     expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(AA);
   });
+
+  // A placeholder sits on a field's own ground (bg); only a disabled field has the surface under it, and WCAG exempts the text of an inactive
+  // control. In light that pair is 4.43:1 (today's token, kept as it is), so it is held for the dark block, where the review measured it.
+  if (mode === "dark") {
+    it("a placeholder in a disabled field (on the surface) reads at 4.5:1", () => {
+      expect(contrast(tok("text-disabled"), tok("surface"))).toBeGreaterThanOrEqual(AA);
+    });
+  }
 
   const nonTextPairs: Array<[string, () => string, () => string]> = [
     ["sidebar: marker on the active fill", () => tok("side-accent"), () => tok("side-bg-active")],
@@ -230,9 +240,32 @@ describe("the editor's drag placeholder", () => {
   });
 });
 
+describe("the avatar in the open profile panel", () => {
+  it("gets a hairline in dark, for the presets whose avatar ground is the page's own (desert gold 1.05:1, graphite 1.87:1)", () => {
+    expect(only(AVATAR).body).toMatch(/box-shadow:\s*0 0 0 1px var\(--border-strong\)/);
+    expect(only(AVATAR).order).toBeGreaterThan(darkRule().order);
+  });
+});
+
+describe("the widget cards in dark", () => {
+  it("lose the frozen black border (invisible on the dark page) and get rounded corners, without clipping the resize handles", () => {
+    const body = only(CARD).body;
+    expect(body).toMatch(/border-color:\s*transparent/);
+    expect(body).toMatch(/border-radius:\s*var\(--radius\)/);
+    expect(body).not.toMatch(/overflow/);
+  });
+
+  it("comes after the island and outranks app.css's .widget-frame (more specific, and later)", () => {
+    expect(only(CARD).order).toBeGreaterThan(only(ISLAND).order);
+  });
+});
+
 describe("the file", () => {
-  it("is ordered: the four presets, then dark, then the island, then Billing, then the placeholder", () => {
-    const order = [...THEMES.map((t) => presetRule(t.id).order), darkRule().order, only(ISLAND).order, only(BILLING_INK).order, only(BILLING_GROUND).order, only(PLACEHOLDER).order];
+  it("is ordered: the four presets, then dark, the avatar, the island, the cards, then Billing, then the placeholder", () => {
+    const order = [
+      ...THEMES.map((t) => presetRule(t.id).order), darkRule().order, only(AVATAR).order, only(ISLAND).order, only(CARD).order,
+      only(BILLING_INK).order, only(BILLING_GROUND).order, only(PLACEHOLDER).order,
+    ];
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(rules).toHaveLength(order.length);
   });

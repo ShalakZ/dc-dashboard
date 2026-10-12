@@ -86,8 +86,9 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
       }
     } catch {
       if (epoch.current !== mine) return;
-      setError(NOT_SAVED);
+      // Only when no newer choice is waiting: that one is still to be sent, and reports for itself if it fails too.
       if (same(wanted.current, sending)) {
+        setError(NOT_SAVED);
         wanted.current = confirmed.current;
         show(confirmed.current);
         writeMirror(confirmed.current);
@@ -104,6 +105,7 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     const next = { ...wanted.current, ...patch };
     if (same(next, wanted.current)) return;
     wanted.current = next;
+    setError(null);
     show(next);
     writeMirror(next);
     void flush();

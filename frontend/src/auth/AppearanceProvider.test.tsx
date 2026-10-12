@@ -248,10 +248,23 @@ describe("saving", () => {
     expect(look()).toBe("dark/graphite"); // not light/navy-gold, not even for a moment
     expect(JSON.parse(mirror() ?? "null")).toEqual({ mode: "dark", theme: "graphite" });
     expect(server.puts[1].body).toEqual({ mode: "dark", theme: "graphite" }); // everything that still differs from what the server confirmed
+    await act(async () => {});
+    expect(alertText()).toBeNull(); // no false alarm about a choice that was already replaced
     server.puts[1].reply({ status: 500, body: { detail: "boom" } });
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(look()).toBe("light/navy-gold");
     expect(server.puts).toHaveLength(2);
+  });
+
+  it("a new choice clears the line of an earlier failure at once", async () => {
+    const server = startServer(user("ann", LIGHT_NAVY));
+    await mount();
+    await click("dark");
+    server.puts[0].reply({ status: 500, body: { detail: "boom" } });
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await click("graphite"); // its own PUT is still out
+    expect(server.puts).toHaveLength(2);
+    expect(alertText()).toBeNull();
   });
 
   it("adopts the server's merged answer when it is the last word", async () => {

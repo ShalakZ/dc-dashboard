@@ -56,6 +56,9 @@
   --tooltip-bg: #3f4653;
 }
 
+/* The avatar's ground is the preset's own: in desert gold and graphite it is nearly the page's colour (1.05:1 and 1.87:1), so the disc needs an edge. */
+:root[data-mode="dark"] .prof-head .avatar { box-shadow: 0 0 0 1px var(--border-strong); }
+
 /* The widget island stays light in dark mode (the widgets' restyle is a separate session): the content tokens go back to app.css's
    light values and the controls to light, so a .muted, a link or a native button inside a white widget keeps today's contrast. */
 :is(.widget-frame, .widget-preview) {
@@ -70,6 +73,10 @@
   --stale: #545d6b; --stale-tint: #eceef2;
   --danger: #c0262d; --danger-hover: #a51f25;
 }
+
+/* app.css freezes the card's border black and square, which on a dark page reads as a cut-out: the border goes quiet (it still takes the
+   space) and the corners follow the rest of the app. No overflow clipping: the editor's resize handles sit on the card's edge. */
+:root[data-mode="dark"] .widget-frame { border-color: transparent; border-radius: var(--radius); }
 
 /* Billing: app.css freezes the muted cell as light literals (#666 on #f4f4f4); in dark that is a light patch on a dark page. */
 :root[data-mode="dark"] table.billing td.muted, :root[data-mode="dark"] table.billing td.muted .muted { color: #b7bdc9; }

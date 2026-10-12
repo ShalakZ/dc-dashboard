@@ -142,6 +142,21 @@ describe("the shell (W6 sidebar)", () => {
     }
   });
 
+  it("the graph's attribution link reads in --text-2, in the layer (React Flow's own #999 is 2.68:1 on the surface)", () => {
+    const rule = rules.find((r) => r.selector === ".graph-canvas .react-flow__attribution a");
+    expect(rule, "a rule for the attribution link").toBeDefined();
+    expect(inLayer(rule!)).toBe(true);
+    expect(rule!.body).toMatch(/color:\s*var\(--text-2\)/);
+  });
+
+  it("every placeholder is --text-disabled at full opacity, in the layer (Chrome's own grey is 3.86:1 on the dark field)", () => {
+    const found = rules.filter((r) => r.selector === "::placeholder");
+    expect(found, "one rule for ::placeholder").toHaveLength(1);
+    expect(inLayer(found[0])).toBe(true);
+    expect(found[0].body).toMatch(/color:\s*var\(--text-disabled\)/);
+    expect(found[0].body).toMatch(/opacity:\s*1\b/);
+  });
+
   it("the asset page's no-data words are not set as a figure", () => {
     expect(bodyOf(".tile .big.none")).toMatch(/font-weight:\s*400/);
     expect(bodyOf(".tile .big.none")).toMatch(/color:\s*var\(--text-2\)/);
