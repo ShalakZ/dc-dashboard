@@ -8,6 +8,7 @@ import { Icon, type IconName } from "../components/Icon";
 import { InfoTip } from "../components/InfoTip";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
+import { FormSkeleton, TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
 import { fmtRate } from "../lib/billing";
 
@@ -58,7 +59,7 @@ function CurrencyForm() {
   const put = usePutBillingSettings();
   const [typed, setTyped] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  if (settings.isPending) return <p className="muted">loading…</p>;
+  if (settings.isPending) return <FormSkeleton rows={1} inline label="Loading the currency" />;
   if (settings.isError) return <p className="error" role="alert">{errorText(settings.error)}</p>;
   const stored = settings.data.currency;
   const shown = typed ?? stored ?? "";
@@ -239,6 +240,15 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
   );
 }
 
+/** Static, so the page draws it while the rates load too: the table skeleton sits under it, where the table will be. */
+function SiteDefaultHead() {
+  return (
+    <SectionHead icon="rate" title="Site default rate">
+      The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date.
+    </SectionHead>
+  );
+}
+
 function TariffTables({ tariffs, assets, assetsError, currencyUnset }: {
   tariffs: Tariff[]; assets: Asset[]; assetsError: string | null; currencyUnset: boolean;
 }) {
@@ -250,9 +260,7 @@ function TariffTables({ tariffs, assets, assetsError, currencyUnset }: {
       {currencyUnset && (
         <Note>Set the currency first: rates are in the site currency, and it is not set yet.</Note>
       )}
-      <SectionHead icon="rate" title="Site default rate">
-        The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date.
-      </SectionHead>
+      <SiteDefaultHead />
       {defaults.length === 0 ? (
         <Empty>No site default rate yet. Until one is set, assets with no override show a dash for cost. Add a rate below.</Empty>
       ) : (
@@ -299,7 +307,12 @@ export function TariffsPage() {
         The unit costs are shown in. Set it first: every rate below is in this currency.
       </SectionHead>
       <CurrencyForm />
-      {tariffs.isPending && <p className="muted">loading…</p>}
+      {tariffs.isPending && (
+        <>
+          <SiteDefaultHead />
+          <TableSkeleton columns={3} rows={3} label="Loading tariffs" />
+        </>
+      )}
       {tariffs.isError && <p className="error" role="alert">{errorText(tariffs.error)}</p>}
       {tariffs.data && (
         <TariffTables

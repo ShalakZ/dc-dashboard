@@ -52,7 +52,7 @@ async function siteToday(page: Page): Promise<string> {
 
 test("W3c: the audit screen filters, links, exports and pages, and is for admins only", async ({ page }) => {
   test.setTimeout(300_000);
-  const rows = page.locator("tbody tr");
+  const rows = page.locator(".audit-table tbody tr"); // the real table: the loading skeleton's rows are `tbody tr` too (W7f)
   const filterBy = (label: string) => page.getByLabel(label, { exact: true });
 
   await test.step("the admin signs in and makes some audit rows through the API", async () => {

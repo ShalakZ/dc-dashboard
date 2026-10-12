@@ -1,10 +1,11 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "../api/client";
 import type { BillingCosts, CostFigure } from "../api/types";
 import { ESTIMATED_TIP, PARTIAL_TIP } from "../components/Figure";
 import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { BillingPage } from "./BillingPage";
 
@@ -55,6 +56,7 @@ const open = (
   reply: { status?: number; body?: unknown } = { body: costs },
   zone = "Asia/Qatar",
   months: { status?: number; body?: unknown } | "pending" = { body: { first_month: null } },
+  hold?: (method: string, path: string) => boolean, // requests kept back until release() (installed before the page mounts)
 ) => {
   mockFetch(routes(role, reply, zone, months === "pending" ? {} : months));
   if (months === "pending") {
@@ -62,7 +64,9 @@ const open = (
     vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
       String(input).includes("/api/billing/months") ? new Promise<Response>(() => {}) : answered(input, init));
   }
+  const held = hold ? holdFetch(hold) : { release: () => {} };
   renderWithProviders(<BillingPage />, { route: "/billing", path: "/billing" });
+  return held;
 };
 const yearSelect = () => screen.getByRole("combobox", { name: "Year" });
 const monthSelect = () => screen.getByRole("combobox", { name: "Month" });
@@ -83,9 +87,107 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("BillingPage", () => {
-  it("says loading until the month arrives", () => {
-    open();
-    expect(screen.getByText("loading…")).toBeInTheDocument();
+  describe("while the month loads", () => {
+    const LABEL = "Loading billing";
+    const region = () => screen.getByText(LABEL).parentElement!;
+
+    it("shows a table skeleton until the month arrives, then the table and no region", async () => {
+      open();
+      expect(region()).toHaveAttribute("role", "status");
+      expect(region().querySelector(".sk-table")).not.toBeNull();
+      expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+      expect(screen.queryByRole("rowheader")).not.toBeInTheDocument(); // the placeholder rows are not in the accessibility tree
+      expect(await screen.findByRole("rowheader", { name: "LV Panel 1" })).toBeInTheDocument();
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+      expect(document.querySelector(".sk-region")).toBeNull(); // (the missing-rate banner is a status of its own)
+    });
+
+    it("draws the how-to-read caption row of the table (a line placeholder in a muted caption), so the first row sits where it will land", async () => {
+      open();
+      const caption = region().querySelector(".sk-table caption")!;
+      expect(caption).toHaveClass("muted");
+      expect(caption.querySelector(".sk-line")).not.toBeNull();
+      expect(caption.textContent).toBe("");
+      expect(caption.nextElementSibling?.tagName, "the caption comes first in the table, then the head").toBe("THEAD");
+      await screen.findByRole("rowheader", { name: "LV Panel 1" });
+    });
+
+    it("keeps a 34px gap in the header's actions slot and the month bar's place while the site is unknown, and the real ones take their place", async () => {
+      const held = open("viewer", { body: costs }, "Asia/Qatar", { body: { first_month: null } }, (_method, path) => path === "/api/site");
+      const actions = document.querySelector("header.page-head > .actions")!;
+      expect(actions).not.toBeNull();
+      const gap = actions.firstElementChild as HTMLElement;
+      expect(gap).toHaveAttribute("aria-hidden", "true");
+      expect(gap.style.height).toBe("34px");
+      expect(screen.queryByRole("button", { name: "Download CSV" })).not.toBeInTheDocument();
+      const bar = document.querySelector(".billing-page > .row.billing-bar")!; // and the month bar's place, with its selects' height
+      expect(bar).toHaveAttribute("aria-hidden", "true");
+      expect((bar.firstElementChild as HTMLElement).style.height).toBe("38px");
+      expect(bar.querySelector("button, select")).toBeNull();
+      held.release();
+      expect(await screen.findByRole("button", { name: "Download CSV" })).toBeInTheDocument();
+      expect(document.querySelectorAll("header.page-head > .actions > *")).toHaveLength(1); // the button, and the gap is gone
+      expect(document.querySelectorAll(".billing-page .billing-bar")).toHaveLength(1); // the real bar only
+      expect(document.querySelector(".billing-bar[aria-hidden]")).toBeNull();
+    });
+
+    it("keeps no gap when the site could not be read (there is no button or bar to come)", async () => {
+      mockFetch({ ...routes("viewer", { body: costs }, "Asia/Qatar", { body: { first_month: null } }), "GET /api/site": { status: 500, body: { detail: "no site" } } });
+      renderWithProviders(<BillingPage />, { route: "/billing", path: "/billing" });
+      expect(await screen.findByText("no site")).toBeInTheDocument();
+      expect(document.querySelector("header.page-head > .actions")).toBeNull();
+      expect(document.querySelector(".billing-bar")).toBeNull();
+    });
+
+    it("keeps the pickers and shows the skeleton in the table's place while the month's costs are held", async () => {
+      const held = open("viewer", { body: costs }, "Asia/Qatar", { body: { first_month: null } }, (_method, path) => path === "/api/billing/costs");
+      expect(await screen.findByText("October 2026")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Previous month" })).toBeInTheDocument();
+      expect(screen.getByText(LABEL)).toBeInTheDocument();
+      expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+      held.release();
+      expect(await screen.findByRole("rowheader", { name: "Site" })).toBeInTheDocument();
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    });
+
+    it("shows the skeleton again for a month that has not been fetched, and not on a refetch of one that has", async () => {
+      open();
+      await screen.findByRole("rowheader", { name: "Site" });
+      const held = holdFetch((_method, path) => path === "/api/billing/costs");
+      await userEvent.click(screen.getByRole("button", { name: "Previous month" }));
+      expect(await screen.findByText("September 2026")).toBeInTheDocument();
+      expect(screen.getByText(LABEL)).toBeInTheDocument(); // a month with no data yet
+      expect(screen.queryByRole("rowheader")).not.toBeInTheDocument();
+      held.release();
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    });
+
+    it("ends with the error as an alert, no region, when the costs cannot be loaded", async () => {
+      open("viewer", { status: 500, body: { detail: "costs are down" } });
+      expect(await screen.findByRole("alert")).toHaveTextContent("costs are down");
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("ends with the empty state for a site with no assets", async () => {
+      open("viewer", { body: { ...costs, assets: [] } });
+      expect(await screen.findByText("No assets yet.")).toBeInTheDocument();
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    });
+
+    it("a costs request that failed never brings the skeleton back when it is tried again: today's muted line shows, then the error", async () => {
+      open("viewer", { status: 500, body: { detail: "costs are down" } });
+      await screen.findByRole("alert");
+      const held = holdFetch((_method, path) => path === "/api/billing/costs");
+      act(() => { document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); }); // a refetch, as the 60 s poll would make
+      expect(await screen.findByText("loading…")).toHaveClass("muted");
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      held.release();
+      expect(await screen.findByRole("alert")).toHaveTextContent("costs are down");
+      expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    });
   });
 
   it("shows the asset tree by day with kWh over cost, month totals and the rate in effect", async () => {

@@ -54,6 +54,7 @@
   --stale: #b0b7c3; --stale-tint: #272b32;
   --danger: #ff8b8b; --danger-hover: #ffa3a3;
   --backdrop: rgba(0, 0, 0, 0.62);
+  --skeleton: #2c323d; --skeleton-shine: #394150;
   --shadow-dialog: 0 18px 50px rgba(0, 0, 0, 0.6); --shadow-tip: 0 4px 14px rgba(0, 0, 0, 0.5); --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5);
   --tooltip-bg: #3f4653;
 }
@@ -87,6 +88,7 @@
   --info: #1d4fb8; --info-tint: #e7eefc; --info-line: #c5d6f6; --info-ink: #173f8f;
   --stale: #545d6b; --stale-tint: #eceef2;
   --danger: #c0262d; --danger-hover: #a51f25;
+  --skeleton: #dde2ea; --skeleton-shine: #eef1f6;
 }
 
 /* app.css freezes the card's border black and square, which on a dark page reads as a cut-out: the border goes quiet (it still takes the

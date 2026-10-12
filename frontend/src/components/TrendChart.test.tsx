@@ -2,7 +2,9 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { useAppearance } from "../auth/AppearanceProvider";
+import { CHART_HEIGHT } from "../lib/chartBox";
 import { mockFetch } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { seriesToOption, TrendChart } from "./TrendChart";
 
@@ -323,7 +325,7 @@ describe("TrendChart site timezone", () => {
     const release = holdSite({ ...siteRoute, ...routes });
     renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
     expect(await screen.findByText("raw samples")).toBeInTheDocument(); // the series has arrived
-    expect(screen.getByText("loading…")).toBeInTheDocument();
+    expect(screen.getByText("Loading the chart").parentElement).toHaveAttribute("role", "status"); // the chart's box, not a bare line
     expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
     expect(captured.options).toHaveLength(0); // no chart was ever given an option, so none had the UTC axis
     release();
@@ -332,6 +334,7 @@ describe("TrendChart site timezone", () => {
     for (const option of captured.options as { xAxis: { axisLabel: { formatter: (ms: number) => string } } }[]) {
       expect(option.xAxis.axisLabel.formatter(Date.parse("2026-10-06T21:00:00Z"))).toBe("00:00"); // Asia/Qatar, never UTC's 21:00
     }
+    expect(screen.queryByText("Loading the chart")).not.toBeInTheDocument();
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
   });
 
@@ -458,5 +461,90 @@ describe("TrendChart says when it was updated and pauses under a mouse", () => {
     fireEvent.pointerEnter(screen.getByTestId("chart").closest("section")!, { pointerType: "mouse" });
     await screen.findByText(/paused while you point/);
     expect(captured.options.at(-1)).toBe(captured.options.at(-2));
+  });
+});
+
+describe("TrendChart while the series loads", () => {
+  const LABEL = "Loading the chart";
+  const routes = {
+    ...siteRoute,
+    "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+    "GET /api/assets/4/series": { body: series },
+  };
+  const holdSeries = () => holdFetch((method, path) => method === "GET" && path === "/api/assets/4/series");
+  const seriesAsked = () => waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/series"))).toBe(true));
+  const regionOf = () => screen.getByText(LABEL).parentElement!;
+  beforeEach(() => { captured.options.length = 0; });
+
+  it("puts a chart-sized block, as one status region, in the frame under the real toolbar while the series is held; then the chart", async () => {
+    mockFetch(routes);
+    const held = holdSeries();
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    await seriesAsked();
+    const frame = screen.getByRole("region", { name: "Trend" });
+    expect(frame.querySelector(".trend-bar select")).not.toBeNull(); // the toolbar is the real one
+    expect(regionOf()).toHaveAttribute("role", "status");
+    expect(frame.contains(regionOf())).toBe(true);
+    const block = regionOf().querySelector<HTMLElement>(".sk-block")!;
+    expect(block.style.height).toBe(`${CHART_HEIGHT}px`);
+    expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
+    held.release();
+    await screen.findByTestId("chart");
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("is one region from the series to the site zone (the same element stays while the zone is awaited)", async () => {
+    mockFetch(routes);
+    const answer = fetch;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => (String(input).includes("/api/site") ? gate.then(() => answer(input, init)) : answer(input, init))));
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    const region = regionOf();
+    await screen.findByText("raw samples"); // the series is in, the zone is not
+    expect(regionOf()).toBe(region);
+    release();
+    await screen.findByTestId("chart");
+    expect(region.isConnected).toBe(false);
+  });
+
+  it("shows the text 'No data in this range.' and no block for an empty series", async () => {
+    mockFetch({ ...routes, "GET /api/assets/4/series": { body: { ...series, points: [] } } });
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    expect(await screen.findByText("No data in this range.")).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("shows the error and no block when the series fails", async () => {
+    mockFetch({ ...routes, "GET /api/assets/4/series": { status: 500, body: { detail: "series down" } } });
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("series down");
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("never shows the block on a refetch with the chart on screen", async () => {
+    mockFetch(routes);
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    await screen.findByTestId("chart");
+    holdSeries();
+    fireEvent(window, new Event("visibilitychange")); // React Query fetches again
+    await seriesAsked();
+    expect(screen.getByTestId("chart")).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+  });
+
+  it("a series that failed never brings the block back when it is tried again (the error and the block would take turns at every poll)", async () => {
+    mockFetch({ ...routes, "GET /api/assets/4/series": { status: 500, body: { detail: "series down" } } });
+    renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
+    await screen.findByRole("alert");
+    holdSeries();
+    fireEvent(window, new Event("visibilitychange"));
+    await seriesAsked();
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument()); // the retry is pending: no error yet
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });

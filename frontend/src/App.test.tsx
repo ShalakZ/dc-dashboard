@@ -173,7 +173,7 @@ describe("the Assets workspace", () => {
   it("clicking a node in the tree opens the asset and leaves the tree mounted", async () => {
     visitAssets("/assets");
     const tree = await screen.findByRole("region", { name: "Asset tree" });
-    await userEvent.click(within(tree).getByRole("link", { name: "Site" }));
+    await userEvent.click(await within(tree).findByRole("link", { name: "Site" })); // the tree is there at once, its rows when the list arrives
     expect(await screen.findByRole("heading", { name: "Site", level: 1 })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Asset tree" })).toBe(tree);
   });

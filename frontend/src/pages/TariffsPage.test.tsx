@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../App";
 import { mockFetch, shellRoutes, type Routes } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { TariffsPage } from "./TariffsPage";
 
@@ -532,5 +533,72 @@ describe("TariffsPage", () => {
     renderWithProviders(<App />, { route: "/tariffs", path: "*" });
     expect(await screen.findByText("Admins only")).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/tariffs" || c.path === "/api/settings/billing")).toBe(false);
+  });
+});
+
+describe("TariffsPage while its lists load (W7f)", () => {
+  const mount = (held: string) => {
+    mockFetch(routes("admin"));
+    const hold = holdFetch((_method, path) => path === held);
+    renderWithProviders(<TariffsPage />, { route: "/tariffs", path: "/tariffs" });
+    return hold;
+  };
+
+  it("keeps the real header and section heads and shows a one-row bar skeleton for the currency while it is held", async () => {
+    const hold = mount("/api/settings/billing");
+    expect(screen.getByRole("heading", { level: 1, name: "Tariffs" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Currency" })).toBeInTheDocument();
+    const region = screen.getByText("Loading the currency").parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.querySelector(".inline-form")).not.toBeNull();
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Site currency" })).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByRole("form", { name: "Site currency" })).toBeInTheDocument();
+    expect(screen.queryByText("Loading the currency")).not.toBeInTheDocument();
+  });
+
+  it("shows a table skeleton for the tariffs while they are held, then the two tables and no region", async () => {
+    const hold = mount("/api/tariffs");
+    await screen.findByRole("form", { name: "Site currency" }); // the currency is in; the rates are not
+    const region = screen.getByText("Loading tariffs").parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.querySelector(".sk-table")).not.toBeNull();
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText(/No site default rate yet/)).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByRole("table", { name: "Site default rates" })).toBeInTheDocument();
+    expect(screen.queryByText("Loading tariffs")).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("draws the Site default rate section head, its words and all, above the table skeleton, and keeps just the one head when the rates arrive (the skeleton must sit where the table will)", async () => {
+    const hold = mount("/api/tariffs");
+    await screen.findByRole("form", { name: "Site currency" });
+    const head = screen.getByRole("heading", { level: 2, name: "Site default rate" });
+    expect(screen.getByText(/The price per kWh used for every asset that has no override/)).toBeInTheDocument();
+    const region = screen.getByText("Loading tariffs").parentElement!;
+    expect(head.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING, "the head comes before the skeleton").toBeTruthy();
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Currency", "Site default rate"]);
+    hold.release();
+    await screen.findByRole("table", { name: "Site default rates" });
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Currency", "Site default rate", "Asset overrides"]);
+  });
+
+  it("ends with the errors as alerts, never a region, when the lists fail", async () => {
+    overrides = { "GET /api/tariffs": { status: 500, body: { detail: "rates are down" } }, "GET /api/settings/billing": { status: 500, body: { detail: "settings are down" } } };
+    mockFetch(routes("admin"));
+    renderWithProviders(<TariffsPage />, { route: "/tariffs", path: "/tariffs" });
+    expect(await screen.findByText("rates are down")).toBeInTheDocument();
+    expect(await screen.findByText("settings are down")).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("ends with the empty looks when there are no rates", async () => {
+    rows = [];
+    open();
+    expect(await screen.findByText(/No site default rate yet/)).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
   });
 });

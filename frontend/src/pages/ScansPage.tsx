@@ -7,6 +7,7 @@ import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
 import { ScanProgress } from "../components/ScanProgress";
 import { ScopeForm } from "../components/ScopeForm";
+import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { claimedCount } from "../lib/scanText";
@@ -68,7 +69,15 @@ export function ScansPage() {
     await invalidate(keys.scopes);
   });
 
-  if (isLoading) return <p className="muted">loading…</p>;
+  if (isLoading) {
+    // The gap stands where the admin's New scope button will be; the other roles' header has no actions slot (it would be 6.5px taller than the real one).
+    return (
+      <>
+        <PageHeader title="Scans" actions={isAdmin ? <ActionsSpace /> : undefined} />
+        <TableSkeleton columns={isAdmin ? 4 : 3} rows={3} label="Loading scopes" />
+      </>
+    );
+  }
   if (scopesError) return <p className="error" role="alert">{scopesError.message}</p>;
   return (
     <>
@@ -134,7 +143,7 @@ export function ScansPage() {
       )}
       {activeScan !== null && <ScanProgress scanId={activeScan} />}
       <h2 className="section-title">Recent scans</h2>
-      {scansLoading && <p className="muted">loading…</p>}
+      {scansLoading && <TableSkeleton columns={5} rows={3} label="Loading recent scans" />}
       {scansError && <p className="error" role="alert">{scansError.message}</p>}
       {!scansLoading && !scansError && scans.length === 0 && (
         <div className="empty"><div className="empty-icon"><ScansIcon /></div><p className="muted">No scans yet.</p></div>

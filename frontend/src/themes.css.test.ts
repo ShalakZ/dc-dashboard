@@ -131,6 +131,13 @@ describe.each(combos)("$id, $mode", ({ id, mode }) => {
     expect(contrast(fg(), bg())).toBeGreaterThanOrEqual(NON_TEXT);
   });
 
+  it("the skeleton shows against the page and against the surface (1.15:1 at least) and is no accent", () => {
+    for (const ground of ["bg", "surface"]) expect(contrast(tok("skeleton"), tok(ground)), `--skeleton on --${ground}`).toBeGreaterThanOrEqual(1.15);
+    const accents = ACCENT_SET.map((name) => tok(name).toLowerCase());
+    for (const name of ["skeleton", "skeleton-shine"]) expect(accents, `--${name} is not an accent value`).not.toContain(tok(name).toLowerCase());
+    expect(tok("skeleton-shine")).not.toBe(tok("skeleton"));
+  });
+
   it("the tooltip is told apart from the page (1.5:1 at least)", () => {
     expect(contrast(tok("tooltip-bg"), tok("bg"))).toBeGreaterThanOrEqual(1.5);
   });
@@ -221,6 +228,14 @@ describe("the dark block", () => {
     expect(sorted(customProperties(darkRule().body).keys())).toEqual(DARK_SET);
   });
 
+  it("sets both skeleton tokens, as hex colours that differ from app.css's light ones", () => {
+    const tokens = customProperties(darkRule().body);
+    for (const name of ["skeleton", "skeleton-shine"]) {
+      expect(tokens.get(name), `--${name}`).toMatch(HEX);
+      expect(tokens.get(name), `--${name}`).not.toBe(base.get(name));
+    }
+  });
+
   it("asks for dark scroll bars, date pickers and selects", () => {
     expect(darkRule().body).toMatch(/(?:^|[;\s])color-scheme:\s*dark\s*;/);
   });
@@ -261,6 +276,14 @@ describe("the widget island", () => {
     expect(sorted(pinned.keys())).toEqual(ISLAND_SET());
     for (const [name, value] of pinned) expect(value, `--${name}`).toBe(base.get(name));
     expect(island.body).toMatch(/(?:^|[;\s])color-scheme:\s*light\s*;/);
+  });
+
+  it("re-pins both skeleton tokens to their light values (a widget keeps a light card, and a skeleton inside it a light grey)", () => {
+    const pinned = customProperties(only(ISLAND).body);
+    for (const name of ["skeleton", "skeleton-shine"]) {
+      expect(pinned.get(name), `--${name}`).toMatch(HEX);
+      expect(pinned.get(name), `--${name}`).toBe(base.get(name));
+    }
   });
 
   it("comes after the dark block, so it wins on an element inside a widget", () => {

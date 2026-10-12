@@ -5,6 +5,7 @@ import type { BillingCosts, CostFigure } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ESTIMATED_TIP, Figure, PARTIAL_TIP } from "../components/Figure";
 import { PageHeader } from "../components/PageHeader";
+import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import {
   clampMonth, depthsByAsset, fmtCost, fmtKwh, fmtRate, MONTH_NAMES, monthLabel, monthsOfYear, shiftMonth, yearsBetween,
 } from "../lib/billing";
@@ -178,11 +179,12 @@ export function BillingPage() {
     <section className="billing-page">
       <PageHeader
         title="Billing"
-        actions={month !== null && (
+        actions={month !== null ? (
           <button type="button" className="primary" onClick={exportCsv} disabled={exporting}><DownloadIcon />Download CSV</button>
-        )}
+        ) : site.isPending ? <ActionsSpace /> : undefined /* the button waits for the site's month; its height does not */}
       />
       {site.isError && <p className="error" role="alert">{site.error.message}</p>}
+      {month === null && site.isPending && <div className="row billing-bar" aria-hidden="true"><ActionsSpace height={38} /></div>}
       {month !== null && (
         <div className="row billing-bar">
           <button type="button" onClick={() => setPicked(shiftMonth(month, -1))} disabled={firstMonth !== null && month <= firstMonth}>
@@ -196,7 +198,10 @@ export function BillingPage() {
         </div>
       )}
       {exportError && <p className="error" role="alert">{exportError}</p>}
-      {(site.isPending || (month !== null && costs.isPending)) && <p className="muted">loading…</p>}
+      {(site.isPending || (month !== null && costs.isPending)) && (
+        // The costs poll sets a query that failed before pending again for a second, with no error: the skeleton and the error would take turns.
+        costs.errorUpdateCount === 0 ? <TableSkeleton columns={7} rows={5} label="Loading billing" caption /> : <p className="muted">loading…</p>
+      )}
       {costs.isError && <p className="error" role="alert">{costs.error.message}</p>}
       {costs.data && <BillingTable costs={costs.data} isAdmin={hasRole("admin")} />}
     </section>

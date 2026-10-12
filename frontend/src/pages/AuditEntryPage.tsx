@@ -3,6 +3,7 @@ import { useAuditEntry, useSite } from "../api/queries";
 import { ApiError } from "../api/client";
 import { AuditEntryDetail } from "../components/AuditEntryDetail";
 import { PageHeader } from "../components/PageHeader";
+import { PageHeaderSkeleton, Skeleton, SkeletonRegion } from "../components/Skeleton";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 const MAX_ID = 2_147_483_647; // the largest id the API holds
@@ -27,7 +28,20 @@ export function AuditEntryPage() {
     return <div className="admin-page audit-entry-page"><p className="back-line">{back}</p><p className="error" role="alert">Audit entry not found.</p></div>;
   }
   if (error) return <div className="admin-page audit-entry-page"><p className="back-line">{back}</p><p className="error" role="alert">{error.message}</p></div>;
-  if (isLoading || site.isPending || !data) return <p className="muted">loading…</p>;
+  if (isLoading || site.isPending || !data) {
+    return (
+      <div className="admin-page audit-entry-page">
+        <SkeletonRegion label="Loading the entry">
+          <PageHeaderSkeleton crumbs />
+          <dl className="kv" aria-hidden="true">
+            {Array.from({ length: 10 }, (_, i) => (
+              <div key={i}><dt><Skeleton width="9ch" /></dt><dd><Skeleton width={i % 3 === 0 ? "26ch" : "16ch"} /></dd></div>
+            ))}
+          </dl>
+        </SkeletonRegion>
+      </div>
+    );
+  }
   return (
     <div className="admin-page audit-entry-page">
       <PageHeader title={`Audit entry #${data.id}`} crumbs={[{ label: "Audit log", to: "/audit" }, { label: `Entry #${data.id}` }]} actions={back} />

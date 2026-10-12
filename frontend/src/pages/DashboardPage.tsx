@@ -9,6 +9,7 @@ import { Crumbs } from "../components/Crumbs";
 import { DashboardViewer } from "../components/dashboard/DashboardViewer";
 import { LiveValuesProvider } from "../components/dashboard/LiveValuesContext";
 import { Pending } from "../components/Pending";
+import { DashboardSkeleton } from "../components/Skeleton";
 import { newest } from "../lib/dashboardEdit";
 
 // The editor brings react-grid-layout with it: it loads only when someone starts editing (spec 10.8).
@@ -40,7 +41,7 @@ function DashboardScreen({ id }: { id: number }) {
     if (loadError instanceof ApiError && loadError.status === 404) void queryClient.invalidateQueries({ queryKey: keys.defaultDashboard });
   }, [loadError, queryClient]);
 
-  if (query.isLoading || site.isLoading) return <p className="muted">loading…</p>;
+  if (query.isLoading || site.isLoading) return <DashboardSkeleton label="Loading the dashboard" canEdit={canEdit} />;
   const failure = query.error ?? site.error;
   // Block the page only when there is nothing to show. React Query keeps the last data when a refetch fails and still sets
   // `error`; replacing the screen then would unmount the editor and silently throw away unsaved edits (and a failed Reload

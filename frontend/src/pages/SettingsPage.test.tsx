@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { SettingsPage } from "./SettingsPage";
 
@@ -424,5 +425,61 @@ describe("SettingsPage version line", () => {
     await open({ status: 500, body: { detail: "boom" } });
     expect(screen.queryByText(/^Version /)).not.toBeInTheDocument();
     expect(screen.getByLabelText("Timezone")).toHaveValue("UTC");
+  });
+});
+
+describe("SettingsPage while it loads (W7f)", () => {
+  const general = { "GET /api/settings/general": { body: { timezone: "UTC" } } };
+  const mount = (held: string) => {
+    mockFetch({ ...base, ...general });
+    const hold = holdFetch((_method, path) => path === held);
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    return hold;
+  };
+
+  it("shows the page's wrapper, the real header and the two-column grid of form skeletons in one region while the settings are held, then the page", async () => {
+    const hold = mount("/api/settings/general");
+    const page = document.querySelector("section.admin-page.settings-page")!;
+    expect(page).not.toBeNull();
+    expect(within(page as HTMLElement).getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+    const region = screen.getByText("Loading settings").parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveClass("settings-grid"); // the region IS the grid, so the cards sit where the real ones do
+    expect(region.querySelectorAll(":scope > .settings-col > .form-card, :scope > .form-card")).toHaveLength(2);
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Timezone")).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByLabelText("Timezone")).toBeInTheDocument();
+    expect(screen.queryByText("Loading settings")).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("shows the sign-in card's own wait inside its real card and heading, with two field rows and no card of its own, then the form", async () => {
+    const hold = mount("/api/settings/sign-in");
+    await screen.findByLabelText("Timezone"); // the general settings are in; the policy is not
+    const card = screen.getByRole("heading", { name: "Sign-in protection" }).closest(".form-card")!;
+    const region = within(card as HTMLElement).getByText("Loading sign-in protection").parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.querySelectorAll(".sk-field")).toHaveLength(2);
+    expect(card.querySelectorAll(".form-card")).toHaveLength(0);
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Sign-in protection" })).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByRole("form", { name: "Sign-in protection" })).toBeInTheDocument();
+    expect(screen.queryByText("Loading sign-in protection")).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("ends with the error alone when the settings fail, and with the error inside the sign-in card when only the policy fails, never a region", async () => {
+    mockFetch({ ...base, "GET /api/settings/general": { status: 500, body: { detail: "settings are down" } } });
+    const first = renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("settings are down");
+    expect(document.querySelector(".sk-region")).toBeNull();
+    first.unmount();
+    mockFetch({ ...base, ...general, "GET /api/settings/sign-in": { status: 500, body: { detail: "policy is down" } } });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("policy is down");
+    expect(document.querySelector(".sk-region")).toBeNull();
   });
 });

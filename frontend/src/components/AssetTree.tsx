@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { Link } from "react-router";
 import { Icon } from "./Icon";
+import { Skeleton, SkeletonRegion, TreeSkeleton } from "./Skeleton";
 import { kindIcon } from "../lib/kindIcon";
 import { readStored, writeStored } from "../lib/sidebarState";
 import { ancestorIds, type TreeNode } from "../lib/tree";
@@ -202,7 +203,7 @@ function useTreeWidth(column: RefObject<HTMLElement | null>) {
  * and which are folded is remembered too. Selecting an asset unfolds the way to it. A handle on the right edge resizes the column
  * (drag, arrow keys, double click for the default); the width is remembered too.
  */
-export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled }: {
+export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, loading }: {
   nodes: TreeNode[];
   /** The asset in the URL (null: none). A node is a link to its page, so there is no select callback. */
   selectedId: number | null;
@@ -212,6 +213,8 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled }:
   onAddTop?: () => void;
   /** Disables the + buttons (the page is busy with something that must not get a dialog next to it). */
   disabled?: boolean;
+  /** The asset list is on its way: the same column (its width, its state, its handle) with placeholders where the filter and the rows will be. */
+  loading?: boolean;
 }) {
   const [state, setState] = useState<ColumnState>(() => (readStored(KEY) === "minimized" ? "minimized" : "expanded"));
   const [filter, setFilter] = useState("");
@@ -301,21 +304,31 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled }:
         </button>
       </div>
       <div className="tree-body" id="asset-tree-body" hidden={minimized}>
-        {nodes.length > 0 && (
-          <div className="tree-filter">
-            <Search />
-            <label className="sr-only" htmlFor="asset-tree-filter">Filter assets</label>
-            <input id="asset-tree-filter" type="search" placeholder="Filter by name or kind" autoComplete="off" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          </div>
+        {loading ? (
+          // The filter's slot and the rows are one region, so neither shows before the 150 ms delay is over.
+          <SkeletonRegion label="Loading the asset tree">
+            <div className="tree-filter"><Skeleton variant="block" height={34} /></div>
+            <div className="tree-scroll"><TreeSkeleton /></div>
+          </SkeletonRegion>
+        ) : (
+          <>
+            {nodes.length > 0 && (
+              <div className="tree-filter">
+                <Search />
+                <label className="sr-only" htmlFor="asset-tree-filter">Filter assets</label>
+                <input id="asset-tree-filter" type="search" placeholder="Filter by name or kind" autoComplete="off" value={filter} onChange={(e) => setFilter(e.target.value)} />
+              </div>
+            )}
+            <div className="tree-scroll">
+              {visible && visible.size === 0 && <p className="muted tree-empty">No assets match the filter.</p>}
+              {nodes.length > 0 && (!visible || visible.size > 0) && (
+                <ul className="tree">
+                  <Nodes nodes={only(nodes, visible)} view={view} />
+                </ul>
+              )}
+            </div>
+          </>
         )}
-        <div className="tree-scroll">
-          {visible && visible.size === 0 && <p className="muted tree-empty">No assets match the filter.</p>}
-          {nodes.length > 0 && (!visible || visible.size > 0) && (
-            <ul className="tree">
-              <Nodes nodes={only(nodes, visible)} view={view} />
-            </ul>
-          )}
-        </div>
       </div>
       {!minimized && (
         <div

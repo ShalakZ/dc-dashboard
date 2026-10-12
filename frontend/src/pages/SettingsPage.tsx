@@ -5,6 +5,7 @@ import { useGeneralSettings, usePutGeneralSettings, usePutSignInPolicy, useSignI
 import { daysLeftText } from "../components/CertificateNotice";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { PageHeader } from "../components/PageHeader";
+import { FormSkeleton, SkeletonRegion } from "../components/Skeleton";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 /** ApiError.message already carries the API's `detail`; drop pydantic's "Value error, " prefix. */
@@ -65,7 +66,7 @@ function SignInProtection() {
   return (
     <div className="form-card">
       <h2 id="sign-in-protection" className="section-title">Sign-in protection</h2>
-      {policy.isPending && <p className="muted">loading…</p>}
+      {policy.isPending && <FormSkeleton rows={2} bare label="Loading sign-in protection" />}
       {policy.isError && <p className="error" role="alert">{detailText(policy.error)}</p>}
       {policy.data && (
         <form
@@ -170,7 +171,17 @@ export function SettingsPage() {
   useEffect(() => {
     if (settings.data) setTimezone(settings.data.timezone);
   }, [settings.data]);
-  if (settings.isPending) return <p className="muted">loading…</p>;
+  if (settings.isPending) {
+    return (
+      <section className="admin-page settings-page">
+        <PageHeader title="Settings" sub="Options that apply to the whole site." />
+        <SkeletonRegion label="Loading settings" className="settings-grid">
+          <div className="settings-col"><FormSkeleton rows={1} /></div>
+          <FormSkeleton rows={2} />
+        </SkeletonRegion>
+      </section>
+    );
+  }
   if (settings.isError) return <p className="error" role="alert">{detailText(settings.error)}</p>;
   return (
     <section className="admin-page settings-page">

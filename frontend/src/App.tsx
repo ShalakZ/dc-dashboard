@@ -4,6 +4,7 @@ import { useDefaultDashboard } from "./api/queries";
 import { RequireAuth, RequireRole } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { Pending } from "./components/Pending";
+import { PageSkeleton } from "./components/Skeleton";
 import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { AssetsSummary } from "./pages/AssetsSummary";
@@ -27,7 +28,7 @@ import { UsersPage } from "./pages/UsersPage";
 // These pages pull in react-grid-layout and ECharts, so they load only when visited.
 const DashboardsPage = lazy(() => import("./pages/DashboardsPage").then((m) => ({ default: m.DashboardsPage })));
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
-const loading = <><Pending /><p className="muted">loading…</p></>; // Pending: the loading bar waits for it too
+const loading = <><Pending /><PageSkeleton label="Loading the page" /></>; // Pending: the loading bar waits for it too (a skeleton alone is no load)
 
 /** `/`: the default dashboard when one is set, else Assets. Waits for the answer, so Assets is not shown first; an error falls back to Assets. */
 function HomeRedirect() {

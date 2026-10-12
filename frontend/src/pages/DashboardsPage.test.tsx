@@ -5,6 +5,7 @@ import type { Role } from "../api/types";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { authed, dashboard } from "../test/dashboardFixtures";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { DashboardsPage } from "./DashboardsPage";
 
@@ -17,10 +18,12 @@ function Probe() {
   const location = useLocation();
   return <output data-testid="location">{`${location.pathname}|${JSON.stringify(location.state)}`}</output>;
 }
-function open(role: Role, over: Routes = {}) {
+/** `hold` keeps back the requests it matches until `release()` (installed before the page mounts, so none gets through). */
+function open(role: Role, over: Routes = {}, hold?: (method: string, path: string) => boolean) {
   const calls = mockFetch({ ...authed(role), "GET /api/dashboards": { body: items }, "GET /api/dashboards/default": { body: { dashboard_id: null } }, ...over });
+  const held = hold ? holdFetch(hold) : { release: () => {} };
   renderWithProviders(<><DashboardsPage /><Probe /></>, { route: "/dashboards", path: "*" });
-  return calls;
+  return Object.assign(calls, { release: held.release });
 }
 
 describe("DashboardsPage", () => {
@@ -179,6 +182,51 @@ describe("DashboardsPage", () => {
     expect(screen.getByRole("heading", { name: "Dashboards" })).toBeInTheDocument();
     expect(await screen.findByRole("alert")).toHaveTextContent("list failed");
     expect(screen.getByRole("heading", { name: "Dashboards" })).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull(); // the error replaces the skeleton
+  });
+
+  describe("while the list loads", () => {
+    const LABEL = "Loading dashboards";
+    const skeletonColumns = () => document.querySelectorAll(".sk-table thead th").length;
+
+    it("shows the heading and a table skeleton with the list held, then the list and no region", async () => {
+      const page = open("viewer", {}, (_method, path) => path === "/api/dashboards");
+      expect(screen.getByRole("heading", { name: "Dashboards" })).toBeInTheDocument();
+      expect(screen.getByText(LABEL).parentElement).toHaveAttribute("role", "status"); // (the page's Probe output is a status too: find the region by its class)
+      expect(skeletonColumns()).toBe(3);
+      expect(document.querySelectorAll(".sk-table tbody tr")).toHaveLength(4);
+      expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+      expect(screen.queryByRole("row")).not.toBeInTheDocument(); // the placeholder rows are not in the accessibility tree
+      page.release();
+      expect(await screen.findByRole("link", { name: "Hall A" })).toBeInTheDocument();
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+      expect(document.querySelector(".sk-region")).toBeNull();
+    });
+
+    it("has the Actions column for someone who can edit", async () => {
+      const page = open("operator", {}, (_method, path) => path === "/api/dashboards");
+      await waitFor(() => expect(skeletonColumns()).toBe(4)); // (the role arrives with /api/me, a moment after the first render)
+      expect(screen.getByText(LABEL)).toBeInTheDocument();
+      page.release();
+      await screen.findByRole("link", { name: "Hall A" });
+    });
+
+    it("keeps the skeleton until the site zone is in as well", async () => {
+      const calls = open("viewer", {}, (_method, path) => path === "/api/site");
+      await waitFor(() => expect(calls.some((c) => c.path === "/api/dashboards")).toBe(true));
+      await new Promise((r) => setTimeout(r, 30)); // the list has answered by now
+      expect(screen.getByText(LABEL)).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Hall A" })).not.toBeInTheDocument();
+      calls.release();
+      expect(await screen.findByRole("link", { name: "Hall A" })).toBeInTheDocument();
+      expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    });
+
+    it("ends with the empty state when there are no dashboards, no region left", async () => {
+      open("viewer", { "GET /api/dashboards": { body: [] } });
+      expect(await screen.findByText("No dashboards yet.")).toBeInTheDocument();
+      expect(document.querySelector(".sk-region")).toBeNull();
+    });
   });
 
   it("shows an empty state, with a hint only for those who can create", async () => {

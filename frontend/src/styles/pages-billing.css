@@ -14,8 +14,8 @@
   .billing-page .empty { margin-top: 8px; }
 
   /* The day table scrolls sideways inside main (.table-scroll on the wrap), never the page. The caption is the how-to-read line;
-     the sticky first column and its header corner stay while the days scroll under them. */
-  table.billing caption { caption-side: top; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: var(--fs-xs); text-align: left; }
+     the sticky first column and its header corner stay while the days scroll under them. The loading skeleton's caption is the same box. */
+  table.billing caption, .sk-table caption { caption-side: top; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: var(--fs-xs); text-align: left; }
   table.billing :is(th, td) { padding-inline: 10px; }
   table.billing td { padding-block: 7px; line-height: 1.3; }
   table.billing td.num { min-width: 52px; }

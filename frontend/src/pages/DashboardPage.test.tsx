@@ -3,8 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { useDefaultDashboard } from "../api/queries";
 import type { Role, WidgetType } from "../api/types";
 import { downloadCsv } from "../lib/download";
+import { progress } from "../lib/progress";
 import { authed, config, dashboard, dataFor, valueRow, valuesData, widget, widgetDataRoute } from "../test/dashboardFixtures";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { DashboardPage } from "./DashboardPage";
 
@@ -53,15 +55,17 @@ const assets = widget(5, "table", { title: "Assets", config: config({ assets: [5
 // Deliberately not in reading order.
 const widgets = [assets, current, trend, load, energy];
 
-function open(role: Role = "viewer", over: Routes = {}) {
+/** `hold` keeps back the requests it matches until `release()` (installed before the page mounts, so none gets through). */
+function open(role: Role = "viewer", over: Routes = {}, hold?: (method: string, path: string) => boolean) {
   const calls = mockFetch({
     ...authed(role),
     "GET /api/dashboards/3": { body: dashboard({ widgets }) },
     "POST /api/widget-data": widgetDataRoute,
     ...over,
   });
+  const held = hold ? holdFetch(hold) : { release: () => {} };
   renderWithProviders(<DashboardPage />, { route: "/dashboards/3", path: "/dashboards/:id" });
-  return calls;
+  return Object.assign(calls, { release: held.release });
 }
 const region = (name: string) => screen.findByRole("region", { name });
 const dataRequests = (calls: { method: string; path: string; body: unknown }[]) =>
@@ -280,5 +284,59 @@ describe("DashboardPage (view)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("dashboard not found");
     await waitFor(() => expect(screen.getByTestId("default")).toHaveTextContent("null"));
     expect(calls.filter((c) => c.path === "/api/dashboards/default")).toHaveLength(2);
+  });
+});
+
+describe("DashboardPage while it loads", () => {
+  const LABEL = "Loading the dashboard";
+  const pause = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); }); // lets /api/me and the answers that are not held arrive
+
+  it("shows the skeleton region and none of the page with the dashboard held, then the page and no region", async () => {
+    const page = open("viewer", {}, (_method, path) => path === "/api/dashboards/3");
+    expect(screen.getByText(LABEL).parentElement).toHaveAttribute("role", "status");
+    expect(document.querySelector(".sk-region .row.dash-head")).not.toBeNull();
+    expect(document.querySelectorAll(".sk-quad > .sk-block")).toHaveLength(4);
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument(); // the real title is not there yet, and the placeholder is no heading
+    expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Dashboard range")).not.toBeInTheDocument();
+    expect(progress.getCount("pending")).toBe(0); // a query's own wait is counted by the bar through React Query; Pending belongs to Suspense fallbacks
+    page.release();
+    expect(await screen.findByRole("heading", { name: "Hall A" })).toBeInTheDocument();
+    expect(await region("Power trend")).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("stays a skeleton until the site zone is in as well (the widgets need it)", async () => {
+    const page = open("viewer", {}, (_method, path) => path === "/api/site");
+    await waitFor(() => expect(screen.getByText(LABEL)).toBeInTheDocument());
+    await pause(); // the dashboard itself has answered by now
+    expect(screen.getByText(LABEL)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Hall A" })).not.toBeInTheDocument();
+    page.release();
+    expect(await screen.findByRole("heading", { name: "Hall A" })).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+  });
+
+  it("gives someone who can edit the Edit button's block in the head row, and a viewer not", async () => {
+    const operator = open("operator", {}, (_method, path) => path === "/api/dashboards/3");
+    await waitFor(() => expect(document.querySelectorAll(".dash-head > .sk-block")).toHaveLength(2)); // (the role arrives with /api/me, a moment after the first render)
+    operator.release();
+    await screen.findByRole("heading", { name: "Hall A" });
+  });
+
+  it("has only the select's block for a viewer", async () => {
+    const page = open("viewer", {}, (_method, path) => path === "/api/dashboards/3");
+    await pause(); // /api/me has answered
+    expect(document.querySelectorAll(".dash-head > .sk-block")).toHaveLength(1);
+    page.release();
+    await screen.findByRole("heading", { name: "Hall A" });
+  });
+
+  it("ends in the error, with no region left, when the dashboard cannot be loaded", async () => {
+    open("viewer", { "GET /api/dashboards/3": { status: 404, body: { detail: "dashboard not found" } } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("dashboard not found");
+    expect(document.querySelector(".sk-region")).toBeNull();
   });
 });

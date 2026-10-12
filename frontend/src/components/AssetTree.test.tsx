@@ -708,3 +708,62 @@ describe("AssetTree kind icons", () => {
     expect(screen.getByRole("button", { name: "Children of Main" })).toBeInTheDocument();
   });
 });
+
+describe("AssetTree while the list loads", () => {
+  const WIDTH_KEY = "dcdash.assetTreeWidth";
+  const column = () => screen.getByRole("region", { name: "Asset tree" });
+  const loadingUi = (props: Props = {}) => ui({ nodes: [], loading: true, onAddTop: vi.fn(), ...props });
+
+  it("keeps the column and its header and shows one status region, with the filter slot and the rows as placeholders inside it", () => {
+    render(loadingUi());
+    expect(column()).toBeInTheDocument();
+    expect(screen.getByText("Assets", { selector: ".tree-title" })).toBeInTheDocument();
+    const region = screen.getByText("Loading the asset tree").parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(region).toHaveAttribute("aria-busy", "true");
+    expect(column().contains(region)).toBe(true);
+    expect(region.parentElement).toHaveClass("tree-body");
+    expect(region.querySelector(".tree-filter .sk-block")).not.toBeNull(); // the filter's slot, inside the region so it fades in with the rows
+    expect(region.querySelector(".tree-scroll .sk-tree .node")).not.toBeNull();
+    expect(region.querySelector("input, a, button")).toBeNull();
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+  });
+
+  it("disables the header buttons that need a tree or a list (Add, Collapse all, Expand all) and leaves the toggle and the handle", () => {
+    render(loadingUi({ disabled: true }));
+    expect(screen.getByRole("button", { name: "Add a top-level asset" })).toBeDisabled();
+    expect(collapseAll()).toBeDisabled();
+    expect(expandAll()).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Minimize asset tree" })).toBeEnabled();
+    expect(screen.getByRole("separator", { name: "Resize the tree column" })).toBeInTheDocument();
+  });
+
+  it("is the very column the tree then fills: the stored width is on it while loading, and the section is the same element after", () => {
+    localStorage.setItem(WIDTH_KEY, "340");
+    const { rerender } = render(loadingUi());
+    const before = column();
+    expect(before.style.getPropertyValue("--tree-user-w")).toBe("340px");
+    rerender(ui());
+    expect(column()).toBe(before);
+    expect(column().style.getPropertyValue("--tree-user-w")).toBe("340px");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(link("Site")).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Filter assets" })).toBeInTheDocument();
+  });
+
+  it("keeps the minimized state: a minimized column hides its body, the skeleton included", () => {
+    localStorage.setItem("dcdash.assetTree", "minimized");
+    render(loadingUi());
+    expect(column()).toHaveAttribute("data-state", "minimized");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument(); // hidden from the accessibility tree with the rest of the body
+    expect(screen.getByRole("button", { name: "Expand asset tree" })).toBeInTheDocument();
+  });
+
+  it("shows no status and the real filter when it is not loading", () => {
+    render(ui());
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Filter assets" })).toBeInTheDocument();
+  });
+});

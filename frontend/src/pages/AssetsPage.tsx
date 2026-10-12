@@ -21,7 +21,7 @@ function Icon({ children }: { children: ReactNode }) {
 /** What the workspace layout hands to the page in its pane (the fleet summary and the asset page). */
 export interface AssetsContext {
   admin: boolean;
-  /** A delete is running or awaiting its confirmation: no form may open next to it. */
+  /** A delete is running or awaiting its confirmation, or the asset list has not arrived: no form may open next to it, and none without the parent list. */
   locked: boolean;
   /** The Add asset dialog; null = top level. */
   openAdd: (parentId: number | null) => void;
@@ -68,8 +68,9 @@ export function AssetsPage() {
   const tree = useMemo(() => buildTree(assets), [assets]);
   const selected = assets.find((a) => a.id === selectedId) ?? null;
   const { run, busy, error: actionError } = useAction();
-  // While a delete runs or its confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap).
-  const locked = busy || confirming !== null;
+  // While a delete runs or its confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap);
+  // and none opens before the list is there, since the form's parent picker needs it.
+  const locked = busy || confirming !== null || isLoading;
   const openAdd = (parentId: number | null) => { if (!locked) setDialog({ kind: "add", parentId }); };
   const openEdit = () => { if (!locked) setDialog({ kind: "edit" }); };
 
@@ -98,7 +99,6 @@ export function AssetsPage() {
     }
   });
 
-  if (isLoading) return <p className="muted">loading…</p>;
   if (error) return <p className="error" role="alert">{error.message}</p>;
   const admin = hasRole("admin");
   const context: AssetsContext = { admin, locked, openAdd, openEdit, remove };
@@ -111,6 +111,7 @@ export function AssetsPage() {
           onAddChild={admin ? openAdd : undefined}
           onAddTop={admin ? () => openAdd(null) : undefined}
           disabled={locked}
+          loading={isLoading}
         />
         <div className="assets-detail">
           {actionError && <p className="error" role="alert">{actionError}</p>}

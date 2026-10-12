@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { ApiError } from "../api/client";
 import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithDataRouter } from "../test/render";
 import { AuditPage } from "./AuditPage";
 
@@ -356,5 +357,77 @@ describe("AuditPage", () => {
     expect(await screen.findByText("Created scan scope Lab")).toBeInTheDocument();
     expect(screen.queryByText("Updating…")).not.toBeInTheDocument();
     expect(screen.getByRole("table")).not.toHaveAttribute("aria-busy", "true");
+  });
+});
+
+describe("AuditPage while the log loads (W7f)", () => {
+  const LABEL = "Loading the audit log";
+  const mount = (route: string, held: string, reply: Routes[string] = twoRows) => {
+    mockFetch({ ...admin, "GET /api/audit": reply });
+    const hold = holdFetch((_method, path) => path === held);
+    renderWithDataRouter(<AuditPage />, { route, path: "/audit" });
+    return hold;
+  };
+
+  it("keeps the real header and filter bar and shows a table skeleton in one region while the log is held, then the rows and no region", async () => {
+    const hold = mount("/audit", "/api/audit");
+    expect(screen.getByRole("heading", { level: 1, name: "Audit log" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Action")).toBeInTheDocument(); // the filter bar does not wait
+    const region = screen.getByText(LABEL).parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(3); // Time, User, What happened
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText("No audit entries yet.")).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("keeps the place of the Friendly/Raw switch above the skeleton (an aria-hidden .row.seg with a 34px gap, so the table does not jump), and the real switch replaces it", async () => {
+    const hold = mount("/audit", "/api/audit");
+    const place = document.querySelector(".audit-page > .row.seg")!;
+    expect(place).toHaveAttribute("aria-hidden", "true");
+    expect(place.textContent).toBe("");
+    expect(place.querySelector("button")).toBeNull();
+    expect((place.firstElementChild as HTMLElement).style.height).toBe("34px");
+    const region = screen.getByText(LABEL).parentElement!;
+    expect(place.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING, "the gap comes before the skeleton").toBeTruthy();
+    expect(screen.queryByRole("group", { name: "View" })).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByRole("group", { name: "View" })).toBeInTheDocument();
+    expect(document.querySelectorAll(".audit-page .row.seg")).toHaveLength(1); // the real one only
+    expect(document.querySelector(".audit-page .row.seg[aria-hidden]")).toBeNull();
+  });
+
+  it("has four columns in the raw view", async () => {
+    const hold = mount("/audit?view=raw", "/api/audit");
+    expect(screen.getByText(LABEL).parentElement!.querySelectorAll(".sk-table thead th")).toHaveLength(4);
+    hold.release();
+    await screen.findByRole("table");
+  });
+
+  it("keeps the skeleton until the site zone is in as well, as the rows wait for it", async () => {
+    const hold = mount("/audit", "/api/site");
+    await screen.findByLabelText("Action");
+    await new Promise((r) => setTimeout(r, 30)); // the log has answered by now
+    expect(screen.getByText(LABEL)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+  });
+
+  it("ends with the empty state for an empty log, and with the error when the log fails, never a region", async () => {
+    mockFetch({ ...admin, "GET /api/audit": list(0, []) });
+    const first = renderWithDataRouter(<AuditPage />, { route: "/audit", path: "/audit" });
+    expect(await screen.findByText("No audit entries yet.")).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+    first.unmount();
+    mockFetch({ ...admin, "GET /api/audit": { status: 500, body: { detail: "the log is down" } } });
+    renderWithDataRouter(<AuditPage />, { route: "/audit", path: "/audit" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("the log is down");
+    expect(document.querySelector(".sk-region")).toBeNull();
   });
 });

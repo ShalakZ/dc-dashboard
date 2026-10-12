@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { ScansPage } from "./ScansPage";
 
@@ -345,5 +346,88 @@ describe("ScansPage look (W6)", () => {
     open();
     expect((await screen.findByText(/No scopes yet/)).closest(".empty")).not.toBeNull();
     expect((await screen.findByText("No scans yet.")).closest(".empty")).not.toBeNull();
+  });
+});
+
+describe("ScansPage while the lists load (W7f)", () => {
+  const heldBy = (held: string) => holdFetch((_method, path) => path === held);
+
+  it("shows the real heading and a table skeleton while the scopes are held, with nothing to press, then the scopes and no region", async () => {
+    mockFetch(base("admin"));
+    const held = heldBy("/api/scopes");
+    open();
+    expect(screen.getByRole("heading", { level: 1, name: "Scans" })).toBeInTheDocument();
+    const region = screen.getByText("Loading scopes").parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    await waitFor(() => expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(4)); // Name, Targets, Ports and the admin's row menu (the role arrives a moment after the first render)
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByText(/No scopes/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    held.release();
+    expect(await screen.findByRole("button", { name: "New scope" })).toBeInTheDocument();
+    expect(screen.queryByText("Loading scopes")).not.toBeInTheDocument();
+    expect(await screen.findAllByText("lab")).toHaveLength(2);
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("stands a 34px gap in the admin's header actions slot, outside the region, so the header keeps its height", async () => {
+    mockFetch(base("admin"));
+    const held = heldBy("/api/scopes");
+    open();
+    await waitFor(() => expect(document.querySelector(".page-head > .actions > [aria-hidden]")).not.toBeNull()); // (the role arrives a moment after the first render)
+    const gap = document.querySelector<HTMLElement>(".page-head > .actions > [aria-hidden]")!;
+    expect(gap.style.height).toBe("34px");
+    expect(gap.closest(".sk-region")).toBeNull();
+    held.release();
+    await screen.findByRole("button", { name: "New scope" });
+  });
+
+  it("has three columns and no actions slot for someone who cannot change anything (the real header has none either)", async () => {
+    mockFetch(base("operator"));
+    const held = heldBy("/api/scopes");
+    open();
+    await waitFor(() => expect(document.querySelectorAll(".sk-table thead th")).toHaveLength(3));
+    expect(document.querySelector(".page-head > .actions")).toBeNull();
+    held.release();
+    await screen.findAllByText("lab");
+  });
+
+  it("shows 'Recent scans' and its own skeleton while only the history is held, then the history", async () => {
+    mockFetch(base("operator"));
+    const held = heldBy("/api/scans");
+    open();
+    expect(await screen.findByText("lab")).toBeInTheDocument(); // the scope row
+    expect(screen.getByRole("heading", { name: "Recent scans" })).toBeInTheDocument();
+    const region = screen.getByText("Loading recent scans").parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(5);
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByText("No scans yet.")).not.toBeInTheDocument();
+    held.release();
+    await waitFor(() => expect(screen.getAllByText("lab")).toHaveLength(2)); // the scope row and its scan in the history
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("ends with the empty looks when there is nothing, and with the errors when the lists fail, never a region", async () => {
+    mockFetch({ ...base("operator"), "GET /api/scopes": { body: [] }, "GET /api/scans": { body: [] } });
+    open();
+    expect(await screen.findByText("No scopes have been defined yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No scans yet.")).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("ends with the scopes error alone, and with the history's error under its heading, never a region", async () => {
+    mockFetch({ ...base("operator"), "GET /api/scopes": { status: 500, body: { detail: "scopes are down" } } });
+    open();
+    expect(await screen.findByRole("alert")).toHaveTextContent("scopes are down");
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("ends with the history's error under its heading when only the history fails", async () => {
+    mockFetch({ ...base("operator"), "GET /api/scans": { status: 500, body: { detail: "history is down" } } });
+    open();
+    expect(await screen.findByRole("alert")).toHaveTextContent("history is down");
+    expect(screen.getByRole("heading", { name: "Recent scans" })).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
   });
 });

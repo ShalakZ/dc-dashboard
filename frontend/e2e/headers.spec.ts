@@ -71,6 +71,7 @@ test("every page an admin can open runs under the policy without one violation, 
     await page.goto(path);
     await expect(heading ? page.getByRole("heading", { name: heading, exact: true }) : page.getByRole("heading", { level: 1 })).toBeVisible();
     await page.waitForLoadState("load");
+    await expect(page.locator(".sk-region")).toHaveCount(0); // a loading skeleton shows the heading too (W7f): wait for the data
     await page.waitForTimeout(500); // late work: data-driven rendering, charts, fonts
     visited.push(path);
   };

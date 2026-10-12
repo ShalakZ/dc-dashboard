@@ -263,7 +263,7 @@ test("Storage: tips open and close, and the rows per day follow the chosen days"
   });
 
   const rowsDay = page.locator(".rows-day");
-  const dayRows = rowsDay.locator("tbody tr");
+  const dayRows = rowsDay.locator(".table-wrap:not(.sk-table) tbody tr"); // not the 7-row loading skeleton of a chosen range (W7f)
   const from = rowsDay.getByLabel("Rows from day", { exact: true });
   const to = rowsDay.getByLabel("Rows to day", { exact: true });
   const problem = rowsDay.getByRole("alert"); // scoped: the warning banners above are alerts too

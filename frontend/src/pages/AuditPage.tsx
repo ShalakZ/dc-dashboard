@@ -6,6 +6,7 @@ import { AuditEntryDetail } from "../components/AuditEntryDetail";
 import { AuditFilterBar } from "../components/AuditFilterBar";
 import { AuditPager } from "../components/AuditPager";
 import { PageHeader } from "../components/PageHeader";
+import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { apiQuery, isFiltered, readUrl, writeUrl, type AuditFilters, type AuditUrlState } from "../lib/auditFilters";
 import { describeAudit } from "../lib/auditText";
 import { downloadCsv } from "../lib/download";
@@ -135,7 +136,13 @@ export function AuditPage() {
         error={problem}
         notice={hint && hint.at === current && data && data.total > 0 ? hint.text : null}
       />
-      {(isLoading || site.isPending) && <p className="muted">loading…</p>}
+      {(isLoading || site.isPending) && (
+        <>
+          {/* the Friendly/Raw switch needs rows to show; its place is kept (the same row and margin), or the table would sit 44px higher than it lands */}
+          <div className="row seg" aria-hidden="true"><ActionsSpace /></div>
+          <TableSkeleton columns={raw ? 4 : 3} rows={8} label="Loading the audit log" />
+        </>
+      )}
       {error && <p className="error" role="alert">{error.message}</p>}
       {fresh && fresh.total === 0 && (
         <div className="empty">

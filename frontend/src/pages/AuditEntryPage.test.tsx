@@ -1,5 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { AuditEntryPage } from "./AuditEntryPage";
 
@@ -66,5 +67,38 @@ describe("AuditEntryPage", () => {
   it("shows the API's message for any other failure", async () => {
     open("9", { "GET /api/audit/9": { status: 500, body: { detail: "database is down" } } });
     expect(await screen.findByRole("alert")).toHaveTextContent("database is down");
+  });
+});
+
+describe("AuditEntryPage while the entry loads (W7f)", () => {
+  const LABEL = "Loading the entry";
+  const mount = (held: string) => {
+    mockFetch({ ...admin, "GET /api/audit/9": { body: stored } });
+    const hold = holdFetch((_method, path) => path === held);
+    renderWithProviders(<AuditEntryPage />, { route: "/audit/9", path: "/audit/:id" });
+    return hold;
+  };
+
+  it.each(["/api/audit/9", "/api/site"])("shows one region with a header trail and a list of ten pairs while %s is held, nothing to read, then the entry and no region", async (held) => {
+    const hold = mount(held);
+    const region = screen.getByText(LABEL).parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.closest(".admin-page.audit-entry-page")).not.toBeNull(); // the wrapper the page's width rules key on
+    expect(region.querySelector("header.page-head .crumbs")).not.toBeNull();
+    expect(region.querySelectorAll("dl.kv > div")).toHaveLength(10);
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByRole("heading", { name: "Audit entry #9" })).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("never shows a skeleton for an id that cannot be one (nothing is asked), nor over a 404", async () => {
+    open("abc");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Audit entry not found.");
+    expect(document.querySelector(".sk-region")).toBeNull();
   });
 });
