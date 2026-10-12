@@ -83,4 +83,22 @@
   .audit-entry-page .actions svg.i, .audit-entry-page .back-line svg.i { width: 16px; height: 16px; margin-left: -4px; }
   .back-line { margin: 22px 0 14px; font-size: var(--fs-sm); }
   .audit-entry-page pre { margin: 0 0 22px; padding: 14px 16px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: var(--fs-sm); line-height: 1.5; }
+
+  /* Connection check (the Diagnostics page and the Sources row's dialog): the controls, then one block per step, each led by its state shape */
+  .check-panel { display: grid; gap: 12px; min-width: 0; }
+  .check-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+  .check-controls > label { min-width: 220px; }
+  .check-panel p { margin: 0; }
+  .check-line { font-weight: 600; }
+  .check-steps { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius); }
+  .check-step { display: grid; gap: 4px; padding: 10px 16px; }
+  .check-step + .check-step { border-top: 1px solid var(--border); }
+  .check-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+  .check-head .st { font-size: var(--fs-base); font-weight: 600; white-space: normal; }
+  .check-ms { flex: none; color: var(--text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+  .check-summary, .check-error, .check-hint { padding-left: 14px; overflow-wrap: anywhere; font-size: var(--fs-sm); }
+  .check-error { font-weight: 600; }
+  .check-hint { padding-left: 12px; border-left: 2px solid var(--border-strong); }
+  .check-step[data-state="failed"] .check-hint { border-left-color: var(--crit); }
+  .check-at { font-size: var(--fs-sm); }
 }

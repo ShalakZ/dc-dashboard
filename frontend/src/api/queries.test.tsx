@@ -5,7 +5,7 @@ import { NO_FILTERS } from "../lib/auditFilters";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
-  auditPosition, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
+  auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
@@ -467,5 +467,75 @@ describe("useFleetSummary", () => {
     await waitFor(() => expect(result.current.fleet.data).toBeDefined());
     await result.current.put.mutateAsync({ currency: "USD" });
     await waitFor(() => expect(fetched(calls)).toBe(2));
+  });
+});
+
+describe("useStartCheck", () => {
+  it("posts to the source's check route and returns the job id", async () => {
+    const calls = mockFetch({ "POST /api/sources/7/check": { status: 202, body: { job_id: 41 } } });
+    const { result } = renderHook(() => useStartCheck(7), { wrapper: stableWrapper() });
+    expect(await result.current.mutateAsync()).toEqual({ job_id: 41 });
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/api/sources/7/check"]);
+  });
+
+  it("keeps the 409 body, which names the check that is already running", async () => {
+    mockFetch({ "POST /api/sources/7/check": { status: 409, body: { detail: "a connection check is already running for this source", job_id: 40 } } });
+    const { result } = renderHook(() => useStartCheck(7), { wrapper: stableWrapper() });
+    await expect(result.current.mutateAsync()).rejects.toMatchObject({ status: 409, body: { job_id: 40 } });
+  });
+
+  it("refreshes the audit log, since the start is audited", async () => {
+    const calls = mockFetch({
+      "POST /api/sources/7/check": { status: 202, body: { job_id: 41 } },
+      "GET /api/audit/options": { body: { actions: [], users: [] } },
+    });
+    const { result } = renderHook(() => ({ options: useAuditOptions(), start: useStartCheck(7) }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.options.isSuccess).toBe(true));
+    await result.current.start.mutateAsync();
+    await waitFor(() => expect(calls.filter((c) => c.path === "/api/audit/options")).toHaveLength(2));
+  });
+});
+
+describe("buildReport", () => {
+  /** The URLs the report route was asked for (mockFetch records paths without the query). */
+  const urls = () => {
+    const seen: string[] = [];
+    mockFetch({
+      "GET /api/diagnostics/report": ({ url }) => {
+        seen.push(url);
+        return { body: { format: "DCDASH-REPORT v1", build_id: "abc", detail: "summary", mask: false, checksum: "c", parts: [], legend: [] } };
+      },
+    });
+    return seen;
+  };
+
+  it("asks for the JSON form with the chosen options and the browser's clock", async () => {
+    const seen = urls();
+    const before = Date.now();
+    await buildReport({ detail: "full", mask: true, source: 4 });
+    const query = new URL(seen[0], "http://x").searchParams;
+    expect([query.get("detail"), query.get("mask"), query.get("format"), query.get("source")]).toEqual(["full", "1", "json", "4"]);
+    const clock = Date.parse(query.get("client_time") ?? "");
+    expect(clock).toBeGreaterThanOrEqual(before);
+    expect(clock).toBeLessThanOrEqual(Date.now());
+    expect(query.get("client_time")).toMatch(/Z$/); // an ISO instant with its zone
+  });
+
+  it("leaves source out for all sources and sends mask=0 unmasked", async () => {
+    const seen = urls();
+    await buildReport({ detail: "summary", mask: false, source: null });
+    const query = new URL(seen[0], "http://x").searchParams;
+    expect(query.has("source")).toBe(false);
+    expect(query.get("mask")).toBe("0");
+  });
+
+  it("is a mutation: nothing is requested until it is called, and a refocus asks nothing", async () => {
+    const seen = urls();
+    const { result } = renderHook(() => useBuildReport(), { wrapper: stableWrapper() });
+    expect(seen).toHaveLength(0);
+    window.dispatchEvent(new Event("focus"));
+    expect(seen).toHaveLength(0);
+    await act(async () => { await result.current.mutateAsync({ detail: "summary", mask: false, source: null }); });
+    expect(seen).toHaveLength(1);
   });
 });
