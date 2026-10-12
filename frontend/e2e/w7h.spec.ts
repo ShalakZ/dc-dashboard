@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Page, type Route } from "@playwright/test";
-import { userBlock } from "./shell";
+import { signOut, userBlock } from "./shell";
 
 // W7h (a real first-load screen) on the state the earlier projects leave behind: admin `admin` / `correct-horse`. Nothing is created; the one
 // thing the spec changes is the admin's look (Light and Navy and gold is put back in afterAll, which is what a re-run and the later gallery
@@ -15,11 +15,13 @@ import { userBlock } from "./shell";
 // `main`; the colours are compared with the look's own tokens (read through a probe on <html>), so the spec pins the wiring and not the palette.
 //
 // What the recorder inside the page keeps (as in w7e and w7f, because a flash of one frame is missed by polling): the order of the shell states
-// (static, skeleton, real, none), how many frames showed a bar in each, how many frames had none after the first, and the loading bar (how many
-// `.top-progress` elements there were, its phases, and its width while it ran).
+// (static, skeleton, real, none), how many frames showed a bar in each, how many frames had none after the first, how often #root was empty after the first
+// paint (nothing but the loading bar), and the loading bar (how many `.top-progress` elements there were, its phases, and its
+// width while it ran). The bar's phases come from the mutation records with the value each one replaced: the bar restarts (finish or fade, then
+// reset, then run) inside one task, so a callback that only reads the attribute afterwards would see `run` and never `reset`.
 //
 // The security policy is Report-Only: a violation is a console message and a `securitypolicyviolation` event, and every page of this spec is
-// listened to (`watchPolicy`); the listener is proved to see a deliberate violation in the last test.
+// listened to (`watchPolicy`); the listener is proved to see a deliberate violation in test (h).
 
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost/";
 const ADMIN = { username: "admin", password: "correct-horse" };
@@ -208,19 +210,21 @@ function shining(page: Page): Promise<{ animations: number; sweeps: number }> {
 
 // The recorder. `states` is the order in which `#root` held a static copy, React's skeleton, the real shell, or no shell at all (only noted
 // once a shell has been there); `frames` counts the animation frames that had a visible top bar, by state; `blank` the frames after the first
-// of those that had none; `bar` the loading bar (`nodes` distinct `.top-progress` elements, `phases` in order, `runs` its width and opacity
-// in every frame of its `run` phase).
+// of those that had none; `empty` how often, after the first paint, #root held nothing but the loading bar (a white page between two screens;
+// counted after every change of the DOM and in every frame); `bar` the loading bar (`nodes` distinct `.top-progress` elements, `phases` in
+// order, `runs` its width and opacity in every frame of its `run` phase).
 interface ShellRecord {
   states: string[];
   frames: Record<string, number>;
   blank: number;
+  empty: number;
   bar: { nodes: number; phases: string[]; runs: { width: number; opacity: number }[] };
 }
 type WithShell = Window & { __w7h: ShellRecord; __w7hBar?: Element };
 
 /** Starts recording in the document it runs in. For `addInitScript` (every document from now on). */
 function recordShell(): void {
-  const record: ShellRecord = { states: [], frames: {}, blank: 0, bar: { nodes: 0, phases: [], runs: [] } };
+  const record: ShellRecord = { states: [], frames: {}, blank: 0, empty: 0, bar: { nodes: 0, phases: [], runs: [] } };
   (window as unknown as WithShell).__w7h = record;
   const stateOf = (): string => {
     const shell = document.querySelector("#root .shell");
@@ -240,15 +244,23 @@ function recordShell(): void {
     seen.add(el);
     record.bar.nodes += 1;
     if (record.bar.nodes === 1) (window as unknown as WithShell).__w7hBar = el;
-    const phase = () => {
-      const now = el.getAttribute("data-phase") ?? "";
-      if (record.bar.phases[record.bar.phases.length - 1] !== now) record.bar.phases.push(now);
-    };
-    phase();
-    new MutationObserver(phase).observe(el, { attributes: true, attributeFilter: ["data-phase"] });
+    const phases = record.bar.phases;
+    const push = (value: string) => { if (phases[phases.length - 1] !== value) phases.push(value); };
+    push(el.getAttribute("data-phase") ?? "");
+    // Every record's old value, then the current one: the values between two reads (a restart that happens inside one task) are kept too.
+    new MutationObserver((records) => {
+      for (const change of records) push(change.oldValue ?? "");
+      push(el.getAttribute("data-phase") ?? "");
+    }).observe(el, { attributes: true, attributeFilter: ["data-phase"], attributeOldValue: true });
   };
-  new MutationObserver(() => { note(); lookAtBar(); }).observe(document, { childList: true, subtree: true });
   let painted = false;
+  // An empty #root (nothing in it but the loading bar) is looked for after every change of the DOM as well as in every frame: a commit that
+  // empties the page and the commit that fills it again are two tasks, and whether a frame is painted between them is up to the browser.
+  const noteEmpty = () => {
+    const root = document.getElementById("root");
+    if (painted && root && [...root.children].every((child) => child.classList.contains("top-progress"))) record.empty += 1;
+  };
+  new MutationObserver(() => { note(); lookAtBar(); noteEmpty(); }).observe(document, { childList: true, subtree: true });
   const frame = () => {
     note();
     lookAtBar();
@@ -260,6 +272,7 @@ function recordShell(): void {
     } else if (painted) {
       record.blank += 1;
     }
+    noteEmpty();
     const bar = document.querySelector(".top-progress");
     const fill = bar?.firstElementChild;
     if (bar && fill && bar.getAttribute("data-phase") === "run" && record.bar.runs.length < 4000) {
@@ -443,6 +456,7 @@ test.describe.serial("W7h: the first-load screen", () => {
       await settled(page);
       const record = await shellRecord(page);
       expect(record.states, `signed out: static copy and skeleton at most, never the real shell (${record.states.join(" > ")})`).not.toContain("real");
+      expect(record.empty, "no frame with an empty #root between the shell and the sign-in page (the redirect's own frame keeps the skeleton)").toBe(0);
       await expect(page.locator(".navbar"), "the sign-in page has no top bar").toHaveCount(0);
 
       await page.getByLabel("Username").fill(ADMIN.username);
@@ -452,6 +466,7 @@ test.describe.serial("W7h: the first-load screen", () => {
       await expect(heading1(page, "Dashboards")).toBeVisible();
       await expect(userBlock(page)).toContainText(ADMIN.username);
       await expect(page.locator(".sk-shell")).toHaveCount(0);
+      expect((await shellRecord(page)).empty, "nor on the way from the sign-in page to the page asked for").toBe(0);
     });
   });
 
@@ -479,6 +494,7 @@ test.describe.serial("W7h: the first-load screen", () => {
       const record = await shellRecord(page);
       expect(record.states, "in this order, and no empty #root in between").toEqual(["static", "skeleton", "real"]);
       expect(record.blank, "frames after the first paint that had no top bar").toBe(0);
+      expect(record.empty, "and #root was never left holding nothing but the loading bar").toBe(0);
       expect(record.frames.static ?? 0, "the static copy was painted").toBeGreaterThan(0);
       expect(record.frames.skeleton ?? 0, "so was the skeleton").toBeGreaterThan(0);
       expect(record.frames.real ?? 0, "and the real shell").toBeGreaterThan(0);
@@ -529,5 +545,40 @@ test.describe.serial("W7h: the first-load screen", () => {
     } finally {
       await context.close();
     }
+  });
+
+  test("(i) signing out from the profile menu goes to the sign-in page with no static shell and no empty frame, and reloading it shows no shell", async ({ browser }) => {
+    test.setTimeout(120_000);
+    await withPage(browser, {}, async (page) => {
+      await watchShell(page);
+      await page.goto("/billing");
+      await expect(userBlock(page)).toContainText(ADMIN.username);
+      await settled(page);
+      const before = (await shellRecord(page)).states;
+      expect(before.at(-1), "the real shell is up before signing out").toBe("real");
+
+      await signOut(page); // the profile menu, Sign out, the confirm dialog, and the sign-in page
+      await expect(page).toHaveURL(/\/login$/);
+      await settled(page);
+      const record = await shellRecord(page);
+      // Between the real shell and the sign-in page: the skeleton may be there for the one frame that carries the redirect (it keeps the page from
+      // going white), never the static copy and never the real shell again, and nothing is left but the sign-in page.
+      expect([["none"], ["skeleton", "none"]], `after the real shell: ${record.states.slice(before.length).join(" > ")}`).toContainEqual(record.states.slice(before.length));
+      expect(record.empty, "no frame with an empty #root on the way").toBe(0);
+      await expect(page.locator(".shell"), "no shell on the sign-in page").toHaveCount(0);
+      await expect(page.locator(".top-progress"), "and no loading bar").toHaveCount(0);
+
+      // A reload of the sign-in page, with the app's script held so that only what the HTML and the stylesheet paint is there: no shell.
+      const script = await holdScript(page);
+      await page.reload({ waitUntil: "commit" });
+      await sheetLoaded(page);
+      expect(await html(page).getAttribute("data-shell"), "after the reload theme-init.js sets no data-shell").toBeNull();
+      expect(await staticCopy(page).evaluate((el) => getComputedStyle(el).display), "the static copy is display: none").toBe("none");
+      await expect(page.locator(".navbar")).not.toBeVisible();
+      script.release();
+      await expect(heading1(page, "Sign in")).toBeVisible();
+      await settled(page);
+      expect(framesPainted(await shellRecord(page)), "no frame of the reloaded page had a top bar").toBe(0);
+    });
   });
 });

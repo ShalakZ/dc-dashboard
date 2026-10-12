@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AppShellSkeleton } from "./components/AppShellSkeleton";
@@ -1138,6 +1138,29 @@ describe("the app-shell skeleton (W7h)", () => {
       expect(rules.filter((r) => r.selector.includes("::after") && r.selector.includes("main") && r.selector.includes("sk-shell")).map((r) => r.selector)).toEqual([".sk-shell[hidden] main::after"]);
       const calm = rules.filter((r) => r.at.some((a) => a.includes("prefers-reduced-motion")) && r.selector.includes("sk-shell"));
       expect(calm, "reduced motion keeps the delay").toEqual([]);
+    });
+
+    // The twin guard below only sees rules whose every selector part starts with MIN, in app.css. A minimized rule written any other way
+    // (`[data-sidebar="minimized"] .side`, a part of a list that does not start with MIN) or put in another stylesheet would escape it.
+    it("every selector that names data-sidebar starts with the form the twin guard reads", () => {
+      const named = rules.filter((r) => r.selector.includes("data-sidebar"));
+      expect(named.length, "rules that name data-sidebar").toBeGreaterThanOrEqual(7);
+      expect(named.filter((r) => !r.selector.split(", ").every((part) => part.startsWith(MIN))).map((r) => r.selector)).toEqual([]);
+    });
+
+    it("no other stylesheet under src names data-sidebar (a minimized rule there would have no twin)", () => {
+      const sheets: string[] = [];
+      const walk = (dir: string) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true }) as Dirent[]) {
+          const path = `${dir}/${entry.name}`;
+          if (entry.isDirectory()) walk(path);
+          else if (entry.name.endsWith(".css")) sheets.push(path);
+        }
+      };
+      walk("src");
+      expect(sheets, "the walk finds the stylesheets").toEqual(expect.arrayContaining(["src/app.css", "src/themes.css"]));
+      const naming = sheets.filter((path) => path !== "src/app.css" && stripComments(readFileSync(path, "utf8")).includes("data-sidebar"));
+      expect(naming).toEqual([]);
     });
 
     it("every minimized rule the skeleton uses has a twin with the same declarations", () => {
