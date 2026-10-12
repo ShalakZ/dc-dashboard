@@ -98,17 +98,23 @@ describe("AppShellSkeleton", () => {
     });
   });
 
+  // The bar's right side is empty on purpose: the real chip, clock and user block are as wide as their content (the user's name sets the
+  // user block's width), so a placeholder of any one width would slide them at the hand-over for every account but one.
+  it("leaves the right side of the bar empty: no chip, separator, clock, user block or avatar", () => {
+    const { container } = render(<AppShellSkeleton />);
+    const barIn = container.querySelector(".navbar > .bar-in")!;
+    expect([...barIn.children].map((el) => el.className)).toEqual(["qf", "grow"]);
+    expect(container.querySelector(".sk-chip, .live, .vr, .site-time, .profile, .who, .avatar, .sk-avatar, .sk-caret")).toBeNull();
+    expect(container.querySelector(".navbar .sk-circle")).toBeNull();
+  });
+
   // The geometry is the real CSS's only if the landmarks nest the way Layout's do. Compared on the listed steps only: Layout has more
-  // children (the tip, the chip, the clock), and its skip link and loading bar sit outside .shell.
+  // children (the tip, the chip, the clock, the user), and its skip link and loading bar sit outside .shell.
   describe("keeps Layout's landmark chain", () => {
     const describeEl = (el: Element | null) =>
       el ? `${el.tagName.toLowerCase()}${[...el.classList].filter((c) => !c.startsWith("sk-") && c !== "ready").map((c) => `.${c}`).join("")}` : "(none)";
     const first = (el: Element | null) => el?.firstElementChild ?? null;
     const next = (el: Element | null) => el?.nextElementSibling ?? null;
-    /** The bar's right side stands in for the real chip, caret and button by slot, not by class: a placeholder has its own classes. */
-    const slot = (el: Element) => (el.matches(".live, .sk-chip") ? "chip" : el.matches("svg.i, .sk-caret") ? "caret" : describeEl(el));
-    const slots = (els: Iterable<Element>) => [...els].map(slot);
-    const following = (el: Element | null) => { const found: Element[] = []; for (let n = next(el); n; n = next(n)) found.push(n); return found; };
     /** The chain of one shell: each pair is (what the step is, what it found). */
     const chain = (shell: Element) => {
       const header = first(shell);
@@ -117,8 +123,6 @@ describe("AppShellSkeleton", () => {
       const nav = first(side);
       const brand = first(header);
       const barIn = next(brand);
-      const grow = barIn!.querySelector(":scope > .grow");
-      const who = barIn!.querySelector(".profile > .who");
       return {
         shell: describeEl(shell),
         "shell > first": describeEl(header),
@@ -131,9 +135,6 @@ describe("AppShellSkeleton", () => {
         "brand > second": describeEl(next(first(brand))),
         "bar-in > first": describeEl(first(barIn)),
         "bar-in > second": describeEl(next(first(barIn))),
-        "bar-in after the grow": slots(following(grow)),
-        "who": slots(who?.children ?? []),
-        "who > lbl": slots(who?.querySelector(".lbl")?.children ?? []),
         "side > first": describeEl(nav),
         "nav > first": describeEl(first(nav)),
         "nav > second": describeEl(next(first(nav))),
@@ -152,10 +153,7 @@ describe("AppShellSkeleton", () => {
       expect(skeletonChain).toEqual(realChain);
       expect(realChain["frame > second"]).toBe("main"); // the chain found something at every step
       expect(realChain["nav-group > first"]).toBe("span.nav-heading");
-      // the right side of the bar: the data chip, the separators, the clock and the user, as the real bar has them, so the avatar and the chip sit where the real ones will
-      expect(realChain["bar-in after the grow"]).toEqual(["chip", "span.vr", "span.site-time", "span.vr", "div.profile"]);
-      expect(realChain.who).toEqual(["span.avatar", "span.lbl", "caret"]);
-      expect(realChain["who > lbl"]).toEqual(["span.who-name", "span.who-role"]);
+      expect(realChain["bar-in > second"]).toBe("span.grow"); // the skeleton's bar ends here; the real one goes on with the chip, the clock and the user
     });
   });
 });

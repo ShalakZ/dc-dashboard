@@ -1012,8 +1012,8 @@ describe("the loading skeletons (W7f)", () => {
 });
 
 describe("the app-shell skeleton (W7h)", () => {
-  // every rule written for it: the placeholder sizes, the .sk-shell scope, the find box, the avatar, the chip and the caret
-  const mine = rules.filter((r) => /\.sk-(shell|find|avatar|chip|caret|[wh]-\d+)(?![\w-])/.test(r.selector));
+  // every rule written for it: the placeholder sizes, the .sk-shell scope and the find box
+  const mine = rules.filter((r) => /\.sk-(shell|find|[wh]-\d+)(?![\w-])/.test(r.selector));
   const narrow = (r: Rule) => r.at.some((a) => a.startsWith("@media (max-width: 1179.98px)"));
   const only = (selector: string) => {
     const found = mine.filter((r) => r.selector === selector && !narrow(r)); // the narrow window's rules are checked on their own
@@ -1063,35 +1063,15 @@ describe("the app-shell skeleton (W7h)", () => {
     expect(find.order).toBeGreaterThan(only(".sk-shell .navbar .sk, .sk-shell .side .sk").order);
   });
 
-  it("the avatar disc is the placeholder colour, not the gold of the real one, and follows the real .avatar rule", () => {
-    const avatar = only(".sk-avatar");
-    expect(avatar.body).toMatch(/background:\s*var\(--side-bg-hover\)/);
-    expect(avatar.order).toBeGreaterThan(rules.find((r) => r.selector === ".avatar")!.order);
-  });
-
   it("a placeholder row takes no pointer and shows no hover colour", () => {
     expect(only(".sk-shell .side-row").body).toMatch(/pointer-events:\s*none/);
     expect(only(".sk-shell .side-row").body).toMatch(/cursor:\s*default/);
   });
 
-  it("the right side of the bar: a chip placeholder as high as the real chip (28px) with its ring, a caret placeholder, a user block that takes no pointer", () => {
-    const chip = only(".sk-chip");
-    expect(chip.body).toMatch(/height:\s*28px/);
-    expect(chip.body).toMatch(/flex:\s*none/);
-    expect(chip.body).toMatch(/border:\s*1px solid var\(--top-chip-border\)/);
-    expect(chip.body).toMatch(/border-radius:\s*var\(--radius-sm\)/);
-    expect(chip.body).toMatch(/font-size:\s*var\(--fs-sm\)/); // the chip's own size, so its ch is the real chip's
-    expect(only(".sk-caret").body).toMatch(/width:\s*14px;\s*height:\s*14px/);
-    expect(only(".sk-caret").body).toMatch(/margin-left:\s*2px/);
-    expect(only(".sk-shell .who").body).toMatch(/pointer-events:\s*none/);
-  });
-
-  it("in a narrow window the chip placeholder is the word alone, as the real chip is (its detail is hidden there)", () => {
-    const chip = mine.filter((r) => r.selector === ".sk-chip" && narrow(r));
-    expect(chip).toHaveLength(1);
-    expect(chip[0].body).toMatch(/width:\s*\d+ch/);
-    expect(chip[0].order).toBeGreaterThan(only(".sk-chip").order);
-    expect(inLayer(chip[0])).toBe(true);
+  // The bar's right side is empty (the real chip, clock and user block are as wide as their content, so no placeholder width fits every
+  // account): the rules that drew a chip, a caret and an avatar are gone, and so is the user block's pointer rule.
+  it("has no rule left for a chip, a caret, an avatar or the user block", () => {
+    expect(rules.filter((r) => /\.sk-(chip|caret|avatar)(?![\w-])|\.sk-shell\s+\.who(?![\w-])/.test(r.selector))).toEqual([]);
   });
 
   it("draws the brand name in CSS, so the markup holds no word of it", () => {

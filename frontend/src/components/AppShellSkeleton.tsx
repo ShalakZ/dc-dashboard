@@ -7,8 +7,8 @@ import { ICONS } from "./Icon";
 // `.sk-shell .brand .lbl::before`), and AppShellSkeleton.test.tsx fails if the two drift apart. The page area holds the status line and
 // nothing else: grey shapes there would be a second skeleton chain in front of the pages' own (W7f's fade-in rule).
 // The roles are unknown while the sign-in check is out, so the sidebar shows three groups of three rows whatever the user's role. The bar's
-// right side has the real bar's parts (chip, clock, user) with the real classes where there are some (`.vr`, `.site-time`, `.profile`, `.who`),
-// so the user's avatar lands about where the real one will; the real narrow-window rules hide the clock's zone and the role there too.
+// right side stays empty: the real chip, clock and user block are as wide as their content (the user's name sets the user block's width), so
+// a placeholder of any one width would make them slide at the hand-over for every account but one. They appear in place instead.
 
 /** A text placeholder: width `sk-w-<n>` (in ch), in a plain span of its own as `Skeleton` does. */
 function Line({ w }: { w: number }) {
@@ -41,20 +41,6 @@ export function AppShellSkeleton({ sidebar = initialSidebar() }: { sidebar?: Sid
         <div className="bar-in">
           <div className="qf"><span className="sk-find" /></div>
           <span className="grow" />
-          <span className="sk sk-chip" />
-          <span className="vr" aria-hidden="true" />
-          <span className="site-time"><Line w={6} /><span className="zone"><Line w={3} /></span></span>
-          <span className="vr" aria-hidden="true" />
-          <div className="profile">
-            <div className="who">
-              <span className="avatar sk-avatar" />
-              <span className="lbl">
-                <span className="who-name"><Line w={5} /></span>
-                <span className="who-role"><Line w={11} /></span>
-              </span>
-              <span className="sk sk-caret" />
-            </div>
-          </div>
         </div>
       </header>
       <div className="frame">
