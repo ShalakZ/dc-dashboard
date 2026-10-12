@@ -1047,10 +1047,15 @@ describe("the app-shell skeleton (W7h)", () => {
     }
   });
 
-  it("the placeholders on the navy are the sidebar's hover colour and do not shine (a hand-over would restart the sweep)", () => {
-    expect(tok("side-bg-hover")).not.toBe(tok("side-bg"));
-    expect(tok("side-bg-hover")).not.toBe(tok("top-bg"));
-    expect(only(".sk-shell .navbar .sk, .sk-shell .side .sk").body).toMatch(/background:\s*var\(--side-bg-hover\)/);
+  // The hover fill was 1.17:1 on the navy and could vanish over a remote desktop's colour depth; the active fill is the next step up the same
+  // ramp (about 1.3:1): quiet, but there. Still one token, never a colour of its own.
+  it("the placeholders on the navy are the sidebar's active colour (one step above the hover fill) and do not shine (a hand-over would restart the sweep)", () => {
+    expect(tok("side-bg-active")).not.toBe(tok("side-bg"));
+    expect(tok("side-bg-active")).not.toBe(tok("side-bg-hover"));
+    expect(tok("side-bg-active")).not.toBe(tok("top-bg"));
+    expect(contrast(tok("side-bg-active"), tok("side-bg"))).toBeGreaterThan(contrast(tok("side-bg-hover"), tok("side-bg")));
+    expect(contrast(tok("side-bg-active"), tok("top-bg"))).toBeGreaterThan(contrast(tok("side-bg-hover"), tok("top-bg")));
+    expect(only(".sk-shell .navbar .sk, .sk-shell .side .sk").body).toMatch(/background:\s*var\(--side-bg-active\)/);
     expect(only(".sk-shell .navbar .sk::after, .sk-shell .side .sk::after").body).toMatch(/display:\s*none/);
   });
 

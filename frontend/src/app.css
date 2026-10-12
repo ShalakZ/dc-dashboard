@@ -467,7 +467,7 @@
 
   /* The app-shell skeleton (components/AppShellSkeleton.tsx, and its static copy in index.html): the real shell's classes with grey
      placeholders, shown before the user is known. Placeholder widths are classes, not style attributes (the copy in index.html must
-     survive a strict style-src). On the navy the placeholders are the sidebar's hover colour and do not shine: the hand-over to the real
+     survive a strict style-src). On the navy the placeholders are the sidebar's active colour and do not shine: the hand-over to the real
      shell would restart a sweep. Only the sizes the component uses are written. */
   .sk-w-7 { width: 7ch; }
   .sk-w-8 { width: 8ch; }
@@ -475,7 +475,7 @@
   .sk-w-10 { width: 10ch; }
   .sk-w-11 { width: 11ch; }
   .sk-w-12 { width: 12ch; }
-  .sk-shell .navbar .sk, .sk-shell .side .sk { background: var(--side-bg-hover); }
+  .sk-shell .navbar .sk, .sk-shell .side .sk { background: var(--side-bg-active); }
   .sk-shell .navbar .sk::after, .sk-shell .side .sk::after { display: none; }
   .sk-shell .brand .lbl::before { content: "DC Dashboard"; } /* the name is drawn here so the markup holds no text */
   .sk-shell .navbar .sk-find { display: block; width: 100%; height: 34px; border: 1px solid var(--top-find-border); border-radius: var(--radius); background: var(--top-find-bg); } /* the real field's box */
