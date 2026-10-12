@@ -468,7 +468,7 @@ test.describe("W7f: loading skeletons", () => {
   });
 
   test("no flash across chained skeletons: a tree click between two assets, a cold asset page, the landing page and Settings, each with every answer late, never show a region", async ({ page }) => {
-    test.setTimeout(150_000);
+    test.setTimeout(210_000);
     await signIn(page);
     const chart = page.locator('section[aria-label="Trend"] canvas');
 
@@ -495,6 +495,19 @@ test.describe("W7f: loading skeletons", () => {
       await page.unrouteAll({ behavior: "ignoreErrors" });
     });
 
+    await test.step("a tree click again, every answer 140 ms late: a skeleton that has not yet begun to fade in is not a seen one, so the chart's block after it waits too", async () => {
+      await page.goto(`/assets/${asset.id}`);
+      await expect(heading1(page, asset.name)).toBeVisible();
+      await expect(chart).toBeVisible();
+      await delayApi(page, 140);
+      await page.evaluate(recordRegions, []);
+      await treeLink(page, sibling.name).click();
+      await expect(heading1(page, sibling.name)).toBeVisible();
+      await untilQuiet(page, `the click to ${sibling.name} at 140 ms`);
+      expectNoneVisible(await regionRecord(page), `the click to ${sibling.name} at 140 ms`);
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+    });
+
     await test.step("a cold asset page, every answer 40 ms late: the tree, the asset and the chart", async () => {
       await delayApi(page, 40);
       await page.addInitScript(recordRegions, []);
@@ -504,6 +517,17 @@ test.describe("W7f: loading skeletons", () => {
       expectNoneVisible(await regionRecord(page), "the cold asset page");
       await page.unrouteAll({ behavior: "ignoreErrors" });
     });
+
+    for (const ms of [110, 130]) {
+      await test.step(`a cold asset page, every answer ${ms} ms late: the chart's block must not come in at full opacity behind skeletons nobody could see yet`, async () => {
+        await delayApi(page, ms);
+        await page.goto(`/assets/${asset.id}`);
+        await expect(chart).toBeVisible();
+        await untilQuiet(page, `the cold asset page at ${ms} ms`);
+        expectNoneVisible(await regionRecord(page), `the cold asset page at ${ms} ms`);
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+      });
+    }
 
     await test.step("the landing page, every answer 40 ms late: the page, then the fleet summary", async () => {
       await delayApi(page, 40);

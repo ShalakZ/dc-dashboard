@@ -540,7 +540,7 @@ describe("CanvasSkeleton", () => {
 });
 
 describe("the instant rule (a region that follows a skeleton somebody saw does not wait out the fade-in delay)", () => {
-  // The clock is performance.now, which the rule reads at render; React Query is not involved, but global fake timers are not used anyway.
+  // The clock is performance.now, which the rule reads when a region mounts (a layout effect); React Query is not involved, but global fake timers are not used anyway.
   let clock = 0;
   const at = (ms: number) => { clock = ms; };
   let spy: { mockRestore: () => void };
@@ -563,17 +563,17 @@ describe("the instant rule (a region that follows a skeleton somebody saw does n
     expect(instant("One")).toBe(false);
   });
 
-  it("a region that mounts beside one that has been up 150 ms is instant (that one was seen)", () => {
+  it("a region that mounts beside one that has been up 270 ms is instant (that one was fully on screen)", () => {
     const { rerender } = render(regions(["One"]));
-    at(10_150);
+    at(10_270);
     rerender(regions(["One", "Two"]));
     expect(instant("Two")).toBe(true);
     expect(instant("One")).toBe(false); // it was first
   });
 
-  it("a region that mounts beside one that is still inside its delay is delayed too (nobody saw that one)", () => {
+  it("a region that mounts beside one that is still fading in is delayed too (nobody saw that one fully)", () => {
     const { rerender } = render(regions(["One"]));
-    at(10_149);
+    at(10_269);
     rerender(regions(["One", "Two"]));
     expect(instant("Two")).toBe(false);
   });
@@ -584,11 +584,18 @@ describe("the instant rule (a region that follows a skeleton somebody saw does n
     expect(instant("Pane")).toBe(false);
   });
 
-  it("a region swapped in for one that was up 200 ms is instant (the old one has not cleaned up when the new one renders)", () => {
+  it("a region swapped in for one that was up 300 ms is instant (the old one went in the same commit)", () => {
+    const { rerender } = render(regions(["Old"]));
+    at(10_300);
+    rerender(regions(["New"]));
+    expect(instant("New")).toBe(true);
+  });
+
+  it("a region swapped in for one that was up only 200 ms (half faded in) is delayed: the cold chart behind a 130 ms answer's skeletons would flash otherwise", () => {
     const { rerender } = render(regions(["Old"]));
     at(10_200);
     rerender(regions(["New"]));
-    expect(instant("New")).toBe(true);
+    expect(instant("New")).toBe(false);
   });
 
   it("a region swapped in for one that was up only 40 ms is delayed: the data came back before the first was ever visible", () => {
@@ -607,32 +614,32 @@ describe("the instant rule (a region that follows a skeleton somebody saw does n
     expect(instant("Chart")).toBe(false);
   });
 
-  it("a region that was up 200 ms leaves a grace of 250 ms: one that mounts 249 ms after it left is instant", () => {
+  it("a region that was up 300 ms leaves a grace of 250 ms: one that mounts 249 ms after it left is instant", () => {
     const first = render(regions(["One"]));
-    at(10_200);
+    at(10_300);
     first.unmount();
-    at(10_449);
+    at(10_549);
     render(regions(["Quick"]));
     expect(instant("Quick")).toBe(true);
   });
 
   it("and one that mounts 250 ms after it left is delayed again", () => {
     const first = render(regions(["One"]));
-    at(10_200);
+    at(10_300);
     first.unmount();
-    at(10_450);
+    at(10_550);
     render(regions(["Late"]));
     expect(instant("Late")).toBe(false);
   });
 
   it("a region that was instant counts as seen at once: a chain of short hops keeps the grace alive", () => {
     const { rerender, unmount } = render(regions(["A"]));
-    at(10_200);
+    at(10_300);
     rerender(regions(["B"])); // B follows A: instant, so on screen from this moment
     expect(instant("B")).toBe(true);
-    at(10_240);
-    unmount(); // B was up for 40 ms, A went 240 ms ago: past the grace of A at 10_450, within B's own
-    at(10_460);
+    at(10_340);
+    unmount(); // B was up for 40 ms, A went 40 ms before B: C comes past the grace of A (10_550) but within B's own (10_590)
+    at(10_570);
     render(regions(["C"]));
     expect(instant("C")).toBe(true);
   });

@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
 
 // Loading skeletons: grey shapes in the layout the data will have, shown while a page has no data yet. A Suspense fallback uses these
@@ -21,11 +21,12 @@ export function Skeleton({ variant = "line", width, height }: { variant?: Varian
 }
 
 // A region that follows a skeleton somebody SAW skips the fade-in delay: a chain of skeletons (the tree and then the page, a lazy route's
-// fallback and then the page's table) would otherwise blank the area for 150 ms at every step. A skeleton is seen once it is on screen:
-// an instant one at once, a delayed one when its 150 ms delay (app.css) has run out. One that was answered inside the delay was never seen
-// and leaves nothing behind, or the next region (the chart after the asset) would pop in at full opacity for a few frames.
-// Read at render, not in an effect, so a swap inside one commit counts too (the old region has not cleaned up yet).
-const SEEN_AFTER_MS = 150;
+// fallback and then the page's table) would otherwise blank the area for 150 ms at every step. A skeleton is seen once it is fully on
+// screen: an instant one at once, a delayed one when its 150 ms delay and 120 ms fade (app.css) have run out. One that was answered
+// sooner was never fully seen and leaves nothing behind, or the next region (the chart after the asset) would pop in at full opacity.
+// Decided when the region COMMITS (a layout effect, before paint), not when it renders: React keeps a Suspense fallback up for up to
+// 300 ms after its render, and the old region's layout cleanup has already run when the new one's effect does, so a swap counts too.
+const SEEN_AFTER_MS = 270; // the delay plus the fade (`.sk-region` in app.css)
 const GRACE_MS = 250;
 interface Region { born: number; instant: boolean }
 const mounted = new Set<Region>();
@@ -46,21 +47,22 @@ export function resetSkeletonClock() {
 
 /** The one `role="status"` of an area: busy, with the label as its only text. It takes a className so it can BE the real wrapper. */
 export function SkeletonRegion({ label, className, children }: { label: string; className?: string; children?: ReactNode }) {
-  // once per mount: its own effect below joins the set, which must not turn a region that is still waiting out its delay into an instant one
-  const [self] = useState<Region>(() => {
-    const born = performance.now();
-    return { born, instant: followsSeen(born) };
-  });
-  useEffect(() => {
+  const [self] = useState<Region>(() => ({ born: 0, instant: false }));
+  const box = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const now = performance.now();
+    self.born = now;
+    self.instant = followsSeen(now); // before this region joins the set: it must not count itself
+    box.current?.toggleAttribute("data-instant", self.instant); // set by hand, before paint: the animation has not started yet
     mounted.add(self);
     return () => {
       mounted.delete(self);
-      const now = performance.now();
-      if (isSeen(self, now)) lastSeenGone = now; // StrictMode's simulated unmount comes at once, so it stamps nothing for a delayed region
+      const gone = performance.now();
+      if (isSeen(self, gone)) lastSeenGone = gone; // StrictMode's simulated unmount comes at once, so it stamps nothing for a delayed region
     };
   }, [self]);
   return (
-    <div role="status" aria-busy="true" className={className ? `sk-region ${className}` : "sk-region"} data-instant={self.instant ? "" : undefined}>
+    <div ref={box} role="status" aria-busy="true" className={className ? `sk-region ${className}` : "sk-region"}>
       <span className="sr-only">{label}</span>
       {children}
     </div>

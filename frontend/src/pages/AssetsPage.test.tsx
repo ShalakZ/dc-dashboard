@@ -670,7 +670,7 @@ describe("AssetsPage", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(urls).toEqual(["/api/assets/2", "/api/assets/2?confirm=true"]);
       await waitFor(() => expect(screen.queryByRole("link", { name: "Room A" })).not.toBeInTheDocument());
-      expect(where()).toBe("/assets");
+      await waitFor(() => expect(where()).toBe("/assets")); // navigate() renders in a transition, which may land after the list refetch
       expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument();
     });
 
