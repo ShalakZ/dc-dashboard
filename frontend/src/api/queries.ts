@@ -333,7 +333,7 @@ export const useDashboards = () =>
 
 /**
  * The dashboard people land on (null = none). The server answers null for a stale or unusable value too.
- * The sidebar keeps this query alive for the whole session, so it looks again by itself (on focus, once stale, and every minute):
+ * The sidebar keeps this query alive for the whole session, so it looks again by itself (when the tab becomes visible again, once stale, and every minute):
  * another admin may delete the dashboard or pick a new default while a control-room screen stays open.
  */
 export const useDefaultDashboard = () =>
@@ -341,7 +341,7 @@ export const useDefaultDashboard = () =>
     queryKey: keys.defaultDashboard,
     queryFn: () => api.get<DefaultDashboard>("/api/dashboards/default"),
     staleTime: 30_000,
-    refetchOnWindowFocus: true, // the app turns this off for every query (main.tsx)
+    refetchOnWindowFocus: true, // the app turns this off for every query (main.tsx); react-query fires it when the tab becomes visible again
     refetchInterval: 60_000,
   });
 
