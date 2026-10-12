@@ -1,0 +1,55 @@
+DCDASH-REPORT v1 | PART 1 OF 1 | build ede8a20 | 2026-10-12T03:59:40Z
+LATEST CHECK: source 1 "SCADA main" all steps OK
+== ENVIRONMENT ==
+generated: 2026-10-12T03:59:40Z, site time 2026-10-12 03:59:40 UTC (UTC)
+report: detail=summary, not masked, source filter: all
+api: build ede8a20 (built 2026-10-12T03:57:50Z), up 59 s
+collector: build ede8a20, last heartbeat 4 s ago
+build check: OK (api and collector run the same build)
+runtime: Python 3.12.15, Linux x86_64 microsoft-standard-WSL2, asyncua 1.1.8, pymodbus 3.8.6
+database: PostgreSQL 16.15, TimescaleDB 2.30.2
+dns servers: 127.0.0.11
+clock: database minus container = +0.0 s (both run on one VM clock, so this cannot show drift)
+clock: browser minus container = +0.0 s
+clock: last server time seen 2026-10-12T03:59:35.187021+00:00 (source 1, check job 16), skew -0.4 s against the container clock
+== SETTINGS ==
+general.timezone=UTC billing.currency=(not set) sign_in.max_failures=5 sign_in.block_minutes=5 env.timezone=UTC env.session_hours=12 env.scan_max_hosts=1024 env.scan_extra_ports=(empty)
+== SOURCES ==
+#1 "SCADA main" opcua status=online secret=no authentication=none endpoint=opc.tcp://scada-gw.plant.local:4840/dcdash/ security_policy=none
+== SOURCE HEALTH ==
+#1 "SCADA main": 42.4 reads/min, 0.0% bad, newest reading 4 s ago
+== POINTS ==
+60 points: good 4, unmapped 56
+== CONNECTION CHECKS ==
+#1 "SCADA main" (opcua): job 16 done, 2026-10-12T03:59:36Z: all steps OK
+   server_time: the server's clock is 0.4 s behind ours
+   read_points: read 4 point(s) in 3 request(s) of up to 100 node(s): 4 good, 0 bad
+   timing: 5 reads of 4 node(s): min 0 ms, avg 1 ms, max 1 ms
+   clock: server 2026-10-12T03:59:35.187021+00:00, local 2026-10-12T03:59:35.619454+00:00, skew -0.4 s
+== JOURNAL ==
+2026-10-12T03:59:36Z info job check.finished source=1: connection check passed (9 steps) {"first_failed":null,"job_id":16,"ok":true,"skew_seconds":-0.432,"steps":9,"steps_ok":9}
+2026-10-12T03:58:58Z info collector source.online source=1: source is online {"failures":0,"interval":5,"offline_seconds":null}
+== SCANS ==
+no scans
+== STORAGE AND RETENTION ==
+database 11.2 MB; readings 368.0 KB (compressed 0 bytes of 0 bytes); 1m rollup 88.0 KB; 1h rollup 24.0 KB
+disk: capacity 100.0 GB, used 0.01%, growth 368.0 KB/day, full in over 10 years, warning at 80%: no
+retention: raw 30 d, compress after 7 d, 1m rollup 730 d
+rows per day (hourly tier): 10-06=0, 10-07=0, 10-08=0, 10-09=0, 10-10=0, 10-11=0, 10-12=1815
+policy jobs: 5 in all, 0 not scheduled or failing
+journal: 2 events kept, oldest 2026-10-12T03:58:58Z
+== AUDIT TAIL ==
+2026-10-12T03:59:35Z admin source.checked {"job_id":16,"name":"SCADA main","source_id":1}
+2026-10-12T03:58:58Z admin source.updated {"name":"SCADA main","source_id":1} changed: config.client_key changed, config.client_cert /certs/expired-client.pem -> /certs/opcua-client.pem, config.security_policy basic256sha256 -> none, enabled false -> true
+2026-10-12T03:58:51Z admin source.updated {"name":"SCADA main","source_id":1} changed: enabled true -> false
+2026-10-12T03:58:40Z admin login.succeeded {"client":"172.21.0.1"}
+2026-10-12T03:21:54Z admin diagnostics.report {"chars":4816,"detail":"summary","mask":false,"parts":1,"source_id":null}
+2026-10-12T03:21:50Z admin source.checked {"job_id":15,"name":"SCADA main","source_id":1}
+2026-10-12T03:21:12Z admin source.updated {"name":"SCADA main","source_id":1} changed: config.client_key changed, config.client_cert /certs/opcua-client.pem -> /certs/expired-client.pem, config.security_policy none -> basic256sha256, enabled false -> true
+2026-10-12T03:21:06Z admin source.updated {"name":"SCADA main","source_id":1} changed: enabled true -> false
+2026-10-12T03:21:02Z admin diagnostics.report {"chars":4749,"detail":"summary","mask":false,"parts":1,"source_id":null}
+2026-10-12T03:20:57Z admin source.checked {"job_id":14,"name":"SCADA main","source_id":1}
+== API ERRORS ==
+no server errors recorded
+--- PART 1 OF 1 | chars=3812 lines=52 ---
+END OF REPORT edf4e624c41e

@@ -53,16 +53,41 @@ The check only reads (DNS, TCP, endpoint discovery, session, Read); it opens one
 2. The **LATEST CHECK** line right after it: the failing step and the OPC UA status, or "all steps OK", or "no connection check has been run".
 3. **ENVIRONMENT**: versions and the clock lines. **SOURCES** and **SOURCE HEALTH**: status, last error, reads per minute and error rate. **POINTS**: the worst points. **JOURNAL**: what changed and when (source went offline / came back, bad points, jobs, clock skew). **API ERRORS**, **AUDIT TAIL**, **STORAGE AND RETENTION**, **SCANS**.
 
+## Rehearsing a failure (development simulator only)
+Before the real SCADA exists the whole loop can be practised against the OPC UA simulator, which can be told to misbehave. Faults exist ONLY in the simulator (the `simulator` service of the `dev` Compose profile; a production `docker compose up` does not start it, and nothing else in the application reads these variables). Set them for one command, never in `.env`, and look for the line `FAULT INJECTION ACTIVE: ...` in `docker compose logs simulator`: a misspelled variable name never reaches the container and the rehearsal would run without the fault.
+
+    SIM_FAULT_SLOW=1.5 docker compose --profile dev up -d --force-recreate simulator
+    docker compose --profile dev logs --tail 5 simulator
+    SIM_FAULT_SLOW= docker compose --profile dev up -d --force-recreate simulator    # back to normal
+
+| Variable | What the simulator does | What the check shows |
+|---|---|---|
+| `SIM_FAULT_POLICIES=basic256sha256` (or `none,basic256sha256`) | offers only the secure policy (a self-signed server certificate is made at start) | a source set to `none` fails at **Server endpoints**: the policy it wants is not offered |
+| `SIM_FAULT_UNTRUSTED_CERT=1` | refuses every client certificate the way real servers do: an error at the secure channel, then the connection closes (`=session` refuses later, at the session) | **Secure channel and session** fails with `BadSecurityChecksFailed`; the hint asks the SCADA team to trust our certificate thumbprint |
+| `SIM_FAULT_AUTH=required` (+ `SIM_OPCUA_PASSWORD`, user `sim`) | offers only the user name token | no user on the source: **Server endpoints** fails; wrong password: **Secure channel and session** fails with `BadUserAccessDenied` / `BadIdentityTokenRejected` |
+| `SIM_FAULT_SLOW=<seconds>` | delays every incoming message by that long | a delay of about a quarter of the source's timeout or more fails the handshake with a timeout (it needs four round trips); smaller delays only show in **Read timing** |
+| `SIM_FAULT_DROP=<seconds>` | closes each connection that many seconds after it was accepted | the step that is running then fails with a closed connection, and the journal shows the source going offline and online again |
+| `SIM_FAULT_BAD=LVP01_kW:BadSensorFailure,...` | the listed points answer with that Bad status code (a node that exists still browses, which a real server would not allow for `BadNodeIdUnknown`) | **Read the mapped points** names the points and their codes |
+| `SIM_FAULT_SKEW=<seconds>` | the server's clock runs that many seconds ahead (negative: behind) | **Server time** warns above 60 s and fails above 300 s with the clock hint |
+| `SIM_FAULT_CERT_HOSTS=a.example,b.example` | extra host names in the simulator's server certificate | the certificates step stops reporting "does not name the host" for those names |
+
+`SIM_FAULT_*` applies to the OPC UA server only; the HTTP simulator's own `POST /admin/fault` switch is an older, separate thing. `scripts/e2e.sh` refuses to run while any `SIM_FAULT_*` variable is set. The reports produced against each fault, and what a reader with nothing but the text made of them, are in [field-debugging-examples/](field-debugging-examples/README.md).
+
 ## What never to paste
 - Screenshots or text that show a password, a token, the `.env` file, or the contents of `certs/` (private keys).
 - Anything from the report is already scrubbed (passwords, secret key, session tokens and password hashes are never in it), but the report **does** contain the addresses of an OT network unless you tick the mask option. You decide what leaves the workstation.
 
 ## When the web app is down
-The offline script needs no application, no internet and no Docker:
+The offline scripts need no application and no internet. They print and save `dcdash-diag-<time>.txt` (host facts, disk, clock, network adapters, DNS and a TCP connect with milliseconds for each `host:port` you give them, what listens locally, which tools exist) and, when Docker and the project's `compose.yaml` are there, also container status, the database, the API health answer and the last 30 log lines of every service. Their last line `END OF DIAGNOSTICS <checksum>` shows a truncated paste. Copy the text out of the RDP session, or carry the file over RDP drive redirection.
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect-diagnostics.ps1 scada-host:4840 10.0.0.5:502
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect-diagnostics.ps1 scada-host:4840 10.0.0.5:502 -ProjectDir C:\dcdash
+    bash scripts/collect-diagnostics.sh scada-host:4840 10.0.0.5:502 --project-dir /opt/dcdash
 
-It prints and saves `dcdash-diag-<time>.txt` (host facts, disk, clock, network adapters, DNS and a TCP connect with milliseconds for each `host:port` you give it, what listens locally, which of docker / wsl / python exist). Its last line `END OF DIAGNOSTICS <checksum>` shows a truncated paste. Copy the text out of the RDP session, or carry the file over RDP drive redirection.
+`-ProjectDir` / `--project-dir` is the folder with `compose.yaml` and `.env` (default: the current folder, else the folder above `scripts`). Without Docker or a `compose.yaml` the container sections say so and everything else still works (Windows services named `dcdash*` and `postgres*` are listed instead).
+
+**Two files.** The main report is short enough to paste. The logs file `dcdash-diag-<time>-logs.txt` holds the last 300 lines of every service; it is saved but never printed. Send it only when asked, and read it first: a log line can name hosts, user names and part numbers of your OT network.
+
+**Scrubbing.** Every line of both files is scrubbed before it is written: the user name and password inside a URL (`opc.tcp://user:password@host`) become `[hidden]`, and so does every secret value in the project's `.env` (the keys whose name contains PASSWORD, SECRET, TOKEN or KEY; the report says only HOW MANY values it hides, never which). What the scripts cannot know: a source's password is stored encrypted in the database, so a log line that quotes it without a URL around it is not caught. The scrubbers (Python in the application, PowerShell, awk) follow one shared list of cases, `backend/tests/fixtures/scrub_cases.tsv`; `-ScrubFile <file>` (PowerShell) and `--scrub-stdin` (shell) run the same rules over any text file, so you can check or clean a text before pasting it. On Linux the saved files are readable by their owner only. The reports do contain addresses of your OT network and the workstation's user and computer name: delete what must not leave.
 
 ## Message template to Claude
 ```

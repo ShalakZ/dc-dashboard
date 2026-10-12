@@ -492,7 +492,7 @@ that project's own volume; see "Practise a restore".
 
 ### Debugging on the SCADA workstation
 
-The protocol for connecting to the real SCADA and debugging it by copy-paste (the Diagnostics page, the connection check, the report format, the offline `scripts/collect-diagnostics.ps1`) is in [docs/field-debugging.md](docs/field-debugging.md).
+The protocol for connecting to the real SCADA and debugging it by copy-paste (the Diagnostics page, the connection check, the report format, the offline `scripts/collect-diagnostics.ps1` / `scripts/collect-diagnostics.sh`, the simulator fault switches `SIM_FAULT_*` for rehearsing a failure) is in [docs/field-debugging.md](docs/field-debugging.md).
 
 ### Logs
 
