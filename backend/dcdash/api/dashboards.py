@@ -13,7 +13,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, StringConstraints, model_validator,
+)
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,16 +23,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.api.deps import get_db, require_role
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Dashboard, User, Widget
+from dcdash.core.settings_store import DEFAULT_DASHBOARD_KEY, get_setting, set_setting
 from dcdash.core.timeutil import RANGE_PRESETS
 from dcdash.core.widgets import validate_config
 
 router = APIRouter(prefix="/api", tags=["dashboards"])
 Viewer = Depends(require_role("viewer"))
 Operator = Depends(require_role("operator"))
+Admin = Depends(require_role("admin"))
 
 MAX_WIDGETS = 24
 MAX_DASHBOARDS = 50
 DASHBOARD_CAP_LOCK = 7_306_001  # advisory-lock key serializing "count the dashboards" with "insert one"
+DEFAULT_LOCK = 7_310_001  # advisory-lock key: one change to the default dashboard at a time
+MAX_ID = 2_147_483_647  # dashboards.id is a 4-byte SERIAL; the driver raises on a bigger one
 GRID_COLUMNS = 12
 MAX_ROWS = 1000
 DEFAULT_RANGE = "24h"
@@ -102,6 +108,15 @@ class DashboardOut(BaseModel):
     range: str
     updated_at: datetime
     widgets: list[WidgetOut]
+
+
+class DefaultDashboardIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dashboard_id: Annotated[StrictInt, Field(ge=1, le=MAX_ID)] | None
+
+
+class DefaultDashboardOut(BaseModel):
+    dashboard_id: int | None
 
 
 class DashboardListItem(BaseModel):
@@ -197,6 +212,45 @@ async def create_dashboard(
     return dashboard_out(dashboard, [])
 
 
+async def default_dashboard(db: AsyncSession) -> Dashboard | None:
+    """The dashboard marked as the default, or None: nothing set, a stored value that is not a usable id, or a dashboard
+    that is gone (the setting has no foreign key)."""
+    try:
+        value = (await get_setting(db, DEFAULT_DASHBOARD_KEY, {})).get("dashboard_id")
+    except (TypeError, ValueError):  # the stored value is not an object at all
+        return None
+    if type(value) is not int or not 1 <= value <= MAX_ID:  # type(), not isinstance: True is an int in Python
+        return None
+    return (await db.scalars(select(Dashboard).where(Dashboard.id == value))).one_or_none()
+
+
+def _default_side(dashboard: Dashboard | None) -> dict[str, Any]:
+    return {"dashboard_id": dashboard.id if dashboard else None, "dashboard": dashboard.name if dashboard else None}
+
+
+# These two must stay above "/dashboards/{dashboard_id}": declared after it, "default" would be read as the int path
+# parameter and answered with 422.
+@router.get("/dashboards/default", response_model=DefaultDashboardOut, dependencies=[Viewer])
+async def get_default_dashboard(db: AsyncSession = Depends(get_db)) -> DefaultDashboardOut:
+    dashboard = await default_dashboard(db)
+    return DefaultDashboardOut(dashboard_id=dashboard.id if dashboard else None)
+
+
+@router.put("/dashboards/default", response_model=DefaultDashboardOut)
+async def put_default_dashboard(
+    body: DefaultDashboardIn, admin: User = Admin, db: AsyncSession = Depends(get_db)
+) -> DefaultDashboardOut:
+    # One change at a time (the setting's row may not exist yet, so a row lock would not do); released at the commit.
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": DEFAULT_LOCK})
+    # The chosen dashboard is held FOR UPDATE, so a delete of it waits until this commit, then clears what we wrote.
+    chosen = await load_dashboard(db, body.dashboard_id, lock=True) if body.dashboard_id is not None else None
+    before = await default_dashboard(db)
+    await set_setting(db, DEFAULT_DASHBOARD_KEY, {"dashboard_id": body.dashboard_id})
+    await audit_change(db, admin.id, "dashboard.default_changed", {}, _default_side(before), _default_side(chosen))
+    await db.commit()
+    return DefaultDashboardOut(dashboard_id=body.dashboard_id)
+
+
 @router.get("/dashboards/{dashboard_id}", response_model=DashboardOut, dependencies=[Viewer])
 async def get_dashboard(dashboard_id: int, db: AsyncSession = Depends(get_db)) -> DashboardOut:
     dashboard = await load_dashboard(db, dashboard_id)
@@ -260,10 +314,22 @@ async def save_dashboard(
 @router.delete("/dashboards/{dashboard_id}", status_code=204)
 async def delete_dashboard(dashboard_id: int, user: User = Operator, db: AsyncSession = Depends(get_db)) -> None:
     dashboard = await load_dashboard(db, dashboard_id, lock=True)
-    count = await db.scalar(select(func.count()).select_from(Widget).where(Widget.dashboard_id == dashboard.id))
-    await audit(
-        db, user.id, "dashboard.deleted", {"dashboard_id": dashboard.id, "name": dashboard.name, "widgets": count}
+    # Clear the default if it is this dashboard, in ONE statement that tests and writes together: a PUT that sets
+    # another default and is still uncommitted makes this wait, and the condition is checked again once that commit
+    # lands (a read followed by a write would put the old default back over the new one).
+    cleared = await db.execute(
+        text(
+            "UPDATE settings SET value = CAST(:cleared AS jsonb) "
+            "WHERE key = :key AND value -> 'dashboard_id' = to_jsonb(CAST(:id AS integer)) RETURNING key"
+        ),
+        {"cleared": json.dumps({"dashboard_id": None}), "key": DEFAULT_DASHBOARD_KEY, "id": dashboard.id},
     )
+    detail = {"dashboard_id": dashboard.id, "name": dashboard.name}
+    count = await db.scalar(select(func.count()).select_from(Widget).where(Widget.dashboard_id == dashboard.id))
+    detail["widgets"] = count
+    if cleared.first() is not None:
+        detail["was_default"] = True
+    await audit(db, user.id, "dashboard.deleted", detail)
     # The widgets go with it (ON DELETE CASCADE); a Core delete avoids loading them through a relationship.
     await db.execute(delete(Dashboard).where(Dashboard.id == dashboard.id))
     await db.commit()
