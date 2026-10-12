@@ -1,8 +1,9 @@
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 import { ApiError } from "../api/client";
 import type { TlsStatus } from "../api/types";
 import { useGeneralSettings, usePutGeneralSettings, usePutSignInPolicy, useSignInPolicy, useTlsStatus, useVersion } from "../api/queries";
 import { daysLeftText } from "../components/CertificateNotice";
+import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { PageHeader } from "../components/PageHeader";
 import { formatSiteDateTime } from "../lib/siteTime";
 
@@ -30,18 +31,33 @@ function certificateText(tls: TlsStatus, timezone: string): string {
   }
 }
 
-/** How many wrong passwords block an account from a computer, and for how long. Its own query: a failure here leaves the timezone form working. */
+// Inline SVG, 24-unit viewBox, decoration only (the sentence next to it says everything).
+const WarnIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z" /><path d="M12 10v4.5M12 17.5h.01" /></svg>
+);
+
+/** Whether wrong passwords block anyone, how many and for how long. Its own query: a failure here leaves the timezone form working. */
 function SignInProtection() {
   const policy = useSignInPolicy();
   const put = usePutSignInPolicy();
+  const [enabled, setEnabled] = useState(true);
+  const [asking, setAsking] = useState(false);
   const [failures, setFailures] = useState("");
   const [minutes, setMinutes] = useState("");
   useEffect(() => {
     if (policy.data) {
       setFailures(String(policy.data.max_failures));
       setMinutes(String(policy.data.block_minutes));
+      setEnabled(policy.data.enabled !== false); // a reply without the field means ON
     }
   }, [policy.data]);
+  const values = () => ({ max_failures: Number(failures), block_minutes: Number(minutes) });
+  // Cancel and Escape: the switch goes back to ON (the only state from which the dialog opens) and nothing is sent.
+  const keepOn = useCallback(() => {
+    setAsking(false);
+    setEnabled(true);
+    put.reset();
+  }, [put]);
   const edit = (set: (value: string) => void) => (e: ChangeEvent<HTMLInputElement>) => {
     set(e.target.value);
     put.reset();
@@ -56,9 +72,32 @@ function SignInProtection() {
           aria-labelledby="sign-in-protection"
           onSubmit={(e) => {
             e.preventDefault();
-            put.mutate({ max_failures: Number(failures), block_minutes: Number(minutes) });
+            // Only the step from ON to OFF asks first; every other save is sent as it is, without `confirm`.
+            if (policy.data.enabled !== false && !enabled) setAsking(true);
+            else put.mutate({ ...values(), enabled });
           }}
         >
+          <label className="check">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={enabled}
+              onChange={(e) => {
+                setEnabled(e.target.checked);
+                put.reset();
+              }}
+            />
+            Block an account after repeated wrong passwords
+          </label>
+          {!enabled && (
+            <div role="status" className="banner banner-warn">
+              <WarnIcon />
+              <span>
+                Sign-in protection is off. Wrong passwords no longer block anyone, so a password can be guessed without limit.
+                Switch it on again unless this is a closed, trusted network.
+              </span>
+            </div>
+          )}
           <label>
             Failed sign-ins before a block
             <input
@@ -83,6 +122,7 @@ function SignInProtection() {
               onChange={edit(setMinutes)}
             />
           </label>
+          {!enabled && <p className="muted">Used when protection is switched on.</p>}
           <p className="muted">
             After this many wrong passwords for one account from one computer, that account is blocked from that computer for
             this long. Restarting the api service clears every block; Unblock on the Users page lets one account in sooner.
@@ -91,8 +131,21 @@ function SignInProtection() {
             <button type="submit" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
             {put.isSuccess && <span className="muted"> saved</span>}
           </div>
-          {put.isError && <p className="error" role="alert">{detailText(put.error)}</p>}
+          {put.isError && !asking && <p className="error" role="alert">{detailText(put.error)}</p>}
         </form>
+      )}
+      {asking && (
+        // Outside the form: the dialog's buttons would submit it.
+        <ConfirmDeleteDialog
+          title="Stop blocking accounts?"
+          message="Wrong passwords will no longer block anyone, and accounts that are blocked now can sign in at once. The change is recorded in the Audit log."
+          confirmLabel="Switch off"
+          onConfirm={async () => {
+            await put.mutateAsync({ ...values(), enabled: false, confirm: true });
+            setAsking(false);
+          }}
+          onCancel={keepOn}
+        />
       )}
     </div>
   );
