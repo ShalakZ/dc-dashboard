@@ -1,4 +1,4 @@
-import { initialSidebar, readStored, saveSidebar, writeStored } from "./sidebarState";
+import { initialSidebar, NARROW_QUERY, readStored, saveSidebar, SIDEBAR_KEY, writeStored } from "./sidebarState";
 
 const KEY = "dcdash.sidebar";
 
@@ -9,6 +9,18 @@ function stubMatchMedia(matches: boolean) {
 
 afterEach(() => {
   delete (window as { matchMedia?: unknown }).matchMedia;
+});
+
+describe("the names the static shell mirrors (public/theme-init.js)", () => {
+  it("are the stored key and the narrow query that initialSidebar reads", () => {
+    expect(SIDEBAR_KEY).toBe(KEY);
+    localStorage.setItem(SIDEBAR_KEY, "minimized");
+    expect(initialSidebar()).toBe("minimized");
+    const queries: string[] = [];
+    Object.defineProperty(window, "matchMedia", { value: (q: string) => (queries.push(q), { matches: false }), configurable: true, writable: true });
+    initialSidebar();
+    expect(queries).toEqual([NARROW_QUERY]);
+  });
 });
 
 describe("initialSidebar", () => {

@@ -465,6 +465,46 @@
     .sk::after { animation: none; display: none; }
   }
 
+  /* The app-shell skeleton (components/AppShellSkeleton.tsx, and its static copy in index.html): the real shell's classes with grey
+     placeholders, shown before the user is known. Placeholder widths are classes, not style attributes (the copy in index.html must
+     survive a strict style-src). On the navy the placeholders are the sidebar's active colour and do not shine: the hand-over to the real
+     shell would restart a sweep. Only the sizes the component uses are written. */
+  .sk-w-7 { width: 7ch; }
+  .sk-w-8 { width: 8ch; }
+  .sk-w-9 { width: 9ch; }
+  .sk-w-10 { width: 10ch; }
+  .sk-w-11 { width: 11ch; }
+  .sk-w-12 { width: 12ch; }
+  .sk-shell .navbar .sk, .sk-shell .side .sk { background: var(--side-bg-active); }
+  .sk-shell .navbar .sk::after, .sk-shell .side .sk::after { display: none; }
+  .sk-shell .brand .lbl::before { content: "DC Dashboard"; } /* the name is drawn here so the markup holds no text */
+  .sk-shell .navbar .sk-find { display: block; width: 100%; height: 34px; border: 1px solid var(--top-find-border); border-radius: var(--radius); background: var(--top-find-bg); } /* the real field's box */
+  .sk-shell .side-row { pointer-events: none; cursor: default; }
+  .sk-shell .side-row .sk-circle { width: 18px; height: 18px; } /* the row icon's size */
+
+  /* The static copy in index.html carries `hidden`, so with no stylesheet at all it stays invisible; once this file is in, `.shell { display: flex }`
+     (an author rule) beats the browser's [hidden] and shows it, and the rule below hides it again where theme-init.js left <html> without
+     data-shell (the sign-in and setup pages, or the script did not run). React's skeleton has no `hidden`, so nothing here can hide it.
+     The copy is always data-sidebar="expanded"; its minimized state comes from <html data-shell="minimized"> instead, so each
+     `.shell[data-sidebar="minimized"]` rule the skeleton uses has a twin here, scoped to the copy (the React skeleton follows only its own
+     data-sidebar). The existing rules are not edited; app.css.test.ts fails if a twin is missing or differs. */
+  :root:not([data-shell]) .sk-shell[hidden] { display: none; }
+  :root[data-shell="minimized"] .sk-shell[hidden] { --side-w: var(--side-w-closed); }
+  :root[data-shell="minimized"] .sk-shell[hidden] .side .lbl,
+  :root[data-shell="minimized"] .sk-shell[hidden] .brand .lbl,
+  :root[data-shell="minimized"] .sk-shell[hidden] .nav-heading { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  :root[data-shell="minimized"] .sk-shell[hidden] .brand { justify-content: center; padding: 0; }
+  :root[data-shell="minimized"] .sk-shell[hidden] .nav-groups { padding: 16px 10px 12px; }
+  :root[data-shell="minimized"] .sk-shell[hidden] .nav-group + .nav-group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--side-rule); }
+  :root[data-shell="minimized"] .sk-shell[hidden] .side-row { justify-content: center; padding: 0; }
+  :root[data-shell="minimized"] .sk-shell[hidden] .side-foot { padding: 10px; }
+
+  /* If the app's script never runs (a blocked or missing chunk, a stale cached page) the static copy stays for ever and looks like a slow load.
+     After 15 s it says so, in its main: CSS content (the markup holds no text), scoped to [hidden] so React's skeleton can never show it. The
+     animation's `both` holds the first keyframe through the delay; reduced motion keeps it (a delay is not motion, and 200 ms is a fade). */
+  .sk-shell[hidden] main::after { content: "Still loading. If this stays, reload the page."; display: block; padding-top: var(--gutter); color: var(--text-2); font-size: var(--fs-sm); opacity: 0; animation: sk-hint-in 200ms linear 15s both; }
+  @keyframes sk-hint-in { from { opacity: 0; } to { opacity: 1; } }
+
   /* Discovery graph. The page is exactly one window tall (the shell: the bar, then the frame with main beside the sidebar), and
      the canvas takes what the header leaves, so nothing scrolls and nothing at the canvas edge is clipped. A canvas is never
      shorter than 320px (the page scrolls then). */

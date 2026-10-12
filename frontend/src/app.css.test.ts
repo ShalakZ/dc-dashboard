@@ -1,4 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { AppShellSkeleton } from "./components/AppShellSkeleton";
 import { MUTED_FIGURE } from "./lib/widgetFormat";
 import { AA, contrast, customProperties, NON_TEXT, parseRules, stripComments, type Rule } from "./test/cssTools";
 
@@ -1005,5 +1008,177 @@ describe("the loading skeletons (W7f)", () => {
     const narrow = mine.filter((r) => r.selector === ".sk-quad" && r.at.some((a) => a.startsWith("@media (max-width: 700px)")));
     expect(narrow).toHaveLength(1);
     expect(narrow[0].body).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
+  });
+});
+
+describe("the app-shell skeleton (W7h)", () => {
+  // every rule written for it: the placeholder sizes, the .sk-shell scope and the find box
+  const mine = rules.filter((r) => /\.sk-(shell|find|[wh]-\d+)(?![\w-])/.test(r.selector));
+  const narrow = (r: Rule) => r.at.some((a) => a.startsWith("@media (max-width: 1179.98px)"));
+  const only = (selector: string) => {
+    const found = mine.filter((r) => r.selector === selector && !narrow(r)); // the narrow window's rules are checked on their own
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0];
+  };
+  const markup = renderToStaticMarkup(createElement(AppShellSkeleton, { sidebar: "expanded" }));
+  const used = [...new Set(markup.match(/\bsk-[wh]-\d+\b/g) ?? [])].sort();
+
+  it("every rule is inside the layer and uses tokens for its colours", () => {
+    expect(mine.length, "the skeleton shell rules").toBeGreaterThan(8);
+    for (const rule of mine) {
+      expect(inLayer(rule), `"${rule.selector}" in @layer w6`).toBe(true);
+      expect(rule.body, `raw colour in "${rule.selector}"`).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
+    }
+  });
+
+  it("no rule in a .navbar or .side selector reaches for the accent (the accent is 2.09:1 on the navy)", () => {
+    const onNavy = mine.filter((r) => r.selector.includes(".navbar") || r.selector.includes(".side"));
+    expect(onNavy.length, "rules on the navy").toBeGreaterThan(3);
+    for (const rule of onNavy) expect(rule.body, `"${rule.selector}"`).not.toMatch(/var\(--accent/);
+  });
+
+  it("has a class for every placeholder size the component uses, and none it does not", () => {
+    expect(used.length, "size classes in the markup").toBeGreaterThan(3);
+    const declared = mine.filter((r) => /^\.sk-[wh]-\d+$/.test(r.selector)).map((r) => r.selector.slice(1)).sort();
+    expect(declared).toEqual(used);
+    for (const name of used) {
+      const [, axis, size] = /^sk-([wh])-(\d+)$/.exec(name)!;
+      expect(only(`.${name}`).body, `"${name}"`).toMatch(axis === "w" ? new RegExp(`^\\s*width:\\s*${size}ch;\\s*$`) : new RegExp(`^\\s*height:\\s*${size}px;\\s*$`));
+    }
+  });
+
+  // The hover fill was 1.17:1 on the navy and could vanish over a remote desktop's colour depth; the active fill is the next step up the same
+  // ramp (about 1.3:1): quiet, but there. Still one token, never a colour of its own.
+  it("the placeholders on the navy are the sidebar's active colour (one step above the hover fill) and do not shine (a hand-over would restart the sweep)", () => {
+    expect(tok("side-bg-active")).not.toBe(tok("side-bg"));
+    expect(tok("side-bg-active")).not.toBe(tok("side-bg-hover"));
+    expect(tok("side-bg-active")).not.toBe(tok("top-bg"));
+    expect(contrast(tok("side-bg-active"), tok("side-bg"))).toBeGreaterThan(contrast(tok("side-bg-hover"), tok("side-bg")));
+    expect(contrast(tok("side-bg-active"), tok("top-bg"))).toBeGreaterThan(contrast(tok("side-bg-hover"), tok("top-bg")));
+    expect(only(".sk-shell .navbar .sk, .sk-shell .side .sk").body).toMatch(/background:\s*var\(--side-bg-active\)/);
+    expect(only(".sk-shell .navbar .sk::after, .sk-shell .side .sk::after").body).toMatch(/display:\s*none/);
+  });
+
+  it("the find box has the real field's size, border and ground, drawn after the navy placeholder rule so it wins", () => {
+    const find = only(".sk-shell .navbar .sk-find");
+    expect(find.body).toMatch(/height:\s*34px/);
+    expect(find.body).toMatch(/border:\s*1px solid var\(--top-find-border\)/);
+    expect(find.body).toMatch(/background:\s*var\(--top-find-bg\)/);
+    expect(find.body).toMatch(/border-radius:\s*var\(--radius\)/);
+    expect(find.order).toBeGreaterThan(only(".sk-shell .navbar .sk, .sk-shell .side .sk").order);
+  });
+
+  it("a placeholder row takes no pointer and shows no hover colour", () => {
+    expect(only(".sk-shell .side-row").body).toMatch(/pointer-events:\s*none/);
+    expect(only(".sk-shell .side-row").body).toMatch(/cursor:\s*default/);
+  });
+
+  // The bar's right side is empty (the real chip, clock and user block are as wide as their content, so no placeholder width fits every
+  // account): the rules that drew a chip, a caret and an avatar are gone, and so is the user block's pointer rule.
+  it("has no rule left for a chip, a caret, an avatar or the user block", () => {
+    expect(rules.filter((r) => /\.sk-(chip|caret|avatar)(?![\w-])|\.sk-shell\s+\.who(?![\w-])/.test(r.selector))).toEqual([]);
+  });
+
+  it("draws the brand name in CSS, so the markup holds no word of it", () => {
+    expect(only(".sk-shell .brand .lbl::before").body).toMatch(/content:\s*"DC Dashboard"/);
+    expect(markup).not.toContain("DC Dashboard");
+  });
+
+  // The static copy in index.html is `hidden`; the stylesheet shows it (an author `display` beats the UA's [hidden]) and hides it again where
+  // theme-init.js left <html> without data-shell (the sign-in and setup pages). Every rule below is scoped to `.sk-shell[hidden]`, which
+  // React's skeleton never carries, so the two can never disagree on screen.
+  describe("the static copy", () => {
+    const decls = (body: string) => body.split(";").map((d) => d.trim().replace(/\s+/g, " ")).filter(Boolean).sort();
+    const MIN = '.shell[data-sidebar="minimized"]';
+    const TWIN = ':root[data-shell="minimized"] .sk-shell[hidden]';
+
+    it("is shown by the shell's own display and hidden again where <html> has no data-shell", () => {
+      expect(rules.find((r) => r.selector === ".shell")!.body).toMatch(/display:\s*flex/);
+      const hide = only(":root:not([data-shell]) .sk-shell[hidden]");
+      expect(hide.body).toMatch(/^\s*display:\s*none;?\s*$/);
+      expect(inLayer(hide)).toBe(true);
+    });
+
+    // The minimized state is `.shell[data-sidebar="minimized"] <rest>`. The static copy is always data-sidebar="expanded" and takes its
+    // state from <html data-shell> instead, so each of those rules the skeleton's classes use has a twin with the same declarations.
+    // Not used by the skeleton: the current-page marker and the collapse button.
+    const unused = /aria-current|\.side-toggle/;
+    const sources = rules.filter((r) => r.selector.split(", ").every((part) => part.startsWith(MIN)) && !unused.test(r.selector));
+    const twinOf = (selector: string) => selector.split(", ").map((part) => TWIN + part.slice(MIN.length)).join(", ");
+
+    it("the skeleton uses none of what the twins leave out", () => {
+      expect(markup).not.toContain("aria-current");
+      expect(markup).not.toContain("side-toggle");
+    });
+
+    // If the app's script never runs (a blocked or missing chunk, a stale cached page) the copy would stay for ever and read as a slow load.
+    // The hint is CSS content of the copy's main, scoped to `[hidden]` (React's skeleton has none, so it can never show it), invisible for
+    // 15 s: an animation delay with `both` holds the first keyframe through the delay. Reduced motion keeps it: a delay is not motion.
+    it("says after 15 s that the page is still loading, in CSS content of the static copy's main only", () => {
+      const hint = only(".sk-shell[hidden] main::after");
+      expect(inLayer(hint)).toBe(true);
+      expect(hint.body).toMatch(/content:\s*"Still loading\. If this stays, reload the page\."/);
+      expect(hint.body).toMatch(/display:\s*block/);
+      expect(hint.body).toMatch(/padding-top:\s*var\(--gutter\)/);
+      expect(hint.body).toMatch(/color:\s*var\(--text-2\)/);
+      expect(hint.body).toMatch(/font-size:\s*var\(--fs-sm\)/);
+      expect(hint.body).toMatch(/opacity:\s*0\s*;/);
+      expect(hint.body).toMatch(/animation:\s*sk-hint-in\s+200ms\s+linear\s+15s\s+both\s*;?\s*$/);
+      expect(hint.body).not.toMatch(/var\(--accent|var\(--ring/);
+      const frames = rules.filter((r) => r.at.some((a) => a === "@keyframes sk-hint-in"));
+      expect(frames.map((r) => r.selector).sort()).toEqual(["from", "to"]);
+      expect(frames.find((r) => r.selector === "from")!.body).toMatch(/opacity:\s*0/);
+      expect(frames.find((r) => r.selector === "to")!.body).toMatch(/opacity:\s*1/);
+      for (const frame of frames) expect(inLayer(frame), "keyframe in the layer").toBe(true);
+    });
+
+    it("the hint is not in the DOM (the markup holds no sentence) and no other rule can show it", () => {
+      expect(markup).not.toContain("Still loading");
+      expect(readFileSync("index.html", "utf8")).not.toContain("Still loading");
+      expect(rules.filter((r) => r.selector.includes("::after") && r.selector.includes("main") && r.selector.includes("sk-shell")).map((r) => r.selector)).toEqual([".sk-shell[hidden] main::after"]);
+      const calm = rules.filter((r) => r.at.some((a) => a.includes("prefers-reduced-motion")) && r.selector.includes("sk-shell"));
+      expect(calm, "reduced motion keeps the delay").toEqual([]);
+    });
+
+    // The twin guard below only sees rules whose every selector part starts with MIN, in app.css. A minimized rule written any other way
+    // (`[data-sidebar="minimized"] .side`, a part of a list that does not start with MIN) or put in another stylesheet would escape it.
+    it("every selector that names data-sidebar starts with the form the twin guard reads", () => {
+      const named = rules.filter((r) => r.selector.includes("data-sidebar"));
+      expect(named.length, "rules that name data-sidebar").toBeGreaterThanOrEqual(7);
+      expect(named.filter((r) => !r.selector.split(", ").every((part) => part.startsWith(MIN))).map((r) => r.selector)).toEqual([]);
+    });
+
+    it("no other stylesheet under src names data-sidebar (a minimized rule there would have no twin)", () => {
+      const sheets: string[] = [];
+      const walk = (dir: string) => {
+        for (const name of readdirSync(dir)) {
+          const path = `${dir}/${name}`;
+          if (statSync(path).isDirectory()) walk(path);
+          else if (name.endsWith(".css")) sheets.push(path);
+        }
+      };
+      walk("src");
+      expect(sheets, "the walk finds the stylesheets").toEqual(expect.arrayContaining(["src/app.css", "src/themes.css"]));
+      const naming = sheets.filter((path) => path !== "src/app.css" && stripComments(readFileSync(path, "utf8")).includes("data-sidebar"));
+      expect(naming).toEqual([]);
+    });
+
+    it("every minimized rule the skeleton uses has a twin with the same declarations", () => {
+      expect(sources.length, "the minimized rules").toBeGreaterThanOrEqual(7); // --side-w, the three hides, .brand, .nav-groups, .nav-group + .nav-group, .side-row, .side-foot
+      for (const source of sources) {
+        const twin = twinOf(source.selector);
+        expect(inLayer(source), `"${source.selector}" sits in the layer`).toBe(true);
+        const found = rules.filter((r) => r.selector === twin);
+        expect(found, `a twin "${twin}"`).toHaveLength(1);
+        expect(decls(found[0].body), `declarations of "${twin}"`).toEqual(decls(source.body));
+        expect(inLayer(found[0])).toBe(true);
+        expect(found[0].order, `"${twin}" after its source`).toBeGreaterThan(source.order);
+      }
+    });
+
+    it("and there is no twin without a source", () => {
+      const twins = rules.filter((r) => r.selector.startsWith(TWIN)).map((r) => r.selector).sort();
+      expect(twins).toEqual(sources.map((r) => twinOf(r.selector)).sort());
+    });
   });
 });

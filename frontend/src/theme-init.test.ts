@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { MIRROR_KEY } from "./lib/appearance";
+import { NARROW_QUERY, SIDEBAR_KEY } from "./lib/sidebarState";
 
 // The first-paint script is an external file (the CSP is script-src 'self'), so the test runs its source text against stubs.
 const source = readFileSync("public/theme-init.js", "utf8"); // vitest runs from the frontend directory
@@ -7,14 +8,18 @@ const html = readFileSync("index.html", "utf8");
 
 type Setup = {
   stored?: string | null; // what localStorage answers for the mirror key
+  sidebar?: string | null; // what localStorage answers for the sidebar key
+  path?: string; // window.location.pathname; undefined = the page has no location
+  locationThrows?: boolean;
   storageThrows?: boolean; // reading window.localStorage throws, as it does when storage is blocked
   getItemThrows?: boolean;
-  matches?: boolean; // the answer of matchMedia; undefined = the browser has none
+  matches?: boolean; // the answer of matchMedia for the dark query; undefined = the browser has none
+  narrow?: boolean; // the answer of matchMedia for the narrow-window query
   matchMediaThrows?: boolean;
   setAttributeThrows?: boolean;
 };
 
-function run({ stored = null, storageThrows, getItemThrows, matches, matchMediaThrows, setAttributeThrows }: Setup = {}) {
+function run({ stored = null, sidebar = null, path, locationThrows, storageThrows, getItemThrows, matches, narrow, matchMediaThrows, setAttributeThrows }: Setup = {}) {
   const attributes: Record<string, string> = {};
   const queries: string[] = [];
   const keys: string[] = [];
@@ -34,17 +39,22 @@ function run({ stored = null, storageThrows, getItemThrows, matches, matchMediaT
         getItem(key: string) {
           keys.push(key);
           if (getItemThrows) throw new Error("blocked");
-          return stored;
+          return key === SIDEBAR_KEY ? sidebar : stored;
         },
       };
     },
   });
-  if (matches !== undefined || matchMediaThrows) {
+  if (matches !== undefined || narrow !== undefined || matchMediaThrows) {
     win.matchMedia = (query: string) => {
       queries.push(query);
       if (matchMediaThrows) throw new Error("nope");
-      return { matches };
+      return { matches: query === NARROW_QUERY ? narrow : matches };
     };
+  }
+  if (locationThrows) {
+    Object.defineProperty(win, "location", { get() { throw new Error("no location"); } });
+  } else if (path !== undefined) {
+    win.location = { pathname: path };
   }
   new Function("window", "document", source)(win, doc);
   return { attributes, queries, keys };
@@ -113,6 +123,83 @@ describe("theme-init.js", () => {
     expect(source).not.toContain("=>");
     expect(source).not.toContain("`");
     expect(source).not.toMatch(/\b(import|export|async|await)\b/);
+  });
+});
+
+// The static shell in index.html (W7h) is shown only under <html data-shell>; the script decides from the path and mirrors
+// initialSidebar() (src/lib/sidebarState.ts). It reads window.location only, and tests the path before any storage or matchMedia call.
+describe("theme-init.js: data-shell", () => {
+  const withShell = (shell: string) => ({ "data-mode": "light", "data-theme": "navy-gold", "data-shell": shell });
+  const defaults = { "data-mode": "light", "data-theme": "navy-gold" };
+
+  it("is expanded on the app's pages", () => {
+    for (const path of ["/", "/assets", "/assets/3", "/users", "/loginx", "/settings/setup"]) {
+      expect(run({ path }).attributes, path).toEqual(withShell("expanded"));
+    }
+  });
+
+  it("is not set on the sign-in and setup pages, whatever the case or the trailing path (the router matches case-insensitively)", () => {
+    for (const path of ["/login", "/login/", "/Login", "/LOGIN/", "/setup", "/setup/x", "/Setup"]) {
+      expect(run({ path, sidebar: "minimized", narrow: true }).attributes, path).toEqual(defaults);
+    }
+  });
+
+  it("tests the path before it reads storage or asks matchMedia, so those pages cost nothing", () => {
+    const login = run({ path: "/login", matches: false, narrow: true });
+    expect(login.keys).toEqual([MIRROR_KEY]);
+    expect(login.queries).toEqual([]);
+  });
+
+  it("is minimized when the remembered state is, expanded for any other stored value", () => {
+    expect(run({ path: "/", sidebar: "minimized" }).attributes).toEqual(withShell("minimized"));
+    expect(run({ path: "/", sidebar: "expanded" }).attributes).toEqual(withShell("expanded"));
+    expect(run({ path: "/", sidebar: "Minimized" }).attributes).toEqual(withShell("expanded"));
+    expect(run({ path: "/", sidebar: null }).attributes).toEqual(withShell("expanded"));
+  });
+
+  it("is minimized in a narrow window whatever is stored, and expanded in a wide one that has no memory", () => {
+    const narrow = run({ path: "/", narrow: true, sidebar: "expanded" });
+    expect(narrow.attributes).toEqual(withShell("minimized"));
+    expect(narrow.queries).toEqual([NARROW_QUERY]);
+    expect(run({ path: "/", narrow: false }).attributes).toEqual(withShell("expanded"));
+    expect(run({ path: "/", narrow: false, sidebar: "minimized" }).attributes).toEqual(withShell("minimized"));
+  });
+
+  it("leaves the appearance alone, and the appearance leaves it alone", () => {
+    expect(run({ path: "/", stored: pair("dark", "maroon-gold"), sidebar: "minimized" }).attributes).toEqual({
+      "data-mode": "dark",
+      "data-theme": "maroon-gold",
+      "data-shell": "minimized",
+    });
+    expect(run({ path: "/", stored: "{oops", sidebar: "minimized" }).attributes).toEqual(withShell("minimized"));
+  });
+
+  it("reads the same key and asks the same question as the app (sidebarState.ts)", () => {
+    expect(/var SIDEBAR_KEY = "([^"]+)"/.exec(source)?.[1]).toBe(SIDEBAR_KEY);
+    expect(/var NARROW_QUERY = "([^"]+)"/.exec(source)?.[1]).toBe(NARROW_QUERY);
+    expect(run({ path: "/", sidebar: "minimized" }).keys).toEqual([MIRROR_KEY, SIDEBAR_KEY]);
+  });
+
+  it("falls back to the remembered state where matchMedia is missing or throws", () => {
+    expect(run({ path: "/", sidebar: "minimized" }).attributes).toEqual(withShell("minimized")); // no matchMedia at all
+    expect(run({ path: "/", sidebar: "minimized", matchMediaThrows: true }).attributes).toEqual(withShell("minimized"));
+    expect(run({ path: "/", matchMediaThrows: true }).attributes).toEqual(withShell("expanded"));
+  });
+
+  it("is expanded where storage is blocked, and the appearance defaults stay right", () => {
+    expect(run({ path: "/", storageThrows: true }).attributes).toEqual(withShell("expanded"));
+    expect(run({ path: "/", getItemThrows: true }).attributes).toEqual(withShell("expanded"));
+    expect(run({ path: "/", getItemThrows: true, narrow: true }).attributes).toEqual(withShell("minimized"));
+  });
+
+  it("sets nothing, and throws nothing, where the page has no location", () => {
+    expect(run({ sidebar: "minimized" }).attributes).toEqual(defaults);
+    expect(run({ locationThrows: true, stored: pair("dark", "graphite") }).attributes).toEqual({ "data-mode": "dark", "data-theme": "graphite" });
+  });
+
+  it("never throws, not even when <html> refuses the attributes", () => {
+    expect(() => run({ path: "/", sidebar: "minimized", setAttributeThrows: true })).not.toThrow();
+    expect(() => run({ path: "/", storageThrows: true, matchMediaThrows: true, setAttributeThrows: true })).not.toThrow();
   });
 });
 
