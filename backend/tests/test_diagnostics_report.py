@@ -208,7 +208,8 @@ def test_the_kernel_version_is_not_printed_because_it_looks_like_an_address():
 
 
 def test_every_registered_connector_field_is_shown_or_explicitly_excluded_and_nothing_else_is_listed():
-    types = connector_types()
+    # Built-in connectors only: other test files register throwaway connectors (test_connector_base.py's "echo-test").
+    types = {name: cls for name, cls in connector_types().items() if cls.__module__.startswith("dcdash.")}
     assert set(types) <= set(report.REPORT_CONFIG_FIELDS), "a new connector type needs an entry in REPORT_CONFIG_FIELDS"
     for name, connector in types.items():
         schema = set(connector.config_schema.model_fields)
