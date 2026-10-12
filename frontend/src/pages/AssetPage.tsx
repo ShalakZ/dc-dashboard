@@ -46,7 +46,7 @@ function AssetView({ id }: { id: number }) {
   const rollup = sources.length > 0 ? rollupPower(sources, live) : null;
   const note = rollup && rollupNote(rollup, sources);
   const chip = wanted.size > 0 ? <span className={connected ? "chip chip-ok" : "chip chip-warn"}>{connected ? "live" : "reconnecting…"}</span> : null;
-  const buttons = assetActions(workspace, id);
+  const buttons = assetActions(workspace, data.asset);
   // The ancestors come from the cached list. Until the list has the asset (just created, or not loaded) the trail is Assets / the asset, which the page always knows.
   const crumbs: Crumb[] = [
     { label: "Assets", to: "/assets" },
