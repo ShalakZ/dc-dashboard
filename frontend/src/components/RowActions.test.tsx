@@ -314,16 +314,35 @@ describe("RowActions: closing", () => {
     expect(after).toHaveFocus();
   });
 
-  it("a scroll anywhere outside the panel closes it, a scroll inside the panel does not", async () => {
-    const { trigger } = mount();
-    await userEvent.click(trigger);
-    fireEvent.scroll(menu()!);
-    expect(menu()).not.toBeNull();
-    fireEvent.scroll(document.querySelector(".table-wrap")!);
-    expect(menu()).toBeNull();
-    await userEvent.click(trigger);
-    fireEvent.scroll(window);
-    expect(menu()).toBeNull();
+  describe("scrolling", () => {
+    let clock = 10_000;
+    beforeEach(() => { clock = 10_000; vi.spyOn(performance, "now").mockImplementation(() => clock); });
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it("a scroll anywhere outside the panel closes it, a scroll inside the panel does not", async () => {
+      const { trigger } = mount();
+      await userEvent.click(trigger);
+      clock += 500;
+      fireEvent.scroll(menu()!);
+      expect(menu()).not.toBeNull();
+      fireEvent.scroll(document.querySelector(".table-wrap")!);
+      expect(menu()).toBeNull();
+      await userEvent.click(trigger);
+      clock += 500;
+      fireEvent.scroll(window);
+      expect(menu()).toBeNull();
+    });
+
+    it("a scroll that arrives right after it opened does not close it (a row scrolled into view, then clicked)", async () => {
+      const { trigger } = mount();
+      await userEvent.click(trigger);
+      clock += 120;
+      fireEvent.scroll(window);
+      expect(menu()).not.toBeNull();
+      clock += 400;
+      fireEvent.scroll(window);
+      expect(menu()).toBeNull();
+    });
   });
 
   it("a resize closes it", async () => {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 
 const DWELL_MS = 200; // a mouse has to rest (and have moved) over the trigger this long before hover opens it
 const LEAVE_MS = 150; // grace to cross the gap between the trigger and its panel
+const SETTLE_MS = 300; // a scroll that began before it opened (the row was scrolled into view, then clicked) must not close it: its event arrives late
 
 /** The popover that is open now. Opening another one closes it: a row menu and a tip never stand open side by side. */
 let current: { id: symbol; hide: () => void } | null = null;
@@ -40,6 +41,7 @@ export function usePopover({ hover = true, closeOnScroll = false }: { hover?: bo
   const now = useRef({ open: false, pinned: false, quiet: false }); // quiet: no hover-open until the pointer has left and come back
   const dwell = useRef<ReturnType<typeof setTimeout>>(undefined);
   const leave = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const openedAt = useRef(0);
 
   const clearTimers = useCallback(() => {
     clearTimeout(dwell.current);
@@ -58,6 +60,7 @@ export function usePopover({ hover = true, closeOnScroll = false }: { hover?: bo
     current = { id: me.current, hide };
     now.current.open = true;
     now.current.pinned = pinned;
+    openedAt.current = performance.now();
     setOpen(true);
   }, [clearTimers, hide]);
   const dismiss = useCallback(() => {
@@ -98,7 +101,10 @@ export function usePopover({ hover = true, closeOnScroll = false }: { hover?: bo
     };
     const onPointerDown = (event: PointerEvent) => { if (!inside(event.target)) hide(); };
     const onFocusIn = (event: FocusEvent) => { if (!inside(event.target)) hide(); };
-    const onScroll = (event: Event) => { if (!(event.target instanceof Node && panel.current?.contains(event.target))) hide(); };
+    const onScroll = (event: Event) => {
+      if (performance.now() - openedAt.current < SETTLE_MS) return;
+      if (!(event.target instanceof Node && panel.current?.contains(event.target))) hide();
+    };
     document.addEventListener("keydown", onKey);
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("focusin", onFocusIn);
