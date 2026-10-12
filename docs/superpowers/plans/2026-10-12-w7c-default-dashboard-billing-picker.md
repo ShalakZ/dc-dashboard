@@ -77,7 +77,7 @@
 
 **Tests (write first):** the Review Focus items 1 to 4: garbage table (parametrize, store the value through `set_setting` or SQL), missing dashboard, PUT happy path (GET shows it; audit row has before/after with names), set again (no second row), clear, 404, 422 table, role matrix (viewer GET 200, viewer/operator PUT 403, anonymous 401), delete default (setting cleared, audit `was_default`), delete other (setting kept, no `was_default` key), the two real races with two database connections (model them on the reviewer's `/tmp/w7c_review/t/test_w7c_scratch.py` if it still exists, and on the racing tests in `test_api_dashboards.py` with `wait_until_blocked`): PUT(X) vs DELETE(old default Y) leaves X as the default and X's audit row true; PUT(X) vs DELETE(X) leaves none and the PUT answers 404 or the delete clears, route order (`GET /api/dashboards/default` is 200 not 422; `GET /api/dashboards/{id}` unchanged), and a rename of the default keeps it default. `test_audit_coverage.py` and `test_audit_describers.py` must pass untouched. Run: `cd backend && uv run pytest tests/test_api_dashboard_default.py tests/test_api_dashboards.py tests/test_audit_coverage.py tests/test_audit_describers.py tests/test_credential_gate.py -q` and `cd frontend && npx vitest run src/lib/auditText.test.ts`.
 
-- [ ] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the commands above → Step 4: commit `feat(dashboards): admin-set default dashboard endpoints (W7c)`
+- [x] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the commands above → Step 4: commit `feat(dashboards): admin-set default dashboard endpoints (W7c)`
 
 ### Task 2: first month with energy data (O-8)
 
@@ -87,7 +87,7 @@
 
 **Tests (write first):** Review Focus item 7: no meters; meters without readings; data of a non-meter point earlier than the meters' (ignored); the boundary case in `Asia/Qatar` versus `UTC` (a bucket at `2026-08-31T22:00Z` is `2026-09` in Qatar and `2026-08` in UTC); the earliest of several meters wins; viewer allowed, anonymous 401. Run: `cd backend && uv run pytest tests/test_api_billing_months.py tests/test_api_billing.py tests/test_credential_gate.py -q`.
 
-- [ ] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the command above → Step 4: commit `feat(billing): first month with energy data for the month picker (W7c)`
+- [x] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the command above → Step 4: commit `feat(billing): first month with energy data for the month picker (W7c)`
 
 ---
 
@@ -101,7 +101,7 @@
 - `useDefaultDashboard()` (`GET /api/dashboards/default`), `usePutDefaultDashboard()` (`PUT`, `onSuccess`: `setQueryData(keys.defaultDashboard, result)` and `invalidate(keys.auditAll)` like the other audited mutations in this file), `useBillingMonths()` (`GET /api/billing/months`, `staleTime: 60_000`).
 - `useDeleteDashboard.onSuccess` also invalidates `keys.defaultDashboard`.
 
-- [ ] Step 1: edit, `npx vitest run src/api` and `npm run typecheck` → Step 2: commit `feat(api): default dashboard and billing months hooks (W7c)`
+- [x] Step 1: edit, `npx vitest run src/api` and `npm run typecheck` → Step 2: commit `feat(api): default dashboard and billing months hooks (W7c)`
 
 ### Task 4: default dashboard in the app (O-6)
 
@@ -114,13 +114,13 @@
 4. `DashboardsPage.tsx`: the default row shows a `Default` badge after the name link (outside the link). `.dashboards-table td.name` clips with `max-width: 0; overflow: hidden; text-overflow: ellipsis` (`pages-auth.css:24`), so make the cell content a flex row: the link `min-width: 0` with the ellipsis, the badge `flex: none`, and a long name must never push the badge out of view. `.dashboards-table td.act .trash-btn { margin-left: auto }` assumes one control: with a menu plus trash make the cell a right-aligned flex row like the `td.row-actions` pattern in `SourcesPage.tsx`. `.chip` carries a status dot, so add ONE small `.badge` rule instead of reusing it. The Actions cell: for an administrator a `RowActions label={`Actions for ${d.name}`}` with one item (`Make default` → `usePutDefaultDashboard().mutateAsync({ dashboard_id: d.id })`, or `Clear default` → `{ dashboard_id: null }` on the default row), then the existing trash. Operators keep the trash only (no menu); viewers have no Actions column, as today. Errors go through the page's `useAction` the same way delete errors do. The delete confirm text for the default dashboard adds " It is the default dashboard: nobody will land on it any more."
 5. Tests: ONE place for the shell mock: add `"GET /api/dashboards/default": { body: { dashboard_id: null } }` to `shellRoutes` in `test/fetchMock.ts` (App, Layout and Tariffs tests use it; `DashboardsPage.test.tsx` uses `authed()` and needs its own route, otherwise the unknown route answers 500 and the badge tests pass for the wrong reason); new cases for review items 5 and 6 (redirect with a default / without / error, the remembered page wins, the nav link target and `aria-current` on three paths, the minimized tooltip), and `DashboardsPage.test.tsx` for the badge, the menu items per role, the mutation body, an error. Run only the touched test files plus `npm run typecheck`.
 
-- [ ] Step 1: tests (red) → Step 2: implementation → Step 3: touched test files + typecheck → Step 4: commit `feat(dashboards): the default dashboard opens from the sidebar and after sign-in (W7c)`
+- [x] Step 1: tests (red) → Step 2: implementation → Step 3: touched test files + typecheck → Step 4: commit `feat(dashboards): the default dashboard opens from the sidebar and after sign-in (W7c)`
 
 ### Task 4b: an explicit sign-out forgets the page (O-6 landing)
 
 **Why (Opus plan review M5):** `SignOutDialog` runs `logout().then(() => navigate("/login"))`; `logout()` ends the session, `RequireAuth` re-renders with no user on the CURRENT page and writes that path under `RETURN_KEY` BEFORE the navigate happens, so the next sign-in goes back to the page signed out on and the default dashboard is reached only on a fresh tab. Removing the key in the dialog's `.then` does NOT work (that microtask runs before React renders the `user = null` update, and `RequireAuth` writes the old path back at render time). **Fix:** stop the write. `logout()` (the explicit sign-out) marks the sign-out as deliberate in AuthProvider (a ref or sessionStorage flag, reset by `login`); `RequireAuth` skips its `setItem(RETURN_KEY, …)` while the mark is set; a 401 (`endSession` from the unauthorized handler) does NOT set the mark, so an expired session still remembers its page. **Files:** `auth/AuthProvider.tsx`, `auth/RequireAuth.tsx`, their tests, `SignOutDialog.tsx` only if needed. **Tests:** render the REAL `RequireAuth` + `Layout` + `SignOutDialog` tree (a stubbed one passes with the broken version): sign out on `/billing`, sign in, land on `/` (then `/assets` or the default); the same with a 401 mid-session lands back on `/billing`; `RETURN_KEY` is empty after the explicit sign-out. Run `cd frontend && npx vitest run src/auth src/components/Layout.test.tsx src/pages/LoginPage.test.tsx` and `npm run typecheck`.
 
-- [ ] Step 1: tests (red) → Step 2: implementation → Step 3: commands above → Step 4: commit `fix(auth): an explicit sign-out forgets the page, so the next sign-in lands on the default (W7c)`
+- [x] Step 1: tests (red) → Step 2: implementation → Step 3: commands above → Step 4: commit `fix(auth): an explicit sign-out forgets the page, so the next sign-in lands on the default (W7c)`
 
 ### Task 5: Billing year and month picker (O-8)
 
@@ -128,7 +128,7 @@
 
 **Behaviour:** Pure helpers in `lib/billing.ts` (unit-tested): `yearsBetween(lowest, current)`, `monthsOfYear(year, lowest, current)` (numbers 1 to 12 inside the bounds), `clampMonth(month, lowest, current)`, `MONTH_NAMES`. In the page: `useBillingMonths()`; `selectLow = min(first_month ?? month, month, current)` and `selectHigh = max(month, current)` build the options (string compare of `YYYY-MM` is correct); the bar becomes Previous, the month label (stays: it is the live region and the e2e anchor), Next, and a `.billing-jump` group with `<label htmlFor={yearId}>Year</label><select id={yearId}>` and `<label htmlFor={monthId}>Month</label><select id={monthId}>` (siblings, ids from `useId`; a label that WRAPS a select has the option texts in its name, "Year20252026", which breaks `exact` lookups; month names, values `1…12`). Changing a select sets `picked` to the clamped month. Previous is disabled only when `first_month` is a string and `month <= first_month` (pending, failed and `null` leave it enabled, as today). The selects are disabled while `site` has no current month. The group wraps on narrow widths (no sideways scroll at 1024). Tests: Review Focus item 8, one page test for each of the three states (pending, failed, answered `null`: Previous enabled) and for answered-with-month (Previous disabled at it), plus the existing Billing tests green: `BillingPage.test.tsx` gets a default `GET /api/billing/months` route in its `routes()`, and its year-end test ("steps to the previous month and back, across a year end", `:200`) must also pass against a 500 answer of that route. Run the touched test files, `npm run typecheck`, `npm run build`.
 
-- [ ] Step 1: helper tests (red) → Step 2: helpers → Step 3: page tests and page → Step 4: commands above → Step 5: commit `feat(billing): year and month selects beside previous and next (W7c)`
+- [x] Step 1: helper tests (red) → Step 2: helpers → Step 3: page tests and page → Step 4: commands above → Step 5: commit `feat(billing): year and month selects beside previous and next (W7c)`
 
 ### Task 6: Playwright (written by an implementer, run by the controller)
 
@@ -137,14 +137,29 @@
 2. **Billing picker:** `/billing` shows `Year` and `Month` selects with the current values, Next disabled; with `page.route("**/api/billing/months", …)` answering `{"first_month":"2025-03"}` the Year select offers 2025 and the current year, register the route BEFORE a full `page.goto("/billing")` (the months query has `staleTime: 60_000`, a client-side navigation after an earlier Billing visit would use the cache and never hit the mock); choosing 2025 and then March shows the label "March 2025", Previous is disabled, and `page.waitForResponse` saw `/api/billing/costs?month=2025-03` (do NOT assert the "No energy data" empty state: metered assets give a table of muted zero cells titled "no data" for a month before the first reading, that state needs an asset with no meter anywhere); with the real endpoint (no mock) `first_month` is a string or `null` and the selects never offer a month after the current one.
 3. The name audit of Review Focus item 9; fix any spec whose locators now collide.
 
-- [ ] Step 1: spec + config → Step 2: e2e type-check prints nothing → Step 3: commit `test(e2e): default dashboard and Billing picker journeys (W7c)`
+- [x] Step 1: spec + config → Step 2: e2e type-check prints nothing → Step 3: commit `test(e2e): default dashboard and Billing picker journeys (W7c)`
 
 ---
 
 ## Part C: close-out (controller)
 
-- [ ] Task 7: full frontend suite, typecheck, build; full backend suite (once, detached); `vis-rebuild.sh` (isolated Playwright) at the final code commit; gallery at 1440 (and 1024 for Billing and the sidebar) into `.superpowers/sdd/overnight-w7/gallery/W7c/`; ONE whole-wave Opus review that looks at the pages in a real browser and uses the keyboard; one fix wave and one scoped re-review; docs close-out (roadmap status, backlog section V, manual-test notes if any, this plan's execution log and ticked boxes); merge gate and merge exactly as RESUME.md says; markers and MORNING.md.
+- [x] Task 7: full frontend suite, typecheck, build; full backend suite (once, detached); `vis-rebuild.sh` (isolated Playwright) at the final code commit; gallery at 1440 (and 1024 for Billing and the sidebar) into `.superpowers/sdd/overnight-w7/gallery/W7c/`; ONE whole-wave Opus review that looks at the pages in a real browser and uses the keyboard; one fix wave and one scoped re-review; docs close-out (roadmap status, backlog section V, manual-test notes if any, this plan's execution log and ticked boxes); merge gate and merge exactly as RESUME.md says; markers and MORNING.md.
 
 ## Execution log
 
-(filled in by the controller while the wave runs)
+Built 2026-10-12 by the unattended W7c run (controller on Sonnet 5.5, implementers on Sonnet, reviews on Opus). Ledger: `.superpowers/sdd/2026-10-12-w7c-default-dashboard-billing-picker/progress.md`.
+
+| Task | Commit | Notes |
+|---|---|---|
+| plan + review fold | 1c77516, 049f1a6 | Opus plan review: 0 Blocker / 5 Major / 11 Minor, all folded in (the conditional clear on delete, the int32 bound, the Previous rule, sign-out forgets the page, the e2e empty state) |
+| T1 default dashboard API | 184b2b5 | `GET`/`PUT /api/dashboards/default`, delete clears it, `dashboard.default_changed`; two real two-connection race tests; scoped Opus review 0 Critical / 0 Important / 4 Minor (parked, backlog V) |
+| T2 billing months | a7a1853 | `GET /api/billing/months`, 7 tests |
+| T3 API layer | fa5afc3 | hooks and types (controller) |
+| T4 default dashboard in the app | fd286a4 | `/` redirect, sidebar link + `aria-current`, list badge and `Make default` / `Clear default` |
+| T4b sign-out forgets the page | 363ab9c, 190b03a | the mark ends when the sign-in page shows (controller follow-up, mutation checked) |
+| T5 Billing picker | bcdfcd0 | Year and Month selects, `selectLow`/`selectHigh`, Previous only disabled by a real first month |
+| T6 Playwright | 60fe7d1 | `w7c.spec.ts`, project `w7c` |
+| fix wave F1 | d0181bd, e33d784, 3446d12, 0187553 | whole-wave review (0 Critical / 1 Important / 3 Minor): open pages refetch the default (focus, 60 s, a 404 invalidates it); the sign-out mark is set before the POST; the Year/Month group lines up when it wraps; the e2e lost-session step waits for the poll's 401 (the first rewrite raced it and timed out once) |
+| docs | 296b084, 46f2952 | README; a comment-only fix from the scoped re-review (0 Critical / 0 Important / 1 Minor) |
+
+Gates at 46f2952: frontend 109 files / 2185 tests, `npm run typecheck`, `npm run build` clean; Playwright in the isolated project `dcdash_e2e_w7c_vis` **34 passed, 0 failed** (the 32 earlier specs + 2 new); backend full run 3243 passed, 1 failed (`test_scripts_diagnostics.py::test_report_has_every_section_and_the_stdout_carries_the_same_checksum`: this machine's Windows Time service is stopped, the script and the test are untouched by W7c; see backlog V). Leftovers: backlog section V.
