@@ -25,4 +25,5 @@
   .dashboards-table td.name a { font-weight: 600; }
   .dashboards-table td.when { white-space: nowrap; color: var(--text-2); }
   .dashboards-table :is(th, td).act { width: 1%; text-align: right; white-space: nowrap; }
+  .dashboards-table td.act .trash-btn { margin-left: auto; } /* a block-level box: text-align does not move it to the column's right edge */
 }

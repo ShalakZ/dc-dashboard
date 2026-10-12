@@ -413,7 +413,7 @@ describe("AssetsPage", () => {
       it("a viewer sees no Edit, Delete or Add asset on an asset's page, and no + in the tree", async () => {
         await show("viewer", "/assets/2");
         await screen.findByRole("heading", { name: "Room A", level: 1 });
-        for (const name of ["Edit", "Delete", "Add asset", "Add a top-level asset"]) expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+        for (const name of ["Edit", "Delete Room A", "Add asset", "Add a top-level asset"]) expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: /Add child of/ })).not.toBeInTheDocument();
       });
 
@@ -426,13 +426,14 @@ describe("AssetsPage", () => {
         expect(screen.getAllByRole("link", { name: "Room A" })).toHaveLength(1);
       });
 
-      it("an asset with points puts the live chip first in the header's actions, then the admin's Edit, Delete and Add asset", async () => {
+      it("an asset with points puts the live chip first in the header's actions, then the admin's Edit, the Delete trash button and Add asset", async () => {
         const point = { mapping_id: 1, point_id: 7, metric: "active_power_kw", unit: "kW", value: 10.5, ts: "2026-10-07T10:00:00+00:00", quality: 0 };
         mockFetch({ ...authed("admin", deep), "GET /api/assets/2/summary": { body: summaryOf(deep[1], [point]) } });
         renderWorkspace("/assets/2");
         const head = (await screen.findByRole("heading", { name: "Room A", level: 1 })).closest("header")!;
         const actions = head.querySelector(".actions")!;
-        expect([...actions.children].map((c) => c.textContent)).toEqual(["reconnecting…", "Edit", "Delete", "Add asset"]);
+        // the trash button is an icon: its name is the aria-label, not text
+        expect([...actions.children].map((c) => c.textContent || c.getAttribute("aria-label"))).toEqual(["reconnecting…", "Edit", "Delete Room A", "Add asset"]);
         expect(actions.children[0]).toHaveClass("chip");
       });
     });
@@ -527,8 +528,8 @@ describe("AssetsPage", () => {
 
     it("deletes a plain asset as before: one request, no dialog, and the page lands on /assets", async () => {
       const { calls, urls } = setup(false);
-      await click("Delete");
-      await waitFor(() => expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument());
+      await click("Delete Room A");
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Delete Room A" })).not.toBeInTheDocument());
       expect(urls).toEqual(["/api/assets/2"]);
       expect(deletes(calls)).toBe(1);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -542,7 +543,7 @@ describe("AssetsPage", () => {
       async (_case, needsConfirm) => {
         const { calls } = setup(needsConfirm, undefined, true);
         await waitFor(() => expect(cacheCounts(calls)).toEqual({ billing: 1, widgetData: 1, tariffs: 1, fleet: 1 }));
-        await click("Delete");
+        await click("Delete Room A");
         if (needsConfirm) await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
         // The fleet summary is fetched three times: at the start, again when the summary page mounts after the redirect to /assets (its entry is stale), and once more by the invalidation.
         await waitFor(() => expect(cacheCounts(calls)).toEqual({ billing: 2, widgetData: 2, tariffs: 2, fleet: 3 }));
@@ -552,14 +553,14 @@ describe("AssetsPage", () => {
     it("sends nothing when the first confirmation is declined", async () => {
       vi.spyOn(window, "confirm").mockReturnValue(false);
       const { calls } = setup(true);
-      await click("Delete");
+      await click("Delete Room A");
       expect(deletes(calls)).toBe(0);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
     it("shows what will be lost when the API asks for confirmation", async () => {
       setup(true);
-      await click("Delete");
+      await click("Delete Room A");
       const dialog = await screen.findByRole("dialog", { name: 'Delete "Room A"?' });
       expect(dialog).toHaveTextContent(
         "2 assets, 3 mappings and 1 tariff will be deleted; their past energy and cost figures disappear from Billing and dashboards.",
@@ -570,7 +571,7 @@ describe("AssetsPage", () => {
 
     it("Cancel closes the dialog and deletes nothing", async () => {
       const { calls, urls } = setup(true);
-      await click("Delete");
+      await click("Delete Room A");
       await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(urls).toEqual(["/api/assets/2"]); // only the first, refused request
@@ -583,7 +584,7 @@ describe("AssetsPage", () => {
 
     it("Delete anyway repeats the request with confirm=true, then closes, refreshes the tree and lands on /assets", async () => {
       const { urls } = setup(true);
-      await click("Delete");
+      await click("Delete Room A");
       await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(urls).toEqual(["/api/assets/2", "/api/assets/2?confirm=true"]);
@@ -594,7 +595,7 @@ describe("AssetsPage", () => {
 
     it("keeps the dialog open and says why when the confirmed request fails", async () => {
       setup(true, { status: 403, body: { detail: "admin role required" } });
-      await click("Delete");
+      await click("Delete Room A");
       await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
       const dialog = await screen.findByRole("dialog");
       expect(await within(dialog).findByRole("alert")).toHaveTextContent("admin role required");
@@ -604,7 +605,7 @@ describe("AssetsPage", () => {
     it("shows any other 409 as a plain alert above the page, not as a confirmation", async () => {
       mockFetch({ ...authed("admin"), "DELETE /api/assets/2": { status: 409, body: { detail: "something else" } } });
       renderWorkspace("/assets/2");
-      await click("Delete");
+      await click("Delete Room A");
       expect(await screen.findByRole("alert")).toHaveTextContent("something else");
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(where()).toBe("/assets/2");
@@ -662,11 +663,11 @@ describe("AssetsPage", () => {
 
       it("keeps Add asset, Edit, Delete and every + from opening a second dialog while it runs, and the confirm dialog ends up alone", async () => {
         const hold = startDelete();
-        await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+        await userEvent.click(await screen.findByRole("button", { name: "Delete Room A" }));
         const add = screen.getByRole("button", { name: "Add asset" });
         expect(add).toBeDisabled();
         expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
-        expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Delete Room A" })).toBeDisabled();
         expect(screen.getByRole("button", { name: "Add child of Site" })).toBeDisabled();
         expect(screen.getByRole("button", { name: "Add child of Room A" })).toBeDisabled();
         await userEvent.click(add);
@@ -680,7 +681,7 @@ describe("AssetsPage", () => {
 
       it("keeps them from opening a dialog next to the confirm dialog", async () => {
         const hold = startDelete();
-        await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+        await userEvent.click(await screen.findByRole("button", { name: "Delete Room A" }));
         hold.release();
         await screen.findByRole("dialog", { name: 'Delete "Room A"?' });
         for (const name of ["Add asset", "Edit", "Add child of Site"]) {
@@ -706,14 +707,14 @@ describe("AssetsPage header", () => {
   };
   const header = (title = "Assets") => screen.getByRole("heading", { name: title, level: 1 }).closest("header")!;
 
-  it("puts an admin's buttons in the asset page's header, with Add asset as the page's only primary and Delete quiet", async () => {
+  it("puts an admin's buttons in the asset page's header, with Add asset as the page's only primary and Delete a trash button named for the asset", async () => {
     await show("admin", "/assets/2", assets, "Room A");
-    for (const name of ["Add asset", "Edit", "Delete"]) expect(header("Room A")).toContainElement(screen.getByRole("button", { name }));
+    for (const name of ["Add asset", "Edit", "Delete Room A"]) expect(header("Room A")).toContainElement(screen.getByRole("button", { name }));
     expect(document.querySelectorAll("button.primary")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Add asset" })).toHaveClass("primary");
-    expect(screen.getByRole("button", { name: "Delete" })).toHaveClass("danger-quiet");
+    expect(screen.getByRole("button", { name: "Delete Room A" })).toHaveClass("trash-btn");
     expect(screen.getByRole("button", { name: "Edit" })).not.toHaveClass("primary");
-    for (const name of ["Add asset", "Edit", "Delete"]) expect(screen.getByRole("button", { name })).toHaveAttribute("type", "button");
+    for (const name of ["Add asset", "Edit", "Delete Room A"]) expect(screen.getByRole("button", { name })).toHaveAttribute("type", "button");
   });
 
   it("nothing selected: the admin has Add asset only in the header, as the page's only primary", async () => {

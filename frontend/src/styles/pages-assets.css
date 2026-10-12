@@ -7,7 +7,7 @@
      An asset's header has crumbs and keeps the standard page header. */
   .assets-detail .page-head:not(:has(.crumbs)) { align-items: center; min-height: 52px; margin-bottom: 22px; padding: 0; }
   .assets-detail .page-head:not(:has(.crumbs)) > .actions { grid-row: 1; align-self: center; } /* no crumbs or sub line, so the actions take the one row */
-  .assets-detail .page-head .actions .danger-quiet { min-height: 34px; } /* as tall as the buttons beside it */
+  .assets-detail .page-head .actions .trash-btn { width: 34px; height: 34px; } /* as tall as the buttons beside it */
   .assets-detail .empty { margin-top: 4px; }
   .assets-detail .empty .empty-title { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
 
