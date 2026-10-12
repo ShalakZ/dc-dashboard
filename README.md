@@ -1123,8 +1123,10 @@ is open. The code to go back to is `ee1e985` (`main` before W7d).
 W7d (appearance) adds migration `0007`: one new column, `users.preferences`, a JSON object that holds each account's Mode (Light,
 Dark or Match my device) and Theme colour (Navy and gold, Maroon and gold, Graphite or Desert gold). It runs in a moment and needs no
 pre-check. Every existing account starts on Light and Navy and gold; each person changes it in the profile panel (the name block in the
-top bar, section Mode and Theme colour) and it follows them to any browser. The `api` container applies the migration the first time it
-starts from the new image.
+top bar, section Mode and Theme colour) and it follows them to any browser. The default look changes slightly for everyone: the navy
+panels now carry gold markers (the selected item, the focus ring, the avatar) instead of light blue. The first page load after changing
+the look on another computer, or after another person used this browser, shows the previous look for a moment, until the page has asked
+the server. The `api` container applies the migration the first time it starts from the new image.
 
 1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0006`).
 2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
