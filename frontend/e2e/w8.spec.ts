@@ -163,7 +163,7 @@ test.describe("W8: field diagnostics", () => {
     await signIn(page, ADMIN);
     await page.goto("/diagnostics");
     const card = page.locator(".form-card").filter({ has: page.getByRole("heading", { name: "Connection check", exact: true }) });
-    await card.getByLabel("Source", { exact: true }).selectOption({ label: "sim" });
+    await card.getByRole("combobox").selectOption({ label: "sim" }); // the label wraps the select, so its name includes the options
     await card.getByRole("button", { name: "Run connection check" }).click();
     await untilChecked(card);
     const steps = card.getByRole("list", { name: "Check steps" }).getByRole("listitem");
