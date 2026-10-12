@@ -2,8 +2,8 @@ import { render, screen } from "@testing-library/react";
 import { StrictMode, type ReactElement } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
 import {
-  ActionsSpace, AssetSkeleton, ChartBlock, FleetSkeleton, FormSkeleton, PageHeaderSkeleton, PageSkeleton, resetSkeletonClock, Skeleton, SkeletonRegion,
-  TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton,
+  ActionsSpace, AssetSkeleton, CanvasSkeleton, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageHeaderSkeleton, PageSkeleton,
+  resetSkeletonClock, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton,
 } from "./Skeleton";
 
 const FOCUSABLE = "button, a, input, select, textarea, [tabindex]";
@@ -443,6 +443,75 @@ describe("AssetSkeleton", () => {
     const table = region.querySelector(".table-wrap")!;
     expect(table.querySelectorAll("thead th")).toHaveLength(4);
     expect(table.querySelectorAll("tbody tr")).toHaveLength(3);
+  });
+});
+
+describe("DashboardSkeleton", () => {
+  beforeEach(resetSkeletonClock);
+
+  it("is one region that is the sk-dash wrapper, around bare aria-hidden bodies: the trail, the head row and four blocks", () => {
+    const { container } = render(<DashboardSkeleton label="Loading the dashboard" />);
+    const region = screen.getByRole("status");
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(container.firstElementChild).toBe(region);
+    expect(region).toHaveClass("sk-region", "sk-dash");
+    expect(container.textContent).toBe("Loading the dashboard");
+    expect(bodiesOf(region).map((body) => body.tagName + "." + body.className.split(" ")[0])).toEqual(["DIV.crumbs", "DIV.row", "DIV.sk-quad"]);
+    expect(container.querySelector(FOCUSABLE)).toBeNull();
+  });
+
+  it("has no page head, heading or navigation landmark, and none of the widget grid's classes (a spec's locator must not find the skeleton)", () => {
+    const { container } = render(<DashboardSkeleton label="Loading the dashboard" />);
+    expect(container.querySelector("header, h1, h2, nav, .page-head, .dash-grid, .dash-cell")).toBeNull();
+    expect(screen.queryAllByRole("heading")).toHaveLength(0);
+    expect(screen.queryByRole("navigation")).toBeNull();
+  });
+
+  it("draws the trail of the real page, Dashboards and the dashboard's name, as a .crumbs div with one separator", () => {
+    const { container } = render(<DashboardSkeleton label="Loading the dashboard" />);
+    const trail = container.querySelector(".crumbs")!;
+    expect(trail.tagName).toBe("DIV");
+    expect(trail.querySelectorAll("ol > li")).toHaveLength(2);
+    expect(trail.querySelectorAll("li .sep")).toHaveLength(1);
+  });
+
+  it("draws the head row as the real .row.dash-head: a title line, the spacer, the range label, the 142x38 select, and no Edit block unless canEdit", () => {
+    const { container } = render(<DashboardSkeleton label="Loading the dashboard" />);
+    const row = container.querySelector(".row.dash-head")!;
+    expect(row.querySelector(":scope > .sk-h1 .sk-line")).not.toBeNull();
+    expect(row.querySelector(":scope > .spacer")).not.toBeNull();
+    const blocks = [...row.querySelectorAll<HTMLElement>(":scope > .sk-block")];
+    expect(blocks.map((b) => [b.style.width, b.style.height])).toEqual([["142px", "38px"]]);
+  });
+
+  it("with canEdit adds the Edit button's block, 55x34, after the select", () => {
+    const { container } = render(<DashboardSkeleton label="Loading the dashboard" canEdit />);
+    const blocks = [...container.querySelectorAll<HTMLElement>(".dash-head > .sk-block")];
+    expect(blocks.map((b) => [b.style.width, b.style.height])).toEqual([["142px", "38px"], ["55px", "34px"]]);
+  });
+
+  it("ends in four 240px blocks in a two-column grid", () => {
+    const { container } = render(<DashboardSkeleton label="Loading the dashboard" />);
+    const blocks = [...container.querySelectorAll<HTMLElement>(".sk-quad > .sk-block")];
+    expect(blocks.map((b) => b.style.height)).toEqual(["240px", "240px", "240px", "240px"]);
+  });
+});
+
+describe("CanvasSkeleton", () => {
+  beforeEach(resetSkeletonClock);
+
+  it("is one region that IS the .graph-layout row, around one aria-hidden block that takes the row's height (auto, not the 38px default)", () => {
+    const { container } = render(<CanvasSkeleton label="Loading the graph" />);
+    const region = screen.getByRole("status");
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(container.firstElementChild).toBe(region);
+    expect(region).toHaveClass("sk-region", "graph-layout");
+    expect(container.textContent).toBe("Loading the graph");
+    const [block, ...rest] = bodiesOf(region);
+    expect(rest).toHaveLength(0);
+    expect(block).toHaveClass("sk-block");
+    expect((block as HTMLElement).style.height).toBe("auto");
+    expect(container.querySelector(FOCUSABLE)).toBeNull();
   });
 });
 

@@ -450,12 +450,17 @@
   .sk-field { display: grid; gap: 6px; font-size: var(--fs-sm); } /* a label line over a 38px field, as the real label is a grid */
   .sk-stack { display: grid; gap: 14px; } /* the rows of a form card, as .form-card form */
   .sk-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .sk-quad { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 8px; } /* the dashboard's widgets: the grid's 10px gap, under .dash-head's 8px */
+  .sk-dash > .crumbs { margin: 18px 0 4px; } /* as main > .crumbs: the region stands between main and the trail */
   .sk-h1 { font-size: var(--fs-title); line-height: 1.25; } /* a title's height, as .page-head h1 */
   .sk-sep::before { content: "/"; } /* the breadcrumb separator, drawn here so the skeleton holds no text */
   .sk-table, .sk-tree { overflow: hidden; } /* a skeleton never scrolls: a narrow window would otherwise grow a scroll bar the real table may not have */
   .sk-tree .node:hover { background: none; }
   @keyframes sk-in { from { opacity: 0; } to { opacity: 1; } }
   @keyframes sk-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  @media (max-width: 700px) {
+    .sk-quad { grid-template-columns: minmax(0, 1fr); } /* the real grid stacks its cells on a narrow window */
+  }
   @media (prefers-reduced-motion: reduce) {
     .sk::after { animation: none; display: none; }
   }

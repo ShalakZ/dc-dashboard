@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import type { GraphModel, GraphPoint } from "../api/types";
 import { mockFetch } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { DiscoveryPage } from "./DiscoveryPage";
 
@@ -496,6 +497,7 @@ describe("DiscoveryPage look (W6)", () => {
   it("has one h1 in a page header with the hint as its sub line and Refresh in its actions", async () => {
     mockFetch(routes("operator"));
     open();
+    await screen.findByText("Plant OPC"); // (the header is there while the graph loads; look at it once the graph is in)
     const title = await screen.findByRole("heading", { level: 1, name: "Discovery" });
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     const header = title.closest("header")!;
@@ -507,8 +509,56 @@ describe("DiscoveryPage look (W6)", () => {
   it("with nothing discovered, still has the page's h1 and shows the empty look with the link to Scans", async () => {
     mockFetch(routes("operator", { sources: [], unidentified: [], assets: [], layout: {} }));
     open();
-    expect(await screen.findByRole("heading", { level: 1, name: "Discovery" })).toBeInTheDocument();
+    expect(await screen.findByText(/Nothing discovered yet/)).toBeInTheDocument(); // (the header is there while the graph loads)
+    expect(screen.getByRole("heading", { level: 1, name: "Discovery" })).toBeInTheDocument();
     expect(screen.getByText(/Nothing discovered yet/).closest(".empty")).not.toBeNull();
     expect(screen.getByRole("link", { name: "run a scan" })).toHaveAttribute("href", "/scans");
+  });
+});
+
+describe("DiscoveryPage while the graph loads", () => {
+  const LABEL = "Loading the graph";
+  const openHeld = (over: Record<string, unknown> = {}) => {
+    mockFetch({ ...routes("operator"), ...over } as ReturnType<typeof routes>);
+    const held = holdFetch((_method, path) => path === "/api/discovery/graph");
+    open();
+    return held;
+  };
+
+  it("shows the page's own header and the canvas skeleton inside .graph-page with the graph held, then the graph and no region", async () => {
+    const page = openHeld();
+    const wrapper = document.querySelector(".graph-page")!; // (the shell's 100vh rules key on it)
+    expect(wrapper).not.toBeNull();
+    const title = screen.getByRole("heading", { level: 1, name: "Discovery" });
+    expect(wrapper.contains(title)).toBe(true);
+    expect(title.closest("header")).toHaveClass("page-head");
+    expect(screen.getByText(/Dashed nodes were discovered/)).toHaveClass("sub");
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument(); // a gap holds its place until the graph is in
+    const region = screen.getByText(LABEL).parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveClass("graph-layout");
+    expect(wrapper.contains(region)).toBe(true);
+    expect(screen.queryByTestId("flow")).not.toBeInTheDocument();
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    page.release();
+    expect(await screen.findByText("Plant OPC")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+    expect(document.querySelector(".graph-page")).not.toBeNull();
+  });
+
+  it("ends in the error, no region left, when the graph cannot be loaded", async () => {
+    mockFetch({ ...routes("operator"), "GET /api/discovery/graph": { status: 500, body: { detail: "graph failed" } } });
+    open();
+    expect(await screen.findByRole("alert")).toHaveTextContent("graph failed");
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("ends in the empty state, no region left, when nothing has been discovered", async () => {
+    mockFetch(routes("operator", { sources: [], unidentified: [], assets: [], layout: {} }));
+    open();
+    expect(await screen.findByText(/Nothing discovered yet/)).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
   });
 });

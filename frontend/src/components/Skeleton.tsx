@@ -180,6 +180,19 @@ export function TreeSkeleton({ label }: { label?: string }) {
   );
 }
 
+/** A breadcrumb trail of lines with the separators drawn by the stylesheet, as a div (the page's one Breadcrumb landmark is the real one). */
+function TrailSkeleton({ widths }: { widths: readonly string[] }) {
+  return (
+    <div className="crumbs" aria-hidden="true">
+      <ol>
+        {widths.map((width, i) => (
+          <li key={i}>{i > 0 ? <span className="sep sk-sep" /> : null}<Skeleton width={width} /></li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 /**
  * The header of a page whose title depends on data (an asset, an audit entry, a source's points); a static title uses the real PageHeader.
  * The parts the real header would have are opt-in: `crumbs` (a trail of three, as a div, not a nav landmark), `icon` (a 40px block beside
@@ -191,15 +204,7 @@ export function PageHeaderSkeleton({ crumbs, icon, sub, actions, label }: { crum
   return (
     <Labelled label={label}>
       <header className="page-head" aria-hidden="true">
-        {crumbs ? (
-          <div className="crumbs">
-            <ol>
-              <li><Skeleton width="6ch" /></li>
-              <li><span className="sep sk-sep" /><Skeleton width="10ch" /></li>
-              <li><span className="sep sk-sep" /><Skeleton width="12ch" /></li>
-            </ol>
-          </div>
-        ) : null}
+        {crumbs ? <TrailSkeleton widths={["6ch", "10ch", "12ch"]} /> : null}
         {icon ? <div className="page-title"><Skeleton variant="block" width={40} height={40} />{title}</div> : title}
         {sub ? <p className="sub"><Skeleton width="30ch" /></p> : null}
         {actions ? <div className="actions"><Skeleton variant="block" width={96} height={34} /></div> : null}
@@ -268,6 +273,42 @@ export function AssetSkeleton({ label }: { label: string }) {
       <TrendSkeleton />
       <h2 aria-hidden="true"><Skeleton width="8ch" /></h2>
       <TableSkeleton columns={4} rows={3} />
+    </SkeletonRegion>
+  );
+}
+
+/**
+ * The dashboard page, which has no `.page-head`: its top is the trail (Dashboards and the dashboard's name) and the `.row.dash-head` (the title,
+ * a spacer, the range label and its 142x38 select, and for someone who can edit the 55px Edit button), then the widgets. The widgets are four
+ * 240px blocks in two columns with the grid's 10px gap: the real grid is the dashboard's own layout, which is not known yet. The region is
+ * `.sk-dash`, which gives the trail the margin `main > .crumbs` gives the real one. None of the grid's class names: a locator must not find it.
+ */
+export function DashboardSkeleton({ label, canEdit }: { label: string; canEdit?: boolean }) {
+  return (
+    <SkeletonRegion label={label} className="sk-dash">
+      <TrailSkeleton widths={["10ch", "14ch"]} />
+      <div className="row dash-head" aria-hidden="true">
+        <div className="sk-h1"><Skeleton width="18ch" /></div>
+        <span className="spacer" />
+        <Skeleton width="14ch" />
+        <Skeleton variant="block" width={142} height={38} />
+        {canEdit ? <Skeleton variant="block" width={55} height={34} /> : null}
+      </div>
+      <div className="sk-quad" aria-hidden="true">
+        {[0, 1, 2, 3].map((i) => <Skeleton key={i} variant="block" height={240} />)}
+      </div>
+    </SkeletonRegion>
+  );
+}
+
+/**
+ * The Discovery graph's canvas: the region IS the real `.graph-layout` row (it takes what the window leaves under the header, at least
+ * 320px), holding one block that stretches to the row. The page header above it is the real one.
+ */
+export function CanvasSkeleton({ label }: { label: string }) {
+  return (
+    <SkeletonRegion label={label} className="graph-layout">
+      <Skeleton variant="block" height="auto" />
     </SkeletonRegion>
   );
 }

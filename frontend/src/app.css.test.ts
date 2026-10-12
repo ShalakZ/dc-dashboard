@@ -996,4 +996,14 @@ describe("the loading skeletons (W7f)", () => {
     expect(only(".sk-block").body).toMatch(/flex:\s*none/);
     expect(only(".sk-circle").body).toMatch(/flex:\s*none/);
   });
+
+  it("the dashboard skeleton's trail has the margin the real one has directly under main, and its widgets sit in two columns, one on a narrow window", () => {
+    const margin = (body: string) => /margin:\s*([^;]+)/.exec(body)?.[1].trim();
+    const real = rules.find((r) => r.selector === "main > .crumbs")!;
+    expect(margin(only(".sk-dash > .crumbs").body)).toBe(margin(real.body));
+    expect(only(".sk-quad").body).toMatch(/grid-template-columns:\s*repeat\(2,/);
+    const narrow = mine.filter((r) => r.selector === ".sk-quad" && r.at.some((a) => a.startsWith("@media (max-width: 700px)")));
+    expect(narrow).toHaveLength(1);
+    expect(narrow[0].body).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
+  });
 });

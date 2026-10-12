@@ -14,11 +14,14 @@ import { nodeTypes } from "../components/graph/nodes";
 import { ReviewDialog, type InitialTarget } from "../components/graph/ReviewDialog";
 import { SourcePanel } from "../components/graph/SourcePanel";
 import { PageHeader } from "../components/PageHeader";
+import { ActionsSpace, CanvasSkeleton } from "../components/Skeleton";
 import { useAction } from "../hooks/useAction";
 import { dropPayload, pickDropTarget, type DropPayload } from "../lib/drop";
 import {
   buildGraph, type ClusterNodeData, type OpenState, type PointNodeData, type SourceNodeData,
 } from "../lib/graph";
+
+const HINT = "Dashed nodes were discovered; solid nodes are assets. Drag nodes to arrange them.";
 
 /** The server rejects a longer layout node id (a cluster id embeds device-reported names, so it can be long). */
 const MAX_LAYOUT_ID = 512;
@@ -155,7 +158,7 @@ function Canvas({ model }: { model: GraphModel }) {
     <>
       <PageHeader
         title="Discovery"
-        sub="Dashed nodes were discovered; solid nodes are assets. Drag nodes to arrange them."
+        sub={HINT}
         actions={<button onClick={() => invalidate(keys.graph)}>Refresh</button>}
       />
       {saveError && <p className="error" role="alert">{saveError}</p>}
@@ -202,7 +205,15 @@ function Canvas({ model }: { model: GraphModel }) {
 export function DiscoveryPage() {
   const { loading } = useAuth();
   const { data: model, error, isLoading } = useGraph();
-  if (loading || isLoading) return <p className="muted">loading…</p>;
+  if (loading || isLoading) {
+    // Inside .graph-page from the first paint: the shell's one-window-tall rules key on it, and the canvas takes what the header leaves.
+    return (
+      <div className="graph-page">
+        <PageHeader title="Discovery" sub={HINT} actions={<ActionsSpace />} />
+        <CanvasSkeleton label="Loading the graph" />
+      </div>
+    );
+  }
   if (error) return <p className="error" role="alert">{error.message}</p>;
   if (!model || (model.sources.length === 0 && model.unidentified.length === 0)) {
     return (
