@@ -8,6 +8,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { Crumbs } from "../components/Crumbs";
 import { DashboardViewer } from "../components/dashboard/DashboardViewer";
 import { LiveValuesProvider } from "../components/dashboard/LiveValuesContext";
+import { Pending } from "../components/Pending";
 import { newest } from "../lib/dashboardEdit";
 
 // The editor brings react-grid-layout with it: it loads only when someone starts editing (spec 10.8).
@@ -60,7 +61,7 @@ function DashboardScreen({ id }: { id: number }) {
       <>
         {notice}
         {crumbs}
-        <Suspense fallback={<p className="muted">loading editor…</p>}>
+        <Suspense fallback={<><Pending /><p className="muted">loading editor…</p></>}>
           <DashboardEditor
             key={epoch}
             dashboard={dashboard}

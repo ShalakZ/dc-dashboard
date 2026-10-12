@@ -303,6 +303,15 @@ describe("Layout top bar", () => {
     expect(within(frame.children[0] as HTMLElement).queryByText("DC Dashboard")).not.toBeInTheDocument(); // the brand moved out of the rail
   });
 
+  it("mounts the loading bar next to the shell, not in it (the shell's children stay the bar and the frame)", async () => {
+    mockFetch(routes("viewer"));
+    const { container } = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    const bar = container.querySelector(".top-progress") as HTMLElement;
+    expect(bar).toHaveAttribute("aria-hidden", "true"); // its phase is not checked: the real timers here run on the shared store
+    expect(bar.nextElementSibling).toBe(container.querySelector(".shell"));
+  });
+
   it("puts the quick find first in the bar's content, ahead of the chip, the time and the profile", async () => {
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });

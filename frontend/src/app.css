@@ -63,6 +63,20 @@
   .skip-link { position: absolute; left: -9999px; top: 0; }
   .skip-link:focus { left: 8px; top: 8px; z-index: 2000; padding: 4px 8px; background: var(--bg); border: 1px solid var(--border-strong); outline-offset: 0; } /* the ring stays on the link, not out on the navy sidebar */
 
+  /* The loading bar along the top edge, in the theme's marker colour (src/lib/progress.ts picks the phase, TopProgress sets data-phase).
+     z-index 46: above the top bar (45), below the sidebar tip (50), the pop-ups and the dialogs (1000). It never takes a click. run
+     eases towards 85 percent and waits; finish replaces that running transition from where it is. reset is width 0 with no transition,
+     so a restart during finish or fade does not sweep backwards. */
+  .top-progress { position: fixed; inset: 0 0 auto 0; height: 3px; z-index: 46; pointer-events: none; }
+  .top-progress > span { display: block; height: 100%; width: 0; opacity: 0; background: var(--side-accent); }
+  .top-progress[data-phase="reset"] > span { width: 0; opacity: 1; }
+  .top-progress[data-phase="run"] > span { width: 85%; opacity: 1; transition: width 30s cubic-bezier(0, 0.9, 0.1, 1); }
+  .top-progress[data-phase="finish"] > span { width: 100%; opacity: 1; transition: width 150ms ease-out; }
+  .top-progress[data-phase="fade"] > span { width: 100%; opacity: 0; transition: opacity 200ms linear; }
+  @media (prefers-reduced-motion: reduce) {
+    .top-progress[data-phase] > span { width: 100%; transition: none; } /* a full line that appears and disappears; the opacity above still decides which */
+  }
+
   /* The sidebar, under the top bar. Its focus ring is --side-accent (--ring equals --accent, which the navy cannot show); no rule with
      .side in its selector may use var(--accent…), app.css.test.ts checks. z-index 40 keeps the sticky tree column below it, the bar
      (45) is above it and the tip (50) above both. */

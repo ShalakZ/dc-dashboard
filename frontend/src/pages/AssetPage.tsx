@@ -8,6 +8,7 @@ import { EnergyTile } from "../components/EnergyTile";
 import { Icon } from "../components/Icon";
 import { fmt, MetricsTable } from "../components/MetricsTable";
 import { PageHeader } from "../components/PageHeader";
+import { Pending } from "../components/Pending";
 import { useStream } from "../hooks/useStream";
 import { kindIcon } from "../lib/kindIcon";
 import { rollupNote, rollupPower } from "../lib/rollup";
@@ -78,7 +79,7 @@ function AssetView({ id }: { id: number }) {
         <CostTile cost={data.cost_today ?? null} currency={data.currency ?? null} />
       </div>
       <h2>Trend</h2>
-      <Suspense fallback={<p className="muted">loading chart…</p>}>
+      <Suspense fallback={<><Pending /><p className="muted">loading chart…</p></>}>
         <TrendChart assetId={id} metrics={data.metrics} />
       </Suspense>
       <h2>Metrics</h2>
