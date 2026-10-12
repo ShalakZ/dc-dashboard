@@ -84,6 +84,14 @@ JOURNAL_FETCH = (300, 1000)  # events read (summary, full): the journal lines an
 MESSAGE_CHARS = 200
 KEY_STEPS = ("server_time", "read_points", "timing")  # steps of an all-OK check that a summary still shows
 SESSION_CONTEXT_STEPS = ("endpoints", "certificates")  # a failed session's hints point at these (thumbprint, offered token types)
+AUDIT_PAIRS = 4  # changed fields a source.updated line names (the rest as "+N more")
+# source.updated / source.created show a VALUE only for these fields; any other (the secret, the user name, the key path, ...) shows
+# "<field> changed", never what it holds
+AUDIT_VALUE_FIELDS = frozenset(
+    {"name", "enabled", "connector_type", *(f"config.{name}" for names in REPORT_CONFIG_FIELDS.values() for name in names)}
+)
+RESOLV_CONF = "/etc/resolv.conf"
+DNS_SERVERS_SHOWN = 3
 
 SECTION_TITLES = (
     "ENVIRONMENT", "SETTINGS", "SOURCES", "SOURCE HEALTH", "POINTS", "CONNECTION CHECKS", "JOURNAL", "SCANS",
@@ -130,6 +138,7 @@ class Environment:
     container_time: datetime | None = None
     database_time: datetime | None = None
     client_time: datetime | None = None  # the browser's clock, when the Diagnostics page sent it (M1)
+    dns_servers: tuple[str, ...] | None = None  # the nameservers of this container's resolv.conf; None: the file cannot be read
 
 
 @dataclass(frozen=True)
@@ -190,6 +199,8 @@ class CheckStep:
     status_hex: str | None = None
     error_message: str | None = None
     hint: str | None = None
+    points_bad: int | None = None  # read_points only: how many points answered a Bad status, and how many were read
+    points_total: int | None = None
 
 
 @dataclass(frozen=True)
@@ -387,6 +398,19 @@ async def load_source_hosts(db: AsyncSession) -> list[str]:
     return list(hosts)
 
 
+def _audit_hosts(entry: AuditEntry) -> list[str]:
+    """The host-bearing config values a source.created / source.updated row holds (before and after), URL credentials removed."""
+    if not entry.action.startswith("source."):
+        return []
+    detail = entry.detail
+    configs = [detail.get("config")] + [side.get("config") for side in (detail.get("before"), detail.get("after")) if isinstance(side, Mapping)]
+    found = []
+    for config in configs:
+        if isinstance(config, Mapping):
+            found += [without_credentials(config[key]) for key in HOST_FIELDS if isinstance(config.get(key), str) and config[key].strip()]
+    return found
+
+
 def mask_names(data: ReportData, source_hosts: Iterable[str] | None = None) -> tuple[list[str], list[str]]:
     """(hosts, uris) to give the `Masker`: every source's endpoint/host and what the checks learned about the server (M5), in a
     stable order (source id, then check), without duplicates. Aliases are numbered in registration order, so the order matters.
@@ -405,6 +429,9 @@ def mask_names(data: ReportData, source_hosts: Iterable[str] | None = None) -> t
         for check in sorted(data.checks, key=lambda c: c.source_id):
             hosts.update(dict.fromkeys(check.hosts))
             uris.update(dict.fromkeys(check.uris))
+    if not isinstance(data.audit, Unavailable):  # an edit names the OLD host, which no source has any more
+        for entry in data.audit:
+            hosts.update(dict.fromkeys(_audit_hosts(entry)))
     return list(hosts), list(uris)
 
 
@@ -454,6 +481,21 @@ def _system() -> str:
     return " ".join(part for part in (platform.system(), platform.machine(), flavour) if part)
 
 
+def _dns_servers() -> tuple[str, ...] | None:
+    """The first nameservers of the container's resolv.conf, in file order; None when it cannot be read."""
+    try:
+        with open(RESOLV_CONF, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read(20_000).splitlines()
+    except OSError:
+        return None
+    servers = []
+    for line in lines:
+        parts = line.split("#", 1)[0].split()
+        if len(parts) >= 2 and parts[0] == "nameserver":
+            servers.append(parts[1])
+    return tuple(servers[:DNS_SERVERS_SHOWN])
+
+
 async def _environment(db: AsyncSession, client_time: datetime | None) -> Environment:
     container_now = datetime.now(timezone.utc)  # sampled right next to the database clock
     row = (
@@ -486,6 +528,7 @@ async def _environment(db: AsyncSession, client_time: datetime | None) -> Enviro
         container_time=container_now,
         database_time=row.db_now,
         client_time=client_time,
+        dns_servers=_dns_servers(),
     )
 
 
@@ -631,14 +674,30 @@ async def _points(db: AsyncSession, source_id: int | None, worst: int) -> Points
     )
 
 
+def _count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _point_counts(raw: dict[str, Any]) -> tuple[int | None, int | None]:
+    """(points that answered a Bad status, points read) out of the detail of a read_points step."""
+    detail = raw.get("detail") if raw.get("id") == "read_points" and isinstance(raw.get("detail"), dict) else {}
+    bad = _count(detail.get("bad_status"))
+    if bad is None:
+        bad = _count(detail.get("bad"))
+    good, all_bad = _count(detail.get("good")), _count(detail.get("bad"))
+    return bad, (good + all_bad if good is not None and all_bad is not None else None)
+
+
 def _step(raw: Any) -> CheckStep | None:
     if not isinstance(raw, dict):
         return None
     error = raw.get("error") if isinstance(raw.get("error"), dict) else {}
+    points_bad, points_total = _point_counts(raw)
     return CheckStep(
         id=str(raw.get("id", "?")), ok=_flag(raw.get("ok")), name=str(raw.get("name") or ""), ms=_float(raw.get("ms")),
         summary=str(raw.get("summary") or ""), error_class=_str(error.get("class")), status_name=_str(error.get("status_name")),
         status_hex=_str(error.get("status_hex")), error_message=_str(error.get("message")), hint=_str(raw.get("hint")),
+        points_bad=points_bad, points_total=points_total,
     )
 
 
@@ -832,6 +891,18 @@ def _transform_strings(value: Any, transform: Callable[[str], str]) -> Any:
     return value
 
 
+def _flatten(value: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
+    """A nested mapping as {"config.endpoint": ...}: one entry per leaf (a list is a leaf)."""
+    flat: dict[str, Any] = {}
+    for key, item in value.items():
+        path = f"{prefix}{key}"
+        if isinstance(item, Mapping):
+            flat.update(_flatten(item, path + "."))
+        else:
+            flat[path] = item
+    return flat
+
+
 def _days(days: float | None) -> str:
     if days is None:
         return "n/a"
@@ -953,8 +1024,17 @@ class _Renderer:
             step = check.failed_step
             return f"FAILED at {self.text(step.id, 40) if step else self.text(check.first_failed or '?', 40)}: {self.reason(step)}"
         if state == "ok":
-            return "all steps OK"
+            return "all steps OK" + self._bad_points(check)
         return "has no usable result"
+
+    @staticmethod
+    def _bad_points(check: CheckInfo) -> str:
+        """A check passes with bad points (the server answers, the device behind it does not): the verdict must not hide them."""
+        step = next((s for s in check.steps if s.id == "read_points" and s.ok and s.points_bad), None)
+        if step is None:
+            return ""
+        total = step.points_total if step.points_total is not None else step.points_bad
+        return f", but {step.points_bad} of {total} points answered a Bad status"
 
     def reason(self, step: CheckStep | None) -> str:
         if step is None:
@@ -990,6 +1070,8 @@ class _Renderer:
             "database: PostgreSQL " + (self.text(env.postgres, 60) if env.postgres else "unknown")
             + ", TimescaleDB " + (self.text(env.timescale, 20) if env.timescale else "not installed")
         )
+        servers = "unknown" if env.dns_servers is None else (", ".join(self.text(item, 64) for item in env.dns_servers) or "none listed")
+        lines.append(f"dns servers: {servers}")
         lines.extend(self._clocks(env))
         return lines
 
@@ -1198,9 +1280,9 @@ class _Renderer:
             if check.state in ("ok", "failed"):
                 for s in steps:
                     if s.ok and s.id in KEY_STEPS and s.summary:
-                        lines.append(f"   {self.text(s.id, 30)}: {self.text(s.summary, 160)}")
-                        if s.hint:  # read_points: a passed step can still say who to ask about the bad points
-                            lines.append("      hint: " + self.text(s.hint, 300))
+                        prefix = f"   {self.text(s.id, 30)}: "  # the whole line: read_points names up to three bad statuses
+                        lines.append(prefix + self.text(s.summary, LINE_LIMIT - len(prefix)))
+                        lines.extend(self._hint_lines(s.hint))  # read_points: a passed step says who to ask about the bad points
         if check.skew_seconds is not None:
             server, local = self.text(check.server_time, 40), self.text(check.local_time, 40)
             lines.append(f"   clock: server {server}, local {local}, skew {_signed(check.skew_seconds)}")
@@ -1209,9 +1291,10 @@ class _Renderer:
     def _step_lines(self, number: int, step: CheckStep) -> list[str]:
         mark = "ok" if step.ok else ("FAIL" if step.ok is False else "skipped")
         ms = f" {step.ms:.0f} ms" if step.ms is not None else ""
-        lines = [f"   {number} {self.text(step.id, 30)} {mark}{ms}" + (f": {self.text(step.summary, 200)}" if step.summary else "")]
-        if step.ok and step.hint and step.id in KEY_STEPS:
-            lines.append("      hint: " + self.text(step.hint, 300))
+        head = f"   {number} {self.text(step.id, 30)} {mark}{ms}"
+        lines = [head + (f": {self.text(step.summary, LINE_LIMIT - len(head) - 2)}" if step.summary else "")]
+        if step.ok and step.id in KEY_STEPS:
+            lines.extend(self._hint_lines(step.hint))
         if step.ok is False:
             status = step.status_hex
             if step.status_name:
@@ -1219,9 +1302,12 @@ class _Renderer:
             error = ": ".join(part for part in (step.error_class, status, step.error_message) if part)
             if error:
                 lines.append("      error: " + self.text(error, 240))
-            if step.hint:
-                lines.append("      hint: " + self.text(step.hint, 300))
+            lines.extend(self._hint_lines(step.hint))
         return lines
+
+    def _hint_lines(self, hint: str | None) -> list[str]:
+        """One `hint:` line per line of the hint (read_points gives one per bad status; the others are a single line)."""
+        return ["      hint: " + self.text(part, 300) for part in (hint or "").split("\n") if part.strip()]
 
     def _event_line(self, event: Event, count: int, first: datetime | None, *, with_source: bool = True) -> str:
         head = [_iso(event.ts), self.text(event.level, 10), self.text(event.component, 12), self.text(event.kind, 30)]
@@ -1302,11 +1388,56 @@ class _Renderer:
             return ["no audit entries"]
         lines = []
         for entry in entries:
-            detail = ""
-            if entry.detail:
-                detail = " " + self.compact(entry.detail, 160)
-            lines.append(f"{_iso(entry.ts)} {self.text(entry.actor, 40)} {self.text(entry.action, 40)}{detail}")
+            head = f"{_iso(entry.ts)} {self.text(entry.actor, 40)} {self.text(entry.action, 40)}"
+            lines.append(head + self._audit_detail(entry, len(head)))
         return self.capped(lines, self.caps["audit"])
+
+    def _audit_detail(self, entry: AuditEntry, used: int) -> str:
+        detail = entry.detail
+        if not detail:
+            return ""
+        story = self._source_story(entry.action, detail)
+        if story is None:
+            return " " + self.compact(detail, 160)
+        subject, label, pairs, more = story
+        shown = " " + self.compact(subject, 80) if subject else ""
+        room = LINE_LIMIT - used - len(shown) - len(label) - 2
+        return f"{shown} {label}: " + clip(", ".join(pairs) + more, max(room, 60))
+
+    def _source_story(self, action: str, detail: Mapping[str, Any]) -> tuple[dict[str, Any], str, list[str], str] | None:
+        """(the rest of the detail, "changed" | "created", the field texts, "(+N more)") of a source.updated / source.created row, or
+        None for any other row (and for one of these without the shape the API writes)."""
+        if action == "source.updated" and isinstance(detail.get("before"), Mapping) and isinstance(detail.get("after"), Mapping):
+            before, after = _flatten(detail["before"]), _flatten(detail["after"])
+            changed = [key for key in {*before, *after} if before.get(key) != after.get(key)]
+            # what the secret or a credential did first: it is the change a reader most needs to see, and the shown ones are few
+            changed.sort(key=lambda key: (key in AUDIT_VALUE_FIELDS, key))
+            pairs = [self._audit_pair(key, before.get(key), after.get(key)) for key in changed[:AUDIT_PAIRS]]
+            more = f" (+{len(changed) - AUDIT_PAIRS} more)" if len(changed) > AUDIT_PAIRS else ""
+            if pairs:
+                return {k: v for k, v in detail.items() if k not in ("before", "after")}, "changed", pairs, more
+        if action == "source.created":
+            flat = _flatten(detail)
+            host = next((f"config.{name}" for name in HOST_FIELDS if f"config.{name}" in flat), None)
+            keys = ("name", "connector_type", host, "config.security_policy")
+            pairs = [f"{key}={self._audit_value(flat[key])}" for key in keys if key in flat]
+            if pairs:
+                return {k: v for k, v in detail.items() if k == "source_id"}, "created", pairs, ""
+        return None
+
+    def _audit_pair(self, key: str, before: Any, after: Any) -> str:
+        if key not in AUDIT_VALUE_FIELDS:
+            return f"{self.text(key, 40)} changed"
+        return f"{self.text(key, 40)} {self._audit_value(before)} -> {self._audit_value(after)}"
+
+    def _audit_value(self, value: Any) -> str:
+        """A value of an audited field, through the same transform as every other text, before it is clipped."""
+        if value is None:
+            return "(unset)"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        shown = value if isinstance(value, str) else json.dumps(plain(value), sort_keys=True, default=str)
+        return self.text(shown, 50) or "(empty)"
 
 
 def _assemble(

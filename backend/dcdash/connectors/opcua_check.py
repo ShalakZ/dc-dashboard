@@ -17,7 +17,6 @@ import ipaddress
 import math
 import socket
 import time
-from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,6 +39,7 @@ TIMING_READS = 5
 TIMING_PAUSE = 0.2  # seconds between the timing reads
 TIMING_NODES = 10
 MAX_POINT_LINES = 20  # points listed in the detail of read_points, bad ones first
+MAX_BAD_KINDS = 3  # distinct bad statuses read_points names in its summary and gives a hint line each
 SKEW_WARN_SECONDS = 60.0
 SKEW_FAIL_SECONDS = 300.0
 CERT_WARN_DAYS = 30
@@ -167,6 +167,16 @@ def _validity_words(facts: dict[str, Any]) -> str:
     if facts["not_yet_valid"]:
         return f"NOT VALID YET (from {facts['not_before'][:10]})"
     return f"valid until {facts['not_after'][:10]} ({facts['days_left']} days)"
+
+
+def _read_hints(kinds: list[tuple[str, str]]) -> str | None:
+    """One line per hint text, newline apart ("BadSensorFailure, BadDeviceFailure: Ask ..."): the report prints each as a line of
+    its own, since two hints joined into one would be cut at the line limit. Statuses with the same hint share a line."""
+    lines: dict[str, list[str]] = {}
+    for name, _address in kinds:
+        if hint := hint_for(name, None, "read_points"):
+            lines.setdefault(hint, []).append(name)
+    return "\n".join(f"{', '.join(names)}: {hint}" for hint, names in lines.items()) or None
 
 
 # -- the check --------------------------------------------------------------------------------------------------------------
@@ -498,14 +508,15 @@ class OpcUaCheck:
             "chunk_size": chunk, "server_max_nodes_per_read": limit, "requests": requests,
         }
         summary = f"read {len(rows)} point(s) in {requests} request(s) of up to {chunk} node(s): {len(good)} good, {len(bad)} bad"
+        first: dict[str, str] = {}  # each distinct bad status with the first point that answered it
+        for row in bad:
+            first.setdefault(_status_name(row["status"]), row["address"])
+        kinds = list(first.items())[:MAX_BAD_KINDS]
         if bad:
-            summary += f"; first bad: {bad[0]['address']}: {bad[0]['status']}"
-        hints = []
-        for name, _count in Counter(_status_name(row["status"]) for row in bad).most_common(3):
-            hint = hint_for(name, None, "read_points")
-            if hint and hint not in hints:
-                hints.append(hint)
-        return StepOutcome(_clip(summary), detail, " ".join(hints) or None)
+            summary += "; bad: " + "; ".join(f"{name} {_clip(address, 40)}" for name, address in kinds)
+            summary += f" (+{len(first) - len(kinds)} more kinds)" if len(first) > len(kinds) else ""
+        detail["bad_status"] = sum(1 for row in bad if _status_name(row["status"]).startswith("Bad"))  # a Bad code, not "non-numeric"
+        return StepOutcome(_clip(summary), detail, _read_hints(kinds))
 
     async def _read_optional(self, nodeids: list[ua.NodeId], attr: ua.AttributeIds) -> list[ua.DataValue | None]:
         """An attribute for each node, or Nones when the server cannot say: it is extra information, not the point of the step."""

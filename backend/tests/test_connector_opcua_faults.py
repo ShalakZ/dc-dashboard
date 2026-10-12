@@ -219,12 +219,32 @@ async def test_a_point_with_a_bad_status_is_named_with_its_code_and_the_hint_say
         result = await create_connector("opcua", _cfg(srv)).check([fine, broken])
     read_points = _by_id(result)["read_points"]
     assert all(step.ok is True for step in result.steps) and result.first_failed is None  # the step passes, the row is the finding
-    assert f"first bad: {broken}: BadSensorFailure (0x808C0000)" in read_points.summary
+    assert f"bad: BadSensorFailure {broken}" in read_points.summary and read_points.detail["bad_status"] == 1
     assert read_points.summary.startswith("read 2 point(s)") and "1 good, 1 bad" in read_points.summary
     first = read_points.detail["points"][0]
     assert (first["address"], first["good"], first["status"], first["value"]) == (broken, False, "BadSensorFailure (0x808C0000)", None)
     _asks(read_points, "device behind it", "which device or signal")
-    assert hint_for("BadSensorFailure", None, "read_points") == read_points.hint
+    assert read_points.hint == f"BadSensorFailure: {hint_for('BadSensorFailure', None, 'read_points')}"
+
+
+async def test_several_bad_statuses_are_each_named_once_with_their_first_point_and_get_a_hint_line_each():
+    bad = "LVP01_kW:BadSensorFailure,LVP02_V:BadNodeIdUnknown,LVP03_kW:BadSensorFailure,LVP04_kW:BadDeviceFailure"
+    async with opcua_server(faults=faults(BAD=bad)) as srv:
+        async with Client(srv.endpoint.replace("0.0.0.0", "127.0.0.1")) as plain:
+            ids = {
+                name: (await plain.nodes.objects.get_child(["2:Panels", f"2:LVP{panel}", f"2:{field}"])).nodeid.to_string()
+                for name, panel, field in (("a", "01", "kW"), ("b", "02", "V"), ("c", "03", "kW"), ("d", "04", "kW"), ("ok", "05", "kW"))
+            }
+        result = await create_connector("opcua", _cfg(srv)).check([ids["ok"], ids["a"], ids["b"], ids["c"], ids["d"]])
+    read_points = _by_id(result)["read_points"]
+    assert all(step.ok is True for step in result.steps) and read_points.detail["bad"] == 4 and read_points.detail["good"] == 1
+    # the first point of each status, in the order the statuses first appear; the third point shares the first one's status
+    assert f"bad: BadSensorFailure {ids['a']}; BadNodeIdUnknown {ids['b']}; BadDeviceFailure {ids['d']}" in read_points.summary
+    assert ids["c"] not in read_points.summary and len(read_points.summary) <= opcua_check.SUMMARY_CHARS
+    lines = read_points.hint.split("\n")
+    assert len(lines) == 2  # BadSensorFailure and BadDeviceFailure share the device-fault hint, BadNodeIdUnknown has its own
+    assert lines[0].startswith("BadSensorFailure, BadDeviceFailure: ") and "device behind it" in lines[0]
+    assert lines[1].startswith("BadNodeIdUnknown: ") and "namespace" in lines[1] and all(len(line) <= 280 for line in lines)
 
 
 # -- SKEW: the server's clock is wrong ------------------------------------------------------------------------------------------
