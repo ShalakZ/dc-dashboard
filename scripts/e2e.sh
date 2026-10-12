@@ -38,7 +38,7 @@ done
 quote="'"
 fault_in_env=""
 if [ -r .env ]; then
-  fault_in_env=$(sed -nE "s/^[[:space:]]*(export[[:space:]]+)?(SIM_FAULT_[A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*[\"$quote]?[^[:space:]#\"$quote].*/\2/p" .env) || fault_in_env=""
+  fault_in_env=$(sed -nE "s/^[[:space:]]*(export[[:space:]]+)?(SIM_FAULT_[A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*[\"$quote]?[[:space:]]*[^[:space:]#\"$quote].*/\2/p" .env) || fault_in_env=""
   fault_in_env=${fault_in_env%%$'\n'*}
 fi
 if [ -n "$fault_in_env" ]; then

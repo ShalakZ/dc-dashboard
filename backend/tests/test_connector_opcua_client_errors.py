@@ -317,6 +317,20 @@ async def test_a_connect_that_runs_out_of_time_closes_what_it_opened(timeout, wh
         assert await _until(lambda: not _client_tasks()), _client_tasks()
 
 
+async def test_a_connect_that_is_cancelled_closes_what_it_opened():
+    """The scheduler cancels a poll when its source is edited: 0.5 s lands before CreateSession answers, 1.05 s after it."""
+    async with opcua_server(faults=Faults.from_env({"SIM_FAULT_SLOW": "0.3"})) as srv:
+        connector = create_connector("opcua", _cfg(srv.endpoint, timeout_seconds=5.0))
+        for delay in (0.5, 1.05):
+            task = asyncio.create_task(connector.test())
+            await asyncio.sleep(delay)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert await _until(lambda: not srv._server.bserver.clients), f"{len(srv._server.bserver.clients)} connections left"
+        assert await _until(lambda: not _client_tasks()), _client_tasks()
+
+
 async def test_a_refused_login_stays_a_refused_login_when_the_server_then_hangs_up():
     """Some servers close the connection soon after a bad password: asyncua's clean-up (CloseSession) is then still waiting for its
     answer and fails with a reset, which used to replace the refusal. (Answers 0.2 s late, so the hang-up 0.1 s after the refusal

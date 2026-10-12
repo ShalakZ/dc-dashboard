@@ -257,10 +257,13 @@ class OpcUaConnector(Connector):
         client = await self._new_client()
         try:
             await asyncio.wait_for(client.connect(), self.config.timeout_seconds)
-        except Exception as exc:  # noqa: BLE001 - translated into a typed status
-            # A connect that ran out of time is cancelled where it stands, past asyncua's own clean-up; what it opened (socket,
-            # channel, a session with its watchdog) would stay and poll the server for good.
+        except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 - translated into a typed status
+            # A connect that ran out of time, or that the scheduler cancelled because its source was edited, stops where it
+            # stands, past asyncua's own clean-up; what it opened (socket, channel, a session with its watchdog) would stay and
+            # poll the server for good.
             await close_quietly(client)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             raise _translate(exc) from exc
         try:
             yield client
