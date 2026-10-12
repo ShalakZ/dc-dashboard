@@ -116,8 +116,9 @@ export interface UserRow { id: number; username: string; role: Role; active: boo
 export interface GeneralSettings { timezone: string }
 
 export interface SignInValues { max_failures: number; block_minutes: number }
-/** What GET and PUT /api/settings/sign-in answer: the policy in force, its bounds as [min, max] and the factory values; PUT takes only the two numbers. */
+/** What GET and PUT /api/settings/sign-in answer: the policy in force (`enabled` false = nobody is blocked), its bounds as [min, max] and the factory values; PUT takes the two numbers and `enabled`. */
 export interface SignInPolicy extends SignInValues {
+  enabled: boolean;
   limits: { max_failures: [number, number]; block_minutes: [number, number] };
   defaults: SignInValues;
 }
@@ -131,6 +132,15 @@ export interface StorageSettings {
 }
 /** What GET /api/settings/storage answers: the stored values, the factory values and this site's own default (null until one is set); PUT takes and returns only the five. */
 export type StorageSettingsOut = StorageSettings & { factory: StorageSettings; site_default: StorageSettings | null };
+/** GET /api/storage/rows-per-day: one entry per UTC day from `start` to `end`, zero filled. */
+export interface RowsPerDayRange {
+  start: string;
+  end: string;
+  days: { day: string; rows: number }[];
+  total_rows: number;
+  first_day: string | null;
+  last_day: string;
+}
 export interface StorageStats {
   database_bytes: number;
   readings_bytes_uncompressed: number;

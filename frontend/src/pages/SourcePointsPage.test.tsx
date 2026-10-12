@@ -10,6 +10,11 @@ const points = [
   { id: 8, address: "panel1/energy", name: "Panel 1 energy", data_type: "float", unit_hint: "kWh",
     mapping: { id: 2, asset_id: 4, metric: "energy_kwh", scale: 1, interval_seconds: 60, custom_unit: null } },
 ];
+/** Opens a row's three-dot menu (named `Actions for <point name>`) and chooses an item. Items are in the DOM only while the menu is open. */
+async function choose(row: HTMLElement, item: string) {
+  await userEvent.click(within(row).getByRole("button", { name: /^Actions for / }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: item }));
+}
 const routes = {
   "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "a", role: "admin" } },
   "GET /api/assets": { body: [{ id: 4, parent_id: null, name: "Panel 1", kind: "panel", sort_order: 0 }] },
@@ -29,7 +34,7 @@ describe("SourcePointsPage", () => {
     expect(await screen.findByText("sim", { selector: "[aria-current]" })).toBeInTheDocument();
     expect(await screen.findByText("found 2 points")).toBeInTheDocument();
     const row = (await screen.findByText("panel1/power")).closest("tr")!;
-    await userEvent.click(within(row).getByRole("button", { name: "Map" }));
+    await choose(row, "Map");
     await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
     await userEvent.selectOptions(screen.getByLabelText("Metric"), "active_power_kw");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -43,7 +48,7 @@ describe("SourcePointsPage", () => {
     renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
     const row = (await screen.findByText("panel1/energy")).closest("tr")!;
     expect(within(row).getByText(/Panel 1 · energy_kwh/)).toBeInTheDocument();
-    await userEvent.click(within(row).getByRole("button", { name: "Unmap" }));
+    await choose(row, "Unmap");
     expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/mappings/2")).toBe(true);
   });
 
@@ -51,7 +56,7 @@ describe("SourcePointsPage", () => {
     mockFetch({ ...routes, "POST /api/mappings": { status: 409, body: { detail: "this point is already mapped, or the asset already has this metric" } } });
     renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
     const row = (await screen.findByText("panel1/power")).closest("tr")!;
-    await userEvent.click(within(row).getByRole("button", { name: "Map" }));
+    await choose(row, "Map");
     await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("already mapped");
@@ -71,7 +76,7 @@ describe("SourcePointsPage", () => {
     const mapped = (await screen.findByText("panel1/energy")).closest("tr")!;
     expect(await within(mapped).findByText(/^LV Panel \(Room 2\) · energy_kwh/)).toBeInTheDocument();
     const row = screen.getByText("panel1/power").closest("tr")!;
-    await userEvent.click(within(row).getByRole("button", { name: "Map" }));
+    await choose(row, "Map");
     const texts = within(screen.getByLabelText("Asset")).getAllByRole("option").map((o) => o.textContent!.replace(/\u00a0/g, "").trim());
     expect(texts).toEqual(["(choose)", "Room 1", "LV Panel (Room 1)", "Room 2", "LV Panel (Room 2)"]);
   });
@@ -186,7 +191,7 @@ describe("SourcePointsPage sorting, filtering and search", () => {
     page();
     await userEvent.click(await screen.findByRole("button", { name: "Browse points" }));
     const row = (await screen.findByText("panel1/power")).closest("tr")!;
-    await userEvent.click(within(row).getByRole("button", { name: "Map" }));
+    await choose(row, "Map");
     expect(screen.getByRole("heading", { name: "Map panel1/power" })).toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "Refresh list" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("database is down");
@@ -221,7 +226,7 @@ describe("SourcePointsPage sorting, filtering and search", () => {
     await userEvent.click(screen.getByRole("button", { name: "Name" }));
     await userEvent.click(screen.getByRole("button", { name: "Name" }));
     expect(shown()).toEqual(["panel2/power", "panel1/power"]);
-    await userEvent.click(within(screen.getByText("panel1/power").closest("tr")!).getByRole("button", { name: "Map" }));
+    await choose(screen.getByText("panel1/power").closest("tr")!, "Map");
     await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByText("panel1/power")).not.toBeInTheDocument()); // now mapped, so filtered out
@@ -246,7 +251,7 @@ describe("SourcePointsPage sorting, filtering and search", () => {
     await screen.findByText("panel1/energy");
     await userEvent.type(screen.getByRole("searchbox", { name: "Search points" }), "energy");
     expect(shown()).toEqual(["panel1/energy"]);
-    await userEvent.click(screen.getByRole("button", { name: "Unmap" }));
+    await choose(screen.getByText("panel1/energy").closest("tr")!, "Unmap");
     expect(await screen.findByText("unmapped")).toBeInTheDocument();
     expect(shown()).toEqual(["panel1/energy"]);
     expect(screen.getByRole("searchbox", { name: "Search points" })).toHaveValue("energy");
@@ -285,7 +290,7 @@ describe("SourcePointsPage mapping dialog", () => {
     mockFetch(routes);
     page();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await choose(await rowOf("panel1/power"), "Map");
     const dialog = screen.getByRole("dialog", { name: "Map panel1/power" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(within(dialog).getByRole("heading", { name: "Map panel1/power" })).toBeInTheDocument();
@@ -297,7 +302,7 @@ describe("SourcePointsPage mapping dialog", () => {
   it("opens Edit as a dialog titled Edit mapping <address>, prefilled from the mapping", async () => {
     mockFetch(routes);
     page();
-    await userEvent.click(within(await rowOf("panel1/energy")).getByRole("button", { name: "Edit" }));
+    await choose(await rowOf("panel1/energy"), "Edit");
     const dialog = screen.getByRole("dialog", { name: "Edit mapping panel1/energy" });
     expect(within(dialog).getByLabelText("Asset")).toHaveValue("4");
     expect(within(dialog).getByLabelText("Metric")).toHaveValue("energy_kwh");
@@ -306,7 +311,7 @@ describe("SourcePointsPage mapping dialog", () => {
   it("closes the dialog and refreshes the list when Save succeeds", async () => {
     const calls = mockFetch(routes);
     page();
-    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await choose(await rowOf("panel1/power"), "Map");
     await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
     const loads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/sources/2/points").length;
     const before = loads();
@@ -318,7 +323,7 @@ describe("SourcePointsPage mapping dialog", () => {
   it("keeps the dialog open and shows the error when Save fails", async () => {
     mockFetch({ ...routes, "POST /api/mappings": { status: 409, body: { detail: "this point is already mapped" } } });
     page();
-    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await choose(await rowOf("panel1/power"), "Map");
     await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent("already mapped");
@@ -328,7 +333,7 @@ describe("SourcePointsPage mapping dialog", () => {
     const calls = mockFetch({ ...routes, "POST /api/mappings": { status: 409, body: { detail: "this point is already mapped" } } });
     const hold = holdFetch((method, path) => method === "POST" && path === "/api/mappings");
     page();
-    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await choose(await rowOf("panel1/power"), "Map");
     await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     const dialog = screen.getByRole("dialog");
@@ -345,21 +350,21 @@ describe("SourcePointsPage mapping dialog", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("closes the dialog on Cancel without a request, and returns focus to the row's button", async () => {
+  it("closes the dialog on Cancel without a request, and returns focus to the row's menu button", async () => {
     const calls = mockFetch(routes);
     page();
-    const map = within(await rowOf("panel1/power")).getByRole("button", { name: "Map" });
-    await userEvent.click(map);
+    const row = await rowOf("panel1/power");
+    await choose(row, "Map");
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(map).toHaveFocus();
+    expect(within(row).getByRole("button", { name: "Actions for Panel 1 power" })).toHaveFocus();
     expect(calls.some((c) => c.method === "POST" || c.method === "PATCH")).toBe(false);
   });
 
   it("closes the dialog on Escape", async () => {
     mockFetch(routes);
     page();
-    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await choose(await rowOf("panel1/power"), "Map");
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
@@ -373,20 +378,20 @@ describe("SourcePointsPage mapping dialog", () => {
       ] },
     });
     page();
-    await userEvent.click(within(await rowOf("bus/volts")).getByRole("button", { name: "Map" }));
+    await choose(await rowOf("bus/volts"), "Map");
     expect(within(screen.getByRole("dialog")).getByRole("status")).toHaveTextContent(`unit hint is "V"`);
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await userEvent.click(within(await rowOf("panel1/energy")).getByRole("button", { name: "Edit" }));
+    await choose(await rowOf("panel1/energy"), "Edit");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("starts the form afresh when another row is mapped after the first dialog was closed", async () => {
     mockFetch(routes);
     page();
-    await userEvent.click(within(await rowOf("panel1/power")).getByRole("button", { name: "Map" }));
+    await choose(await rowOf("panel1/power"), "Map");
     await userEvent.selectOptions(screen.getByLabelText("Asset"), "4");
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await userEvent.click(within(await rowOf("panel1/energy")).getByRole("button", { name: "Edit" }));
+    await choose(await rowOf("panel1/energy"), "Edit");
     expect(screen.getByRole("dialog", { name: "Edit mapping panel1/energy" })).toBeInTheDocument();
     expect(screen.getByLabelText("Metric")).toHaveValue("energy_kwh");
   });
@@ -414,6 +419,26 @@ describe("SourcePointsPage look (W6)", () => {
     const unmapped = within((await screen.findByText("panel1/power")).closest("tr")!).getByText("unmapped");
     expect(unmapped).toHaveClass("muted", "st", "st-off");
     expect(within(screen.getByText("panel1/energy").closest("tr")!).queryByText("unmapped")).not.toBeInTheDocument();
+  });
+
+  it("gives each row a menu: Map for an unmapped point, Edit and a danger-toned Unmap for a mapped one, which needs no confirmation", async () => {
+    const calls = mockFetch(routes);
+    const confirm = vi.spyOn(window, "confirm");
+    page();
+    const unmapped = (await screen.findByText("panel1/power")).closest("tr")!;
+    await userEvent.click(within(unmapped).getByRole("button", { name: "Actions for Panel 1 power" }));
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Map"]);
+    await userEvent.keyboard("{Escape}");
+    const mapped = screen.getByText("panel1/energy").closest("tr")!;
+    expect(within(mapped).getByRole("button", { name: "Actions for Panel 1 energy" }).closest("td")).toHaveClass("row-actions");
+    await userEvent.click(within(mapped).getByRole("button", { name: "Actions for Panel 1 energy" }));
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Edit", "Unmap"]);
+    expect(screen.getByRole("menuitem", { name: "Unmap" })).toHaveClass("danger-item");
+    expect(screen.getByRole("menuitem", { name: "Edit" })).not.toHaveClass("danger-item");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Unmap" }));
+    expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/mappings/2")).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("a sort header is a quiet button inside the th, and only the sorted one draws the arrow", async () => {

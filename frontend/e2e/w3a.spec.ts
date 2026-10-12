@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { roleLabel } from "./roles";
-import { treeLink, userBlock } from "./shell";
+import { rowAction, treeLink, userBlock } from "./shell";
 
 // W3a (assets, mapping, sources) on the state the journey, discovery, phase3 and headers projects leave behind: admin `admin` /
 // `correct-horse`; the manual source `sim` (60 simulator points; LVP01_kW and LVP01_kWh mapped to the asset MV2); every asset of kind
@@ -154,21 +154,21 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
     const voltagePoint = unmapped.find((p) => p.unit_hint === "V")!;
     expect(voltagePoint, "an unmapped point with unit hint V").toBeTruthy();
     const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: voltagePoint.address, exact: true }) });
-    const mapButton = row.getByRole("button", { name: "Map", exact: true });
+    const trigger = row.getByRole("button", { name: /^Actions for / });
     const dialog = page.getByRole("dialog", { name: `Map ${voltagePoint.address}` });
     const warning = dialog.getByRole("status");
     const metric = dialog.getByLabel(/^Metric/);
 
-    // Escape with the first field focused and no select popup open closes the dialog and gives the focus back to the button
-    await mapButton.click();
+    // Escape with the first field focused and no select popup open closes the dialog and gives the focus back to the row's menu button
+    await (await rowAction(page, row, "Map")).click();
     await expect(dialog).toBeVisible();
     await expect(dialog.getByLabel(/^Asset/)).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
-    await expect(mapButton).toBeFocused();
+    await expect(trigger).toBeFocused();
 
     // The wrong metric warns but does not block; the matching metric clears the warning; Escape with the Metric select focused closes
-    await mapButton.click();
+    await (await rowAction(page, row, "Map")).click();
     await expect(dialog).toBeVisible();
     await metric.selectOption("energy_kwh");
     await expect(warning).toBeVisible();
@@ -180,7 +180,7 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
     await expect(metric).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
-    await expect(mapButton).toBeFocused();
+    await expect(trigger).toBeFocused();
 
     // Neither Escape saved anything
     const after = await getJson<ApiPoint[]>(page, `/api/sources/${sim.id}/points`);
@@ -214,7 +214,7 @@ test("W3a: child assets and a picked Kind, sortable and filterable points, a map
 
     // Edit it: the stored values are in the form, the connector is fixed, and a blank Secret keeps the stored one
     const edit = page.getByRole("dialog", { name: "Edit source idle" });
-    await sourceRow("idle").getByRole("button", { name: "Edit", exact: true }).click();
+    await (await rowAction(page, sourceRow("idle"), "Edit")).click();
     await expect(edit).toBeVisible();
     await expect(edit.getByLabel("Name", { exact: true })).toHaveValue("idle");
     await expect(edit.getByText("Connector: simulator")).toBeVisible();

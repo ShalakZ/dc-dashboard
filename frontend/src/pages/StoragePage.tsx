@@ -1,12 +1,18 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { InfoTip } from "../components/InfoTip";
 import { PageHeader } from "../components/PageHeader";
-import { useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
-import type { StorageSettings } from "../api/types";
+import { useRowsPerDay, useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
+import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
 import { storageLoss } from "../lib/impact";
+import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 
-const gib = (b: number) => `${(b / 1024 ** 3).toFixed(1)} GiB`;
-const FIELDS: [keyof StorageSettings, string][] = [
+/** A size as text, one decimal: GiB from 1 GiB up, MiB below it (a small database would read 0.0 GiB). */
+export function sizeText(bytes: number): string {
+  const mib = bytes / 1024 ** 2;
+  return mib < 1023.95 ? `${mib.toFixed(1)} MiB` : `${(bytes / 1024 ** 3).toFixed(1)} GiB`; // 1023.95 MiB would round to 1024.0 MiB
+}
+export const FIELDS: [keyof StorageSettings, string][] = [
   ["raw_retention_days", "Raw retention (days)"],
   ["compress_after_days", "Compress after (days)"],
   ["rollup_1m_retention_days", "1-minute rollup retention (days)"],
@@ -45,7 +51,104 @@ const summary = (d: StorageSettings) =>
 // days_until_full is null both when the database is already over capacity and when it is not growing.
 export function projection(usedPct: number, daysUntilFull: number | null): string {
   if (usedPct >= 100) return "full";
-  return daysUntilFull === null ? "not growing" : `${Math.round(daysUntilFull)} days`;
+  return daysUntilFull === null ? "not growing" : `${Math.round(daysUntilFull).toLocaleString("en-US")} days`;
+}
+
+const DAY_MS = 86_400_000;
+const MAX_RANGE_DAYS = 366;  // the server's limit (core/storage.py MAX_RANGE_DAYS)
+
+/** Why a rows-per-day range cannot be asked for, or null. Days are `YYYY-MM-DD` UTC days; `lastDay` comes from the server (never this
+ * browser's clock). The order is the server's, so its 422 and this agree. */
+export function checkRange(start: string, end: string, lastDay: string): string | null {
+  if (start > end) return "The first day must not be after the last day.";
+  if (end > lastDay) return "Choose days up to today (UTC).";
+  if ((Date.parse(end) - Date.parse(start)) / DAY_MS + 1 > MAX_RANGE_DAYS) return `At most ${MAX_RANGE_DAYS} days at a time.`;
+  return null;
+}
+
+function Tile({ title, tip, big, note }: { title: string; tip: string; big: string; note?: string }) {
+  return (
+    <div className="tile">
+      <div className="muted"><span>{title}</span><InfoTip>{tip}</InfoTip></div>
+      <div className="big">{big}</div>
+      {note && <small className="muted">{note}</small>}
+    </div>
+  );
+}
+
+const rowCount = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "row" : "rows"} in total`;
+
+/** The daily row counts: the last 7 days from the storage reply until the person picks another range of days. */
+function RowsPerDay({ initial }: { initial: StorageStats["rows_per_day"] }) {
+  const firstShown = initial[0]?.day ?? "";
+  const lastShown = initial[initial.length - 1]?.day ?? "";
+  const [start, setStart] = useState(firstShown);
+  const [end, setEnd] = useState(lastShown);
+  const [chosen, setChosen] = useState<{ start: string; end: string } | null>(null);  // the range asked for; null = the initial 7 days
+  const [problem, setProblem] = useState<string | null>(null);
+  const [seen, setSeen] = useState<RowsPerDayRange | null>(null);  // the last answer: its bounds are the server's
+  const query = useRowsPerDay(chosen?.start ?? null, chosen?.end ?? null);
+  useEffect(() => { if (query.data) setSeen(query.data); }, [query.data]);
+  const lastDay = seen?.last_day ?? lastShown;
+
+  const change = (nextStart: string, nextEnd: string) => {
+    setStart(nextStart);
+    setEnd(nextEnd);
+    if (!nextStart || !nextEnd) { setProblem(null); return; }  // a cleared input: nothing to ask or to complain about
+    const why = checkRange(nextStart, nextEnd, lastDay);
+    setProblem(why);
+    if (why === null) setChosen(nextStart === firstShown && nextEnd === lastShown ? null : { start: nextStart, end: nextEnd });
+  };
+  const reset = () => { setStart(firstShown); setEnd(lastShown); setChosen(null); setProblem(null); };
+
+  let body;
+  if (chosen === null) {
+    body = <DayTable days={initial} total={initial.reduce((sum, d) => sum + d.rows, 0)} />;
+  } else if (query.isError) {
+    body = <p className="error" role="alert">{query.error.message}</p>;
+  } else if (query.isPending) {
+    body = <p className="muted">loading…</p>;
+  } else if (query.data.first_day === null) {
+    body = <p className="muted">No readings stored yet.</p>;
+  } else {
+    body = <DayTable days={query.data.days} total={query.data.total_rows} />;
+  }
+  return (
+    <div className="rows-day">
+      <h2 className="section-title">Rows per day</h2>
+      <div className="rows-range">
+        <label>
+          Rows from day
+          <input type="date" value={start} min={seen?.first_day ?? undefined} max={lastDay} onChange={(e) => change(e.target.value, end)} />
+        </label>
+        <label>
+          Rows to day
+          <input type="date" value={end} min={seen?.first_day ?? undefined} max={lastDay} onChange={(e) => change(start, e.target.value)} />
+        </label>
+        <button type="button" className="quiet" onClick={reset}>Last 7 days</button>
+      </div>
+      {problem && <p className="error" role="alert">{problem}</p>}
+      <p className="muted">Days are UTC days, midnight to midnight UTC, not days in the site's time zone.</p>
+      {body}
+    </div>
+  );
+}
+
+function DayTable({ days, total }: { days: { day: string; rows: number }[]; total: number }) {
+  return (
+    <>
+      <p className="muted">{rowCount(total)}</p>
+      <div className="table-wrap">
+        <table>
+          <tbody>
+            {days.map((d) => (
+              <tr key={d.day}><td>{d.day}</td><td className="num">{d.rows.toLocaleString("en-US")}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
 }
 
 export function StoragePage() {
@@ -113,46 +216,33 @@ export function StoragePage() {
           </span>
         </div>
       )}
-      <div className="storage-top">
-        <div>
-          <dl className="kv">
-            <div><dt>Database size</dt><dd>{gib(s.database_bytes)}</dd></div>
-            <div>
-              <dt>Readings (raw)</dt>
-              <dd>{gib(s.readings_bytes_total)} — compressed {gib(s.readings_bytes_compressed)} of {gib(s.readings_bytes_uncompressed)} (ratio {ratio})</dd>
-            </div>
-            <div><dt>Rollups</dt><dd>1 min {gib(s.rollup_1m_bytes)}, 1 h {gib(s.rollup_1h_bytes)}</dd></div>
-            <div><dt>Growth</dt><dd>{gib(s.growth_bytes_per_day)} / day</dd></div>
-            <div>
-              <dt>Projected full</dt>
-              <dd>{projection(s.used_pct, s.days_until_full)} ({s.used_pct}% of {gib(s.disk_capacity_bytes)})</dd>
-            </div>
-          </dl>
-          <p className="muted">
-            Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.
-          </p>
-        </div>
-        <div>
-          <h2 className="section-title">Rows per day</h2>
-          <div className="table-wrap">
-            <table>
-              <tbody>
-                {s.rows_per_day.map((d) => (
-                  <tr key={d.day}><td>{d.day}</td><td className="num">{d.rows.toLocaleString("en-US")}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      <div className="tiles storage-tiles">
+        <Tile title="Database size" tip={TILE_HELP.database} big={sizeText(s.database_bytes)} />
+        <Tile
+          title="Readings (raw)"
+          tip={TILE_HELP.readings}
+          big={sizeText(s.readings_bytes_total)}
+          note={s.readings_bytes_uncompressed ? `compressed ${sizeText(s.readings_bytes_compressed)} of ${sizeText(s.readings_bytes_uncompressed)}, ratio ${ratio}` : "nothing compressed yet"}
+        />
+        <Tile title="Rollups" tip={TILE_HELP.rollups} big={sizeText(s.rollup_1m_bytes + s.rollup_1h_bytes)} note={`1 min ${sizeText(s.rollup_1m_bytes)}, 1 h ${sizeText(s.rollup_1h_bytes)}`} />
+        <Tile title="Growth per day" tip={TILE_HELP.growth} big={`${sizeText(s.growth_bytes_per_day)} / day`} />
+        <Tile title="Projected full" tip={TILE_HELP.projected} big={projection(s.used_pct, s.days_until_full)} note={`${s.used_pct}% of ${sizeText(s.disk_capacity_bytes)}`} />
       </div>
+      <p className="muted">
+        Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.
+      </p>
+      <RowsPerDay initial={s.rows_per_day} />
       <div className="form-card wide">
         <h2 className="section-title">Retention and capacity</h2>
         <form className="retention-form" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(false); }}>
           {FIELDS.map(([key, label]) => (
-            <label key={key}>
-              {label}
-              <input type="number" step="any" value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} />
-            </label>
+            <div className="has-tip" key={key}>
+              <label>
+                {label}
+                <input type="number" step="any" value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} />
+              </label>
+              <InfoTip>{FIELD_HELP[key]}</InfoTip>
+            </div>
           ))}
           {error && <p className="error" role="alert">{error}</p>}
           {note && !error && <p className="muted" role="status">{note}</p>}

@@ -184,6 +184,54 @@ def test_clear_restores_the_constructor_numbers():
     assert limiter.retry_after("k") == 300.0
 
 
+def test_a_fresh_limiter_is_enabled():
+    limiter, _ = _limiter(max_failures=1)
+    limiter.record_failure("k")
+    assert limiter.blocked("k")
+
+
+def test_a_disabled_limiter_blocks_nothing_and_forgets_what_it_held():
+    limiter, _ = _limiter(max_failures=5, window=300)
+    for _ in range(5):
+        limiter.record_failure("blocked")
+    limiter.record_failure("counted")
+    assert limiter.blocked("blocked") and limiter.blocked_keys() == ["blocked"]
+    limiter.configure(5, 300, enabled=False)
+    assert not limiter.blocked("blocked") and limiter.retry_after("blocked") == 0.0
+    assert limiter.blocked_keys() == []
+    assert limiter._failures == {} and limiter._blocked_since == {}
+    for i in range(50):
+        limiter.record_failure("blocked")
+        limiter.record_failure(f"k{i}")
+    assert not limiter.blocked("blocked") and limiter.blocked_keys() == []
+    assert limiter._failures == {} and limiter._blocked_since == {}  # nothing was stored
+    limiter.reset("blocked")  # these must not raise either
+    assert limiter.drop(lambda key: True) == 0
+    limiter.configure(5, 300, enabled=False)  # idempotent
+
+
+def test_switching_a_limiter_back_on_counts_from_zero():
+    limiter, _ = _limiter(max_failures=5, window=300)
+    limiter.configure(5, 300, enabled=False)
+    for _ in range(50):
+        limiter.record_failure("k")
+    limiter.configure(5, 300, True)
+    for _ in range(4):
+        limiter.record_failure("k")
+    assert not limiter.blocked("k")  # the 50 failures from while it was off were not counted
+    limiter.record_failure("k")
+    assert limiter.blocked("k")
+
+
+def test_clear_turns_a_switched_off_limiter_back_on():
+    limiter, _ = _limiter(max_failures=5, window=300)
+    limiter.configure(5, 300, enabled=False)
+    limiter.clear()  # a configure() is forgotten, the switch too
+    for _ in range(5):
+        limiter.record_failure("k")
+    assert limiter.blocked("k")
+
+
 def test_limiter_reset_clears_one_key():
     limiter = LoginLimiter(max_failures=1)
     limiter.record_failure("a")

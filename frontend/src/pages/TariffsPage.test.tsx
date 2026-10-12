@@ -56,6 +56,13 @@ const fillRate = async (form: HTMLElement, from: string, rate: string) => {
   await userEvent.type(within(form).getByLabelText("Rate per kWh"), rate);
 };
 const currencyForm = () => screen.getByRole("form", { name: "Site currency" });
+// The row menu is a portal on document.body: open it from the row's trigger, then find the item on the page.
+const openMenu = (row: HTMLElement) => userEvent.click(within(row).getByRole("button", { name: /^Actions for / }));
+const edit = async (row: HTMLElement) => {
+  await openMenu(row);
+  await userEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
+};
+const trash = (row: HTMLElement) => within(row).getByRole("button", { name: /^Delete rate from / });
 
 beforeEach(() => {
   // newest first per scope, as the API returns them: site default rates, then overrides
@@ -91,15 +98,86 @@ describe("TariffsPage", () => {
     expect(screen.getByText(/A rate applies from its effective date/).closest(".page-head")).not.toBeNull();
   });
 
-  it("styles the row actions as quiet (Edit) and danger-quiet (Delete), and has at most one primary button", async () => {
+  it("gives each rate a three-dot menu (Edit only) and a trash button, and has at most one primary button", async () => {
     open();
     const row = (await screen.findByText("2026-10-01")).closest("tr")!;
-    expect(within(row).getByRole("button", { name: "Edit" })).toHaveClass("quiet");
-    expect(within(row).getByRole("button", { name: "Delete" })).toHaveClass("danger-quiet");
+    const trigger = within(row).getByRole("button", { name: "Actions for rate from 2026-10-01 (site default)" });
+    expect(trigger).toHaveClass("row-menu-btn");
+    expect(trash(row)).toHaveClass("trash-btn");
+    expect(within(row).queryByRole("button", { name: "Edit" })).not.toBeInTheDocument(); // Edit lives in the menu now
+    await userEvent.click(trigger);
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Edit"]); // Delete is the trash, never a menu item
     // the page has no primary button: the two Add rate buttons and the currency Save are plain (none is invented here)
     expect(document.querySelectorAll(".primary").length).toBeLessThanOrEqual(1);
     expect(document.querySelectorAll(".primary")).toHaveLength(0);
     expect(screen.getAllByRole("button", { name: "Add rate" })).toHaveLength(2);
+  });
+
+  it("names every menu and trash button by the rate and, for an override, its asset", async () => {
+    open();
+    const defaults = await screen.findByRole("table", { name: "Site default rates" });
+    expect(within(defaults).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Actions for rate from 2026-10-01 (site default)", "Delete rate from 2026-10-01 (site default)",
+      "Actions for rate from 2026-01-01 (site default)", "Delete rate from 2026-01-01 (site default)",
+    ]);
+    const overrides = screen.getByRole("table", { name: "Asset overrides" });
+    expect(within(overrides).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Actions for rate from 2026-10-15 for LV Panel 1", "Delete rate from 2026-10-15 for LV Panel 1",
+    ]);
+  });
+
+  it("gives each section a head: an icon, the unchanged h2 and a one-line purpose, and adds no heading", async () => {
+    open();
+    await screen.findByRole("table", { name: "Site default rates" });
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Currency", "Site default rate", "Asset overrides"]);
+    const purposes = [
+      ["Currency", "The unit costs are shown in. Set it first: every rate below is in this currency."],
+      ["Site default rate", "The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date."],
+      ["Asset overrides", "A different price per kWh for one asset and everything under it (unless a lower asset has its own), from its effective date."],
+    ];
+    for (const [title, text] of purposes) {
+      const head = screen.getByRole("heading", { level: 2, name: title }).closest(".sect-head")!;
+      expect(head).not.toBeNull();
+      expect(head.querySelector("svg.i")).toHaveAttribute("aria-hidden", "true");
+      expect(head.querySelector("h2 svg")).toBeNull(); // the icon sits beside the heading, not in its name
+      const purpose = within(head as HTMLElement).getByText(text);
+      expect(purpose).toHaveClass("sect-purpose", "muted");
+    }
+  });
+
+  it("explains the fields with tips that sit beside the labels, not inside them", async () => {
+    open();
+    const tips = (scope: HTMLElement) => within(scope).getAllByRole("button", { name: "What does this mean?" });
+    const currency = await screen.findByRole("form", { name: "Site currency" });
+    const siteForm = screen.getByRole("form", { name: "Add site default rate" });
+    const overrideForm = screen.getByRole("form", { name: "Add asset override" });
+    expect(tips(currency)).toHaveLength(1);
+    expect(tips(siteForm)).toHaveLength(2);
+    expect(tips(overrideForm)).toHaveLength(3);
+    expect(document.querySelectorAll("label .tip")).toHaveLength(0);
+    expect(document.querySelectorAll(".has-tip > label + .tip")).toHaveLength(6);
+    const cases: [HTMLElement, number, string][] = [
+      [currency, 0, "A three-letter code such as QAR."],
+      [siteForm, 0, "The first day (site time) this rate counts. Readings before that day keep the rate that applied then."],
+      [siteForm, 1, "The price of one kilowatt-hour in the site currency, for example 0.18."],
+      [overrideForm, 0, "This asset and the assets under it are charged this rate."],
+      [overrideForm, 1, "The first day (site time) this rate counts. Readings before that day keep the rate that applied then."],
+      [overrideForm, 2, "The price of one kilowatt-hour in the site currency, for example 0.18."],
+    ];
+    for (const [form, index, text] of cases) {
+      const button = tips(form)[index];
+      await userEvent.click(button);
+      expect(screen.getByRole("note")).toHaveTextContent(text);
+      await userEvent.click(button); // pinned by the click: a second click closes it
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    }
+  });
+
+  it("keeps the label of each field its own (a tip never changes a field's name)", async () => {
+    open();
+    const form = await screen.findByRole("form", { name: "Add asset override" });
+    for (const name of ["Asset", "Effective from", "Rate per kWh"]) expect(within(form).getByLabelText(name)).toBeInTheDocument();
+    expect(await screen.findByLabelText("Currency")).toBeInTheDocument();
   });
 
   it("puts the currency notes in info banners that keep role status", async () => {
@@ -114,8 +192,10 @@ describe("TariffsPage", () => {
   it("shows empty states when there are no rates and no overrides", async () => {
     rows = [];
     open();
-    expect(await screen.findByText(/No site default rate yet/)).toBeInTheDocument();
-    expect(screen.getByText(/No overrides/)).toBeInTheDocument();
+    expect(await screen.findByText(
+      "No site default rate yet. Until one is set, assets with no override show a dash for cost. Add a rate below.",
+    )).toBeInTheDocument();
+    expect(screen.getByText("No overrides. Every asset uses the site default rate.")).toBeInTheDocument();
     expect(screen.getByText(/No site default rate yet/).closest(".empty")).not.toBeNull();
     expect(screen.getByText(/No overrides/).closest(".empty")).not.toBeNull();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
@@ -208,7 +288,7 @@ describe("TariffsPage", () => {
       expect(within(form).getByLabelText("Rate per kWh")).toHaveAttribute("step", "0.01");
     }
     const row = (await screen.findByText("2026-10-01")).closest("tr")!;
-    await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    await edit(row);
     expect(within(row).getByLabelText("Rate per kWh")).toHaveAttribute("step", "0.01");
   });
 
@@ -279,7 +359,7 @@ describe("TariffsPage", () => {
       const body = within(table).getAllByRole("row").slice(1);
       expect(body.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["PDU A (Site / Room 1)", "PDU A (Site / Room 2)"]);
       const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-      await userEvent.click(within(body[1]).getByRole("button", { name: "Delete" }));
+      await userEvent.click(within(body[1]).getByRole("button", { name: "Delete rate from 2026-10-15 for PDU A (Site / Room 2)" }));
       expect(confirm).toHaveBeenCalledWith(expect.stringContaining("for PDU A (Site / Room 2)?"));
     });
   });
@@ -291,7 +371,7 @@ describe("TariffsPage", () => {
     const cells = within(within(table).getAllByRole("row")[1]).getAllByRole("cell");
     expect(cells[0].textContent).toBe("Room 1 / Panel");
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    await userEvent.click(within(table).getByRole("button", { name: "Delete" }));
+    await userEvent.click(within(table).getByRole("button", { name: "Delete rate from 2026-10-15 for Room 1 / Panel" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("for Room 1 / Panel?"));
   });
 
@@ -339,7 +419,7 @@ describe("TariffsPage", () => {
   it("edits a rate and sends only the changed field", async () => {
     const calls = open();
     const row = (await screen.findByText("2026-10-01")).closest("tr")!;
-    await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    await edit(row);
     const rate = within(row).getByLabelText("Rate per kWh");
     await userEvent.clear(rate);
     await userEvent.type(rate, "0.18");
@@ -351,7 +431,7 @@ describe("TariffsPage", () => {
   it("edits the effective date and sends only that", async () => {
     const calls = open();
     const row = (await screen.findByText("2026-10-01")).closest("tr")!;
-    await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    await edit(row);
     fireEvent.change(within(row).getByLabelText("Effective from"), { target: { value: "2026-10-05" } });
     await userEvent.click(within(row).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ effective_from: "2026-10-05" }));
@@ -364,7 +444,7 @@ describe("TariffsPage", () => {
     };
     open();
     const row = (await screen.findByText("2026-10-01")).closest("tr")!;
-    await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    await edit(row);
     fireEvent.change(within(row).getByLabelText("Effective from"), { target: { value: "2026-01-01" } });
     await userEvent.click(within(row).getByRole("button", { name: "Save" }));
     expect(await within(row).findByRole("alert")).toHaveTextContent("already starts on that date");
@@ -373,21 +453,59 @@ describe("TariffsPage", () => {
   it("leaves the rate alone when an edit is cancelled", async () => {
     const calls = open();
     const row = (await screen.findByText("2026-10-01")).closest("tr")!;
-    await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    await edit(row);
     await userEvent.type(within(row).getByLabelText("Rate per kWh"), "9");
     await userEvent.click(within(row).getByRole("button", { name: "Cancel" }));
     expect(within(row).getByText("0.15")).toBeInTheDocument();
     expect(calls.some((c) => c.method === "PATCH")).toBe(false);
   });
 
+  it("Escape ends an edit like Cancel: no request, the old rate shown, the focus back on the menu button", async () => {
+    const calls = open();
+    const row = (await screen.findByText("2026-10-01")).closest("tr")!;
+    await edit(row);
+    await userEvent.type(within(row).getByLabelText("Rate per kWh"), "9");
+    await userEvent.keyboard("{Escape}");
+    expect(within(row).getByText("0.15")).toBeInTheDocument();
+    expect(within(row).queryByLabelText("Rate per kWh")).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+    expect(within(row).getByRole("button", { name: "Actions for rate from 2026-10-01 (site default)" })).toHaveFocus();
+  });
+
+  it("Escape on a row that is not being edited does nothing", async () => {
+    open();
+    const row = (await screen.findByText("2026-10-01")).closest("tr")!;
+    within(row).getByRole("button", { name: "Actions for rate from 2026-10-01 (site default)" }).focus();
+    await userEvent.keyboard("{Escape}");
+    expect(within(row).getByText("0.15")).toBeInTheDocument();
+  });
+
+  it("puts the focus on the Effective from input when Edit is chosen, and gives it back to the menu button after Cancel and after Save", async () => {
+    open();
+    const row = (await screen.findByText("2026-10-01")).closest("tr")!;
+    const trigger = () => within(row).getByRole("button", { name: "Actions for rate from 2026-10-01 (site default)" });
+    await edit(row);
+    expect(within(row).getByLabelText("Effective from")).toHaveFocus(); // the menu button is gone, so the first field takes it
+    expect(within(row).queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument(); // Save and Cancel replace the menu and the trash
+    await userEvent.click(within(row).getByRole("button", { name: "Cancel" }));
+    expect(trigger()).toHaveFocus();
+    await edit(row);
+    const rate = within(row).getByLabelText("Rate per kWh");
+    await userEvent.clear(rate);
+    await userEvent.type(rate, "0.18");
+    await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(within(row).getByText("0.18")).toBeInTheDocument());
+    expect(trigger()).toHaveFocus();
+  });
+
   it("deletes an override only after confirmation", async () => {
     const calls = open();
     const row = (await screen.findByText("2026-10-15")).closest("tr")!;
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
-    await userEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    await userEvent.click(trash(row));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("LV Panel 1"));
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
-    await userEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    await userEvent.click(trash(row));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/tariffs/3")).toBe(true));
     expect(await screen.findByText(/No overrides/)).toBeInTheDocument();
   });

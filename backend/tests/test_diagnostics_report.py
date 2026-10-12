@@ -765,6 +765,16 @@ async def test_gather_on_an_empty_database_gives_every_section(db, session):
     assert "no sources configured" in body and "no connection check has been run" in body and verify_paste(finalize(body, "x", NOW).text()).ok
 
 
+async def test_the_settings_block_says_whether_sign_in_protection_is_on(db, session):
+    assert dict((await gather(session, detail="summary")).settings.values)["sign_in.enabled"] == "True"
+    await db.execute(
+        "INSERT INTO settings (key, value) VALUES ('sign_in', '{\"max_failures\": 5, \"block_minutes\": 5, \"enabled\": false}'::jsonb)"
+    )
+    assert dict((await gather(session, detail="summary")).settings.values)["sign_in.enabled"] == "False"
+    await db.execute("UPDATE settings SET value = '{\"max_failures\": 5, \"block_minutes\": 5, \"enabled\": \"false\"}'::jsonb WHERE key = 'sign_in'")
+    assert dict((await gather(session, detail="summary")).settings.values)["sign_in.enabled"] == "True"  # garbage means on
+
+
 async def test_gather_reads_every_section_from_a_seeded_database(db, session):
     ids = await seed(db)
     data = await gather(session, detail="full", client_time=datetime.now(timezone.utc) + timedelta(seconds=90))

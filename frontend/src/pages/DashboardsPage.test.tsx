@@ -40,6 +40,26 @@ describe("DashboardsPage", () => {
     await screen.findByRole("link", { name: "Hall A" });
     expect(screen.queryByRole("button", { name: "New dashboard" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Delete/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Actions" })).not.toBeInTheDocument();
+  });
+
+  it("gives an operator one control per row: the trash button named for the dashboard, with no menu", async () => {
+    open("operator");
+    await screen.findByRole("link", { name: "Hall A" });
+    const row = screen.getByRole("link", { name: "Hall A" }).closest("tr")!;
+    const trash = within(row).getByRole("button", { name: "Delete Hall A" });
+    expect(trash).toHaveClass("trash-btn");
+    expect(within(row).getAllByRole("button")).toEqual([trash]);
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument(); // no empty three-dot menu
+  });
+
+  it("deletes from the keyboard: Enter on the trash button asks first", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    open("operator");
+    await screen.findByRole("link", { name: "Hall A" });
+    screen.getByRole("button", { name: "Delete Hall A" }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(confirm).toHaveBeenCalledWith('Delete dashboard "Hall A" and its widgets?');
   });
 
   it("lets an operator create a dashboard and opens it in edit mode", async () => {

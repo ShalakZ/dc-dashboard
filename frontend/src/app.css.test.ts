@@ -712,10 +712,134 @@ describe("the page style files (src/styles/*.css)", () => {
     expect(bare).toEqual([]);
   });
 
+  it("the Tariffs form bars size their Save and Add buttons, not the ? tips in the same bar (a 38px tip would sit 10px below its label line)", () => {
+    const billing = parsed.find((p) => p.file === "pages-billing.css")!;
+    const onButtons = billing.rules.flatMap((r) => selectorParts(r.selector).filter((part) => /\.inline-form button/.test(part)).map((part) => ({ part, body: r.body })));
+    expect(onButtons.length, "a rule that sizes the buttons of the form bars").toBeGreaterThan(0);
+    for (const { part, body } of onButtons) {
+      if (/(min-)?(height|width)\s*:/.test(body)) expect(part, "spares the icon buttons").toContain(":not(.icon-btn)");
+    }
+  });
+
   it("the checks above can see a clash (the helpers are exercised on a small example)", () => {
     const sample = parseRules(".row-actions { display: flex; } td.row-actions, .users-page .row-actions :is(a, b), .x:hover, .y::before { color: red; }");
     expect([...bareClasses(sample)].sort()).toEqual(["row-actions", "users-page", "x", "y"]); // a page root is "bare" too; only it is named in no other file
     expect(selectorParts(".a :is(b, c), d")).toEqual([".a :is(b, c)", "d"]);
     expect(firstCompound(".users-page .row-actions")).toBe(".users-page");
+  });
+});
+
+describe("the row menu, the trash button and the info tip (W7b)", () => {
+  const SHARED = /\.(row-menu-btn|row-menu-panel|trash-btn|tip|tip-btn|tip-bubble|has-tip)(?![\w-])/;
+  const mine = rules.filter((r) => SHARED.test(r.selector));
+  const only = (selector: string) => {
+    const found = rules.filter((r) => r.selector === selector);
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0];
+  };
+  const zIndex = (selector: string) => Number(/z-index:\s*(\d+)/.exec(only(selector).body)?.[1]);
+  const parts = (selector: string) => selector.split(",").map((part) => part.trim());
+
+  it("every rule is inside the layer and uses tokens only, no raw colour", () => {
+    expect(mine.length, "the rules of the three pieces").toBeGreaterThan(12);
+    for (const rule of mine) {
+      expect(inLayer(rule), `"${rule.selector}" in @layer w6`).toBe(true);
+      expect(rule.body, `colour in "${rule.selector}"`).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
+    }
+  });
+
+  it("the menu panel is a fixed, scrolling, white popup above the top bar and below the dialogs", () => {
+    const panel = only(".row-menu-panel").body;
+    expect(panel).toMatch(/position:\s*fixed/);
+    expect(panel).toMatch(/min-width:\s*168px/);
+    expect(panel).toMatch(/max-height:\s*calc\(100vh - 16px\)/);
+    expect(panel).toMatch(/overflow-y:\s*auto/);
+    expect(panel).toMatch(/background:\s*var\(--bg\)/);
+    expect(panel).toMatch(/box-shadow:\s*var\(--shadow-pop\)/);
+    expect(panel).toMatch(/border-radius:\s*var\(--radius\)/);
+    expect(zIndex(".row-menu-panel")).toBeGreaterThan(zIndex(".navbar"));
+    expect(zIndex(".row-menu-panel")).toBeLessThan(zIndex(".dialog-backdrop"));
+  });
+
+  it("the tip bubble sits above the page chrome (sidebar, bar) and below the dialogs", () => {
+    expect(zIndex(".tip-bubble")).toBeGreaterThan(zIndex(".navbar"));
+    expect(zIndex(".tip-bubble")).toBeLessThan(zIndex(".dialog-backdrop"));
+  });
+
+  it("a menu item is a flat, left-aligned, 34px row that undoes the base button (no border, no centring), ringed inside the panel", () => {
+    const item = only('.row-menu-panel [role="menuitem"]').body;
+    expect(item).toMatch(/width:\s*100%/);
+    expect(item).toMatch(/min-height:\s*34px/);
+    expect(item).toMatch(/border:\s*0/);
+    expect(item).toMatch(/justify-content:\s*flex-start/);
+    expect(item).toMatch(/text-align:\s*left/);
+    expect(item).toMatch(/text-decoration:\s*none/); // a link item
+    // inside the panel: it scrolls, so an outside ring would be clipped
+    const ring = only('.row-menu-panel [role="menuitem"]:focus-visible').body;
+    expect(ring).toMatch(/outline:\s*2px solid var\(--ring\)/);
+    expect(ring).toMatch(/outline-offset:\s*-\d+px/);
+    expect(only('.row-menu-panel [role="menuitem"]:disabled').body).toMatch(/color:\s*var\(--text-disabled\)/);
+    expect(only(".row-menu-panel .danger-item").body).toMatch(/color:\s*var\(--crit\)/);
+  });
+
+  it("the trash button turns critical on hover and focus, later in the file than the icon button's accent hover it must beat", () => {
+    const hover = rules.find((r) => parts(r.selector).includes(".trash-btn:hover:not(:disabled)"))!;
+    expect(parts(hover.selector)).toContain(".trash-btn:focus-visible");
+    expect(hover.body).toMatch(/background:\s*var\(--crit-tint\)/);
+    expect(hover.body).toMatch(/color:\s*var\(--crit\)/);
+    expect(hover.order).toBeGreaterThan(only(".icon-btn:hover:not(:disabled)").order);
+    expect(contrast(tok("crit"), tok("crit-tint"))).toBeGreaterThanOrEqual(AA);
+  });
+
+  it("the lid turns about its left end (its hinge), lifting and tilting, over the motion token", () => {
+    const lid = only(".trash-btn .lid").body;
+    expect(lid).toMatch(/transform-box:\s*fill-box/); // otherwise the SVG would turn it about its own 0,0
+    expect(lid).toMatch(/transform-origin:\s*0% 100%/);
+    expect(lid).toMatch(/transition:\s*transform var\(--motion\)/);
+    const lifted = rules.find((r) => parts(r.selector).includes(".trash-btn:hover:not(:disabled) .lid"))!;
+    expect(parts(lifted.selector)).toContain(".trash-btn:focus-visible .lid");
+    expect(lifted.body).toMatch(/transform:\s*translateY\(-1\.5px\) rotate\(-16deg\)/);
+  });
+
+  it("with reduced motion the lid does not move: the hover and focus selectors are repeated, because the plain one would lose on specificity", () => {
+    const calm = rules.filter((r) => r.at.some((a) => a.includes("prefers-reduced-motion: reduce")) && parts(r.selector).includes(".trash-btn .lid"));
+    expect(calm, "a reduced-motion rule for .trash-btn .lid").toHaveLength(1);
+    expect(parts(calm[0].selector)).toEqual(expect.arrayContaining([".trash-btn:hover:not(:disabled) .lid", ".trash-btn:focus-visible .lid"]));
+    expect(calm[0].body).toMatch(/transform:\s*none/);
+    expect(calm[0].body).toMatch(/transition:\s*none/);
+    const lifted = rules.find((r) => parts(r.selector).includes(".trash-btn:hover:not(:disabled) .lid"))!;
+    expect(calm[0].order).toBeGreaterThan(lifted.order);
+  });
+
+  it("the tip bubble is white on the tooltip navy, wraps at 320px (80vw on a small window), and a tip at the line end opens leftwards", () => {
+    const bubble = only(".tip-bubble").body;
+    expect(bubble).toMatch(/max-width:\s*min\(320px,\s*80vw\)/);
+    expect(bubble).toMatch(/position:\s*absolute/);
+    expect(bubble).toMatch(/box-shadow:\s*var\(--shadow-tip\)/);
+    expect(bubble).toMatch(/white-space:\s*normal/);
+    expect(contrast(tok("tooltip-text"), tok("tooltip-bg"))).toBeGreaterThanOrEqual(AA);
+    expect(only('.tip-bubble[data-align="end"]').body).toMatch(/left:\s*auto;\s*right:\s*0/);
+  });
+
+  it("a tip sits at the end of a label line without being inside the label: .has-tip anchors it", () => {
+    expect(only(".tip").body).toMatch(/position:\s*relative/);
+    expect(only(".has-tip").body).toMatch(/position:\s*relative/);
+    const placed = only(".has-tip > .tip").body;
+    expect(placed).toMatch(/position:\s*absolute/);
+    expect(placed).toMatch(/top:\s*0/);
+    expect(placed).toMatch(/right:\s*0/);
+  });
+
+  it("a tip never covers its label and sits on the label's first line: the label keeps 28px free, the field gives them back, the tip box is one label line high", () => {
+    const reserved = /padding-right:\s*(\d+)px/.exec(only(".has-tip > label").body)?.[1];
+    expect(Number(reserved), "room reserved at the right of the label").toBeGreaterThanOrEqual(24 + 4); // the 24px button and a 4px gap
+    expect(only(".has-tip > label > :is(input, select, textarea)").body).toMatch(new RegExp(`margin-right:\\s*-${reserved}px`));
+    expect(only(".has-tip > .tip").body).toMatch(/height:\s*calc\(var\(--fs-sm\)\s*\*\s*1\.4\)/); // the label's font size at the 1.4 line height of the page
+    expect(only("label").body).toMatch(/font-size:\s*var\(--fs-sm\)/);
+  });
+
+  it("the tip and menu buttons keep a hit area of 24px or more", () => {
+    expect(only(".tip-btn").body).toMatch(/width:\s*24px;\s*height:\s*24px/);
+    expect(only(".icon-btn").body).toMatch(/width:\s*28px;\s*height:\s*28px/);
   });
 });

@@ -1,9 +1,10 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
-import { StoragePage, validate } from "./StoragePage";
+import { checkRange, FIELDS, sizeText, StoragePage, validate } from "./StoragePage";
 
 const base = {
   "GET /api/setup": { body: { needed: false } },
@@ -97,7 +98,7 @@ describe("StoragePage", () => {
       "GET /api/settings/storage": { body: settingsOut },
     });
     renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
-    expect(await screen.findByText(/^full /)).toBeInTheDocument();
+    expect(await screen.findByText("full")).toBeInTheDocument();  // the tile's figure is the word alone (the caption "Projected full" is not an exact match)
     expect(screen.queryByText(/not growing/)).not.toBeInTheDocument();
   });
 
@@ -290,5 +291,211 @@ describe("validate bounds", () => {
     expect(validate({ ...ok, warn_threshold_pct: 80.5 })).toMatch(/whole number/);
     expect(validate({ ...ok, disk_capacity_gb: 0.5 })).toBeNull();
     expect(validate({ ...ok, disk_capacity_gb: Number.NaN })).toMatch(/must be a number/);
+  });
+});
+
+describe("StoragePage summary tiles and explanations", () => {
+  const tileOf = (caption: string) => screen.getByText(caption).closest(".tile") as HTMLElement;
+  const CAPTIONS = { database: "Database size", readings: "Readings (raw)", rollups: "Rollups", growth: "Growth per day", projected: "Projected full" } as const;
+
+  it("shows the five figures in tiles and no longer in a key/value list", async () => {
+    mockFetch(routes());
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByText("Database size");
+    expect(tileOf("Database size")).toHaveTextContent("5.0 GiB");
+    expect(tileOf("Readings (raw)")).toHaveTextContent("2.0 GiB");
+    expect(tileOf("Readings (raw)")).toHaveTextContent("compressed 1.0 GiB of 4.0 GiB, ratio 0.25");
+    expect(tileOf("Rollups")).toHaveTextContent("1 min 1.0 MiB, 1 h 1.0 MiB"); // under 1 GiB: MiB
+    expect(tileOf("Growth per day")).toHaveTextContent("100.0 MiB / day");
+    expect(tileOf("Projected full")).toHaveTextContent("973 days");
+    expect(tileOf("Projected full")).toHaveTextContent("5% of 100.0 GiB");
+    expect(document.querySelector(".storage-page dl")).toBeNull();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("reads a small database in MiB, not as 0.0 GiB, and groups the digits of a long projection", async () => {
+    mockFetch({ ...routes(), "GET /api/storage": { body: { ...stats, database_bytes: 40 * 1024 ** 2, growth_bytes_per_day: 0, days_until_full: 71_615.4, used_pct: 0.01 } } });
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByText("Database size");
+    expect(tileOf("Database size")).toHaveTextContent("40.0 MiB");
+    expect(tileOf("Database size")).not.toHaveTextContent("GiB");
+    expect(tileOf("Growth per day")).toHaveTextContent("0.0 MiB / day");
+    expect(tileOf("Projected full")).toHaveTextContent("71,615 days");
+  });
+
+  it("sizeText: MiB below 1 GiB, GiB from there, and never 1024.0 MiB", () => {
+    expect(sizeText(0)).toBe("0.0 MiB");
+    expect(sizeText(5 * 1024 ** 2)).toBe("5.0 MiB");
+    expect(sizeText(1024 ** 3 - 1024 ** 2)).toBe("1023.0 MiB");
+    expect(sizeText(1024 ** 3 - 1024 ** 2 / 100)).toBe("1.0 GiB"); // 1023.99 MiB
+    expect(sizeText(1024 ** 3)).toBe("1.0 GiB");
+    expect(sizeText(5 * 1024 ** 3)).toBe("5.0 GiB");
+  });
+
+  it("says nothing is compressed yet instead of a ratio when no chunk is compressed", async () => {
+    mockFetch({ ...routes(), "GET /api/storage": { body: { ...stats, readings_bytes_compressed: 0, readings_bytes_uncompressed: 0 } } });
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByText("Database size");
+    expect(tileOf("Readings (raw)")).toHaveTextContent("nothing compressed yet");
+    expect(tileOf("Readings (raw)")).not.toHaveTextContent(/ratio/);
+  });
+
+  it("each tile has a tip that opens with its sentence", async () => {
+    mockFetch(routes());
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByText("Database size");
+    for (const [key, caption] of Object.entries(CAPTIONS) as [keyof typeof CAPTIONS, string][]) {
+      const button = within(tileOf(caption)).getByRole("button", { name: "What does this mean?" });
+      await userEvent.click(button);
+      expect(screen.getByRole("note"), caption).toHaveTextContent(TILE_HELP[key]);  // one tip is open at a time
+    }
+  });
+
+  it("each retention and capacity field has a tip beside its label, never inside it, with the sentence from storageHelp", async () => {
+    mockFetch(routes());
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByLabelText(/raw retention/i);
+    for (const [key, label] of FIELDS) {
+      const field = screen.getByLabelText(label).closest(".has-tip") as HTMLElement;
+      const button = within(field).getByRole("button", { name: "What does this mean?" });
+      expect(button.closest("label"), label).toBeNull();
+      await userEvent.click(button);
+      expect(screen.getByRole("note"), label).toHaveTextContent(FIELD_HELP[key]);
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    }
+  });
+});
+
+describe("checkRange", () => {
+  it("accepts a good range, a single day and the longest allowed span (366 days)", () => {
+    expect(checkRange("2026-10-01", "2026-10-07", "2026-10-07")).toBeNull();
+    expect(checkRange("2026-10-07", "2026-10-07", "2026-10-07")).toBeNull();
+    expect(checkRange("2025-10-07", "2026-10-07", "2026-10-07")).toBeNull();
+  });
+  it("refuses a first day after the last day, a last day after today and 367 days, in the server's order", () => {
+    expect(checkRange("2026-10-09", "2026-10-07", "2026-10-07")).toBe("The first day must not be after the last day.");
+    expect(checkRange("2026-10-01", "2026-10-08", "2026-10-07")).toBe("Choose days up to today (UTC).");
+    expect(checkRange("2025-10-06", "2026-10-07", "2026-10-07")).toBe("At most 366 days at a time.");
+    expect(checkRange("2026-10-09", "2026-10-08", "2026-10-07")).toBe("The first day must not be after the last day.");
+    expect(checkRange("2024-01-01", "2026-10-08", "2026-10-07")).toBe("Choose days up to today (UTC).");
+  });
+});
+
+describe("StoragePage rows per day by date", () => {
+  const from = () => screen.getByLabelText("Rows from day");
+  const to = () => screen.getByLabelText("Rows to day");
+  const rangeBody = (start: string, end: string, extra: object = {}) => ({
+    start, end, first_day: "2026-09-01", last_day: "2026-10-07", total_rows: 6, ...extra,
+    days: [{ day: start, rows: 2 }, { day: end, rows: 4 }],
+  });
+  const rangeCalls = (calls: { path: string }[]) => calls.filter((c) => c.path === "/api/storage/rows-per-day");
+  const open = async (rangeRoute: object) => {
+    const urls: string[] = [];
+    const calls = mockFetch(routes({ "GET /api/storage/rows-per-day": (req: { url: string }) => { urls.push(req.url); return rangeRoute; } }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByLabelText("Rows from day");
+    return { urls, calls };
+  };
+
+  it("starts on the last 7 days from the storage reply, with no extra request, and says the days are UTC days", async () => {
+    const { calls } = await open({ body: rangeBody("2026-09-28", "2026-10-07") });
+    expect(from()).toHaveValue("2026-10-01");
+    expect(to()).toHaveValue("2026-10-07");
+    expect(screen.getByText("7,000")).toBeInTheDocument();
+    expect(screen.getByText("28,000 rows in total")).toBeInTheDocument();
+    expect(screen.getByText(/UTC days/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Last 7 days" })).toBeInTheDocument();
+    expect(rangeCalls(calls)).toHaveLength(0);
+  });
+
+  it("loads a valid range with one request carrying both days, and fills min and max from the answer", async () => {
+    const { urls } = await open({ body: rangeBody("2026-09-28", "2026-10-07") });
+    fireEvent.change(from(), { target: { value: "2026-09-28" } });
+    expect(await screen.findByText("2026-09-28")).toBeInTheDocument();
+    expect(screen.getByText("6 rows in total")).toBeInTheDocument();
+    expect(screen.queryByText("7,000")).not.toBeInTheDocument();
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("start=2026-09-28");
+    expect(urls[0]).toContain("end=2026-10-07");
+    expect(from()).toHaveAttribute("min", "2026-09-01");
+    expect(to()).toHaveAttribute("max", "2026-10-07");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("a first day after the last day shows the message, sends nothing and leaves the table", async () => {
+    const { calls } = await open({ body: rangeBody("2026-10-09", "2026-10-07") });
+    fireEvent.change(from(), { target: { value: "2026-10-09" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("The first day must not be after the last day.");
+    expect(screen.getByText("7,000")).toBeInTheDocument();
+    expect(rangeCalls(calls)).toHaveLength(0);
+  });
+
+  it("a last day after today and a span over 366 days are refused the same way", async () => {
+    const { calls } = await open({ body: rangeBody("2026-10-01", "2026-10-08") });
+    fireEvent.change(to(), { target: { value: "2026-10-08" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Choose days up to today (UTC).");
+    fireEvent.change(to(), { target: { value: "2026-10-07" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.change(from(), { target: { value: "2025-10-06" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("At most 366 days at a time.");
+    expect(rangeCalls(calls)).toHaveLength(0);
+    expect(screen.getByText("7,000")).toBeInTheDocument();
+  });
+
+  it("a cleared date input shows no message, sends nothing and keeps the table", async () => {
+    const { calls } = await open({ body: rangeBody("2026-09-28", "2026-10-07") });
+    fireEvent.change(to(), { target: { value: "" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("7,000")).toBeInTheDocument();
+    expect(rangeCalls(calls)).toHaveLength(0);
+  });
+
+  it("Last 7 days puts the first rows back without another request", async () => {
+    const { urls } = await open({ body: rangeBody("2026-09-28", "2026-10-07") });
+    fireEvent.change(from(), { target: { value: "2026-09-28" } });
+    await screen.findByText("6 rows in total");
+    await userEvent.click(screen.getByRole("button", { name: "Last 7 days" }));
+    expect(screen.getByText("7,000")).toBeInTheDocument();
+    expect(screen.getByText("28,000 rows in total")).toBeInTheDocument();
+    expect(from()).toHaveValue("2026-10-01");
+    expect(to()).toHaveValue("2026-10-07");
+    expect(urls).toHaveLength(1);
+  });
+
+  it("takes the latest allowed day from the last answer, so a server a day ahead of the first reply is not second-guessed", async () => {
+    const { urls } = await open({ body: rangeBody("2026-09-28", "2026-10-07", { last_day: "2026-10-08" }) });
+    fireEvent.change(from(), { target: { value: "2026-09-28" } });
+    await screen.findByText("6 rows in total");
+    fireEvent.change(to(), { target: { value: "2026-10-08" } });
+    await waitFor(() => expect(urls).toHaveLength(2));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(urls[1]).toContain("end=2026-10-08");
+  });
+
+  it("shows loading… while the range is on its way and the server's text when it refuses", async () => {
+    const real = globalThis.fetch;
+    mockFetch(routes());
+    const mocked = globalThis.fetch;
+    let release: (r: Response) => void = () => {};
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      return url.includes("rows-per-day") ? new Promise<Response>((resolve) => { release = resolve; }) : mocked(input, init);
+    }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByLabelText("Rows from day");
+    fireEvent.change(from(), { target: { value: "2026-09-28" } });
+    expect(await screen.findByText("loading…")).toBeInTheDocument();
+    expect(screen.queryByText("7,000")).not.toBeInTheDocument();
+    release(new Response(JSON.stringify({ detail: "The end day is in the future; the latest day is 2026-10-06." }), { status: 422, headers: { "content-type": "application/json" } }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The end day is in the future; the latest day is 2026-10-06.");
+    vi.stubGlobal("fetch", real);
+  });
+
+  it("says No readings stored yet. for a site whose hourly tier is empty", async () => {
+    await open({ body: rangeBody("2026-09-28", "2026-10-07", { first_day: null, total_rows: 0 }) });
+    fireEvent.change(from(), { target: { value: "2026-09-28" } });
+    expect(await screen.findByText("No readings stored yet.")).toBeInTheDocument();
+    expect(from()).not.toHaveAttribute("min");
   });
 });

@@ -133,7 +133,10 @@ UI screens, besides Assets, Sources and Points:
   totals, Billing and dashboard ranges, and it must have a whole-hour UTC offset in both January and
   July (Settings refuses any other zone). `DCDASH_TIMEZONE` in `.env` only seeds this on first start.
   **Sign-in protection** sets how many failed sign-ins block an account (3 to 20) and for how many minutes
-  (1 to 60); a change is applied at once. See "If you are blocked from signing in".
+  (1 to 60); a change is applied at once. It is on by default and an administrator can switch it off (this asks
+  for a confirmation and is audited); the two numbers are kept while it is off. While it is off a password can be
+  guessed without limit (only the Argon2 time per attempt slows it), and it never switches itself back on.
+  See "If you are blocked from signing in".
 - **Storage** (admin): database and per-tier sizes, compression ratio, rows per day, growth and a
   projected days-until-full figure. Free disk space is not visible from the API container, so disk
   capacity is a setting: set it to the size of the volume holding the database. The page also edits
@@ -273,8 +276,8 @@ data-retrieval requests the connectors already use, nothing else.
    storage save, which re-applies the compression and retention policies and is always recorded).
    Audited: users (create, role, active, password reset, delete: `user.deleted`), your own password changes, first-run
    setup, sign-ins (success, failure, lockout; a wrong current password on a password change counts as
-   a failure), an admin unblocking an account (`login.unblocked`), a change to the sign-in protection numbers
-   (`settings.sign_in_changed`), the site timezone, the currency, the storage settings (every save, `storage.changed`, whose
+   a failure), an admin unblocking an account (`login.unblocked`), a change to the sign-in protection numbers or its
+   switch (`settings.sign_in_changed`), the site timezone, the currency, the storage settings (every save, `storage.changed`, whose
    subject carries `origin`, and, for a save that needed confirmation, `confirmed_loss`; remembering a site
    default is `storage.default_set`), assets, mappings,
    sources (create, edit, delete, test, test all, browse), tariffs, dashboards, scopes, scans (start and
@@ -543,9 +546,16 @@ sooner:
    that account's blocks from every computer. Resetting the account's password or deleting it clears them too.
 2. **An admin changes the numbers** on the Settings page, section Sign-in protection: how many failed sign-ins block an account
    (3 to 20, default 5) and for how many minutes (1 to 60, default 5). A change applies to the next sign-in attempt, also to a block
-   that is running: a shorter block time ends a block that has already lasted that long. The limits cannot be switched off.
-3. **If every admin is blocked,** run `docker compose restart api`. The blocks are held in the api's memory, so a restart clears
-   all of them (the stored numbers are kept).
+   that is running: a shorter block time ends a block that has already lasted that long.
+3. **An admin switches the protection off** (same section, the Sign-in protection switch; it asks for a confirmation). Every block
+   ends at once and no account is blocked while it is off. Failed sign-ins are still written to the audit log, and the Argon2
+   password check still takes its time on every attempt: off removes the block, not that slowdown. Plainly: while it is off a
+   password can be guessed without limit, and only that Argon2 time slows each attempt. It never switches itself back on: an
+   administrator must switch it on again, and then failures are counted from zero. The numbers are kept while it is off.
+   Switching it off or on is audited as `settings.sign_in_changed`; the row for switching it off also says how many blocks it
+   ended (`blocks_ended`).
+4. **If every admin is blocked,** run `docker compose restart api`. The blocks are held in the api's memory, so a restart clears
+   all of them (the stored numbers and the switch are kept).
 
 On this Docker setup every browser may look like one computer: Docker can present all browser connections to the stack as coming
 from the one Compose gateway address, so the wrong passwords typed on one machine can block that account for everyone who signs in

@@ -4,6 +4,8 @@ import { useCreateUser, useDeleteUser, usePatchUser, useUnblockUser, useUsers } 
 import type { Role, UserRow } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { RowActions, type RowAction } from "../components/RowActions";
+import { TrashButton } from "../components/TrashButton";
 
 const ROLES: Role[] = ["viewer", "operator", "admin"];
 
@@ -20,8 +22,25 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
   const [newPassword, setNewPassword] = useState("");
   const [resetting, setResetting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const row = useRef<HTMLTableRowElement>(null);
+  const form = useRef<HTMLFormElement>(null);
+  const field = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (resetting) field.current?.focus(); }, [resetting]);
+
+  // Save and Cancel remove the form their button sits in: the focus goes to the row's menu button, unless the user already moved on.
+  const closeReset = () => {
+    const at = document.activeElement;
+    const kept = !at || at === document.body || form.current?.contains(at);
+    setResetting(false);
+    if (kept) row.current?.querySelector<HTMLElement>(".row-menu-btn")?.focus();
+  };
+  const items: RowAction[] = [
+    { label: user.active ? "Deactivate" : "Activate", disabled: self || patch.isPending, onSelect: () => patch.mutate({ id: user.id, body: { active: !user.active } }) },
+    { label: "Reset password", onSelect: () => setResetting((open) => !open) },
+    ...(user.blocked ? [{ label: "Unblock", disabled: unblock.isPending, onSelect: () => unblock.mutate(user.id) }] : []),
+  ];
   return (
-    <tr>
+    <tr ref={row}>
       <td className="cell-user" title={user.username}>{user.username}</td>
       <td>
         <select
@@ -43,26 +62,21 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
       </td>
       <td>
         <div className="row-actions">
-          <button
-            type="button"
-            className="quiet"
-            disabled={self || patch.isPending}
-            onClick={() => patch.mutate({ id: user.id, body: { active: !user.active } })}
-          >
-            {user.active ? "Deactivate" : "Activate"}
-          </button>
-          {resetting ? (
+          {resetting && (
             <form
+              ref={form}
               className="reset-form"
+              onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); closeReset(); } }}
               onSubmit={(e) => {
                 e.preventDefault();
                 patch.mutate(
                   { id: user.id, body: { password: newPassword } },
-                  { onSuccess: () => { setResetting(false); setNewPassword(""); } },
+                  { onSuccess: () => { setNewPassword(""); closeReset(); } },
                 );
               }}
             >
               <input
+                ref={field}
                 aria-label={`New password for ${user.username}`}
                 type="password"
                 minLength={8}
@@ -71,15 +85,11 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
                 onChange={(e) => setNewPassword(e.target.value)}
               />
               <button type="submit" disabled={patch.isPending}>Save</button>
-              <button type="button" className="quiet" onClick={() => setResetting(false)}>Cancel</button>
+              <button type="button" className="quiet" onClick={closeReset}>Cancel</button>
             </form>
-          ) : (
-            <button className="quiet" onClick={() => setResetting(true)}>Reset password</button>
           )}
-          {user.blocked && (
-            <button className="quiet" aria-label={`Unblock ${user.username}`} disabled={unblock.isPending} onClick={() => unblock.mutate(user.id)}>Unblock</button>
-          )}
-          <button className="danger-quiet" aria-label={`Delete ${user.username}`} disabled={self} onClick={() => setDeleting(true)}>Delete</button>
+          <RowActions label={`Actions for ${user.username}`} items={items} />
+          <TrashButton label={`Delete ${user.username}`} disabled={self} onClick={() => setDeleting(true)} />
         </div>
         {patch.isError && <span className="error row-error" role="alert"> {errorText(patch.error)}</span>}
         {unblock.isError && <span className="error row-error" role="alert"> {errorText(unblock.error)}</span>}

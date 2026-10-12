@@ -4,8 +4,8 @@ import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { SettingsPage } from "./SettingsPage";
 
-const policy = (max_failures = 5, block_minutes = 5) => ({
-  max_failures, block_minutes,
+const policy = (max_failures = 5, block_minutes = 5, enabled = true) => ({
+  max_failures, block_minutes, enabled,
   limits: { max_failures: [3, 20], block_minutes: [1, 60] },
   defaults: { max_failures: 5, block_minutes: 5 },
 });
@@ -107,7 +107,7 @@ describe("SettingsPage sign-in protection", () => {
     await userEvent.click(within(section()).getByRole("button", { name: "Save sign-in protection" }));
     expect(await within(section()).findByText("saved")).toBeInTheDocument();
     expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([
-      ["/api/settings/sign-in", { max_failures: 8, block_minutes: 15 }],
+      ["/api/settings/sign-in", { max_failures: 8, block_minutes: 15, enabled: true }],
     ]);
     await waitFor(() => expect(screen.getByLabelText("Failed sign-ins before a block")).toHaveValue(8));
     expect(screen.getByLabelText("Timezone")).toHaveValue("UTC");
@@ -148,6 +148,208 @@ describe("SettingsPage sign-in protection", () => {
     expect(await screen.findByLabelText("Timezone")).toHaveValue("UTC");
     expect(await screen.findByRole("alert")).toHaveTextContent("boom");
     expect(screen.queryByLabelText("Failed sign-ins before a block")).not.toBeInTheDocument();
+  });
+});
+
+describe("SettingsPage sign-in protection switch", () => {
+  const SWITCH = "Block an account after repeated wrong passwords";
+  const WARNING = /Sign-in protection is off\. Wrong passwords no longer block anyone/;
+  const section = () => screen.getByRole("form", { name: "Sign-in protection" });
+
+  /** A stateful sign-in endpoint: GET answers the stored policy, PUT stores it (like the API) and remembers the full URL. */
+  function open(initial = policy(), putReply?: { status: number; body: unknown }) {
+    let stored = initial;
+    const urls: string[] = [];
+    const calls = mockFetch({
+      ...base,
+      "GET /api/settings/general": { body: { timezone: "UTC" } },
+      "GET /api/settings/sign-in": () => ({ body: stored }),
+      "PUT /api/settings/sign-in": ({ url, body }) => {
+        urls.push(url);
+        if (putReply) return putReply;
+        const b = body as { max_failures: number; block_minutes: number; enabled?: boolean };
+        stored = policy(b.max_failures, b.block_minutes, b.enabled ?? true);
+        return { body: stored };
+      },
+    });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    const puts = () => calls.filter((c) => c.method === "PUT");
+    return { calls, puts, urls };
+  }
+  const theSwitch = () => screen.findByRole("switch", { name: SWITCH });
+  const save = () => userEvent.click(within(section()).getByRole("button", { name: "Save sign-in protection" }));
+
+  it("shows the saved state as a switch inside the form, on, with no warning", async () => {
+    open();
+    const sw = await theSwitch();
+    expect(sw).toBeChecked();
+    expect(section()).toContainElement(sw);
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+    expect(screen.queryByText("Used when protection is switched on.")).not.toBeInTheDocument();
+  });
+
+  it("shows OFF as an unchecked switch with a warning, and keeps the two numbers editable and filled", async () => {
+    open(policy(7, 12, false));
+    const sw = await theSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
+    const warning = screen.getByText(WARNING).closest("[role=status]");
+    expect(warning).toHaveClass("banner", "banner-warn");
+    expect(warning).toHaveTextContent("Switch it on again unless this is a closed, trusted network.");
+    const failures = screen.getByLabelText("Failed sign-ins before a block");
+    const minutes = screen.getByLabelText("Block time in minutes");
+    expect(failures).toBeEnabled();
+    expect(minutes).toBeEnabled();
+    expect(failures).toHaveValue(7);
+    expect(minutes).toHaveValue(12);
+    expect(section()).toHaveTextContent("Used when protection is switched on.");
+    await userEvent.clear(failures);
+    await userEvent.type(failures, "9");
+    expect(failures).toHaveValue(9);
+  });
+
+  it("treats a reply without `enabled` as ON", async () => {
+    const { enabled: _enabled, ...old } = policy(6, 6);
+    open(old as ReturnType<typeof policy>);
+    const sw = await theSwitch();
+    await waitFor(() => expect(screen.getByLabelText("Failed sign-ins before a block")).toHaveValue(6));
+    expect(sw).toBeChecked();
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+  });
+
+  it("switching off shows the warning at once, but Save asks first and sends nothing yet", async () => {
+    const { puts } = open();
+    await userEvent.click(await theSwitch());
+    expect(screen.getByRole("switch", { name: SWITCH })).not.toBeChecked();
+    expect(screen.getByText(WARNING)).toBeInTheDocument();
+    await save();
+    const dialog = await screen.findByRole("dialog", { name: "Stop blocking accounts?" });
+    expect(within(dialog).getByRole("heading", { level: 2, name: "Stop blocking accounts?" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(
+      "Wrong passwords will no longer block anyone, and accounts that are blocked now can sign in at once. The change is recorded in the Audit log.",
+    );
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("Switch off sends one PUT with confirm=true and enabled:false, closes the dialog and shows saved", async () => {
+    const { puts, urls } = open();
+    await userEvent.click(await theSwitch());
+    await save();
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Switch off" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(puts().map((c) => c.body)).toEqual([{ max_failures: 5, block_minutes: 5, enabled: false }]);
+    expect(urls).toHaveLength(1);
+    expect(new URL(urls[0], "http://x").searchParams.get("confirm")).toBe("true");
+    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("switch", { name: SWITCH })).not.toBeChecked());
+    expect(screen.getByText(WARNING)).toBeInTheDocument();
+  });
+
+  it("Cancel puts the switch back to ON and sends nothing", async () => {
+    const { puts } = open();
+    await userEvent.click(await theSwitch());
+    await save();
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("Escape does the same as Cancel", async () => {
+    const { puts } = open();
+    await userEvent.click(await theSwitch());
+    await save();
+    await screen.findByRole("dialog");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("an ON to ON save sends enabled:true and no confirm, with no dialog", async () => {
+    const { puts, urls } = open();
+    const failures = await screen.findByLabelText("Failed sign-ins before a block");
+    await waitFor(() => expect(failures).toHaveValue(5));
+    await userEvent.clear(failures);
+    await userEvent.type(failures, "6");
+    await save();
+    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(puts().map((c) => c.body)).toEqual([{ max_failures: 6, block_minutes: 5, enabled: true }]);
+    expect(urls.map((u) => new URL(u, "http://x").search)).toEqual([""]);
+  });
+
+  it("switching back on saves enabled:true without a dialog or confirm", async () => {
+    const { puts, urls } = open(policy(5, 5, false));
+    const sw = await theSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
+    await userEvent.click(sw);
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+    await save();
+    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(puts().map((c) => c.body)).toEqual([{ max_failures: 5, block_minutes: 5, enabled: true }]);
+    expect(new URL(urls[0], "http://x").search).toBe("");
+    await waitFor(() => expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked());
+  });
+
+  it("saving the numbers while protection is already off sends enabled:false without confirm and asks nothing", async () => {
+    const { puts, urls } = open(policy(5, 5, false));
+    const minutes = await screen.findByLabelText("Block time in minutes");
+    await waitFor(() => expect(minutes).toHaveValue(5));
+    await userEvent.clear(minutes);
+    await userEvent.type(minutes, "20");
+    await save();
+    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(puts().map((c) => c.body)).toEqual([{ max_failures: 5, block_minutes: 20, enabled: false }]);
+    expect(new URL(urls[0], "http://x").search).toBe("");
+  });
+
+  it("keeps the dialog open and shows the API's text when the confirmed save is refused", async () => {
+    const { puts } = open(policy(), { status: 409, body: { detail: "this needs confirmation (send confirm=true)", needs_confirmation: true } });
+    await userEvent.click(await theSwitch());
+    await save();
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Switch off" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("this needs confirmation (send confirm=true)");
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(screen.getAllByRole("alert")).toHaveLength(1); // the form behind the dialog does not repeat it
+    expect(puts()).toHaveLength(1);
+  });
+
+  it("a page that still shows OFF while the server says ON: the 409 brings the switch back to the server's state and the server's text stays", async () => {
+    let stored = policy(5, 5, false);
+    const text = "Sign-in protection is on. Switching it off needs confirmation: reload the Settings page and switch it off again.";
+    const calls = mockFetch({
+      ...base,
+      "GET /api/settings/general": { body: { timezone: "UTC" } },
+      "GET /api/settings/sign-in": () => ({ body: stored }),
+      "PUT /api/settings/sign-in": () => {
+        stored = policy(5, 5, true); // someone switched it on in the meantime
+        return { status: 409, body: { detail: text, needs_confirmation: true } };
+      },
+    });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    const sw = await theSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
+    expect(screen.getByText(WARNING)).toBeInTheDocument();
+    await save(); // OFF to OFF: no dialog, sent without confirm
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(sw).toBeChecked());
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+    expect(within(section()).getByRole("alert")).toHaveTextContent(text);
+    expect(calls.filter((c) => c.method === "GET" && c.path === "/api/settings/sign-in")).toHaveLength(2);
+  });
+
+  it("clears the saved marker when the switch is touched", async () => {
+    open(policy(5, 5, false));
+    const sw = await theSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
+    await save();
+    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    await userEvent.click(sw);
+    expect(within(section()).queryByText("saved")).not.toBeInTheDocument();
   });
 });
 

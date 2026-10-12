@@ -18,15 +18,10 @@ def pinned_datetime(frozen: datetime) -> type[datetime]:
     return FrozenDatetime
 
 
-@pytest.fixture
-def auckland_process(monkeypatch):
-    """The Python process runs in another zone than the database session (UTC).
-
-    asyncpg turns a `date` bound to a timestamptz parameter into midnight in the process's local zone, so a query that
-    binds dates without a cast shifts every day window by the host's UTC offset (13 h here in October).
-    """
+def process_in_zone(monkeypatch, zone: str):
+    """Run the Python process in `zone` while the database session stays on UTC (restored on exit)."""
     original = os.environ.get("TZ")
-    monkeypatch.setenv("TZ", "Pacific/Auckland")
+    monkeypatch.setenv("TZ", zone)
     tzset()
     yield
     if original is None:
@@ -34,6 +29,21 @@ def auckland_process(monkeypatch):
     else:
         os.environ["TZ"] = original
     tzset()
+
+
+@pytest.fixture
+def auckland_process(monkeypatch):
+    """The Python process runs in another zone than the database session (UTC).
+
+    asyncpg turns a `date` bound to a timestamptz parameter into midnight in the process's local zone, so a query that
+    binds dates without a cast shifts every day window by the host's UTC offset (13 h here in October).
+    """
+    yield from process_in_zone(monkeypatch, "Pacific/Auckland")
+
+
+@pytest.fixture
+def tokyo_process(monkeypatch):
+    yield from process_in_zone(monkeypatch, "Asia/Tokyo")
 
 
 async def test_storage_requires_admin(client, db):
@@ -75,6 +85,156 @@ async def test_rows_per_day_labels_do_not_depend_on_the_process_timezone(client,
     await login_as(client, db)
     days = [row["day"] for row in (await client.get("/api/storage")).json()["rows_per_day"]]
     assert days == [(frozen.date() - timedelta(days=back)).isoformat() for back in range(6, -1, -1)]
+
+
+RANGE_URL = "/api/storage/rows-per-day"
+
+
+def utc_midnight() -> datetime:
+    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def freeze_at_noon(monkeypatch) -> datetime:
+    """Pin the storage clock to 12:00 UTC today (the readings are seeded relative to the real UTC midnight)."""
+    frozen = utc_midnight().replace(hour=12)
+    monkeypatch.setattr("dcdash.core.storage.datetime", pinned_datetime(frozen))
+    return frozen
+
+
+def range_params(start, end) -> dict[str, str]:
+    return {"start": start.isoformat(), "end": end.isoformat()}
+
+
+async def test_rows_per_day_range_needs_a_session_and_the_admin_role(client, db):
+    params = {"start": "2026-01-01", "end": "2026-01-02"}
+    assert (await client.get(RANGE_URL, params=params)).status_code == 401
+    for role in ("operator", "viewer"):
+        await login_as(client, db, role=role)
+        assert (await client.get(RANGE_URL, params=params)).status_code == 403
+
+
+async def test_rows_per_day_range_counts_each_day_and_zero_fills_the_gaps(client, db, monkeypatch):
+    frozen = freeze_at_noon(monkeypatch)
+    midnight = utc_midnight()
+    pid = await make_point(db, await make_source(db), "LVP01_kW")
+    await insert_readings(db, pid, midnight - timedelta(days=3) + timedelta(hours=1), 60, [1.0] * 40)  # three days ago
+    await insert_readings(db, pid, midnight - timedelta(days=1) + timedelta(hours=5), 60, [1.0] * 25)  # yesterday
+    await insert_readings(db, pid, midnight, 60, [1.0] * 12)                                           # today
+    await login_as(client, db)
+    today = frozen.date()
+    r = await client.get(RANGE_URL, params=range_params(today - timedelta(days=3), today))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["days"] == [
+        {"day": (today - timedelta(days=3)).isoformat(), "rows": 40},
+        {"day": (today - timedelta(days=2)).isoformat(), "rows": 0},
+        {"day": (today - timedelta(days=1)).isoformat(), "rows": 25},
+        {"day": today.isoformat(), "rows": 12},
+    ]
+    assert body["total_rows"] == 77
+    assert body["start"] == (today - timedelta(days=3)).isoformat() and body["end"] == today.isoformat()
+    assert body["last_day"] == today.isoformat()
+    assert body["first_day"] == (today - timedelta(days=3)).isoformat()
+
+
+async def test_rows_per_day_range_of_a_single_day(client, db, monkeypatch):
+    frozen = freeze_at_noon(monkeypatch)
+    pid = await make_point(db, await make_source(db), "LVP01_kW")
+    await insert_readings(db, pid, utc_midnight() - timedelta(days=1) + timedelta(hours=2), 60, [1.0] * 9)
+    await login_as(client, db)
+    day = frozen.date() - timedelta(days=1)
+    body = (await client.get(RANGE_URL, params=range_params(day, day))).json()
+    assert body["days"] == [{"day": day.isoformat(), "rows": 9}] and body["total_rows"] == 9
+
+
+async def test_rows_per_day_range_on_a_site_without_readings_has_no_first_day(client, db, monkeypatch):
+    frozen = freeze_at_noon(monkeypatch)
+    await login_as(client, db)
+    today = frozen.date()
+    body = (await client.get(RANGE_URL, params=range_params(today - timedelta(days=2), today))).json()
+    assert body["first_day"] is None and body["total_rows"] == 0
+    assert [d["rows"] for d in body["days"]] == [0, 0, 0] and body["last_day"] == today.isoformat()
+
+
+async def test_first_day_is_the_utc_date_of_the_oldest_hour_even_before_the_range(client, db, monkeypatch):
+    frozen = freeze_at_noon(monkeypatch)
+    pid = await make_point(db, await make_source(db), "LVP01_kW")
+    await insert_readings(db, pid, utc_midnight() - timedelta(days=10) + timedelta(hours=23, minutes=30), 60, [1.0] * 5)
+    await insert_readings(db, pid, utc_midnight() - timedelta(days=1), 60, [1.0] * 5)
+    await login_as(client, db)
+    today = frozen.date()
+    body = (await client.get(RANGE_URL, params=range_params(today - timedelta(days=1), today))).json()
+    assert body["first_day"] == (today - timedelta(days=10)).isoformat()
+    assert body["total_rows"] == 5
+
+
+async def test_the_range_agrees_with_the_seven_days_of_the_storage_endpoint(client, db, monkeypatch):
+    frozen = freeze_at_noon(monkeypatch)
+    midnight = utc_midnight()
+    pid = await make_point(db, await make_source(db), "LVP01_kW")
+    await insert_readings(db, pid, midnight - timedelta(days=5) + timedelta(hours=3), 60, [1.0] * 31)
+    await insert_readings(db, pid, midnight - timedelta(days=2) + timedelta(hours=22), 60, [1.0] * 90)  # spills into yesterday
+    await insert_readings(db, pid, midnight, 60, [1.0] * 7)
+    await login_as(client, db)
+    seven = (await client.get("/api/storage")).json()["rows_per_day"]
+    today = frozen.date()
+    r = await client.get(RANGE_URL, params=range_params(today - timedelta(days=6), today))
+    assert r.json()["days"] == seven
+    assert sum(d["rows"] for d in seven) == 31 + 90 + 7
+
+
+@pytest.mark.parametrize("zone_fixture", ["auckland_process", "tokyo_process"])
+async def test_rows_per_day_range_does_not_depend_on_the_process_timezone(client, db, monkeypatch, request, zone_fixture):
+    request.getfixturevalue(zone_fixture)
+    frozen = freeze_at_noon(monkeypatch)
+    pid = await make_point(db, await make_source(db), "LVP01_kW")
+    # 20:00-20:10 UTC: a window bound as local midnight would put these rows on the following day
+    await insert_readings(db, pid, utc_midnight() - timedelta(days=2) + timedelta(hours=20), 60, [1.0] * 10)
+    await login_as(client, db)
+    today = frozen.date()
+    body = (await client.get(RANGE_URL, params=range_params(today - timedelta(days=3), today))).json()
+    assert [(d["day"], d["rows"]) for d in body["days"]] == [
+        ((today - timedelta(days=3)).isoformat(), 0),
+        ((today - timedelta(days=2)).isoformat(), 10),
+        ((today - timedelta(days=1)).isoformat(), 0),
+        (today.isoformat(), 0),
+    ]
+    assert body["first_day"] == (today - timedelta(days=2)).isoformat()
+
+
+async def test_rows_per_day_range_refuses_a_day_in_the_future(client, db, monkeypatch):
+    today = freeze_at_noon(monkeypatch).date()
+    await login_as(client, db)
+    r = await client.get(RANGE_URL, params=range_params(today, today + timedelta(days=1)))
+    assert r.status_code == 422 and "future" in r.json()["detail"]
+    assert (await client.get(RANGE_URL, params=range_params(today, today))).status_code == 200
+
+
+async def test_rows_per_day_range_refuses_an_end_before_the_start(client, db, monkeypatch):
+    today = freeze_at_noon(monkeypatch).date()
+    await login_as(client, db)
+    r = await client.get(RANGE_URL, params=range_params(today, today - timedelta(days=1)))
+    assert r.status_code == 422 and "before" in r.json()["detail"]
+
+
+async def test_rows_per_day_range_allows_366_days_and_refuses_367(client, db, monkeypatch):
+    today = freeze_at_noon(monkeypatch).date()
+    await login_as(client, db)
+    ok = await client.get(RANGE_URL, params=range_params(today - timedelta(days=365), today))
+    assert ok.status_code == 200 and len(ok.json()["days"]) == 366
+    too_long = await client.get(RANGE_URL, params=range_params(today - timedelta(days=366), today))
+    assert too_long.status_code == 422 and "366" in too_long.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{}, {"start": "2026-01-01"}, {"end": "2026-01-01"}, {"start": "yesterday", "end": "2026-01-01"},
+     {"start": "2026-01-01", "end": "2026-13-45"}, {"start": "", "end": ""}],
+    ids=["none", "no-end", "no-start", "word", "impossible-date", "empty"],
+)
+async def test_rows_per_day_range_refuses_missing_or_malformed_dates(client, db, params):
+    await login_as(client, db)
+    assert (await client.get(RANGE_URL, params=params)).status_code == 422
 
 
 async def test_storage_warn_when_capacity_tiny(client, db):

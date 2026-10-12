@@ -244,6 +244,31 @@
   .icon-btn:hover:not(:disabled) { background: var(--accent-tint); color: var(--accent); }
   .icon-btn svg.i { width: 16px; height: 16px; }
 
+  /* Row menu (RowActions), delete button (TrashButton), info tip (InfoTip). The menu panel is a portal on document.body, so it
+     is styled from the root, not from its row; z-index 90 is above the top bar (45) and below the dialogs (1000). */
+  .row-menu-btn[aria-expanded="true"], .tip-btn[aria-expanded="true"] { background: var(--accent-tint); color: var(--accent); }
+  .row-menu-panel { position: fixed; z-index: 90; width: max-content; min-width: 168px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; padding: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); }
+  .row-menu-panel [role="menuitem"] { display: flex; align-items: center; justify-content: flex-start; width: 100%; min-height: 34px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text); font-family: inherit; font-size: var(--fs-sm); font-weight: 400; line-height: 1.4; text-align: left; text-decoration: none; white-space: nowrap; cursor: pointer; }
+  .row-menu-panel [role="menuitem"]:hover:not(:disabled), .row-menu-panel [role="menuitem"]:focus-visible { background: var(--surface); }
+  .row-menu-panel [role="menuitem"]:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; } /* inside: the panel scrolls, so it would clip a ring drawn outside */
+  .row-menu-panel [role="menuitem"]:disabled { color: var(--text-disabled); cursor: not-allowed; opacity: 1; }
+  .row-menu-panel .danger-item { color: var(--crit); }
+  .row-menu-panel .danger-item:hover:not(:disabled), .row-menu-panel .danger-item:focus-visible { background: var(--crit-tint); }
+  .trash-btn:hover:not(:disabled), .trash-btn:focus-visible { background: var(--crit-tint); color: var(--crit); }
+  .trash-btn .lid { transform-box: fill-box; transform-origin: 0% 100%; transition: transform var(--motion); } /* about the lid's left end, its hinge */
+  .trash-btn:hover:not(:disabled) .lid, .trash-btn:focus-visible .lid { transform: translateY(-1.5px) rotate(-16deg); }
+  .tip { position: relative; display: inline-flex; align-items: center; vertical-align: middle; }
+  .tip-btn { width: 24px; height: 24px; }
+  .tip-bubble { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; width: max-content; max-width: min(320px, 80vw); padding: 8px 12px; border-radius: var(--radius); background: var(--tooltip-bg); color: var(--tooltip-text); box-shadow: var(--shadow-tip); font-size: var(--fs-sm); font-weight: 400; line-height: 1.45; text-align: left; white-space: normal; }
+  .tip-bubble[data-align="end"] { left: auto; right: 0; } /* a tip at the right end of a line opens leftwards, so the page gets no sideways scroll */
+  .has-tip { position: relative; }
+  /* A tip at the end of a label line without being inside the <label>. The label keeps 28px free on the right, so a long label wraps
+     before the tip instead of running under it, and the field takes the room back with a negative margin, so it still spans the whole
+     wrapper. The tip box is as tall as the label's first line (--fs-sm at the 1.4 line height), which centres the 24px button on it. */
+  .has-tip > label { padding-right: 28px; }
+  .has-tip > label > :is(input, select, textarea) { margin-right: -28px; }
+  .has-tip > .tip { position: absolute; top: 0; right: 0; height: calc(var(--fs-sm) * 1.4); }
+
   /* Plain text colours (colour only: they also style text inside the widgets) */
   .error { color: var(--crit); }
   .warning { color: var(--warn-ink); }
@@ -450,6 +475,8 @@
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; }
+    /* the hover and focus selectors again: the plain one would lose to them on specificity and the lid would still tilt */
+    .trash-btn .lid, .trash-btn:hover:not(:disabled) .lid, .trash-btn:focus-visible .lid { transition: none; transform: none; }
   }
 }
 

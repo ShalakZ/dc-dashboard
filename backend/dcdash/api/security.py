@@ -40,7 +40,12 @@ class LoginLimiter:
     """Blocks a key for `window_seconds` once it has `max_failures` failures inside that window.
 
     The two numbers can change at run time (`configure`); a block lasts `blocked_since + window` with the CURRENT window.
+    `configure(..., enabled=False)` switches the blocking off: nothing is counted or blocked, and what was held is dropped.
     Memory is bounded: expired entries are swept and, past `max_keys`, plain counters are evicted before blocks.
+
+    The state is per process, and a process learns of a change (the on/off switch, the numbers) from the next request that
+    runs `apply_sign_in_policy`. With more than one api worker a worker that missed an OFF could keep a block alive, and
+    show it again after OFF then ON. Compose runs one worker; run another and the switch needs a shared store first.
     """
 
     def __init__(
@@ -52,16 +57,22 @@ class LoginLimiter:
     ) -> None:
         self._max = max_failures
         self._window = window_seconds
-        self._initial = (max_failures, window_seconds)
+        self._enabled = True
+        self._initial = (max_failures, window_seconds, True)
         self._clock = clock
         self._max_keys = max_keys
         self._failures: dict[Hashable, list[float]] = {}
         self._blocked_since: dict[Hashable, float] = {}
 
-    def configure(self, max_failures: int, window_seconds: float) -> None:
-        self._max, self._window = max_failures, window_seconds
+    def configure(self, max_failures: int, window_seconds: float, enabled: bool = True) -> None:
+        self._max, self._window, self._enabled = max_failures, window_seconds, enabled
+        if not enabled:
+            self._failures.clear()  # so that switching it on again counts from zero, with no block coming back
+            self._blocked_since.clear()
 
     def retry_after(self, key: Hashable) -> float:
+        if not self._enabled:
+            return 0.0
         since = self._blocked_since.get(key)
         if since is None:
             return 0.0
@@ -75,7 +86,7 @@ class LoginLimiter:
         return self.retry_after(key) > 0
 
     def record_failure(self, key: Hashable) -> None:
-        if self.blocked(key):
+        if not self._enabled or self.blocked(key):
             return  # a failure during a block neither counts nor extends it
         now = self._clock()
         recent = [t for t in self._failures.get(key, []) if t > now - self._window]
@@ -88,6 +99,8 @@ class LoginLimiter:
         self._bound()
 
     def blocked_keys(self) -> list[Hashable]:
+        if not self._enabled:
+            return []
         return [key for key in list(self._blocked_since) if self.blocked(key)]
 
     def drop(self, match: Callable[[Hashable], bool]) -> int:
@@ -107,7 +120,7 @@ class LoginLimiter:
     def clear(self) -> None:
         self._failures.clear()
         self._blocked_since.clear()
-        self._max, self._window = self._initial  # a configure() from an earlier test or request is forgotten too
+        self._max, self._window, self._enabled = self._initial  # a configure() from an earlier test or request is forgotten too
 
     def _bound(self) -> None:
         # Only non-empty lists are ever stored in _failures, so times[-1] below is safe. The sweep is O(n) per failure

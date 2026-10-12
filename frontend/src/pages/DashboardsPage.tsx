@@ -5,6 +5,7 @@ import type { DashboardListItem } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { CreateDashboardDialog } from "../components/dashboard/CreateDashboardDialog";
 import { PageHeader } from "../components/PageHeader";
+import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { formatSiteDateTime } from "../lib/siteTime";
 
@@ -53,7 +54,7 @@ export function DashboardsPage() {
                   <td className="name"><Link to={`/dashboards/${d.id}`} title={d.name}>{d.name}</Link></td>
                   <td className="num">{d.widget_count}</td>
                   <td className="when">{formatSiteDateTime(d.updated_at, timezone)}</td>
-                  {canEdit && <td className="act"><button type="button" className="danger-quiet" onClick={() => confirmDelete(d)} aria-label={`Delete ${d.name}`}>Delete</button></td>}
+                  {canEdit && <td className="act"><TrashButton label={`Delete ${d.name}`} onClick={() => confirmDelete(d)} /></td>}
                 </tr>
               ))}
             </tbody>

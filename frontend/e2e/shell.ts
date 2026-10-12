@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 // Locators for the app shell (W7a): the sidebar, the Assets tree, the profile block in the top bar. A crumb link, a tree link and a
 // sidebar link can share one name ("Assets", "Sources", an asset's name ...), so a page-wide getByRole("link", { name }) is ambiguous
@@ -24,4 +24,36 @@ export async function signOut(page: Page): Promise<void> {
   await page.locator(".navbar").getByRole("button", { name: "Sign out", exact: true }).click();
   await page.getByRole("dialog", { name: /^Sign out/ }).getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+}
+
+/** Clicks the row's `Actions for <name>` button and returns the open menu (named after that button; a click opens it and pins it, whether a hover got there first or not). */
+async function openRowMenu(page: Page, row: Locator): Promise<Locator> {
+  const trigger = row.getByRole("button", { name: /^Actions for / });
+  const label = await trigger.getAttribute("aria-label");
+  expect(label, "the row has an Actions button").toBeTruthy();
+  await trigger.click();
+  const menu = page.getByRole("menu", { name: label!, exact: true });
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/**
+ * Opens the three-dot menu of a table row and returns the menu item to click: `await (await rowAction(page, row, "Edit")).click()`.
+ * The menu is a portal on the page and its items exist only while it is open, so the item is looked up inside THIS row's menu. The menu
+ * must be closed on entry (a second click on the trigger closes it again).
+ */
+export async function rowAction(page: Page, row: Locator, item: string | RegExp): Promise<Locator> {
+  return (await openRowMenu(page, row)).getByRole("menuitem", { name: item, exact: typeof item === "string" });
+}
+
+/**
+ * Opens the row's menu, checks that `item` is not in it and that other items are, and closes it again (Escape puts the focus back on the
+ * trigger). With the menu closed no item is in the page at all, so a bare `toHaveCount(0)` on a menuitem would prove nothing.
+ */
+export async function expectNoRowAction(page: Page, row: Locator, item: string | RegExp): Promise<void> {
+  const menu = await openRowMenu(page, row);
+  await expect(menu.getByRole("menuitem")).not.toHaveCount(0);
+  await expect(menu.getByRole("menuitem", { name: item, exact: typeof item === "string" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
 }

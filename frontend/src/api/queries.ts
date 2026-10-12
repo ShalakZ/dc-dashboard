@@ -1,11 +1,11 @@
 import { hashKey, keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiQuery, type AuditFilters } from "../lib/auditFilters";
 import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
-import { api } from "./client";
+import { ApiError, api } from "./client";
 import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave,
   FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
-  Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
+  RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
 
@@ -167,12 +167,30 @@ export const useSignInPolicy = () =>
 export function usePutSignInPolicy() {
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: (body: SignInValues) => api.put<SignInPolicy>("/api/settings/sign-in", body),
+    // `enabled` omitted = the server's safe default (ON); `confirm` travels in the query string only (the body forbids extras)
+    mutationFn: ({ confirm, ...body }: SignInValues & { enabled?: boolean; confirm?: boolean }) =>
+      api.put<SignInPolicy>(`/api/settings/sign-in${confirm ? "?confirm=true" : ""}`, body),
     onSuccess: () => invalidate(keys.signInPolicy, keys.auditAll),
+    // A 409 that asks for confirmation means the page's switch no longer matches the server (another admin changed it, or the page is old):
+    // read the policy again, so the switch shows the real state. The page still shows the server's text.
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409 && (error.body as { needs_confirmation?: unknown } | null)?.needs_confirmation === true) {
+        void invalidate(keys.signInPolicy);
+      }
+    },
   });
 }
 
 export const useStorage = () => useQuery({ queryKey: keys.storage, queryFn: () => api.get<StorageStats>("/api/storage") });
+
+/** Rows per UTC day for a range; nothing is requested until both days are given. */
+export const useRowsPerDay = (start: string | null, end: string | null) =>
+  useQuery({
+    queryKey: [...keys.storage, "rows-per-day", start, end] as const,
+    queryFn: () => api.get<RowsPerDayRange>(`/api/storage/rows-per-day?start=${start}&end=${end}`),
+    enabled: start !== null && end !== null,
+    staleTime: 30_000,
+  });
 
 export const useStorageSettings = () =>
   useQuery({ queryKey: keys.storageSettings, queryFn: () => api.get<StorageSettingsOut>("/api/settings/storage") });
