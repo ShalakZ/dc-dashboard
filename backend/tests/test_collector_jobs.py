@@ -6,9 +6,12 @@ import pytest
 from dcdash.collector import jobs as jobs_module
 from dcdash.collector.jobs import fail_stale_jobs, run_job_loop, run_pending_jobs
 from dcdash.connectors.base import ConnectionCheck
+from dcdash.diagnostics.check import Checker, StepFailed
 from dcdash.simulator.app import create_sim_app
 from dcdash.simulator.model import Simulator
-from helpers import make_source, sim_factory, wait_for
+from datetime import datetime, timedelta, timezone
+
+from helpers import make_asset, make_mapping, make_point, make_source, sim_factory, wait_for
 
 
 def factory():
@@ -581,6 +584,7 @@ async def test_a_password_that_only_the_source_knows_never_reaches_the_job_resul
     text = str(stored)
     assert SOURCE_SECRET not in text and URL_PASSWORD not in text
     assert (await job(db, checked))["result"]["message"] == "server rejected [hidden] for [hidden]"
+    assert await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source) == "server rejected [hidden] for [hidden]"
     assert (await job(db, browsed))["result"] == {"error": "cannot browse as [hidden]: [hidden] was refused"}
 
 
@@ -612,3 +616,258 @@ async def test_a_journal_that_never_answers_cannot_leave_a_finished_job_looking_
         await asyncio.wait_for(jobs_module._run_one(db, claimed, factory()), timeout=1)
     row = await job(db, job_id)
     assert row["status"] == "done" and row["finished_at"] is not None
+
+
+# --- the connection check job ---------------------------------------------------------------------------------------------
+
+
+class Scripted:
+    """A connector whose `check` runs `body(points, publish)`; it remembers the points it was given."""
+
+    def __init__(self, body):
+        self.body = body
+        self.points = None
+        self.closed = False
+
+    async def check(self, points, publish):
+        self.points = points
+        return await self.body(points, publish)
+
+    async def close(self):
+        self.closed = True
+
+
+async def ok_step() -> str:
+    return "fine"
+
+
+def fails(message="boom"):
+    async def step() -> None:
+        raise RuntimeError(message)
+
+    return step
+
+
+async def run_check(db, connector, **source_args):
+    source = await make_source(db, **source_args)
+    job_id = await add_job(db, "check_connection", source)
+    await run_pending_jobs(db, lambda *_args: connector)
+    return source, job_id, await job(db, job_id)
+
+
+async def test_a_check_of_a_source_without_a_detailed_check_is_one_test_step_and_marks_it_online(db):
+    source = await make_source(db, secret="k")
+    job_id = await add_job(db, "check_connection", source)
+    await run_pending_jobs(db, factory())
+    row = await job(db, job_id)
+    result = row["result"]
+    assert row["status"] == "done" and result["source_id"] == source and result["connector_type"] == "simulator"
+    assert result["finished"] is True and result["ok"] is True and result["first_failed"] is None
+    assert [(s["id"], s["ok"]) for s in result["steps"]] == [("test", True)]
+    assert result["names"] == {"hosts": [], "uris": []} and result["clock"]["skew_seconds"] is None
+    assert await db.fetchval("SELECT status FROM sources WHERE id = $1", source) == "online"
+
+
+async def test_a_failed_test_step_is_a_failed_check_and_marks_the_source_offline(db):
+    source = await make_source(db, secret="wrong")
+    job_id = await add_job(db, "check_connection", source)
+    await run_pending_jobs(db, factory())
+    row = await job(db, job_id)
+    assert row["status"] == "done" and row["result"]["ok"] is False and row["result"]["first_failed"] == "test"
+    source_row = await db.fetchrow("SELECT status, last_error FROM sources WHERE id = $1", source)
+    assert source_row["status"] == "offline" and source_row["last_error"] == "auth_failed: credentials rejected"
+
+
+async def test_the_check_gets_the_sorted_mapped_addresses_of_its_source_only(db):
+    source = await make_source(db)
+    other = await make_source(db, name="other")
+    assets = [await make_asset(db, name) for name in ("A", "B", "C", "D")]
+    for address, asset in (("ns=2;s=b", assets[0]), ("ns=2;s=a", assets[1])):
+        await make_mapping(db, await make_point(db, source, address), asset)
+    await make_mapping(db, await make_point(db, source, "ns=2;s=c"), assets[2])
+    await make_point(db, source, "ns=2;s=unmapped")
+    await make_mapping(db, await make_point(db, other, "ns=2;s=elsewhere"), assets[3])
+
+    async def body(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("one", "One", ok_step)
+        return await checker.finish()
+
+    connector = Scripted(body)
+    await db.fetchval("INSERT INTO jobs (kind, params) VALUES ('check_connection', $1) RETURNING id", {"source_id": source})
+    await run_pending_jobs(db, lambda *_args: connector)
+    assert connector.points == ["ns=2;s=a", "ns=2;s=b", "ns=2;s=c"] and connector.closed
+
+
+async def test_every_step_is_stored_while_the_job_is_still_running(db):
+    release = asyncio.Event()
+
+    async def body(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("one", "One", ok_step)
+
+        async def wait() -> None:
+            await release.wait()
+
+        await checker.step("two", "Two", wait, needs=("one",))
+        return await checker.finish()
+
+    source = await make_source(db)
+    job_id = await add_job(db, "check_connection", source)
+    task = asyncio.create_task(run_pending_jobs(db, lambda *_args: Scripted(body)))
+    try:
+        async def seen():
+            row = await job(db, job_id)
+            result = row["result"]
+            return row["status"], result and result["finished"], result and [s["id"] for s in result["steps"]]
+
+        assert await wait_for(seen, ("running", False, ["one"]))
+        assert (await job(db, job_id))["result"]["steps"][0]["ok"] is True
+    finally:
+        release.set()
+        await task
+    row = await job(db, job_id)
+    assert row["status"] == "done" and row["result"]["finished"] is True and row["result"]["ok"] is True
+    assert [s["id"] for s in row["result"]["steps"]] == ["one", "two"]
+
+
+async def test_a_partial_result_is_not_written_after_the_job_is_over(db):
+    async def body(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("one", "One", ok_step)
+        return await checker.finish()
+
+    source = await make_source(db)
+    job_id = await db.fetchval(
+        "INSERT INTO jobs (kind, params, status) VALUES ('check_connection', $1, 'failed') RETURNING id", {"source_id": source}
+    )
+    await jobs_module._check_connection(db, {"source_id": source}, lambda *_args: Scripted(body), job_id, [])
+    assert (await job(db, job_id))["result"] is None
+
+
+async def test_only_the_session_step_decides_whether_the_source_is_online(db):
+    async def endpoints_fail_session_ok(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("endpoints", "Endpoints", fails("not listed"))
+        await checker.step("session", "Session", ok_step)
+        return await checker.finish()
+
+    async def endpoints_fail_session_skipped(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("tcp", "TCP", fails("closed"))
+        await checker.step("session", "Session", ok_step, needs=("tcp",))
+        return await checker.finish()
+
+    async def session_fails(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("tcp", "TCP", ok_step)
+        await checker.step("session", "Session", fails("rejected the login"), needs=("tcp",))
+        return await checker.finish()
+
+    async def no_session_step(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("endpoints", "Endpoints", fails("not listed"))
+        return await checker.finish()
+
+    async def status_of(body, name):
+        source, _job, _row = await run_check(db, Scripted(body), name=name)
+        return tuple(await db.fetchrow("SELECT status, last_error FROM sources WHERE id = $1", source))
+
+    assert await status_of(endpoints_fail_session_ok, "a") == ("online", None)
+    assert await status_of(endpoints_fail_session_skipped, "b") == ("unknown", None)
+    assert await status_of(session_fails, "c") == ("offline", "rejected the login")
+    assert await status_of(no_session_step, "d") == ("unknown", None)
+
+
+SECRET = "Zq-source-secret-7781"
+URL_PW = "Url-pw-5512"
+
+
+async def test_a_password_in_a_check_never_reaches_the_job_result_the_source_or_the_journal(db):
+    """The connector here does not scrub anything itself; the job runner has to, at every write."""
+
+    async def body(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("dns", "DNS", ok_step)
+
+        async def session() -> str:
+            raise ConnectionError(f"rejected {SECRET} for svc:{URL_PW} at opc.tcp://svc:{URL_PW}@10.1.2.3:4840")
+
+        await checker.step("session", "Session", session, needs=("dns",))
+        checker.add_names(hosts=["10.1.2.3"])
+
+        async def detail() -> object:
+            from dcdash.diagnostics.check import StepOutcome
+
+            return StepOutcome(f"read as {SECRET}", {"note": f"token {URL_PW}"})
+
+        await checker.step("namespaces", "Namespaces", detail)
+        return await checker.finish()
+
+    source, job_id, row = await run_check(
+        db, Scripted(body), config={"endpoint": f"opc.tcp://svc:{URL_PW}@10.1.2.3:4840"}, secret=SECRET
+    )
+    stored = str(await db.fetch("SELECT result FROM jobs")) + str(await db.fetch("SELECT last_error FROM sources"))
+    stored += str(await db.fetch("SELECT message, detail, code FROM diag_events"))
+    assert SECRET not in stored and URL_PW not in stored
+    assert row["status"] == "done" and row["result"]["first_failed"] == "session"
+    assert "[hidden]" in row["result"]["steps"][1]["error"]["message"]
+    assert "[hidden]" in await db.fetchval("SELECT last_error FROM sources WHERE id = $1", source)
+
+
+async def test_a_finished_check_is_journaled_as_check_finished_and_not_as_job_finished(db):
+    async def good(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("one", "One", ok_step)
+        return await checker.finish()
+
+    async def bad(points, publish):
+        checker = Checker("fake", publish)
+        await checker.step("one", "One", ok_step)
+        await checker.step("session", "Session", fails("no"), needs=("one",))
+        return await checker.finish()
+
+    first, _job, _row = await run_check(db, Scripted(good), name="good")
+    second, bad_job, _row = await run_check(db, Scripted(bad), name="bad")
+    events = await db.fetch("SELECT * FROM diag_events ORDER BY id")
+    assert [e["kind"] for e in events] == ["check.finished", "check.finished"]
+    ok, failed = events
+    assert (ok["level"], ok["component"], ok["source_id"], ok["code"]) == ("info", "job", first, None)
+    assert ok["message"] == "connection check passed (1 steps)" and ok["detail"]["steps_ok"] == 1
+    assert (failed["level"], failed["source_id"], failed["code"]) == ("warning", second, "RuntimeError")
+    assert failed["message"] == "connection check failed at session: RuntimeError"
+    assert failed["detail"]["first_failed"] == "session" and failed["detail"]["job_id"] == bad_job
+
+
+@pytest.mark.parametrize(("seconds", "journaled"), [(45, False), (-45, False), (61, True), (-400, True)])
+async def test_a_clock_skew_beyond_a_minute_is_journaled(db, seconds, journaled):
+    async def body(points, publish):
+        checker = Checker("fake", publish)
+        now = datetime.now(timezone.utc)
+        checker.clock(now + timedelta(seconds=seconds), now)
+        await checker.step("server_time", "Server time", ok_step)
+        return await checker.finish()
+
+    source, _job, _row = await run_check(db, Scripted(body))
+    skew = await db.fetch("SELECT * FROM diag_events WHERE kind = 'clock.skew'")
+    assert bool(skew) is journaled
+    if journaled:
+        assert skew[0]["level"] == "warning" and skew[0]["source_id"] == source
+        assert skew[0]["detail"]["skew_seconds"] == seconds and f"{seconds:+d} s" in skew[0]["message"]
+
+
+async def test_a_check_job_that_raised_is_a_failed_job_with_the_generic_journal_row(db):
+    source = await make_source(db)
+    job_id = await add_job(db, "check_connection", source)
+
+    def raising(*_args):
+        raise RuntimeError(LEAKY)
+
+    await run_pending_jobs(db, raising)
+    row = await job(db, job_id)
+    assert row["status"] == "failed" and row["result"] == {"error": SCRUBBED}
+    [event] = await db.fetch("SELECT * FROM diag_events")
+    assert (event["kind"], event["level"], event["source_id"]) == ("job.finished", "error", source)
+    missing = await add_job(db, "check_connection", 9999)
+    await run_pending_jobs(db, factory())
+    assert (await job(db, missing))["status"] == "failed"

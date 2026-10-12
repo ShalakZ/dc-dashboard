@@ -25,6 +25,9 @@ router = APIRouter(prefix="/api", tags=["sources"])
 Admin = Depends(require_role("admin"))
 Operator = Depends(require_role("operator"))
 
+CHECK_LOCK = 7_308_001  # advisory-lock namespace (first int); the source id is the second: one check start per source at a time
+CHECK_COOLDOWN_SECONDS = 5
+
 
 class SourceIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -303,6 +306,47 @@ async def test_source(
     source = await get_source(db, source_id)
     job_id = await enqueue(db, "test_source", {"source_id": source_id}, user)
     await audit(db, user.id, "source.tested", {"source_id": source.id, "name": source.name, "job_id": job_id})
+    await db.commit()
+    return {"job_id": job_id}
+
+
+@router.post("/sources/{source_id}/check", status_code=202, response_model=None)
+async def check_source(
+    source_id: int, user: User = Operator, db: AsyncSession = Depends(get_db)
+) -> dict[str, int] | JSONResponse:
+    """Queue a step-by-step connection check. One per source at a time (409 while one is queued or running) and not again
+    within CHECK_COOLDOWN_SECONDS of the last one (429): the device it probes may be fragile. The guards and the insert run
+    under one advisory lock, so two requests cannot both pass them."""
+    source = await get_source(db, source_id)
+    await db.execute(text("SELECT pg_advisory_xact_lock(:space, :source)"), {"space": CHECK_LOCK, "source": source_id})
+    sid = str(source_id)
+    active = await db.scalar(
+        text(
+            "SELECT id FROM jobs WHERE kind = 'check_connection' AND params->>'source_id' = :sid "
+            "AND status IN ('pending', 'running') ORDER BY id DESC LIMIT 1"
+        ),
+        {"sid": sid},
+    )
+    if active is not None:
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "a connection check is already running for this source", "job_id": active},
+        )
+    recent = await db.scalar(
+        text(
+            "SELECT id FROM jobs WHERE kind = 'check_connection' AND params->>'source_id' = :sid "
+            "AND finished_at > clock_timestamp() - CAST(:cooldown AS integer) * interval '1 second' ORDER BY id DESC LIMIT 1"
+        ),
+        {"sid": sid, "cooldown": CHECK_COOLDOWN_SECONDS},
+    )
+    if recent is not None:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "a connection check for this source finished a moment ago; try again in a few seconds"},
+            headers={"Retry-After": str(CHECK_COOLDOWN_SECONDS)},
+        )
+    job_id = await enqueue(db, "check_connection", {"source_id": source_id}, user)
+    await audit(db, user.id, "source.checked", {"source_id": source.id, "name": source.name, "job_id": job_id})
     await db.commit()
     return {"job_id": job_id}
 
