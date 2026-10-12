@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import asyncpg
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -222,6 +222,17 @@ def hidden_parts(config: Mapping[str, Any]) -> dict[str, str]:
         if text:
             hidden[key] = text
     return hidden
+
+
+def hidden_values(config: Mapping[str, Any]) -> list[str]:
+    """What must not reach a stored text about this config: every `hidden_parts` value, and its percent-decoded form too (a URL
+    keeps `p%40ss` encoded, but the client library decodes the user info and may quote `p@ss`)."""
+    values: list[str] = []
+    for value in hidden_parts(config).values():
+        values.append(value)
+        if (decoded := unquote(value)) != value:
+            values.append(decoded)
+    return values
 
 
 def safe_config(config: Mapping[str, Any]) -> dict[str, Any]:

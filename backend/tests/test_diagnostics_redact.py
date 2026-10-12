@@ -666,3 +666,23 @@ def test_masker_add_lists_more_names_later_without_renumbering():
     assert masker.mask("first-box second-box") == "HOST-1 second-box"
     masker.add(["second-box"])
     assert masker.mask("first-box second-box") == "HOST-1 HOST-2"
+
+
+def test_a_listed_short_host_name_hides_the_whole_fqdn_it_starts():
+    masker = Masker(["opc.tcp://scada01:4840"])
+    out = masker.mask("connect to SCADA01.site.local:4840, then scada01 and scada01. Done; ask scada01.plant-2.example.")
+    assert "site.local" not in out and "plant-2" not in out and "SCADA01" not in out.upper().replace("HOST", "")
+    assert out.startswith("connect to HOST-2:4840, then HOST-1 and HOST-1. Done; ask HOST-3.")
+    assert masker.mask(out) == out
+    assert {entry["original"] for entry in masker.legend()} == {"scada01", "SCADA01.site.local", "scada01.plant-2.example"}
+
+
+def test_a_listed_ip_address_does_not_swallow_a_following_label():
+    assert Masker(["10.1.2.5"]).mask("at 10.1.2.5.backup") == "at HOST-1.backup"
+
+
+def test_the_public_opc_foundation_names_are_never_aliased_so_namespace_zero_stays_recognisable():
+    masker = Masker(["opcfoundation.org"], ["http://opcfoundation.org/UA/", "http://opcfoundation.org/UA/DI/", "urn:scada:srv:app"])
+    text = "ns 0 http://opcfoundation.org/UA/ and http://opcfoundation.org/UA/DI/ on opcfoundation.org, urn:opcfoundation.org:2008:x"
+    assert masker.mask(text) == text
+    assert masker.mask("app urn:scada:srv:app on http://plc.plant:4840") == "app URN-1 on http://HOST-1:4840"

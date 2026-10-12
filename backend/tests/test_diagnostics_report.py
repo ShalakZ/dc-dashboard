@@ -538,6 +538,21 @@ def test_odd_data_in_one_section_becomes_a_line_not_an_exception():
     assert lines_of(body, "POINTS") == ["section unavailable: render TypeError"]
 
 
+@pytest.mark.parametrize("masked", [False, True])
+@pytest.mark.parametrize("known, tail", [('pass"word1', "word1"), ("pässwort9", "sswort9"), ("back\\slash77", "slash77")])
+def test_a_known_value_json_would_escape_is_hidden_in_a_journal_detail_and_an_audit_detail(known, tail, masked):
+    data = ReportData(
+        generated_at=NOW,
+        journal=(event(message="login failed", detail={"error": f"rejected {known} for svc"}),),
+        audit=(AuditEntry(NOW, "admin", "source.updated", {"note": f"changed to {known}"}),),
+    )
+    masker = Masker() if masked else None
+    transform = (lambda value: masker.mask(scrub(value, [known]))) if masker else (lambda value: scrub(value, [known]))
+    body = render(data, "summary", transform, masked=masked)
+    assert tail not in body and known not in body, body
+    assert "[hidden]" in "".join(lines_of(body, "JOURNAL")) and "[hidden]" in "".join(lines_of(body, "AUDIT TAIL"))
+
+
 # --- masking -----------------------------------------------------------------------------------------------------------------
 
 
@@ -551,6 +566,12 @@ def test_mask_names_lists_source_hosts_and_the_names_the_checks_learned_in_a_sta
     assert hosts == ["opc.tcp://plc.example:4840", "10.1.2.4", "opc.tcp://10.1.2.5:4840", "plc.example", "SCADA-SRV", "10.1.2.5"]
     assert uris == ["urn:SCADA-SRV:Vendor:Server"]
     assert mask_names(ReportData(sources=Unavailable("X"), checks=Unavailable("Y"))) == ([], [])
+
+
+def test_mask_names_takes_the_hosts_of_all_sources_when_it_is_given_them():
+    data = ReportData(sources=(source(5, config=(("endpoint", "opc.tcp://10.1.2.5:4840"),)),), checks=())
+    hosts, _uris = mask_names(data, ["opc.tcp://scada01:4840", "10.1.2.5", "opc.tcp://scada01:4840", "  "])
+    assert hosts == ["opc.tcp://scada01:4840", "10.1.2.5"]  # not the filtered list, no duplicates, no blanks
 
 
 def test_a_masked_report_has_no_host_or_address_of_the_data_and_masking_again_changes_nothing():

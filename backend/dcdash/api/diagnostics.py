@@ -19,7 +19,7 @@ from dcdash.core.audit import audit
 from dcdash.core.build import build_info, uptime_seconds
 from dcdash.core.models import User
 from dcdash.diagnostics.redact import FORMAT, Masker, clip, finalize, scrub
-from dcdash.diagnostics.report import LINE_LIMIT, gather, load_known, mask_names, render
+from dcdash.diagnostics.report import LINE_LIMIT, gather, load_known, load_source_hosts, mask_names, render
 
 router = APIRouter(prefix="/api", tags=["diagnostics"])
 
@@ -77,8 +77,9 @@ async def get_report(
     # The session's token is a secret the database never holds (only its hash); this request's own cookie is one more value to hide.
     own_token = request.cookies.get(COOKIE)
     known = await load_known(db, extra=[own_token] if own_token else ())
+    source_hosts = await load_source_hosts(db) if mask else None  # all sources, not only the filtered one; fails closed
     data = await gather(db, detail=detail, source_id=source, client_time=client_time)
-    masker = Masker(*mask_names(data)) if mask else None
+    masker = Masker(*mask_names(data, source_hosts)) if mask else None
     transform = (lambda value: masker.mask(scrub(value, known))) if masker else (lambda value: scrub(value, known))
     body = _second_net(render(data, detail, transform, masked=bool(mask)), known, masker)
     parts = finalize(body, build_info().build_id, data.generated_at)

@@ -30,7 +30,7 @@ from cryptography.x509.oid import NameOID
 
 from dcdash.connectors.base import GOOD, url_host_port
 from dcdash.connectors.opcua import OpcUaConnector, _point_value, _status_text
-from dcdash.core.audit import hidden_parts
+from dcdash.core.audit import hidden_values
 from dcdash.diagnostics.check import Checker, CheckResult, Publish, StepFailed, StepOutcome
 from dcdash.diagnostics.hints import CLOCK_SKEW, hint_for
 
@@ -179,7 +179,7 @@ class OpcUaCheck:
         self.connector = connector
         self.config = connector.config
         self.points = list(points)
-        known = [*hidden_parts(self.config.model_dump()).values(), *([connector.secret] if connector.secret else [])]
+        known = [*hidden_values(self.config.model_dump()), *([connector.secret] if connector.secret else [])]
         # step_timeout is None: each step is given its own bound, and a step may need more than `timeout_seconds` in all
         self.checker = Checker("opcua", publish, known=known, step_timeout=None, deadline_seconds=DEADLINE_SECONDS)
         self.endpoints: list[Any] | None = None

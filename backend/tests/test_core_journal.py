@@ -340,3 +340,12 @@ async def test_background_writes_land_in_the_order_they_were_scheduled_and_use_o
     stored = await rows(db)
     assert [row["message"] for row in stored] == [f"event {n}" for n in range(30)]
     assert [row["ts"] for row in stored] == sorted(row["ts"] for row in stored)
+
+
+def test_known_for_adds_the_percent_decoded_credentials_of_a_url():
+    from dcdash.core.audit import scrub_url_credentials
+
+    known = journal.known_for({"endpoint": "opc.tcp://user:p%40ss%2Fw0rd@host:4840"}, None)
+    assert "user:p%40ss%2Fw0rd" in known and "user:p@ss/w0rd" in known
+    assert scrub_url_credentials("password p@ss/w0rd rejected", known) == "password [hidden] rejected"
+    assert journal.known_for({"endpoint": "opc.tcp://user:plain-pw@host:4840"}, None) == ["user:plain-pw"]  # nothing to decode

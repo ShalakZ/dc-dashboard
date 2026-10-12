@@ -871,3 +871,91 @@ async def test_a_check_job_that_raised_is_a_failed_job_with_the_generic_journal_
     missing = await add_job(db, "check_connection", 9999)
     await run_pending_jobs(db, factory())
     assert (await job(db, missing))["status"] == "failed"
+
+
+# --- the journal event of a failed job is cut AFTER the scrub (SEC-C1) and fails closed (SEC-I2) -------------------------------
+
+# The URL's "@" comes after character 200, the password starts at 194: a cut at 200 of the raw text keeps "Sup3rS".
+URL_CUT = "x" * 180 + " http://admin:Sup3rS3cretPassw0rd@sim:8000/api/values"
+# A password that is not in URL shape and straddles the cut: only the source knows it.
+SECRET_CUT = "OpcPassw0rd-7731"
+KNOWN_CUT = "y" * 194 + f" {SECRET_CUT} was refused"
+
+
+def assert_no_password_start(row, *starts: str) -> None:
+    for text in (row["message"], row["detail"]["error"]):
+        assert not any(start in text for start in starts), text
+
+
+@pytest.mark.parametrize("kind", ["test_source", "browse_source"])
+@pytest.mark.parametrize("text, starts", [(URL_CUT, ("Sup3r", "admin:")), (KNOWN_CUT, ("OpcPa", "Passw0"))])
+async def test_the_journal_event_of_a_job_is_cut_after_the_scrub_not_before(db, kind, text, starts):
+    source = await make_source(db, secret=SECRET_CUT)
+
+    class Leaky:
+        async def test(self):
+            return ConnectionCheck(ok=False, status="unreachable", message=text)
+
+        async def browse(self):
+            raise RuntimeError(text)
+
+        async def close(self):
+            pass
+
+    await add_job(db, kind, source)
+    await run_pending_jobs(db, lambda *_args: Leaky())
+    [event] = await finished_events(db)
+    assert event["detail"]["error"]  # there is something to look at
+    assert_no_password_start(event, *starts)
+
+
+async def test_the_journal_event_of_a_scan_job_without_a_source_is_cut_after_the_url_scrub(db, monkeypatch):
+    async def failing_scan(pool, scan_id, factory) -> None:
+        raise RuntimeError(URL_CUT)
+
+    monkeypatch.setattr(jobs_module, "run_scan", failing_scan)
+    scan_id = await db.fetchval("INSERT INTO scans (scope_snapshot) VALUES ('{}') RETURNING id")
+    await db.execute("INSERT INTO jobs (kind, params) VALUES ('scan', $1)", {"scan_id": scan_id})
+    await run_pending_jobs(db, factory())
+    [event] = await finished_events(db)
+    assert event["source_id"] is None and event["detail"]["error"].startswith("x" * 180 + " http://[hidden]")
+    assert_no_password_start(event, "Sup3r", "admin:")
+
+
+def test_finished_event_cuts_a_raw_text_after_scrubbing_it_too():
+    event = jobs_module._finished_event({"id": 1, "kind": "scan", "params": {}}, "failed", {"error": URL_CUT})
+    assert "Sup3r" not in event["message"] and "Sup3r" not in event["detail"]["error"]
+
+
+class FlakyPool:
+    """Delegates to the real pool, but the query for the source's credentials fails."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def fetchrow(self, query, *args):
+        if "SELECT config, secret FROM sources" in query:
+            raise OSError("connection reset by peer")
+        return await self.inner.fetchrow(query, *args)
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+async def test_a_job_whose_hidden_values_cannot_be_loaded_fails_before_it_touches_the_device(db):
+    source = await make_source(db, secret="k")
+    job_id = await add_job(db, "test_source", source)
+    touched = []
+
+    def device(*_args):
+        touched.append(True)
+        return factory()(*_args)
+
+    claimed = await db.fetchrow(jobs_module._CLAIM)
+    await jobs_module._run_one(FlakyPool(db), claimed, device)
+    row = await job(db, job_id)
+    assert touched == [] and row["status"] == "failed" and row["finished_at"] is not None
+    assert row["result"] == {"error": jobs_module.HIDDEN_VALUES_UNAVAILABLE}
+    [event] = await finished_events(db)
+    assert event["level"] == "error" and event["detail"]["job_id"] == job_id
+    assert await db.fetchval("SELECT status FROM sources WHERE id = $1", source) != "online"

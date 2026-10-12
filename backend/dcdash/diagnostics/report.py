@@ -373,12 +373,29 @@ async def load_known(
     )
 
 
-def mask_names(data: ReportData) -> tuple[list[str], list[str]]:
+async def load_source_hosts(db: AsyncSession) -> list[str]:
+    """The endpoint/host of EVERY source (not only the one a `source=` filter keeps), by source id, for `mask_names`: the sections
+    that are not filtered (audit tail, scans, api errors) may name the other sources' hosts. Selects the config only, and
+    fails CLOSED like `load_known`: call it before `gather` when the report is masked."""
+    hosts: dict[str, None] = {}
+    for (config,) in (await db.execute(select(Source.config).order_by(Source.id))).all():
+        for key in HOST_FIELDS:
+            value = config.get(key) if isinstance(config, Mapping) else None
+            if isinstance(value, str) and value.strip():
+                hosts.setdefault(without_credentials(value))
+    return list(hosts)
+
+
+def mask_names(data: ReportData, source_hosts: Iterable[str] | None = None) -> tuple[list[str], list[str]]:
     """(hosts, uris) to give the `Masker`: every source's endpoint/host and what the checks learned about the server (M5), in a
-    stable order (source id, then check), without duplicates. Aliases are numbered in registration order, so the order matters."""
+    stable order (source id, then check), without duplicates. Aliases are numbered in registration order, so the order matters.
+
+    `source_hosts` (see `load_source_hosts`) replaces the hosts read from `data.sources`, which a source filter narrows."""
     hosts: dict[str, None] = {}
     uris: dict[str, None] = {}
-    if not isinstance(data.sources, Unavailable):
+    if source_hosts is not None:
+        hosts.update(dict.fromkeys(host for host in source_hosts if host.strip()))
+    elif not isinstance(data.sources, Unavailable):
         for source in sorted(data.sources, key=lambda s: s.id):
             for key, value in source.config:
                 if key in HOST_FIELDS and value:
@@ -791,6 +808,17 @@ def _compact(value: Mapping[str, Any]) -> str:
     return json.dumps(plain(dict(value)), sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _transform_strings(value: Any, transform: Callable[[str], str]) -> Any:
+    """`value` with `transform` applied to every string in it, however deep (keys are left alone)."""
+    if isinstance(value, str):
+        return transform(value)
+    if isinstance(value, Mapping):
+        return {key: _transform_strings(item, transform) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_transform_strings(item, transform) for item in value]
+    return value
+
+
 def _days(days: float | None) -> str:
     if days is None:
         return "n/a"
@@ -829,11 +857,18 @@ class _Renderer:
     def text(self, value: Any, limit: int = LINE_LIMIT) -> str:
         if value is None:
             return "-"
-        raw = str(value)
+        return clip(self._done(str(value)), limit)
+
+    def _done(self, raw: str) -> str:
         done = self._memo.get(raw)
         if done is None:
             done = self._memo[raw] = " ".join(self._transform(raw).translate(_CONTROL).split())
-        return clip(done, limit)
+        return done
+
+    def compact(self, value: Mapping[str, Any], limit: int) -> str:
+        """A detail as one JSON line. The strings are transformed BEFORE `json.dumps` escapes them: a known value with a quote, a
+        backslash or a non-ASCII character no longer matches in the JSON text. `text` is the second net over the line."""
+        return self.text(_compact(_transform_strings(plain(dict(value)), self._done)), limit)
 
     def src(self, source_id: int | None) -> str:
         if source_id is None:
@@ -1177,7 +1212,7 @@ class _Renderer:
             head.append(f"x{count} since {_iso(first)}")
         detail = ""
         if event.detail:
-            detail = " " + self.text(_compact(event.detail), 120)
+            detail = " " + self.compact(event.detail, 120)
         return " ".join(head) + ": " + self.text(event.message, MESSAGE_CHARS) + detail
 
     def events(self, events: Sequence[Event], cap: int, empty: str) -> list[str]:
@@ -1248,7 +1283,7 @@ class _Renderer:
         for entry in entries:
             detail = ""
             if entry.detail:
-                detail = " " + self.text(_compact(entry.detail), 160)
+                detail = " " + self.compact(entry.detail, 160)
             lines.append(f"{_iso(entry.ts)} {self.text(entry.actor, 40)} {self.text(entry.action, 40)}{detail}")
         return self.capped(lines, self.caps["audit"])
 

@@ -132,6 +132,10 @@ _NODE_ID_KEY = re.compile(r"(?:^|[\s\"'(,{;])(?:ns|[isgb])=$")
 _IPV4 = re.compile(r"(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\d|\.\d)")
 _URN = re.compile(rf"(?<![\w.-])(urn:)({_NAME_CHARS}+)", re.IGNORECASE)
 _PORT = re.compile(r"(.+):\d{1,5}")
+# Names that mean the same on every installation and say nothing about this one: the standard OPC UA namespaces
+# (http://opcfoundation.org/UA/...). Hiding them would make namespace 0 unrecognisable.
+_PUBLIC = re.compile(r"(?:[a-z][a-z0-9+.-]*://|urn:)?(?:[\w-]+\.)*opcfoundation\.org(?:[/:].*)?", re.IGNORECASE)
+_SUFFIX = r"(?:\.[A-Za-z0-9-]+)*"  # a listed short host name also covers the labels of the FQDN it starts
 _BRACKET_PORT = re.compile(r"\[([^\]]+)\](?::\d{1,5})?")
 
 
@@ -171,6 +175,15 @@ def _key(value: str) -> str:
     if (normal := _ipv6(value.strip("[]"), bracketed=True)) is not None:
         return normal
     return value.casefold().rstrip(".")
+
+
+def _public(name: str) -> bool:
+    return _PUBLIC.fullmatch(name.strip()) is not None
+
+
+def _is_address(name: str) -> bool:
+    key = _key(name)
+    return bool(re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", key)) or _ipv6(key, bracketed=True) is not None
 
 
 def _listed_names(value: str) -> list[str]:
@@ -218,11 +231,14 @@ class Masker:
         for kind, values in ((HOST, hosts), (URN, uris)):
             for value in values:
                 for name in _listed_names(value) if kind == HOST else [value.strip()]:
-                    if len(name) < _MIN_NAME or _ALIAS.fullmatch(name):
+                    if len(name) < _MIN_NAME or _ALIAS.fullmatch(name) or _public(name):
                         continue
                     self._listed[name.casefold()] = self._alias(_key(name), name, kind)
         names = sorted(self._listed, key=len, reverse=True)
-        alternatives = "|".join(map(re.escape, names))
+        # a host name (not an address, not a URI) also covers the labels after it: SCADA01.site.local is one host
+        alternatives = "|".join(
+            re.escape(name) + ("" if _is_address(name) or ":" in name else _SUFFIX) for name in names
+        )
         self._pattern = re.compile(rf"(?<![\w.-])(?:{alternatives})(?![\w-]|\.\d)", re.IGNORECASE) if names else None
 
     def _alias(self, key: str, original: str, kind: str) -> str:
@@ -260,9 +276,10 @@ class Masker:
     # each sub callback returns the alias for what it matched, or the match itself when it is not worth masking
 
     def _listed_name(self, match: re.Match[str]) -> str:
-        alias = self._listed.get(match.group().casefold())
-        if alias is None:
-            return match.group()
+        found = match.group()
+        alias = self._listed.get(found.casefold())
+        if alias is None:  # a listed name and the labels after it: the whole FQDN gets an alias of its own
+            return self._use(found)
         self._used.add(alias)
         return alias
 
@@ -275,7 +292,7 @@ class Masker:
                 return prefix + host
             return prefix + self._use(host[1:-1])
         name = host.rstrip(".")
-        if not name or _ALIAS.fullmatch(name):  # already an alias, or a listed name masked by the first pass
+        if not name or _ALIAS.fullmatch(name) or _public(name):  # an alias already, a listed name masked by the first pass, or public
             return prefix + host
         return prefix + self._use(name) + host[len(name) :]
 
@@ -299,7 +316,7 @@ class Masker:
     def _urn(self, match: re.Match[str]) -> str:
         prefix, authority = match.groups()
         name = authority.rstrip(".")
-        if not name or _ALIAS.fullmatch(name):
+        if not name or _ALIAS.fullmatch(name) or _public(name):
             return match.group()
         return prefix + self._use(name) + authority[len(name):]
 

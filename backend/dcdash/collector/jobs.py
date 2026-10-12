@@ -34,6 +34,7 @@ _CLAIM = """
 # not reach any stored text); it returns the job's result.
 CHECK_POINT_LIMIT = 200  # mapped addresses a connection check reads
 CLOCK_SKEW_JOURNAL_SECONDS = 60
+HIDDEN_VALUES_UNAVAILABLE = "the job was not run: the values to hide could not be read from the database"
 
 
 async def _test_source(
@@ -118,20 +119,19 @@ def _stored_result(result: Any, known: Iterable[str] = ()) -> Any:
 
 async def _known_for_job(pool: asyncpg.Pool, params: Any) -> list[str]:
     """What must not reach the stored result or the journal when the job is about a source: the credentials in its config and
-    its decrypted secret. A job without a source, a missing source or an undecryptable secret just means fewer values."""
+    its decrypted secret. A job without a source, a missing source or an undecryptable secret just means fewer values.
+
+    A failed query is not "fewer values": it raises (like `report.load_known`), and the job is failed before it touches the device."""
     if not isinstance(params, dict) or "source_id" not in params:
         return []
-    try:
-        row = await pool.fetchrow("SELECT config, secret FROM sources WHERE id = $1", params["source_id"])
-        if row is None:
-            return []
-        try:
-            secret = decrypt(row["secret"]) if row["secret"] else None
-        except Exception:
-            secret = None
-        return journal.known_for(row["config"], secret)
-    except Exception:
+    row = await pool.fetchrow("SELECT config, secret FROM sources WHERE id = $1", params["source_id"])
+    if row is None:
         return []
+    try:
+        secret = decrypt(row["secret"]) if row["secret"] else None
+    except Exception:
+        secret = None
+    return journal.known_for(row["config"], secret)
 
 
 def _finished_event(job: asyncpg.Record, status: str, result: Any) -> dict[str, Any]:
@@ -143,8 +143,9 @@ def _finished_event(job: asyncpg.Record, status: str, result: Any) -> dict[str, 
     source_id = params.get("source_id")
     detail: dict[str, Any] = {"job_id": job["id"], "kind": job["kind"], "ok": ok, "status": status}
     if reason is not None:
-        detail["error"] = reason[:200]
-    text = f"{job['kind']} job {job['id']} " + ("finished" if ok else "failed") + (f": {reason[:200]}" if reason else "")
+        reason = clip_error(reason, 200)  # scrubbed first, then cut: a cut inside "://user:pass@" must not leave half a password
+        detail["error"] = reason
+    text = f"{job['kind']} job {job['id']} " + ("finished" if ok else "failed") + (f": {reason}" if reason else "")
     return {
         "level": "info" if ok else ("error" if status == "failed" else "warning"),
         "source_id": source_id if isinstance(source_id, int) and not isinstance(source_id, bool) else None,
@@ -197,17 +198,24 @@ def _check_events(job: asyncpg.Record, result: Any) -> list[dict[str, Any]]:
 
 
 async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFactory) -> None:
-    known = await _known_for_job(pool, job["params"])
+    known: list[str] = []
     try:
-        handler = _HANDLERS.get(job["kind"])
-        if handler is None:
-            raise ValueError(f"unknown job kind: {job['kind']}")
-        result = await handler(pool, job["params"], factory, job["id"], known)
-        status = "done"
-    except Exception as exc:
-        log.warning("job %s (%s) failed: %s", job["id"], job["kind"], exc)
-        result = {"error": str(exc) or type(exc).__name__}
+        known = await _known_for_job(pool, job["params"])
+    except Exception as exc:  # fail closed: without the values to hide, nothing may run that could quote them
+        log.warning("job %s (%s) not run, the values to hide could not be loaded: %s", job["id"], job["kind"], type(exc).__name__)
+        result: Any = {"error": HIDDEN_VALUES_UNAVAILABLE}
         status = "failed"
+    else:
+        try:
+            handler = _HANDLERS.get(job["kind"])
+            if handler is None:
+                raise ValueError(f"unknown job kind: {job['kind']}")
+            result = await handler(pool, job["params"], factory, job["id"], known)
+            status = "done"
+        except Exception as exc:
+            log.warning("job %s (%s) failed: %s", job["id"], job["kind"], exc)
+            result = {"error": str(exc) or type(exc).__name__}
+            status = "failed"
     await pool.execute(
         "UPDATE jobs SET status = $2, result = $3, finished_at = now() WHERE id = $1",
         job["id"], status, _stored_result(result, known),
@@ -217,7 +225,7 @@ async def _run_one(pool: asyncpg.Pool, job: asyncpg.Record, factory: ConnectorFa
         for event in _check_events(job, result):
             await journal.record(pool, "job", event.pop("kind"), event.pop("message"), known=known, **event)
         return
-    event = _finished_event(job, status, result)
+    event = _finished_event(job, status, _stored_result(result, known))
     await journal.record(pool, "job", journal.JOB_FINISHED, event.pop("message"), known=known, **event)
 
 

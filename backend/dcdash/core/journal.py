@@ -19,7 +19,7 @@ import asyncpg
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.core.audit import clip_error, hidden_parts, plain, scrub_strings, scrub_url_credentials
+from dcdash.core.audit import clip_error, hidden_values, plain, scrub_strings, scrub_url_credentials
 from dcdash.core.models import DiagEvent
 
 log = logging.getLogger(__name__)
@@ -117,7 +117,7 @@ def allow(key: Hashable, within_seconds: float) -> bool:
 
 def known_for(config: Mapping[str, Any], secret: str | None) -> list[str]:
     """The values to hide when a text about a source is stored: the credentials in its config and its decrypted secret."""
-    known = list(hidden_parts(config).values()) if isinstance(config, Mapping) else []
+    known = hidden_values(config) if isinstance(config, Mapping) else []
     if secret:
         known.append(secret)
     return known

@@ -187,6 +187,17 @@ async def test_an_sql_error_in_a_section_does_not_abort_the_transaction_the_audi
     assert len(await audit_rows(db)) == 1
 
 
+async def test_a_masked_report_of_one_source_still_hides_the_host_names_of_the_others_in_unfiltered_sections(client, db):
+    from dcdash.core.audit import audit_pool
+
+    await login_as(client, db, "admin")
+    await make_source(db, "Alpha Meter", "simulator", {"url": "http://alpha-host:9000"})
+    second = await make_source(db, "Beta Meter", "simulator", {"url": "http://beta-host:9000"})
+    await audit_pool(db, None, "source.updated", {"note": "moved alpha-host to rack 4"})
+    body = (await ask(client, source=second, mask=1)).text
+    assert "alpha-host" not in body and "beta-host" not in body and "moved HOST-" in body
+
+
 async def test_a_database_that_cannot_be_read_for_the_secrets_gives_no_report_at_all(client, db, monkeypatch):
     await login_as(client, db, "admin")
 
