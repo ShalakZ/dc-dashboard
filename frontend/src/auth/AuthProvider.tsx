@@ -13,6 +13,8 @@ interface AuthState {
   /** Set when the server says the signed-in user now has another role than the page loaded with. `user` itself is left alone. */
   roleChange: { from: Role; to: Role } | null;
   setupNeeded: boolean;
+  /** True from an explicit sign-out until the next sign-in: RequireAuth then does not remember the page the user left from. A 401 does not set it. */
+  signedOutOnPurpose: boolean;
   loading: boolean;
   login(username: string, password: string): Promise<void>;
   setup(username: string, password: string): Promise<void>;
@@ -26,6 +28,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [setupNeeded, setSetupNeeded] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [signedOutOnPurpose, setSignedOutOnPurpose] = useState(false);
   const [roleChange, setRoleChange] = useState<AuthState["roleChange"]>(null);
   const queryClient = useQueryClient();
   // The latest signed-in user, for callbacks that must not depend on it. The role the page "loaded with" is this user's role.
@@ -137,24 +140,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (username: string, password: string) => {
     replaceUser(await api.post<User>("/api/login", { username, password }));
+    setSignedOutOnPurpose(false);
   }, [replaceUser]);
 
   const setup = useCallback(async (username: string, password: string) => {
     replaceUser(await api.post<User>("/api/setup", { username, password }));
     setSetupNeeded(false);
+    setSignedOutOnPurpose(false);
   }, [replaceUser]);
 
   const logout = useCallback(async () => {
     await api.post("/api/logout");
+    setSignedOutOnPurpose(true); // in the same batch as the user going null, so RequireAuth never renders one without the other
     endSession();
   }, [endSession]);
 
   const value = useMemo<AuthState>(
     () => ({
-      user, roleChange, setupNeeded, loading, login, setup, logout,
+      user, roleChange, setupNeeded, signedOutOnPurpose, loading, login, setup, logout,
       hasRole: (min) => user !== null && ROLE_LEVEL[user.role] >= ROLE_LEVEL[min],
     }),
-    [user, roleChange, setupNeeded, loading, login, setup, logout],
+    [user, roleChange, setupNeeded, signedOutOnPurpose, loading, login, setup, logout],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

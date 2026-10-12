@@ -4,12 +4,13 @@ import type { Role } from "../api/types";
 import { RETURN_KEY, useAuth } from "./AuthProvider";
 
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { user, setupNeeded, loading } = useAuth();
+  const { user, setupNeeded, signedOutOnPurpose, loading } = useAuth();
   const location = useLocation();
   if (loading) return <p className="muted">loading…</p>;
   if (setupNeeded) return <Navigate to="/setup" replace />;
   if (!user) {
-    sessionStorage.setItem(RETURN_KEY, location.pathname + location.search);
+    // An explicit sign-out leaves nothing behind (the next sign-in lands on /); a lost session remembers where it was.
+    if (!signedOutOnPurpose) sessionStorage.setItem(RETURN_KEY, location.pathname + location.search);
     return <Navigate to="/login" replace />;
   }
   return <>{children}</>;
