@@ -6,7 +6,7 @@ import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
   auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
-  usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
+  usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
 
@@ -132,7 +132,7 @@ describe("audit filter options refresh", () => {
 
 describe("sign-in policy queries", () => {
   const answer = (max_failures: number, block_minutes: number) => ({
-    max_failures, block_minutes,
+    max_failures, block_minutes, enabled: true,
     limits: { max_failures: [3, 20], block_minutes: [1, 60] },
     defaults: { max_failures: 5, block_minutes: 5 },
   });
@@ -154,6 +154,37 @@ describe("sign-in policy queries", () => {
     await waitFor(() => expect(result.current.policy.data?.block_minutes).toBe(15));
     expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ max_failures: 8, block_minutes: 15 });
     expect(calls.filter((c) => c.method === "GET" && c.path === "/api/settings/sign-in")).toHaveLength(2);
+  });
+});
+
+describe("sign-in switch and rows per day", () => {
+  const jsonReply = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+
+  it("sends confirm in the query string only, never in the body", async () => {
+    const fetchSpy = vi.fn(async () => jsonReply({}));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { result } = renderHook(() => usePutSignInPolicy(), { wrapper: stableWrapper() });
+    await result.current.mutateAsync({ max_failures: 5, block_minutes: 5, enabled: false, confirm: true });
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/settings/sign-in?confirm=true");
+    expect(JSON.parse(init.body as string)).toEqual({ max_failures: 5, block_minutes: 5, enabled: false });
+    await result.current.mutateAsync({ max_failures: 5, block_minutes: 5 });
+    const [plain, plainInit] = fetchSpy.mock.calls[1] as unknown as [string, RequestInit];
+    expect(plain).toBe("/api/settings/sign-in");
+    expect(JSON.parse(plainInit.body as string)).toEqual({ max_failures: 5, block_minutes: 5 });
+    vi.unstubAllGlobals();
+  });
+
+  it("asks for rows per day only when both days are given", async () => {
+    const fetchSpy = vi.fn(async () => jsonReply({ start: "2026-10-01", end: "2026-10-03", days: [], total_rows: 0, first_day: null, last_day: "2026-10-12" }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const idle = renderHook(() => useRowsPerDay(null, "2026-10-03"), { wrapper: stableWrapper() });
+    expect(idle.result.current.fetchStatus).toBe("idle");
+    const { result } = renderHook(() => useRowsPerDay("2026-10-01", "2026-10-03"), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.data?.last_day).toBe("2026-10-12"));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect((fetchSpy.mock.calls[0] as unknown as [string])[0]).toBe("/api/storage/rows-per-day?start=2026-10-01&end=2026-10-03");
+    vi.unstubAllGlobals();
   });
 });
 
