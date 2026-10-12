@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { iconHtml } from "../test/iconHtml";
 import { CostTile } from "./CostTile";
 import { ESTIMATED_TIP, PARTIAL_TIP } from "./Figure";
 
@@ -59,5 +60,14 @@ describe("CostTile", () => {
   it("does not mute a measured figure", () => {
     render(<CostTile cost={{ cost: 1, estimated: false, partial: false, no_data: false }} currency="QAR" />);
     expect(screen.getByText("1.00")).not.toHaveClass("muted");
+  });
+
+  it("puts the currency icon beside the caption and leaves the caption text alone", () => {
+    render(<CostTile cost={null} currency="QAR" />);
+    const caption = screen.getByText("Cost today");
+    expect(caption).toHaveClass("muted", "tile-label");
+    expect(caption.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    expect(caption.querySelector("svg")!.innerHTML).toBe(iconHtml("currency"));
+    expect(caption.parentElement!.firstElementChild).toBe(caption);
   });
 });

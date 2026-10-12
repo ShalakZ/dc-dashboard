@@ -3,8 +3,10 @@ import { useAssets, useFleetSummary, useSite } from "../api/queries";
 import type { Asset, AttentionItem, FleetSummary } from "../api/types";
 import { CostTile } from "../components/CostTile";
 import { EnergyTile } from "../components/EnergyTile";
+import { Icon } from "../components/Icon";
 import { fmt } from "../components/MetricsTable";
 import { PageHeader } from "../components/PageHeader";
+import { kindIcon } from "../lib/kindIcon";
 import { cleanKind, kindKey } from "../lib/kinds";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { assetActions, useAssetsContext } from "./AssetsPage";
@@ -90,11 +92,11 @@ function Fleet({ assets }: { assets: readonly Asset[] }) {
     <>
       <div className="tiles fleet-tiles">
         <div className="tile">
-          <div className="muted">Assets</div>
+          <div className="muted tile-label"><Icon name="assets" />Assets</div>
           <div className="big">{assets.length}</div>
         </div>
         <div className="tile">
-          <div className="muted">Live power</div>
+          <div className="muted tile-label"><Icon name="rate" />Live power</div>
           <div className="big">{data.power.kw === null ? "—" : `${fmt(data.power.kw)} kW`}</div>
           <small className="muted">{powerNote(data.power)}</small>
         </div>
@@ -104,7 +106,7 @@ function Fleet({ assets }: { assets: readonly Asset[] }) {
       <h2 className="section-title">By kind</h2>
       <ul className="kind-list">
         {kindCounts(assets).map(({ name, count }) => (
-          <li key={name}><span className="kind-name">{name}</span> <span className="kind-count">{count}</span></li>
+          <li key={name}><span className="kind-name"><Icon name={kindIcon(name)} />{name}</span> <span className="kind-count">{count}</span></li>
         ))}
       </ul>
       <Attention attention={data.attention} timezone={site.data?.timezone} />

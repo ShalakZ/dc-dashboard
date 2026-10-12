@@ -38,9 +38,10 @@
 
   /* Fleet summary (the index page): the kinds as a wrapped row of name and count with a hairline between them, and the attention table */
   .kind-list { display: flex; flex-wrap: wrap; row-gap: 10px; margin: 0 0 0 -17px; padding: 0; list-style: none; clip-path: inset(0 0 0 17px); }
-  .kind-list li { display: flex; align-items: baseline; gap: 8px; margin-left: -1px; padding: 0 18px 0 17px; border-left: 1px solid var(--border); } /* the first item of a line has its hairline clipped away, with the 17px that the list is pulled out to the left */
+  .kind-list li { display: flex; align-items: center; gap: 8px; margin-left: -1px; padding: 0 18px 0 17px; border-left: 1px solid var(--border); } /* the first item of a line has its hairline clipped away, with the 17px that the list is pulled out to the left */
   .fleet-tiles .tile .big:not(.none) { font-size: var(--fs-title); } /* four tiles share the row: a figure such as 1605.00 kWh must fit on one line (the asset page's three tiles keep the larger size) */
-  .kind-name { color: var(--text); font-size: var(--fs-base); }
+  .kind-name { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-size: var(--fs-base); }
+  .kind-name svg.i { width: 16px; height: 16px; color: var(--text-2); }
   .kind-count { color: var(--text-2); font-size: var(--fs-base); font-variant-numeric: tabular-nums; }
   .attention-table th:first-child { width: 24%; } /* the asset's name keeps a readable share when the path is long */
   .attn-name, .attn-where { overflow-wrap: anywhere; } /* a long asset name or a deep path wraps inside its cell instead of widening the table */

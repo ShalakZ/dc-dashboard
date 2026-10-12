@@ -5,6 +5,7 @@ import { useLocation } from "react-router";
 import type { Asset } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { iconHtml } from "../test/iconHtml";
 import { renderWithProviders } from "../test/render";
 import { QuickFind } from "./QuickFind";
 
@@ -114,6 +115,17 @@ describe("QuickFind structure", () => {
     const captions = Array.from(list.querySelectorAll(".qf-cap"));
     expect(captions.map((c) => c.textContent)).toEqual(["Assets", "Pages"]);
     for (const caption of captions) expect(caption).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("shows the icon of the asset's kind on an asset option and a page's own icon on a page option", async () => {
+    const hall = (id: number, name: string, kind: string): Asset => ({ ...asset(id, name, null), kind });
+    const { user, input } = await mount({ assets: { body: [hall(1, "Billing Hall", "Room"), hall(2, "Billing Rack", "Rack")] } });
+    await user.type(input, "billing");
+    await screen.findByRole("option", { name: "Billing Hall" });
+    const iconOf = (name: string) => screen.getByRole("option", { name: new RegExp(`^${name}`) }).querySelector("svg")!.innerHTML;
+    expect(iconOf("Billing Hall")).toBe(iconHtml("kindRoom"));
+    expect(iconOf("Billing Rack")).toBe(iconHtml("kindRack"));
+    expect(iconOf("Billing$")).toBe(iconHtml("billing"));
   });
 
   it("names the option by its label and then the path above it", async () => {

@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
+import { iconHtml } from "../test/iconHtml";
 import { PageHeader } from "./PageHeader";
 
 // The crumbs are links, so the header needs a router around it.
@@ -49,5 +50,27 @@ describe("PageHeader", () => {
     const { container } = inRouter(<PageHeader title="Audit log" crumbs={[{ label: "Admin" }]} sub="Every change" actions={<button type="button">Export</button>} />);
     const parts = Array.from(container.querySelector("header.page-head")!.children).map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${el.className}` : ""}`);
     expect(parts).toEqual(["nav.crumbs", "h1", "p.sub", "div.actions"]);
+  });
+
+  it("with an icon, wraps a tile and the h1 in one .page-title (still one h1, named by the title alone)", () => {
+    const { container } = render(<PageHeader title="Panel 1" icon="kindPanel" />);
+    const title = container.querySelector("header.page-head > div.page-title")!;
+    expect(Array.from(title.children).map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${el.className}` : ""}`)).toEqual(["span.page-tile", "h1"]);
+    expect(title.querySelector(".page-tile svg")).toHaveAttribute("aria-hidden", "true");
+    expect(title.querySelector(".page-tile svg")!.innerHTML).toBe(iconHtml("kindPanel"));
+    expect(screen.getAllByRole("heading")).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1, name: "Panel 1" })).toBe(title.querySelector("h1"));
+  });
+
+  it("keeps the other parts as direct children of the header when there is an icon too", () => {
+    const { container } = inRouter(<PageHeader title="MV2" icon="kindSite" crumbs={[{ label: "Assets" }]} sub="Site" actions={<button type="button">Edit</button>} />);
+    const parts = Array.from(container.querySelector("header.page-head")!.children).map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${el.className}` : ""}`);
+    expect(parts).toEqual(["nav.crumbs", "div.page-title", "p.sub", "div.actions"]);
+  });
+
+  it("without an icon the markup is exactly today's: the h1 straight in the header, no .page-title, no tile", () => {
+    const { container } = render(<PageHeader title="Billing" />);
+    expect(container.querySelector(".page-title, .page-tile")).toBeNull();
+    expect(container.querySelector("header.page-head > h1")).toHaveTextContent("Billing");
   });
 });

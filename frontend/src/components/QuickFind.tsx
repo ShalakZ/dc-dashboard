@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { useNavigate } from "react-router";
 import { useAssets } from "../api/queries";
 import { useAuth } from "../auth/AuthProvider";
+import { kindIcon } from "../lib/kindIcon";
 import { findHits, type FindHit } from "../lib/quickFind";
 import { Icon } from "./Icon";
 import { GROUPS } from "./navItems";
@@ -150,7 +151,7 @@ export function QuickFind() {
                           key={hit.key}
                           onClick={() => choose(hit)}
                         >
-                          <Icon name={hit.kind === "asset" ? "assets" : pageIcon(hit.to)} />
+                          <Icon name={hit.kind === "asset" ? kindIcon(hit.assetKind ?? "") : pageIcon(hit.to)} />
                           <span className="qf-label">{hit.label}</span>
                           {hit.detail && (
                             <>

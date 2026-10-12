@@ -77,17 +77,24 @@ describe("findHits matching", () => {
 describe("findHits shape", () => {
   it("describes an asset by its id, its name and the path above it", () => {
     const [hit] = findHits("meter", TREE, []);
-    expect(hit).toEqual({ kind: "asset", key: "asset:12", label: "Meter", detail: "Site / MV2", to: "/assets/12" });
+    expect(hit).toEqual({ kind: "asset", key: "asset:12", label: "Meter", detail: "Site / MV2", to: "/assets/12", assetKind: "panel" });
   });
 
   it("gives a top-level asset no detail", () => {
     const [hit] = findHits("site", TREE, []);
-    expect(hit).toEqual({ kind: "asset", key: "asset:1", label: "Site", detail: null, to: "/assets/1" });
+    expect(hit).toEqual({ kind: "asset", key: "asset:1", label: "Site", detail: null, to: "/assets/1", assetKind: "panel" });
   });
 
   it("describes a page by its route", () => {
     const [hit] = findHits("billing", [], PAGES);
     expect(hit).toEqual({ kind: "page", key: "page:/billing", label: "Billing", detail: null, to: "/billing" });
+  });
+
+  it("carries the asset's kind (as stored) on an asset hit and nothing of the sort on a page hit", () => {
+    const hits = findHits("i", [{ ...asset(1, "Cooling unit"), kind: "Chiller-1" }], [{ label: "Settings", to: "/settings" }]);
+    expect(hits.map((h) => h.kind)).toEqual(["asset", "page"]);
+    expect(hits[0].assetKind).toBe("Chiller-1");
+    expect(hits[1]).not.toHaveProperty("assetKind");
   });
 
   it("keeps a 46-character name whole (the ellipsis is the stylesheet's job)", () => {

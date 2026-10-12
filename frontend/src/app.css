@@ -289,6 +289,8 @@
   /* Asset page tiles; .tiles is the grid they sit in from 4a on */
   .tile { max-width: 360px; margin: 0 0 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); }
   .tile > .muted:first-child { font-size: var(--fs-sm); }
+  .tile-label { display: flex; align-items: center; gap: 6px; }
+  .tile-label svg.i { width: 16px; height: 16px; color: var(--accent); }
   .tile .big { margin-top: 2px; font-size: var(--fs-figure); font-weight: 600; font-variant-numeric: tabular-nums; }
   .tile .big small { font-size: var(--fs-base); font-weight: 400; }
   .tile .big.none { font-size: var(--fs-base); font-weight: 400; color: var(--text-2); } /* "no energy data": words, not a measurement, so not set as the figure */
@@ -335,6 +337,9 @@
   .twisty svg.i { width: 16px; height: 16px; transition: transform var(--motion); }
   .twisty[aria-expanded="false"] svg.i { transform: rotate(-90deg); }
   .twisty-sp { flex: none; width: 20px; }
+  .node-icon { flex: none; display: grid; place-items: center; width: 16px; height: 16px; color: var(--text-2); } /* the kind's icon: the name still ellipsises first */
+  .node-icon svg.i { width: 16px; height: 16px; }
+  .node.is-selected .node-icon { color: var(--accent); }
   .node .add { flex: none; display: grid; place-items: center; width: 24px; height: 24px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
   .node .add:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg); color: var(--accent); }
   .node .add svg.i { width: 14px; height: 14px; }
@@ -355,6 +360,11 @@
   .page-head > * { grid-column: 1; margin: 0; }
   .page-head h1 { font-size: var(--fs-title); font-weight: 600; line-height: 1.25; letter-spacing: -0.2px; }
   .page-head .crumbs { margin-bottom: 4px; }
+  .page-title { display: flex; align-items: center; gap: 12px; min-width: 0; } /* an icon beside the title: a tile (40) and a gap (12) */
+  .page-title h1 { margin: 0; min-width: 0; } /* the grid's margin reset does not reach a nested h1 */
+  .page-tile { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius); background: var(--accent-tint); color: var(--accent); }
+  .page-tile svg.i { width: 22px; height: 22px; }
+  .page-head:has(.page-title) > .sub { padding-left: 52px; } /* under the title, not under the tile */
   .page-head .sub { margin-top: 2px; font-size: var(--fs-sm); color: var(--text-2); }
   .page-head > .actions { grid-column: 2; grid-row: 1 / span 3; align-self: end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   /* A titled block under the page header (Users, Settings, Storage, Audit entry, Scans): one rule, so no page file can restyle another's */
