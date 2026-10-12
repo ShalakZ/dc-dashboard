@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AppShellSkeleton } from "./components/AppShellSkeleton";
@@ -1151,10 +1151,10 @@ describe("the app-shell skeleton (W7h)", () => {
     it("no other stylesheet under src names data-sidebar (a minimized rule there would have no twin)", () => {
       const sheets: string[] = [];
       const walk = (dir: string) => {
-        for (const entry of readdirSync(dir, { withFileTypes: true }) as Dirent[]) {
-          const path = `${dir}/${entry.name}`;
-          if (entry.isDirectory()) walk(path);
-          else if (entry.name.endsWith(".css")) sheets.push(path);
+        for (const name of readdirSync(dir)) {
+          const path = `${dir}/${name}`;
+          if (statSync(path).isDirectory()) walk(path);
+          else if (name.endsWith(".css")) sheets.push(path);
         }
       };
       walk("src");
