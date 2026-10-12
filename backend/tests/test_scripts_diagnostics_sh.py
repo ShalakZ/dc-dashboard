@@ -4,18 +4,22 @@ The scrubber is awk, and Ubuntu's awk is mawk while a dev box may have gawk, so 
 `awk` is a symlink). Nothing here calls the real `docker`: a fake one sits first on PATH and leaves a marker file if it is ever called.
 Every run passes `--project-dir` pointing at an empty temp folder (the default would resolve to this repo and its real .env).
 """
+import atexit
 import hashlib
 import os
+import random
 import re
 import shutil
 import stat
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from dcdash.core.audit import scrub_url_credentials
 from tests.scrub_fixture import FIXTURE, load_cases
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,14 +41,24 @@ class Result:
         return self.raw.decode("utf-8")
 
 
-def _fake_docker(tmp_path: Path) -> tuple[Path, Path]:
-    """A `docker` that only records that it was called: (bin dir, marker file)."""
-    bin_dir, marker = tmp_path / "fake_bin", tmp_path / "docker_was_called"
-    bin_dir.mkdir()
-    fake = bin_dir / "docker"
-    fake.write_text(f'#!/bin/sh\necho "$@" >> "{marker}"\nexit 1\n')
-    fake.chmod(0o755)
-    return bin_dir, marker
+# A `docker` that only records that it was called. EVERY run in this file has it first on PATH (WSL's Docker Desktop integration puts the
+# real one in /usr/bin), and the autouse fixture below fails any test that reached it. B1b's docker tests bring their own fake.
+_FAKE_DIR = Path(tempfile.mkdtemp(prefix="dcdash-fake-docker-"))
+DOCKER_MARKER = _FAKE_DIR / "docker_was_called"
+(_FAKE_DIR / "docker").write_text(f'#!/bin/sh\necho "$@" >> "{DOCKER_MARKER}"\nexit 1\n')
+(_FAKE_DIR / "docker").chmod(0o755)
+atexit.register(shutil.rmtree, _FAKE_DIR, ignore_errors=True)
+
+
+def _with_fake(path: str) -> str:
+    return str(_FAKE_DIR) + os.pathsep + path
+
+
+@pytest.fixture(autouse=True)
+def docker_is_never_called():
+    DOCKER_MARKER.unlink(missing_ok=True)
+    yield
+    assert not DOCKER_MARKER.exists(), f"docker was called: {DOCKER_MARKER.read_text()}"
 
 
 def _path_with(tmp_path: Path, awk: str | None, extra_first: Path | None = None) -> str:
@@ -77,7 +91,7 @@ BASE_TOOLS = ["bash", "awk", "sed", "head", "tr", "cat", "cp", "cut", "date", "d
 
 
 def _run(args: list[str], cwd: Path, *, stdin: bytes | None = None, path: str | None = None, timeout: int = 120) -> Result:
-    env = {**os.environ, "PATH": path if path is not None else os.environ["PATH"]}
+    env = {**os.environ, "PATH": _with_fake(path if path is not None else os.environ["PATH"])}
     proc = subprocess.run([BASH, str(SCRIPT), *args], capture_output=True, input=stdin, cwd=cwd, env=env, timeout=timeout)
     return Result(proc.returncode, proc.stdout, proc.stderr.decode("utf-8", "replace"))
 
@@ -95,12 +109,10 @@ def awk_path(request, tmp_path):
 
 @pytest.fixture
 def quiet_cwd(tmp_path):
-    """An empty folder to run in, with a fake docker: the test fails if anything was written there or docker was called."""
+    """An empty folder to run in, and the fake docker's folder (kept as a pair so the tests read the same as the ones with their own)."""
     cwd = tmp_path / "cwd"
     cwd.mkdir()
-    bin_dir, marker = _fake_docker(tmp_path)
-    yield cwd, str(bin_dir)
-    assert not marker.exists(), f"docker was called: {marker.read_text()}"
+    return cwd, str(_FAKE_DIR)
 
 
 # ---- the file itself ----------------------------------------------------------------------------------------------------------
@@ -145,7 +157,8 @@ def test_banned_commands_never_appear_in_the_script():
 
 
 def test_sourcing_the_file_defines_functions_and_runs_nothing(tmp_path):
-    proc = subprocess.run([BASH, "-c", 'source "$1"; type -t emit; type -t main', "bash", str(SCRIPT)], capture_output=True, text=True, cwd=tmp_path)
+    proc = subprocess.run([BASH, "-c", 'source "$1"; type -t emit; type -t main', "bash", str(SCRIPT)], capture_output=True, text=True, cwd=tmp_path,
+                          env={**os.environ, "PATH": _with_fake(os.environ["PATH"])})
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.split() == ["function", "function"]
     assert list(tmp_path.iterdir()) == []
@@ -245,6 +258,8 @@ HOSTILE = {
     "at signs": ("@" * 150_000, None),
     "one rewrite then many runs": ("://@ " + "a " * 70_000, "://[hidden]@ " + "a " * 70_000),
     "known value many times": ("tok-1234 " * 16_000, "[hidden] " * 16_000),
+    "600 KB of runs that each need rewriting": ("x://y@z " * 75_000, "x://[hidden]@z " * 75_000),
+    "600 KB of one known value": ("tok-1234" * 75_000, "[hidden]" * 75_000),
 }
 
 
@@ -276,7 +291,7 @@ def _emit(tmp_path, awk_path, snippet: str, *, env_text: str = "", inputs: dict[
         'source "$1"; export LC_ALL=C; AWK=$(type -P awk); ICONV_BIN=$(type -P iconv); WORK=$2; ENV_FILE=$3\n'
         ': > "$WORK/main.txt"\n' + snippet + "\n")
     proc = subprocess.run([BASH, str(driver), str(SCRIPT), str(work), str(env_file)], capture_output=True, cwd=tmp_path,
-                          env={**os.environ, "PATH": awk_path}, timeout=60)
+                          env={**os.environ, "PATH": _with_fake(awk_path)}, timeout=60)
     assert proc.returncode == 0, proc.stderr
     return {path.name: path.read_bytes() for path in work.glob("*.txt")}
 
@@ -330,7 +345,6 @@ class Run:
     report: bytes
     names: list[str]
     out_dir: Path
-    marker: Path
     project: Path
 
 
@@ -340,11 +354,9 @@ def skeleton(tmp_path_factory):
     project, out_dir, cwd = base / "project", base / "out", base / "cwd"
     for folder in (project, out_dir, cwd):
         folder.mkdir()
-    bin_dir, marker = _fake_docker(base)
-    proc = _run(["127.0.0.1:1", "nohost.invalid:1", "badtarget", "--project-dir", str(project), "--out-dir", str(out_dir)], cwd,
-                path=str(bin_dir) + os.pathsep + os.environ["PATH"])
+    proc = _run(["127.0.0.1:1", "nohost.invalid:1", "badtarget", "--project-dir", str(project), "--out-dir", str(out_dir)], cwd)
     files = sorted(out_dir.glob("dcdash-diag-*.txt"))
-    return Run(proc, files[0].read_bytes() if files else b"", [f.name for f in files], out_dir, marker, project)
+    return Run(proc, files[0].read_bytes() if files else b"", [f.name for f in files], out_dir, project)
 
 
 def _report(skeleton) -> str:
@@ -354,7 +366,7 @@ def _report(skeleton) -> str:
 def test_exit_code_zero_one_file_named_by_the_time_and_docker_untouched(skeleton):
     assert skeleton.proc.rc == 0, skeleton.proc.err
     assert len(skeleton.names) == 1 and re.fullmatch(r"dcdash-diag-\d{8}-\d{6}\.txt", skeleton.names[0])
-    assert not skeleton.marker.exists(), "the skeleton must not call docker"
+    assert not DOCKER_MARKER.exists(), "the skeleton must not call docker"
     assert "section failed" not in _report(skeleton)
 
 
@@ -451,3 +463,33 @@ def test_without_timeout_the_probes_still_work_and_the_report_says_so(tmp_path, 
     assert result.rc == 0
     assert "timeout: not found" in result.out and "note: timeout is missing, so no command here has a time limit" in result.out
     assert re.search(r"tcp 127\.0\.0\.1:1 FAILED in \d+ ms: .*refused", result.out, re.I)
+
+
+# ---- the awk copy against the Python scrubber on inputs the fixture does not list ---------------------------------------------------
+
+def _random_lines(count: int) -> list[str]:
+    """Lines of up to ~9000 characters made of pieces that make matches likely, so known values land on the 4 KB search windows' edges."""
+    rng = random.Random(8)
+    pieces = ["tok-1234", "tok-12345", "ab", "abcd:wxyz9", "wxyz9", "x", " ", "  ", "\t", "\r", "\v", "\f", "\u00a0", "http://u:p@h/x", "://",
+              "@", "a@b", "é", "日", "--", "svc:pw-123", "pw-123"]
+    lines = []
+    for _ in range(count):
+        parts = []
+        while sum(map(len, parts)) < rng.choice([40, 300, 4090, 4100, 9000]):
+            parts.append(rng.choice(pieces))
+        lines.append("".join(parts))
+    return lines
+
+
+def test_the_awk_scrubber_agrees_with_the_python_one_on_random_long_lines(awk_path, tmp_path, quiet_cwd):
+    cwd, _ = quiet_cwd
+    env_file = tmp_path / "dot.env"
+    env_file.write_text("A_PASSWORD=tok-1234\nB_SECRET=tok-12345\nC_TOKEN=abcd:wxyz9\nD_KEY=svc:pw-123\n")
+    known = ["tok-1234", "tok-12345", "abcd:wxyz9", "svc:pw-123"]
+    lines = _random_lines(60)
+    result = _run(["--scrub-stdin", "--env-file", str(env_file), "--project-dir", str(cwd)], cwd,
+                  stdin=("\n".join(lines) + "\n").encode(), path=awk_path)
+    got = result.raw.decode("utf-8").split("\n")[:-1]
+    assert len(got) == len(lines)
+    for line, scrubbed in zip(lines, got):
+        assert scrubbed == scrub_url_credentials(line, known)

@@ -48,22 +48,35 @@ function sort_known(    i, j, tv, tl) {        # longest first, equal lengths in
     kn[j + 1] = tv; kl[j + 1] = tl
   }
 }
-function hide_known(s,    i, v, n, p, out) {   # literal, case-sensitive, one value after the other, never a pattern
+function join(a, lo, hi,    mid) {         # a[lo..hi] joined by halving, so no byte is copied more than log2(n) times (mawk does not optimise appends)
+  if (lo > hi) return ""
+  if (lo == hi) return a[lo]
+  mid = int((lo + hi) / 2)
+  return join(a, lo, mid) join(a, mid + 1, hi)
+}
+function hide_known(s,    i, v, n, len, pos, chunk, p, adv, np, pc) {
+  # literal and case-sensitive, one value after the other, never a pattern. index() has no start offset, so the text is searched in
+  # windows of about 4 KB that overlap by n - 1 bytes: no copy of the whole remainder per match.
   for (i = 1; i <= nk; i++) {
-    v = kn[i]; n = length(v)
-    p = index(s, v)
-    if (p == 0) continue
-    out = ""
-    while (p > 0) { out = out substr(s, 1, p - 1) "[hidden]"; s = substr(s, p + n); p = index(s, v) }
-    s = out s
+    v = kn[i]
+    if (index(s, v) == 0) continue
+    n = length(v); len = length(s); pos = 1; np = 0; split("", pc)
+    while (pos <= len) {
+      chunk = substr(s, pos, 4096 + n)
+      p = index(chunk, v)
+      if (p > 0) { pc[++np] = substr(chunk, 1, p - 1) "[hidden]"; pos += p - 1 + n }
+      else if (pos + length(chunk) > len) { pc[++np] = chunk; break }
+      else { adv = length(chunk) - n + 1; pc[++np] = substr(chunk, 1, adv); pos += adv }
+    }
+    s = join(pc, 1, np)
   }
   return s
 }
-function hide_urls(s,    n, parts, k, p, q, run, st, m, a, last, out, copied) {
+function hide_urls(s,    n, parts, k, p, q, run, st, m, a, last, np, pc, copied) {
   # in every run of non-space text, from the first "://" to the last "@" becomes "://[hidden]@" (only if that "@" follows the "://")
   if (index(s, "://") == 0 || index(s, "@") == 0) return s
   n = split(s, parts, WS)                      # one part per single space-like byte, so a run starts at p and the next one at p + q + 1
-  out = ""; copied = 1; p = 1
+  np = 0; copied = 1; p = 1
   for (k = 1; k <= n; k++) {
     run = parts[k]; q = length(run)
     st = index(run, "://")
@@ -71,13 +84,15 @@ function hide_urls(s,    n, parts, k, p, q, run, st, m, a, last, out, copied) {
       m = split(run, a, "[@]")
       last = q - length(a[m])                  # position of the last "@"
       if (last >= st + 3) {
-        out = out substr(s, copied, p - copied) substr(run, 1, st - 1) "://[hidden]@" substr(run, last + 1)
+        pc[++np] = substr(s, copied, p - copied)   # the unchanged stretch before this run, in one piece
+        pc[++np] = substr(run, 1, st - 1) "://[hidden]@" substr(run, last + 1)
         copied = p + q
       }
     }
     p += q + 1
   }
-  return out substr(s, copied)                 # unchanged stretches are copied in one piece: no work per run
+  pc[++np] = substr(s, copied)
+  return join(pc, 1, np)
 }
 function scrub(s) { return hide_urls(hide_known(s)) }
 function unesc(f,    out, n, i, c, d) {        # the fixture's escapes, decoded in ONE left-to-right pass
