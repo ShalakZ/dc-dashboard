@@ -28,9 +28,14 @@
 
   /* Tariffs: one column of sections, each a table (or its empty note) over the form that adds to it */
   .tariffs-page .page-head .sub { max-width: 72ch; }
-  .tariffs-page h2 { margin: 30px 0 12px; font-size: var(--fs-lg); font-weight: 600; line-height: 1.3; }
-  .tariffs-page .page-head + h2 { margin-top: 0; }
-  .tariffs-page :is(.table-wrap, .inline-form, .empty, .banner) { max-width: 760px; }
+  .tariffs-page :is(.table-wrap, .inline-form, .empty, .banner, .sect-head) { max-width: 760px; }
+
+  /* A section's head: an icon tile beside the title and, under it, the one line that says what the section is for */
+  .tariffs-page .sect-head { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 2px 12px; margin: 30px 0 12px; }
+  .tariffs-page .page-head + .sect-head { margin-top: 0; }
+  .tariffs-page .sect-head > svg.i { grid-row: 1 / span 2; align-self: start; width: 32px; height: 32px; padding: 7px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent); }
+  .tariffs-page .sect-head h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; line-height: 1.3; }
+  .tariffs-page .sect-purpose { margin: 0; font-size: var(--fs-sm); line-height: 1.45; }
   .tariffs-page .banner { margin: 0 0 14px; }
   .tariffs-page .empty { padding: 22px 24px; }
   .tariffs-page .empty p { max-width: 520px; }
@@ -47,7 +52,7 @@
 
   /* The add forms and the currency form are one-line bars on a surface; an error takes the whole last line */
   .tariffs-page .inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 14px; margin: 12px 0 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
-  .tariffs-page .inline-form label { flex: none; }
+  .tariffs-page .inline-form .has-tip:not(.asset-field) { flex: none; } /* a label and its tip travel together */
   .tariffs-page .inline-form .asset-field { flex: 1 1 260px; min-width: 0; }
   .tariffs-page .inline-form .asset-field select { width: 100%; }
   .tariffs-page .inline-form input[type="date"] { width: 170px; }

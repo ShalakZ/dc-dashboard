@@ -24,6 +24,10 @@ export const ICONS = {
   // The lid is its own group so the trash button can lift and tilt it about its left end (app.css, `.trash-btn .lid`).
   trash: <><path d="M6.5 9.5 7.4 20h9.2l.9-10.5" /><path d="M10 12.5v5M14 12.5v5" /><g className="lid"><path d="M4 6.5h16" /><path d="M9 6.5V4h6v2.5" /></g></>,
   help: <><circle cx="12" cy="12" r="9" /><path d="M9.6 9.6a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1.1.9-1.1 1.7" /><path d="M12 17h.01" /></>,
+  // Tariffs section heads: a coin, a bolt (the price of energy) and a building (one asset's own rate).
+  currency: <><circle cx="12" cy="12" r="9" /><path d="M14.8 9.4c-.4-.9-1.4-1.4-2.8-1.4-1.6 0-2.7.8-2.7 2 0 2.8 5.5 1.4 5.5 4.1 0 1.2-1.2 2-2.8 2-1.4 0-2.5-.6-2.9-1.5" /><path d="M12 6v2M12 16v2" /></>,
+  rate: <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />,
+  override: <><path d="M5 21V4h9v17" /><path d="M14 9h5v12" /><path d="M3 21h18" /><path d="M8.5 8h2M8.5 12h2M8.5 16h2" /></>,
 } satisfies Record<string, ReactNode>;
 export type IconName = keyof typeof ICONS;
 
