@@ -897,6 +897,9 @@ _MASK_CASES = [   # (text, a regular expression the masked line must fully match
     ("connect opc.tcp://scada07:4840 failed; scada07 timed out", r"connect opc\.tcp://(HOST-\d+):4840 failed; \1 timed out"),   # a URL host is a name from then on
     ("probe http://127.0.0.1:8000/x [::1]:80 http://[::1]/y 0.0.0.0 127.0.0.2 [::] ::1 end", r"probe http://127\.0\.0\.1:8000/x \[::1\]:80 http://\[::1\]/y 0\.0\.0\.0 127\.0\.0\.2 \[::\] ::1 end"),
     ("plain words: local time, api, docker and PowerShell stay", r"plain words: local time, api, docker and PowerShell stay"),
+    # the compose service names say nothing about the site and tell the reader WHICH container failed: a URL naming them masks nothing
+    ("GET http://api:8000/health and opc.tcp://simulator:4840 then == api == db exited; services: api, collector, db, simulator, web",
+     r"GET http://api:8000/health and opc\.tcp://simulator:4840 then == api == db exited; services: api, collector, db, simulator, web"),
 ]
 
 

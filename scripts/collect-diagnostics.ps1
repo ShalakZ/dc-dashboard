@@ -12,7 +12,7 @@
 # of dropped lines is printed, then the last 300 (file) / 30 (screen) remain. -RawLogs keeps every line.
 # -Mask replaces addresses, host names (this computer, the targets, the domain, the DNS and gateway hosts, the time source, a host seen in a URL),
 # the user name and the project and output folders by HOST-n, USER-1 and PATH-n in the files AND on the screen; loopback addresses (127.x,
-# ::1, 0.0.0.0, localhost) stay as they are. The legend (alias = original) is printed on the screen after the "saved:" lines and never written
+# ::1, 0.0.0.0), localhost and the compose service names (db, api, web, collector, simulator) stay as they are. The legend (alias = original) is printed on the screen after the "saved:" lines and never written
 # to a file. Hosts the script cannot know (in a log line that is no URL and no address) stay: read before pasting.
 # Every line is cut at 64 KB, scrubbed (URL credentials "://user:pass@" and the secret values of the project's .env become [hidden]) and
 # clipped; the report only says HOW MANY .env values it hides. Every external command has a time limit, so a hung docker cannot hang this.
@@ -127,9 +127,9 @@ function Test-IPv6([string]$S, [bool]$Bracketed = $false) {   # outside brackets
   $colons = $a.Length - $a.Replace(":", "").Length
   return ($a.Contains("::") -or $colons -eq 7 -or ($colons -eq 6 -and $a.Contains("."))) -and @($a.Split([char]58) | Where-Object { $_ }).Count -ge 2
 }
-function Test-Loopback([string]$V) {   # 127.0.0.0/8, ::1, 0.0.0.0, :: and localhost say nothing about the site: they are never masked
+function Test-Loopback([string]$V) {   # 127.0.0.0/8, ::1, 0.0.0.0, ::, localhost and the compose service names say nothing about the site: never masked
   $b = $V.Trim().Trim([char[]]"[]")
-  if ($b -ieq "localhost") { return $true }
+  if ($b -ieq "localhost" -or @("db", "api", "web", "collector", "simulator") -contains $b.ToLowerInvariant()) { return $true }   # a masked "== HOST-3 ==" would not say WHICH container failed
   $m = $RxV4Whole.Match($b)
   if ($m.Success) { $n = ConvertTo-IPv4 @($m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value, $m.Groups[4].Value); return [bool]($n -and ($n.StartsWith("127.") -or $n -eq "0.0.0.0")) }
   if (-not (Test-IPv6 $b $true)) { return $false }
