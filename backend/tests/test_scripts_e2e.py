@@ -36,7 +36,7 @@ def run_e2e(tmp_path: Path, *, running_normal_stack: bool = False, npm_status: i
         path.write_text("#!/usr/bin/env bash\n" + body)
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
     environment = {k: v for k, v in os.environ.items()
-                   if k not in ("COMPOSE_PROJECT_NAME", "E2E_COMPOSE_PROJECT") and not k.startswith("DCDASH_BUILD_")}
+                   if k not in ("COMPOSE_PROJECT_NAME", "E2E_COMPOSE_PROJECT") and not k.startswith(("DCDASH_BUILD_", "SIM_FAULT_"))}
     environment.update(
         PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         FAKE_RUNNING="1" if running_normal_stack else "",
@@ -88,6 +88,25 @@ def test_a_running_normal_stack_stops_the_script_before_it_changes_anything(tmp_
     assert "docker compose --profile dev stop" in result.stderr  # and never with -v
     assert changing(calls) == [] and not any(c.startswith("npm") for c in calls)
     assert calls == ["docker compose -p dcdash --profile dev ps -q"]  # it only looked
+
+
+def test_a_fault_switch_in_the_environment_stops_the_script_before_any_docker_call(tmp_path):
+    result, calls = run_e2e(tmp_path, SIM_FAULT_SLOW="1.5")  # the simulator it starts would inherit it
+    assert result.returncode != 0
+    assert "SIM_FAULT_SLOW" in result.stderr and len(result.stderr.strip().splitlines()) == 1
+    assert calls == []  # not even the look at the normal stack
+
+
+def test_an_empty_fault_switch_is_no_fault_and_the_run_goes_on(tmp_path):
+    result, calls = run_e2e(tmp_path, SIM_FAULT_SLOW="", SIM_FAULT_AUTH="")
+    assert result.returncode == 0, result.stderr
+    assert "npm run e2e" in calls
+
+
+def test_the_fault_guard_sits_before_the_first_docker_command():
+    code = [line for line in SCRIPT.read_text().splitlines() if not line.lstrip().startswith("#")]
+    guard = next(i for i, line in enumerate(code) if "compgen -e SIM_FAULT_" in line)
+    assert guard < next(i for i, line in enumerate(code) if "docker compose" in line)
 
 
 # ---- the build id the images carry (W8, part G / amendment M10) -------------------------------------------------------------

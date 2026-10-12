@@ -25,6 +25,14 @@ case "$project" in
     ;;
 esac
 
+# The simulator this run starts would inherit a rehearsal fault from the environment and the journey would fail for no reason.
+for name in $(compgen -e SIM_FAULT_); do
+  if [ -n "${!name}" ]; then
+    echo "$name is set in this shell: the end-to-end run starts the simulator and must not inherit a fault switch. Unset it first." >&2
+    exit 1
+  fi
+done
+
 if [ -n "$(docker compose -p dcdash --profile dev ps -q)" ]; then
   echo "The normal stack (Compose project dcdash) is running and holds ports 80 and 443. Stop it first, without -v:" >&2
   echo "  docker compose --profile dev stop" >&2

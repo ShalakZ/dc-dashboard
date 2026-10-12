@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from asyncua import Node, Server, ua
 from asyncua.server.user_managers import User, UserRole
 
+from dcdash.simulator.faults import FaultConfigError, Faults
 from dcdash.simulator.model import PANELS, SIGNALS, Simulator
 
 OPCUA_NAMESPACE = "urn:dcdash:simulator"
@@ -26,7 +27,11 @@ class _Users:
 
 
 class OpcUaSim:
-    def __init__(self, sim: Simulator, port: int, username: str = "sim", password: str | None = None) -> None:
+    def __init__(self, sim: Simulator, port: int, username: str = "sim", password: str | None = None, *,
+                 faults: Faults | None = None) -> None:
+        self.faults = faults or Faults()
+        if self.faults.auth_required and not password:
+            raise FaultConfigError("SIM_FAULT_AUTH=required needs SIM_OPCUA_PASSWORD (the password of the user 'sim').")
         self.sim = sim
         self.endpoint = f"opc.tcp://0.0.0.0:{port}/dcdash/"
         self._users = _Users(sim, username, password)

@@ -107,6 +107,17 @@ services:
     environment:
       SIM_API_KEY: sim-key
       SIM_OPCUA_PASSWORD: ${SIM_OPCUA_PASSWORD:-}
+      # Fault injection for rehearsing the field-debugging loop (docs/field-debugging.md): OPC UA only, off unless set for ONE
+      # command (`SIM_FAULT_SLOW=1.5 docker compose --profile dev up -d simulator`), never in .env. Only this dev-profile service
+      # gets them; backend/dcdash/simulator/faults.py is the only reader and refuses a name it does not know.
+      SIM_FAULT_POLICIES: ${SIM_FAULT_POLICIES:-}
+      SIM_FAULT_UNTRUSTED_CERT: ${SIM_FAULT_UNTRUSTED_CERT:-}
+      SIM_FAULT_AUTH: ${SIM_FAULT_AUTH:-}
+      SIM_FAULT_SLOW: ${SIM_FAULT_SLOW:-}
+      SIM_FAULT_DROP: ${SIM_FAULT_DROP:-}
+      SIM_FAULT_BAD: ${SIM_FAULT_BAD:-}
+      SIM_FAULT_SKEW: ${SIM_FAULT_SKEW:-}
+      SIM_FAULT_CERT_HOSTS: ${SIM_FAULT_CERT_HOSTS:-}
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:4840:4840"
