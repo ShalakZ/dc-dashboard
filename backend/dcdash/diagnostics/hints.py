@@ -31,8 +31,9 @@ _BY_STATUS: dict[str, str] = {
         "Also check that the clocks of both machines agree."
     ),
     "BadCertificateUriInvalid": (
-        "The ApplicationUri in our certificate does not match what the client announces. Regenerate the client certificate with "
-        "the right application URI, or ask the SCADA team what they expect."
+        "The server compares two URIs and they differ: the ApplicationUri our client announces and the URI in our client "
+        "certificate. We announce the certificate's own URI (certificates step), so a certificate without one cannot match. "
+        "Regenerate it with a URI, or ask the SCADA team which they expect."
     ),
     "BadIdentityTokenRejected": (
         "The server rejected the user identity. Check the user name and password, and that the endpoint allows user name and "

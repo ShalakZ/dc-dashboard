@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 from asyncua import Client, Node, ua
+from asyncua.client.ua_client import UaClient, UASocketProtocol
+from asyncua.common.shortcuts import Shortcuts
 from pydantic import BaseModel, Field
 
 from dcdash.connectors.base import (
@@ -66,7 +68,100 @@ def _translate(exc: BaseException) -> ConnectorError:
         return ConnectorError("timeout", "timed out")
     if isinstance(exc, (ConnectionError, OSError)):
         return ConnectorError("unreachable", str(exc) or exc.__class__.__name__)
+    code = exc.code if isinstance(exc, ua.UaStatusCodeError) else None
+    if isinstance(code, int) and not isinstance(code, bool):
+        return ConnectorError("protocol_error", _status_text(ua.StatusCode(code)))  # a refusal by name, not asyncua's long doc text
     return ConnectorError("protocol_error", str(exc))
+
+
+class _ReportingProtocol(UASocketProtocol):
+    """asyncua's client protocol, made to say why a connection ended.
+
+    Stock asyncua drops the status of a server ERR message (what a real server answers to a certificate it does not trust) and
+    leaves every waiting request alone when the socket closes, so a refusal or a dropped connection looks like a timeout. Here a
+    closed connection fails the waiting requests at once, with the ERR status if one arrived, else with a ConnectionResetError.
+    Instance state only: nothing in asyncua is patched.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._refusal: ua.StatusCode | None = None  # the status of a server ERR message
+        self._closed_here = False
+
+    def _why_lost(self) -> Exception | None:
+        """What to raise for a request on this connection, or None while it is open (or was closed by this client)."""
+        if self.state != self.CLOSED:
+            return None
+        if self._refusal is not None:
+            return ua.UaStatusCodeError(self._refusal.value)
+        return None if self._closed_here else ConnectionResetError("connection closed by the server")
+
+    def _process_received_message(self, msg: Any) -> None:
+        if isinstance(msg, ua.ErrorMessage) and msg.Error is not None:
+            self._refusal = msg.Error
+        super()._process_received_message(msg)
+
+    def disconnect_socket(self) -> None:
+        self._closed_here = True
+        super().disconnect_socket()
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        super().connection_lost(exc)
+        for future in list(self._callbackmap.values()):
+            error = self._why_lost()
+            if error is not None and not future.done():
+                future.set_exception(error)
+
+    async def send_hello(self, url: str, max_messagesize: int = 0, max_chunkcount: int = 0) -> Any:
+        if (error := self._why_lost()) is not None:
+            raise error
+        return await super().send_hello(url, max_messagesize, max_chunkcount)
+
+    def _send_request(
+        self, request: Any, timeout: float = 1, message_type: ua.MessageType = ua.MessageType.SecureMessage
+    ) -> Any:
+        # Stock asyncua writes to the dead transport and waits for the timeout. Closing the channel stays as it is: it is
+        # the clean-up after a failure and must not replace the failure.
+        if message_type != ua.MessageType.SecureClose and (error := self._why_lost()) is not None:
+            raise error
+        return super()._send_request(request, timeout, message_type)
+
+    async def send_request(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await super().send_request(*args, **kwargs)
+        except ConnectionError:
+            if (error := self._why_lost()) is not None:
+                raise error from None  # stock asyncua turns every failure of a closed connection into "Connection is closed"
+            raise
+
+
+class _ReportingUaClient(UaClient):
+    def _make_protocol(self) -> UASocketProtocol:
+        self.protocol = _ReportingProtocol(self._timeout, security_policy=self.security_policy)
+        self.protocol.pre_request_hook = self._pre_request_hook
+        return self.protocol
+
+
+class ReportingClient(Client):
+    """An asyncua `Client` whose failures name their cause (see `_ReportingProtocol`). Written against asyncua 1.1.8: a test
+    fails when the version changes, because this copies a few lines of its `Client.__init__` and `UaClient._make_protocol`."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        stock = self.uaclient
+        self.uaclient = _ReportingUaClient(stock._timeout)
+        self.uaclient.pre_request_hook = stock.pre_request_hook
+        self.nodes = Shortcuts(self.uaclient)
+
+
+async def _certificate_uri(path: str) -> str | None:
+    """The first URI among the alternative names of the public certificate at `path` (the key is never read), or None."""
+    from dcdash.connectors.opcua_check import certificate_facts, load_certificate  # imported here: that module imports this one
+
+    try:
+        return certificate_facts(await load_certificate(path))["application_uri"]
+    except Exception:  # noqa: BLE001 - asyncua reads the file next and reports a bad one in its own way
+        return None
 
 
 @register
@@ -104,7 +199,7 @@ class OpcUaConnector(Connector):
 
     async def _new_client(self) -> Client:
         """A client with the configured authentication and security, not yet connected."""
-        client = Client(self.config.endpoint, timeout=self.config.timeout_seconds)
+        client = ReportingClient(self.config.endpoint, timeout=self.config.timeout_seconds)
         if self.config.username:
             client.set_user(self.config.username)
             client.set_password(self.secret or "")
@@ -112,6 +207,9 @@ class OpcUaConnector(Connector):
             for path in (self.config.client_cert, self.config.client_key):
                 if not Path(path).is_file():
                     raise ConnectorError("protocol_error", f"client certificate not found: {path}")
+            # The server compares the ApplicationUri we announce with the one in the certificate; asyncua's default is not it
+            if (uri := await _certificate_uri(self.config.client_cert)) is not None:
+                client.application_uri = uri
             await client.set_security_string(
                 f"Basic256Sha256,SignAndEncrypt,{self.config.client_cert},{self.config.client_key}"
             )

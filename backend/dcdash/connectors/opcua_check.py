@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.x509.oid import NameOID
 
 from dcdash.connectors.base import GOOD, url_host_port
-from dcdash.connectors.opcua import OpcUaConnector, _point_value, _status_text
+from dcdash.connectors.opcua import OpcUaConnector, ReportingClient, _point_value, _status_text
 from dcdash.core.audit import hidden_values
 from dcdash.diagnostics.check import Checker, CheckResult, Publish, StepFailed, StepOutcome
 from dcdash.diagnostics.hints import CLOCK_SKEW, hint_for
@@ -286,7 +286,7 @@ class OpcUaCheck:
         return StepOutcome(f"connected to {_hostport(host, port)}", {"remote_address": str(peer[0]) if peer else None})
 
     async def get_endpoints(self) -> StepOutcome:
-        client = Client(self.config.endpoint, timeout=self.config.timeout_seconds)
+        client = ReportingClient(self.config.endpoint, timeout=self.config.timeout_seconds)
         endpoints = await client.connect_and_get_server_endpoints()
         self.endpoints = list(endpoints)
         rows = []
