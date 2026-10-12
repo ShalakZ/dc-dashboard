@@ -735,7 +735,7 @@ describe("AssetTree while the list loads", () => {
   it("keeps the column and its header and shows one status region, with the filter slot and the rows as placeholders inside it", () => {
     render(loadingUi());
     expect(column()).toBeInTheDocument();
-    expect(screen.getByText("Assets", { selector: ".tree-title" })).toBeInTheDocument();
+    expect(screen.getByText("Assets Tree", { selector: ".tree-title" })).toBeInTheDocument();
     const region = screen.getByText("Loading the asset tree").parentElement!;
     expect(region).toHaveAttribute("role", "status");
     expect(screen.getAllByRole("status")).toHaveLength(1);

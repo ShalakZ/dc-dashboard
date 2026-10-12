@@ -80,7 +80,7 @@ describe("AssetsSummary", () => {
     show();
     await ready();
     expect(screen.getAllByRole("heading").map((h) => [h.tagName, h.textContent])).toEqual([
-      ["H1", "Assets"], ["H2", "By kind"], ["H2", "Needs attention"],
+      ["H1", "Assets Tree"], ["H2", "By kind"], ["H2", "Needs attention"],
     ]);
     expect(document.querySelectorAll("h2.section-title")).toHaveLength(2);
   });
@@ -289,7 +289,7 @@ describe("AssetsSummary", () => {
     it("gives an admin the Add asset button in the header, once, and no viewer", async () => {
       show({ list: [], role: "admin" });
       const add = await screen.findByRole("button", { name: "Add asset" });
-      expect(add.closest("header")).toContainElement(screen.getByRole("heading", { name: "Assets", level: 1 }));
+      expect(add.closest("header")).toContainElement(screen.getByRole("heading", { name: "Assets Tree", level: 1 }));
       expect(screen.getAllByRole("button", { name: "Add asset" })).toHaveLength(1);
     });
 
@@ -332,7 +332,7 @@ describe("AssetsSummary", () => {
       expect(statusOf(FLEET)).toHaveAttribute("role", "status");
       expect(document.querySelectorAll(".tiles.fleet-tiles > .tile")).toHaveLength(4);
       expect(screen.queryByText("loading…")).not.toBeInTheDocument();
-      expect(screen.getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument();
       expect(screen.queryByRole("heading", { name: "By kind" })).not.toBeInTheDocument();
       held.release();
       await ready();
@@ -344,7 +344,7 @@ describe("AssetsSummary", () => {
       const calls = stub({ fleet: fleetOf({ power: { kw: 3, counted: 1, of: 1 } }) });
       const held = holdFetch((_method, path) => path === "/api/assets");
       mount("viewer");
-      expect(screen.getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument();
       expect(statusOf(FLEET)).toHaveAttribute("role", "status");
       expect(document.querySelectorAll(".tiles.fleet-tiles > .tile")).toHaveLength(4);
       expect(screen.queryByText("No assets yet.")).not.toBeInTheDocument();
@@ -411,7 +411,7 @@ describe("AssetsSummary", () => {
     it("shows the failure as an alert under the header, and the admin's Add asset stays", async () => {
       show({ role: "admin", fleetReply: { status: 500, body: { detail: "the fleet figures are not available" } } });
       expect(await screen.findByRole("alert")).toHaveTextContent("the fleet figures are not available");
-      expect(screen.getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Add asset" })).toBeInTheDocument();
       expect(screen.queryByRole("heading", { name: "By kind" })).not.toBeInTheDocument();
     });

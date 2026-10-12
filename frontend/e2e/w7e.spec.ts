@@ -249,7 +249,7 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
     await expect(heading1(page, PANEL)).toBeVisible();
 
     const add = page.getByRole("button", { name: "Add asset", exact: true });
-    const crumb = page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Assets", exact: true });
+    const crumb = page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Assets Tree", exact: true });
     const row = page.locator(".node.is-selected");
 
     for (const look of LOOKS) {
@@ -278,7 +278,7 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
     await setAdminLook(browser, DEFAULT_LOOK);
     await signIn(page, ADMIN);
     await page.goto("/assets");
-    await expect(heading1(page, "Assets")).toBeVisible();
+    await expect(heading1(page, "Assets Tree")).toBeVisible();
     const trigger = userBlock(page);
     const popup = () => page.waitForTimeout(250); // the open popup has no DOM to wait for
 
@@ -393,7 +393,7 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
     });
 
     await page.goto("/assets");
-    await expect(heading1(page, "Assets")).toBeVisible();
+    await expect(heading1(page, "Assets Tree")).toBeVisible();
 
     for (const theme of THEMES) {
       await test.step(`${theme}: visible in --side-accent while /api/assets is held, gone after`, async () => {
@@ -436,7 +436,7 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
 
     await test.step("a change of page shows it for at least 400 ms even when the page is quick", async () => {
       await page.goto("/assets");
-      await expect(heading1(page, "Assets")).toBeVisible();
+      await expect(heading1(page, "Assets Tree")).toBeVisible();
       await expect.poll(() => lastPhase(page), { message: "the first load is over", timeout: 15_000 }).toBe("idle");
       await page.waitForTimeout(500);
       await clearBarRecord(page);
@@ -458,7 +458,7 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
     await watchBar(page);
     await signIn(page, ADMIN);
     await page.goto("/assets");
-    await expect(heading1(page, "Assets")).toBeVisible();
+    await expect(heading1(page, "Assets Tree")).toBeVisible();
     await expect.poll(() => lastPhase(page), { timeout: 15_000 }).toBe("idle");
 
     const unhold = await holdAssets(page);
@@ -480,7 +480,7 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
     await watchBar(page);
     await signIn(page, ADMIN);
     await page.goto("/assets");
-    await expect(heading1(page, "Assets")).toBeVisible();
+    await expect(heading1(page, "Assets Tree")).toBeVisible();
     await page.waitForLoadState("networkidle");
     await expect.poll(() => lastPhase(page), { message: "the first load is over", timeout: 15_000 }).toBe("idle");
     await page.waitForTimeout(1_500);
@@ -558,13 +558,13 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
 
     const pages: [string, string][] = [
       [`/assets/${panelId}`, PANEL], // the long name next to the header tile
-      ["/assets", "Assets"],
+      ["/assets", "Assets Tree"],
     ];
     for (const [path, name] of pages) {
       await page.goto(path);
       await expect(heading1(page, name)).toBeVisible();
       for (const look of LOOKS) {
-        await test.step(`${name === "Assets" ? "the fleet summary" : "the asset page"}, ${look.theme}, ${look.mode}`, async () => {
+        await test.step(`${name === "Assets Tree" ? "the fleet summary" : "the asset page"}, ${look.theme}, ${look.mode}`, async () => {
           await chooseLook(page, look);
           await settled(page);
           await expect.poll(() => sidewaysOverflow(page), { message: "the sideways overflow in pixels" }).toBeLessThanOrEqual(0);

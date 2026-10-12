@@ -202,7 +202,7 @@ describe("Layout Dashboards entry and the default dashboard", () => {
     await profileButton();
     await waitFor(() => expect(dashboardsLink()).toHaveAttribute("href", "/dashboards/7"));
     expect(dashboardsLink()).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "Assets" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Assets Tree" })).not.toHaveAttribute("aria-current");
   });
 
   it("matches whole path segments: /dashboardsX is not the Dashboards page", async () => {
@@ -389,7 +389,7 @@ describe("Layout sidebar landmarks and groups", () => {
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     await profileButton();
     const linksOf = (group: string) => within(screen.getByRole("group", { name: group })).getAllByRole("link").map((a) => a.textContent);
-    expect(linksOf("Monitor")).toEqual(["Assets", "Dashboards", "Billing"]);
+    expect(linksOf("Monitor")).toEqual(["Assets Tree", "Dashboards", "Billing"]);
     expect(linksOf("Operate")).toEqual(["Sources", "Scans", "Discovery"]);
     expect(linksOf("Administer")).toEqual(["Users", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"]);
   });
@@ -399,7 +399,7 @@ describe("Layout sidebar landmarks and groups", () => {
     renderWithProviders(<Layout />, { route: "/billing", path: "/billing" });
     await profileButton();
     expect(screen.getByRole("link", { name: "Billing" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "Assets" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Assets Tree" })).not.toHaveAttribute("aria-current");
   });
 });
 
@@ -437,7 +437,7 @@ describe("Layout sidebar toggle", () => {
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     await profileButton();
     await userEvent.click(screen.getByRole("button", { name: "Minimize sidebar" }));
-    for (const name of ["Assets", "Dashboards", "Billing", "Sources", "Scans", "Discovery", "Users", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"]) {
+    for (const name of ["Assets Tree", "Dashboards", "Billing", "Sources", "Scans", "Discovery", "Users", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"]) {
       expect(screen.getByRole("link", { name })).toBeInTheDocument();
     }
     expect(screen.getByRole("group", { name: "Monitor" })).toBeInTheDocument(); // the headings stay in the DOM too
@@ -523,8 +523,8 @@ describe("Layout minimized tooltip", () => {
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     await minimize();
-    act(() => screen.getByRole("link", { name: "Assets" }).focus());
-    expect(tip()).toHaveTextContent("Assets");
+    act(() => screen.getByRole("link", { name: "Assets Tree" }).focus());
+    expect(tip()).toHaveTextContent("Assets Tree");
     act(() => screen.getByRole("link", { name: "Billing" }).focus());
     expect(tip()).toHaveTextContent("Billing");
     act(() => screen.getByRole("button", { name: "Expand sidebar" }).focus());
@@ -580,7 +580,7 @@ describe("Layout minimized tooltip", () => {
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     await minimize();
-    act(() => screen.getByRole("link", { name: "Assets" }).focus()); // the click left the focus on the toggle: move away and back
+    act(() => screen.getByRole("link", { name: "Assets Tree" }).focus()); // the click left the focus on the toggle: move away and back
     act(() => screen.getByRole("button", { name: "Expand sidebar" }).focus());
     expect(tip()).toHaveTextContent("Expand sidebar");
   });
@@ -589,10 +589,10 @@ describe("Layout minimized tooltip", () => {
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     await profileButton();
-    act(() => screen.getByRole("link", { name: "Assets" }).focus());
+    act(() => screen.getByRole("link", { name: "Assets Tree" }).focus());
     expect(tip()).toHaveAttribute("hidden");
     await userEvent.click(screen.getByRole("button", { name: "Minimize sidebar" }));
-    act(() => screen.getByRole("link", { name: "Assets" }).focus());
+    act(() => screen.getByRole("link", { name: "Assets Tree" }).focus());
     expect(tip()).not.toHaveAttribute("hidden");
     await userEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
     expect(tip()).toHaveAttribute("hidden");

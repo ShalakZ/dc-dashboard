@@ -95,7 +95,7 @@ describe("AssetsPage", () => {
       expect(tree().closest(".assets-layout")).not.toBeNull();
       expect(within(tree()).getByText("Loading the asset tree").parentElement).toHaveAttribute("role", "status");
       const pane = document.querySelector(".assets-detail") as HTMLElement;
-      expect(within(pane).getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument(); // the Outlet's page is mounted
+      expect(within(pane).getByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument(); // the Outlet's page is mounted
       expect(within(pane).getByText("Loading the fleet summary").parentElement).toHaveAttribute("role", "status");
       expect(screen.queryByText("loading…")).not.toBeInTheDocument();
       held.release();
@@ -289,11 +289,11 @@ describe("AssetsPage", () => {
     const link = (name: string) => screen.queryByRole("link", { name });
     const typeFilter = (text: string) => userEvent.type(screen.getByLabelText("Filter assets"), text);
 
-    it("is a region named Asset tree; the title is plain text, so the h1 is the only heading named Assets, and there is no legend", async () => {
+    it("is a region named Asset tree; the title is plain text, so the h1 is the only heading named Assets Tree, and there is no legend", async () => {
       await show();
-      expect(within(column()).getByText("Assets")).toBeInTheDocument();
-      expect(screen.getAllByRole("heading", { name: "Assets" })).toHaveLength(1);
-      expect(screen.getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+      expect(within(column()).getByText("Assets Tree")).toBeInTheDocument();
+      expect(screen.getAllByRole("heading", { name: "Assets Tree" })).toHaveLength(1);
+      expect(screen.getByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument();
       expect(screen.queryByRole("group")).not.toBeInTheDocument();
       expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
     });
@@ -348,7 +348,7 @@ describe("AssetsPage", () => {
       expect(screen.getByRole("button", { name: "Add a top-level asset" })).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: "Minimize asset tree" }));
       expect(screen.queryByRole("button", { name: "Add a top-level asset" })).not.toBeInTheDocument();
-      expect(within(column()).queryByText("Assets")).not.toBeInTheDocument();
+      expect(within(column()).queryByText("Assets Tree")).not.toBeInTheDocument();
       expect(within(column()).getAllByRole("button")).toHaveLength(1);
     });
 
@@ -616,7 +616,7 @@ describe("AssetsPage", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(where()).toBe("/assets"); // not a dead /assets/2
       expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument();
-      expect(screen.getByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument();
     });
 
     it.each([["a plain asset", false], ["an asset with mappings, after Delete anyway", true]])(
@@ -780,13 +780,13 @@ describe("AssetsPage", () => {
 });
 
 describe("AssetsPage header", () => {
-  /** `title` is the h1 to wait for: "Assets" on the index page, the asset's name on its own page. */
-  const show = async (role: string, route: string, body: Fixture = assets, title = "Assets") => {
+  /** `title` is the h1 to wait for: "Assets Tree" on the index page, the asset's name on its own page. */
+  const show = async (role: string, route: string, body: Fixture = assets, title = "Assets Tree") => {
     mockFetch(authed(role, body));
     renderWorkspace(route);
     await screen.findByRole("heading", { name: title, level: 1 });
   };
-  const header = (title = "Assets") => screen.getByRole("heading", { name: title, level: 1 }).closest("header")!;
+  const header = (title = "Assets Tree") => screen.getByRole("heading", { name: title, level: 1 }).closest("header")!;
 
   it("puts an admin's buttons in the asset page's header, with Add asset as the page's only primary and Delete a trash button named for the asset", async () => {
     await show("admin", "/assets/2", assets, "Room A");

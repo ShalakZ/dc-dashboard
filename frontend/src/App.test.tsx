@@ -99,7 +99,12 @@ describe("App routes", () => {
   it.each(["viewer", "operator", "admin"])("answers an unknown address with a page, inside the layout, for a %s", async (role) => {
     visit(role, "/nope");
     expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Assets" })).toBeInTheDocument(); // the nav is still there
+    expect(screen.getByRole("link", { name: "Assets Tree" })).toBeInTheDocument(); // the nav is still there
+  });
+
+  it("offers a way back from an unknown address: the link Back to Assets Tree, to /assets", async () => {
+    visit("viewer", "/nope");
+    expect(await screen.findByRole("link", { name: "Back to Assets Tree" })).toHaveAttribute("href", "/assets");
   });
 });
 
@@ -118,12 +123,12 @@ describe("the home route", () => {
 
   it("opens Assets when there is no default", async () => {
     home("viewer");
-    expect(await screen.findByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument();
   });
 
   it("opens Assets when the default cannot be read", async () => {
     home("viewer", { "GET /api/dashboards/default": { status: 500, body: { detail: "boom" } } });
-    expect(await screen.findByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument();
   });
 
   it("lists the dashboards on /dashboards even when a default is set", async () => {
@@ -159,7 +164,7 @@ describe("the Assets workspace", () => {
   it("/assets shows the asset tree beside the index page", async () => {
     visitAssets("/assets");
     expect(await screen.findByRole("region", { name: "Asset tree" })).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "Assets", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument(); // the fleet summary
   });
 

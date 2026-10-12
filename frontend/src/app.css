@@ -330,7 +330,7 @@
   .tree-resize:focus-visible { outline-offset: -2px; } /* the column is overflow: hidden, so a ring outside the handle would be clipped */
   .tree-head { display: flex; align-items: center; gap: 4px; flex: none; height: 52px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--border); }
   .tree-col[data-state="minimized"] .tree-head { justify-content: center; padding: 0; border-bottom: 0; }
-  .tree-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; font-size: var(--fs-md); font-weight: 600; white-space: nowrap; } /* a p, never a heading: the page's h1 is "Assets" */
+  .tree-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; font-size: var(--fs-md); font-weight: 600; white-space: nowrap; } /* a p, never a heading: the page's h1 is "Assets Tree" */
   .tree-toggle svg.i { transition: transform var(--motion); }
   .tree-col[data-state="minimized"] .tree-toggle svg.i { transform: rotate(180deg); }
   .tree-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }

@@ -105,7 +105,7 @@ test("every page an admin can open runs under the policy without one violation, 
   const asset = assets.find((a) => a.name === "Panel 01") ?? assets[0]; // Panel 01 has mapped points: its page opens a stream
 
   await test.step("assets, an asset page", async () => {
-    await settled("/assets", "Assets");
+    await settled("/assets", "Assets Tree");
     await settled(`/assets/${asset.id}`);
     await expect(page.getByRole("heading", { name: "Metrics" })).toBeVisible();
   });

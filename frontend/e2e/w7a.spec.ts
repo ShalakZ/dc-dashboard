@@ -69,16 +69,16 @@ test.describe("W7a: the Assets workspace and the shell", () => {
     await expect(tree(page)).toHaveAttribute("data-w7a", "kept");
   });
 
-  test("the crumb Assets leads back to the fleet summary, with the tree still there", async ({ page }) => {
+  test("the crumb Assets Tree leads back to the fleet summary, with the tree still there", async ({ page }) => {
     await page.goto(`/assets/${idOf("Panel 01")}`);
     await expect(heading1(page, "Panel 01")).toBeVisible();
     const crumbs = page.getByRole("navigation", { name: "Breadcrumb" });
-    // Assets / Site / Panel 01: the ancestors are links, the asset itself is the current page
-    await expect(crumbs.getByRole("link")).toHaveText(["Assets", "Site"]);
+    // Assets Tree / Site / Panel 01: the ancestors are links, the asset itself is the current page
+    await expect(crumbs.getByRole("link")).toHaveText(["Assets Tree", "Site"]);
 
-    await crumbs.getByRole("link", { name: "Assets", exact: true }).click();
+    await crumbs.getByRole("link", { name: "Assets Tree", exact: true }).click();
     await expect(page).toHaveURL(/\/assets$/);
-    await expect(heading1(page, "Assets")).toBeVisible();
+    await expect(heading1(page, "Assets Tree")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Needs attention" })).toBeVisible();
     await expect(tree(page)).toBeVisible();
     await expect(treeLink(page, "Panel 01")).not.toHaveAttribute("aria-current", "true");
@@ -193,7 +193,7 @@ test.describe("W7a: the Assets workspace and the shell", () => {
 
   test("the Assets landing page shows four tiles and Needs attention", async ({ page }) => {
     await page.goto("/assets");
-    await expect(heading1(page, "Assets")).toBeVisible();
+    await expect(heading1(page, "Assets Tree")).toBeVisible();
     const tiles = page.locator(".fleet-tiles .tile");
     await expect(tiles).toHaveCount(4);
     await expect(tiles).toHaveText([/^Assets\s*\d+$/, /^Live power/, /^Energy today/, /^Cost today/]);

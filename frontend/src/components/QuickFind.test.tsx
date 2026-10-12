@@ -90,7 +90,7 @@ describe("QuickFind structure", () => {
 
   it("opens a listbox of option rows in two named groups when something matches", async () => {
     const { user, input } = await mount();
-    await user.type(input, "s"); // Site, MV2 ... by path, and the pages Assets, Dashboards, Settings, ...
+    await user.type(input, "s"); // Site, MV2 ... by path, and the pages Assets Tree, Dashboards, Settings, ...
     await screen.findByRole("group", { name: "Tree matches" }); // the pages answer at once, the assets when their request has
     const list = screen.getByRole("listbox");
     expect(list.tagName).toBe("UL");
