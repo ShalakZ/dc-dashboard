@@ -1,10 +1,14 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   useAssets, useBillingSettings, useCreateTariff, useDeleteTariff, usePutBillingSettings, useTariffs, useUpdateTariff,
 } from "../api/queries";
 import type { Asset, Tariff, TariffPatch } from "../api/types";
 import { assetLabels } from "../components/dashboard/AssetPicker";
+import { Icon, type IconName } from "../components/Icon";
+import { InfoTip } from "../components/InfoTip";
 import { PageHeader } from "../components/PageHeader";
+import { RowActions } from "../components/RowActions";
+import { TrashButton } from "../components/TrashButton";
 import { fmtRate } from "../lib/billing";
 
 /** ApiError.message already carries the API's `detail` (a string for 404/409, a joined list for 422); drop pydantic's prefix. */
@@ -32,6 +36,20 @@ function Empty({ children }: { children: string }) {
     </div>
   );
 }
+
+/** A section's title (the h2 text is the section's name), with its icon and the one line that says what the section is for. */
+function SectionHead({ icon, title, children }: { icon: IconName; title: string; children: string }) {
+  return (
+    <div className="sect-head">
+      <Icon name={icon} />
+      <h2>{title}</h2>
+      <p className="sect-purpose muted">{children}</p>
+    </div>
+  );
+}
+
+const EFFECTIVE_TIP = "The first day (site time) this rate counts. Readings before that day keep the rate that applied then.";
+const RATE_TIP = "The price of one kilowatt-hour in the site currency, for example 0.18.";
 
 const validRate = (text: string) => text.trim() !== "" && Number.isFinite(Number(text)) && Number(text) >= 0;
 
@@ -63,17 +81,20 @@ function CurrencyForm() {
         <Note>No currency is set, so costs show without a unit. Enter a three-letter code such as QAR.</Note>
       )}
       <form aria-label="Site currency" className="inline-form" noValidate onSubmit={save}>
-        <label className="currency-field">
-          Currency
-          <input
-            value={shown}
-            maxLength={3}
-            onChange={(e) => {
-              setTyped(e.target.value.toUpperCase());
-              put.reset();
-            }}
-          />
-        </label>
+        <div className="has-tip currency-field">
+          <label>
+            Currency
+            <input
+              value={shown}
+              maxLength={3}
+              onChange={(e) => {
+                setTyped(e.target.value.toUpperCase());
+                put.reset();
+              }}
+            />
+          </label>
+          <InfoTip>A three-letter code such as QAR.</InfoTip>
+        </div>
         <button type="submit" disabled={put.isPending}>Save</button>
         {put.isSuccess && <span className="muted saved"> saved</span>}
         {problem && <p className="error" role="alert">{problem}</p>}
@@ -106,22 +127,31 @@ function AddTariff({ assets, labels, assetsError = null }: {
   return (
     <form aria-label={assets === null ? "Add site default rate" : "Add asset override"} className="inline-form" noValidate onSubmit={submit}>
       {assets !== null && (
-        <label className="asset-field">
-          Asset
-          <select value={assetId} onChange={(e) => setAssetId(e.target.value)}>
-            <option value="">Choose an asset…</option>
-            {assets.map((a) => <option key={a.id} value={a.id}>{labels.get(a.id) ?? a.name}</option>)}
-          </select>
-        </label>
+        <div className="has-tip asset-field">
+          <label>
+            Asset
+            <select value={assetId} onChange={(e) => setAssetId(e.target.value)}>
+              <option value="">Choose an asset…</option>
+              {assets.map((a) => <option key={a.id} value={a.id}>{labels.get(a.id) ?? a.name}</option>)}
+            </select>
+          </label>
+          <InfoTip>This asset and the assets under it are charged this rate.</InfoTip>
+        </div>
       )}
-      <label>
-        Effective from
-        <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-      </label>
-      <label>
-        Rate per kWh
-        <input type="number" min="0" step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} />
-      </label>
+      <div className="has-tip">
+        <label>
+          Effective from
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </label>
+        <InfoTip>{EFFECTIVE_TIP}</InfoTip>
+      </div>
+      <div className="has-tip">
+        <label>
+          Rate per kWh
+          <input type="number" min="0" step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} />
+        </label>
+        <InfoTip>{RATE_TIP}</InfoTip>
+      </div>
       <button type="submit" disabled={create.isPending}>Add rate</button>
       {assetsError !== null && <p className="error" role="alert">Could not load the assets: {assetsError}</p>}
       {problem && <p className="error" role="alert">{problem}</p>}
@@ -139,6 +169,21 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
   const [from, setFrom] = useState(tariff.effective_from);
   const [problem, setProblem] = useState<string | null>(null);
   const busy = update.isPending || remove.isPending;
+  const row = useRef<HTMLTableRowElement>(null);
+  const fromInput = useRef<HTMLInputElement>(null);
+  const wasEditing = useRef(false);
+  // The menu button and the trash are gone while editing, so the first field takes the focus; when the edit ends the menu button gets it back.
+  useEffect(() => {
+    if (editing) fromInput.current?.focus();
+    else if (wasEditing.current) {
+      const active = document.activeElement;
+      if (!active || active === document.body || row.current?.contains(active)) row.current?.querySelector<HTMLElement>(".row-menu-btn")?.focus();
+    }
+    wasEditing.current = editing;
+  }, [editing]);
+  const what = tariff.asset_id === null
+    ? `rate from ${tariff.effective_from} (site default)`
+    : `rate from ${tariff.effective_from}${where ? ` for ${where}` : ""}`;
   const failure = problem ?? (update.isError ? errorText(update.error) : remove.isError ? errorText(remove.error) : null);
 
   const startEdit = () => {
@@ -164,10 +209,10 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
   };
 
   return (
-    <tr>
+    <tr ref={row}>
       {tariff.asset_id !== null && <td className="asset-cell" title={where ?? undefined}>{where}</td>}
       <td className="date-cell">
-        {editing ? <input type="date" aria-label="Effective from" value={from} onChange={(e) => setFrom(e.target.value)} /> : tariff.effective_from}
+        {editing ? <input ref={fromInput} type="date" aria-label="Effective from" value={from} onChange={(e) => setFrom(e.target.value)} /> : tariff.effective_from}
       </td>
       <td className="num">
         {editing ? (
@@ -183,8 +228,8 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
             </>
           ) : (
             <>
-              <button type="button" className="quiet" onClick={startEdit} disabled={busy}>Edit</button>
-              <button type="button" className="danger-quiet" onClick={del} disabled={busy}>Delete</button>
+              <RowActions label={`Actions for ${what}`} items={[{ label: "Edit", onSelect: startEdit, disabled: busy }]} />
+              <TrashButton label={`Delete ${what}`} onClick={del} disabled={busy} />
             </>
           )}
         </div>
@@ -205,9 +250,11 @@ function TariffTables({ tariffs, assets, assetsError, currencyUnset }: {
       {currencyUnset && (
         <Note>Set the currency first: rates are in the site currency, and it is not set yet.</Note>
       )}
-      <h2>Site default rate</h2>
+      <SectionHead icon="rate" title="Site default rate">
+        The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date.
+      </SectionHead>
       {defaults.length === 0 ? (
-        <Empty>No site default rate yet. Until one is set, assets without their own rate show a dash for cost.</Empty>
+        <Empty>No site default rate yet. Until one is set, assets with no override show a dash for cost. Add a rate below.</Empty>
       ) : (
         <div className="table-wrap">
           <table aria-label="Site default rates" className="tariff-table">
@@ -217,7 +264,9 @@ function TariffTables({ tariffs, assets, assetsError, currencyUnset }: {
         </div>
       )}
       <AddTariff assets={null} labels={labels} />
-      <h2>Asset overrides</h2>
+      <SectionHead icon="override" title="Asset overrides">
+        A different price per kWh for one asset and everything under it (unless a lower asset has its own), from its effective date.
+      </SectionHead>
       {perAsset.length === 0 ? (
         <Empty>No overrides. Every asset uses the site default rate.</Empty>
       ) : (
@@ -246,7 +295,9 @@ export function TariffsPage() {
         title="Tariffs"
         sub="A rate applies from its effective date (a site-local date) until the next one. An asset's override replaces the site default from its own effective date. Editing a past rate recalculates history."
       />
-      <h2>Currency</h2>
+      <SectionHead icon="currency" title="Currency">
+        The unit costs are shown in. Set it first: every rate below is in this currency.
+      </SectionHead>
       <CurrencyForm />
       {tariffs.isPending && <p className="muted">loading…</p>}
       {tariffs.isError && <p className="error" role="alert">{errorText(tariffs.error)}</p>}
