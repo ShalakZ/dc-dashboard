@@ -42,6 +42,10 @@ class LoginLimiter:
     The two numbers can change at run time (`configure`); a block lasts `blocked_since + window` with the CURRENT window.
     `configure(..., enabled=False)` switches the blocking off: nothing is counted or blocked, and what was held is dropped.
     Memory is bounded: expired entries are swept and, past `max_keys`, plain counters are evicted before blocks.
+
+    The state is per process, and a process learns of a change (the on/off switch, the numbers) from the next request that
+    runs `apply_sign_in_policy`. With more than one api worker a worker that missed an OFF could keep a block alive, and
+    show it again after OFF then ON. Compose runs one worker; run another and the switch needs a shared store first.
     """
 
     def __init__(

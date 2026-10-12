@@ -134,7 +134,8 @@ UI screens, besides Assets, Sources and Points:
   July (Settings refuses any other zone). `DCDASH_TIMEZONE` in `.env` only seeds this on first start.
   **Sign-in protection** sets how many failed sign-ins block an account (3 to 20) and for how many minutes
   (1 to 60); a change is applied at once. It is on by default and an administrator can switch it off (this asks
-  for a confirmation and is audited); the two numbers are kept while it is off.
+  for a confirmation and is audited); the two numbers are kept while it is off. While it is off a password can be
+  guessed without limit (only the Argon2 time per attempt slows it), and it never switches itself back on.
   See "If you are blocked from signing in".
 - **Storage** (admin): database and per-tier sizes, compression ratio, rows per day, growth and a
   projected days-until-full figure. Free disk space is not visible from the API container, so disk
@@ -548,8 +549,11 @@ sooner:
    that is running: a shorter block time ends a block that has already lasted that long.
 3. **An admin switches the protection off** (same section, the Sign-in protection switch; it asks for a confirmation). Every block
    ends at once and no account is blocked while it is off. Failed sign-ins are still written to the audit log, and the Argon2
-   password check still takes its time on every attempt: off removes the block, not that slowdown. The numbers are kept, and
-   switching it on again counts failures from zero. Switching it off or on is audited as `settings.sign_in_changed`.
+   password check still takes its time on every attempt: off removes the block, not that slowdown. Plainly: while it is off a
+   password can be guessed without limit, and only that Argon2 time slows each attempt. It never switches itself back on: an
+   administrator must switch it on again, and then failures are counted from zero. The numbers are kept while it is off.
+   Switching it off or on is audited as `settings.sign_in_changed`; the row for switching it off also says how many blocks it
+   ended (`blocks_ended`).
 4. **If every admin is blocked,** run `docker compose restart api`. The blocks are held in the api's memory, so a restart clears
    all of them (the stored numbers and the switch are kept).
 

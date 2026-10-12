@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.auth import limiter
@@ -24,6 +25,8 @@ from dcdash.core.timeutil import validate_whole_hour_zone
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["settings"], dependencies=[Depends(require_role("admin"))])
+
+SIGN_IN_LOCK = 7_309_001  # advisory-lock key: one change to the sign-in policy at a time (the row may not exist yet)
 
 
 class GeneralSettings(BaseModel):
@@ -171,20 +174,27 @@ async def put_sign_in(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role("admin")),
 ) -> SignInPolicyOut | JSONResponse:
+    # Read, check and write as one step: two admins racing at READ COMMITTED could otherwise both read an old OFF and
+    # the later write would switch protection off after somebody switched it on, with no confirmation. A row lock would
+    # not do (a site that never saved the policy has no row); the lock is released at the commit or rollback.
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": SIGN_IN_LOCK})
     before = await get_sign_in_policy(db)
     if before.enabled and not body.enabled and not confirm:
-        # Same pattern as PUT /api/settings/storage: refuse, say why, ask for confirm=true. Nothing is written or audited.
+        # Same pattern as PUT /api/settings/storage: refuse, say why, ask for confirmation. Nothing is written or audited.
+        # The web page always asks first, so this is seen only from a page that was out of date.
         return JSONResponse(
             status_code=409,
             content={
-                "detail": "Switching sign-in protection off ends every current block and stops blocking accounts after "
-                          "wrong passwords: this needs confirmation (send confirm=true).",
+                "detail": "Sign-in protection is on. Switching it off needs confirmation: reload the Settings page and "
+                          "switch it off again.",
                 "needs_confirmation": True,
             },
         )
     after = SignInPolicy(max_failures=body.max_failures, block_minutes=body.block_minutes, enabled=body.enabled)
+    # Switching off ends every current block: the audit row says how many, counted before configure() drops them.
+    subject = {"blocks_ended": len(limiter.blocked_keys())} if before.enabled and not after.enabled else {}
     await set_setting(db, SIGN_IN_KEY, asdict(after))
-    await audit_change(db, admin.id, "settings.sign_in_changed", {}, asdict(before), asdict(after))
+    await audit_change(db, admin.id, "settings.sign_in_changed", subject, asdict(before), asdict(after))
     await db.commit()
     limiter.configure(after.max_failures, after.block_minutes * 60, after.enabled)  # this process applies it at once
     return _sign_in_out(after)
