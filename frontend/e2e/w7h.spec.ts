@@ -201,6 +201,8 @@ function shining(page: Page): Promise<{ animations: number; sweeps: number }> {
     const shell = document.querySelector(".sk-shell");
     const animations = document.getAnimations().filter((a) => {
       const target = (a.effect as KeyframeEffect | null)?.target;
+      // The static copy's "still loading" hint (a 15 s delayed fade on main::after) is an animation too, but not a shine.
+      if (a instanceof CSSAnimation && a.animationName === "sk-hint-in") return false;
       return !!shell && !!target && shell.contains(target);
     }).length;
     const sweeps = [...document.querySelectorAll(".sk-shell .sk")].filter((el) => getComputedStyle(el, "::after").display !== "none").length;
