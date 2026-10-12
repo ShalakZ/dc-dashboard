@@ -122,6 +122,18 @@ async def test_a_secure_source_against_a_secure_only_server_passes_all_nine_step
     assert result.ok and result.first_failed is None
 
 
+async def test_a_secure_source_against_a_server_that_offers_no_security_fails_endpoints_and_the_session_with_the_policy_hint(tmp_path):
+    async with opcua_server() as srv:  # the default simulator offers None only
+        result = await create_connector("opcua", _secure(srv, tmp_path)).check(["ns=2;i=1"])
+    steps = _by_id(result)
+    assert result.first_failed == "endpoints"
+    assert _not_ok(result) == {"endpoints": False, "session": False, **AFTER_SESSION}  # certificates only reads our own file
+    assert "Basic256Sha256/SignAndEncrypt" in steps["endpoints"].error["message"] and "None/None" in steps["endpoints"].summary
+    _asks(steps["endpoints"], "security policy")
+    assert steps["session"].error["class"] == "UaError" and steps["session"].error["message"].startswith("No matching endpoints")
+    _asks(steps["session"], "security policy")  # asyncua refuses inside _new_client here, before connect(): the same translation
+
+
 # -- AUTH: the server wants a login -------------------------------------------------------------------------------------------
 
 
