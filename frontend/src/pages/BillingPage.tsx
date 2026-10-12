@@ -5,6 +5,7 @@ import type { BillingCosts, CostFigure } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ESTIMATED_TIP, Figure, PARTIAL_TIP } from "../components/Figure";
 import { PageHeader } from "../components/PageHeader";
+import { TableSkeleton } from "../components/Skeleton";
 import {
   clampMonth, depthsByAsset, fmtCost, fmtKwh, fmtRate, MONTH_NAMES, monthLabel, monthsOfYear, shiftMonth, yearsBetween,
 } from "../lib/billing";
@@ -196,7 +197,10 @@ export function BillingPage() {
         </div>
       )}
       {exportError && <p className="error" role="alert">{exportError}</p>}
-      {(site.isPending || (month !== null && costs.isPending)) && <p className="muted">loading…</p>}
+      {(site.isPending || (month !== null && costs.isPending)) && (
+        // The costs poll sets a query that failed before pending again for a second, with no error: the skeleton and the error would take turns.
+        costs.errorUpdateCount === 0 ? <TableSkeleton columns={7} rows={5} label="Loading billing" /> : <p className="muted">loading…</p>
+      )}
       {costs.isError && <p className="error" role="alert">{costs.error.message}</p>}
       {costs.data && <BillingTable costs={costs.data} isAdmin={hasRole("admin")} />}
     </section>

@@ -9,6 +9,7 @@ import { JobStatus } from "../components/JobStatus";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions, type RowAction } from "../components/RowActions";
+import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { SourceForm } from "../components/SourceForm";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
@@ -35,7 +36,7 @@ const SourcesIcon = () => (
 
 export function SourcesPage() {
   const { hasRole } = useAuth();
-  const { data, error, isLoading, dataUpdatedAt: sourcesAnsweredAt } = useSources();
+  const { data, error, isLoading, errorUpdateCount, dataUpdatedAt: sourcesAnsweredAt } = useSources();
   const sources = data ?? [];
   const collector = useCollectorStatus();
   const secretKey = useSecretKeyStatus();
@@ -98,7 +99,16 @@ export function SourcesPage() {
     ] : []),
   ];
 
-  if (isLoading) return <p className="muted">loading…</p>;
+  if (isLoading) {
+    // The 10 s poll sets a list that failed before pending again for a second, with no error: the skeleton would take turns with the error at every poll.
+    return errorUpdateCount > 0 ? <p className="muted">loading…</p> : (
+      <>
+        <PageHeader title="Sources" actions={<ActionsSpace />} />
+        {/* Seven of the table's nine columns: nine rows of placeholders are 1300px wide at 1440, wider than the page, and would be cut at its edge */}
+        <TableSkeleton columns={7} rows={5} label="Loading sources" />
+      </>
+    );
+  }
   // A failed refetch keeps the last list (and any open dialog, with what was typed in it) and shows the error above the table.
   if (error && data === undefined) return <p className="error" role="alert">{error.message}</p>;
   return (

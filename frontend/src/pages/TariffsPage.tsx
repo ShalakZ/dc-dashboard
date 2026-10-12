@@ -8,6 +8,7 @@ import { Icon, type IconName } from "../components/Icon";
 import { InfoTip } from "../components/InfoTip";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
+import { FormSkeleton, TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
 import { fmtRate } from "../lib/billing";
 
@@ -58,7 +59,7 @@ function CurrencyForm() {
   const put = usePutBillingSettings();
   const [typed, setTyped] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  if (settings.isPending) return <p className="muted">loading…</p>;
+  if (settings.isPending) return <FormSkeleton rows={1} inline label="Loading the currency" />;
   if (settings.isError) return <p className="error" role="alert">{errorText(settings.error)}</p>;
   const stored = settings.data.currency;
   const shown = typed ?? stored ?? "";
@@ -299,7 +300,7 @@ export function TariffsPage() {
         The unit costs are shown in. Set it first: every rate below is in this currency.
       </SectionHead>
       <CurrencyForm />
-      {tariffs.isPending && <p className="muted">loading…</p>}
+      {tariffs.isPending && <TableSkeleton columns={3} rows={3} label="Loading tariffs" />}
       {tariffs.isError && <p className="error" role="alert">{errorText(tariffs.error)}</p>}
       {tariffs.data && (
         <TariffTables

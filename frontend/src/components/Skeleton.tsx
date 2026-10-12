@@ -58,16 +58,24 @@ function Labelled({ label, children }: { label?: string; children: ReactNode }) 
 }
 
 /**
- * The tiles of the asset page and the fleet summary. Each is the real `.tile`: a muted label row (a 16px circle and a line), the figure, and
- * for the tiles listed in `notes` a `<small>` line under it (the fleet's "Live power" tile always has one, and a row is as tall as its tallest tile).
+ * The tiles of the asset page, the fleet summary and the Storage page. Each is the real `.tile`: a muted label row (a 16px circle and a line,
+ * or with `plain` just a line, as Storage's `.muted` caption), the figure, and for the tiles listed in `notes` a `<small>` line under it (the
+ * fleet's "Live power" tile always has one, and a row is as tall as its tallest tile). `className` adds classes to the grid (`storage-tiles`).
  */
-export function TilesSkeleton({ count, fleet, notes, label }: { count: number; fleet?: boolean; notes?: readonly number[]; label?: string }) {
+export function TilesSkeleton({ count, fleet, notes, plain, className, label }: {
+  count: number; fleet?: boolean; notes?: readonly number[]; plain?: boolean; className?: string; label?: string;
+}) {
+  const grid = ["tiles", fleet ? "fleet-tiles" : "", className ?? ""].filter(Boolean).join(" ");
   return (
     <Labelled label={label}>
-      <div className={fleet ? "tiles fleet-tiles" : "tiles"} aria-hidden="true">
+      <div className={grid} aria-hidden="true">
         {Array.from({ length: count }, (_, i) => (
           <div className="tile" key={i}>
-            <div className="muted tile-label"><Skeleton variant="circle" width={16} /><Skeleton width="10ch" /></div>
+            {plain ? (
+              <div className="muted"><Skeleton width="12ch" /></div>
+            ) : (
+              <div className="muted tile-label"><Skeleton variant="circle" width={16} /><Skeleton width="10ch" /></div>
+            )}
             <div className="big"><Skeleton width="6ch" /></div>
             {notes?.includes(i) ? <small><Skeleton width="16ch" /></small> : null}
           </div>
@@ -102,17 +110,27 @@ export function TableSkeleton({ columns, rows, label }: { columns: number; rows:
   );
 }
 
-/** A `.form-card` of `rows` fields: a label line over a 38px field, as the real label is a grid. `wide` is the full-width card. */
-export function FormSkeleton({ rows, label, wide }: { rows: number; label?: string; wide?: boolean }) {
+/**
+ * A `.form-card` of `rows` fields: a label line over a 38px field, as the real label is a grid. `wide` is the full-width card. `bare` is the
+ * rows alone, for a card the page already draws (the sign-in card keeps its real heading). `inline` is the Tariffs page's one-row bar
+ * (`.inline-form`: the fields side by side and a button), not a card.
+ */
+export function FormSkeleton({ rows, label, wide, bare, inline }: { rows: number; label?: string; wide?: boolean; bare?: boolean; inline?: boolean }) {
+  const fields = Array.from({ length: rows }, (_, i) => (
+    <div className="sk-field" key={i}>
+      <Skeleton width={HEAD_WIDTHS[i % HEAD_WIDTHS.length]} />
+      <Skeleton variant="block" width={inline ? 110 : undefined} height={38} />
+    </div>
+  ));
   return (
     <Labelled label={label}>
-      <div className={wide ? "form-card wide" : "form-card"} aria-hidden="true">
-        <div className="sk-stack">
-          {Array.from({ length: rows }, (_, i) => (
-            <div className="sk-field" key={i}><Skeleton width={HEAD_WIDTHS[i % HEAD_WIDTHS.length]} /><Skeleton variant="block" height={38} /></div>
-          ))}
-        </div>
-      </div>
+      {inline ? (
+        <div className="inline-form" aria-hidden="true">{fields}<Skeleton variant="block" width={64} height={38} /></div>
+      ) : bare ? (
+        <div className="sk-stack" aria-hidden="true">{fields}</div>
+      ) : (
+        <div className={wide ? "form-card wide" : "form-card"} aria-hidden="true"><div className="sk-stack">{fields}</div></div>
+      )}
     </Labelled>
   );
 }
@@ -188,6 +206,14 @@ export function PageHeaderSkeleton({ crumbs, icon, sub, actions, label }: { crum
       </header>
     </Labelled>
   );
+}
+
+/**
+ * The actions slot of a REAL page header whose buttons depend on data (Sources, Scans): a 34px gap, so the header is as tall as it will be (one
+ * without its actions is 6.5px shorter). Not grey: the header stands outside any region, and a grey block would show before the fade-in delay.
+ */
+export function ActionsSpace() {
+  return <span aria-hidden="true" style={{ display: "block", height: 34 }} />;
 }
 
 /** A whole page with nothing known about it: a page head with a title line, then two 240px blocks side by side. One region. */

@@ -460,3 +460,46 @@ describe("SourcePointsPage look (W6)", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 });
+
+describe("SourcePointsPage while the points load (W7f)", () => {
+  const LABEL = "Loading points";
+  const page = () => renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
+  const heldPoints = () => holdFetch((_method, path) => path === "/api/sources/2/points");
+
+  it("shows one region around a header, a toolbar and a table placeholder while the points are held, with nothing to read or press, then the table", async () => {
+    mockFetch(routes);
+    const held = heldPoints();
+    page();
+    const region = screen.getByText(LABEL).parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.querySelector("header.page-head .crumbs")).not.toBeNull(); // the title and the trail depend on data: both are placeholders
+    expect(region.querySelector("header.page-head .actions")).not.toBeNull();
+    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(6); // five sortable columns and the row menu's
+    expect(region.querySelector(".row.toolbar")).not.toBeNull(); // the real table sits under the real toolbar
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByText(/No points yet/)).not.toBeInTheDocument();
+    held.release();
+    expect(await screen.findByText("panel1/power")).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "Points" })).toBeInTheDocument();
+  });
+
+  it("ends with the empty state for a source with no points, and no region", async () => {
+    mockFetch({ ...routes, "GET /api/sources/2/points": { body: [] } });
+    page();
+    expect(await screen.findByText(/No points yet/)).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("ends with the error alone when the first fetch fails, and no region", async () => {
+    mockFetch({ ...routes, "GET /api/sources/2/points": { status: 500, body: { detail: "the source is gone" } } });
+    page();
+    expect(await screen.findByRole("alert")).toHaveTextContent("the source is gone");
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+});

@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { UsersPage } from "./UsersPage";
 
@@ -299,5 +300,53 @@ describe("UsersPage reset password", () => {
     await userEvent.type(within(opsRow()).getByLabelText("New password for ops"), "longenough{Enter}");
     expect(await within(opsRow()).findByRole("alert")).toHaveTextContent("password too weak");
     expect(within(opsRow()).getByLabelText("New password for ops")).toBeInTheDocument();
+  });
+});
+
+describe("UsersPage while the list loads (W7f)", () => {
+  const LABEL = "Loading users";
+  const mount = () => renderWithProviders(<UsersPage />, { route: "/users", path: "/users" });
+  const heldUsers = () => holdFetch((_method, path) => path === "/api/users");
+
+  it("shows the page's own wrapper and header (title and sub text as real) with a table skeleton in the region while the list is held", async () => {
+    mockFetch(routes());
+    const held = heldUsers();
+    mount();
+    const page = document.querySelector("section.admin-page.users-page")!;
+    expect(page).not.toBeNull();
+    const heading = within(page as HTMLElement).getByRole("heading", { level: 1, name: "Users" });
+    expect(heading.closest("header")).toHaveClass("page-head");
+    expect(within(page as HTMLElement).getByText("Who can sign in, and what each account may do.")).toBeInTheDocument();
+    const region = screen.getByText(LABEL).parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(page.contains(region)).toBe(true);
+    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(4);
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument(); // the placeholder is not a table to assistive technology
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    held.release();
+    expect(await screen.findByText("ops", { selector: "td" })).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("keeps the very same section and h1 element from the skeleton to the list, so the heading can still take the focus after a delete", async () => {
+    mockFetch(routes());
+    const held = heldUsers();
+    mount();
+    const page = document.querySelector("section.admin-page.users-page");
+    const heading = screen.getByRole("heading", { level: 1, name: "Users" });
+    held.release();
+    await screen.findByText("ops", { selector: "td" });
+    expect(document.querySelector("section.admin-page.users-page")).toBe(page);
+    expect(screen.getByRole("heading", { level: 1, name: "Users" })).toBe(heading);
+    expect(heading).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("ends with the error alone when the list fails, never a region", async () => {
+    mockFetch({ ...routes(), "GET /api/users": { status: 500, body: { detail: "users are down" } } });
+    mount();
+    expect(await screen.findByRole("alert")).toHaveTextContent("users are down");
+    expect(document.querySelector(".sk-region")).toBeNull();
   });
 });

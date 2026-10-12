@@ -6,6 +6,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { CreateDashboardDialog } from "../components/dashboard/CreateDashboardDialog";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
+import { TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { formatSiteDateTime } from "../lib/siteTime";
@@ -40,7 +41,7 @@ export function DashboardsPage() {
       />
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {failure && <p className="error" role="alert">{failure.message}</p>}
-      {!failure && (!list.data || timezone === undefined) && <p className="muted">loading…</p>}
+      {!failure && (!list.data || timezone === undefined) && <TableSkeleton columns={canEdit ? 4 : 3} rows={4} label="Loading dashboards" />}
       {list.data && timezone !== undefined && list.data.length === 0 && (
         <div className="empty">
           <span className="empty-icon" aria-hidden="true">

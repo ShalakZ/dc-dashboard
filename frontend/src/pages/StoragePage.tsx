@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { InfoTip } from "../components/InfoTip";
 import { PageHeader } from "../components/PageHeader";
+import { FormSkeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
 import { useRowsPerDay, useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
 import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
 import { storageLoss } from "../lib/impact";
@@ -107,7 +108,7 @@ function RowsPerDay({ initial }: { initial: StorageStats["rows_per_day"] }) {
   } else if (query.isError) {
     body = <p className="error" role="alert">{query.error.message}</p>;
   } else if (query.isPending) {
-    body = <p className="muted">loading…</p>;
+    body = <TableSkeleton columns={2} rows={7} label="Loading rows per day" />;
   } else if (query.data.first_day === null) {
     body = <p className="muted">No readings stored yet.</p>;
   } else {
@@ -168,7 +169,18 @@ export function StoragePage() {
   }, [settings.data, form]);
   if (stats.isError) return <p className="error" role="alert">{stats.error.message}</p>;
   if (settings.isError) return <p className="error" role="alert">{settings.error.message}</p>;
-  if (stats.isPending || settings.isPending || !form) return <p className="muted">loading…</p>;
+  if (stats.isPending || settings.isPending || !form) {
+    // The tiles are the real five, three with their note line; the form's height is a guess (its rows lay out in columns).
+    return (
+      <section className="admin-page storage-page">
+        <PageHeader title="Storage" sub="How much space the readings take, and how long they are kept." />
+        <SkeletonRegion label="Loading storage">
+          <TilesSkeleton count={5} plain className="storage-tiles" notes={[1, 2, 4]} />
+          <FormSkeleton rows={4} wide />
+        </SkeletonRegion>
+      </section>
+    );
+  }
   const s = stats.data;
   const factory = settings.data.factory;
   const siteDefault = settings.data.site_default ?? null;

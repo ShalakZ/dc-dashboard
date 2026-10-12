@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { StrictMode, type ReactElement } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
 import {
-  AssetSkeleton, ChartBlock, FleetSkeleton, FormSkeleton, PageHeaderSkeleton, PageSkeleton, resetSkeletonClock, Skeleton, SkeletonRegion,
+  ActionsSpace, AssetSkeleton, ChartBlock, FleetSkeleton, FormSkeleton, PageHeaderSkeleton, PageSkeleton, resetSkeletonClock, Skeleton, SkeletonRegion,
   TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton,
 } from "./Skeleton";
 
@@ -152,6 +152,22 @@ describe("TilesSkeleton", () => {
     expect(container.firstElementChild).toHaveClass("tiles", "fleet-tiles");
   });
 
+  it("with plain the label is a muted line alone (Storage's caption, no circle) and className reaches the grid", () => {
+    const { container } = render(<TilesSkeleton count={5} plain className="storage-tiles" notes={[1, 2, 4]} />);
+    const grid = container.firstElementChild!;
+    expect(grid).toHaveClass("tiles", "storage-tiles");
+    const tiles = [...grid.querySelectorAll(":scope > .tile")];
+    expect(tiles).toHaveLength(5);
+    for (const tile of tiles) {
+      const label = tile.firstElementChild!;
+      expect(label).toHaveClass("muted");
+      expect(label).not.toHaveClass("tile-label");
+      expect(label.querySelector(".sk-circle")).toBeNull();
+      expect(label.querySelector(".sk-line")).not.toBeNull();
+    }
+    expect(tiles.map((t) => t.querySelector(":scope > small") !== null)).toEqual([false, true, true, false, true]);
+  });
+
   it("gives a <small> note line, as a direct child of the tile, to the tiles listed in notes only", () => {
     const { container } = render(<TilesSkeleton count={4} fleet notes={[1]} />);
     const tiles = [...container.querySelectorAll(".tiles > .tile")];
@@ -199,6 +215,26 @@ describe("FormSkeleton", () => {
       expect(field.querySelector(".sk-line")).not.toBeNull();
       expect((field.querySelector(".sk-block") as HTMLElement).style.height).toBe("38px");
     }
+  });
+
+  it("with bare is the rows alone, with no card of its own (a card the page already draws keeps its heading)", () => {
+    const { container } = render(<FormSkeleton rows={2} bare />);
+    const stack = container.firstElementChild!;
+    expect(stack).toHaveClass("sk-stack");
+    expect(stack).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelector(".form-card")).toBeNull();
+    expect(stack.querySelectorAll(".sk-field")).toHaveLength(2);
+  });
+
+  it("with inline is the Tariffs bar: the fields side by side in a .inline-form and a 38px button block, no card", () => {
+    const { container } = render(<FormSkeleton rows={1} inline />);
+    const bar = container.firstElementChild!;
+    expect(bar).toHaveClass("inline-form");
+    expect(bar).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelector(".form-card")).toBeNull();
+    expect(bar.querySelectorAll(":scope > .sk-field")).toHaveLength(1);
+    const button = bar.querySelector<HTMLElement>(":scope > .sk-block")!;
+    expect(button.style.height).toBe("38px");
   });
 
   it("with wide takes the full-width card", () => {
@@ -284,6 +320,18 @@ describe("PageHeaderSkeleton", () => {
     expect(container.querySelector("p.sub .sk-line")).not.toBeNull();
     const block = container.querySelector<HTMLElement>(".actions > .sk-block")!;
     expect(block.style.height).toBe("34px");
+  });
+});
+
+describe("ActionsSpace", () => {
+  it("is a 34px aria-hidden gap with no text and nothing grey (it stands outside any region, so a grey block would show before the fade-in delay)", () => {
+    const { container } = render(<ActionsSpace />);
+    const gap = container.firstElementChild as HTMLElement;
+    expect(container.children).toHaveLength(1);
+    expect(gap).toHaveAttribute("aria-hidden", "true");
+    expect(gap.style.height).toBe("34px");
+    expect(gap.className).toBe("");
+    expect(gap.textContent).toBe("");
   });
 });
 

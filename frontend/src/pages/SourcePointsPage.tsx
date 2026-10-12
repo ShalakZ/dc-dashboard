@@ -9,6 +9,7 @@ import { MappingForm, type MappingBody } from "../components/MappingForm";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
+import { PageHeaderSkeleton, Skeleton, SkeletonRegion, TableSkeleton } from "../components/Skeleton";
 import { useAction } from "../hooks/useAction";
 import { DEFAULT_POINT_VIEW, sortBy, viewPoints, type PointSortKey } from "../lib/points";
 
@@ -50,7 +51,20 @@ export function SourcePointsPage() {
   };
   const unmap = (mappingId: number) => run(async () => { await api.del(`/api/mappings/${mappingId}`); await refresh(); });
 
-  if (isLoading) return <p className="muted">loading…</p>;
+  if (isLoading) {
+    // One region: the title and the trail depend on data, and the toolbar's height decides where the table lands.
+    return (
+      <SkeletonRegion label="Loading points">
+        <PageHeaderSkeleton crumbs actions />
+        <div className="row toolbar" aria-hidden="true">
+          <Skeleton width="15ch" />
+          <Skeleton variant="block" width={260} height={38} />
+          <Skeleton width="18ch" />
+        </div>
+        <TableSkeleton columns={6} rows={6} />
+      </SkeletonRegion>
+    );
+  }
   // A failed refetch keeps the table (and an open form) and shows the error above it; only a failed first load has nothing to show.
   if (error && !data) return <p className="error" role="alert">{error.message}</p>;
   return (

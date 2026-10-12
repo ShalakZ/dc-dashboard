@@ -648,8 +648,8 @@ describe("SourcesPage look (W6)", () => {
   it("puts Test all and Add source in the page header, Add source being the one primary button", async () => {
     mockFetch(routes("admin"));
     renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
-    const header = (await screen.findByRole("heading", { level: 1, name: "Sources" })).closest("header")!;
-    expect(within(header).getByRole("button", { name: "Test all" })).toBeInTheDocument();
+    const header = (await screen.findByRole("heading", { level: 1, name: "Sources" })).closest("header")!; // (the header is there while the list loads: wait for its buttons)
+    expect(await within(header).findByRole("button", { name: "Test all" })).toBeInTheDocument();
     expect(within(header).getByRole("button", { name: "Add source" })).toHaveClass("primary");
     expect(document.querySelectorAll("button.primary")).toHaveLength(1);
   });
@@ -751,5 +751,80 @@ describe("SourcesPage look (W6)", () => {
       expect(screen.getByRole("button", { name: "Delete sim", hidden: true })).toBeDisabled();
       expect(screen.getByRole("button", { name: "Add source", hidden: true })).toBeDisabled();
     });
+  });
+});
+
+describe("SourcesPage while the list loads (W7f)", () => {
+  const LABEL = "Loading sources";
+  const heldList = () => holdFetch((_method, path) => path === "/api/sources");
+
+  it("shows the real heading and a table skeleton in the region while the list is held, then the table and no region", async () => {
+    mockFetch(routes("admin"));
+    const held = heldList();
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    expect(screen.getByRole("heading", { level: 1, name: "Sources" })).toBeInTheDocument();
+    const region = screen.getByText(LABEL).parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(7); // seven of the table's nine columns: more would run wider than the page
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByText("No sources yet.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument(); // the placeholder is not a table to assistive technology
+    expect(screen.queryByRole("button")).not.toBeInTheDocument(); // the header's buttons wait for the data: nothing focusable while loading
+    held.release();
+    expect(await screen.findByText("sim")).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+    expect(screen.getByRole("button", { name: "Test all" })).toBeInTheDocument();
+  });
+
+  it("keeps the header as tall as it will be: an aria-hidden 34px gap stands in the actions slot, outside the region", async () => {
+    mockFetch(routes("admin"));
+    const held = heldList();
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    const gap = document.querySelector<HTMLElement>(".page-head > .actions > [aria-hidden]")!;
+    expect(gap.style.height).toBe("34px");
+    expect(gap.closest(".sk-region")).toBeNull();
+    held.release();
+    await screen.findByText("sim");
+  });
+
+  it("ends with the empty state when there are no sources, and no region", async () => {
+    mockFetch({ ...routes("admin"), "GET /api/sources": { body: [] } });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    expect(await screen.findByText("No sources yet.")).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("ends with the error alone when the very first fetch fails, and no region", async () => {
+    mockFetch({ ...routes("admin"), "GET /api/sources": { status: 500, body: { detail: "database is down" } } });
+    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is down");
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("a list that failed once never brings the skeleton back when its poll asks again: today's muted line shows, not the skeleton or 'No sources yet.', then the error", async () => {
+    mockFetch({ ...routes("admin"), "GET /api/sources": { status: 500, body: { detail: "database is down" } } });
+    renderWithProviders(<><SourcesPage /><RefetchSources /></>, { route: "/sources", path: "/sources" });
+    await screen.findByRole("alert");
+    const held = heldList();
+    await userEvent.click(screen.getByRole("button", { name: "refetch sources" }));
+    expect(await screen.findByText("loading…")).toHaveClass("muted");
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(screen.queryByText("No sources yet.")).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+    held.release();
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is down");
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+  });
+
+  it("never shows the skeleton on a refetch of a list that is on screen", async () => {
+    mockFetch(routes("admin"));
+    renderWithProviders(<><SourcesPage /><RefetchSources /></>, { route: "/sources", path: "/sources" });
+    await screen.findByText("sim");
+    const held = heldList();
+    await userEvent.click(screen.getByRole("button", { name: "refetch sources" }));
+    expect(screen.getByText("sim")).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+    held.release();
   });
 });

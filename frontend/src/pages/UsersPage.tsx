@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import { ApiError } from "../api/client";
 import { useCreateUser, useDeleteUser, usePatchUser, useUnblockUser, useUsers } from "../api/queries";
 import type { Role, UserRow } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { RowActions, type RowAction } from "../components/RowActions";
+import { TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
 
 const ROLES: Role[] = ["viewer", "operator", "admin"];
@@ -111,6 +112,16 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
   );
 }
 
+/** PageHeader's markup, written out because the h1 must take focus after a delete (PageHeader forwards no ref). The skeleton shows it too: nothing in it waits for data. */
+function UsersHead({ heading }: { heading?: Ref<HTMLHeadingElement> }) {
+  return (
+    <header className="page-head">
+      <h1 ref={heading} tabIndex={-1}>Users</h1>
+      <p className="sub">Who can sign in, and what each account may do.</p>
+    </header>
+  );
+}
+
 export function UsersPage() {
   const { user: me } = useAuth();
   const users = useUsers();
@@ -120,15 +131,18 @@ export function UsersPage() {
   const heading = useRef<HTMLHeadingElement>(null);
   const [deletions, setDeletions] = useState(0);
   useEffect(() => { if (deletions > 0) heading.current?.focus(); }, [deletions]);
-  if (users.isPending) return <p className="muted">loading…</p>;
+  if (users.isPending) {
+    return (
+      <section className="admin-page users-page">
+        <UsersHead heading={heading} />
+        <TableSkeleton columns={4} rows={3} label="Loading users" />
+      </section>
+    );
+  }
   if (users.isError) return <p className="error" role="alert">{errorText(users.error)}</p>;
   return (
     <section className="admin-page users-page">
-      {/* PageHeader's markup, written out here because the h1 must take focus after a delete (PageHeader forwards no ref) */}
-      <header className="page-head">
-        <h1 ref={heading} tabIndex={-1}>Users</h1>
-        <p className="sub">Who can sign in, and what each account may do.</p>
-      </header>
+      <UsersHead heading={heading} />
       <div className="table-wrap">
         <table className="users-table">
           <thead>

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 import { mockFetch } from "../test/fetchMock";
+import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { checkRange, FIELDS, sizeText, StoragePage, validate } from "./StoragePage";
 
@@ -473,7 +474,7 @@ describe("StoragePage rows per day by date", () => {
     expect(urls[1]).toContain("end=2026-10-08");
   });
 
-  it("shows loading… while the range is on its way and the server's text when it refuses", async () => {
+  it("shows a table skeleton while the range is on its way and the server's text when it refuses", async () => {
     const real = globalThis.fetch;
     mockFetch(routes());
     const mocked = globalThis.fetch;
@@ -485,10 +486,14 @@ describe("StoragePage rows per day by date", () => {
     renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
     await screen.findByLabelText("Rows from day");
     fireEvent.change(from(), { target: { value: "2026-09-28" } });
-    expect(await screen.findByText("loading…")).toBeInTheDocument();
+    const region = (await screen.findByText("Loading rows per day")).parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(2);
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByText("7,000")).not.toBeInTheDocument();
     release(new Response(JSON.stringify({ detail: "The end day is in the future; the latest day is 2026-10-06." }), { status: 422, headers: { "content-type": "application/json" } }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The end day is in the future; the latest day is 2026-10-06.");
+    expect(document.querySelector(".sk-region")).toBeNull();
     vi.stubGlobal("fetch", real);
   });
 
@@ -497,5 +502,40 @@ describe("StoragePage rows per day by date", () => {
     fireEvent.change(from(), { target: { value: "2026-09-28" } });
     expect(await screen.findByText("No readings stored yet.")).toBeInTheDocument();
     expect(from()).not.toHaveAttribute("min");
+  });
+});
+
+describe("StoragePage while it loads (W7f)", () => {
+  const LABEL = "Loading storage";
+  const mount = (held: string) => {
+    mockFetch({ ...base, "GET /api/storage": { body: stats }, "GET /api/settings/storage": { body: settingsOut } });
+    const hold = holdFetch((_method, path) => path === held);
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    return hold;
+  };
+
+  it.each(["/api/storage", "/api/settings/storage"])("shows the real header, five tiles and a form skeleton in one region while %s is held, then the page and no region", async (held) => {
+    const hold = mount(held);
+    expect(screen.getByRole("heading", { level: 1, name: "Storage" })).toBeInTheDocument();
+    const region = screen.getByText(LABEL).parentElement!;
+    expect(region).toHaveAttribute("role", "status");
+    expect(region.querySelectorAll(".tiles.storage-tiles > .tile")).toHaveLength(5);
+    expect(region.querySelectorAll(".storage-tiles .tile > small")).toHaveLength(3); // three of the five real tiles carry a note
+    expect(region.querySelector(".form-card.wide")).not.toBeNull();
+    expect(screen.queryByText("loading…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument(); // the tiles' tips and the form's buttons wait for the data
+    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByText(/5\.0 GiB/)).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+    expect(await screen.findByLabelText(/raw retention/i)).toBeInTheDocument();
+  });
+
+  it("ends with the error alone when the storage request fails, and no region", async () => {
+    mockFetch({ ...base, "GET /api/storage": { status: 500, body: { detail: "storage is down" } }, "GET /api/settings/storage": { body: settingsOut } });
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("storage is down");
+    expect(document.querySelector(".sk-region")).toBeNull();
   });
 });
