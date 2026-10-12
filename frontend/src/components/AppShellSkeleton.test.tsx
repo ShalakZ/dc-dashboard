@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { AppShellSkeleton } from "./AppShellSkeleton";
@@ -155,5 +157,62 @@ describe("AppShellSkeleton", () => {
       expect(realChain.who).toEqual(["span.avatar", "span.lbl", "caret"]);
       expect(realChain["who > lbl"]).toEqual(["span.who-name", "span.who-role"]);
     });
+  });
+});
+
+// index.html carries a static copy of the skeleton (it paints before any script runs). A string comparison would trip on harmless
+// differences (indentation, `<path/>` against `<path></path>`, `data-x` against `data-x=""`, attribute order), so both sides are parsed to DOM
+// and compared with isEqualNode after the whitespace between tags and the comments are dropped. The only difference allowed is `hidden` on the
+// static root: it keeps the copy invisible until the stylesheet shows it (app.css), and the React skeleton must never carry it.
+describe("the static copy in index.html", () => {
+  const html = readFileSync("index.html", "utf8"); // vitest runs from the frontend directory
+
+  /** Comments and whitespace-only text go, recursively: the generated markup has neither, the pasted copy has line breaks between blocks. */
+  function tidy(node: Node) {
+    for (const child of [...node.childNodes]) {
+      if (child.nodeType === Node.COMMENT_NODE || (child.nodeType === Node.TEXT_NODE && !(child.nodeValue ?? "").trim())) child.remove();
+      else tidy(child);
+    }
+  }
+  const staticRoot = () => new DOMParser().parseFromString(html, "text/html").getElementById("root")!;
+  const generated = (sidebar: "expanded" | "minimized" = "expanded") => {
+    const template = document.createElement("template");
+    template.innerHTML = renderToStaticMarkup(<AppShellSkeleton sidebar={sidebar} />);
+    return template.content;
+  };
+
+  it("is the skeleton's markup, element for element (paste this into <div id=\"root\"> when it drifts)", () => {
+    const root = staticRoot();
+    expect(root, "a #root in index.html").not.toBeNull();
+    const copy = root.firstElementChild;
+    expect(copy, "the static shell inside #root").not.toBeNull();
+    copy!.removeAttribute("hidden");
+    tidy(root);
+    const expected = generated();
+    tidy(expected);
+    expect(root.childNodes.length, "#root holds the shell and nothing else").toBe(1);
+    const markup = renderToStaticMarkup(<AppShellSkeleton sidebar="expanded" />);
+    expect(expected.firstChild!.isEqualNode(copy), `the static copy has drifted from AppShellSkeleton; the generated markup is:\n${markup}`).toBe(true);
+  });
+
+  it("starts expanded and hidden: the stylesheet shows it, and without one it never paints unstyled", () => {
+    const copy = staticRoot().firstElementChild!;
+    expect(copy.className).toBe("shell sk-shell");
+    expect(copy.getAttribute("data-sidebar")).toBe("expanded");
+    expect(copy.hasAttribute("hidden")).toBe(true);
+    expect(generated().firstElementChild!.hasAttribute("hidden")).toBe(false);
+  });
+
+  it("is classes only: no style attribute (a strict style-src would drop it) and no script in the copy", () => {
+    const root = staticRoot();
+    expect(root.querySelector("[style]")).toBeNull();
+    expect(root.querySelector("script")).toBeNull();
+    expect(html).not.toMatch(/\sstyle=/);
+  });
+
+  it("sits in #root before the module script", () => {
+    expect(html.indexOf('<div id="root">')).toBeGreaterThan(-1);
+    expect(html.indexOf("sk-shell")).toBeGreaterThan(html.indexOf('<div id="root">'));
+    expect(html.indexOf("sk-shell")).toBeLessThan(html.indexOf('<script type="module"'));
   });
 });

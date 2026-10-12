@@ -7,7 +7,107 @@
     <script src="/theme-init.js"></script>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- The app shell, painted before any script runs: a static copy of components/AppShellSkeleton.tsx (AppShellSkeleton.test.tsx
+         fails when the two drift; paste the markup it prints). Hidden until app.css shows it, and shown only where the html element
+         has a data-shell attribute, which theme-init.js sets on every page but sign-in and setup. React replaces it in one step. -->
+    <div id="root">
+      <div class="shell sk-shell" data-sidebar="expanded" hidden>
+        <header class="navbar" aria-hidden="true">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"></path>
+              </svg>
+            </span>
+            <span class="lbl"></span>
+          </div>
+          <div class="bar-in">
+            <div class="qf">
+              <span class="sk-find"></span>
+            </div>
+            <span class="grow"></span>
+            <span class="sk sk-chip"></span>
+            <span class="vr" aria-hidden="true"></span>
+            <span class="site-time">
+              <span><span class="sk sk-line sk-w-6"></span></span>
+              <span class="zone"><span><span class="sk sk-line sk-w-3"></span></span></span>
+            </span>
+            <span class="vr" aria-hidden="true"></span>
+            <div class="profile">
+              <div class="who">
+                <span class="avatar sk-avatar"></span>
+                <span class="lbl"><span class="who-name"><span><span class="sk sk-line sk-w-5"></span></span></span><span class="who-role"><span><span class="sk sk-line sk-w-11"></span></span></span></span>
+                <span class="sk sk-caret"></span>
+              </div>
+            </div>
+          </div>
+        </header>
+        <div class="frame">
+          <div class="side" aria-hidden="true">
+            <nav>
+              <div class="nav-groups">
+                <div class="nav-group">
+                  <span class="nav-heading"><span><span class="sk sk-line sk-w-7"></span></span></span>
+                  <div class="side-row">
+                    <span class="sk sk-circle"></span>
+                    <span class="lbl"><span><span class="sk sk-line sk-w-10"></span></span></span>
+                  </div>
+                  <div class="side-row">
+                    <span class="sk sk-circle"></span>
+                    <span class="lbl"><span><span class="sk sk-line sk-w-12"></span></span></span>
+                  </div>
+                  <div class="side-row">
+                    <span class="sk sk-circle"></span>
+                    <span class="lbl"><span><span class="sk sk-line sk-w-8"></span></span></span>
+                  </div>
+                </div>
+                <div class="nav-group">
+                  <span class="nav-heading"><span><span class="sk sk-line sk-w-8"></span></span></span>
+                  <div class="side-row">
+                    <span class="sk sk-circle"></span>
+                    <span class="lbl"><span><span class="sk sk-line sk-w-9"></span></span></span>
+                  </div>
+                  <div class="side-row">
+                    <span class="sk sk-circle"></span>
+                    <span class="lbl"><span><span class="sk sk-line sk-w-11"></span></span></span>
+                  </div>
+                  <div class="side-row">
+                    <span class="sk sk-circle"></span>
+                    <span class="lbl"><span><span class="sk sk-line sk-w-10"></span></span></span>
+                  </div>
+                </div>
+                <div class="nav-group">
+                  <span class="nav-heading"><span><span class="sk sk-line sk-w-10"></span></span></span>
+                  <div class="side-row">
+                    <span class="sk sk-circle"></span>
+                    <span class="lbl"><span><span class="sk sk-line sk-w-8"></span></span></span>
+                  </div>
+                  <div class="side-row">
+                    <span class="sk sk-circle"></span>
+                    <span class="lbl"><span><span class="sk sk-line sk-w-12"></span></span></span>
+                  </div>
+                  <div class="side-row">
+                    <span class="sk sk-circle"></span>
+                    <span class="lbl"><span><span class="sk sk-line sk-w-9"></span></span></span>
+                  </div>
+                </div>
+              </div>
+              <div class="side-foot">
+                <div class="side-row">
+                  <span class="sk sk-circle"></span>
+                  <span class="lbl"><span><span class="sk sk-line sk-w-12"></span></span></span>
+                </div>
+              </div>
+            </nav>
+          </div>
+          <main>
+            <div role="status" aria-busy="true">
+              <span class="sr-only">Loading</span>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

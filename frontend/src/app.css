@@ -492,6 +492,23 @@
     .sk-chip { width: 8ch; } /* the real chip shows the word alone in a narrow window; the clock's zone and the role are hidden by the real rules */
   }
 
+  /* The static copy in index.html carries `hidden`, so with no stylesheet at all it stays invisible; once this file is in, `.shell { display: flex }`
+     (an author rule) beats the browser's [hidden] and shows it, and the rule below hides it again where theme-init.js left <html> without
+     data-shell (the sign-in and setup pages, or the script did not run). React's skeleton has no `hidden`, so nothing here can hide it.
+     The copy is always data-sidebar="expanded"; its minimized state comes from <html data-shell="minimized"> instead, so each
+     `.shell[data-sidebar="minimized"]` rule the skeleton uses has a twin here, scoped to the copy (the React skeleton follows only its own
+     data-sidebar). The existing rules are not edited; app.css.test.ts fails if a twin is missing or differs. */
+  :root:not([data-shell]) .sk-shell[hidden] { display: none; }
+  :root[data-shell="minimized"] .sk-shell[hidden] { --side-w: var(--side-w-closed); }
+  :root[data-shell="minimized"] .sk-shell[hidden] .side .lbl,
+  :root[data-shell="minimized"] .sk-shell[hidden] .brand .lbl,
+  :root[data-shell="minimized"] .sk-shell[hidden] .nav-heading { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  :root[data-shell="minimized"] .sk-shell[hidden] .brand { justify-content: center; padding: 0; }
+  :root[data-shell="minimized"] .sk-shell[hidden] .nav-groups { padding: 16px 10px 12px; }
+  :root[data-shell="minimized"] .sk-shell[hidden] .nav-group + .nav-group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--side-rule); }
+  :root[data-shell="minimized"] .sk-shell[hidden] .side-row { justify-content: center; padding: 0; }
+  :root[data-shell="minimized"] .sk-shell[hidden] .side-foot { padding: 10px; }
+
   /* Discovery graph. The page is exactly one window tall (the shell: the bar, then the frame with main beside the sidebar), and
      the canvas takes what the header leaves, so nothing scrolls and nothing at the canvas edge is clipped. A canvas is never
      shorter than 320px (the page scrolls then). */

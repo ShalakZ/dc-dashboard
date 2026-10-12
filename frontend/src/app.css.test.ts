@@ -1098,4 +1098,50 @@ describe("the app-shell skeleton (W7h)", () => {
     expect(only(".sk-shell .brand .lbl::before").body).toMatch(/content:\s*"DC Dashboard"/);
     expect(markup).not.toContain("DC Dashboard");
   });
+
+  // The static copy in index.html is `hidden`; the stylesheet shows it (an author `display` beats the UA's [hidden]) and hides it again where
+  // theme-init.js left <html> without data-shell (the sign-in and setup pages). Every rule below is scoped to `.sk-shell[hidden]`, which
+  // React's skeleton never carries, so the two can never disagree on screen.
+  describe("the static copy", () => {
+    const decls = (body: string) => body.split(";").map((d) => d.trim().replace(/\s+/g, " ")).filter(Boolean).sort();
+    const MIN = '.shell[data-sidebar="minimized"]';
+    const TWIN = ':root[data-shell="minimized"] .sk-shell[hidden]';
+
+    it("is shown by the shell's own display and hidden again where <html> has no data-shell", () => {
+      expect(rules.find((r) => r.selector === ".shell")!.body).toMatch(/display:\s*flex/);
+      const hide = only(":root:not([data-shell]) .sk-shell[hidden]");
+      expect(hide.body).toMatch(/^\s*display:\s*none;?\s*$/);
+      expect(inLayer(hide)).toBe(true);
+    });
+
+    // The minimized state is `.shell[data-sidebar="minimized"] <rest>`. The static copy is always data-sidebar="expanded" and takes its
+    // state from <html data-shell> instead, so each of those rules the skeleton's classes use has a twin with the same declarations.
+    // Not used by the skeleton: the current-page marker and the collapse button.
+    const unused = /aria-current|\.side-toggle/;
+    const sources = rules.filter((r) => r.selector.split(", ").every((part) => part.startsWith(MIN)) && !unused.test(r.selector));
+    const twinOf = (selector: string) => selector.split(", ").map((part) => TWIN + part.slice(MIN.length)).join(", ");
+
+    it("the skeleton uses none of what the twins leave out", () => {
+      expect(markup).not.toContain("aria-current");
+      expect(markup).not.toContain("side-toggle");
+    });
+
+    it("every minimized rule the skeleton uses has a twin with the same declarations", () => {
+      expect(sources.length, "the minimized rules").toBeGreaterThanOrEqual(7); // --side-w, the three hides, .brand, .nav-groups, .nav-group + .nav-group, .side-row, .side-foot
+      for (const source of sources) {
+        const twin = twinOf(source.selector);
+        expect(inLayer(source), `"${source.selector}" sits in the layer`).toBe(true);
+        const found = rules.filter((r) => r.selector === twin);
+        expect(found, `a twin "${twin}"`).toHaveLength(1);
+        expect(decls(found[0].body), `declarations of "${twin}"`).toEqual(decls(source.body));
+        expect(inLayer(found[0])).toBe(true);
+        expect(found[0].order, `"${twin}" after its source`).toBeGreaterThan(source.order);
+      }
+    });
+
+    it("and there is no twin without a source", () => {
+      const twins = rules.filter((r) => r.selector.startsWith(TWIN)).map((r) => r.selector).sort();
+      expect(twins).toEqual(sources.map((r) => twinOf(r.selector)).sort());
+    });
+  });
 });
