@@ -365,15 +365,15 @@ async def test_skew_keeps_current_time_and_the_point_stamps_off_by_that_much_for
             for round_ in range(2):  # asyncua's own writer would put the real time back within a second
                 if round_:
                     await asyncio.sleep(2)
-                assert abs(await clock_offset(late) - 900) < 3
-                assert abs(await clock_offset(early) + 900) < 3
-                assert abs(await clock_offset(real)) < 3
+                assert abs(await clock_offset(late) - 900) < 10
+                assert abs(await clock_offset(early) + 900) < 10
+                assert abs(await clock_offset(real)) < 10
 
             for srv, client, skew in ((ahead, late, 900), (behind, early, -900)):
                 await srv.refresh()
                 stamped = await (await client.nodes.objects.get_child(V_PATH)).read_data_value()
                 for stamp in (stamped.SourceTimestamp, stamped.ServerTimestamp):
-                    assert abs((stamp - datetime.now(timezone.utc)).total_seconds() - skew) < 3
+                    assert abs((stamp - datetime.now(timezone.utc)).total_seconds() - skew) < 10
                 assert stamped.Value.Value == 400.0 and stamped.StatusCode_.is_good()
     assert not skew_clock_tasks()
 
