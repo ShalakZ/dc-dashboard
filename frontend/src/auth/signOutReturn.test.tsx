@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { Link, MemoryRouter, Route, Routes } from "react-router";
 import { api } from "../api/client";
 import { Layout } from "../components/Layout";
 import { LoginPage } from "../pages/LoginPage";
@@ -29,7 +29,7 @@ function renderApp(route: string) {
       <MemoryRouter initialEntries={[route]}>
         <AuthProvider>
           <Routes>
-            <Route path="/login" element={<LoginPage />} />
+            <Route path="/login" element={<><LoginPage /><Link to="/billing">visit billing</Link></>} />
             <Route element={<RequireAuth><Layout /></RequireAuth>}>
               <Route path="/" element={<p>home page</p>} />
               <Route path="/billing" element={<Billing />} />
@@ -126,5 +126,21 @@ describe("the page remembered across a sign-in", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Load more" }));
     await screen.findByLabelText("Username");
     expect(sessionStorage.getItem(RETURN_KEY)).toBe("/billing");
+  });
+
+  it("remembers a page visited while signed out after an explicit sign-out (the mark ends when the sign-in page shows)", async () => {
+    server();
+    renderApp("/");
+    await userEvent.click(await screen.findByRole("button", { name: /^u Administrator$/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    const dialog = await screen.findByRole("dialog", { name: "Sign out of DC Dashboard?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
+    await screen.findByLabelText("Username");
+    await userEvent.click(screen.getByRole("link", { name: "visit billing" }));
+    await screen.findByLabelText("Username");
+    expect(sessionStorage.getItem(RETURN_KEY)).toBe("/billing");
+
+    await signInAgain();
+    expect(await screen.findByText("billing page")).toBeInTheDocument();
   });
 });

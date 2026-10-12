@@ -15,6 +15,8 @@ interface AuthState {
   setupNeeded: boolean;
   /** True from an explicit sign-out until the next sign-in: RequireAuth then does not remember the page the user left from. A 401 does not set it. */
   signedOutOnPurpose: boolean;
+  /** Ends the mark above. The sign-in page calls it once it shows, so the mark only covers the render that follows the sign-out. */
+  clearSignOutMark(): void;
   loading: boolean;
   login(username: string, password: string): Promise<void>;
   setup(username: string, password: string): Promise<void>;
@@ -149,6 +151,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSignedOutOnPurpose(false);
   }, [replaceUser]);
 
+  const clearSignOutMark = useCallback(() => setSignedOutOnPurpose(false), []);
+
   const logout = useCallback(async () => {
     await api.post("/api/logout");
     setSignedOutOnPurpose(true); // in the same batch as the user going null, so RequireAuth never renders one without the other
@@ -157,10 +161,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthState>(
     () => ({
-      user, roleChange, setupNeeded, signedOutOnPurpose, loading, login, setup, logout,
+      user, roleChange, setupNeeded, signedOutOnPurpose, clearSignOutMark, loading, login, setup, logout,
       hasRole: (min) => user !== null && ROLE_LEVEL[user.role] >= ROLE_LEVEL[min],
     }),
-    [user, roleChange, setupNeeded, signedOutOnPurpose, loading, login, setup, logout],
+    [user, roleChange, setupNeeded, signedOutOnPurpose, clearSignOutMark, loading, login, setup, logout],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

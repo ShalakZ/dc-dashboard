@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { RETURN_KEY, useAuth } from "../auth/AuthProvider";
 
@@ -15,12 +15,14 @@ export function AuthBrand() {
 }
 
 export function LoginPage() {
-  const { login } = useAuth();
+  const { login, clearSignOutMark } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The sign-out mark has done its job once this page shows; a later signed-out visit to another page is remembered again.
+  useEffect(() => clearSignOutMark(), [clearSignOutMark]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
