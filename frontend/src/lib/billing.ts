@@ -13,6 +13,31 @@ export function monthLabel(month: string): string {
   return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "long", year: "numeric" }).format(new Date(Date.UTC(year, m - 1, 1)));
 }
 
+export const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December",
+] as const;
+
+const yearOf = (month: string) => Number(month.slice(0, 4));
+const monthOf = (month: string) => Number(month.slice(5, 7));
+
+/** Every year from the lowest month's to the current month's, oldest first (both are `YYYY-MM`). */
+export function yearsBetween(lowest: string, current: string): number[] {
+  const first = yearOf(lowest);
+  return Array.from({ length: Math.max(0, yearOf(current) - first + 1) }, (_, i) => first + i);
+}
+
+/** The month numbers (1 to 12) of `year` that lie inside [lowest, current]; empty for a year outside them. */
+export function monthsOfYear(year: number, lowest: string, current: string): number[] {
+  if (year < yearOf(lowest) || year > yearOf(current)) return [];
+  const from = year === yearOf(lowest) ? monthOf(lowest) : 1;
+  const to = year === yearOf(current) ? monthOf(current) : 12;
+  return Array.from({ length: to - from + 1 }, (_, i) => from + i);
+}
+
+/** `month` pulled into [lowest, current]; plain string compares are right for `YYYY-MM`. */
+export const clampMonth = (month: string, lowest: string, current: string) =>
+  month < lowest ? lowest : month > current ? current : month;
+
 /** Tree depth per asset id. The API lists assets parents-first, so one pass over the parent chain is enough. */
 export function depthsByAsset(assets: readonly BillingAssetRow[]): Map<number, number> {
   const depth = new Map<number, number>();

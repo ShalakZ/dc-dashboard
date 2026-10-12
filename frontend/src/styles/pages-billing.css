@@ -4,6 +4,11 @@
   /* Billing: the month bar under the page header */
   .billing-page .billing-bar { gap: 8px; margin: 0 0 16px; }
   .billing-page .month-label { min-width: 9.5em; text-align: center; font-size: var(--fs-md); font-weight: 600; }
+  /* Year and Month: a label beside its select, the pair travels together; the group sits after Next and wraps below it on a narrow screen */
+  .billing-page .billing-jump { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-left: 8px; }
+  .billing-page .jump-field { display: flex; align-items: center; gap: 8px; }
+  .billing-page .jump-field label { font-size: var(--fs-sm); font-weight: 600; }
+  .billing-page .jump-field select { min-width: 96px; }
   .billing-page .banner { margin: 0 0 16px; }
   .billing-page .banner a { color: inherit; font-weight: 600; text-decoration: underline; }
   .billing-page .empty { margin-top: 8px; }
