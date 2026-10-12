@@ -83,7 +83,8 @@ async def test_an_unhandled_exception_is_journaled_with_the_route_template_and_t
     assert event["detail"] == {
         "method": "GET", "route": "/api/_t/boom/{item_id}", "status": 500, "exception": "RuntimeError", "status_sent": None,
     }
-    text = str(dict(event))
+    # not `ts` and `id`: a timestamp's microseconds contain "42" about one run in twenty, which made this test fail at random
+    text = str({key: value for key, value in dict(event).items() if key not in ("id", "ts")})
     for forbidden in (SECRET_TEXT, "42", "query-secret-77", "token"):
         assert forbidden not in text
 
