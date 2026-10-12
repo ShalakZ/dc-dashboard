@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import "./app.css";
+import "./themes.css";
 import "./styles/pages-assets.css";
 import "./styles/pages-sources.css";
 import "./styles/pages-billing.css";

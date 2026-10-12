@@ -1,0 +1,76 @@
+/* W7d appearance: the four theme presets and the dark mode, as token overrides on <html data-theme data-mode> (src/lib/appearance.ts
+   and public/theme-init.js set the two attributes). Unlayered and loaded after app.css. This is the one place besides app.css's :root
+   where raw colours are allowed. A preset and the dark block have the same weight, so file order decides: the presets come first and
+   the only token both set is --tooltip-bg, which dark must win. Contrast of every pair in every look: themes.css.test.ts. */
+
+/* Presets. Each sets the same twenty tokens (the bars, the avatar, the tooltip); the content accent stays blue in all of them. */
+:root[data-theme="navy-gold"] {
+  --side-bg: #283354; --side-bg-hover: #313d63; --side-bg-active: #3a4772;
+  --side-text: #b8c2dc; --side-text-strong: #ffffff; --side-muted: #9aa6c4; --side-rule: #3a4569;
+  --side-accent: #deb406; --side-avatar-bg: #deb406; --side-avatar-text: #1d2540;
+  --tooltip-bg: #172033; --tooltip-text: #ffffff;
+  --top-bg: #283354; --top-find-bg: #313d63; --top-find-border: #7c88b4; --top-chip-border: #4a5682; --top-find-text: #ffffff; --top-find-ph: #b8c2dc;
+  --top-live: #6fdc9a; --top-stale: #ffc46b;
+}
+:root[data-theme="maroon-gold"] {
+  --side-bg: #7d0849; --side-bg-hover: #8c1857; --side-bg-active: #9a2865;
+  --side-text: #f3cddf; --side-text-strong: #ffffff; --side-muted: #e9b3cc; --side-rule: #962c66;
+  --side-accent: #deb406; --side-avatar-bg: #deb406; --side-avatar-text: #4a0329;
+  --tooltip-bg: #3d0222; --tooltip-text: #ffffff;
+  --top-bg: #7d0849; --top-find-bg: #8f1b5b; --top-find-border: #d88ab1; --top-chip-border: #a5467b; --top-find-text: #ffffff; --top-find-ph: #f3cddf;
+  --top-live: #86e8ac; --top-stale: #ffd27a;
+}
+:root[data-theme="graphite"] {
+  --side-bg: #2b2f36; --side-bg-hover: #353a42; --side-bg-active: #40464f;
+  --side-text: #c3c8d0; --side-text-strong: #ffffff; --side-muted: #a4abb6; --side-rule: #3d424a;
+  --side-accent: #8fb2ff; --side-avatar-bg: #40464f; --side-avatar-text: #e6e9ee;
+  --tooltip-bg: #0f1216; --tooltip-text: #ffffff;
+  --top-bg: #2b2f36; --top-find-bg: #353a42; --top-find-border: #7f8794; --top-chip-border: #4a5059; --top-find-text: #ffffff; --top-find-ph: #c3c8d0;
+  --top-live: #6fdc9a; --top-stale: #ffc46b;
+}
+:root[data-theme="desert-gold"] {
+  --side-bg: #deb406; --side-bg-hover: #e9c52c; --side-bg-active: #f2d660;
+  --side-text: #4a3b00; --side-text-strong: #241c00; --side-muted: #4f3f00; --side-rule: #b8940b;
+  --side-accent: #241c00; --side-avatar-bg: #241c00; --side-avatar-text: #deb406;
+  --tooltip-bg: #241c00; --tooltip-text: #ffffff;
+  --top-bg: #deb406; --top-find-bg: #f7e397; --top-find-border: #7a6100; --top-chip-border: #a8870a; --top-find-text: #241c00; --top-find-ph: #4a3b00;
+  --top-live: #0b5c2b; --top-stale: #6e3700;
+}
+
+/* Dark mode: the content tokens, deeper shadows, and dark scroll bars, date pickers and selects. The page is a dark grey, never black.
+   The bars keep their preset. --bg is the text colour of a primary or danger button, so it reads as dark ink on the light fill. The
+   tooltip bubble gets a lighter ground than the page, or the presets' near-black ones would vanish on it. */
+:root[data-mode="dark"] {
+  color-scheme: dark;
+  --bg: #15181e; --surface: #1c2027; --row-hover: #1b1f26; --border: #2b313b; --border-strong: #3a414d;
+  --field-border: #6f7888; --text: #e4e7ed; --text-2: #a3abb8; --text-disabled: #8a93a1;
+  --accent: #7ea7ff; --accent-hover: #a3c0ff; --accent-tint: #1e2a45; --accent-ink: #b8ceff; --ring: #7ea7ff;
+  --ok: #6cd396; --ok-tint: #14301f;
+  --warn: #f0b35c; --warn-tint: #332512; --warn-line: #5e4519; --warn-ink: #f4cb8e; --warn-bg: #2a2011; --warn-icon: #f0b35c;
+  --crit: #ff8b8b; --crit-tint: #3a1b1f;
+  --info: #8fb2ff; --info-tint: #18223a; --info-line: #2e4374; --info-ink: #b8ceff;
+  --stale: #b0b7c3; --stale-tint: #272b32;
+  --danger: #ff8b8b; --danger-hover: #ffa3a3;
+  --backdrop: rgba(0, 0, 0, 0.62);
+  --shadow-dialog: 0 18px 50px rgba(0, 0, 0, 0.6); --shadow-tip: 0 4px 14px rgba(0, 0, 0, 0.5); --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --tooltip-bg: #3f4653;
+}
+
+/* The widget island stays light in dark mode (the widgets' restyle is a separate session): the content tokens go back to app.css's
+   light values and the controls to light, so a .muted, a link or a native button inside a white widget keeps today's contrast. */
+:is(.widget-frame, .widget-preview) {
+  color-scheme: light;
+  --bg: #ffffff; --surface: #f6f8fb; --row-hover: #fafbfd; --border: #e1e5ec; --border-strong: #cdd3dd;
+  --field-border: #868fa0; --text: #172033; --text-2: #596579; --text-disabled: #6b7484;
+  --accent: #1d5bd8; --accent-hover: #174bb5; --accent-tint: #e8effc; --accent-ink: #163f94; --ring: #1d5bd8;
+  --ok: #136c37; --ok-tint: #e3f3e9;
+  --warn: #8a4b00; --warn-tint: #fcefd6; --warn-line: #f1d29e; --warn-ink: #6b3a00; --warn-bg: #fdf3e1; --warn-icon: #a85d00;
+  --crit: #b0202a; --crit-tint: #fce8e8;
+  --info: #1d4fb8; --info-tint: #e7eefc; --info-line: #c5d6f6; --info-ink: #173f8f;
+  --stale: #545d6b; --stale-tint: #eceef2;
+  --danger: #c0262d; --danger-hover: #a51f25;
+}
+
+/* Billing: app.css freezes the muted cell as light literals (#666 on #f4f4f4); in dark that is a light patch on a dark page. */
+:root[data-mode="dark"] table.billing td.muted, :root[data-mode="dark"] table.billing td.muted .muted { color: #b7bdc9; }
+:root[data-mode="dark"] table.billing td.muted { background: #262b33; }
