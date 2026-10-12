@@ -1,6 +1,6 @@
 # W7d: Appearance (light/dark mode and four theme presets per account) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Every signed-in user can open an "Appearance" section in the profile panel and choose a Mode (Light, Dark, Match my device) and a Theme colour (Navy and gold, Maroon and gold, Graphite, Desert gold). The choice is stored on the account (migration 0007), follows the user to any browser, and is applied before the first paint from a browser-side mirror so nothing flashes and the sign-in page keeps the last look used on that browser (O-16).
 
@@ -98,7 +98,7 @@ Dark content tokens (`:root[data-mode="dark"]`, plus `color-scheme: dark`): `bg 
 
 **Tests (write first):** Review Focus 1 to 4. The migration test follows `test_schema_diag_events.py` (column type, NOT NULL, default text, the CHECK refusing the four bad shapes, upgrade from 0006 keeps an existing user row with `{}`, downgrade removes the column and leaves `users` rows otherwise identical, upgrade again, one head). The API test covers the tables of Review Focus 1 and 2 as parametrized cases, persistence across a second login, a second user untouched, no audit row (`SELECT count(*) FROM audit_log` unchanged), both races with two connections. `test_audit_coverage.py` and `test_audit_describers.py` must pass. Run: `cd backend && uv run pytest tests/test_schema_user_preferences.py tests/test_api_me_preferences.py tests/test_api_me_password.py tests/test_auth.py tests/test_audit_coverage.py tests/test_audit_describers.py tests/test_schema*.py tests/test_account_vanished.py -q`.
 
-- [ ] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the command above → Step 4: commit `feat(accounts): per-account appearance preferences, migration 0007 (W7d)`
+- [x] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the command above → Step 4: commit `feat(accounts): per-account appearance preferences, migration 0007 (W7d)`
 
 ---
 
@@ -116,7 +116,7 @@ Dark content tokens (`:root[data-mode="dark"]`, plus `color-scheme: dark`): `bg 
 
 **Tests (write first):** Review Focus 5 and 6. `themes.css.test.ts` builds the EIGHT token maps in cascade order (base, then the preset, then the dark block when dark) and runs on each: every sidebar/top/tooltip/avatar/find pair of `app.css.test.ts` (copy the 4.5 and 3 pair lists; the two "below 3:1" rationale assertions of that file, `--accent` on the sidebar and `--top-chip-border` on the bar, stay base-only: desert gold's `--accent` on its bar measures 3.0046), the content pair list (dark uses `--bg` as the button text), the tooltip text on its ground and its ground against `--bg` in dark (distinguishable, at least 1.5:1), the completeness guards of Review Focus 6 (sets defined there), that dark comes after every preset block and that the only token both set is `--tooltip-bg`, the Billing cell, `color-scheme` present in dark, no `@layer` and no `!important` in `themes.css`, the island re-pin equals the base light values token by token, `THEMES[].swatch` equals each preset's `--side-bg` and `--side-accent`. `theme-init.test.ts` evaluates the script text with `new Function` against a stubbed `document`/`localStorage`/`matchMedia`. Run: `cd frontend && npx vitest run src/themes.css.test.ts src/theme-init.test.ts src/lib/appearance.test.ts src/app.css.test.ts && npm run typecheck`; `cd backend && uv run pytest tests/test_preferences_parity.py -q`.
 
-- [ ] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the commands above → Step 4: commit `feat(ui): theme presets, dark mode tokens and first-paint script (W7d)`
+- [x] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the commands above → Step 4: commit `feat(ui): theme presets, dark mode tokens and first-paint script (W7d)`
 
 ### Task 3: provider, API call, the Appearance section in the profile panel
 
@@ -126,13 +126,13 @@ Dark content tokens (`:root[data-mode="dark"]`, plus `color-scheme: dark`): `bg 
 
 **Tests (write first):** Review Focus 7 and 8 at unit level (`vi.stubGlobal("matchMedia")`, `mockFetch` from `src/test/fetchMock.ts` for the PUT). Run: `cd frontend && npx vitest run src/auth src/components/ProfileMenu.test.tsx src/components/Layout.test.tsx src/App.test.tsx src/pages/LoginPage.test.tsx src/app.css.test.ts && npm run typecheck`.
 
-- [ ] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the command above → Step 4: commit `feat(ui): Appearance section in the profile panel, per-account choice (W7d)`
+- [x] Step 1: tests (red) → Step 2: implementation (green) → Step 3: the command above → Step 4: commit `feat(ui): Appearance section in the profile panel, per-account choice (W7d)`
 
 ### Task 4: dark mode in the pages
 
 **Files:** `frontend/src/components/TrendChart.tsx` (+ test), `frontend/src/pages/DiscoveryPage.tsx`, `frontend/src/themes.css`, plus what the controller's dark-mode gallery (taken after Task 3 on a scratch build) shows; the controller writes those findings into this task's brief as a list of `page / element / what is wrong / expected`. Known work before the gallery: `seriesToOption(series, range, query, timezone, dark = false)` returns today's option unchanged when `dark` is false (a test pins the light option) and, when true, light text and axis colours (`xAxis` and `yAxis` `axisLabel.color`, `axisLine.lineStyle.color`, `axisTick.lineStyle.color`, `splitLine.lineStyle.color`, and `yAxis.nameTextStyle.color` — the unit name keeps ECharts' default `#6E7079`, 3.6:1 on the dark page, if only `axisLabel` is set; use `#a3abb8` for text, `#3a414d` axis line, `#2b313b` split lines), the average line `#e4e7ed`, the band the same at 12 percent, `backgroundColor: "transparent"`, a dark tooltip (`#1f232b` ground, `#3a414d` border, `#e4e7ed` text); `TrendChart` reads `useAppearance().dark` and its `useMemo` for the option adds `dark` to the dependencies (otherwise a mode switch does not redraw); the test pins `nameTextStyle` too. Discovery: `colorMode={dark ? "dark" : "light"}` on `<ReactFlow>`; its node and panel CSS already uses tokens; @xyflow/react 12.12.0 supports `colorMode`, but its dark CSS gives a near-black canvas (`#141414`) and faint edges, so also add in the layer `.graph-canvas .react-flow { --xy-background-color: transparent; --xy-edge-stroke: var(--text-disabled); --xy-background-pattern-dots-color: var(--border-strong); }` (tokens only). The frozen editor drag placeholder (`.dash-grid-edit .react-grid-item.react-grid-placeholder { background: #000 }`) sits on the page, not on a card, and is invisible on a dark page (1.18:1): add to `themes.css` `:root[data-mode="dark"] .dash-grid-edit .react-grid-item.react-grid-placeholder { background: #fff; }`. Dark popups and dialogs (`.prof-menu`, `.qf-pop`, `.row-menu-panel`, `.dialog`) are `--bg` on a `--bg` page, separated only by `--border-strong` and a shadow: the gallery looks at this specifically; if it reads flat, give those four rules a lighter popup ground in dark mode in `themes.css` (selector overrides, no new base token).
 
-- [ ] Step 1: the known work with tests → Step 2: the gallery findings → Step 3: `npx vitest run src/components/TrendChart.test.tsx src/pages/DiscoveryPage.test.tsx src/themes.css.test.ts && npm run typecheck && npm run build` → Step 4: commit `feat(ui): dark mode for the charts, the graph and the findings of the gallery (W7d)`
+- [x] Step 1: the known work with tests → Step 2: the gallery findings → Step 3: `npx vitest run src/components/TrendChart.test.tsx src/pages/DiscoveryPage.test.tsx src/themes.css.test.ts && npm run typecheck && npm run build` → Step 4: commit `feat(ui): dark mode for the charts, the graph and the findings of the gallery (W7d)`
 
 ### Task 5: end-to-end spec, name audit, docs
 
@@ -142,18 +142,26 @@ Dark content tokens (`:root[data-mode="dark"]`, plus `color-scheme: dark`): `bg 
 
 **Name audit:** list every `getByLabel(`, `getByRole(` name and `getByText(` value in `frontend/e2e/*.ts`; the new names are `Light`, `Dark`, `Match my device`, `Navy and gold`, `Maroon and gold`, `Graphite`, `Desert gold`, `Mode`, `Theme colour` (the plan's review ran this audit once: no existing lookup collides, repeat it on the final tree); flag any case-insensitive substring match against them (in particular `Mode`, `Dark`, `Light`), scope or tighten the older lookups, and write the result into the commit body.
 
-- [ ] Step 1: spec + audit → Step 2: README section → Step 3: e2e type-check, `uv run pytest tests/test_readme_ops.py -q` → Step 4: commit `test(e2e): appearance spec, name audit and upgrade notes (W7d)`
+- [x] Step 1: spec + audit → Step 2: README section → Step 3: e2e type-check, `uv run pytest tests/test_readme_ops.py -q` → Step 4: commit `test(e2e): appearance spec, name audit and upgrade notes (W7d)`
 
 ---
 
 ## Part C: controller steps (not delegated)
 
-- [ ] C1 migration rehearsal on a restored copy of the dev database in a guarded scratch project (upgrade, set preferences through the API, downgrade, compare every other table, upgrade again), after Task 1.
-- [ ] C2 dark gallery (every page, light and dark, four presets on two pages) after Task 3 on a scratch build; findings into Task 4's brief.
-- [ ] C3 full frontend suite, typecheck, build, the full backend suite (a migration), isolated Playwright run on a build of the final commit (the run must list the `w7d` project).
-- [ ] C4 whole-wave Opus review (browser, 1920/1440/1024, both modes, four presets, keyboard), one fix wave, one scoped re-review.
-- [ ] C5 gallery into `.superpowers/sdd/overnight-w7/gallery/W7d/`, docs close-out (roadmap O-16 status, backlog section X, plan execution log and ticked boxes), merge gate, backup, rebuild, verify, push, markers, memory, MORNING.
+- [x] C1 migration rehearsal on a restored copy of the dev database in a guarded scratch project (upgrade, set preferences through the API, downgrade, compare every other table, upgrade again), after Task 1.
+- [x] C2 dark gallery (every page, light and dark, four presets on two pages) after Task 3 on a scratch build; findings into Task 4's brief.
+- [x] C3 full frontend suite, typecheck, build, the full backend suite (a migration), isolated Playwright run on a build of the final commit (the run must list the `w7d` project).
+- [x] C4 whole-wave Opus review (browser, 1920/1440/1024, both modes, four presets, keyboard), one fix wave, one scoped re-review.
+- [x] C5 gallery into `.superpowers/sdd/overnight-w7/gallery/W7d/`, docs close-out (roadmap O-16 status, backlog section X, plan execution log and ticked boxes), merge gate, backup, rebuild, verify, push, markers, memory, MORNING.
 
 ## Execution log
 
-(filled in during the wave)
+Run 2026-10-12 (unattended, attempt 1, AUTO_MERGE=1), controller on Sonnet, implementers on Sonnet, reviews on Opus. Ledger `.superpowers/sdd/2026-10-12-w7d-appearance-theme/progress.md` (git-ignored) holds every Ruling.
+
+- Plan written, ONE Opus plan review (1 Blocker / 6 Major / 14 Minor, it prototyped and ran the risky parts) folded in at `027ed49`. The Blocker: `db.refresh(user, with_for_update=True)` answers 500 on a deleted account; the row lock is a `select(...).with_for_update()` with `populate_existing`.
+- Task 1 `7fdd0bd` migration 0007 + `PUT /api/me/preferences`; Task 2 `aaef7a5` theme tokens, first-paint script, helpers; Task 3 `889275f` provider + the Mode / Theme colour groups in the profile panel; Task 4 `3874bbf` Trend chart and Discovery graph in dark; Task 5 `29d9924` Playwright spec (+ the `w7d` project the config needed), name audit (no collision), README upgrade section.
+- Controller C1: the migration was rehearsed on a restored copy of the dev database (scratch project `dcdash_e2e_w7d_mig`, `mig-drill.sh`): upgrade, every account reads `{}`, the CHECK refuses `[]` `"x"` `1` `null`, downgrade lossless (every table fingerprint identical), upgrade again. C2: dark gallery and the 8-combination preset sheet on a scratch build; the only defects were the two Task 4 items.
+- Gates at `29d9924`: full backend 3481 passed / 1 skipped, frontend 113 files / 2675 tests, typecheck, build, Playwright 40 passed (the `w7d` project ran 6).
+- Whole-wave Opus review (browser, 8 combinations at three widths, keyboard, Match my device, first paint): 0 Critical / 1 Important / 7 Minor. Fix wave (`93558e2` backend, `7b3e141` front end, `6a1b471` README): placeholder contrast in dark (the Important), the error line of a replaced choice, the avatar edge in dark, the dark widget cards (transparent border, radius), `active` re-checked under the lock, README. Scoped re-review (Opus medium): 0 Critical / 1 Important (the credit-link colour rule sat in the layer and React Flow's unlayered CSS beat it) / 1 Minor; fixed by the controller at `0aec03c` (rule moved to `themes.css`), no third review.
+- Gates at the final code (`0aec03c`, then one test-only commit `8faf1e7`): frontend 113 files / 2686 tests, typecheck, build; the whole backend suite run again at `0aec03c`: 3481 passed / 1 skipped / 1 failed, the failure being a pre-existing time-dependent flake of `test_api_error_recorder.py` (the test searched the row's timestamp for the text "42"; fixed in `8faf1e7`, 11 passed three times alone); Playwright in a scratch project on the build of `0aec03c`: 40 passed, 0 failed (the `w7d` project ran 6).
+- Parked in backlog section X: the widgets stay light cards in dark mode (their own session), a second open tab keeps the old look until reload, sign-out does not cancel a save in flight, `--text-disabled` on `--surface` is 4.43:1 in light, desert gold is a very bright bar.
