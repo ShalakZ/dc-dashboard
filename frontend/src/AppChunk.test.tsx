@@ -42,11 +42,11 @@ describe("the lazy routes while their chunk loads", () => {
     expect(region()).toHaveClass("sk-region");
     expect(region().querySelector("header.page-head")).toHaveAttribute("aria-hidden", "true");
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
-    expect(progress.getCount("pending")).toBe(1); // Pending is mounted next to the skeleton in the fallback
+    await waitFor(() => expect(progress.getCount("pending")).toBe(1)); // Pending is mounted next to the skeleton in the fallback
     chunks.list.open();
     expect(await screen.findByRole("heading", { name: "the dashboards page" })).toBeInTheDocument();
     expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
-    expect(progress.getCount("pending")).toBe(0);
+    await waitFor(() => expect(progress.getCount("pending")).toBe(0));
   });
 
   it("/dashboards/3 does the same for the dashboard's chunk", async () => {
@@ -55,11 +55,11 @@ describe("the lazy routes while their chunk loads", () => {
     await screen.findByText(LABEL);
     expect(region()).toHaveAttribute("role", "status");
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
-    expect(progress.getCount("pending")).toBe(1);
+    await waitFor(() => expect(progress.getCount("pending")).toBe(1));
     chunks.one.open();
     expect(await screen.findByRole("heading", { name: "the dashboard page" })).toBeInTheDocument();
     expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
-    expect(progress.getCount("pending")).toBe(0);
+    await waitFor(() => expect(progress.getCount("pending")).toBe(0));
   });
 });
 
@@ -72,11 +72,11 @@ describe("the home route while the default dashboard is asked", () => {
     await screen.findByText(LABEL);
     expect(region()).toHaveAttribute("role", "status");
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
-    expect(progress.getCount("pending")).toBe(1);
+    await waitFor(() => expect(progress.getCount("pending")).toBe(1));
     expect(calls.some((c) => c.path === "/api/fleet/summary")).toBe(false);
     held.release();
     expect(await screen.findByRole("heading", { name: "the dashboard page" })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText(LABEL)).not.toBeInTheDocument());
-    expect(progress.getCount("pending")).toBe(0);
+    await waitFor(() => expect(progress.getCount("pending")).toBe(0));
   });
 });
