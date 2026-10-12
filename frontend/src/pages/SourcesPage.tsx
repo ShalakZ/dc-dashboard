@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Link } from "react-router";
 import { api } from "../api/client";
 import { keys, useCollectorStatus, useInvalidate, useSecretKeyStatus, useSite, useSources } from "../api/queries";
 import type { Source, SourceImpact } from "../api/types";
@@ -9,7 +8,9 @@ import { ConnectionCheck } from "../components/ConnectionCheck";
 import { JobStatus } from "../components/JobStatus";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
+import { RowActions, type RowAction } from "../components/RowActions";
 import { SourceForm } from "../components/SourceForm";
+import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { useNow } from "../hooks/useNow";
 import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
@@ -86,6 +87,16 @@ export function SourcesPage() {
       setConfirming({ id, name, impact });
     }
   });
+
+  const isAdmin = hasRole("admin");
+  const actionsOf = (s: Source): RowAction[] => [
+    { label: "Test", onSelect: () => testOne(s.id), disabled: locked },
+    { label: "Check connection", onSelect: () => openCheck(s), disabled: locked },
+    ...(isAdmin ? [
+      { label: "Edit", onSelect: () => openEdit(s), disabled: locked },
+      { label: "Points", to: `/sources/${s.id}/points` },
+    ] : []),
+  ];
 
   if (isLoading) return <p className="muted">loading…</p>;
   // A failed refetch keeps the last list (and any open dialog, with what was typed in it) and shows the error above the table.
@@ -168,11 +179,8 @@ export function SourcesPage() {
                     <td className="error">{s.last_error ?? ""}</td>
                     <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
                     <td className="row-actions">
-                      <button className="quiet" onClick={() => testOne(s.id)} disabled={locked}>Test</button>
-                      <button className="quiet" onClick={() => openCheck(s)} disabled={locked} aria-label="Check connection" title="Check connection">Check</button>
-                      {hasRole("admin") && <button className="quiet" onClick={() => openEdit(s)} disabled={locked}>Edit</button>}
-                      {hasRole("admin") && <Link className="quiet-link" to={`/sources/${s.id}/points`}>Points</Link>}
-                      {hasRole("admin") && <button className="danger-quiet" onClick={() => remove(s.id, s.name)} disabled={locked}>Delete</button>}
+                      <RowActions label={`Actions for ${s.name}`} items={actionsOf(s)} />
+                      {isAdmin && <TrashButton label={`Delete ${s.name}`} onClick={() => remove(s.id, s.name)} disabled={locked} />}
                     </td>
                   </tr>
                 );

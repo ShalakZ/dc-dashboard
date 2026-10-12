@@ -4,8 +4,10 @@ import { keys, useInvalidate, useScans, useScopes, useScopeSuggestions, useSite 
 import type { Scope, ScopePreview } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { PageHeader } from "../components/PageHeader";
+import { RowActions } from "../components/RowActions";
 import { ScanProgress } from "../components/ScanProgress";
 import { ScopeForm } from "../components/ScopeForm";
+import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { claimedCount } from "../lib/scanText";
 import { formatSiteDateTime } from "../lib/siteTime";
@@ -117,9 +119,11 @@ export function ScansPage() {
                   <td><span className="cell-name" title={s.name}>{s.name}</span></td><td className="wrap-any">{s.targets.join(", ")}</td><td className="wrap-any">{s.ports.join(", ")}</td>
                   {isAdmin && (
                     <td className="row-actions">
-                      <button className="quiet" onClick={() => requestPreview(s)} disabled={busy}>Scan</button>
-                      <button className="quiet" onClick={() => edit(s)}>Edit</button>
-                      <button className="danger-quiet" onClick={() => remove(s)} disabled={busy}>Delete</button>
+                      <RowActions label={`Actions for ${s.name}`} items={[
+                        { label: "Scan", onSelect: () => requestPreview(s), disabled: busy },
+                        { label: "Edit", onSelect: () => edit(s) },
+                      ]} />
+                      <TrashButton label={`Delete ${s.name}`} onClick={() => remove(s)} disabled={busy} />
                     </td>
                   )}
                 </tr>

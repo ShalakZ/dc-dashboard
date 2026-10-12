@@ -23,6 +23,12 @@ const base = (role: string) => ({
   "GET /api/scopes/suggestions": { body: { targets: ["172.18.0.0/24"], ports: [502, 4840, 9000] } },
 });
 const open = () => renderWithProviders(<ScansPage />, { route: "/scans", path: "/scans" });
+/** The three-dot menu of the scope row (named `Actions for lab`); its items are in the DOM only while it is open. */
+const menuButton = async () => screen.findByRole("button", { name: "Actions for lab" });
+async function pick(item: string) {
+  await userEvent.click(await menuButton());
+  await userEvent.click(await screen.findByRole("menuitem", { name: item }));
+}
 
 describe("ScansPage", () => {
   it("lets an operator read scopes and history but not change anything", async () => {
@@ -30,7 +36,8 @@ describe("ScansPage", () => {
     open();
     expect(await screen.findAllByText("lab")).toHaveLength(2); // the scope row and its scan in the history
     expect(screen.queryByRole("button", { name: "New scope" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Scan" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument(); // no menu at all, so no Scan, Edit or Delete either
+    expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
   });
 
   it("prints the start of a scan on the wall clock of the site zone", async () => {
@@ -86,7 +93,7 @@ describe("ScansPage", () => {
       "GET /api/scans/7": () => ({ body: ++polls < 2 ? { ...done, status: "running", stage: "probe", findings: [] } : done }),
     });
     open();
-    await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+    await pick("Scan");
     expect(await screen.findByText("2 hosts × 3 ports (6 probes)")).toBeInTheDocument();
     expect(calls.some((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")).toBe(false); // nothing runs before confirming
     await userEvent.click(screen.getByRole("button", { name: "Start scan" }));
@@ -106,10 +113,10 @@ describe("ScansPage", () => {
       "GET /api/scans/7": { body: done },
     });
     open();
-    await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+    await pick("Scan");
     await screen.findByRole("button", { name: "Start scan" });
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await userEvent.click(screen.getByRole("button", { name: "Scan" }));
+    await pick("Scan");
     await userEvent.click(await screen.findByRole("button", { name: "Start scan" }));
     expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({
       confirm_host_count: 2, digest: "digest-2",
@@ -119,7 +126,7 @@ describe("ScansPage", () => {
   it("cancelling the confirmation runs nothing", async () => {
     const calls = mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } } });
     open();
-    await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+    await pick("Scan");
     await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
     expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/scan"))).toBe(false);
   });
@@ -131,7 +138,7 @@ describe("ScansPage", () => {
       "POST /api/scopes/3/scan": { status: 409, body: { detail: "a scan is already in progress" } },
     });
     open();
-    await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+    await pick("Scan");
     await userEvent.click(await screen.findByRole("button", { name: "Start scan" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("a scan is already in progress");
   });
@@ -144,7 +151,7 @@ describe("ScansPage", () => {
     });
     vi.spyOn(window, "confirm").mockReturnValue(true);
     open();
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await pick("Edit");
     expect(screen.getByLabelText("Name")).toHaveValue("lab");
     expect(screen.getByLabelText("Targets")).toHaveValue("simulator");
     expect(screen.getByLabelText("Ports")).toHaveValue("9000, 4840, 5020");
@@ -153,8 +160,22 @@ describe("ScansPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ name: "lab", targets: ["simulator"], ports: [4840] });
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete lab" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/scopes/3")).toBe(true));
+  });
+
+  it("gives an admin a menu with Scan and Edit and a trash button for Delete, which still asks first", async () => {
+    const calls = mockFetch({ ...base("admin"), "DELETE /api/scopes/3": { status: 204 } });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    open();
+    await userEvent.click(await menuButton());
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Scan", "Edit"]);
+    await userEvent.keyboard("{Escape}");
+    expect((await menuButton()).closest("td")).toHaveClass("row-actions");
+    await userEvent.click(screen.getByRole("button", { name: "Delete lab" }));
+    expect(confirm).toHaveBeenCalledWith('Delete scope "lab"?');
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(screen.getByRole("button", { name: "Details" })).toBeInTheDocument(); // the history keeps its own link-like button
   });
 
   it("opens the details of a past scan from the history", async () => {
@@ -220,9 +241,9 @@ describe("ScansPage", () => {
     it("closes when the scope is edited", async () => {
       const calls = mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } } });
       open();
-      await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+      await pick("Scan");
       expect(await screen.findByText(confirmation)).toBeInTheDocument();
-      await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await pick("Edit");
       expect(screen.queryByText(confirmation)).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Start scan" })).not.toBeInTheDocument();
       expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/scan"))).toBe(false);
@@ -236,9 +257,9 @@ describe("ScansPage", () => {
       });
       vi.spyOn(window, "confirm").mockReturnValue(true);
       open();
-      await userEvent.click(await screen.findByRole("button", { name: "Scan" }));
+      await pick("Scan");
       expect(await screen.findByText(confirmation)).toBeInTheDocument();
-      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await userEvent.click(screen.getByRole("button", { name: "Delete lab" }));
       await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/scopes/3")).toBe(true));
       expect(screen.queryByText(confirmation)).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Start scan" })).not.toBeInTheDocument();
@@ -252,9 +273,9 @@ describe("ScansPage", () => {
         "PATCH /api/scopes/3": ({ body }) => { ports = (body as { ports: number[] }).ports.length; return { body: scope }; },
       });
       open();
-      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      await pick("Edit");
       // The edit form stays open while the operator previews again; saving must still discard that preview.
-      await userEvent.click(screen.getByRole("button", { name: "Scan" }));
+      await pick("Scan");
       expect(await screen.findByText(confirmation)).toBeInTheDocument();
       await userEvent.clear(screen.getByLabelText("Ports"));
       await userEvent.type(screen.getByLabelText("Ports"), "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20");
@@ -262,7 +283,7 @@ describe("ScansPage", () => {
       await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
       expect(screen.queryByText(confirmation)).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Start scan" })).not.toBeInTheDocument();
-      await userEvent.click(screen.getByRole("button", { name: "Scan" }));
+      await pick("Scan");
       expect(await screen.findByText("2 hosts × 20 ports (40 probes)")).toBeInTheDocument();
       expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/scan"))).toBe(false);
     });
@@ -301,7 +322,7 @@ describe("ScansPage look (W6)", () => {
     open();
     expect(await screen.findByRole("button", { name: "New scope" })).toHaveClass("primary");
     expect(document.querySelectorAll("button.primary")).toHaveLength(1);
-    await userEvent.click(screen.getByRole("button", { name: "Scan" }));
+    await pick("Scan");
     const start = await screen.findByRole("button", { name: "Start scan" });
     expect(start).toHaveClass("primary");
     expect(screen.getByRole("button", { name: "New scope" })).not.toHaveClass("primary");

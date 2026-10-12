@@ -18,23 +18,17 @@
     .table-wrap.dense th, .table-wrap.dense td { padding-left: 6px; padding-right: 6px; }
     .table-wrap.dense td { font-size: var(--fs-sm); }
     .cell-name { max-width: 104px; }
-    td.row-actions :is(.quiet, .danger-quiet, .quiet-link) { padding: 0 5px; }
   }
   .table-wrap.dense td.error { min-width: 140px; max-width: 260px; overflow-wrap: break-word; } /* never squeezed to a few letters per line: the wrap scrolls instead */
 
-  /* Row actions: quiet buttons at the right of the row. The cell stays a table cell (it must not be display: flex). */
+  /* Row actions: the three-dot menu and the trash button (app.css) side by side at the right of the row, in the narrowest cell the
+     controls fit (two 28px boxes); the Scans history keeps its one quiet Details button here. The cell stays a table cell (it must not be display: flex). */
   td.row-actions, th.row-actions { display: table-cell; } /* belt: no other rule may turn the cell into a flex box and tear the row */
-  /* The buttons may wrap onto a second line (Points and Delete) instead of widening the table: at 1440px, with the sidebar open, the
-     wrap is 1146px wide and the nine columns with one nowrap line of buttons needed 1233px, so Points was cut off and Delete sat behind
-     a sideways scroll. The cell's smallest width is now its widest button (about 65px, 265px less than before), which absorbs the 87px
-     of overflow and the Status minimum below. A button is an atomic inline, so the line breaks between buttons and never inside one. */
-  td.row-actions { min-width: 150px; padding-top: 6px; padding-bottom: 6px; text-align: right; white-space: normal; }
-  td.row-actions > * { white-space: nowrap; }
+  td.row-actions { width: 1%; padding-top: 6px; padding-bottom: 6px; text-align: right; white-space: nowrap; }
   td.row-actions > * { vertical-align: middle; }
-  td.row-actions :is(.quiet, .danger-quiet, .quiet-link) { padding: 0 7px; }
+  td.row-actions > .icon-btn { display: inline-grid; } /* .icon-btn is a grid (block level): inline, so the menu and the trash sit on one line */
   td.row-actions > * + * { margin-left: 2px; }
-  .quiet-link { display: inline-flex; align-items: center; min-height: 30px; padding: 0 10px; border-radius: var(--radius); font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; }
-  .quiet-link:hover { background: var(--accent-tint); text-decoration: none; }
+  td.row-actions .quiet { padding: 0 7px; }
 
   /* A status text: a shape in front, the words wrap (a job message or a "not polled" reason can be a sentence) */
   .st.job, .st.note { align-items: flex-start; font-size: var(--fs-sm); font-weight: 500; white-space: normal; }

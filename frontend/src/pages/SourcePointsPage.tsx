@@ -8,6 +8,7 @@ import { JobStatus } from "../components/JobStatus";
 import { MappingForm, type MappingBody } from "../components/MappingForm";
 import { Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
+import { RowActions } from "../components/RowActions";
 import { useAction } from "../hooks/useAction";
 import { DEFAULT_POINT_VIEW, sortBy, viewPoints, type PointSortKey } from "../lib/points";
 
@@ -106,8 +107,10 @@ export function SourcePointsPage() {
                   <td><span className="cell-trunc" title={p.address}>{p.address}</span></td><td>{p.name}</td><td>{p.data_type}</td><td>{p.unit_hint ?? ""}</td>
                   <td>{p.mapping ? `${assetName(p.mapping.asset_id)} · ${p.mapping.metric} · every ${p.mapping.interval_seconds}s · ×${p.mapping.scale}` : <span className="muted st st-off plain">unmapped</span>}</td>
                   <td className="row-actions">
-                    <button className="quiet" onClick={() => setEditing(p)}>{p.mapping ? "Edit" : "Map"}</button>
-                    {p.mapping && <button className="danger-quiet" onClick={() => unmap(p.mapping!.id)}>Unmap</button>}
+                    <RowActions label={`Actions for ${p.name}`} items={[
+                      { label: p.mapping ? "Edit" : "Map", onSelect: () => setEditing(p) },
+                      ...(p.mapping ? [{ label: "Unmap", onSelect: () => unmap(p.mapping!.id), tone: "danger" as const }] : []), // no confirm, as before
+                    ]} />
                   </td>
                 </tr>
               ))}
