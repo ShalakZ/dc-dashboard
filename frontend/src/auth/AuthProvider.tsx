@@ -13,7 +13,7 @@ interface AuthState {
   /** Set when the server says the signed-in user now has another role than the page loaded with. `user` itself is left alone. */
   roleChange: { from: Role; to: Role } | null;
   setupNeeded: boolean;
-  /** True from an explicit sign-out until the next sign-in: RequireAuth then does not remember the page the user left from. A 401 does not set it. */
+  /** True from the start of an explicit sign-out until the next sign-in: RequireAuth then does not remember the page the user left from. A 401 does not set it. */
   signedOutOnPurpose: boolean;
   /** Ends the mark above. The sign-in page calls it once it shows, so the mark only covers the render that follows the sign-out. */
   clearSignOutMark(): void;
@@ -154,8 +154,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const clearSignOutMark = useCallback(() => setSignedOutOnPurpose(false), []);
 
   const logout = useCallback(async () => {
-    await api.post("/api/logout");
-    setSignedOutOnPurpose(true); // in the same batch as the user going null, so RequireAuth never renders one without the other
+    // Before the request: a 401 that lands while it is out (a poll already on its way) ends the session first and must not remember the page.
+    setSignedOutOnPurpose(true);
+    try {
+      await api.post("/api/logout");
+    } catch (error) {
+      setSignedOutOnPurpose(false); // still signed in
+      throw error;
+    }
     endSession();
   }, [endSession]);
 

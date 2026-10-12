@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Link, MemoryRouter, Route, Routes } from "react-router";
 import { api } from "../api/client";
@@ -42,7 +42,7 @@ function renderApp(route: string) {
 }
 
 /** The server side of one session: signed in until the logout or an expiry, and signed in again by the next login. */
-function server(options: { expireOnRequest?: boolean } = {}) {
+function server(options: { expireOnRequest?: boolean; logoutFails?: boolean } = {}) {
   let signedIn = true;
   const user = { id: 1, username: "u", role: "admin" };
   return mockFetch({
@@ -54,6 +54,7 @@ function server(options: { expireOnRequest?: boolean } = {}) {
       return { status: 401, body: { detail: "not authenticated" } };
     },
     "POST /api/logout": () => {
+      if (options.logoutFails) return { status: 500, body: { detail: "logout failed" } };
       signedIn = false;
       return { status: 204 };
     },
@@ -62,6 +63,24 @@ function server(options: { expireOnRequest?: boolean } = {}) {
       return { body: user };
     },
   });
+}
+
+/** Keeps the logout request waiting (the server has not answered it yet) until the returned function is called. Call it after `server()`. */
+function holdLogout() {
+  const inner = globalThis.fetch;
+  let release = () => {};
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (!url.endsWith("/api/logout")) return inner(input, init);
+    return new Promise<Response>((resolve) => { release = () => resolve(inner(input, init)); });
+  });
+  return () => release();
+}
+
+async function openSignOutDialog() {
+  await userEvent.click(await screen.findByRole("button", { name: /^u Administrator$/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+  return screen.findByRole("dialog", { name: "Sign out of DC Dashboard?" });
 }
 
 async function signInAgain() {
@@ -124,6 +143,39 @@ describe("the page remembered across a sign-in", () => {
     expect(await screen.findByText("home page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("link", { name: "Billing" }));
     await userEvent.click(await screen.findByRole("button", { name: "Load more" }));
+    await screen.findByLabelText("Username");
+    expect(sessionStorage.getItem(RETURN_KEY)).toBe("/billing");
+  });
+
+  it("is not remembered by a 401 that lands while the sign-out request is still out", async () => {
+    server();
+    const answerLogout = holdLogout();
+    renderApp("/billing");
+    await screen.findByText("billing page");
+    const dialog = await openSignOutDialog();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
+    await act(async () => {
+      await api.get("/api/expiring").catch(() => undefined); // a poll that was already on its way gets the session's 401 first
+    });
+    await screen.findByLabelText("Username");
+    expect(sessionStorage.getItem(RETURN_KEY)).toBeNull();
+
+    await act(async () => answerLogout());
+    await signInAgain();
+    expect(await screen.findByText("home page")).toBeInTheDocument();
+  });
+
+  it("leaves a user whose sign-out failed signed in, and a later expiry remembers the page again", async () => {
+    server({ logoutFails: true, expireOnRequest: true });
+    renderApp("/billing");
+    await screen.findByText("billing page");
+    const dialog = await openSignOutDialog();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("logout failed");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("billing page")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }));
     await screen.findByLabelText("Username");
     expect(sessionStorage.getItem(RETURN_KEY)).toBe("/billing");
   });
