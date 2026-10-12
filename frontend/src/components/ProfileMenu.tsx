@@ -1,17 +1,26 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { Link } from "react-router";
+import { useAppearance } from "../auth/AppearanceProvider";
 import { useAuth } from "../auth/AuthProvider";
+import { THEMES, type Mode } from "../lib/appearance";
 import { Icon } from "./Icon";
 import { ROLE_LABEL } from "./navItems";
 import { SignOutDialog } from "./SignOutDialog";
 
+const MODE_OPTIONS: { id: Mode; label: string }[] = [
+  { id: "light", label: "Light" },
+  { id: "dark", label: "Dark" },
+  { id: "system", label: "Match my device" },
+];
+
 /**
- * The signed-in user in the top bar: a button that opens a small panel with the way to the password page and Sign out.
- * A disclosure, not an ARIA menu (the panel holds a link and a button, plus a heading line), so the keys are the plain ones
- * plus the arrows; Tab walks through it and out of it, which closes it.
+ * The signed-in user in the top bar: a button that opens a small panel with the appearance choice, the way to the password page and
+ * Sign out. A disclosure, not an ARIA menu (the panel holds radios, a link and a button, plus a heading line), so the keys are the
+ * plain ones plus the arrows; Tab walks through it and out of it, which closes it. The arrows on a radio belong to its group.
  */
 export function ProfileMenu() {
   const { user } = useAuth();
+  const { mode, theme, setMode, setTheme, error } = useAppearance();
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -62,6 +71,7 @@ export function ProfileMenu() {
   };
   const onPanelKey = (event: KeyboardEvent) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    if (event.target instanceof HTMLInputElement && event.target.type === "radio") return; // the group's own arrows
     event.preventDefault();
     const all = items();
     const at = all.indexOf(document.activeElement as HTMLElement);
@@ -105,6 +115,26 @@ export function ProfileMenu() {
               <span className="r">{role}</span>
             </div>
           </div>
+          <fieldset className="prof-group">
+            <legend>Mode</legend>
+            {MODE_OPTIONS.map((option) => (
+              <label key={option.id} className="prof-opt check">
+                <input type="radio" name="appearance-mode" value={option.id} checked={mode === option.id} onChange={() => setMode(option.id)} />
+                {option.label}
+              </label>
+            ))}
+          </fieldset>
+          <fieldset className="prof-group">
+            <legend>Theme colour</legend>
+            {THEMES.map((option) => (
+              <label key={option.id} className="prof-opt check">
+                <input type="radio" name="appearance-theme" value={option.id} checked={theme === option.id} onChange={() => setTheme(option.id)} />
+                <span className="swatch" aria-hidden="true" style={{ "--sw-bg": option.swatch.bg, "--sw-dot": option.swatch.dot } as CSSProperties} />
+                {option.label}
+              </label>
+            ))}
+            {error && <p role="alert" className="error">{error}</p>}
+          </fieldset>
           <Link to="/password" className="prof-item" onClick={closeToTrigger}>
             <Icon name="password" />
             <span>Password</span>

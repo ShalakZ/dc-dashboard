@@ -1,8 +1,9 @@
 import math
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from dcdash.api.security_events import client_address, sign_in_events
 from dcdash.core.audit import audit
 from dcdash.core.config import get_settings
 from dcdash.core.models import User, UserSession
+from dcdash.core.preferences import normalize
 from dcdash.core.sign_in_policy import SignInPolicy, get_sign_in_policy
 
 router = APIRouter(prefix="/api", tags=["auth"])
@@ -56,11 +58,36 @@ class PasswordChange(BaseModel):
     new_password: str = Field(min_length=8, max_length=256)
 
 
+class Preferences(BaseModel):
+    mode: Literal["light", "dark", "system"]
+    theme: Literal["navy-gold", "maroon-gold", "graphite", "desert-gold"]
+
+
+class PreferencesIn(BaseModel):
+    """One or both keys. Neither is an optional type: `None` is only "not sent", so a JSON null is a 422 and is never stored."""
+
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["light", "dark", "system"] = None  # type: ignore[assignment]
+    theme: Literal["navy-gold", "maroon-gold", "graphite", "desert-gold"] = None  # type: ignore[assignment]
+
+    @model_validator(mode="after")
+    def at_least_one_choice(self) -> "PreferencesIn":
+        if not self.model_fields_set:
+            raise ValueError("send mode, theme or both")
+        return self
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     username: str
     role: str
+    preferences: Preferences
+
+    @field_validator("preferences", mode="before")
+    @classmethod
+    def _valid_choice(cls, stored: object) -> dict[str, str]:
+        return normalize(stored)
 
 
 def _is_https(request: Request) -> bool:
@@ -183,3 +210,31 @@ async def change_my_password(
         )
         await audit(db, user.id, "password.changed", {"other_sessions_signed_out": closed.rowcount})
         await db.commit()
+
+
+@router.put("/me/preferences", response_model=Preferences)
+async def set_my_preferences(
+    body: PreferencesIn, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
+    """Merge the given keys into the caller's own choice. Display settings, not configuration: no audit row."""
+    given = body.model_dump(exclude_unset=True)
+    # The lock makes two simultaneous requests for different keys queue, so the second merges into the first's result.
+    # populate_existing re-reads the row under the lock; db.refresh(with_for_update=True) would raise, not answer 401,
+    # when the account was deleted after authentication.
+    # An account deactivated since authentication is refused too, as one that is gone.
+    locked = (
+        await db.execute(
+            select(User)
+            .where(User.id == user.id, User.active.is_(True))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if locked is None:
+        await db.rollback()
+        raise HTTPException(401, "not authenticated")
+    merged = {**normalize(locked.preferences), **given}
+    async with account_vanished_is_401(db):
+        locked.preferences = merged
+        await db.commit()
+    return merged

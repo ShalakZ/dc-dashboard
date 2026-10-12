@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -20,6 +20,7 @@ class User(Base):
     password_hash: Mapped[str]
     role: Mapped[str]
     active: Mapped[bool] = mapped_column(default=True)
+    preferences: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
 
 
 class UserSession(Base):

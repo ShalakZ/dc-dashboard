@@ -27,6 +27,8 @@ EXEMPT: dict[str, str] = {
     "PUT /api/discovery/layout": "node positions on the graph canvas: a picture, not configuration",
     "POST /api/widget-data": "a read sent as POST because the body carries the widget configs",
     "POST /api/widget-data/csv": "a read sent as POST: the CSV export of widget values",
+    "PUT /api/me/preferences": "a personal display setting of the signed-in account (mode and theme), not configuration; "
+                               "it changes nothing another user or the system can see",
 }
 
 

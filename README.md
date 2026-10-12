@@ -1115,6 +1115,28 @@ starts from the new image.
    downgrade drops `diag_events`; nothing else changes, and `upgrade` creates it empty again. A restart of the W8 `api` would run
    `alembic upgrade head` and apply `0006` again, so the W8 `api` must not be running once the schema is back at `0005`.
 
+### Upgrading to W7d (migration 0007)
+
+Schema `0006` to `0007`. Downgrade: **lossless** for everything else (it only loses the display choices described below), so option a
+is open. The code to go back to is `ee1e985` (`main` before W7d).
+
+W7d (appearance) adds migration `0007`: one new column, `users.preferences`, a JSON object that holds each account's Mode (Light,
+Dark or Match my device) and Theme colour (Navy and gold, Maroon and gold, Graphite or Desert gold). It runs in a moment and needs no
+pre-check. Every existing account starts on Light and Navy and gold; each person changes it in the profile panel (the name block in the
+top bar, section Mode and Theme colour) and it follows them to any browser. The default look changes slightly for everyone: the navy
+panels now carry gold markers (the selected item's marker, the focus ring and the logo mark, all light blue before) and a gold avatar. The first page load after changing
+the look on another computer, or after another person used this browser, shows the previous look for a moment, until the page has asked
+the server. The `api` container applies the migration the first time it starts from the new image.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0006`).
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you.
+3. **Verify.** `docker compose exec api alembic current` prints `0007 (head)`; the profile panel shows the Mode and Theme colour choices.
+4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0006` and `<old commit>` = `ee1e985`. The `0007`
+   downgrade drops `users.preferences`; nothing else changes, so only the display choices are lost, and `upgrade` adds the column
+   again with every account on the defaults. A restart of the W7d `api` would run `alembic upgrade head` and apply `0007` again, so the
+   W7d `api` must not be running once the schema is back at `0006`.
+
 ## Add a connector
 
 Create `backend/dcdash/connectors/<name>.py` with a `Connector` subclass

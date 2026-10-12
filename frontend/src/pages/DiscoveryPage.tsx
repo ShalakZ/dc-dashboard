@@ -8,6 +8,7 @@ import { Link } from "react-router";
 import { api } from "../api/client";
 import { keys, useGraph, useInvalidate } from "../api/queries";
 import type { GraphModel } from "../api/types";
+import { useAppearance } from "../auth/AppearanceProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { nodeTypes } from "../components/graph/nodes";
 import { ReviewDialog, type InitialTarget } from "../components/graph/ReviewDialog";
@@ -62,6 +63,7 @@ function Canvas({ model }: { model: GraphModel }) {
   // Where the dragged nodes were when the drag began, so a drop onto an asset can put them back.
   const dragStart = useRef(new Map<string, { x: number; y: number }>());
   const { getIntersectingNodes } = useReactFlow();
+  const { dark } = useAppearance();
   const [review, setReview] = useState<{ key: number; payload: DropPayload; initialTarget: InitialTarget } | null>(null);
   const reviewCount = useRef(0);
   const [offer, setOffer] = useState<{ nodeId: string; label: string } | null>(null);
@@ -168,6 +170,7 @@ function Canvas({ model }: { model: GraphModel }) {
             onNodeClick={(_event, node) => { if (node.type === "source") setSelectedId((node.data as SourceNodeData).source.id); }}
             onNodeDragStart={onNodeDragStart}
             onNodeDragStop={onNodeDragStop}
+            colorMode={dark ? "dark" : "light"}
             nodesConnectable={false}
             deleteKeyCode={null}
             fitView

@@ -1,40 +1,9 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { MUTED_FIGURE } from "./lib/widgetFormat";
+import { AA, contrast, customProperties, NON_TEXT, parseRules, stripComments, type Rule } from "./test/cssTools";
 
 // vitest is configured with `css: false`, which empties a CSS import, so the stylesheets are read as text.
-// Comments go first: one in front of a rule would otherwise become part of its selector.
-const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "");
 const css = stripComments(readFileSync("src/app.css", "utf8")); // vitest runs from the frontend directory
-
-type Rule = { selector: string; body: string; at: string[]; order: number };
-
-/**
- * The style rules of a stylesheet, each with the at-rules it sits in (`@layer w6`, `@media (...)`) and its position.
- * CSS nesting is not used: a `{` after an at-rule header opens a block of rules, any other `{` a declaration block.
- */
-function parseRules(text: string): Rule[] {
-  const rules: Rule[] = [];
-  const at: string[] = [];
-  let start = 0;
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "{") {
-      const prelude = text.slice(start, i).trim().replace(/\s+/g, " ");
-      if (prelude.startsWith("@")) {
-        at.push(prelude);
-        start = i + 1;
-      } else {
-        const end = text.indexOf("}", i);
-        rules.push({ selector: prelude, body: text.slice(i + 1, end), at: [...at], order: rules.length });
-        i = end;
-        start = end + 1;
-      }
-    } else if (text[i] === "}") {
-      at.pop();
-      start = i + 1;
-    }
-  }
-  return rules;
-}
 
 const rules = parseRules(css);
 const inLayer = (rule: Rule) => rule.at.some((a) => a.startsWith("@layer"));
@@ -46,24 +15,6 @@ const tokens = new Map<string, string>(
 );
 const resolve = (value: string) => value.replace(/var\(--([\w-]+)\)/g, (_, name: string) => tokens.get(name) ?? `<missing --${name}>`);
 const HEX = /^#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$/;
-
-// The muted greys are the only text on a tinted or white ground that is meant to look faded; WCAG AA asks 4.5:1 for it.
-const AA = 4.5;
-const NON_TEXT = 3; // WCAG 1.4.11: the boundary of a control, a focus ring, an indicator
-
-const channel = (v: number) => {
-  const c = v / 255;
-  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-};
-const luminance = (hex: string) => {
-  const full = hex.length === 4 ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex; // #999 is #999999
-  const [r, g, b] = [1, 3, 5].map((i) => parseInt(full.slice(i, i + 2), 16));
-  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
-};
-const contrast = (fg: string, bg: string) => {
-  const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a);
-  return (hi + 0.05) / (lo + 0.05);
-};
 
 /** The colour of `property` in the one rule whose selector list is exactly `selector`; a `var(--name)` is read from `:root`. */
 function declared(selector: string, property: string): string {
@@ -178,6 +129,29 @@ describe("the shell (W6 sidebar)", () => {
 
   it("the graph's zoom buttons are dimmed once (by React Flow), not twice (the disabled-button rule)", () => {
     expect(bodyOf(".graph-canvas .react-flow__controls button")).toMatch(/opacity:\s*1\b/);
+  });
+
+  it("the graph's React Flow colours (both of its modes) are pointed at page tokens, never at a raw colour", () => {
+    const flow = customProperties(bodyOf(".graph-canvas .react-flow"));
+    for (const name of [
+      "xy-background-color", "xy-edge-stroke", "xy-background-pattern-dots-color", "xy-controls-button-background-color",
+      "xy-controls-button-background-color-hover", "xy-controls-button-color", "xy-controls-button-color-hover",
+      "xy-controls-button-border-color", "xy-edge-label-background-color", "xy-edge-label-color", "xy-attribution-background-color",
+    ]) {
+      expect(flow.get(name), `--${name}`).toMatch(/^(?:transparent|var\(--[a-z0-9-]+\))$/);
+    }
+  });
+
+  it("leaves the attribution link's colour to themes.css: React Flow's stylesheet is unlayered, so a layered rule would lose", () => {
+    expect(rules.some((r) => r.selector === ".graph-canvas .react-flow__attribution a")).toBe(false);
+  });
+
+  it("every placeholder is --text-disabled at full opacity, in the layer (Chrome's own grey is 3.86:1 on the dark field)", () => {
+    const found = rules.filter((r) => r.selector === "::placeholder");
+    expect(found, "one rule for ::placeholder").toHaveLength(1);
+    expect(inLayer(found[0])).toBe(true);
+    expect(found[0].body).toMatch(/color:\s*var\(--text-disabled\)/);
+    expect(found[0].body).toMatch(/opacity:\s*1\b/);
   });
 
   it("the asset page's no-data words are not set as a figure", () => {

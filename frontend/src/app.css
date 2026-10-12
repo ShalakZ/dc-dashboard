@@ -138,7 +138,7 @@
   .who[aria-expanded="true"] > svg.i { transform: rotate(180deg); }
   /* White surfaces inside the bar take the content's ring back: the bar's light one is 2.10:1 on white (WCAG 1.4.11 asks 3:1). */
   .prof-menu, .qf-pop { --ring: var(--accent); }
-  .prof-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 90; width: 240px; padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); }
+  .prof-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 90; width: 264px; padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); }
   .prof-menu[hidden] { display: none; }
   .prof-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; padding: 8px 8px 10px; border-bottom: 1px solid var(--border); }
   .prof-head > div { min-width: 0; }
@@ -150,6 +150,15 @@
   .prof-item svg.i { width: 16px; height: 16px; color: var(--text-2); }
   .prof-item:hover, .prof-item:focus-visible { background: var(--accent-tint); text-decoration: none; }
   .prof-item:focus-visible { outline-offset: -2px; }
+  /* The appearance choice: two groups of native radios. `.check` on the label opts it out of the radio-label grid rule, so the swatch and the name stay on one line. */
+  .prof-group { margin: 0; padding: 4px 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; } /* the base fieldset's radius would curl the ends of the rule */
+  .prof-group legend { padding: 4px 10px; color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; }
+  .prof-group .prof-opt { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; font-size: var(--fs-sm); font-weight: 400; }
+  .prof-group .error { margin: 0; padding: 4px 10px; font-size: var(--fs-xs); font-weight: 600; }
+  /* A swatch is the preset's panel colour with its marker colour as a dot; the checked one is also ringed, so the colour is not the only sign. */
+  .prof-opt .swatch { position: relative; flex: none; width: 14px; height: 14px; border-radius: var(--radius-sm); background: var(--sw-bg); box-shadow: 0 0 0 1px var(--border-strong); }
+  .prof-opt .swatch::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--sw-dot); }
+  .prof-opt input:checked ~ .swatch { box-shadow: 0 0 0 2px var(--ring); }
 
   /* The quick find: a field on the chip's lighter navy (its focus ring is the bar's, --side-accent) and a white popup under it (which
      takes the content's ring, above). The field's selector outranks the base input rule, which comes later in the file. The shortcut
@@ -201,6 +210,7 @@
   input:is(:not([type]), [type="text"], [type="password"], [type="number"], [type="date"], [type="time"], [type="datetime-local"], [type="search"], [type="email"], [type="url"]):disabled,
   select:disabled, textarea:disabled { background: var(--surface); color: var(--text-disabled); }
   input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: 0; border-color: var(--ring); }
+  ::placeholder { color: var(--text-disabled); opacity: 1; } /* Chrome's own grey is 3.86:1 on the dark field; the quick find's .qf rule above is more specific */
   input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   /* A label that wraps a checkbox or radio reads as [box] text: the control sits in the first column, whatever its place in the DOM
      (so no visual reordering of anything focusable); a help line under it lines up with the text. The flex variants (.inline,
@@ -407,6 +417,14 @@
   .graph-page > .row { flex: none; margin-bottom: 8px; }
   .graph-layout { flex: 1; min-height: 320px; display: flex; gap: 12px; }
   .graph-canvas { flex: 1; min-width: 0; border: 1px solid var(--border-strong); position: relative; }
+  /* React Flow's own colours (its light and its dark mode) come from --xy-* variables; they are pointed at the page tokens, so both modes and all presets follow the theme. */
+  .graph-canvas .react-flow {
+    --xy-background-color: transparent; --xy-edge-stroke: var(--text-disabled); --xy-background-pattern-dots-color: var(--border-strong);
+    --xy-controls-button-background-color: var(--bg); --xy-controls-button-background-color-hover: var(--surface);
+    --xy-controls-button-color: var(--text); --xy-controls-button-color-hover: var(--text); --xy-controls-button-border-color: var(--border-strong);
+    --xy-edge-label-background-color: var(--bg); --xy-edge-label-color: var(--text-2);
+    --xy-attribution-background-color: var(--surface);
+  }
   .graph-canvas .react-flow__controls button { min-height: 0; border-radius: 0; font-weight: 400; opacity: 1; } /* opacity 1: React Flow dims a disabled zoom button itself, the base disabled rule must not dim it twice */
   .gpanel { width: 320px; flex: none; align-content: start; overflow: auto; margin: 0; }
   .gpanel h2 { margin: 0; font-size: 16px; }

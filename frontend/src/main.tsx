@@ -4,12 +4,14 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import "./app.css";
+import "./themes.css";
 import "./styles/pages-assets.css";
 import "./styles/pages-sources.css";
 import "./styles/pages-billing.css";
 import "./styles/pages-admin.css";
 import "./styles/pages-auth.css";
 import { App } from "./App";
+import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
@@ -22,7 +24,9 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <RouterProvider router={router} />
+        <AppearanceProvider>
+          <RouterProvider router={router} />
+        </AppearanceProvider>
       </AuthProvider>
     </QueryClientProvider>
   </StrictMode>,

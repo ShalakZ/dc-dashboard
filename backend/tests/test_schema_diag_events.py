@@ -89,6 +89,9 @@ async def snapshot(db) -> dict:
 
 async def test_downgrade_drops_only_the_journal_and_upgrade_makes_it_again(db):
     try:
+        # Taken at 0006, where this migration is the newest one: later migrations add to other tables.
+        start = run_alembic("downgrade", "0006")
+        assert start.returncode == 0, start.stderr
         uid = await db.fetchval("INSERT INTO users (username, password_hash, role) VALUES ('a', 'x', 'admin') RETURNING id")
         await db.execute("INSERT INTO audit_log (user_id, action) VALUES ($1, 'kept')", uid)
         await db.execute("INSERT INTO diag_events (level, component, kind, message) VALUES ('info', 'api', 'k', 'lost by design')")
@@ -101,7 +104,7 @@ async def test_downgrade_drops_only_the_journal_and_upgrade_makes_it_again(db):
         assert await snapshot(db) == before  # every other table is identical, including its triggers (0005's)
         assert await db.fetchval("SELECT action FROM audit_log") == "kept"
 
-        up = run_alembic("upgrade", "head")
+        up = run_alembic("upgrade", "0006")
         assert up.returncode == 0, up.stderr
         assert await db.fetchval("SELECT count(*) FROM diag_events") == 0  # empty again: the rows are not kept
         assert await snapshot(db) == before
