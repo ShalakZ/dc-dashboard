@@ -493,6 +493,12 @@ Nine specs run in one `playwright test` run against the dev-profile stack on `ht
   stays, the "Assets" crumb returns to the summary, the tree column resizes by keyboard and keeps its width and its folds across a reload,
   quick find (Ctrl+K) and its Esc keys, the "Live" status chip, Billing and Users at the full width of a 1920 px window, the summary's four
   tiles and "Needs attention", and the profile panel's Sign out with its Cancel.
+- `w7f.spec.ts` (its own project, after `w7e`, at 1600×1000) holds a page's first data request and checks the loading skeletons: one status
+  region per area and none of the content, and the content back with the region gone once the data arrives (an asset page, the summary,
+  the Dashboards list, Users); the skeleton against the loaded page to 2 px (the asset page, the Trend frame's height, the summary at 1440
+  and 1024 px); the stored tree width while the asset list loads; no flash for an answer within 40 ms and a fade-in from nothing for a
+  slow one; no skeleton on a poll, and none after a failed poll; the error alert replacing the skeleton; no sweep under reduced motion;
+  the dark token in dark mode.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1165,6 +1171,27 @@ W7e (theme polish) is front end only:
    colour dropdowns, and choosing Maroon and gold turns the Add asset button maroon in Light mode.
 4. **Going back.** Check out `499fdc5` and rebuild as in step 2. There is no database step: the stored Mode and Theme colour choices
    are the same in both versions.
+
+### Upgrading to W7f (no migration)
+
+Schema stays at `0007`; nothing in the database or the API changes, so there is nothing to restore. The code to go back to is
+`10feba7` (`main` before W7f).
+
+W7f (loading skeletons) is front end only, so only the `web` image changes: while a page waits for its first data it shows quiet grey
+shapes in the layout the data will have (the Assets tree, the summary tiles, the asset page and its chart, the tables of Dashboards,
+Billing, Sources, Scans, Users, Tariffs, Storage and Audit, the forms of Settings and Storage, the dashboard and the Discovery graph)
+instead of a bare "loading..." line. The shapes appear only if the wait lasts longer than about a sixth of a second, so a quick page
+shows none, and only on the first load of a page: the pages that refresh themselves in the background never bring them back, and a
+failed load shows its error as before. Screen readers hear one "Loading ..." line per area. With "reduce motion" switched on in the
+system the shapes do not shimmer. Sign-in, setup, Password and Diagnostics are unchanged, and the dashboard widgets keep their own
+"loading..." line until their own redesign.
+
+1. **Back up first** (a habit here: nothing in the database changes), as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). Only `web` is rebuilt. Reload open browser tabs.
+3. **Verify.** `docker compose exec api alembic current` still prints `0007 (head)`. In the browser's developer tools set the network
+   to "Slow 4G", open the Users page and watch grey bars take the place of the table until the list arrives.
+4. **Going back.** Check out `10feba7` and rebuild as in step 2. There is no database step.
 
 ## Add a connector
 
