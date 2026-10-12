@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { navLink, treeLink } from "./shell";
+import { navLink, rowAction, treeLink } from "./shell";
 
 test("first-run journey: setup, simulator source, map two points, live values", async ({ page }) => {
   // 1. First-run setup
@@ -24,11 +24,11 @@ test("first-run journey: setup, simulator source, map two points, live values", 
   await page.getByRole("button", { name: "Save" }).click();
   const simRow = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "sim", exact: true }) });
   await expect(simRow).toBeVisible();
-  await simRow.getByRole("button", { name: "Test" }).click();
+  await (await rowAction(page, simRow, "Test")).click();
   await expect(simRow).toContainText("online", { timeout: 30_000 });
 
   // 3. Browse points
-  await simRow.getByRole("link", { name: "Points" }).click();
+  await (await rowAction(page, simRow, "Points")).click();
   await expect(page.getByRole("heading", { name: "Points" })).toBeVisible();
   await page.getByRole("button", { name: "Browse points" }).click();
   await expect(page.getByText(/found \d+ points/)).toBeVisible({ timeout: 30_000 });
@@ -45,12 +45,11 @@ test("first-run journey: setup, simulator source, map two points, live values", 
 
   // 5. Map two points to MV2
   await navLink(page, "Sources").click();
-  await page.getByRole("row").filter({ has: page.getByRole("cell", { name: "sim", exact: true }) })
-    .getByRole("link", { name: "Points" }).click();
+  await (await rowAction(page, simRow, "Points")).click();
   await expect(page.getByRole("heading", { name: "Points" })).toBeVisible();
   for (const [address, metric] of [["LVP01_kW", "active_power_kw"], ["LVP01_kWh", "energy_kwh"]] as const) {
     const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: address, exact: true }) });
-    await row.getByRole("button", { name: "Map" }).click();
+    await (await rowAction(page, row, "Map")).click();
     await expect(page.getByRole("heading", { name: `Map ${address}` })).toBeVisible();
     await page.getByLabel("Asset").selectOption({ label: "MV2" });
     await page.getByLabel("Metric").selectOption(metric);
