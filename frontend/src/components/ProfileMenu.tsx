@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { Link } from "react-router";
 import { useAppearance } from "../auth/AppearanceProvider";
 import { useAuth } from "../auth/AuthProvider";
-import { THEMES, type Mode } from "../lib/appearance";
+import { THEMES, type Mode, type ThemeId } from "../lib/appearance";
 import { Icon } from "./Icon";
 import { ROLE_LABEL } from "./navItems";
 import { SignOutDialog } from "./SignOutDialog";
@@ -15,8 +15,8 @@ const MODE_OPTIONS: { id: Mode; label: string }[] = [
 
 /**
  * The signed-in user in the top bar: a button that opens a small panel with the appearance choice, the way to the password page and
- * Sign out. A disclosure, not an ARIA menu (the panel holds radios, a link and a button, plus a heading line), so the keys are the
- * plain ones plus the arrows; Tab walks through it and out of it, which closes it. The arrows on a radio belong to its group.
+ * Sign out. A disclosure, not an ARIA menu (the panel holds two selects, a link and a button, plus a heading line), so the keys are the
+ * plain ones plus the arrows; Tab walks through it and out of it, which closes it. The arrows on a select belong to the select.
  */
 export function ProfileMenu() {
   const { user } = useAuth();
@@ -26,10 +26,13 @@ export function ProfileMenu() {
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const modeId = useId();
+  const themeId = useId();
   const focusFirst = useRef(false); // set by ArrowDown; the panel is still hidden, so the focus moves once it has been shown
 
   const name = user?.username ?? "";
   const role = user ? ROLE_LABEL[user.role] ?? user.role : "";
+  const current = THEMES.find((option) => option.id === theme) ?? THEMES[0];
   const items = () => Array.from(panel.current?.querySelectorAll<HTMLElement>("a[href], button") ?? []);
 
   useEffect(() => {
@@ -71,7 +74,7 @@ export function ProfileMenu() {
   };
   const onPanelKey = (event: KeyboardEvent) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    if (event.target instanceof HTMLInputElement && event.target.type === "radio") return; // the group's own arrows
+    if (event.target instanceof HTMLSelectElement) return; // the select's own arrows change its value; cancelling them would block that
     event.preventDefault();
     const all = items();
     const at = all.indexOf(document.activeElement as HTMLElement);
@@ -115,26 +118,22 @@ export function ProfileMenu() {
               <span className="r">{role}</span>
             </div>
           </div>
-          <fieldset className="prof-group">
-            <legend>Mode</legend>
-            {MODE_OPTIONS.map((option) => (
-              <label key={option.id} className="prof-opt check">
-                <input type="radio" name="appearance-mode" value={option.id} checked={mode === option.id} onChange={() => setMode(option.id)} />
-                {option.label}
-              </label>
-            ))}
-          </fieldset>
-          <fieldset className="prof-group">
-            <legend>Theme colour</legend>
-            {THEMES.map((option) => (
-              <label key={option.id} className="prof-opt check">
-                <input type="radio" name="appearance-theme" value={option.id} checked={theme === option.id} onChange={() => setTheme(option.id)} />
-                <span className="swatch" aria-hidden="true" style={{ "--sw-bg": option.swatch.bg, "--sw-dot": option.swatch.dot } as CSSProperties} />
-                {option.label}
-              </label>
-            ))}
+          <div className="prof-field">
+            <label htmlFor={modeId}>Mode</label>
+            <select id={modeId} value={mode} onChange={(event) => setMode(event.target.value as Mode)}>
+              {MODE_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </select>
+          </div>
+          <div className="prof-field">
+            <label htmlFor={themeId}>Theme colour</label>
+            <div className="prof-pick">
+              <span className="swatch" aria-hidden="true" style={{ "--sw-bg": current.swatch.bg, "--sw-dot": current.swatch.dot } as CSSProperties} />
+              <select id={themeId} value={theme} onChange={(event) => setTheme(event.target.value as ThemeId)}>
+                {THEMES.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </div>
             {error && <p role="alert" className="error">{error}</p>}
-          </fieldset>
+          </div>
           <Link to="/password" className="prof-item" onClick={closeToTrigger}>
             <Icon name="password" />
             <span>Password</span>

@@ -150,15 +150,16 @@
   .prof-item svg.i { width: 16px; height: 16px; color: var(--text-2); }
   .prof-item:hover, .prof-item:focus-visible { background: var(--accent-tint); text-decoration: none; }
   .prof-item:focus-visible { outline-offset: -2px; }
-  /* The appearance choice: two groups of native radios. `.check` on the label opts it out of the radio-label grid rule, so the swatch and the name stay on one line. */
-  .prof-group { margin: 0; padding: 4px 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; } /* the base fieldset's radius would curl the ends of the rule */
-  .prof-group legend { padding: 4px 10px; color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; }
-  .prof-group .prof-opt { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; font-size: var(--fs-sm); font-weight: 400; }
-  .prof-group .error { margin: 0; padding: 4px 10px; font-size: var(--fs-xs); font-weight: 600; }
-  /* A swatch is the preset's panel colour with its marker colour as a dot; the checked one is also ringed, so the colour is not the only sign. */
-  .prof-opt .swatch { position: relative; flex: none; width: 14px; height: 14px; border-radius: var(--radius-sm); background: var(--sw-bg); box-shadow: 0 0 0 1px var(--border-strong); }
-  .prof-opt .swatch::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--sw-dot); }
-  .prof-opt input:checked ~ .swatch { box-shadow: 0 0 0 2px var(--ring); }
+  /* The appearance choice: two labelled native selects. The Theme colour one has a chip of the preset beside it: the preset's panel
+     colour with its marker colour as a dot. */
+  .prof-field { display: grid; gap: 6px; padding: 8px 10px 10px; border-bottom: 1px solid var(--border); }
+  .prof-field label { color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; }
+  .prof-field select { width: 100%; min-width: 0; min-height: 36px; font-size: var(--fs-sm); }
+  .prof-field .error { margin: 0; font-size: var(--fs-xs); font-weight: 600; }
+  .prof-pick { display: flex; align-items: center; gap: 8px; }
+  .prof-pick select { flex: 1; }
+  .prof-pick .swatch { position: relative; flex: none; width: 14px; height: 14px; border-radius: var(--radius-sm); background: var(--sw-bg); box-shadow: 0 0 0 1px var(--border-strong); }
+  .prof-pick .swatch::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--sw-dot); }
 
   /* The quick find: a field on the chip's lighter navy (its focus ring is the bar's, --side-accent) and a white popup under it (which
      takes the content's ring, above). The field's selector outranks the base input rule, which comes later in the file. The shortcut
