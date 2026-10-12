@@ -20,6 +20,10 @@ export const ICONS = {
   collapse: <><path d="M4 4v16" /><path d="m15 7-5 5 5 5" /><path d="M10 12h10" /></>,
   caret: <path d="m7 9 5 5 5-5" />,
   search: <><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4-4" /></>,
+  more: <><circle cx="5" cy="12" r="1.3" /><circle cx="12" cy="12" r="1.3" /><circle cx="19" cy="12" r="1.3" /></>,
+  // The lid is its own group so the trash button can lift and tilt it about its left end (app.css, `.trash-btn .lid`).
+  trash: <><path d="M6.5 9.5 7.4 20h9.2l.9-10.5" /><path d="M10 12.5v5M14 12.5v5" /><g className="lid"><path d="M4 6.5h16" /><path d="M9 6.5V4h6v2.5" /></g></>,
+  help: <><circle cx="12" cy="12" r="9" /><path d="M9.6 9.6a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1.1.9-1.1 1.7" /><path d="M12 17h.01" /></>,
 } satisfies Record<string, ReactNode>;
 export type IconName = keyof typeof ICONS;
 
