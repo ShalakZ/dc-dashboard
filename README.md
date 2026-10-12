@@ -1046,6 +1046,24 @@ The `api` container applies it the first time it starts from the new image.
      the old commit (see step 5 of option b in "Upgrading and going back"). `--force` is needed: the volume
      still holds the W1a database (`0005`) and the dump's `.version` says `0004`, so the script refuses without it.
 
+### Upgrading to W8 (migration 0006)
+
+Schema `0005` to `0006`. Downgrade: **lossless** for every other table (the dropped table only holds diagnostics), so option a is open.
+The code to go back to is `b933bc7` (`main` before W8).
+
+W8 (field diagnostics) adds migration `0006`: one new table, `diag_events`, the persistent event journal behind the Diagnostics report
+(connection transitions, job results, check results, API errors), with two indexes. It runs in a moment and needs no pre-check. The
+collector's hourly housekeeping keeps at most 14 days and 20 000 rows of it. The `api` container applies the migration the first time it
+starts from the new image.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0005`).
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you.
+3. **Verify.** `docker compose exec api alembic current` prints `0006 (head)`; the Settings page shows "Version <id>".
+4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0005` and `<old commit>` = `b933bc7`. The `0006`
+   downgrade drops `diag_events`; nothing else changes, and `upgrade` creates it empty again. A restart of the W8 `api` would run
+   `alembic upgrade head` and apply `0006` again, so the W8 `api` must not be running once the schema is back at `0005`.
+
 ## Add a connector
 
 Create `backend/dcdash/connectors/<name>.py` with a `Connector` subclass
