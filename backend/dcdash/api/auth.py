@@ -221,8 +221,14 @@ async def set_my_preferences(
     # The lock makes two simultaneous requests for different keys queue, so the second merges into the first's result.
     # populate_existing re-reads the row under the lock; db.refresh(with_for_update=True) would raise, not answer 401,
     # when the account was deleted after authentication.
+    # An account deactivated since authentication is refused too, as one that is gone.
     locked = (
-        await db.execute(select(User).where(User.id == user.id).with_for_update().execution_options(populate_existing=True))
+        await db.execute(
+            select(User)
+            .where(User.id == user.id, User.active.is_(True))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one_or_none()
     if locked is None:
         await db.rollback()

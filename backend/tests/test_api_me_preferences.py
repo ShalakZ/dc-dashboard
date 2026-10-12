@@ -281,3 +281,23 @@ async def test_an_account_deleted_between_authentication_and_the_lock_answers_40
     assert await db.fetchval("SELECT count(*) FROM audit_log") == 0
     await asyncio.sleep(0.2)
     assert await db.fetchval("SELECT count(*) FROM diag_events WHERE kind = 'http.5xx'") == 0
+
+
+async def test_an_account_deactivated_between_authentication_and_the_lock_answers_401(client, db, app, monkeypatch):
+    app.state.pool = db
+    await login_as(client, db, "viewer")
+    real = deps_module.authenticate
+
+    async def authenticate_then_deactivate(request, session):
+        user = await real(request, session)
+        await db.execute("UPDATE users SET active = false WHERE username = 'viewer'")  # refused everywhere before the route takes its lock
+        return user
+
+    monkeypatch.setattr(deps_module, "authenticate", authenticate_then_deactivate)
+    response = await client.put(URL, json={"mode": "dark"})
+    assert response.status_code == 401, response.text
+    assert response.json() == {"detail": "not authenticated"}
+    assert await stored(db, "viewer") == {}
+    assert await db.fetchval("SELECT count(*) FROM audit_log") == 0
+    await asyncio.sleep(0.2)
+    assert await db.fetchval("SELECT count(*) FROM diag_events WHERE kind = 'http.5xx'") == 0
