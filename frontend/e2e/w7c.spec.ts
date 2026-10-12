@@ -175,11 +175,14 @@ test.describe("W7c: the default dashboard", () => {
     });
 
     await test.step("a lost session (no sign-out) still remembers the page it was on", async () => {
-      await page.context().clearCookies();
       await page.goto("/billing");
+      await expect(heading1(page, "Billing")).toBeVisible();
+      await page.context().clearCookies();
+      // No reload: the next in-app request gets the 401 (the path AuthProvider's unauthorized handler takes). Tariffs asks the server at once.
+      await navLink(page, "Tariffs").click();
       await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
       await signIn(page, ADMIN);
-      await expect(page).toHaveURL(onPath("/billing"));
+      await expect(page).toHaveURL(onPath("/tariffs"));
     });
 
     await test.step("an operator sees the badge and the trash button but no Actions menu; a viewer sees the badge and no Actions column", async () => {
