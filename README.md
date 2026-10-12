@@ -146,8 +146,9 @@ UI screens, besides Assets, Sources and Points:
 - **Audit** (admin): the read-only audit log, newest first, 50 entries per page. Changes to configuration
   and access are recorded with who did it (the name stays even after the account is deleted), when, and for
   updates the values before and after; sign-in successes, failures and lockouts are recorded too.
-- **Dashboards** (everyone can read; operators and admins build): shared dashboards of widgets; see
-  "Dashboards and billing".
+- **Dashboards** (everyone can read; operators and admins build): shared dashboards of widgets; an
+  admin can mark one as the default, and the sidebar entry and the first page after signing in then open
+  it; see "Dashboards and billing".
 - **Billing** (everyone): cost per asset per day and per month, with a CSV export.
 - **Tariffs** (admin): the site currency and the rates that cost is calculated with.
 
@@ -309,6 +310,7 @@ Roles are enforced by the API; the screens only hide what you cannot use.
 |---|---|---|---|
 | Open dashboards and Billing, export CSV | yes | yes | yes |
 | Create, edit and delete dashboards | no | yes | yes |
+| Choose the default dashboard (Dashboards list, row menu) | no | no | yes |
 | Read tariffs (through the API; operators have no Tariffs screen) | no | yes | yes |
 | Set tariffs and the currency (Tariffs screen) | no | no | yes |
 
@@ -338,7 +340,19 @@ text starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading
 spreadsheets do not run it as a formula). Custom metrics are not available in widgets; they stay on the
 asset page. A metric widget offers only assets that have a mapping for that metric.
 
-**Billing** shows one month at a time (previous and next month; the current month by default) as the
+**The default dashboard** is one dashboard an admin picks in the Dashboards list (the `⋯` menu of a row:
+**Make default**, or **Clear default** on the one that is). It carries a `Default` badge. The sidebar's
+Dashboards entry then opens it directly and so does the first page after signing in (a page you were sent
+away from when your session expired still wins; a deliberate sign-out forgets the page, so signing in
+again lands on the default). The list of all dashboards stays one click away: the **Dashboards** crumb
+above the dashboard, or the Quick find entry. With no default set, the entry opens the list and the first
+page is Assets. Deleting the default dashboard clears the choice (the audit row says so); choosing, switching
+and clearing it are audited as `dashboard.default_changed`. An open page learns of a change within a minute
+or when you return to its window.
+
+**Billing** shows one month at a time (previous and next month, or the Year and Month selects beside them
+to jump straight to a month; the years start at the first month with energy data; the current month by
+default) as the
 asset tree by day: kWh above, cost below, then the month total and the rate in effect. `~` marks a
 figure estimated from power and `*` a partial cost (some energy in the period had no rate). A dash means
 one thing: there is no rate for that cost, and a missing rate is never shown as zero. An empty cell is an
