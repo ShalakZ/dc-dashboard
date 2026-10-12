@@ -1106,6 +1106,35 @@ describe("the app-shell skeleton (W7h)", () => {
       expect(markup).not.toContain("side-toggle");
     });
 
+    // If the app's script never runs (a blocked or missing chunk, a stale cached page) the copy would stay for ever and read as a slow load.
+    // The hint is CSS content of the copy's main, scoped to `[hidden]` (React's skeleton has none, so it can never show it), invisible for
+    // 15 s: an animation delay with `both` holds the first keyframe through the delay. Reduced motion keeps it: a delay is not motion.
+    it("says after 15 s that the page is still loading, in CSS content of the static copy's main only", () => {
+      const hint = only(".sk-shell[hidden] main::after");
+      expect(inLayer(hint)).toBe(true);
+      expect(hint.body).toMatch(/content:\s*"Still loading\. If this stays, reload the page\."/);
+      expect(hint.body).toMatch(/display:\s*block/);
+      expect(hint.body).toMatch(/padding-top:\s*var\(--gutter\)/);
+      expect(hint.body).toMatch(/color:\s*var\(--text-2\)/);
+      expect(hint.body).toMatch(/font-size:\s*var\(--fs-sm\)/);
+      expect(hint.body).toMatch(/opacity:\s*0\s*;/);
+      expect(hint.body).toMatch(/animation:\s*sk-hint-in\s+200ms\s+linear\s+15s\s+both\s*;?\s*$/);
+      expect(hint.body).not.toMatch(/var\(--accent|var\(--ring/);
+      const frames = rules.filter((r) => r.at.some((a) => a === "@keyframes sk-hint-in"));
+      expect(frames.map((r) => r.selector).sort()).toEqual(["from", "to"]);
+      expect(frames.find((r) => r.selector === "from")!.body).toMatch(/opacity:\s*0/);
+      expect(frames.find((r) => r.selector === "to")!.body).toMatch(/opacity:\s*1/);
+      for (const frame of frames) expect(inLayer(frame), "keyframe in the layer").toBe(true);
+    });
+
+    it("the hint is not in the DOM (the markup holds no sentence) and no other rule can show it", () => {
+      expect(markup).not.toContain("Still loading");
+      expect(readFileSync("index.html", "utf8")).not.toContain("Still loading");
+      expect(rules.filter((r) => r.selector.includes("::after") && r.selector.includes("main") && r.selector.includes("sk-shell")).map((r) => r.selector)).toEqual([".sk-shell[hidden] main::after"]);
+      const calm = rules.filter((r) => r.at.some((a) => a.includes("prefers-reduced-motion")) && r.selector.includes("sk-shell"));
+      expect(calm, "reduced motion keeps the delay").toEqual([]);
+    });
+
     it("every minimized rule the skeleton uses has a twin with the same declarations", () => {
       expect(sources.length, "the minimized rules").toBeGreaterThanOrEqual(7); // --side-w, the three hides, .brand, .nav-groups, .nav-group + .nav-group, .side-row, .side-foot
       for (const source of sources) {

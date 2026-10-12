@@ -499,6 +499,12 @@
   :root[data-shell="minimized"] .sk-shell[hidden] .side-row { justify-content: center; padding: 0; }
   :root[data-shell="minimized"] .sk-shell[hidden] .side-foot { padding: 10px; }
 
+  /* If the app's script never runs (a blocked or missing chunk, a stale cached page) the static copy stays for ever and looks like a slow load.
+     After 15 s it says so, in its main: CSS content (the markup holds no text), scoped to [hidden] so React's skeleton can never show it. The
+     animation's `both` holds the first keyframe through the delay; reduced motion keeps it (a delay is not motion, and 200 ms is a fade). */
+  .sk-shell[hidden] main::after { content: "Still loading. If this stays, reload the page."; display: block; padding-top: var(--gutter); color: var(--text-2); font-size: var(--fs-sm); opacity: 0; animation: sk-hint-in 200ms linear 15s both; }
+  @keyframes sk-hint-in { from { opacity: 0; } to { opacity: 1; } }
+
   /* Discovery graph. The page is exactly one window tall (the shell: the bar, then the frame with main beside the sidebar), and
      the canvas takes what the header leaves, so nothing scrolls and nothing at the canvas edge is clipped. A canvas is never
      shorter than 320px (the page scrolls then). */
