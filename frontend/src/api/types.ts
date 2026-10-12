@@ -1,7 +1,11 @@
+import type { Appearance } from "../lib/appearance";
+
 export type Role = "viewer" | "operator" | "admin";
 export const ROLE_LEVEL: Record<Role, number> = { viewer: 0, operator: 1, admin: 2 };
 
-export interface User { id: number; username: string; role: Role }
+/** The account's appearance choice, as /api/me, /api/login, /api/setup and PUT /api/me/preferences answer it. */
+export type Preferences = Appearance;
+export interface User { id: number; username: string; role: Role; preferences: Preferences }
 
 export interface Asset { id: number; parent_id: number | null; name: string; kind: string; sort_order: number }
 export interface AssetIn { name: string; parent_id: number | null; kind: string; sort_order: number }

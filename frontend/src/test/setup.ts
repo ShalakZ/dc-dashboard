@@ -10,6 +10,10 @@ if (dom) Object.defineProperty(globalThis, "localStorage", { value: dom.window.l
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  if (typeof document !== "undefined") { // the look the appearance provider put on <html>
+    document.documentElement.removeAttribute("data-mode");
+    document.documentElement.removeAttribute("data-theme");
+  }
   dom?.window.localStorage.clear(); // jsdom keeps it for a whole test file: a saved sidebar state must not leak into the next test (the node-environment SSR files have no dom)
 });
 

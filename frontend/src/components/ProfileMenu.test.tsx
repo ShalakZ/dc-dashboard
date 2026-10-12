@@ -7,8 +7,9 @@ import { ProfileMenu } from "./ProfileMenu";
 
 const SESSION: Routes = {
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "admin", role: "admin" } },
+  "GET /api/me": { body: { id: 1, username: "admin", role: "admin", preferences: { mode: "light", theme: "navy-gold" } } },
   "POST /api/logout": { status: 204 },
+  "PUT /api/me/preferences": { body: { mode: "light", theme: "navy-gold" } },
 };
 
 /** The menu in a banner, with a focusable button after it (the place Tab goes when it leaves the widget). */
@@ -53,7 +54,7 @@ describe("ProfileMenu trigger", () => {
   });
 
   it("writes the role out in words", async () => {
-    mockFetch({ ...SESSION, "GET /api/me": { body: { id: 2, username: "pat", role: "viewer" } } });
+    mockFetch({ ...SESSION, "GET /api/me": { body: { id: 2, username: "pat", role: "viewer", preferences: { mode: "light", theme: "navy-gold" } } } });
     renderWithProviders(<ProfileMenu />, { route: "/assets" });
     expect(await screen.findByRole("button", { name: "pat Viewer" })).toBeInTheDocument();
   });
@@ -108,6 +109,10 @@ describe("ProfileMenu panel", () => {
     const { trigger, panel } = await mount();
     await userEvent.click(trigger);
     await userEvent.tab();
+    expect(screen.getByRole("radio", { name: "Light" })).toHaveFocus(); // one stop per group: the checked radio
+    await userEvent.tab();
+    expect(screen.getByRole("radio", { name: "Navy and gold" })).toHaveFocus();
+    await userEvent.tab();
     expect(screen.getByRole("link", { name: "Password" })).toHaveFocus();
     await userEvent.tab();
     expect(screen.getByRole("button", { name: "Sign out" })).toHaveFocus();
@@ -152,6 +157,130 @@ describe("ProfileMenu panel", () => {
     expect(panel()).toHaveAttribute("hidden");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(trigger).toHaveFocus();
+  });
+});
+
+describe("ProfileMenu appearance", () => {
+  const radios = (group: string) => within(screen.getByRole("group", { name: group })).getAllByRole("radio");
+  const names = (list: HTMLElement[]) => list.map((radio) => radio.closest("label")?.textContent);
+  /** A server that keeps what it was sent and answers the whole, as PUT /api/me/preferences does. */
+  const savingServer = (): Routes => {
+    const stored: Record<string, unknown> = { mode: "light", theme: "navy-gold" };
+    return { "PUT /api/me/preferences": ({ body }) => ({ body: Object.assign(stored, body) }) };
+  };
+  const puts = (calls: { method: string; path: string; body: unknown }[]) => calls.filter((c) => c.method === "PUT" && c.path === "/api/me/preferences").map((c) => c.body);
+
+  it("holds a Mode group and a Theme colour group between the name block and Password, under exactly those two legends", async () => {
+    const { trigger, panel } = await mount();
+    await userEvent.click(trigger);
+    const groups = Array.from(panel().querySelectorAll("fieldset.prof-group"));
+    expect(groups.map((group) => group.querySelector("legend")?.textContent)).toEqual(["Mode", "Theme colour"]);
+    const order = Array.from(panel().children);
+    expect(order.indexOf(panel().querySelector(".prof-head") as Element)).toBeLessThan(order.indexOf(groups[0]));
+    expect(order.indexOf(groups[1])).toBeLessThan(order.indexOf(panel().querySelector("a[href='/password']") as Element));
+    expect(panel()).not.toHaveTextContent(/appearance/i); // the two legends are the only words
+    expect(screen.getByRole("group", { name: "Mode" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Theme colour" })).toBeInTheDocument();
+  });
+
+  it("names the radios exactly, in order, and checks the account's choice", async () => {
+    const { trigger } = await mount();
+    await userEvent.click(trigger);
+    expect(names(radios("Mode"))).toEqual(["Light", "Dark", "Match my device"]);
+    expect(names(radios("Theme colour"))).toEqual(["Navy and gold", "Maroon and gold", "Graphite", "Desert gold"]);
+    for (const label of ["Light", "Dark", "Match my device", "Navy and gold", "Maroon and gold", "Graphite", "Desert gold"]) {
+      expect(screen.getByRole("radio", { name: label })).toHaveAccessibleName(label);
+    }
+    expect(radios("Mode").map((radio) => (radio as HTMLInputElement).checked)).toEqual([true, false, false]);
+    expect(radios("Theme colour").map((radio) => (radio as HTMLInputElement).checked)).toEqual([true, false, false, false]);
+  });
+
+  it("builds each row as a label with the check class: the radio first, then (themes only) a decorative swatch, then the text", async () => {
+    const { trigger } = await mount();
+    await userEvent.click(trigger);
+    const modeNames = new Set(radios("Mode").map((radio) => (radio as HTMLInputElement).name));
+    const themeNames = new Set(radios("Theme colour").map((radio) => (radio as HTMLInputElement).name));
+    expect(modeNames.size).toBe(1); // one name per group, so the arrow keys walk the group
+    expect(themeNames.size).toBe(1);
+    expect([...modeNames][0]).not.toBe([...themeNames][0]);
+    for (const radio of [...radios("Mode"), ...radios("Theme colour")]) {
+      const label = radio.closest("label") as HTMLElement;
+      expect(label).toHaveClass("prof-opt", "check");
+      expect(label.firstElementChild).toBe(radio);
+    }
+    for (const radio of radios("Mode")) expect(radio.closest("label")?.querySelector(".swatch")).toBeNull();
+    const maroon = screen.getByRole("radio", { name: "Maroon and gold" }).closest("label") as HTMLElement;
+    const swatch = maroon.querySelector(".swatch") as HTMLElement;
+    expect(swatch).toHaveAttribute("aria-hidden", "true");
+    expect(swatch.previousElementSibling).toBe(screen.getByRole("radio", { name: "Maroon and gold" }));
+    expect(swatch.style.getPropertyValue("--sw-bg")).toBe("#7d0849");
+    expect(swatch.style.getPropertyValue("--sw-dot")).toBe("#deb406");
+    expect(swatch).toHaveTextContent("");
+  });
+
+  it("choosing a radio applies it, saves only that key, and never closes the panel", async () => {
+    const { calls, trigger, panel } = await mount(savingServer());
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole("radio", { name: "Dark" }));
+    expect(screen.getByRole("radio", { name: "Dark" })).toBeChecked();
+    expect(document.documentElement.getAttribute("data-mode")).toBe("dark");
+    expect(panel()).not.toHaveAttribute("hidden");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(puts(calls)).toEqual([{ mode: "dark" }]));
+    await userEvent.click(screen.getByRole("radio", { name: "Graphite" }));
+    expect(document.documentElement.getAttribute("data-theme")).toBe("graphite");
+    expect(panel()).not.toHaveAttribute("hidden");
+    await waitFor(() => expect(puts(calls)).toEqual([{ mode: "dark" }, { theme: "graphite" }]));
+  });
+
+  it("the arrow keys change the selection inside a group, keep the focus there, and are not taken by the panel's own walk", async () => {
+    const { calls, trigger, panel } = await mount(savingServer());
+    await userEvent.click(trigger);
+    await userEvent.tab();
+    expect(screen.getByRole("radio", { name: "Light" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radio", { name: "Dark" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Dark" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radio", { name: "Match my device" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}{ArrowUp}");
+    expect(screen.getByRole("radio", { name: "Light" })).toHaveFocus();
+    expect(screen.getByRole("radio", { name: "Light" })).toBeChecked();
+    expect(panel()).not.toHaveAttribute("hidden");
+    await waitFor(() => expect(puts(calls).length).toBeGreaterThan(0));
+    expect(puts(calls)[0]).toEqual({ mode: "dark" });
+  });
+
+  it("Escape from a radio closes the panel and puts the focus on the trigger; ArrowDown on the trigger still lands on Password", async () => {
+    const { trigger, panel } = await mount();
+    await userEvent.click(trigger);
+    await userEvent.tab();
+    expect(screen.getByRole("radio", { name: "Light" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(panel()).toHaveAttribute("hidden");
+    expect(trigger).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("link", { name: "Password" })).toHaveFocus();
+  });
+
+  it("shows no error line until a save fails, then one alert under the Theme colour group; the next good save clears it", async () => {
+    let fail = true;
+    const { trigger } = await mount({
+      "PUT /api/me/preferences": () => (fail ? { status: 500, body: { detail: "boom" } } : { body: { mode: "light", theme: "graphite" } }),
+    });
+    await userEvent.click(trigger);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: "Graphite" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Not saved. Check the connection and try again.");
+    expect(alert.tagName).toBe("P");
+    expect(alert).toHaveClass("error");
+    expect(screen.getByRole("group", { name: "Theme colour" })).toContainElement(alert);
+    expect(screen.getByRole("radio", { name: "Navy and gold" })).toBeChecked(); // put back
+    fail = false;
+    await userEvent.click(screen.getByRole("radio", { name: "Graphite" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByRole("radio", { name: "Graphite" })).toBeChecked();
   });
 });
 

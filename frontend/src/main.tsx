@@ -11,6 +11,7 @@ import "./styles/pages-billing.css";
 import "./styles/pages-admin.css";
 import "./styles/pages-auth.css";
 import { App } from "./App";
+import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
@@ -23,7 +24,9 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <RouterProvider router={router} />
+        <AppearanceProvider>
+          <RouterProvider router={router} />
+        </AppearanceProvider>
       </AuthProvider>
     </QueryClientProvider>
   </StrictMode>,

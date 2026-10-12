@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router";
+import { AppearanceProvider } from "../auth/AppearanceProvider";
 import { AuthProvider } from "../auth/AuthProvider";
 import "./routerRequestShim";
 
@@ -11,11 +12,13 @@ export function renderWithProviders(ui: ReactElement, { route = "/", path = "*" 
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[route]}>
         <AuthProvider>
-          <Routes>
-            <Route path={path} element={ui} />
-            <Route path="/login" element={<p>login page</p>} />
-            <Route path="/setup" element={<p>setup page</p>} />
-          </Routes>
+          <AppearanceProvider>
+            <Routes>
+              <Route path={path} element={ui} />
+              <Route path="/login" element={<p>login page</p>} />
+              <Route path="/setup" element={<p>setup page</p>} />
+            </Routes>
+          </AppearanceProvider>
         </AuthProvider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -40,7 +43,9 @@ export function renderWithDataRouter(
   const result = render(
     <QueryClientProvider client={client}>
       <AuthProvider>
-        <RouterProvider router={router} />
+        <AppearanceProvider>
+          <RouterProvider router={router} />
+        </AppearanceProvider>
       </AuthProvider>
     </QueryClientProvider>,
   );
