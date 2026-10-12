@@ -744,6 +744,196 @@ def test_docker_clock_without_containers_is_skipped(run, hung_docker_run):
     assert _section(next(iter(hung_docker_run[1].values())), "DOCKER CLOCK") == ["skipped (no containers)"]
 
 
+# ---- W8c part 3: -Mask -------------------------------------------------------------------------------------------------
+
+DOMAIN_SETUP = "$env:USERDNSDOMAIN = 'meeza.local'"   # set INSIDE PowerShell: a variable set in WSL does not reach it
+MASK_NOTE = "masking: ON (addresses, host names, user and folder names appear as HOST-n, USER-1, PATH-n)"
+
+
+def _ps_arg(arg: str) -> str:
+    return arg if arg.startswith("-") else "'" + arg.replace("'", "''") + "'"   # a quoted '-Mask' would be a value, not the switch
+
+
+def _run_in_powershell(args: list[str], cwd: Path, project: Path, timeout: int = 180) -> subprocess.CompletedProcess:
+    """Like _run_script, but through -Command so that USERDNSDOMAIN can be set first."""
+    command = f"{DOMAIN_SETUP}; & '{_win(SCRIPT)}' {' '.join(map(_ps_arg, args))} -ProjectDir '{_win(project)}'; exit $LASTEXITCODE"
+    return subprocess.run(
+        [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        capture_output=True, text=True, timeout=timeout, cwd=str(cwd),
+    )
+
+
+def _has_word(text: str, word: str) -> bool:
+    """A whole word, in any case: a user named `user` or `admin` must not fail on `user:` or `admin.api` by substring."""
+    return re.search(rf"(?<![A-Za-z0-9_]){re.escape(word)}(?![A-Za-z0-9_])", text, re.I) is not None
+
+
+@pytest.fixture(scope="module")
+def who(scratch):
+    """What this machine is called, read by PowerShell itself: computer, user, USERDOMAIN and the IPv4 addresses of the adapters that are up."""
+    command = (
+        "$ips = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | "
+        "Where-Object { $_.OperationalStatus -eq 'Up' -and $_.NetworkInterfaceType -ne 'Loopback' } | "
+        "ForEach-Object { $_.GetIPProperties().UnicastAddresses } | Where-Object { $_.Address.AddressFamily -eq 'InterNetwork' } | "
+        "ForEach-Object { [string]$_.Address }); ($env:COMPUTERNAME, $env:USERNAME, $env:USERDOMAIN, ($ips -join ',')) -join '|'"
+    )
+    out = subprocess.run([POWERSHELL, "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=60).stdout.strip()
+    computer, user, domain, ips = (out.split("|") + ["", "", "", ""])[:4]
+    if len(computer) < 3 or len(user) < 3:
+        pytest.skip("the computer or user name is shorter than 3 characters: the script does not register such names")
+    words = [w for w in dict.fromkeys([computer, user, domain, *ips.split(",")]) if len(w) >= 3]
+    return {"computer": computer, "user": user, "words": words}
+
+
+def _mask_logs(who: dict) -> dict[str, list[str]]:
+    return {
+        "db": _prefixed("db", [
+            "time source dc01.meeza.local", "peer scada02.meeza.local:4840", "connection from 10.1.2.3",
+            "host scada01.meeza.local refused", f"user {who['user']} failed", f"node {who['computer']} ready",
+            "source opc.tcp://svc:Zq9-pw-zzz@scada01.meeza.local:4840/ rejected", "second look at SCADA01.MEEZA.LOCAL",
+        ]),
+        "api": _prefixed("api", ["api is up"]),
+    }
+
+
+@pytest.fixture(scope="module")
+def mask_runs(scratch, who):
+    """The same fake project with -Mask and without: (completed process, saved files by name)."""
+    def one(flags: list[str]):
+        fake, project, out_dir = scratch("dcdash-diag-fake-"), scratch("dcdash-diag-project-"), scratch()
+        _compose_project(project)
+        docker = _fake_docker(fake, answers=True, logs=_mask_logs(who))
+        proc = _run_in_powershell(["scada01.meeza.local:4840", "127.0.0.1:1", "-OutDir", _win(out_dir), "-DockerPath", _win(docker), *flags], out_dir, project)
+        return proc, {f.name: f.read_bytes().decode("utf-8") for f in sorted(out_dir.glob("dcdash-diag-*.txt"))}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        masked, plain = pool.map(one, (["-Mask"], []))
+    return {"masked": masked, "plain": plain}
+
+
+@needs_powershell
+def test_masked_files_name_nothing_of_this_machine_or_the_sources(mask_runs, who):
+    proc, files = mask_runs["masked"]
+    assert proc.returncode == 0, proc.stderr
+    main, logs = _main_and_logs(files)
+    for name, text in files.items():
+        for word in who["words"]:
+            assert not _has_word(text, word), (name, word)
+        low = text.lower()
+        assert "meeza" not in low, name
+        for original in ("scada01", "scada02", "dc01", "10.1.2.3", "zq9-pw-zzz", "hq7-db-pass", "zk-9999-secret", "zz9-urlpw"):
+            assert original not in low, (name, original)
+    assert "section failed" not in main
+    for name in SECTIONS:
+        assert re.search(rf"^== {name}\b", main, re.M), name   # an ordinary word of the report ("local", "api") is not an alias
+    assert MASK_NOTE in main.splitlines() and MASK_NOTE in logs.splitlines()
+    _assert_footer_verifies(main)
+    _assert_footer_verifies(logs)
+
+
+@needs_powershell
+def test_one_name_has_one_alias_everywhere_and_each_name_its_own(mask_runs, who):
+    main, logs = _main_and_logs(mask_runs["masked"][1])
+
+    def alias(text: str, pattern: str) -> str:
+        found = re.search(pattern, text, re.M)
+        assert found, pattern
+        return found.group(1)
+
+    scada01 = {
+        alias(main, r"^target (HOST-\d+):4840$"), alias(logs, r"^db-1  \| host (HOST-\d+) refused$"),
+        alias(logs, r"^db-1  \| source opc\.tcp://\[hidden\]@(HOST-\d+):4840/ rejected$"), alias(logs, r"^db-1  \| second look at (HOST-\d+)$"),
+    }
+    assert len(scada01) == 1, scada01
+    others = [alias(logs, r"^db-1  \| time source (HOST-\d+)$"), alias(logs, r"^db-1  \| peer (HOST-\d+):4840$"),
+              alias(logs, r"^db-1  \| connection from (HOST-\d+)$"), *scada01]
+    assert len(set(others)) == 4, others   # dc01.meeza.local is ONE alias, not scada01's and not the domain's
+    assert f"db-1  | node HOST-1 ready" in logs.splitlines() and "db-1  | user USER-1 failed" in logs.splitlines()
+    assert any(l.startswith("computer: HOST-1  user: USER-1  cpus: ") for l in main.splitlines())
+
+
+@needs_powershell
+def test_the_legend_is_printed_on_the_screen_only(mask_runs, who):
+    proc, files = mask_runs["masked"]
+    head = "MASK LEGEND (screen only; do not paste)"
+    assert proc.stdout.count(head) == 1
+    before, legend = proc.stdout.split(head)
+    assert len(re.findall(r"^saved: ", before, re.M)) == 2 and before.rstrip().splitlines()[-1].startswith("saved: ")
+    rows = [l for l in legend.splitlines() if l.strip()]
+    entries = dict(re.findall(r"^((?:HOST|USER|PATH)-\d+) = (.+)$", legend, re.M))
+    assert len(rows) == len(entries) > 0, "nothing but alias = original lines after the heading, to the end of the output"
+    assert entries["HOST-1"] == who["computer"] and entries["USER-1"] == who["user"]
+    originals = list(entries.values())
+    for original in ("scada01.meeza.local", "scada02.meeza.local", "dc01.meeza.local", "10.1.2.3"):
+        assert originals.count(original) == 1, original
+    assert any(key.startswith("PATH-") for key in entries)
+    for text in files.values():
+        assert head not in text and not re.search(r"^(HOST|USER|PATH)-\d+ = ", text, re.M)
+        assert not any(value in text for value in entries.values() if len(value) > 6), "no original in the files"
+
+
+@needs_powershell
+def test_without_mask_the_originals_show_and_there_is_no_legend(mask_runs):
+    proc, files = mask_runs["plain"]
+    assert proc.returncode == 0, proc.stderr
+    main, logs = _main_and_logs(files)
+    assert "MASK LEGEND" not in proc.stdout and "masking:" not in main + logs
+    assert "target scada01.meeza.local:4840" in main
+    assert "db-1  | host scada01.meeza.local refused" in logs and "db-1  | connection from 10.1.2.3" in logs
+    assert "opc.tcp://[hidden]@scada01.meeza.local:4840/ rejected" in logs
+    for text in (proc.stdout, proc.stderr, *files.values(), *mask_runs["masked"][1].values(), mask_runs["masked"][0].stdout):
+        assert "Zq9-pw-zzz" not in text and "Hq7-db-pass" not in text
+
+
+_MASK_CASES = [   # (text, a regular expression the masked line must fully match; \1 repeats an alias)
+    ("node scada01.site.local up | scada01x | xscada01 | SCADA01.Site.Local", r"node (HOST-\d+) up \| scada01x \| xscada01 \| \1"),
+    ("scada01:4840 and scada01", r"(HOST-\d+):4840 and \1"),
+    ("dc01.meeza.local MEEZA.LOCAL notmeeza.local dc01.MEEZA.local", r"(HOST-\d+) (?!\1)(HOST-\d+) notmeeza\.local \1"),
+    ("ns=6;s=::AsGlobalPV 09:21:11.968 999.1.1.1 256.1.1.1 1.2.3.4.5 1A:2B:3C:4D:5E:6F", r"ns=6;s=::AsGlobalPV 09:21:11\.968 999\.1\.1\.1 256\.1\.1\.1 1\.2\.3\.4\.5 1A:2B:3C:4D:5E:6F"),
+    ("peer 10.1.2.3 and 10.1.2.3:4840 and 010.001.002.003", r"peer (HOST-\d+) and \1:4840 and \1"),
+    ("v6 [2001:db8::1]:4840 fe80::1%12 fe80::1", r"v6 (HOST-\d+):4840 (?!\1)(HOST-\d+) \2"),
+    ("url opc.tcp://svc:pw@fileserver.corp:4840/x https://[2001:db8::2]/y", r"url opc\.tcp://\[hidden\]@(HOST-\d+):4840/x https://(?!\1)(HOST-\d+)/y"),
+    ("plain words: local time, api, docker and PowerShell stay", r"plain words: local time, api, docker and PowerShell stay"),
+]
+
+
+def _scrub_masked(scratch) -> subprocess.CompletedProcess:
+    folder = scratch()
+    (folder / "input.txt").write_bytes("\n".join(text for text, _ in _MASK_CASES).encode("utf-8") + b"\n")
+    return _run_in_powershell(["scada01:4840", "-Mask", "-ScrubFile", _win(folder / "input.txt")], folder, folder)
+
+
+@needs_powershell
+def test_scrub_file_mask_masks_every_shape_and_keeps_the_look_alikes(scratch):
+    first, second = _scrub_masked(scratch), _scrub_masked(scratch)
+    assert first.returncode == 0, first.stderr
+    lines = first.stdout.splitlines()
+    assert len(lines) == len(_MASK_CASES), lines
+    for line, (text, pattern) in zip(lines, _MASK_CASES):
+        assert re.fullmatch(pattern, line), (text, line)
+    assert "MASK LEGEND" not in first.stdout, "the screen IS the output in this mode: no legend among the text that gets pasted"
+    assert "legend" in first.stderr and "not shown" in first.stderr
+    assert second.stdout == first.stdout, "the same input twice gives the same aliases"
+
+
+@needs_powershell
+@pytest.mark.parametrize("payload, expected", [
+    ("a." * 75000, r"(?:a\.){75000}"),                                                  # a chain of labels the domain pattern tries to extend
+    ("x" * 150000 + " scada01.meeza.local", r"x{150000} HOST-\d+"),                     # one long word, then a name
+    ("a-" * 75000 + " " + ":" * 100000 + " " + "f:" * 30000, r"(?:a-){75000} :{100000} (?:f:){30000}"),   # runs the address shapes look at and reject
+    ("10.1.2.3 " * 3000, r"(?:HOST-\d+ ){3000}"),                               # an address that comes back thousands of times
+], ids=["label-chain", "long-word", "address-look-alikes", "repeated-address"])
+def test_masking_150_kb_takes_seconds_not_minutes(scratch, payload, expected):
+    folder = scratch()
+    (folder / "big.txt").write_bytes(payload.encode("ascii"))
+    started = time.monotonic()
+    proc = _run_in_powershell(["scada01.meeza.local:4840", "-Mask", "-ScrubFile", _win(folder / "big.txt")], folder, folder)
+    elapsed = time.monotonic() - started
+    assert proc.returncode == 0, proc.stderr
+    assert re.fullmatch(expected, proc.stdout.rstrip("\r\n")), proc.stdout[:200]
+    assert elapsed < 20, f"{elapsed:.1f} s"
+
+
 # ---- the script itself --------------------------------------------------------------------------------------------------
 
 def _code() -> str:

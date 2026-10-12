@@ -1,5 +1,5 @@
 # Host facts for field debugging when the web app itself is down: one text file to copy and paste to whoever helps.
-# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect-diagnostics.ps1 [host:port ...] [-OutDir DIR] [-ProjectDir DIR] [-RawLogs]
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect-diagnostics.ps1 [host:port ...] [-OutDir DIR] [-ProjectDir DIR] [-RawLogs] [-Mask]
 # Prints the report and saves dcdash-diag-<yyyyMMdd-HHmmss>.txt in -OutDir (default: the logs folder inside the project folder, else
 # inside the current folder; created if missing). Each host:port gets a DNS lookup and a TCP connect (3 s timeout).
 # Sections: HOST DISKS NETWORK CLOCK TARGETS LOCAL PORTS TOOLS ON PATH SERVICES DOCKER CLOCK DATABASE API LOGS.
@@ -10,14 +10,18 @@
 # Per service the last 2000 log lines are read and the ROUTINE ones are dropped (2xx/3xx uvicorn access lines, Caddy admin API requests,
 # TimescaleDB refresh and checkpoint chatter; a line with error, warn, fatal, traceback, exception or panic is never dropped), the count
 # of dropped lines is printed, then the last 300 (file) / 30 (screen) remain. -RawLogs keeps every line.
+# -Mask replaces addresses, host names (this computer, the targets, the domain, the DNS and gateway hosts), the user name and the project and
+# output folders by HOST-n, USER-1 and PATH-n in the files AND on the screen; the legend (alias = original) is printed on the screen after the
+# "saved:" lines and never written to a file. Hosts the script cannot know (in a log line that is no URL and no address) stay: read before pasting.
 # Every line is cut at 64 KB, scrubbed (URL credentials "://user:pass@" and the secret values of the project's .env become [hidden]) and
 # clipped; the report only says HOW MANY .env values it hides. Every external command has a time limit, so a hung docker cannot hang this.
 # Read-only, needs no internet and none of the application. PowerShell 5.1 compatible.
 # Files are UTF-8 without BOM with LF line breaks. The last line is `END OF DIAGNOSTICS <12 hex>`: the first 12 hex characters of the
 # SHA-256 of every line before it, joined by LF (UTF-8 bytes, no trailing LF), so a paste can be verified.
 # Other modes (they exit before any collection): -ScrubSelfTest <scrub_cases.tsv> checks the scrubber against the shared fixture
-# (backend\tests\fixtures\scrub_cases.tsv) and exits 0 only when every case passes; -ScrubFile <file> [-EnvFile <.env>] prints that file
-# scrubbed with the same rules (default .env: the project's), to check a text before pasting it. -DockerPath <docker.exe> overrides the docker found on the PATH.
+# (backend\tests\fixtures\scrub_cases.tsv) and exits 0 only when every case passes; -ScrubFile <file> [-EnvFile <.env>] [-Mask] prints that file
+# scrubbed (and masked) with the same rules (default .env: the project's), to check a text before pasting it: the screen IS the output there,
+# so no legend is printed (stderr says so). -DockerPath <docker.exe> overrides the docker found on the PATH.
 # Exit codes: 0 report written, 1 a file could not be saved (the report was still printed).
 param(
   [Parameter(Position = 0, ValueFromRemainingArguments = $true)][string[]]$Targets,
@@ -28,6 +32,7 @@ param(
   [string]$EnvFile,
   [string]$DockerPath,
   [switch]$RawLogs,   # keep the routine log lines too
+  [switch]$Mask,   # HOST-n, USER-1, PATH-n instead of addresses, host names, the user name and folders
   [int]$CommandTimeoutSeconds = 10   # the limit of one external command (docker compose logs: three times as long); tests shorten it
 )
 $ErrorActionPreference = "Stop"
@@ -90,10 +95,144 @@ function Get-Scrubbed([string]$Text, [string[]]$Hide) {
   [void]$out.Append($Text, $from, $n - $from)
   return $out.ToString()
 }
-function Format-Line([string]$Raw, [int]$Clip, [int]$Cap = 65536) {   # cap the raw line, THEN scrub, THEN clip (a clipped URL would leak half a password)
+# ---- masking (-Mask): the idea of redact.Masker. Names this machine and this run know are registered up front; addresses and URL hosts are aliased where they appear ----
+$MaskOn = $Mask.IsPresent
+$MaskCount = @{ HOST = 0; USER = 0; PATH = 0 }
+$MaskByKey = @{}   # kind + normalised value -> alias
+$MaskKnown = @{}   # a registered text in lower case -> alias
+$MaskSeen = @{}   # a text aliased on sight -> its alias (the same address comes back thousands of times in a log)
+$MaskLegend = [ordered]@{}   # alias -> the first spelling seen
+$MaskUsed = New-Object 'System.Collections.Generic.HashSet[string]'   # the aliases that reached a line: only those go into the legend
+$MaskEntries = New-Object 'System.Collections.Generic.List[object]'   # the alternatives of the one regex, rebuilt after a name was added
+$MaskRx = $null
+$RxOpts = [Text.RegularExpressions.RegexOptions]"IgnoreCase, CultureInvariant"
+$RxAlias = New-Object Text.RegularExpressions.Regex('^(HOST|USER|PATH)-[0-9]+$', $RxOpts)
+$RxV4Whole = New-Object Text.RegularExpressions.Regex('^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$', $RxOpts)
+$RxV4 = New-Object Text.RegularExpressions.Regex('(?<![0-9.])([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(?![0-9]|\.[0-9])', $RxOpts)
+$RxUrl = New-Object Text.RegularExpressions.Regex('(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*://)((?:[^\s/@?#]*@)?)(\[[^\]\s]*\]|[\w.~%-]+)', $RxOpts)
+$RxV6Bracket = New-Object Text.RegularExpressions.Regex('\[([0-9A-Fa-f:.]{2,64}(?:%[A-Za-z0-9_.-]{1,20})?)\]', $RxOpts)
+# a bare IPv6 address: a run of hex digits, colons and dots, not glued to a word, ":" "." ";" "%" "/" "[" "-" before it; the "s=" of an OPC UA node id (ns=6;s=::Var) is a name
+$RxV6Run = New-Object Text.RegularExpressions.Regex('(?<![\w:.;%/\[-])(?<!(?:^|[\s"''(,{;])(?:ns|[isgb])=)[0-9A-Fa-f:.]{3,64}(?:%[A-Za-z0-9_.-]{1,20})?(?![\w:])', $RxOpts)
+function ConvertTo-IPv4([string[]]$Octets) {   # "a.b.c.d" without leading zeros, or $null when an octet is above 255
+  $n = @()
+  foreach ($o in $Octets) { $v = [int]$o; if ($v -gt 255) { return $null }; $n += $v }
+  return $n -join "."
+}
+function Test-IPv6([string]$S, [bool]$Bracketed = $false) {   # outside brackets only a form with "::" or eight groups counts: a time or a thumbprint is no address
+  $a = $S.Split([char]37)[0]   # without the %scope
+  $ip = $null
+  if ($a.IndexOf([char]58) -lt 0 -or -not [Net.IPAddress]::TryParse($a, [ref]$ip) -or $ip.AddressFamily -ne "InterNetworkV6") { return $false }
+  if ($Bracketed) { return $true }
+  $colons = $a.Length - $a.Replace(":", "").Length
+  return ($a.Contains("::") -or $colons -eq 7 -or ($colons -eq 6 -and $a.Contains("."))) -and @($a.Split([char]58) | Where-Object { $_ }).Count -ge 2
+}
+function Get-MaskKey([string]$V) {   # what makes two spellings one name: IPv4 without leading zeros, IPv6 compressed, the rest in lower case without a final dot
+  $V = $V.Trim()
+  $m = $RxV4Whole.Match($V)
+  if ($m.Success) { $n = ConvertTo-IPv4 @($m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value, $m.Groups[4].Value); if ($n) { return $n } }
+  $b = $V.Trim([char[]]"[]")
+  if (Test-IPv6 $b $true) { $ip = $null; [void][Net.IPAddress]::TryParse($b.Split([char]37)[0], [ref]$ip); return $ip.ToString() }
+  return $V.ToLowerInvariant().TrimEnd(".")
+}
+function Get-MaskAlias([string]$Value, [string]$Kind) {   # Kind HOST, USER or PATH; numbered in order of birth, so a run gives the same aliases as the one before
+  $key = $Kind + ":" + (Get-MaskKey $Value)
+  $a = $script:MaskByKey[$key]
+  if (-not $a) {
+    $script:MaskCount[$Kind] = $script:MaskCount[$Kind] + 1
+    $a = "$Kind-$($script:MaskCount[$Kind])"
+    $script:MaskByKey[$key] = $a; $script:MaskLegend[$a] = $Value
+  }
+  return $a
+}
+function Use-Mask([string]$Value) {
+  $a = $script:MaskSeen[$Value]
+  if (-not $a) { $a = Get-MaskAlias $Value "HOST"; $script:MaskSeen[$Value] = $a }
+  [void]$script:MaskUsed.Add($a); return $a
+}
+function Add-MaskName([string]$Name, [string]$Kind) {   # Kind: host (also covers the labels after it), domain (and the labels before it), user or path
+  if (-not $Name) { return }
+  $Name = $Name.Trim(); $low = $Name.ToLowerInvariant()
+  # shorter than 3 characters, an alias, known already, or a one-label domain (local, lan: ordinary words in a report) is not registered
+  if ($Name.Length -lt 3 -or $RxAlias.IsMatch($Name) -or $script:MaskKnown.ContainsKey($low) -or ($Kind -eq "domain" -and -not $Name.Contains("."))) { return }
+  $esc = [regex]::Escape($Name)
+  $pat = switch ($Kind) {   # every alternative carries its own boundaries: whole words only
+    "domain" { '(?<![\w.-])(?:[A-Za-z0-9-]+\.)*' + $esc + '(?![\w-])' }
+    "host" {
+      if ($RxV4Whole.IsMatch($Name)) { '(?<![\w.-])' + $esc + '(?![\w-]|\.[0-9])' }
+      elseif (Test-IPv6 $Name $true) { '(?<![\w:.;%/\[-])' + $esc + '(?:%[A-Za-z0-9_.-]{1,20})?(?![\w:])' }
+      else { '(?<![\w.-])' + $esc + '(?:\.[A-Za-z0-9-]+)*(?![\w-])' }
+    }
+    default { '(?<![\w.-])' + $esc + '(?![\w-])' }
+  }
+  $script:MaskKnown[$low] = Get-MaskAlias $Name $(if ($Kind -eq "user") { "USER" } elseif ($Kind -eq "path") { "PATH" } else { "HOST" })
+  $script:MaskEntries.Add([pscustomobject]@{ Len = $Name.Length; Pat = $pat })
+  $script:MaskRx = $null
+}
+$MaskEvalName = [Text.RegularExpressions.MatchEvaluator]{ param($m)   # a registered name, or one with more labels around it: that whole name gets an alias of its own
+  $f = $m.Value; $a = $script:MaskKnown[$f.ToLowerInvariant()]
+  if (-not $a) { $a = Get-MaskAlias $f "HOST" }
+  [void]$script:MaskUsed.Add($a); return $a
+}
+$MaskEvalUrl = [Text.RegularExpressions.MatchEvaluator]{ param($m)   # scheme://[user@]host: nothing before the "@" survives, the host becomes an alias
+  $pre = $m.Groups[1].Value + $(if ($m.Groups[2].Value) { "[hidden]@" } else { "" })
+  $h = $m.Groups[3].Value
+  if ($h.StartsWith("[")) { $inner = $h.Substring(1, $h.Length - 2); if (Test-IPv6 $inner $true) { return $pre + (Use-Mask $inner) }; return $pre + $h }
+  $n = $h.TrimEnd(".")
+  if (-not $n -or $RxAlias.IsMatch($n)) { return $pre + $h }
+  return $pre + (Use-Mask $n) + $h.Substring($n.Length)
+}
+$MaskEvalBracket = [Text.RegularExpressions.MatchEvaluator]{ param($m) if (Test-IPv6 $m.Groups[1].Value $true) { return (Use-Mask $m.Groups[1].Value) }; return $m.Value }
+$MaskEvalV6 = [Text.RegularExpressions.MatchEvaluator]{ param($m)
+  $run = $m.Value; $t = $run.TrimEnd(".")   # a sentence may end right after an address
+  foreach ($c in $(if ($run.Contains("%")) { @($run) } else { @($run, $t, $t.TrimEnd(":")) })) { if ($c -and (Test-IPv6 $c)) { return (Use-Mask $c) + $run.Substring($c.Length) } }
+  return $run
+}
+$MaskEvalV4 = [Text.RegularExpressions.MatchEvaluator]{ param($m)
+  if ($script:MaskSeen.ContainsKey($m.Value) -or (ConvertTo-IPv4 @($m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value, $m.Groups[4].Value))) { return (Use-Mask $m.Value) }
+  return $m.Value
+}
+function Get-Masked([string]$Text) {
+  if ($script:MaskEntries.Count -gt 0 -and -not $script:MaskRx) {   # one compiled alternation, longest name first
+    $pats = @($script:MaskEntries | Sort-Object Len -Descending | ForEach-Object { $_.Pat })
+    $script:MaskRx = New-Object Text.RegularExpressions.Regex(($pats -join "|"), ([Text.RegularExpressions.RegexOptions]"IgnoreCase, CultureInvariant, Compiled"))
+  }
+  if ($script:MaskRx) { $Text = $script:MaskRx.Replace($Text, $MaskEvalName) }
+  $Text = $RxUrl.Replace($Text, $MaskEvalUrl)
+  $Text = $RxV6Bracket.Replace($Text, $MaskEvalBracket)
+  $Text = $RxV6Run.Replace($Text, $MaskEvalV6)
+  return $RxV4.Replace($Text, $MaskEvalV4)
+}
+function Write-MaskLegend {   # screen only: it holds every original
+  if (-not $MaskOn) { return }
+  Write-Host "MASK LEGEND (screen only; do not paste)"
+  foreach ($a in @($MaskLegend.Keys | Where-Object { $MaskUsed.Contains($_) } | Sort-Object { $_.Split("-")[0] }, { [int]$_.Split("-")[1] })) { Write-Host "$a = $($MaskLegend[$a])" }
+}
+
+function Initialize-Mask {   # before any output, in a fixed order, so the numbers repeat from run to run
+  Add-MaskName $env:COMPUTERNAME "host"; Add-MaskName $env:USERNAME "user"; Add-MaskName $env:USERDOMAIN "host"; Add-MaskName $env:USERDNSDOMAIN "domain"
+  try { Add-MaskName ([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().DomainName) "domain" } catch { }
+  try { Add-MaskName ([Net.Dns]::GetHostName()) "host" } catch { }   # COMPUTERNAME is cut at 15 characters
+  try { Add-MaskName (Split-Path $env:USERPROFILE -Leaf) "user" } catch { }   # often user.DOMAIN
+  Add-MaskName $Root "path"; Add-MaskName $OutFull "path"
+  try {
+    foreach ($n in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+      if ($n.NetworkInterfaceType -eq "Loopback" -or $n.OperationalStatus -ne "Up") { continue }
+      $p = $n.GetIPProperties()
+      Add-MaskName $p.DnsSuffix "domain"
+      foreach ($u in $p.UnicastAddresses) { Add-MaskName "$($u.Address)" "host" }
+      foreach ($g in $p.GatewayAddresses) { Add-MaskName "$($g.Address)" "host" }
+      foreach ($d in $p.DnsAddresses) { Add-MaskName "$d" "host" }
+    }
+  } catch { }
+  foreach ($raw in $Targets) {
+    foreach ($t in @($raw -split "[,;\s]+" | Where-Object { $_ })) { if ($t -match '^\[(.+)\]:[0-9]{1,5}$' -or $t -match '^([^:\[\]]+):[0-9]{1,5}$') { Add-MaskName $Matches[1] "host" } }
+  }
+}
+function Format-Line([string]$Raw, [int]$Clip, [int]$Cap = 65536) {   # cap the raw line, THEN scrub, THEN mask, THEN clip (a clipped URL would leak half a password)
   $cut = $Cap -gt 0 -and $Raw.Length -gt $Cap
   if ($cut) { $Raw = $Raw.Substring(0, $Cap) }
   $s = Get-Scrubbed $Raw $Known
+  if ($MaskOn) { $s = Get-Masked $s }
   if ($Clip -gt 0 -and $s.Length -gt $Clip) { return $s.Substring(0, $Clip - 1) + $Ellipsis }
   if ($cut) { return $s + $Ellipsis }
   return $s
@@ -172,16 +311,18 @@ $HasCompose = [bool]($Root -and (Test-Path -LiteralPath (Join-Path $Root "compos
 $EnvPath = $(if ($EnvFile) { $EnvFile } elseif ($Root) { Join-Path $Root ".env" })
 $EnvRead = Read-EnvSecrets $EnvPath
 $Known = Get-KnownValues $EnvRead.Hide
+$OutBase = $(if ($OutDir) { $OutDir } elseif ($Root) { Join-Path $Root "logs" } else { Join-Path (Get-Location).Path "logs" })
+$OutFull = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutBase)
+if ($MaskOn) { Initialize-Mask }
 if ($ScrubFile) {
   try { foreach ($l in [IO.File]::ReadAllLines($ScrubFile, [Text.Encoding]::UTF8)) { Write-Host (Format-Line $l 0 0) } }
   catch { [Console]::Error.WriteLine("cannot read ${ScrubFile}: $($_.Exception.Message)"); Stop-Script 1 }
+  if ($MaskOn) { [Console]::Error.WriteLine("masking is ON; the legend (alias = original) is not shown in this mode") }
   Stop-Script 0
 }
 $Docker = $null
 if ($DockerPath) { if (Test-Path -LiteralPath $DockerPath -PathType Leaf) { $Docker = $DockerPath } }
 else { $c = Get-Command docker -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { $Docker = $c.Source } }
-$OutBase = $(if ($OutDir) { $OutDir } elseif ($Root) { Join-Path $Root "logs" } else { Join-Path (Get-Location).Path "logs" })
-$OutFull = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutBase)
 $Stamp = (Get-Date).ToString("yyyyMMdd-HHmmss", $Inv)
 $MainFile = Join-Path $OutFull "dcdash-diag-$Stamp.txt"
 $LogsFile = Join-Path $OutFull "dcdash-diag-$Stamp-logs.txt"
@@ -278,6 +419,10 @@ try {
   Add-Line ("local time: " + $now.ToString("yyyy-MM-dd HH:mm:ss zzz", $Inv)) -To $LogLines
   Add-Line "$hides; each line is cut at 1000 characters" -To $LogLines
   Add-Line $(if ($RawLogs) { "service logs: the last $TailLines lines per service, unfiltered (-RawLogs), then the last 300" } else { "service logs: the last $TailLines lines per service; routine lines are dropped (see -RawLogs), then the last 300 kept" }) -To $LogLines
+  if ($MaskOn) {
+    $note = "masking: ON (addresses, host names, user and folder names appear as HOST-n, USER-1, PATH-n)"
+    Add-Line $note; Add-Line $note -To $LogLines
+  }
 } catch { Add-Line "header failed: $($_.Exception.Message)" }
 
 Section "HOST" {
@@ -490,6 +635,8 @@ try {
   Write-Host "saved: $MainFile"
 } catch {
   [Console]::Error.WriteLine("could not save the report: $($_.Exception.Message)")
+  Write-MaskLegend
   Stop-Script 1
 }
+Write-MaskLegend
 Stop-Script 0
