@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 from asyncua import Client, Node, ua
@@ -26,6 +26,9 @@ from dcdash.connectors.base import (
     register,
     url_host_port,
 )
+
+if TYPE_CHECKING:
+    from dcdash.diagnostics.check import CheckResult, Publish
 
 _AUTH_CODES = {
     ua.StatusCodes.BadUserAccessDenied,
@@ -99,9 +102,8 @@ class OpcUaConnector(Connector):
         super().__init__(config, secret)
         self.config: OpcUaConfig = config
 
-    @asynccontextmanager
-    async def _session(self) -> AsyncIterator[Client]:
-        """A fresh client per call, always disconnected; a half-dead session is never reused."""
+    async def _new_client(self) -> Client:
+        """A client with the configured authentication and security, not yet connected."""
         client = Client(self.config.endpoint, timeout=self.config.timeout_seconds)
         if self.config.username:
             client.set_user(self.config.username)
@@ -113,6 +115,12 @@ class OpcUaConnector(Connector):
             await client.set_security_string(
                 f"Basic256Sha256,SignAndEncrypt,{self.config.client_cert},{self.config.client_key}"
             )
+        return client
+
+    @asynccontextmanager
+    async def _session(self) -> AsyncIterator[Client]:
+        """A fresh client per call, always disconnected; a half-dead session is never reused."""
+        client = await self._new_client()
         try:
             await asyncio.wait_for(client.connect(), self.config.timeout_seconds)
         except Exception as exc:  # noqa: BLE001 - translated into a typed status
@@ -137,6 +145,11 @@ class OpcUaConnector(Connector):
         except ConnectorError as exc:
             return ConnectionCheck(ok=False, status=exc.status, message=exc.message)
         return ConnectionCheck(ok=True, status="ok", latency_ms=(time.perf_counter() - started) * 1000)
+
+    async def check(self, points: list[str], publish: Publish | None = None) -> CheckResult:
+        from dcdash.connectors.opcua_check import run_check  # imported here: that module imports this one
+
+        return await run_check(self, points, publish)
 
     async def browse(self) -> list[PointDescriptor]:
         found: list[PointDescriptor] = []

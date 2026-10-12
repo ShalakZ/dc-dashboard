@@ -66,6 +66,14 @@ _BY_STATUS: dict[str, str] = {
         "The server did not answer in time. The network may be slow or a firewall may be dropping packets; ask the network team, and "
         "check whether the server is overloaded."
     ),
+    "BadNotReadable": (
+        "The server does not let this account read the node. Ask the SCADA team to give the account read access to the points "
+        "listed, or map a different node."
+    ),
+    "BadTooManyOperations": (
+        "The server refused a read of that many nodes at once. Ask the SCADA team for the server's MaxNodesPerRead limit; "
+        "the check already reads in batches of at most 100."
+    ),
     "BadSecurityPolicyRejected": (
         "The server does not offer the security policy we asked for. See the endpoints step for what it offers and set the "
         "source's security policy to one of those."
