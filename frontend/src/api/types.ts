@@ -7,8 +7,10 @@ export const ROLE_LEVEL: Record<Role, number> = { viewer: 0, operator: 1, admin:
 export type Preferences = Appearance;
 export interface User { id: number; username: string; role: Role; preferences: Preferences }
 
-export interface Asset { id: number; parent_id: number | null; name: string; kind: string; sort_order: number }
-export interface AssetIn { name: string; parent_id: number | null; kind: string; sort_order: number }
+/** `icon` is the chosen icon id (lib/assetIcons.ts), null for Automatic. Optional in the type because many fixtures build an Asset by hand; the API always sends it. */
+export interface Asset { id: number; parent_id: number | null; name: string; kind: string; sort_order: number; icon?: string | null }
+/** `icon`: a catalogue id, null to go back to Automatic, left out to leave it as it is (the server treats an absent key as unchanged). */
+export interface AssetIn { name: string; parent_id: number | null; kind: string; sort_order: number; icon?: string | null }
 /** What deleting an asset takes with it (the 409 body of DELETE /api/assets/{id} without confirm=true). */
 export interface AssetImpact { assets: number; mappings: number; tariffs: number }
 /** What deleting a source takes with it (the 409 body of DELETE /api/sources/{id} without confirm=true). */
@@ -95,7 +97,7 @@ export interface RollupSource {
   asset_id: number; name: string; path: string; point_id: number; value: number | null; ts: string | null; stale: boolean;
 }
 export interface Summary {
-  asset: { id: number; name: string; parent_id: number | null; kind: string };
+  asset: { id: number; name: string; parent_id: number | null; kind: string; icon?: string | null };
   metrics: SummaryMetric[];
   /** Set only for an asset with no power meter of its own whose sub-assets have some (optional so older fixtures type-check). */
   power_rollup?: { sources: RollupSource[] } | null;

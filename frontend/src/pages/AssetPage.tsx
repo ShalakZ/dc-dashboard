@@ -11,7 +11,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Pending } from "../components/Pending";
 import { AssetSkeleton, SkeletonRegion, TrendSkeleton } from "../components/Skeleton";
 import { useStream } from "../hooks/useStream";
-import { kindIcon } from "../lib/kindIcon";
+import { assetIcon } from "../lib/assetIcons";
 import { rollupNote, rollupPower } from "../lib/rollup";
 import { assetTrail, parseAssetId } from "../lib/tree";
 import { assetActions, useAssetsContext } from "./AssetsPage";
@@ -73,7 +73,7 @@ function AssetView({ id }: { id: number }) {
     <div className="asset-page">
       <PageHeader
         title={data.asset.name}
-        icon={kindIcon(data.asset.kind)}
+        icon={assetIcon(data.asset)}
         crumbs={crumbs}
         sub={sub || undefined}
         actions={chip || buttons ? <>{chip}{buttons}</> : undefined}

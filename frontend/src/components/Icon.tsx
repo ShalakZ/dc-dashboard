@@ -30,8 +30,9 @@ export const ICONS = {
   override: <><path d="M5 21V4h9v17" /><path d="M14 9h5v12" /><path d="M3 21h18" /><path d="M8.5 8h2M8.5 12h2M8.5 16h2" /></>,
   // The Energy tile's own icon: a bolt in a circle (the Live power tile reuses `rate`, the Cost tile `currency`).
   energy: <><circle cx="12" cy="12" r="9" /><path d="M13 6 8.5 13H12l-1 5 4.5-7H12l1-5Z" /></>,
-  // One per kind of asset (`lib/kindIcon.ts` picks): a pin, a tower, a floor plan, a line of racks, one rack, a two-door switch cabinet,
-  // a gauge, a switch, a battery, a socket strip, a motor, two coils, a snowflake and a cube for "anything else".
+  // One per kind of asset (`lib/kindIcon.ts` picks from the kind text; `lib/assetIcons.ts` lists all 28 for the picker in the asset dialog):
+  // a pin, a tower, a floor plan, a line of racks, one rack, a two-door switch cabinet,
+  // a gauge, a switch, a battery, a socket strip, a motor, two coils, a snowflake and a cube for "anything else". The 14 after the cube are picker-only:
   kindSite: <><path d="M12 21s-6.5-5.4-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15.6 12 21 12 21Z" /><circle cx="12" cy="10.5" r="2.3" /></>,
   kindBuilding: <><path d="M6 21V4.5A1.5 1.5 0 0 1 7.5 3h9A1.5 1.5 0 0 1 18 4.5V21" /><path d="M3 21h18" /><path d="M9.5 7.5h1M13.5 7.5h1M9.5 11.5h1M13.5 11.5h1" /><path d="M10.5 21v-4h3v4" /></>,
   kindRoom: <><path d="M4 3.5h16v17H4Z" /><path d="M4 13h7v7.5" /><path d="M11 13a4 4 0 0 1 4-4" /></>,
@@ -45,6 +46,23 @@ export const ICONS = {
   kindGenerator: <><rect x="2.5" y="5.5" width="15" height="12.5" rx="2" /><path d="M17.5 11.75h4" /><path d="M6 11.75c1.3-3.2 2.7-3.2 4 0s2.7 3.2 4 0" /><path d="M5 18v2.5M15 18v2.5" /></>,
   kindTransformer: <><circle cx="9.5" cy="12" r="5" /><circle cx="14.5" cy="12" r="5" /><path d="M2 12h2.5M19.5 12H22" /></>,
   kindChiller: <><g><path d="M12 3v18M9.5 5.3 12 7.8l2.5-2.5M9.5 18.7 12 16.2l2.5 2.5" /></g><g transform="rotate(60 12 12)"><path d="M12 3v18M9.5 5.3 12 7.8l2.5-2.5M9.5 18.7 12 16.2l2.5 2.5" /></g><g transform="rotate(120 12 12)"><path d="M12 3v18M9.5 5.3 12 7.8l2.5-2.5M9.5 18.7 12 16.2l2.5 2.5" /></g></>,
+  // an upright cell (the UPS is the flat one with a bolt), a capsule tank on legs, a louvred cabinet blowing down, a bladed ring, a casing with two pipes,
+  kindBattery: <><path d="M10 5V3h4v2" /><rect x="6.5" y="5" width="11" height="16.5" rx="1.5" /><path d="M12 9.5v4M10 11.5h4M10 17.5h4" /></>,
+  kindFuelTank: <><rect x="2.5" y="7.5" width="19" height="9" rx="4.5" /><path d="M10.5 7.5V5h3v2.5" /><path d="M7 16.5V20M17 16.5V20M5 20.5h4M15 20.5h4" /></>,
+  kindCrac: <><rect x="4" y="2.5" width="16" height="12.5" rx="1.5" /><path d="M7.5 6.5h9M7.5 10.5h9" /><path d="M7 17.5v3.5M5.9 19.9 7 21l1.1-1.1M12 17.5v3.5M10.9 19.9 12 21l1.1-1.1M17 17.5v3.5M15.9 19.9 17 21l1.1-1.1" /></>,
+  kindFan: <><circle cx="12" cy="12" r="9.5" /><circle cx="12" cy="12" r="1.5" /><g><path d="M12 10.5C10.2 8.6 10.4 5.8 12 4c1.6 1.8 1.8 4.6 0 6.5Z" /></g><g transform="rotate(120 12 12)"><path d="M12 10.5C10.2 8.6 10.4 5.8 12 4c1.6 1.8 1.8 4.6 0 6.5Z" /></g><g transform="rotate(240 12 12)"><path d="M12 10.5C10.2 8.6 10.4 5.8 12 4c1.6 1.8 1.8 4.6 0 6.5Z" /></g></>,
+  kindPump: <><circle cx="10" cy="14" r="6" /><path d="M10 8V4M7.5 4h5" /><path d="M16 14h5.5M21.5 11.5v5" /><circle cx="10" cy="14" r="1.5" /><path d="M6 21.5h8" /></>,
+  // two stacked rack units, a long unit with a row of ports under a two-way arrow, a box with a screen and buttons, a thermometer,
+  kindServer: <><rect x="3" y="3.5" width="18" height="7" rx="1.5" /><rect x="3" y="13.5" width="18" height="7" rx="1.5" /><path d="M6.5 7h.01M6.5 17h.01" /><path d="M11 7h7M11 17h7" /></>,
+  kindSwitch: <><path d="M7 6.5h10M9.5 4 7 6.5 9.5 9M14.5 4 17 6.5 14.5 9" /><rect x="2.5" y="12" width="19" height="8" rx="1.5" /><path d="M6 15v2.5M10 15v2.5M14 15v2.5M18 15v2.5" /></>,
+  kindController: <><rect x="4" y="2.5" width="16" height="19" rx="1.5" /><rect x="7" y="5.5" width="10" height="6" rx="1" /><path d="M8 16.5h.01M12 16.5h.01M16 16.5h.01" /></>,
+  kindSensor: <><path d="M9 14.5V5a2.5 2.5 0 0 1 5 0v9.5a4.5 4.5 0 1 1-5 0Z" /><path d="M11.5 9.5v7" /><circle cx="11.5" cy="18" r="1.2" /><path d="M17.5 6h2.5M17.5 10h2.5" /></>,
+  // a bulb with rays, a wall camera, a door in its frame, a flame and a drop over water.
+  kindLighting: <><path d="M9.5 17v-1.3c0-1.3-3-2.6-3-6.2a5.5 5.5 0 0 1 11 0c0 3.6-3 4.9-3 6.2V17Z" /><path d="M9.5 20h5M10.5 22.5h3" /><path d="M12 1v1.5M4 4.5l1 1M20 4.5l-1 1" /></>,
+  kindCamera: <><path d="M3 4v16" /><path d="M3 10h2.5" /><rect x="5.5" y="6.5" width="15" height="8" rx="1.5" /><circle cx="15.5" cy="10.5" r="2.3" /><path d="M8.5 9h.01" /></>,
+  kindDoor: <><path d="M4.5 21V3.5h15V21" /><path d="M2.5 21h19" /><path d="M8.5 21V8h7v13" /><path d="M12.5 15h.01" /></>,
+  kindFire: <><path d="M12 2.5c.5 3.5 5.5 6 5.5 11.2a5.5 5.5 0 0 1-11 0c0-2.3 1-3.8 2.3-5.2.2 1.5.9 2.4 1.8 2.8C10.2 8.3 10.5 5 12 2.5Z" /><path d="M12 20.2c-1.6 0-2.6-1-2.6-2.4 0-1.5 1.4-2.2 2.6-4 1.2 1.8 2.6 2.5 2.6 4 0 1.4-1 2.4-2.6 2.4Z" /></>,
+  kindLeak: <><path d="M12 2.5c2.7 3.4 5 6 5 9a5 5 0 0 1-10 0c0-3 2.3-5.6 5-9Z" /><path d="M3 19c1.6-1.6 3-1.6 4.5 0s3 1.6 4.5 0 3-1.6 4.5 0 3 1.6 4.5 0" /></>,
   kindGeneric: <><path d="M12 3 4 7.5v9l8 4.5 8-4.5v-9L12 3Z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></>,
 } satisfies Record<string, ReactNode>;
 export type IconName = keyof typeof ICONS;

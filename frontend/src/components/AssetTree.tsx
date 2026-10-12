@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import { Link } from "react-router";
 import { Icon } from "./Icon";
 import { Skeleton, SkeletonRegion, TreeSkeleton } from "./Skeleton";
-import { kindIcon } from "../lib/kindIcon";
+import { assetIcon } from "../lib/assetIcons";
 import { readStored, writeStored } from "../lib/sidebarState";
 import { ancestorIds, type TreeNode } from "../lib/tree";
 import { foldableIds, readFolded, saveFolded } from "../lib/treeFold";
@@ -76,7 +76,7 @@ function Nodes({ nodes, view }: { nodes: TreeNode[]; view: View }) {
           ) : (
             <span className="twisty-sp" />
           )}
-          <span className="node-icon"><Icon name={kindIcon(node.kind)} /></span>
+          <span className="node-icon"><Icon name={assetIcon(node)} /></span>
           <Link to={`/assets/${node.id}`} title={node.name} aria-current={selected ? "true" : undefined}>
             {node.name}
           </Link>

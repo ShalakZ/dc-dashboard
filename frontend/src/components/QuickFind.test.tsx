@@ -128,6 +128,18 @@ describe("QuickFind structure", () => {
     expect(iconOf("Billing$")).toBe(iconHtml("billing"));
   });
 
+  it("shows the icon an asset was given over its kind, and the kind icon for no icon or an unknown one", async () => {
+    const unit = (id: number, name: string, icon: string | null | undefined): Asset => ({ ...asset(id, name, null), kind: "Rack", icon });
+    const { user, input } = await mount({
+      assets: { body: [unit(1, "Cool Chosen", "crac"), unit(2, "Cool Plain", undefined), unit(3, "Cool Cleared", null), unit(4, "Cool Unknown", "zzz"), unit(5, "Cool Proto", "__proto__")] },
+    });
+    await user.type(input, "cool");
+    await screen.findByRole("option", { name: "Cool Chosen" });
+    const iconOf = (name: string) => screen.getByRole("option", { name: new RegExp(`^${name}`) }).querySelector("svg")!.innerHTML;
+    expect(iconOf("Cool Chosen")).toBe(iconHtml("kindCrac"));
+    for (const name of ["Cool Plain", "Cool Cleared", "Cool Unknown", "Cool Proto"]) expect(iconOf(name)).toBe(iconHtml("kindRack"));
+  });
+
   it("names the option by its label and then the path above it", async () => {
     const { user, input } = await mount();
     await user.type(input, "mv2");

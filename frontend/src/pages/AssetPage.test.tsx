@@ -267,6 +267,29 @@ describe("AssetPage", () => {
     expect(captions.map((c) => c.querySelector("svg")!.innerHTML)).toEqual([iconHtml("rate"), iconHtml("energy"), iconHtml("currency")]);
   });
 
+  describe("the header tile follows the icon in the summary", () => {
+    const withIcon = (icon: unknown) => ({
+      ...routes(null),
+      "GET /api/assets/4/summary": { body: { ...summary(null), asset: { ...summary(null).asset, icon } } },
+    });
+    const tile = async () => (await screen.findByRole("heading", { name: "Panel 1" })).previousElementSibling!.querySelector("svg")!;
+
+    it("shows the chosen icon over the kind icon", async () => {
+      mockFetch(withIcon("server"));
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      expect((await tile()).innerHTML).toBe(iconHtml("kindServer"));
+    });
+
+    it.each([null, undefined, "zzz", "", "__proto__", "constructor", "toString"])(
+      "keeps the kind icon when the summary's icon is %j",
+      async (icon) => {
+        mockFetch(withIcon(icon));
+        renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+        expect((await tile()).innerHTML).toBe(iconHtml("kindPanel"));
+      },
+    );
+  });
+
   it("lays the three tiles out in one .tiles grid, in the order Live power, Energy today, Cost today", async () => {
     mockFetch(routes({ kwh: 3.25, estimated: false, no_data: false }));
     renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
