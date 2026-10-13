@@ -229,6 +229,70 @@ NF {
 END { print read + 0, dropped + 0 > counts }
 AWK_END
 
+# The LOCAL PORTS parser, in awk, mawk-safe (no {n}, no asort, no length(array)); run it under LC_ALL=C on `ss -ltnp` or `netstat -ltnp` text
+# (the plain -ltn forms work too: every owner is then hidden). A listener is (port, process id); a row says WHICH process, by name and id only:
+# never the fd= number, never a command line. ss lists a process as users:(("name",pid=N,fd=F),...) (parsed from the whole line: a name may
+# hold a space, a socket shared by workers lists several), netstat as PID/name in its last column. No process shown (not root, another user's
+# process, "-") is "owner hidden". Prints the three fixed port lines, then "other listening ports", rows by port then pid, 40 at most.
+IFS= read -r -d '' PORTS_PROGRAM <<'AWK_END' || true
+function add(port, a, id, name,    k, x) {
+  k = port SUBSEP id
+  if (!(k in ix)) { ix[k] = ++nk; kp[nk] = port; kq[nk] = id; kn[nk] = (name == "" ? "unknown" : name) }
+  x = ix[k]
+  if (!((k, a) in seen)) { seen[k, a] = 1; ka[x] = ka[x] (ka[x] == "" ? "" : ", ") a }
+  if (!((port, a) in pseen)) { pseen[port, a] = 1; pa[port] = pa[port] (pa[port] == "" ? "" : ", ") a }
+}
+function before(x, y) {   # port, then pid; the hidden owner last
+  if (kp[x] != kp[y]) return kp[x] < kp[y]
+  return (kq[x] == "-" ? 1e12 : kq[x] + 0) < (kq[y] == "-" ? 1e12 : kq[y] + 0)
+}
+$1 == "LISTEN" || $1 ~ /^tcp/ {
+  a = $4; p = a; sub(/^.*:/, "", p); sub(/:[^:]*$/, "", a)
+  if (p !~ /^[0-9]+$/) next
+  p = p + 0; n = 0
+  if ($1 == "LISTEN") {
+    rest = $0
+    while (match(rest, /\("[^"]*",pid=[0-9]+/)) {
+      tok = substr(rest, RSTART + 2, RLENGTH - 2); rest = substr(rest, RSTART + RLENGTH)
+      q = index(tok, "\"")
+      add(p, a, substr(tok, q + 6) + 0, substr(tok, 1, q - 1)); n++
+    }
+  } else {
+    s = $7; for (i = 8; i <= NF; i++) s = s " " $i
+    if (match(s, /^[0-9]+\//)) { add(p, a, substr(s, 1, RLENGTH - 1) + 0, substr(s, RLENGTH + 1)); n++ }
+  }
+  if (n == 0) add(p, a, "-", "")
+}
+END {
+  for (i = 1; i <= nk; i++) ord[i] = i
+  for (i = 2; i <= nk; i++) { v = ord[i]; j = i - 1; while (j >= 1 && before(v, ord[j])) { ord[j + 1] = ord[j]; j-- }; ord[j + 1] = v }
+  split("80 443 8000", want, " ")
+  for (w = 1; w <= 3; w++) {
+    port = want[w] + 0; who = ""; known = 0
+    for (i = 1; i <= nk; i++) {
+      x = ord[i]
+      if (kp[x] != port) continue
+      if (kq[x] == "-") o = "owner hidden"; else { o = kn[x] ", pid " kq[x]; known = 1 }
+      who = who (who == "" ? "" : "; ") o
+    }
+    if (!(port in pa)) print "port " port ": nothing is listening"
+    else print "port " port ": something is listening on " pa[port] " (" (known ? "owner: " : "") who ")"
+  }
+  total = 0
+  for (i = 1; i <= nk; i++) { port = kp[ord[i]]; if (port != 80 && port != 443 && port != 8000) total++ }
+  if (total == 0) { print "other listening ports: none"; exit }
+  print "other listening ports (up to 40):"
+  shown = 0
+  for (i = 1; i <= nk && shown < 40; i++) {
+    x = ord[i]; port = kp[x]
+    if (port == 80 || port == 443 || port == 8000) continue
+    shown++
+    print "  " port "  " ka[x] "  " (kq[x] == "-" ? "owner hidden" : kn[x] " (pid " kq[x] ")")
+  }
+  if (total > shown) print "  ... and " (total - shown) " more"
+}
+AWK_END
+
 usage() {
   cat <<'USAGE'
 Usage: collect-diagnostics.sh [host:port ...] [--project-dir DIR] [--out-dir DIR] [--raw-logs]
@@ -587,18 +651,14 @@ section_targets() {
 }
 
 section_local_ports() {
-  local tool listing="" port on found=0
-  for tool in "ss -ltn" "netstat -ltn"; do
+  local tool listing="" found=0
+  for tool in "ss -ltnp" "ss -ltn" "netstat -ltnp" "netstat -ltn"; do   # -p names the owner; a tool that refuses it still gives the ports
     type -P "${tool%% *}" > /dev/null || continue
     # shellcheck disable=SC2086
     if listing=$(run_limited 10 $tool 2>/dev/null); then found=1; break; fi
   done
   if [ $found = 0 ]; then emit "ss and netstat not found or failed; listening ports unknown"; return; fi
-  for port in 80 443 8000; do
-    on=$(printf '%s\n' "$listing" | "$AWK" -v want="$port" '($1 == "LISTEN" || $1 ~ /^tcp/) { a = $4; p = a; sub(/^.*:/, "", p); sub(/:[^:]*$/, "", a)
-      if (p == want && !(a in s)) { s[a] = 1; out = out (out == "" ? "" : ", ") a } } END { print out }')
-    emit "port ${port}: $([ -n "$on" ] && echo "something is listening on $on" || echo "nothing is listening")"
-  done
+  emit "$(printf '%s\n' "$listing" | "$AWK" "$PORTS_PROGRAM")"
 }
 
 section_tools() {

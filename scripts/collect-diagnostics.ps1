@@ -532,11 +532,49 @@ Section "TARGETS (DNS lookup, then TCP connect with a 3 s timeout)" {
 }
 
 Section "LOCAL PORTS" {
+  # Every address comes from .NET (CIM lists a dual-stack socket once, as ::). CIM only says which process id owns "address|port", and it runs as a
+  # job so that a stuck WMI cannot stall the report. Names, never command lines, paths or users.
   $listeners = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
-  foreach ($port in 80, 443, 8000) {
-    $on = @($listeners | Where-Object { $_.Port -eq $port } | ForEach-Object { "$($_.Address)" })
-    Add-Line ("port ${port}: " + $(if ($on.Count -gt 0) { "something is listening on " + ($on -join ", ") } else { "nothing is listening" }))
+  $FixedPorts = 80, 443, 8000   # the ports this product cares about get a line each; the others go into the block below
+  $owners = @{}; $portOwner = @{}; $names = @{}; $job = $null; $why = $null
+  try {
+    $job = Get-NetTCPConnection -State Listen -AsJob
+    if (Wait-Job $job -Timeout 5) {
+      foreach ($c in @(Receive-Job $job -ErrorAction Stop)) {
+        $n = [int]$c.LocalPort; $o = [int]$c.OwningProcess   # ints on both sides: a hashtable key of another type does not match
+        $owners["$($c.LocalAddress)|$n"] = $o
+        if (-not $portOwner.ContainsKey($n)) { $portOwner[$n] = $o } elseif ($portOwner[$n] -ne $o) { $portOwner[$n] = -1 }   # -1: more than one process on this port
+      }
+    } else { Stop-Job $job; $why = "the lookup did not answer in 5 s" }
+  } catch { $why = "the lookup was refused" } finally { if ($job) { Remove-Job $job -Force -ErrorAction SilentlyContinue } }
+  if (-not $why) { $why = "the lookup did not list it" }   # only read for a listener the lookup did not list
+  if ($owners.Count -gt 0) { try { foreach ($p in Get-Process) { $names[[int]$p.Id] = $p.ProcessName } } catch { } }
+  $rows = @{}   # "port|owner" -> one row per owner process (-1: unknown), the addresses it listens on
+  foreach ($l in $listeners) {
+    $port = [int]$l.Port; $addr = "$($l.Address)"
+    $o = $owners["$addr|$port"]
+    if ($null -eq $o) { $o = $owners["::|$port"] }
+    if ($null -eq $o -and $portOwner.ContainsKey($port) -and $portOwner[$port] -ge 0) { $o = $portOwner[$port] }
+    if ($null -eq $o) { $o = -1 }
+    if (-not $rows.ContainsKey("$port|$o")) { $rows["$port|$o"] = [pscustomobject]@{ Port = $port; Owner = $o; Addrs = (New-Object 'System.Collections.Generic.List[string]') } }
+    if (-not $rows["$port|$o"].Addrs.Contains($addr)) { $rows["$port|$o"].Addrs.Add($addr) }
   }
+  foreach ($r in $rows.Values) { $r.Addrs.Sort([StringComparer]::Ordinal) }
+  $name = { param($r) $(if ($names.ContainsKey($r.Owner)) { $names[$r.Owner] } else { "unknown" }) }
+  foreach ($port in $FixedPorts) {
+    $mine = @($rows.Values | Where-Object { $_.Port -eq $port } | Sort-Object @{ Expression = { $_.Owner -lt 0 } }, Owner)
+    if ($mine.Count -eq 0) { Add-Line "port ${port}: nothing is listening"; continue }
+    $on = @($listeners | Where-Object { $_.Port -eq $port } | ForEach-Object { "$($_.Address)" })
+    $who = @($mine | ForEach-Object { if ($_.Owner -ge 0) { "$(& $name $_), pid $($_.Owner)" } else { "owner hidden: $why" } })
+    Add-Line ("port ${port}: something is listening on " + ($on -join ", ") + " (" + $(if ($mine[0].Owner -ge 0) { "owner: " }) + ($who -join "; ") + ")")
+  }
+  $other = @($rows.Values | Where-Object { $FixedPorts -notcontains $_.Port } | Sort-Object Port, @{ Expression = { $_.Owner -lt 0 } }, Owner)
+  if ($other.Count -eq 0) { Add-Line "other listening ports: none"; return }
+  Add-Line "other listening ports (up to 40):"
+  foreach ($r in @($other | Select-Object -First 40)) {
+    Add-Line ("  {0}  {1}  {2}" -f $r.Port, ($r.Addrs -join ", "), $(if ($r.Owner -ge 0) { "$(& $name $r) (pid $($r.Owner))" } else { "owner hidden ($why)" }))
+  }
+  if ($other.Count -gt 40) { Add-Line "  ... and $($other.Count - 40) more" }
 }
 
 Section "TOOLS ON PATH" {

@@ -754,9 +754,9 @@ def _ps_arg(arg: str) -> str:
     return arg if arg.startswith("-") else "'" + arg.replace("'", "''") + "'"   # a quoted '-Mask' would be a value, not the switch
 
 
-def _run_in_powershell(args: list[str], cwd: Path, project: Path, timeout: int = 180, setup: str = "") -> subprocess.CompletedProcess:
+def _run_in_powershell(args: list[str], cwd: Path, project: Path, timeout: int = 180, setup: str = "", script: Path = SCRIPT) -> subprocess.CompletedProcess:
     """Like _run_script, but through -Command so that USERDNSDOMAIN (and whatever `setup` adds) can be set first."""
-    command = f"{DOMAIN_SETUP}; {setup + '; ' if setup else ''}& '{_win(SCRIPT)}' {' '.join(map(_ps_arg, args))} -ProjectDir '{_win(project)}'; exit $LASTEXITCODE"
+    command = f"{DOMAIN_SETUP}; {setup + '; ' if setup else ''}& '{_win(script)}' {' '.join(map(_ps_arg, args))} -ProjectDir '{_win(project)}'; exit $LASTEXITCODE"
     return subprocess.run(
         [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
         capture_output=True, text=True, timeout=timeout, cwd=str(cwd),
@@ -1031,6 +1031,92 @@ def test_a_mistyped_project_folder_is_not_created_and_the_files_land_in_logs_of_
     assert len(saved) == 1 and sorted(p.name for p in cwd.iterdir()) == ["logs"]
 
 
+# ---- W7i 4a: who owns a listening port -----------------------------------------------------------------------------------
+
+# The test opens loopback listeners INSIDE PowerShell (an environment variable or a socket from WSL would not be this process) and prints its
+# pid. It cannot use 80, 443 or 8000: on the dev machine WSL (mirrored networking) and Docker hold them. So it runs a COPY of the script whose
+# fixed ports are 7, 9 and 13 (one of them is opened) and opens one more low port (17, 19 or 37) for the block: a low port sorts first in
+# "other listening ports", which stops at 40 rows (a dev machine has more than that, so an ephemeral port would fall into "... and N more").
+# Only single quotes in the PowerShell text: the command line goes through WSL.
+FIXED_PORTS = "$FixedPorts = 80, 443, 8000"
+OPEN_PORTS = (
+    "$global:keep = @(); "
+    "function Open-Port($ports) { foreach ($p in $ports) { try { $c = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $p); $c.Start(); $global:keep += $c; return $p } catch { } }; return 0 }; "
+    "$fixed = Open-Port @(7, 9, 13); $low = Open-Port @(17, 19, 37); "
+    "Write-Host ('PORTS-TEST pid=' + $PID + ' fixed=' + $fixed + ' low=' + $low)"
+)
+GET_REFUSED = "function Get-NetTCPConnection { throw 'denied' }"
+GET_HANGS = "function Get-NetTCPConnection { param($State, [switch]$AsJob) Start-Job -ScriptBlock { Start-Sleep -Seconds 60 } }"
+
+
+@pytest.fixture(scope="module")
+def ports_runs(scratch):
+    """The patched script three times, one after the other (they use the same ports): with the real lookup, with Get-NetTCPConnection
+    refused and with it hanging. Each: (host pid, the fixed port opened, the block port opened, the LOCAL PORTS lines, the whole stdout)."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert text.count(FIXED_PORTS) == 1, "the fixed ports moved: update FIXED_PORTS"
+    patched = scratch() / "collect-diagnostics.ps1"
+    patched.write_text(text.replace(FIXED_PORTS, "$FixedPorts = 7, 9, 13, 80, 443, 8000"), encoding="utf-8")
+
+    def one(setup: str):
+        out_dir, project = scratch(), scratch("dcdash-diag-project-")
+        proc = _run_in_powershell(["-OutDir", _win(out_dir)], out_dir, project, setup=OPEN_PORTS + "; " + setup, script=patched)
+        assert proc.returncode == 0, proc.stderr
+        found = re.search(r"PORTS-TEST pid=(\d+) fixed=(\d+) low=(\d+)", proc.stdout)
+        assert found, proc.stdout[:500]
+        pid, fixed, low = (int(g) for g in found.groups())
+        if not (fixed and low):
+            pytest.skip("none of the low ports 7, 9, 13 / 17, 19, 37 could be opened on this machine")
+        return pid, fixed, low, _section(proc.stdout, "LOCAL PORTS"), proc.stdout
+
+    return {"real": one("$null = 0"), "refused": one(GET_REFUSED), "hangs": one(GET_HANGS)}
+
+
+@needs_powershell
+def test_a_fixed_port_line_names_the_owner_process_and_its_pid_and_the_other_ports_say_nothing_is_listening(ports_runs):
+    pid, fixed, _, lines, _ = ports_runs["real"]
+    assert f"port {fixed}: something is listening on 127.0.0.1 (owner: powershell, pid {pid})" in lines
+    assert [l for l in lines if l.startswith("port ")].count(f"port {fixed}: nothing is listening") == 0
+    assert sum("nothing is listening" in l for l in lines) >= 4, lines  # 7, 9, 13 less the one opened, and 80, 443, 8000 (not opened here)
+
+
+@needs_powershell
+def test_other_listeners_are_listed_by_port_with_their_addresses_and_owner(ports_runs):
+    pid, _, low, lines, _ = ports_runs["real"]
+    assert "other listening ports (up to 40):" in lines
+    assert f"  {low}  127.0.0.1  powershell (pid {pid})" in lines
+    rows = [l for l in lines[lines.index("other listening ports (up to 40):") + 1:] if re.match(r"  \d+  ", l)]
+    ports = [int(l.split()[0]) for l in rows]
+    assert ports == sorted(ports) and len(rows) <= 40 and not {7, 9, 13, 80, 443, 8000} & set(ports)
+    assert all(re.fullmatch(r"  \d+  [0-9a-fA-F:.%, ]+  (owner hidden \(.+\)|[^()]+ \(pid \d+\))", l) for l in rows), rows
+
+
+@needs_powershell
+def test_a_refused_lookup_hides_the_owner_and_the_section_still_lists_the_ports(ports_runs):
+    _, fixed, low, lines, out = ports_runs["refused"]
+    assert "section failed" not in out
+    assert f"port {fixed}: something is listening on 127.0.0.1 (owner hidden: the lookup was refused)" in lines
+    assert f"  {low}  127.0.0.1  owner hidden (the lookup was refused)" in lines
+    assert not any("pid" in l for l in lines), lines
+
+
+@needs_powershell
+def test_a_lookup_that_does_not_answer_in_5_seconds_is_abandoned_and_says_so(ports_runs):
+    _, fixed, low, lines, out = ports_runs["hangs"]
+    assert "section failed" not in out and re.search(r"^== TOOLS ON PATH ==$", out, re.M)
+    assert f"port {fixed}: something is listening on 127.0.0.1 (owner hidden: the lookup did not answer in 5 s)" in lines
+    assert f"  {low}  127.0.0.1  owner hidden (the lookup did not answer in 5 s)" in lines
+
+
+@needs_powershell
+def test_the_ports_section_prints_names_and_ids_only_and_the_section_order_is_unchanged(ports_runs):
+    _, _, _, lines, out = ports_runs["real"]
+    assert all(l.isascii() for l in lines)
+    assert not re.search(r"\.exe|[A-Za-z]:\\|-Command|-File|NoProfile", "\n".join(lines)), "no path, command line or argument"
+    positions = [out.index(f"\n== {name}") for name in SECTIONS]
+    assert positions == sorted(positions)
+
+
 # ---- the script itself --------------------------------------------------------------------------------------------------
 
 def _code() -> str:
@@ -1046,7 +1132,7 @@ def test_script_sticks_to_powershell_51_syntax_and_stays_small():
     assert "Out-File" not in code and not re.search(r">\s*\$", code), "UTF-16 on PowerShell 5.1"
     assert "UTF8Encoding $false" in code and "WriteAllText" in code
     assert text.isascii(), "PowerShell 5.1 reads a script without a BOM as ANSI: use [char]0x2026 and friends"
-    assert len(text.splitlines()) <= 700
+    assert len(text.splitlines()) <= 740   # 700 until W7i 4a: the port owner lookup (job, timeout, name map, grouping) added about 40 lines
 
 
 def test_a_timed_out_command_gets_a_second_try_at_deleting_its_raw_output():

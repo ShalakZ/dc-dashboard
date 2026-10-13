@@ -1197,6 +1197,112 @@ def test_usage_names_the_new_switches_and_mask_is_refused_with_a_pointer_to_powe
     assert refused.rc == 2 and "not in the shell twin" in refused.err
 
 
+# ---- LOCAL PORTS: who owns a listening port (W7i 4a), against a fake ss / netstat first on PATH ----------------------------------------
+
+SS_HEADER = "State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess"
+SS_ROWS = [
+    'LISTEN 0      511           0.0.0.0:80         0.0.0.0:*     users:(("nginx",pid=101,fd=6),("nginx",pid=102,fd=6))',
+    'LISTEN 0      4096                *:443              *:*     users:(("caddy",pid=77,fd=3))',
+    'LISTEN 0      4096           [::]:8000          [::]:*       users:(("python3",pid=4120,fd=7))',
+    'LISTEN 0      4096 [::ffff:127.0.0.1]:3010          *:*     users:(("node",pid=900,fd=19))',
+    "LISTEN 0      4096    127.0.0.53%lo:53         0.0.0.0:*",
+    'LISTEN 0      128         127.0.0.1:631        0.0.0.0:*     users:(("Web Content",pid=55,fd=9))',
+    'LISTEN 0      200         127.0.0.1:5432       0.0.0.0:*     users:(("postgres",pid=300,fd=5))',
+    'LISTEN 0      200             [::1]:5432          [::]:*     users:(("postgres",pid=300,fd=6))',
+]
+SS_EXPECTED = [
+    "port 80: something is listening on 0.0.0.0 (owner: nginx, pid 101; nginx, pid 102)",
+    "port 443: something is listening on * (owner: caddy, pid 77)",
+    "port 8000: something is listening on [::] (owner: python3, pid 4120)",
+    "other listening ports (up to 40):",
+    "  53  127.0.0.53%lo  owner hidden",
+    "  631  127.0.0.1  Web Content (pid 55)",
+    "  3010  [::ffff:127.0.0.1]  node (pid 900)",
+    "  5432  127.0.0.1, [::1]  postgres (pid 300)",
+]
+
+
+def _fake_tools(tmp_path: Path, **tools: str) -> str:
+    """A folder with fake executables (name -> shell body) in front of PATH; returns the folder."""
+    folder = tmp_path / "fake_ports"
+    folder.mkdir()
+    for name, body in tools.items():
+        (folder / name).write_text("#!/bin/sh\n" + body)
+        (folder / name).chmod(0o755)
+    return str(folder)
+
+
+def _ports_section(awk_path: str, tmp_path: Path, **tools: str) -> list[str]:
+    """What section_local_ports emits when these fake tools come first on PATH."""
+    path = _fake_tools(tmp_path, **tools) + os.pathsep + awk_path
+    return _emit(tmp_path, path, "section_local_ports")["main.txt"].decode().splitlines()
+
+
+def _listing(*rows: str) -> str:
+    return "cat <<'LISTING'\n" + "\n".join(rows) + "\nLISTING\n"
+
+
+def test_local_ports_name_the_owner_by_name_and_pid_and_list_the_other_listeners(awk_path, tmp_path):
+    lines = _ports_section(awk_path, tmp_path, ss=_listing(SS_HEADER, *SS_ROWS))
+    assert lines == SS_EXPECTED
+    assert not any("fd=" in line for line in lines), "a file descriptor number is not part of the report"
+
+
+def test_a_port_nobody_listens_on_says_so_and_no_other_listener_says_none(awk_path, tmp_path):
+    lines = _ports_section(awk_path, tmp_path, ss=_listing(SS_HEADER))
+    assert lines == ["port 80: nothing is listening", "port 443: nothing is listening", "port 8000: nothing is listening", "other listening ports: none"]
+
+
+def test_ss_that_refuses_p_falls_back_to_the_plain_listing_and_every_owner_is_hidden(awk_path, tmp_path):
+    plain = [row.split("users:")[0].rstrip() for row in SS_ROWS[:3]]
+    body = 'case "$*" in *p*) echo "ss: unknown option" >&2; exit 1 ;; esac\n' + _listing(SS_HEADER, *plain)
+    lines = _ports_section(awk_path, tmp_path, ss=body)
+    assert lines[:3] == ["port 80: something is listening on 0.0.0.0 (owner hidden)", "port 443: something is listening on * (owner hidden)",
+                         "port 8000: something is listening on [::] (owner hidden)"]
+    assert lines[3:] == ["other listening ports: none"]
+
+
+NETSTAT = [
+    "Active Internet connections (only servers)",
+    "Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name",
+    "tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      101/nginx: master",
+    "tcp6       0      0 :::8000                 :::*                    LISTEN      4120/python3",
+    "tcp        0      0 127.0.0.53:53           0.0.0.0:*               LISTEN      -",
+    "tcp6       0      0 ::1:631                 :::*                    LISTEN      55/Web Content",
+]
+
+
+def test_netstat_is_used_when_ss_is_missing_or_fails_and_its_pid_column_is_read(awk_path, tmp_path):
+    lines = _ports_section(awk_path, tmp_path, ss="exit 127\n", netstat=_listing(*NETSTAT))
+    assert lines == [
+        "port 80: something is listening on 0.0.0.0 (owner: nginx: master, pid 101)",
+        "port 443: nothing is listening",
+        "port 8000: something is listening on :: (owner: python3, pid 4120)",
+        "other listening ports (up to 40):",
+        "  53  127.0.0.53  owner hidden",
+        "  631  ::1  Web Content (pid 55)",
+    ]
+
+
+def test_more_than_40_other_listeners_are_cut_with_a_count_and_the_lowest_ports_come_first(awk_path, tmp_path):
+    rows = [f'LISTEN 0 128 0.0.0.0:{port} 0.0.0.0:* users:(("svc{port}",pid={port + 1},fd=3))' for port in range(2000, 1955, -1)]  # 45, listed downwards
+    lines = _ports_section(awk_path, tmp_path, ss=_listing(SS_HEADER, *rows))
+    block = lines[lines.index("other listening ports (up to 40):") + 1:]
+    assert len(block) == 41 and block[0] == "  1956  0.0.0.0  svc1956 (pid 1957)" and block[39] == "  1995  0.0.0.0  svc1995 (pid 1996)"
+    assert block[40] == "  ... and 5 more"
+
+
+def test_neither_tool_is_a_note_not_a_failure(tmp_path):
+    only = _bin_dir(tmp_path, "no_ports_tools", ["bash", "awk", "sed", "cat", "iconv", "mkdir", "rm", "mktemp", "tr", "head"])
+    work = tmp_path / "work"
+    work.mkdir()
+    driver = tmp_path / "driver.sh"
+    driver.write_text('source "$1"; export LC_ALL=C; AWK=$(type -P awk); ICONV_BIN=$(type -P iconv); WORK=$2\n: > "$WORK/main.txt"\nsection_local_ports\n')
+    proc = subprocess.run([BASH, str(driver), str(SCRIPT), str(work)], capture_output=True, cwd=tmp_path, env={**os.environ, "PATH": str(only)}, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert (work / "main.txt").read_text() == "ss and netstat not found or failed; listening ports unknown"
+
+
 # ---- the API probe: curl, wget or bash alone, against a real local server --------------------------------------------------------------
 
 BODY = ('{"status":  "degraded",\n\t"nb": "a\u00a0b",\n\t"detail": "db url postgres://svc:' + URL_SECRET + '@db/x and ' + ENV_SECRET + ' were mentioned",\r\n'
