@@ -3,11 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { ConnectionCheck } from "./ConnectionCheck";
 
 const auth = (role = "operator"): Routes => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "o", role } },
+  "GET /api/me": { body: userFor(role, { username: "o" }) },
   "GET /api/site": { body: { timezone: "UTC", currency: null } },
   "GET /api/sources": { body: [
     { id: 5, name: "Main SCADA", connector_type: "opcua", enabled: true },

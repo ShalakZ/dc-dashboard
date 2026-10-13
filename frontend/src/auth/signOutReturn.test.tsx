@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import { Layout } from "../components/Layout";
 import { LoginPage } from "../pages/LoginPage";
 import { mockFetch, shellRoutes } from "../test/fetchMock";
+import { userFor } from "../test/users";
 import "../test/routerRequestShim";
 import { RETURN_KEY, AuthProvider } from "./AuthProvider";
 import { RequireAuth } from "./RequireAuth";
@@ -44,7 +45,7 @@ function renderApp(route: string) {
 /** The server side of one session: signed in until the logout or an expiry, and signed in again by the next login. */
 function server(options: { expireOnRequest?: boolean; logoutFails?: boolean } = {}) {
   let signedIn = true;
-  const user = { id: 1, username: "u", role: "admin" };
+  const user = userFor("admin");
   return mockFetch({
     ...shellRoutes,
     "GET /api/setup": { body: { needed: false } },

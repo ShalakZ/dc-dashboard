@@ -1,9 +1,10 @@
 import { screen } from "@testing-library/react";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { JobStatus } from "../components/JobStatus";
 
-const auth = { "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "o", role: "operator" } } };
+const auth = { "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("operator", { username: "o" }) } };
 const job = (status: string, result: unknown) => ({ id: 5, kind: "test_source", status, result, created_at: "t", finished_at: null });
 
 describe("JobStatus", () => {

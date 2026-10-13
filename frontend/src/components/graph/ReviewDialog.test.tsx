@@ -9,6 +9,7 @@ import { nodeId } from "../../lib/graph";
 import { mockFetch } from "../../test/fetchMock";
 import { model, point, source } from "../../test/graphFixtures";
 import { renderWithProviders } from "../../test/render";
+import { userFor } from "../../test/users";
 import { ReviewDialog } from "./ReviewDialog";
 
 const suggest = (metric: Metric, over: { scale?: number; interval_seconds?: number; custom_unit?: string | null } = {}) =>
@@ -38,7 +39,7 @@ type Initial = React.ComponentProps<typeof ReviewDialog>["initialTarget"];
 const created = { status: 201, body: { asset_id: 11, mapping_ids: [1, 2, 3] } };
 const routes = (accept: object = created) => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "admin", role: "admin" } },
+  "GET /api/me": { body: userFor("admin", { username: "admin" }) },
   "GET /api/discovery/graph": { body: graph() },
   "POST /api/discovery/accept": accept,
 });

@@ -2,10 +2,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { keys } from "../api/queries";
-import { RequireRole } from "../auth/RequireAuth";
+import { RequirePermission } from "../auth/RequireAuth";
 import { noteReach, resetServerReach } from "../lib/serverReach";
 import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { Layout } from "./Layout";
 
 const ROLE_WORD = { admin: "Administrator", operator: "Operator", viewer: "Viewer" } as const;
@@ -21,7 +22,7 @@ afterEach(() => {
 const routes = (role: string) => ({
   ...shellRoutes,
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/me": { body: userFor(role) },
 });
 
 /**
@@ -125,29 +126,30 @@ describe("Layout audit link", () => {
   });
 });
 
-describe("RequireRole", () => {
-  it("shows a viewer visiting /users an Admins only page instead of the API error", async () => {
+describe("RequirePermission", () => {
+  it("shows a viewer visiting /users the No access page instead of the API error", async () => {
     mockFetch(routes("viewer"));
     renderWithProviders(
-      <RequireRole min="admin"><p>users page</p></RequireRole>,
+      <RequirePermission need="users.view"><p>users page</p></RequirePermission>,
       { route: "/users", path: "/users" },
     );
-    expect(await screen.findByText("Admins only")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
+    expect(screen.getByText("Your role does not include this page.")).toBeInTheDocument();
     expect(screen.queryByText("users page")).not.toBeInTheDocument();
   });
 
-  it("tells a viewer an operator-level page is for operators, and lets an operator in", async () => {
+  it("keeps the same page from a viewer and lets an operator in", async () => {
     mockFetch(routes("viewer"));
     const viewer = renderWithProviders(
-      <RequireRole min="operator"><p>scans page</p></RequireRole>,
+      <RequirePermission need="discovery.view"><p>scans page</p></RequirePermission>,
       { route: "/scans", path: "/scans" },
     );
-    expect(await screen.findByText("Operators only")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
     expect(screen.queryByText("scans page")).not.toBeInTheDocument();
     viewer.unmount();
     mockFetch(routes("operator"));
     renderWithProviders(
-      <RequireRole min="operator"><p>scans page</p></RequireRole>,
+      <RequirePermission need="discovery.view"><p>scans page</p></RequirePermission>,
       { route: "/scans", path: "/scans" },
     );
     expect(await screen.findByText("scans page")).toBeInTheDocument();
@@ -156,10 +158,20 @@ describe("RequireRole", () => {
   it("renders the page for an admin", async () => {
     mockFetch(routes("admin"));
     renderWithProviders(
-      <RequireRole min="admin"><p>users page</p></RequireRole>,
+      <RequirePermission need="users.view"><p>users page</p></RequirePermission>,
       { route: "/users", path: "/users" },
     );
     expect(await screen.findByText("users page")).toBeInTheDocument();
+  });
+
+  it("an array means all of them: one missing keeps the page away", async () => {
+    mockFetch(routes("operator")); // holds tariffs.view and assets.view, not tariffs.edit
+    renderWithProviders(
+      <RequirePermission need={["assets.view", "tariffs.edit"]}><p>tariffs page</p></RequirePermission>,
+      { route: "/tariffs", path: "/tariffs" },
+    );
+    expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
+    expect(screen.queryByText("tariffs page")).not.toBeInTheDocument();
   });
 });
 

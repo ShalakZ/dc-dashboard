@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { RequireAuth } from "./RequireAuth";
 import { RETURN_KEY, useAuth } from "./AuthProvider";
 import { useAssets } from "../api/queries";
@@ -17,6 +18,62 @@ function WhoAmI() {
   const { user, hasRole } = useAuth();
   return <p>{user?.username} admin:{String(hasRole("admin"))} operator:{String(hasRole("operator"))}</p>;
 }
+
+function Held() {
+  const { user, can, canAny } = useAuth();
+  return (
+    <p>
+      {user ? user.username : "nobody"} users:{String(can("users.edit"))} assets:{String(can("assets.view"))} any:{String(canAny("users.edit", "assets.view"))} none:{String(canAny())}
+    </p>
+  );
+}
+
+describe("AuthProvider permissions", () => {
+  const signedInAs = (me: unknown) => mockFetch({ "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: me } });
+
+  it("can(id) is true for a permission the role holds and false for one it does not", async () => {
+    signedInAs(userFor("viewer"));
+    renderWithProviders(<RequireAuth><Held /></RequireAuth>);
+    expect(await screen.findByText("u users:false assets:true any:true none:false")).toBeInTheDocument();
+  });
+
+  it("an administrator holds everything the build knows", async () => {
+    signedInAs(userFor("admin"));
+    renderWithProviders(<RequireAuth><Held /></RequireAuth>);
+    expect(await screen.findByText("u users:true assets:true any:true none:false")).toBeInTheDocument();
+  });
+
+  it("a role with no permissions at all is signed in and can do nothing", async () => {
+    signedInAs(userFor("nobody-yet"));
+    renderWithProviders(<RequireAuth><Held /></RequireAuth>);
+    expect(await screen.findByText("u users:false assets:false any:false none:false")).toBeInTheDocument();
+  });
+
+  it("a role an administrator made is a role like any other: its name is free text and its permissions are what count", async () => {
+    signedInAs(userFor("Night shift (north hall)", { permissions: ["users.edit"] }));
+    renderWithProviders(<RequireAuth><Held /></RequireAuth>);
+    expect(await screen.findByText("u users:true assets:false any:true none:false")).toBeInTheDocument();
+  });
+
+  it("an id a newer server sends is kept and harmless: the ones this build knows still work", async () => {
+    signedInAs(userFor("custom", { permissions: ["assets.view", "something.new" as never] }));
+    renderWithProviders(<RequireAuth><Held /></RequireAuth>);
+    expect(await screen.findByText("u users:false assets:true any:true none:false")).toBeInTheDocument();
+  });
+
+  it("nobody signed in can do nothing", async () => {
+    mockFetch({ "GET /api/setup": { body: { needed: false } }, "GET /api/me": { status: 401, body: { detail: "x" } } });
+    renderWithProviders(<Held />);
+    expect(await screen.findByText("nobody users:false assets:false any:false none:false")).toBeInTheDocument();
+  });
+
+  // TEMPORARY: Task 4b deletes hasRole and this test with it.
+  it("hasRole (until the pages ask for permissions) answers from the three built-in role names only", async () => {
+    signedInAs(userFor("Night shift", { permissions: [...userFor("admin").permissions] }));
+    renderWithProviders(<RequireAuth><WhoAmI /></RequireAuth>);
+    await waitFor(() => expect(screen.getByText(/^u admin:false operator:false$/)).toBeInTheDocument());
+  });
+});
 
 describe("AuthProvider", () => {
   it("redirects to /setup when no user exists yet", async () => {
@@ -35,7 +92,7 @@ describe("AuthProvider", () => {
   it("returns to the login page when a request answers 401 mid-session", async () => {
     mockFetch({
       "GET /api/setup": { body: { needed: false } },
-      "GET /api/me": { body: { id: 1, username: "root", role: "admin" } },
+      "GET /api/me": { body: userFor("admin", { username: "root" }) },
       // session expired between /api/me and the page's own request
       "GET /api/assets": { status: 401, body: { detail: "not authenticated" } },
     });
@@ -47,7 +104,7 @@ describe("AuthProvider", () => {
   it("exposes the user and role checks", async () => {
     mockFetch({
       "GET /api/setup": { body: { needed: false } },
-      "GET /api/me": { body: { id: 1, username: "op", role: "operator" } },
+      "GET /api/me": { body: userFor("operator", { username: "op" }) },
     });
     renderWithProviders(<RequireAuth><WhoAmI /></RequireAuth>);
     await waitFor(() => expect(screen.getByText(/op admin:false operator:true/)).toBeInTheDocument());
@@ -70,9 +127,9 @@ const bootstrapRoutes = () => ({
     if (server.me === "network") throw new TypeError("Failed to fetch");
     if (server.me === 401) return { status: 401, body: { detail: "not authenticated" } };
     if (typeof server.me === "number") return { status: server.me, body: { detail: "Bad Gateway" } };
-    return { body: { id: 1, username: "u", role: "admin" } };
+    return { body: userFor("admin") };
   },
-  "POST /api/login": { body: { id: 2, username: "v", role: "viewer" } },
+  "POST /api/login": { body: userFor("viewer", { id: 2, username: "v" }) },
 });
 
 function Probe() {
@@ -397,9 +454,11 @@ describe("AuthProvider bootstrap: the answers that are neither 'unreachable' nor
     const answers = [
       ["an HTML page (a captive portal)", "<!doctype html><html><body>Sign in to the network</body></html>", "text/html"],
       ["an empty object", "{}", json],
-      ["a name that is not text", JSON.stringify({ id: 1, username: 5, role: "admin" }), json],
-      ["a role that is not one of ours", JSON.stringify({ id: 1, username: "u", role: "root" }), json],
-      ["a role that only every object has (toString)", JSON.stringify({ id: 1, username: "u", role: "toString" }), json],
+      ["a name that is not text", JSON.stringify(userFor("admin", { username: 5 as never })), json],
+      ["a role that is not text", JSON.stringify(userFor("admin", { role: 5 as never })), json],
+      ["no list of permissions", JSON.stringify({ id: 1, username: "u", role: "admin" }), json],
+      ["permissions that are not a list", JSON.stringify(userFor("admin", { permissions: "assets.view" as never })), json],
+      ["permissions that are not text", JSON.stringify(userFor("admin", { permissions: ["assets.view", 5] as never })), json],
       ["null", "null", json],
     ] as const;
 
@@ -423,7 +482,7 @@ describe("AuthProvider bootstrap: the answers that are neither 'unreachable' nor
 
     it("a real user is still signed in (the check is on the shape, not on extra fields)", async () => {
       holdRetryTimers();
-      meSays(JSON.stringify({ id: 3, username: "ann", role: "viewer", preferences: { mode: "dark" } }), json);
+      meSays(JSON.stringify({ ...userFor("viewer", { id: 3, username: "ann" }), preferences: { mode: "dark" } }), json);
       renderWithProviders(<Probe />);
       await waitFor(() => expect(read().user).toBe("ann"));
       expect(logged).not.toHaveBeenCalled();

@@ -7,6 +7,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { iconHtml } from "../test/iconHtml";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { QuickFind } from "./QuickFind";
 
 const asset = (id: number, name: string, parent_id: number | null): Asset => ({ id, parent_id, name, kind: "panel", sort_order: 0 });
@@ -36,7 +37,7 @@ interface MountOptions { role?: string; assets?: Routes[string]; extra?: ReactNo
 async function mount({ role = "admin", assets = { body: ASSETS }, extra = null }: MountOptions = {}) {
   const calls = mockFetch({
     "GET /api/setup": { body: { needed: false } },
-    "GET /api/me": { body: { id: 1, username: "u", role } },
+    "GET /api/me": { body: userFor(role) },
     "GET /api/assets": assets,
   });
   const user = userEvent.setup();
@@ -51,7 +52,7 @@ async function mount({ role = "admin", assets = { body: ASSETS }, extra = null }
     </>,
     { route: "/start" },
   );
-  await waitFor(() => expect(screen.getByTestId("who")).toHaveTextContent(role)); // hasRole needs the user
+  await waitFor(() => expect(screen.getByTestId("who")).toHaveTextContent(role)); // the permissions need the user
   const input = screen.getByRole("combobox", { name: "Quick find" }) as HTMLInputElement;
   return { user, calls, input };
 }

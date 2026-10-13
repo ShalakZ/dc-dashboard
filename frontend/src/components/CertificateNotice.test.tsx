@@ -2,6 +2,7 @@ import { act, screen, waitFor } from "@testing-library/react";
 import type { TlsStatus } from "../api/types";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { CertificateNotice } from "./CertificateNotice";
 
 const NOT_AFTER = "2026-11-09T11:03:11+00:00"; // 14:03:11 on the site clock below (Asia/Qatar, UTC+3)
@@ -13,7 +14,7 @@ const status = (over: Partial<TlsStatus>): TlsStatus => ({
 
 const routes = (tls: TlsStatus, role = "admin") => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/me": { body: userFor(role) },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: null } },
   "GET /api/tls/status": { body: tls },
 });

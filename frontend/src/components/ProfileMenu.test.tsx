@@ -3,11 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { ProfileMenu } from "./ProfileMenu";
 
 const SESSION: Routes = {
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "admin", role: "admin", preferences: { mode: "light", theme: "navy-gold" } } },
+  "GET /api/me": { body: userFor("admin", { username: "admin", preferences: { mode: "light", theme: "navy-gold" } }) },
   "POST /api/logout": { status: 204 },
   "PUT /api/me/preferences": { body: { mode: "light", theme: "navy-gold" } },
 };
@@ -54,9 +55,20 @@ describe("ProfileMenu trigger", () => {
   });
 
   it("writes the role out in words", async () => {
-    mockFetch({ ...SESSION, "GET /api/me": { body: { id: 2, username: "pat", role: "viewer", preferences: { mode: "light", theme: "navy-gold" } } } });
+    mockFetch({ ...SESSION, "GET /api/me": { body: userFor("viewer", { id: 2, username: "pat", preferences: { mode: "light", theme: "navy-gold" } }) } });
     renderWithProviders(<ProfileMenu />, { route: "/assets" });
     expect(await screen.findByRole("button", { name: "pat Viewer" })).toBeInTheDocument();
+  });
+
+  it("writes the name of a role an administrator made as it is, whatever it is called", async () => {
+    mockFetch({ ...SESSION, "GET /api/me": { body: userFor("Night shift", { id: 2, username: "pat" }) } });
+    const view = renderWithProviders(<ProfileMenu />, { route: "/assets" });
+    expect(await screen.findByRole("button", { name: "pat Night shift" })).toBeInTheDocument();
+    view.unmount();
+    // a name that is also a property of every object must not be looked up as one
+    mockFetch({ ...SESSION, "GET /api/me": { body: userFor("constructor", { id: 2, username: "pat" }) } });
+    renderWithProviders(<ProfileMenu />, { route: "/assets" });
+    expect(await screen.findByRole("button", { name: "pat constructor" })).toBeInTheDocument();
   });
 });
 
@@ -203,7 +215,7 @@ describe("ProfileMenu appearance", () => {
 
   it("starts on the choice the account holds, not on the first option", async () => {
     const { trigger } = await mount({
-      "GET /api/me": { body: { id: 1, username: "admin", role: "admin", preferences: { mode: "system", theme: "desert-gold" } } },
+      "GET /api/me": { body: userFor("admin", { username: "admin", preferences: { mode: "system", theme: "desert-gold" } }) },
     });
     await userEvent.click(trigger);
     await waitFor(() => expect(modeSelect()).toHaveValue("system"));

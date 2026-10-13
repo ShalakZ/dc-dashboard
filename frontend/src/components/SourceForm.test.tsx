@@ -6,6 +6,7 @@ import { keys } from "../api/queries";
 import type { Source } from "../api/types";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { SourceForm } from "./SourceForm";
 
 const connectors = [
@@ -15,7 +16,7 @@ const connectors = [
   { type: "other", config_schema: { type: "object", required: ["host"], properties: {
     host: { type: "string", title: "Host" }, port: { type: "integer", title: "Port", default: 502 }, tls: { type: "boolean", title: "Tls", default: false } } } },
 ];
-const auth = { "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "a", role: "admin" } }, "GET /api/connectors": { body: connectors } };
+const auth = { "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin", { username: "a" }) }, "GET /api/connectors": { body: connectors } };
 const sim: Source = {
   id: 2, name: "sim", connector_type: "simulator", config: { url: "http://sim:9000", timeout_seconds: 2.5 }, origin: "manual",
   enabled: true, status: "online", last_seen: null, last_error: null, has_secret: true,

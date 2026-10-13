@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { AppShellSkeleton } from "./AppShellSkeleton";
 import { Layout } from "./Layout";
 
@@ -143,7 +144,7 @@ describe("AppShellSkeleton", () => {
     };
 
     it("is the same on the skeleton and on the real shell", async () => {
-      mockFetch({ ...shellRoutes, "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "u", role: "admin" } } });
+      mockFetch({ ...shellRoutes, "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin") } });
       const real = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
       await screen.findByRole("button", { name: /^u Administrator$/ }); // the shell has settled
       const realChain = chain(real.container.querySelector(".shell")!);

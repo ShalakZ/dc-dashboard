@@ -4,6 +4,7 @@ import { App } from "../App";
 import { Layout } from "../components/Layout";
 import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 
 /**
  * What Viewer, Operator and Admin see and may open. The tables below are literals, written from the sidebar and the route guards as
@@ -35,7 +36,7 @@ type Role = "viewer" | "operator" | "admin";
 const ROLES: Role[] = ["viewer", "operator", "admin"];
 
 /** The user the server answers for `role`. */
-const me = (role: Role) => ({ id: 1, username: "u", role });
+const me = (role: Role) => userFor(role);
 
 const routes = (role: Role, defaultDashboard: number | null = null) => ({
   ...shellRoutes,

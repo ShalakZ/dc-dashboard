@@ -1,11 +1,12 @@
-import type { Asset, Dashboard, Role, Widget, WidgetConfig, WidgetData, WidgetPoint, WidgetType, WidgetValue } from "../api/types";
+import type { Asset, Dashboard, Widget, WidgetConfig, WidgetData, WidgetPoint, WidgetType, WidgetValue } from "../api/types";
+import { userFor } from "./users";
 
 export const SITE = { timezone: "Asia/Qatar", currency: "QAR" };
 
 /** The three requests every page test needs: no setup pending, who is signed in, and the site zone. */
-export const authed = (role: Role) => ({
+export const authed = (role: string) => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/me": { body: userFor(role) },
   "GET /api/site": { body: SITE },
 });
 
