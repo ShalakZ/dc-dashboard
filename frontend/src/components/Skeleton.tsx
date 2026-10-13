@@ -192,6 +192,23 @@ export function PageCardSkeleton({ purpose, className, label, children }: { purp
   );
 }
 
+const WORD_CH = 0.86; // an average character of the UI font as a share of "0" (measured on the Settings paragraphs); `ch` scales with the font
+
+/**
+ * A paragraph standing in for `text`: a grey pill per word, as long as the word, with the space between them, so it breaks into as many
+ * lines as the text will at any width and in any font (a fixed number of grey lines is a line off at some width). Only the lengths of the
+ * words are used; none of them is rendered. `className` is the real paragraph's (`muted`).
+ */
+export function ParagraphSkeleton({ text, className, label }: { text: string; className?: string; label?: string }) {
+  return (
+    <Labelled label={label}>
+      <p className={className ? `sk-words ${className}` : "sk-words"} aria-hidden="true">
+        {text.split(/\s+/).filter(Boolean).map((word, i) => <Skeleton key={i} width={`${(word.length * WORD_CH).toFixed(2)}ch`} />)}
+      </p>
+    </Labelled>
+  );
+}
+
 /** The trend chart's box. */
 export function ChartBlock({ label }: { label?: string }) {
   return <Labelled label={label}><Skeleton variant="block" height={CHART_HEIGHT} /></Labelled>;

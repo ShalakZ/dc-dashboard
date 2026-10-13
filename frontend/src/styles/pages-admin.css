@@ -30,15 +30,17 @@
   .form-card .create-user > button { justify-self: start; min-height: 38px; }
   .form-card .create-user > p { grid-column: 1 / -1; }
 
-  /* Settings: two cards side by side while they fit, the certificate line under the first */
-  .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 22px; align-items: start; }
-  .settings-grid > * { min-width: 0; }
-  .settings-grid .form-card { max-width: none; margin: 0; }
-  .settings-col { display: grid; gap: 16px; }
-  .settings-col .notice { margin: 0; }
+  /* Settings: General and Sign-in protection are two page cards of one height, the About card spans both (.page-grid, .page-card and .span-all
+     are in app.css). The form is the card's column and its foot, the Save and what it says, sits at the bottom, so the two Saves are level;
+     the loading page draws the same column from divs (.settings-form, .form-foot). */
+  .settings-page .page-card p { margin: 0; } /* the card's own gap spaces its lines; a browser margin would add to it */
+  .settings-page .settings-form { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+  .settings-page .form-foot { display: grid; gap: 14px; margin-top: auto; }
   .settings-page input[type="number"] { max-width: 12em; }
   .settings-page label.check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-base); } /* the sign-in switch: box and text on one line */
-  .settings-page .form-card .banner { margin: 0; }
+  .settings-page .sk-switch { display: flex; align-items: center; gap: 8px; font-size: var(--fs-base); } /* its skeleton: a box and a line */
+  .settings-page .page-card .banner { margin: 0; }
+  .settings-page .about-line { overflow-wrap: anywhere; }
 
   /* Storage: the summary tiles, then Rows per day and Retention and capacity as two cards of one height (.page-grid and .page-card are in
      app.css; the data bar is .databar-cell there). The caption of a real tile is [icon and title, tip] with the tip pushed to the right; the
@@ -62,8 +64,8 @@
   .storage-page .retention-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; align-items: end; }
   .storage-page .retention-foot { display: grid; gap: 14px; margin-top: auto; }
 
-  /* Audit log (W7j). The page description may run to about 110 characters; Settings and Diagnostics add themselves to this selector (Tariffs has its own in pages-billing.css). */
-  .audit-page .page-head .sub, .storage-page .page-head .sub { max-width: 110ch; }
+  /* Audit log (W7j). The page description may run to about 110 characters; Diagnostics adds itself to this selector (Tariffs has its own in pages-billing.css). */
+  .audit-page .page-head .sub, .storage-page .page-head .sub, .settings-page .page-head .sub { max-width: 110ch; }
 
   /* The toolbar: Search (it grows), User, Action and From to To as one joined control; under it the quick filters at the left and "Go to date"
      and Export CSV at the right. The selects have a fixed width, so the rows wrap at the same place before and after the options arrive. */

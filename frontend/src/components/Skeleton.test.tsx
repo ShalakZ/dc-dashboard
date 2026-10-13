@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { StrictMode, type ReactElement } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
 import {
-  ActionsSpace, AssetSkeleton, CanvasSkeleton, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageCardSkeleton, PageHeaderSkeleton, PageSkeleton,
+  ActionsSpace, AssetSkeleton, CanvasSkeleton, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageCardSkeleton, PageHeaderSkeleton, PageSkeleton, ParagraphSkeleton,
   resetSkeletonClock, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton,
 } from "./Skeleton";
 
@@ -20,6 +20,7 @@ const shapes: Array<[string, (label?: string) => ReactElement]> = [
   ["PageHeaderSkeleton", (label) => <PageHeaderSkeleton label={label} />],
   ["PageHeaderSkeleton (all parts)", (label) => <PageHeaderSkeleton crumbs icon sub actions label={label} />],
   ["PageCardSkeleton", (label) => <PageCardSkeleton purpose label={label}><FormSkeleton rows={2} bare /></PageCardSkeleton>],
+  ["ParagraphSkeleton", (label) => <ParagraphSkeleton text="The site's time zone. Readings are stored in UTC." label={label} />],
 ];
 
 describe("Skeleton", () => {
@@ -721,5 +722,38 @@ describe("the instant rule (a region that follows a skeleton somebody saw does n
     at(10_600);
     render(<StrictMode>{regions(["Three"])}</StrictMode>);
     expect(instant("Three")).toBe(false); // a leaked region would leave every later one instant for good
+  });
+});
+
+describe("ParagraphSkeleton", () => {
+  const lines = (container: HTMLElement) => Array.from(container.querySelectorAll<HTMLElement>(".sk-line"));
+
+  it("is one paragraph with a grey pill per word of the text, as long as the word", () => {
+    const { container } = render(<ParagraphSkeleton text="A day at midnight." />);
+    const p = container.firstElementChild!;
+    expect(p.tagName).toBe("P");
+    expect(p).toHaveClass("sk-words");
+    const pills = lines(container);
+    expect(pills).toHaveLength(4);
+    const ch = pills.map((pill) => parseFloat(pill.style.width));
+    expect(pills.every((pill) => pill.style.width.endsWith("ch"))).toBe(true);
+    expect(ch[3]).toBeGreaterThan(ch[1]); // "midnight." is longer than "day"
+    expect(ch[0]).toBeLessThan(ch[1]); // "A" is shorter than "day"
+    expect(ch[3] / ch[1]).toBeCloseTo("midnight.".length / "day".length, 1); // proportional to the word's length
+  });
+
+  it("splits on any run of white space and ignores the ends, so the pills are the words and nothing else", () => {
+    const { container } = render(<ParagraphSkeleton text={"  one   two\nthree  "} />);
+    expect(lines(container)).toHaveLength(3);
+  });
+
+  it("holds none of the words, takes the caller's class and is the same markup every render", () => {
+    const text = "Wrong passwords no longer block anyone.";
+    const first = render(<ParagraphSkeleton text={text} className="muted" />);
+    expect(first.container.textContent).toBe("");
+    expect(first.container.firstElementChild).toHaveClass("sk-words", "muted");
+    const markup = first.container.innerHTML;
+    first.unmount();
+    expect(render(<ParagraphSkeleton text={text} className="muted" />).container.innerHTML).toBe(markup);
   });
 });
