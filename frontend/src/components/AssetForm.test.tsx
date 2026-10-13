@@ -343,13 +343,20 @@ describe("AssetForm Icon", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
-  it("closes the dialog on Escape with the grid open, leaving nothing behind", async () => {
+  it("closes only the grid on Escape, keeping the dialog and the typed name, and a second Escape closes the dialog", async () => {
     const onClose = vi.fn();
     const onSubmit = vi.fn(async () => undefined);
     render(<Modal title="Edit asset" onClose={onClose}><AssetForm assets={[]} initial={named} excludeIds={new Set()} onSubmit={onSubmit} onCancel={onClose} /></Modal>);
     expect(screen.getByLabelText("Name")).toHaveFocus();
+    await userEvent.type(screen.getByLabelText("Name"), " 2");
     await userEvent.click(opener());
     await userEvent.keyboard("{ArrowRight}{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(grid()).toHaveAttribute("hidden");
+    expect(opener()).toHaveAttribute("aria-expanded", "false");
+    expect(opener()).toHaveFocus();
+    expect(screen.getByLabelText("Name")).toHaveValue("Asset 2");
+    await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledOnce();
     expect(onSubmit).not.toHaveBeenCalled();
   });

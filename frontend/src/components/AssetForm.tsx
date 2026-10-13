@@ -22,6 +22,7 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
   const [icon, setIcon] = useState<string | null>(startIcon); // a catalogue id, null for Automatic; a stored id the catalogue lacks stays as it is until the user picks
   const [picking, setPicking] = useState(false);
   const grid = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLButtonElement>(null);
   const [labelId, captionId, gridId] = [useId(), useId(), useId()];
   const [sortOrder, setSortOrder] = useState(String(initial?.sort_order ?? 0));
   const [error, setError] = useState<string | null>(null);
@@ -78,10 +79,14 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
         <div className="icon-field-row">
           <span className="page-tile icon-preview" aria-hidden="true"><Icon name={assetIcon({ kind: resolvedKind, icon })} /></span>
           <span id={captionId} className="icon-caption">{caption}</span>
-          <button type="button" aria-expanded={picking} aria-controls={gridId} onClick={() => setPicking((open) => !open)}>Change icon</button>
+          <button type="button" ref={opener} aria-expanded={picking} aria-controls={gridId} onClick={() => setPicking((open) => !open)}>Change icon</button>
         </div>
-        {/* Kept mounted and hidden, so aria-controls resolves; Enter would otherwise save the form while the user is only choosing. */}
-        <div id={gridId} ref={grid} role="radiogroup" aria-label="Icon choices" className="icon-grid" hidden={!picking} onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }}>
+        {/* Kept mounted and hidden, so aria-controls resolves; Enter would otherwise save the form while the user is only choosing.
+            Escape closes the grid only: the dialog and the typed name stay (a second Escape, from outside the grid, closes the dialog). */}
+        <div id={gridId} ref={grid} role="radiogroup" aria-label="Icon choices" className="icon-grid" hidden={!picking} onKeyDown={(e) => {
+          if (e.key === "Enter") e.preventDefault();
+          if (e.key === "Escape") { e.stopPropagation(); setPicking(false); opener.current?.focus(); }
+        }}>
           <label className="icon-cell icon-cell-auto check" title={`Automatic: follows the kind (${iconLabelFor(automatic)})`}>
             <input type="radio" name="asset-icon" checked={icon === null} onChange={() => setIcon(null)} />
             <Icon name={automatic} /><span className="sr-only">Automatic</span>
