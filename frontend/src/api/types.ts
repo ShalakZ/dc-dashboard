@@ -122,6 +122,8 @@ export interface CheckResult { ok: boolean; status: string; latency_ms: number |
 
 /** `blocked`: some sign-in key of this account name is blocked right now (GET /api/users). */
 export interface UserRow { id: number; username: string; role: string; active: boolean; blocked?: boolean }
+/** One role as GET /api/roles answers it. `assignable`: the caller holds every permission the role grants, so may give it to an account and manage the accounts that hold it. `permissions` is null unless the caller holds roles.manage. */
+export interface RoleRow { id: number; name: string; description: string; builtin: boolean; user_count: number; assignable: boolean; permissions: string[] | null }
 export interface GeneralSettings { timezone: string }
 
 export interface SignInValues { max_failures: number; block_minutes: number }

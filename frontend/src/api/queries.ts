@@ -4,7 +4,7 @@ import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { ApiError, api } from "./client";
 import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
-  FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
+  FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
@@ -18,6 +18,7 @@ export const keys = {
   connectors: ["connectors"] as const,
   points: (sourceId: number) => ["sources", sourceId, "points"] as const,
   users: ["users"] as const,
+  roles: ["roles"] as const,
   general: ["settings", "general"] as const,
   signInPolicy: ["settings", "sign-in"] as const,
   storage: ["storage"] as const,
@@ -115,6 +116,9 @@ export function useInvalidate() {
 }
 
 export const useUsers = () => useQuery({ queryKey: keys.users, queryFn: () => api.get<UserRow[]>("/api/users") });
+
+/** The roles and which of them the caller may hand out (`assignable`). Open to users.view and users.edit; the Users page is its reader until the Roles page arrives. */
+export const useRoles = (enabled = true) => useQuery({ queryKey: keys.roles, queryFn: () => api.get<RoleRow[]>("/api/roles"), enabled });
 
 export function useCreateUser() {
   const invalidate = useInvalidate();

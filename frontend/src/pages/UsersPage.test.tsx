@@ -426,3 +426,115 @@ describe("UsersPage controls follow the permissions of the role (a custom role)"
     expect(within(role).getAllByRole("option").map((o) => o.textContent)).toEqual(["viewer", "operator", "admin"]);
   });
 });
+
+describe("UsersPage offers the roles the server says this person may hand out (GET /api/roles)", () => {
+  /** What GET /api/roles answers: `names` are the roles the caller may hand out; the others are listed but not assignable. */
+  const role = (id: number, name: string, assignable: boolean, builtin = false) =>
+    ({ id, name, description: "", builtin, user_count: 0, assignable, permissions: null });
+  const rows = (): Row[] => [
+    { id: 1, username: "admin", role: "admin", active: true },
+    { id: 2, username: "ops", role: "operator", active: true },
+    { id: 9, username: "pm", role: "People manager", active: true },
+    { id: 10, username: "nobody", role: "Nothing", active: true },
+    { id: 11, username: "auditor", role: "Auditor", active: true, blocked: true },
+  ];
+  /** The list the server answers in id order: the built-ins first, then custom roles in the order they were made (not alphabetical). */
+  const roles = (assignable: (name: string) => boolean) =>
+    ["viewer", "operator", "admin"].map((n, i) => role(i + 1, n, assignable(n), true))
+      .concat(["Nothing", "People manager", "Auditor"].map((n, i) => role(4 + i, n, assignable(n))));
+  const rowOf = (name: string) => screen.getByText(name, { selector: "td.cell-user" }).closest("tr")!;
+  const optionsOf = (select: HTMLElement) => within(select).getAllByRole("option").map((o) => o.textContent);
+
+  /** Signed in as user 9 ("People manager": users.view, users.edit, assets.view) or as the built-in admin; the list and the roles are there when this returns. */
+  async function show(who: "people-manager" | "admin", answer: { status?: number; body?: unknown } = {}) {
+    const people = who === "people-manager";
+    const calls = mockFetch({
+      "GET /api/setup": { body: { needed: false } },
+      "GET /api/me": {
+        body: people
+          ? userFor("People manager", { id: 9, username: "pm", permissions: ["users.view", "users.edit", "assets.view"] })
+          : userFor("admin", { id: 1, username: "admin" }),
+      },
+      "GET /api/users": { body: rows() },
+      "GET /api/roles": answer.status || answer.body ? answer : { body: roles((n) => (people ? ["Nothing", "People manager"].includes(n) : true)) },
+      "POST /api/users": ({ body }) => ({ status: 201, body: { id: 12, active: true, ...(body as object) } }),
+    });
+    renderWithProviders(<><UsersPage /><SignedIn /></>, { route: "/users", path: "/users" });
+    await screen.findByText("ops", { selector: "td" });
+    await accountKnown();
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/roles")).toBe(true));
+    return calls;
+  }
+
+  it("a People manager sees the Admin, Operator and Auditor rows read-only: the role as text, no select, no menu, no trash can", async () => {
+    await show("people-manager");
+    await waitFor(() => expect(screen.queryByRole("combobox", { name: "Role for admin" })).not.toBeInTheDocument());
+    for (const [name, text] of [["admin", "admin"], ["ops", "operator"], ["auditor", "Auditor"]]) {
+      const row = rowOf(name);
+      expect(within(row).getAllByRole("cell")[1].textContent).toBe(text); // the role cell: plain text
+      expect(within(row).queryByRole("combobox")).not.toBeInTheDocument();
+      expect(within(row).queryByRole("button", { name: `Actions for ${name}` })).not.toBeInTheDocument();
+      expect(within(row).queryByRole("button", { name: `Delete ${name}` })).not.toBeInTheDocument();
+    }
+    expect(within(rowOf("auditor")).getByText("blocked")).toBeInTheDocument(); // the state is still shown
+    expect(within(rowOf("admin")).getAllByRole("cell")[1]).toHaveAttribute("title", "This account has a role with more access than yours, so you cannot change it.");
+    expect(within(rowOf("nobody")).getAllByRole("cell")[1]).not.toHaveAttribute("title");
+  });
+
+  it("the rows whose role may be handed out keep their controls, and the role select lists only those roles", async () => {
+    await show("people-manager");
+    await waitFor(() => expect(screen.queryByRole("combobox", { name: "Role for admin" })).not.toBeInTheDocument());
+    const nobody = rowOf("nobody");
+    const select = within(nobody).getByRole("combobox", { name: "Role for nobody" });
+    expect(select).toBeEnabled();
+    expect(optionsOf(select)).toEqual(["Nothing", "People manager"]);
+    expect(within(nobody).getByRole("button", { name: "Actions for nobody" })).toBeInTheDocument();
+    expect(within(nobody).getByRole("button", { name: "Delete nobody" })).toBeEnabled();
+    // Your own row: People manager is assignable, so the select is there; it is disabled because it is your own.
+    const own = within(rowOf("pm")).getByRole("combobox", { name: "Role for pm" });
+    expect(own).toBeDisabled();
+    expect(own).toHaveValue("People manager");
+    expect(within(rowOf("pm")).getByRole("button", { name: "Delete pm" })).toBeDisabled();
+  });
+
+  it("the Create user form lists only the roles that may be handed out, and sends the first one when none was picked", async () => {
+    const calls = await show("people-manager");
+    const role = screen.getByLabelText("Role", { selector: "select:not([aria-label])" });
+    await waitFor(() => expect(optionsOf(role)).toEqual(["Nothing", "People manager"]));
+    await userEvent.type(screen.getByLabelText("Username"), "fresh");
+    await userEvent.type(screen.getByLabelText("Password"), "longenough");
+    await userEvent.click(screen.getByRole("button", { name: "Create user" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST")).toHaveLength(1));
+    expect(calls.find((c) => c.method === "POST")!.body).toEqual({ username: "fresh", password: "longenough", role: "Nothing" });
+  });
+
+  it("an Admin is offered every role: the built-ins in their order, then the others by name, and every row is editable", async () => {
+    await show("admin");
+    const role = screen.getByLabelText("Role", { selector: "select:not([aria-label])" });
+    await waitFor(() => expect(optionsOf(role)).toEqual(["viewer", "operator", "admin", "Auditor", "Nothing", "People manager"]));
+    expect(optionsOf(within(rowOf("ops")).getByRole("combobox"))).toEqual(["viewer", "operator", "admin", "Auditor", "Nothing", "People manager"]);
+    for (const name of ["ops", "pm", "nobody", "auditor"]) {
+      expect(within(rowOf(name)).getByRole("combobox")).toBeEnabled();
+      expect(within(rowOf(name)).getByRole("button", { name: `Delete ${name}` })).toBeEnabled();
+    }
+    // Nothing changes for the built-in roles: the form still starts on viewer.
+    expect(role).toHaveValue("viewer");
+  });
+
+  it("while the roles are not known (still loading, or the answer failed) the page is what it was: the three built-in names and every row editable", async () => {
+    // The roles answer is a 500 here; the same fallback covers the time before it arrives.
+    mockFetch({
+      "GET /api/setup": { body: { needed: false } },
+      "GET /api/me": { body: userFor("admin", { id: 1, username: "admin" }) },
+      "GET /api/users": { body: rows() },
+      "GET /api/roles": { status: 500, body: { detail: "roles are down" } },
+    });
+    renderWithProviders(<UsersPage />, { route: "/users", path: "/users" });
+    await screen.findByText("ops", { selector: "td" });
+    const role = screen.getByLabelText("Role", { selector: "select:not([aria-label])" });
+    expect(optionsOf(role)).toEqual(["viewer", "operator", "admin"]);
+    expect(optionsOf(within(rowOf("ops")).getByRole("combobox"))).toEqual(["viewer", "operator", "admin"]);
+    expect(within(rowOf("auditor")).getByRole("combobox")).toBeEnabled();
+    expect(screen.queryByText("roles are down")).not.toBeInTheDocument();
+  });
+});

@@ -1,17 +1,31 @@
 import { useEffect, useRef, useState, type Ref } from "react";
 import { ApiError } from "../api/client";
-import { useCreateUser, useDeleteUser, usePatchUser, useUnblockUser, useUsers } from "../api/queries";
-import type { UserRow } from "../api/types";
+import { useCreateUser, useDeleteUser, usePatchUser, useRoles, useUnblockUser, useUsers } from "../api/queries";
+import type { RoleRow, UserRow } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { RowActions, type RowAction } from "../components/RowActions";
 import { TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
 
-/** The built-in roles. TEMPORARY: W9b lists the roles the server knows (GET /api/roles); until then a role an administrator made is not offered here. */
-const ROLES: string[] = ["viewer", "operator", "admin"];
-/** The options of a row's role select: the offered roles, and the account's own role when it is not one of them (else the select would show the first option as if it were the account's). */
-const optionsFor = (role: string) => (ROLES.includes(role) ? ROLES : [...ROLES, role]);
+/** The built-in roles in the order they are offered. They stand in for the server's list of roles while it is not known (still loading, or its answer failed), which is the page as it was before roles could be made. */
+const BUILTIN_ROLES: string[] = ["viewer", "operator", "admin"];
+
+/** The roles this person may give to an account: the built-in ones first, in their order, then the others by name. */
+function offeredRoles(roles: RoleRow[] | undefined): string[] {
+  if (!roles) return BUILTIN_ROLES;
+  const handed = roles.filter((r) => r.assignable).map((r) => r.name);
+  return [
+    ...BUILTIN_ROLES.filter((name) => handed.includes(name)),
+    ...handed.filter((name) => !BUILTIN_ROLES.includes(name)).sort((a, b) => a.localeCompare(b)),
+  ];
+}
+
+/**
+ * Whether this person may change the account behind a row. The server lets you manage an account only when its role grants nothing you
+ * lack, which is the list's `assignable` flag, so a row is read-only exactly when its role is not assignable (or not listed). While the list is not known every row is open, as before.
+ */
+const manageable = (roles: RoleRow[] | undefined, role: string) => !roles || roles.some((r) => r.name === role && r.assignable);
 
 /** ApiError.message already carries the API's `detail` (string or formatted validation list). */
 function errorText(error: unknown): string {
@@ -19,8 +33,8 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "request failed";
 }
 
-/** `canEdit` (users.edit): the role select and the actions column; without it the row is read-only. */
-function UserRowView({ user, self, canEdit, onDeleted }: { user: UserRow; self: boolean; canEdit: boolean; onDeleted: () => void }) {
+/** `canEdit` (users.edit): the role select and the actions column; without it the row is read-only. `open`: this person may manage the account (its role is one they may hand out); a closed row is read-only too, and says why. `offered`: the roles for the select. */
+function UserRowView({ user, self, canEdit, offered, open, onDeleted }: { user: UserRow; self: boolean; canEdit: boolean; offered: string[]; open: boolean; onDeleted: () => void }) {
   const patch = usePatchUser();
   const remove = useDeleteUser();
   const unblock = useUnblockUser();
@@ -47,17 +61,18 @@ function UserRowView({ user, self, canEdit, onDeleted }: { user: UserRow; self: 
   return (
     <tr ref={row}>
       <td className="cell-user" title={user.username}>{user.username}</td>
-      <td>
-        {canEdit ? (
+      <td title={canEdit && !open ? "This account has a role with more access than yours, so you cannot change it." : undefined}>
+        {canEdit && open ? (
           <select
             aria-label={`Role for ${user.username}`}
             value={user.role}
             disabled={self || patch.isPending}
             onChange={(e) => patch.mutate({ id: user.id, body: { role: e.target.value } })}
           >
-            {optionsFor(user.role).map((r) => (
+            {offered.map((r) => (
               <option key={r} value={r}>{r}</option>
             ))}
+            {!offered.includes(user.role) && <option value={user.role} disabled>{user.role}</option>}
           </select>
         ) : user.role}
       </td>
@@ -67,7 +82,8 @@ function UserRowView({ user, self, canEdit, onDeleted }: { user: UserRow; self: 
           {user.blocked && <span className="chip chip-bad">blocked</span>}
         </span>
       </td>
-      {canEdit && (
+      {canEdit && !open && <td />}
+      {canEdit && open && (
         <td>
           <div className="row-actions">
             {resetting && (
@@ -134,8 +150,12 @@ export function UsersPage() {
   const { user: me, can } = useAuth();
   const canEdit = can("users.edit");
   const users = useUsers();
+  const roles = useRoles(canEdit); // only the people who can change an account need to know which roles they may hand out
+  const offered = offeredRoles(roles.data);
   const create = useCreateUser();
   const [form, setForm] = useState({ username: "", password: "", role: "viewer" });
+  // The form starts on viewer; a person who may not hand that out starts on the first role they may.
+  const chosen = offered.includes(form.role) ? form.role : (offered[0] ?? "");
   // The deleted row and its Delete button are gone, so the dialog has nowhere to give focus back to: keep the keyboard user on the page.
   const heading = useRef<HTMLHeadingElement>(null);
   const [deletions, setDeletions] = useState(0);
@@ -158,7 +178,7 @@ export function UsersPage() {
             <tr><th>Username</th><th>Role</th><th>Status</th>{canEdit && <th></th>}</tr>
           </thead>
           <tbody>
-            {users.data.map((u) => <UserRowView key={u.id} user={u} self={u.id === me?.id} canEdit={canEdit} onDeleted={() => setDeletions((n) => n + 1)} />)}
+            {users.data.map((u) => <UserRowView key={u.id} user={u} self={u.id === me?.id} canEdit={canEdit} offered={offered} open={manageable(roles.data, u.role)} onDeleted={() => setDeletions((n) => n + 1)} />)}
           </tbody>
         </table>
       </div>
@@ -169,7 +189,7 @@ export function UsersPage() {
             className="create-user"
             onSubmit={(e) => {
               e.preventDefault();
-              create.mutate(form, { onSuccess: () => setForm({ username: "", password: "", role: "viewer" }) });
+              create.mutate({ ...form, role: chosen }, { onSuccess: () => setForm({ username: "", password: "", role: "viewer" }) });
             }}
           >
             <label>
@@ -182,13 +202,13 @@ export function UsersPage() {
             </label>
             <label>
               Role{" "}
-              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-                {ROLES.map((r) => (
+              <select value={chosen} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                {offered.map((r) => (
                   <option key={r} value={r}>{r}</option>
                 ))}
               </select>
             </label>
-            <button type="submit" className="primary" disabled={create.isPending}>Create user</button>
+            <button type="submit" className="primary" disabled={create.isPending || offered.length === 0}>Create user</button>
             {create.isError && <p className="error" role="alert">{errorText(create.error)}</p>}
           </form>
         </div>
