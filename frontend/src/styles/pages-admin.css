@@ -181,6 +181,11 @@
      not scroll the body), invisible and out of the way of clicks. */
   .audit-entry .copy-field { position: fixed; top: 0; left: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; pointer-events: none; resize: none; }
 
+  /* Previous and Next in the drawer's footer (components/AuditDrawer.tsx EntrySteps): the buttons stay at the right edge whether or not a
+     line about a failed step sits to their left; the line is cut at two lines, the title says the rest. */
+  .entry-steps { display: flex; gap: 8px; margin-left: auto; }
+  .entry-steps-note { margin: 0; min-width: 0; font-size: var(--fs-sm); line-height: 1.3; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+
   /* Connection check (the Diagnostics page and the Sources row's dialog): the controls, then one block per step, each led by its state shape */
   /* A block, not a grid: the live region below is empty until the first step, and an empty block's margin collapses into its neighbour's. */
   .check-panel { min-width: 0; }

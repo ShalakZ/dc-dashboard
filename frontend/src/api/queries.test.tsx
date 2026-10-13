@@ -5,9 +5,9 @@ import { NO_FILTERS } from "../lib/auditFilters";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
-  auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
+  auditPageOptions, auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
-  useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles,
+  useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
 
@@ -234,6 +234,20 @@ describe("discovery queries", () => {
     const { result } = renderHook(() => useAudit(NO_FILTERS, 50, 100), { wrapper });
     await waitFor(() => expect(result.current.data?.total).toBe(0));
     expect(new URL(url, "http://x").searchParams.toString()).toBe("limit=50&offset=100");
+  });
+
+  it("reads a page with fetchQuery under the key useAudit uses, so the list finds it in the cache (the drawer's Previous and Next)", async () => {
+    const filters = { user: "2", actions: ["*.deleted"], from: "", to: "", q: "" };
+    expect(auditPageOptions(filters, 50, 100).queryKey).toEqual(keys.audit(filters, 50, 100));
+    const calls = mockFetch({ "GET /api/audit": { body: { total: 120, offset: 100, limit: 50, items: [] } } });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const page = await client.fetchQuery(auditPageOptions(filters, 50, 100));
+    const { result } = renderHook(() => useAudit(filters, 50, 100), {
+      wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    });
+    expect(result.current.data).toBe(page); // there on the first render: no loading, no placeholder
+    expect(result.current.isPlaceholderData).toBe(false);
+    expect(calls.filter((c) => c.path === "/api/audit").length).toBeGreaterThanOrEqual(1);
   });
 
   it("sends the filters before the page window", async () => {

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
-import { auditPosition, useAudit, useAuditEntry, useAuditOptions, useSite } from "../api/queries";
+import { auditPageOptions, auditPosition, keys, useAudit, useAuditEntry, useAuditOptions, useSite } from "../api/queries";
 import { ApiError } from "../api/client";
 import type { AuditEntry } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { KindTile, UserLabel } from "../components/AuditCells";
-import { AuditDrawer, type AuditDrawerStatus } from "../components/AuditDrawer";
+import { AuditDrawer, EntrySteps, type AuditDrawerStatus, type StepDirection } from "../components/AuditDrawer";
 import { AuditFilterBar } from "../components/AuditFilterBar";
 import { AuditPager } from "../components/AuditPager";
 import { EmptyNote } from "../components/EmptyNote";
@@ -13,7 +14,7 @@ import { Icon } from "../components/Icon";
 import { PageHeader } from "../components/PageHeader";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
-import { apiQuery, isFiltered, readUrl, writeUrl, type AuditFilters, type AuditUrlState } from "../lib/auditFilters";
+import { apiQuery, isFiltered, nextOffset, previousOffset, readUrl, writeUrl, type AuditFilters, type AuditUrlState } from "../lib/auditFilters";
 import { describeAudit } from "../lib/auditText";
 import { downloadCsv } from "../lib/download";
 import { relativeTime } from "../lib/relativeTime";
@@ -43,6 +44,26 @@ function rowClick(e: MouseEvent<HTMLElement>, open: () => void) {
   if (window.getSelection()?.toString()) return;
   open();
 }
+
+/**
+ * The entry beside `id` in rows that are listed newest first (the list is ORDER BY id DESC): for "previous" the one with the smallest id
+ * above it, for "next" the one with the largest id below it. By id, not by place: a page need not start on a multiple of its size (after
+ * "Go to a date") and entries arrive between two requests, so the neighbour is not at a fixed index.
+ */
+function neighbour(rows: readonly AuditEntry[], id: number, direction: StepDirection): AuditEntry | undefined {
+  let best: AuditEntry | undefined;
+  for (const row of rows) {
+    const beside = direction === "previous" ? row.id > id && (!best || row.id < best.id) : row.id < id && (!best || row.id > best.id);
+    if (beside) best = row;
+  }
+  return best;
+}
+
+/** What a press of Previous or Next does: move to a row of the loaded page, read the page beside it first, or nothing (and why). */
+type StepPlan = { entry: AuditEntry } | { offset: number } | { reason: string };
+
+const OFF_THE_LIST = "open it from the list to step through the log";
+const CHANGED = "New entries arrived since this list loaded. Close this and open the entry again.";
 
 // Column widths in px, null for the rest: the friendly table gives "What happened" the room (and puts the Details chevron first, where a
 // short sentence's empty end does not separate it from its entry), the raw one the detail. They sum to less than the narrowest table; the
@@ -137,6 +158,7 @@ export function AuditPage() {
   const today = siteDay(now, timezone);
   const options = useAuditOptions();
   const toast = useToast();
+  const queryClient = useQueryClient();
   const { data, error, isLoading, isPlaceholderData } = useAudit(filters, size, offset);
 
   // The open entry is part of the address (/audit/12?...), so a link opens it and Back closes it. The page stays mounted either way: filters,
@@ -166,6 +188,18 @@ export function AuditPage() {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+
+  // Previous and Next. `stepFrom` is the entry a neighbouring page is being read for, `stepNote` the one line about a step that failed (it belongs
+  // to the entry it was shown for). `stepping` is the same fact as a ref: two clicks in one tick both see the old render.
+  const [stepFrom, setStepFrom] = useState<number | null>(null);
+  const [stepNote, setStepNote] = useState<{ id: number; text: string } | null>(null);
+  const stepping = useRef(false);
+  const here = useRef(location.pathname + location.search); // where the page is now, for an answer that comes late
+  useEffect(() => { here.current = location.pathname + location.search; });
+  // Reading ends by itself when another entry is shown (the step landed, or the user moved on); it is not cleared on success, where a render
+  // with the old entry and free buttons could come between the answer and the new address.
+  if (stepFrom !== null && stepFrom !== opened?.id) setStepFrom(null);
+  const busy = stepFrom !== null && stepFrom === opened?.id;
 
   function go(next: AuditUrlState, replace = false) {
     setParams(writeUrl(next), { replace });
@@ -239,6 +273,71 @@ export function AuditPage() {
   // While the next query loads the old rows stay (data is a placeholder); its total says nothing about the new query.
   const fresh = ready && !isPlaceholderData ? data : undefined;
   const raw = view === "raw";
+
+  // What Previous and Next would do. A row of the page that is really loaded is the only place to step from: not the placeholder rows of the page
+  // being loaded (the neighbour must come from the page that was asked for), and not an entry fetched by its own id, whose place in the log is unknown.
+  const planFor = (direction: StepDirection): StepPlan => {
+    if (!fresh) return { reason: "the list is still loading" };
+    if (!onPage) return { reason: OFF_THE_LIST };
+    const beside = neighbour(fresh.items, onPage.id, direction);
+    if (beside) return { entry: beside };
+    if (direction === "previous") return offset > 0 ? { offset: previousOffset(offset, size) } : { reason: "this is the newest entry" };
+    const after = nextOffset(offset, size, fresh.total);
+    return after === null ? { reason: "this is the oldest entry" } : { offset: after };
+  };
+  const plans = wanted === undefined ? null : { previous: planFor("previous"), next: planFor("next") };
+  const reasonOf = (direction: StepDirection) => {
+    const plan = plans?.[direction];
+    return plan && "reason" in plan ? plan.reason : null;
+  };
+
+  /**
+   * Moves the drawer to the neighbouring entry: a REPLACE that keeps `state` (so Close still knows where it came from) and, inside the page, the
+   * query byte for byte. Past the edge of the page the page beside it is read first (the same query key the list uses, so it is in the cache when
+   * the list shows it), and the offset and the entry change together in one navigation. Nothing happens before the answer is in.
+   */
+  async function step(direction: StepDirection) {
+    const plan = plans?.[direction];
+    if (!plan || "reason" in plan || !onPage || stepping.current) return; // (a button that is off is not clicked: `busy` needs no check here)
+    setStepNote(null);
+    if ("entry" in plan) {
+      navigate({ pathname: `/audit/${plan.entry.id}`, search: location.search }, { replace: true, state: location.state });
+      return;
+    }
+    const from = onPage.id;
+    const total = fresh?.total; // of the list as it is now, to tell later whether the log grew meanwhile
+    const at = location.pathname + location.search;
+    let landed = false;
+    stepping.current = true;
+    setStepFrom(from);
+    try {
+      const page = await queryClient.fetchQuery(auditPageOptions(filters, size, plan.offset));
+      // The drawer may have been closed, or the address changed, while the page was read: the answer then belongs to nothing.
+      if (!mounted.current || here.current !== at) return;
+      // New entries arrive on top. Going down that can only move the open entry into the page read, so its neighbour in there is the real one.
+      // Going up the page read ends exactly at the entry above the first row of the list, unless entries arrived since the list loaded: then it ends
+      // short of it, and the neighbour found would be a few places away (silently skipping entries). The log's total gives it away, unless the page
+      // still holds the open entry itself (or one below it), in which case the neighbour is in there anyway.
+      const trusted = direction === "next" || page.total === total || page.items.some((row) => row.id <= from);
+      const target = trusted ? neighbour(page.items, from, direction) : undefined;
+      if (!target) {
+        // Say so, and read the list again so the next press steps inside it.
+        setStepNote({ id: from, text: CHANGED });
+        void queryClient.invalidateQueries({ queryKey: keys.audit(filters, size, offset), exact: true });
+        return;
+      }
+      const search = writeUrl({ ...state, offset: plan.offset }).toString();
+      navigate({ pathname: `/audit/${target.id}`, search: search && `?${search}` }, { replace: true, state: location.state });
+      landed = true;
+    } catch (e) {
+      if (mounted.current && here.current === at) {
+        setStepNote({ id: from, text: `Could not step to the ${direction} entry: ${messageOf(e, "the page could not be read")}` });
+      }
+    } finally {
+      stepping.current = false;
+      if (!landed && mounted.current) setStepFrom(null);
+    }
+  }
 
   const count = fresh ? `${fresh.total.toLocaleString("en-US")} ${fresh.total === 1 ? "entry" : "entries"}` : null;
 
@@ -325,6 +424,16 @@ export function AuditPage() {
           now={now}
           onClose={close}
           returnFocus={returnFocus}
+          footer={
+            <EntrySteps
+              previous={reasonOf("previous")}
+              next={reasonOf("next")}
+              busy={busy}
+              error={stepNote && stepNote.id === opened?.id ? stepNote.text : null}
+              entryId={opened?.id}
+              onStep={(direction) => void step(direction)}
+            />
+          }
         />
       )}
     </div>

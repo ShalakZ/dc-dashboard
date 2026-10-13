@@ -864,3 +864,523 @@ describe("AuditPage: an entry opens in the drawer (W7l)", () => {
     });
   });
 });
+
+describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
+  /**
+   * A log of `total` entries, newest first: the entry at position i (from the top) has the id 200 - i. `arrived` entries can come in on top
+   * of it later (every entry then sits that many places further down). An offset in `failing` answers with an error.
+   */
+  function log(total = 120) {
+    const log = { arrived: 0, failing: new Set<number>() };
+    const at = (i: number) => {
+      const id = 200 + log.arrived - i;
+      return entry(id, "scan.started", { scan_id: id });
+    };
+    const reply = (req: { url: string }) => {
+      const query = new URL(req.url, "http://x").searchParams;
+      const offset = Number(query.get("offset") ?? 0);
+      if (log.failing.has(offset)) return { status: 500, body: { detail: "database is down" } };
+      const limit = Number(query.get("limit") ?? 50);
+      const all = total + log.arrived;
+      return list(all, Array.from({ length: Math.max(0, Math.min(offset + limit, all) - offset) }, (_, k) => at(offset + k)), offset);
+    };
+    return { log, reply };
+  }
+  const dialog = () => screen.findByRole("dialog", { name: "Audit entry" });
+  const noDialog = () => expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  const rowOf = (id: number) => document.querySelector<HTMLElement>(`tr[data-entry-id="${id}"]`)!;
+  const chevron = (id: number) => screen.getByRole("button", { name: `Details of entry #${id}` });
+  const previous = () => screen.getByRole("button", { name: /^Previous entry/ });
+  const next = () => screen.getByRole("button", { name: /^Next entry/ });
+  const liveOf = (open: HTMLElement) => open.querySelector<HTMLElement>('[aria-live="polite"]')!;
+  const where = (view: { router: { state: { location: { pathname: string; search: string } } } }) => {
+    const { pathname, search } = view.router.state.location;
+    return pathname + search;
+  };
+  /** Holds every request whose URL contains `part`; `held.count` says how many came. Install after setup(). */
+  function holdOffset(part: string) {
+    const held = { count: 0 };
+    const release = hold((url) => {
+      if (url.includes(part)) held.count += 1;
+      return url.includes(part);
+    });
+    return { held, release };
+  }
+  /** What a browser does when the focused button turns off: focus falls to the body. (jsdom keeps it on the disabled button and cannot blur one.) */
+  function dropFocus() {
+    const button = document.activeElement as HTMLButtonElement;
+    act(() => { button.disabled = false; button.blur(); button.disabled = true; });
+  }
+  const settle = (ms = 30) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+  /** Open the drawer on entry `id` of the page and wait for it. */
+  async function openAt(id: number) {
+    await screen.findByText(`Started scan #${id}`);
+    await userEvent.click(chevron(id));
+    return dialog();
+  }
+
+  describe("inside a page", () => {
+    it("Previous is the entry above, Next the one below: each step replaces the history entry and keeps the query, the state and the same drawer", async () => {
+      const view = setup("/audit?q=scan", log().reply);
+      const open = await openAt(198);
+      const live = liveOf(open);
+      const lists = view.urls.length;
+      expect(view.router.state.location.state).toEqual({ fromList: true, search: "?q=scan" });
+
+      await userEvent.click(next());
+      await waitFor(() => expect(where(view)).toBe("/audit/197?q=scan"));
+      expect(view.router.state.historyAction).toBe("REPLACE");
+      expect(view.router.state.location.state).toEqual({ fromList: true, search: "?q=scan" }); // C6: the state rides along
+      expect(within(open).getByText("Started scan #197")).toBeInTheDocument();
+      expect(rowOf(197)).toHaveAttribute("data-open");
+      expect(rowOf(198)).not.toHaveAttribute("data-open");
+
+      await userEvent.click(previous());
+      await userEvent.click(previous());
+      await waitFor(() => expect(where(view)).toBe("/audit/199?q=scan"));
+      expect(within(open).getByText("Started scan #199")).toBeInTheDocument();
+      // the same panel and the same live node all along: the drawer never went back to its skeleton (the status stayed "ready")
+      expect(screen.getByRole("dialog", { name: "Audit entry" })).toBe(open);
+      expect(liveOf(open)).toBe(live);
+      expect(live).toHaveTextContent("Entry #199: Started scan #199");
+      expect(within(open).queryByText("Loading the entry")).not.toBeInTheDocument();
+      expect(view.urls).toHaveLength(lists); // nothing was asked of the API
+    });
+
+    it("steps in the raw view too, and keeps it", async () => {
+      const view = setup("/audit?view=raw", log().reply);
+      await waitFor(() => expect(rowOf(199)).toBeInTheDocument());
+      await userEvent.click(rowOf(199).querySelector(".cell-action")!);
+      await dialog();
+      await userEvent.click(next());
+      await waitFor(() => expect(where(view)).toBe("/audit/198?view=raw"));
+    });
+
+    it("gives the buttons their visible words and the entry's name, and an enabled one carries no reason", async () => {
+      setup("/audit", log().reply);
+      await openAt(198);
+      expect(previous()).toHaveTextContent("Previous");
+      expect(previous()).toHaveAccessibleName("Previous entry");
+      expect(next()).toHaveTextContent("Next");
+      expect(next()).toHaveAccessibleName("Next entry");
+      expect(previous()).toBeEnabled();
+      expect(next()).toBeEnabled();
+      expect(previous()).not.toHaveAttribute("title");
+    });
+  });
+
+  describe("the ends of the log and entries that cannot be stepped from", () => {
+    it("Previous is off at the newest entry, and says why in its name and its title", async () => {
+      setup("/audit", log().reply);
+      await openAt(200);
+      expect(previous()).toBeDisabled();
+      expect(previous()).toHaveAccessibleName("Previous entry: this is the newest entry");
+      expect(previous()).toHaveAttribute("title", "Previous entry: this is the newest entry");
+      expect(next()).toBeEnabled();
+    });
+
+    it("Next is off at the oldest entry, and says why", async () => {
+      setup("/audit?offset=100", log().reply); // 20 rows, the last of the 120
+      await openAt(81);
+      expect(next()).toBeDisabled();
+      expect(next()).toHaveAccessibleName("Next entry: this is the oldest entry");
+      expect(next()).toHaveAttribute("title", "Next entry: this is the oldest entry");
+      expect(previous()).toBeEnabled();
+    });
+
+    it("both are off for an entry that is not on the loaded page (a deep link), with the way out in the name", async () => {
+      const { reply } = log();
+      setup("/audit/7", reply, { "GET /api/audit/7": { body: { ...entry(7, "scan.finished", { scan_id: 7, status: "done" }), refs: {} } } });
+      await within(await dialog()).findByText("Scan #7 finished (done)");
+      for (const [button, noun] of [[previous(), "Previous"], [next(), "Next"]] as const) {
+        expect(button).toBeDisabled();
+        expect(button).toHaveAccessibleName(`${noun} entry: open it from the list to step through the log`);
+        expect(button).toHaveAttribute("title", `${noun} entry: open it from the list to step through the log`);
+      }
+    });
+
+    it("both are off while the drawer has no entry to show (a bad id), and for the same reason", async () => {
+      setup("/audit/abc", log().reply);
+      await within(await dialog()).findByRole("alert");
+      expect(previous()).toBeDisabled();
+      expect(next()).toBeDisabled();
+      expect(next()).toHaveAccessibleName("Next entry: open it from the list to step through the log");
+    });
+
+    it("both are off while the page they would step in is a placeholder for the next one, and the old rows are never stepped through", async () => {
+      const { reply } = log();
+      const view = setup("/audit/190", reply, { "GET /api/audit/190": { body: { ...entry(190, "scan.started", { scan_id: 190 }), refs: {} } } });
+      await within(await dialog()).findByText("Started scan #190");
+      expect(next()).toBeEnabled();
+      const { release } = holdOffset("offset=50");
+      await act(async () => { await view.router.navigate("/audit/190?offset=50"); }); // 190 is a row of the page it came from, not of this one
+      await waitFor(() => expect(screen.getByRole("table")).toHaveAttribute("aria-busy", "true"));
+      expect(within(screen.getByRole("dialog")).getByText("Started scan #190")).toBeInTheDocument(); // still shown, from the placeholder rows
+      expect(next()).toBeDisabled();
+      expect(next()).toHaveAccessibleName("Next entry: the list is still loading");
+      expect(previous()).toHaveAccessibleName("Previous entry: the list is still loading");
+      await act(async () => { release(); });
+      await waitFor(() => expect(next()).toHaveAccessibleName("Next entry: open it from the list to step through the log"));
+    });
+  });
+
+  describe("across the edge of a page", () => {
+    it("Previous at the top of a page fetches the page before it, waits for it, and moves the drawer into it (raw view kept)", async () => {
+      const view = setup("/audit?offset=50&view=raw", log().reply);
+      await waitFor(() => expect(rowOf(150)).toBeInTheDocument());
+      await userEvent.click(rowOf(150).querySelector(".cell-action")!);
+      const open = await dialog();
+      const live = liveOf(open);
+      expect(previous()).toBeEnabled(); // the first row of page 2 still has an entry above it
+      const { held, release } = holdOffset("offset=0");
+      const navigate = vi.spyOn(view.router, "navigate");
+
+      await userEvent.click(previous());
+      await waitFor(() => expect(previous()).toBeDisabled());
+      expect(next()).toBeDisabled(); // both, while it runs
+      expect(held.count).toBe(1);
+      expect(where(view)).toBe("/audit/150?offset=50&view=raw"); // nothing moved yet
+      expect(within(open).getByText("Started scan #150")).toBeInTheDocument();
+
+      await act(async () => { release(); });
+      expect(await within(open).findByText("Started scan #151")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/151?view=raw"); // the list is page 1 now: one navigation, the offset and the entry together
+      expect(navigate).toHaveBeenCalledTimes(1);
+      expect(view.router.state.historyAction).toBe("REPLACE");
+      expect(view.router.state.location.state).toEqual({ fromList: true, search: "?offset=50&view=raw" });
+      expect(rowOf(151)).toHaveAttribute("data-open");
+      expect(liveOf(open)).toBe(live);
+      expect(live).toHaveTextContent("Entry #151: Started scan #151");
+      expect(within(open).queryByText("Loading the entry")).not.toBeInTheDocument();
+      expect(screen.getByText("Showing 1–50 of 120")).toBeInTheDocument();
+      expect(previous()).toBeEnabled();
+      expect(next()).toBeEnabled();
+    });
+
+    it("Next at the bottom of a page fetches the page after it and lands on its first entry", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      const open = await openAt(101);
+      const live = liveOf(open);
+      await userEvent.click(next());
+      expect(await within(open).findByText("Started scan #100")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/100?offset=100");
+      expect(rowOf(100)).toHaveAttribute("data-open");
+      expect(liveOf(open)).toBe(live);
+      expect(view.router.state.historyAction).toBe("REPLACE");
+    });
+
+    it("can go over the same edge and back: the buttons are free again on the entry it started from", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      await userEvent.click(previous());
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      await userEvent.click(next());
+      await within(screen.getByRole("dialog")).findByText("Started scan #150");
+      expect(where(view)).toBe("/audit/150?offset=50");
+      expect(previous()).toBeEnabled();
+      expect(next()).toBeEnabled();
+      await userEvent.click(next());
+      expect(await within(screen.getByRole("dialog")).findByText("Started scan #149")).toBeInTheDocument();
+    });
+
+    it("chooses the neighbour by id, not by place, when the page does not start on a multiple of its size (offset 37, size 50)", async () => {
+      const { reply } = log();
+      const view = setup("/audit?offset=37", reply);
+      await openAt(163); // the top row of 37..86
+      expect(previous()).toBeEnabled();
+      await userEvent.click(previous()); // the page before is 0..49, which holds the one above 163 in its middle, not at its end
+      expect(await within(screen.getByRole("dialog")).findByText("Started scan #164")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/164");
+      expect(view.urls.at(-1)).toContain("offset=0");
+    });
+
+    it("and when entries arrived but the page before still holds the open entry, the neighbour in it is the right one", async () => {
+      const { log: world, reply } = log();
+      const view = setup("/audit?offset=37", reply);
+      await openAt(163);
+      world.arrived = 2; // 163 is now the 40th entry, inside 0..49, with 164 above it
+      await userEvent.click(previous());
+      expect(await within(screen.getByRole("dialog")).findByText("Started scan #164")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/164");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("chooses by id when entries arrived since the list loaded: Next picks the one below, not the first row of the page", async () => {
+      const { log: world, reply } = log();
+      const view = setup("/audit?offset=37", reply);
+      await openAt(114); // the last row of 37..86
+      world.arrived = 2; // two new entries: 114 now sits two places lower, and 87..136 starts two ids higher
+      await userEvent.click(next());
+      expect(await within(screen.getByRole("dialog")).findByText("Started scan #113")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/113?offset=87");
+    });
+
+    it("does not skip entries when the page before has fallen wholly above the open one: it says so, refreshes the list, and the next press works", async () => {
+      const { log: world, reply } = log();
+      const view = setup("/audit?offset=50", reply);
+      await openAt(150);
+      world.arrived = 3; // 150 is now the 53rd entry; page 0..49 holds only newer ones, and the one just above 150 (151) is not in it
+      await userEvent.click(previous());
+      const note = await screen.findByRole("alert");
+      expect(note).toHaveTextContent("New entries arrived since this list loaded");
+      expect(within(note.closest(".drawer-foot") as HTMLElement).getByRole("button", { name: /^Previous entry/ })).toBeInTheDocument(); // in the footer
+      expect(where(view)).toBe("/audit/150?offset=50"); // it stayed where it was
+      // the list behind it was asked again; 150 is still a row of it, with 151 above it
+      await waitFor(() => expect(previous()).toBeEnabled());
+      await waitFor(() => expect(view.urls.filter((u) => u.includes("offset=50"))).toHaveLength(2));
+      await userEvent.click(previous());
+      await waitFor(() => expect(where(view)).toBe("/audit/151?offset=50"));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument(); // the line belonged to the entry it was shown for
+    });
+  });
+
+  describe("a failure, a second click, a late answer", () => {
+    it("shows one line in the footer when the neighbouring page cannot be read, changes nothing, and gives the buttons back", async () => {
+      const { log: world, reply } = log();
+      const view = setup("/audit?offset=50", reply);
+      const open = await openAt(150);
+      world.failing.add(0);
+      await userEvent.click(previous());
+      const note = await screen.findByRole("alert");
+      expect(note).toHaveTextContent("Could not step to the previous entry: database is down");
+      expect(note.closest(".drawer-foot")).not.toBeNull();
+      expect(where(view)).toBe("/audit/150?offset=50");
+      expect(within(open).getByText("Started scan #150")).toBeInTheDocument();
+      expect(previous()).toBeEnabled();
+      expect(next()).toBeEnabled();
+      // a step that works takes the line away with it
+      await userEvent.click(next());
+      await waitFor(() => expect(where(view)).toBe("/audit/149?offset=50"));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("the line belongs to the entry it was shown for: moving to another entry some other way takes it away", async () => {
+      const { log: world, reply } = log();
+      const view = setup("/audit?offset=50", reply);
+      await openAt(150);
+      world.failing.add(0);
+      await userEvent.click(previous());
+      await screen.findByRole("alert");
+      await act(async () => { await view.router.navigate("/audit/149?offset=50", { replace: true }); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #149");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("a second try takes the old line away while it runs", async () => {
+      const { log: world, reply } = log();
+      setup("/audit?offset=50", reply);
+      await openAt(150);
+      world.failing.add(0);
+      await userEvent.click(previous());
+      await screen.findByRole("alert");
+      world.failing.delete(0);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => expect(previous()).toBeDisabled());
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+    });
+
+    it("a step over an edge, Close, and the same entry opened again later: the buttons are free (nothing is left of the first step)", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      await userEvent.click(previous());
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      await userEvent.click(screen.getByRole("button", { name: "Next" })); // the pager: page 2, where 150 is again the top row
+      await openAt(150);
+      expect(where(view)).toBe("/audit/150?offset=50");
+      expect(previous()).toBeEnabled();
+      expect(next()).toBeEnabled();
+    });
+
+    it("two clicks in one tick start one step (the second finds the first running), and the buttons are off meanwhile", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { held, release } = holdOffset("offset=0");
+      const navigate = vi.spyOn(view.router, "navigate");
+      const button = previous();
+      await act(async () => { fireEvent.click(button); fireEvent.click(button); });
+      expect(held.count).toBe(1);
+      await act(async () => { release(); });
+      expect(await within(screen.getByRole("dialog")).findByText("Started scan #151")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/151");
+      expect(navigate).toHaveBeenCalledTimes(1);
+    });
+
+    it("clicks on a button that is off do nothing", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { held, release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => expect(next()).toBeDisabled());
+      const navigate = vi.spyOn(view.router, "navigate");
+      await userEvent.click(next());
+      await userEvent.click(previous());
+      expect(navigate).not.toHaveBeenCalled();
+      expect(held.count).toBe(1);
+      await act(async () => { release(); });
+      await waitFor(() => expect(where(view)).toBe("/audit/151"));
+    });
+
+    it("an answer that comes after the drawer was closed does not open it again (Escape before the page arrived)", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => expect(previous()).toBeDisabled());
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit?offset=50");
+      const navigate = vi.spyOn(view.router, "navigate");
+      await act(async () => { release(); });
+      await settle();
+      noDialog();
+      expect(where(view)).toBe("/audit?offset=50");
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it("an answer that comes after the drawer moved to another entry is dropped too (Back, then forward to a different address)", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => expect(previous()).toBeDisabled());
+      await act(async () => { await view.router.navigate("/audit/120?offset=50", { replace: true }); });
+      const navigate = vi.spyOn(view.router, "navigate");
+      await act(async () => { release(); });
+      await settle();
+      expect(where(view)).toBe("/audit/120?offset=50");
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it("an answer that comes after the page was left does not navigate", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => expect(previous()).toBeDisabled());
+      const navigate = vi.spyOn(view.router, "navigate");
+      view.unmount();
+      await act(async () => { release(); });
+      await settle();
+      expect(navigate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("history", () => {
+    /** The list is the second entry of the history, "/assets" the first, so one Back after closing leaves the audit page. */
+    async function listOnTopOfAssets(route: string) {
+      const view = setup("/assets", log().reply);
+      await screen.findByText("assets page");
+      await act(async () => { await view.router.navigate(route); });
+      return view;
+    }
+
+    it("the drawer is one history entry however many steps are taken: after three steps and Close, one Back leaves the audit page", async () => {
+      const view = await listOnTopOfAssets("/audit");
+      await openAt(198);
+      for (const go of [next, next, previous]) await userEvent.click(go());
+      await waitFor(() => expect(where(view)).toBe("/audit/197"));
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit"); // Close went one step back, onto the list the drawer was opened from
+      await act(async () => { await view.router.navigate(-1); });
+      expect(await screen.findByText("assets page")).toBeInTheDocument();
+    });
+
+    it("after a step across a page, Close puts the list on that page (a replace), and Back goes to the list it was opened from", async () => {
+      const view = await listOnTopOfAssets("/audit?offset=50");
+      await openAt(150);
+      await userEvent.click(previous());
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      expect(where(view)).toBe("/audit/151");
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit");
+      expect(view.router.state.historyAction).toBe("REPLACE");
+      expect(screen.getByText("Showing 1–50 of 120")).toBeInTheDocument();
+      await act(async () => { await view.router.navigate(-1); });
+      await waitFor(() => expect(where(view)).toBe("/audit?offset=50"));
+    });
+  });
+
+  describe("focus", () => {
+    it("Escape after a step returns focus to the Details button of the entry now shown", async () => {
+      setup("/audit", log().reply);
+      await openAt(198);
+      await userEvent.click(next());
+      await waitFor(() => expect(rowOf(197)).toHaveAttribute("data-open"));
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      await waitFor(() => expect(chevron(197)).toHaveFocus());
+    });
+
+    it("stays on the button that was pressed while it still has somewhere to go", async () => {
+      setup("/audit", log().reply);
+      await openAt(198);
+      await userEvent.click(next());
+      await waitFor(() => expect(rowOf(197)).toHaveAttribute("data-open"));
+      expect(next()).toHaveFocus();
+    });
+
+    it("moves to the drawer panel when the pressed button became off (the end of the log), not to the body", async () => {
+      setup("/audit?offset=100", log().reply);
+      await openAt(82);
+      await userEvent.click(next()); // 81 is the oldest
+      await waitFor(() => expect(next()).toBeDisabled());
+      await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+      expect(document.body).not.toHaveFocus();
+    });
+
+    it("moves to the panel at the newest end as well", async () => {
+      setup("/audit", log().reply);
+      await openAt(199);
+      await userEvent.click(previous()); // 200 is the newest
+      await waitFor(() => expect(previous()).toBeDisabled());
+      await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+    });
+
+    it("goes back to the pressed button after a page was fetched, though the browser dropped focus to the body while it was off", async () => {
+      setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => expect(previous()).toBeDisabled());
+      dropFocus();
+      expect(document.body).toHaveFocus();
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      await waitFor(() => expect(previous()).toHaveFocus());
+    });
+
+    it("goes to the panel after a page was fetched that ends the log", async () => {
+      const { reply } = log(101); // 200..100: the last page holds one entry
+      setup("/audit?offset=50", reply);
+      await openAt(101);
+      const { release } = holdOffset("offset=100");
+      await userEvent.click(next());
+      await waitFor(() => expect(next()).toBeDisabled());
+      dropFocus();
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #100");
+      await waitFor(() => expect(next()).toHaveAccessibleName("Next entry: this is the oldest entry"));
+      await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+    });
+
+    it("leaves focus alone when it went somewhere else meanwhile (the Copy button)", async () => {
+      setup("/audit?offset=50", log().reply);
+      const open = await openAt(150);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => expect(previous()).toBeDisabled());
+      const copy = within(open).getByRole("button", { name: "Copy entry number" });
+      act(() => { copy.focus(); });
+      await act(async () => { release(); });
+      await waitFor(() => expect(within(open).getByText("Started scan #151")).toBeInTheDocument());
+      expect(copy).toHaveFocus();
+    });
+  });
+});

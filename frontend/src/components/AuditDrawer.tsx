@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Link } from "react-router";
 import type { AuditEntry } from "../api/types";
 import { copyText } from "../lib/diagnostics";
@@ -93,6 +93,71 @@ function EntryView({ entry, timezone, now }: { entry: AuditEntry; timezone: stri
       {/* The stored JSON, ids and all: the friendly text above never shows one. */}
       <pre className="entry-json">{JSON.stringify(entry.detail, null, 2)}</pre>
     </div>
+  );
+}
+
+export type StepDirection = "previous" | "next";
+const STEP_NAME: Record<StepDirection, string> = { previous: "Previous entry", next: "Next entry" };
+
+/**
+ * Previous (the entry above, newer) and Next (the one below, older) in the drawer's footer. `previous` / `next` are why that button is off
+ * (null = it works): the reason goes into its name and title, so a screen reader hears it as well. `busy` is a neighbouring page being read:
+ * both are off, with nothing to explain. `error` is one line about a step that failed.
+ *
+ * Focus. A button that turns off loses focus in a browser (it falls to the body), and a page fetch turns both off for a moment. So the
+ * button that was pressed is remembered, and once the step has landed (a different entry is shown, or it failed) focus goes back to it, or to the
+ * panel when it is off for good now (an end of the log), unless it went somewhere else meanwhile. Never to the body.
+ */
+export function EntrySteps({ previous, next, busy, error, entryId, onStep }: {
+  previous: string | null;
+  next: string | null;
+  busy: boolean;
+  error: string | null;
+  entryId: number | undefined;
+  onStep: (direction: StepDirection) => void;
+}) {
+  const buttons = { previous: useRef<HTMLButtonElement>(null), next: useRef<HTMLButtonElement>(null) };
+  const pressed = useRef<{ direction: StepDirection; from: number | undefined } | null>(null);
+
+  useEffect(() => {
+    const press = pressed.current;
+    if (!press || busy) return;
+    if (entryId === press.from && !error) return; // the step has not landed yet (its answer is in, the address has not changed)
+    pressed.current = null;
+    const button = buttons[press.direction].current;
+    const panel = button?.closest<HTMLElement>(".drawer") ?? null;
+    const active = document.activeElement;
+    // still on the button, dropped to the body by the browser, or on the panel: nothing else has taken it
+    if (!button || (active !== button && active !== document.body && active !== panel)) return;
+    (button.disabled ? panel : button)?.focus({ preventScroll: true });
+  }, [entryId, busy, error, previous, next]); // eslint-disable-line react-hooks/exhaustive-deps -- the refs are stable
+
+  const reasons = { previous, next };
+  return (
+    <>
+      {error && <p className="entry-steps-note error" role="alert">{error}</p>}
+      <div className="entry-steps">
+        {(["previous", "next"] as const).map((direction) => {
+          const label = reasons[direction] ? `${STEP_NAME[direction]}: ${reasons[direction]}` : STEP_NAME[direction];
+          return (
+            <button
+              key={direction}
+              ref={buttons[direction]}
+              type="button"
+              disabled={busy || reasons[direction] !== null}
+              aria-label={label}
+              title={reasons[direction] ? label : undefined}
+              onClick={() => {
+                pressed.current = { direction, from: entryId };
+                onStep(direction);
+              }}
+            >
+              {direction === "previous" ? "Previous" : "Next"}
+            </button>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
