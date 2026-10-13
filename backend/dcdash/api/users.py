@@ -1,3 +1,4 @@
+import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -14,7 +15,7 @@ from dcdash.api.deps import (
 from dcdash.api.security import hash_password
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Role, User, UserSession
-from dcdash.core.permissions import BUILTIN_IDS
+from dcdash.core.permissions import BUILTIN_IDS, catalogue_order
 
 router = APIRouter(prefix="/api", tags=["users"])
 
@@ -58,6 +59,7 @@ async def find_role(db: AsyncSession, name: str) -> Role | None:
     names (a final sigma, the dotted capital I), and a role must be found under the exact name it is stored with. The row
     is read again even if this session already holds it, so that a role changed while the request waited is seen as it is.
     """
+    name = unicodedata.normalize("NFC", name)  # role names are stored that way (api/roles.py clean_name)
     return await db.scalar(
         select(Role).where(func.lower(Role.name) == func.lower(name)).execution_options(populate_existing=True)
     )
@@ -225,6 +227,7 @@ async def patch_user(
     leaves_admin = new_role is not None and new_role.id != BUILTIN_IDS["admin"]
     user = await load_target(db, current, user_id, removes_admin=body.active is False or leaves_admin)
     before = {"role": user.role, "active": user.active, "password": "set"}
+    old_role_id, old_permissions = user.role_id, catalogue_order(user.permissions)
     if new_role is not None:
         user.role_row = new_role
     if new_hash is not None:
@@ -238,8 +241,15 @@ async def patch_user(
         await db.execute(delete(UserSession).where(UserSession.user_id == user.id))
     after = {"role": user.role, "active": user.active, "password": "changed" if body.password is not None else "set"}
     name = user.username
+    subject: dict = {"user_id": user.id, "username": name}
+    if new_role is not None and new_role.id != old_role_id:  # the entry says what the new role gives and takes away
+        new_permissions = catalogue_order(user.permissions)
+        subject |= {
+            "added": [p for p in new_permissions if p not in old_permissions],
+            "removed": [p for p in old_permissions if p not in new_permissions],
+        }
     async with account_vanished_is_401(db):  # the audit row needs the acting admin
-        await audit_change(db, current.id, "user.updated", {"user_id": user.id, "username": name}, before, after)
+        await audit_change(db, current.id, "user.updated", subject, before, after)
         await db.commit()
     if body.password is not None:
         forget_sign_in_failures(name)

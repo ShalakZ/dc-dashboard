@@ -253,6 +253,35 @@ def test_nobody_holds_more_than_admin_so_admin_may_change_anything_and_a_custom_
         assert_can_assign(custom_nearly_all, admin.role_row)
 
 
+# ---- the audit of a change of role carries the permission difference ----------------------------------------------------
+
+async def test_a_change_of_role_is_audited_with_the_permissions_it_adds_and_removes(client, db):
+    await login_as(client, db)
+    await make_role(db, "Staff", ["assets.view", "dashboards.view", "audit.view"])  # Viewer's two see-permissions, plus one
+    vic = await make_user(db, "vic")  # viewer: assets.view, dashboards.view, billing.view, billing.export
+    assert (await client.patch(f"/api/users/{vic}", json={"role": "Staff"})).status_code == 200
+    assert (await client.patch(f"/api/users/{vic}", json={"role": "operator"})).status_code == 200
+    first, second = [row["detail"] for row in await db.fetch("SELECT detail FROM audit_log WHERE action = 'user.updated' ORDER BY id")]
+    assert first == {
+        "user_id": vic, "username": "vic", "added": ["audit.view"], "removed": ["billing.view", "billing.export"],
+        "before": {"role": "viewer"}, "after": {"role": "Staff"},
+    }
+    assert second["before"] == {"role": "Staff"} and second["after"] == {"role": "operator"}
+    assert second["added"] == ["dashboards.edit", "billing.view", "billing.export", "tariffs.view", "sources.view", "sources.test",
+                               "discovery.view", "diagnostics.run"]  # in catalogue order
+    assert second["removed"] == ["audit.view"]
+
+
+async def test_a_patch_that_keeps_the_role_carries_no_permission_difference_and_a_no_op_writes_no_row(client, db):
+    await login_as(client, db)
+    vic = await make_user(db, "vic")
+    assert (await client.patch(f"/api/users/{vic}", json={"role": "VIEWER"})).status_code == 200  # the same role: no event
+    assert await audit_count(db, "user.updated") == 0
+    assert (await client.patch(f"/api/users/{vic}", json={"role": "viewer", "active": False})).status_code == 200
+    (row,) = await db.fetch("SELECT detail FROM audit_log WHERE action = 'user.updated'")
+    assert row["detail"] == {"user_id": vic, "username": "vic", "before": {"active": True}, "after": {"active": False}}
+
+
 # ---- escalation: a role saved above its saver (unreachable with the built-in roles, so the built-in Admin is narrowed) --
 
 async def test_a_role_cannot_be_saved_above_the_savers_own_access(client, db, monkeypatch):
@@ -613,3 +642,13 @@ async def test_the_role_of_a_new_account_is_resolved_with_the_databases_lower_on
     await make_role(db, "ΟΔΟΣ", [])
     created = await client.post("/api/users", json={"username": "n", "password": "longenough", "role": "οδοσ"})  # Postgres' lower of ΟΔΟΣ
     assert created.status_code == 201 and created.json()["role"] == "ΟΔΟΣ"
+
+
+async def test_a_role_is_found_whichever_unicode_form_the_name_is_typed_in(client, db):
+    await login_as(client, db)
+    created = await client.post("/api/roles", json={"name": "E\u0301quipe", "permissions": []})  # typed decomposed
+    assert created.status_code == 201 and created.json()["name"] == "\u00c9quipe"  # stored composed
+    for index, spelling in enumerate(("E\u0301quipe", "\u00c9quipe", "\u00e9quipe")):
+        made = await client.post("/api/users", json={"username": f"u{index}", "password": "longenough", "role": spelling})
+        assert made.status_code == 201, (spelling, made.text)
+        assert made.json()["role"] == "\u00c9quipe"

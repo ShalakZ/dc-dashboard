@@ -103,6 +103,7 @@ async def test_patching_a_user_records_before_and_after(client, db):
     (row,) = await audit_rows(db, "user.updated")
     assert row["detail"] == {
         "user_id": uid, "username": "ann",
+        "added": [], "removed": ["dashboards.edit", "tariffs.view", "sources.view", "sources.test", "discovery.view", "diagnostics.run"],
         "before": {"role": "operator", "active": True}, "after": {"role": "viewer", "active": False},
     }
 
