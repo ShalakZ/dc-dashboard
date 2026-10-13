@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
-import { SettingsPage } from "./SettingsPage";
+import { SettingsPage, versionText } from "./SettingsPage";
 
 const policy = (max_failures = 5, block_minutes = 5, enabled = true) => ({
   max_failures, block_minutes, enabled,
@@ -410,6 +410,40 @@ describe("SettingsPage certificate line", () => {
   });
 });
 
+describe("versionText", () => {
+  it("both known: the build id and the build time on the site clock", () => {
+    expect(versionText("227bd6a", "2026-10-12T14:03:11+02:00", "Asia/Qatar")).toBe("Version 227bd6a, built 2026-10-12 15:03:11");
+    expect(versionText("227bd6a", "2026-10-12T14:03:11+00:00", "UTC")).toBe("Version 227bd6a, built 2026-10-12 14:03:11");
+  });
+
+  it("a build id with no known time says the time is unknown, never 'built unknown'", () => {
+    expect(versionText("abc1234", "unknown", "UTC")).toBe("Version abc1234 (build time unknown)");
+  });
+
+  it("the id dev with no known time says the stack was built without a build id", () => {
+    expect(versionText("dev", "unknown", "UTC")).toBe("Version dev (this stack was built without a build id)");
+  });
+
+  it("the id dev with a known time says only the id and the time (the time is the better fact)", () => {
+    expect(versionText("dev", "2026-10-12T14:03:11+00:00", "UTC")).toBe("Version dev, built 2026-10-12 14:03:11");
+  });
+
+  it("a time that cannot be read is treated as unknown, for dev and for a real id", () => {
+    for (const bad of ["unknown", "", "   ", "yesterday-ish", "2026-13-45T99:00:00Z"]) {
+      expect(versionText("abc1234", bad, "UTC")).toBe("Version abc1234 (build time unknown)");
+      expect(versionText("dev", bad, "UTC")).toBe("Version dev (this stack was built without a build id)");
+    }
+  });
+
+  it("never prints 'unknown' after 'built'", () => {
+    for (const id of ["dev", "abc1234"]) {
+      for (const time of ["unknown", "", "nonsense", "2026-10-12T14:03:11+00:00"]) {
+        expect(versionText(id, time, "UTC")).not.toMatch(/built unknown/);
+      }
+    }
+  });
+});
+
 describe("SettingsPage version line", () => {
   async function open(version: { status?: number; body: unknown }, timezone = "UTC") {
     mockFetch({ ...base, "GET /api/settings/general": { body: { timezone } }, "GET /api/version": version });
@@ -424,15 +458,162 @@ describe("SettingsPage version line", () => {
     expect(line.querySelector("input, button")).toBeNull();
   });
 
-  it("says dev and unknown for an image built without a build id", async () => {
+  it("says what an image built without a build id is, instead of 'built unknown'", async () => {
     await open({ body: { build_id: "dev", build_time: "unknown", uptime_seconds: 1 } });
-    expect(await screen.findByText(/^Version /)).toHaveTextContent("Version dev, built unknown");
+    const line = await screen.findByText(/^Version /);
+    expect(line).toHaveTextContent("Version dev (this stack was built without a build id)");
+    expect(line).not.toHaveTextContent(/built unknown/);
+  });
+
+  it("says the build time is unknown for a real build id without one", async () => {
+    await open({ body: { build_id: "abc1234", build_time: "unknown", uptime_seconds: 1 } });
+    expect(await screen.findByText(/^Version /)).toHaveTextContent("Version abc1234 (build time unknown)");
   });
 
   it("shows no version line when the version cannot be read, and the rest of the page works", async () => {
     await open({ status: 500, body: { detail: "boom" } });
     expect(screen.queryByText(/^Version /)).not.toBeInTheDocument();
     expect(screen.getByLabelText("Timezone")).toHaveValue("UTC");
+  });
+});
+
+describe("SettingsPage cards and the About card (W7j)", () => {
+  const version = { build_id: "227bd6a", build_time: "2026-10-12T14:03:11+00:00", uptime_seconds: 5.2 };
+  const tlsOn = {
+    enabled: true, state: "ok", not_after: "2026-11-09T11:03:11+00:00", days_left: 80, subject: "CN=dcdash.example",
+    checked_at: "2026-10-10T12:00:00+00:00", error: null,
+  };
+  const tlsOff = { enabled: false, state: null, not_after: null, days_left: null, subject: null, checked_at: null, error: null };
+
+  async function open(extra: Record<string, { status?: number; body: unknown }> = {}) {
+    const calls = mockFetch({ ...base, "GET /api/settings/general": { body: { timezone: "UTC" } }, ...extra });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    await screen.findByLabelText("Timezone");
+    await screen.findByLabelText("Failed sign-ins before a block");
+    return calls;
+  }
+  const grid = () => document.querySelector(".page-grid") as HTMLElement;
+  const cards = () => Array.from(grid().children) as HTMLElement[];
+
+  it("puts General and Sign-in protection in one page grid as two page cards, each with its own h2", async () => {
+    await open();
+    expect(document.querySelectorAll(".page-grid")).toHaveLength(1);
+    const [general, signIn] = cards();
+    expect(general).toHaveClass("page-card");
+    expect(signIn).toHaveClass("page-card");
+    expect(within(general).getByRole("heading", { level: 2, name: "General" })).toBeInTheDocument();
+    expect(within(signIn).getByRole("heading", { level: 2, name: "Sign-in protection" })).toBeInTheDocument();
+    expect(within(general).getByLabelText("Timezone")).toBeInTheDocument();
+    expect(within(signIn).getByLabelText("Failed sign-ins before a block")).toBeInTheDocument();
+    expect(document.querySelectorAll("h1")).toHaveLength(1);
+  });
+
+  it("keeps the id sign-in-protection on the h2 that names the form, and the cards carry no landmark name of their own", async () => {
+    await open();
+    const heading = screen.getByRole("heading", { name: "Sign-in protection" });
+    expect(heading).toHaveAttribute("id", "sign-in-protection");
+    const form = screen.getByRole("form", { name: "Sign-in protection" });
+    expect(form).toHaveAttribute("aria-labelledby", "sign-in-protection");
+    for (const card of cards()) {
+      expect(card).not.toHaveAttribute("aria-labelledby");
+      expect(card).not.toHaveAttribute("aria-label");
+    }
+    expect(screen.getAllByLabelText("Timezone")).toHaveLength(1);
+  });
+
+  it("gives each card an icon in its head, hidden from assistive technology", async () => {
+    await open();
+    for (const card of cards()) {
+      const icon = card.querySelector(":scope > .page-card-head > svg.i");
+      expect(icon).not.toBeNull();
+      expect(icon).toHaveAttribute("aria-hidden", "true");
+    }
+  });
+
+  it("General's Save sits inside its form: Enter in the field sends the same request", async () => {
+    const calls = await open({ "PUT /api/settings/general": { body: { timezone: "Asia/Qatar" } } });
+    const input = screen.getByLabelText("Timezone");
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save.closest("form")).toBe(input.closest("form"));
+    expect(save).toHaveAttribute("type", "submit");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Asia/Qatar{Enter}");
+    expect(await screen.findByText("saved")).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([["/api/settings/general", { timezone: "Asia/Qatar" }]]);
+  });
+
+  it("Sign-in protection's Save sits inside its form: Enter in a number field sends the request, with the switch on", async () => {
+    const calls = await open({ "PUT /api/settings/sign-in": { body: policy(9, 5) } });
+    const form = screen.getByRole("form", { name: "Sign-in protection" });
+    const save = within(form).getByRole("button", { name: "Save sign-in protection" });
+    expect(save.closest("form")).toBe(form);
+    expect(save).toHaveAttribute("type", "submit");
+    const failures = screen.getByLabelText("Failed sign-ins before a block");
+    await userEvent.clear(failures);
+    await userEvent.type(failures, "9{Enter}");
+    expect(await within(form).findByText("saved")).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([
+      ["/api/settings/sign-in", { max_failures: 9, block_minutes: 5, enabled: true }],
+    ]);
+  });
+
+  it("ON to OFF still asks first from the card, with the dialog outside the form and the card, and Switch off sends the confirmed request", async () => {
+    const calls = await open({ "PUT /api/settings/sign-in": { body: policy(5, 5, false) } });
+    await userEvent.click(screen.getByRole("switch", { name: "Block an account after repeated wrong passwords" }));
+    const form = screen.getByRole("form", { name: "Sign-in protection" });
+    await userEvent.click(within(form).getByRole("button", { name: "Save sign-in protection" }));
+    const dialog = await screen.findByRole("dialog", { name: "Stop blocking accounts?" });
+    expect(form).not.toContainElement(dialog);
+    expect(calls.filter((c) => c.method === "PUT")).toHaveLength(0);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Switch off" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(calls.filter((c) => c.method === "PUT").map((c) => c.body)).toEqual([{ max_failures: 5, block_minutes: 5, enabled: false }]);
+  });
+
+  it("pins each Save to the bottom of its card: the last thing in the form is a foot holding the Save", async () => {
+    await open();
+    for (const [form, name] of [[screen.getByLabelText("Timezone").closest("form")!, "Save"], [screen.getByRole("form", { name: "Sign-in protection" }), "Save sign-in protection"]] as const) {
+      const foot = form.lastElementChild as HTMLElement;
+      expect(foot).toHaveClass("form-foot");
+      expect(within(foot).getByRole("button", { name })).toBeInTheDocument();
+    }
+  });
+
+  it("draws an About card across the whole grid, after the two cards, with the version line", async () => {
+    await open({ "GET /api/version": { body: version }, "GET /api/tls/status": { body: tlsOff } });
+    const about = await screen.findByRole("heading", { level: 2, name: "About" });
+    const card = about.closest(".page-card") as HTMLElement;
+    expect(cards()).toHaveLength(3);
+    expect(cards()[2]).toBe(card);
+    expect(card).toHaveClass("span-all");
+    expect(card.querySelector(":scope > .page-card-head > svg.i")).toHaveAttribute("aria-hidden", "true");
+    expect(within(card).getByText(/^Version /)).toHaveTextContent("Version 227bd6a, built 2026-10-12 14:03:11");
+    expect(within(card).queryByText(/Certificate/)).not.toBeInTheDocument();
+  });
+
+  it("puts the certificate line in the About card under the version line when HTTPS is on", async () => {
+    await open({ "GET /api/version": { body: version }, "GET /api/tls/status": { body: tlsOn } });
+    const about = (await screen.findByRole("heading", { level: 2, name: "About" })).closest(".page-card") as HTMLElement;
+    const certificate = await within(about).findByText(/Certificate/);
+    expect(certificate).toHaveTextContent("Certificate: expires 2026-11-09 11:03:11 (80 days left), CN=dcdash.example");
+    const version_ = within(about).getByText(/^Version /);
+    expect(version_.compareDocumentPosition(certificate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("draws the About card for the certificate alone when the version cannot be read", async () => {
+    await open({ "GET /api/version": { status: 500, body: { detail: "boom" } }, "GET /api/tls/status": { body: tlsOn } });
+    const about = (await screen.findByRole("heading", { level: 2, name: "About" })).closest(".page-card") as HTMLElement;
+    expect(await within(about).findByText(/Certificate/)).toBeInTheDocument();
+    expect(within(about).queryByText(/^Version /)).not.toBeInTheDocument();
+  });
+
+  it("draws no About card at all when there is nothing to put in it: no version yet and HTTPS off", async () => {
+    const calls = await open({ "GET /api/version": { status: 500, body: { detail: "boom" } }, "GET /api/tls/status": { body: tlsOff } });
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/version")).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/tls/status")).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(screen.queryByRole("heading", { name: "About" })).not.toBeInTheDocument();
+    expect(cards()).toHaveLength(2);
   });
 });
 
@@ -445,15 +626,18 @@ describe("SettingsPage while it loads (W7f)", () => {
     return hold;
   };
 
-  it("shows the page's wrapper, the real header and the two-column grid of form skeletons in one region while the settings are held, then the page", async () => {
+  it("shows the page's wrapper, the real header and the page grid of two card skeletons in one region while the settings are held, then the page", async () => {
     const hold = mount("/api/settings/general");
     const page = document.querySelector("section.admin-page.settings-page")!;
     expect(page).not.toBeNull();
     expect(within(page as HTMLElement).getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     const region = screen.getByText("Loading settings").parentElement!;
     expect(region).toHaveAttribute("role", "status");
-    expect(region).toHaveClass("settings-grid"); // the region IS the grid, so the cards sit where the real ones do
-    expect(region.querySelectorAll(":scope > .settings-col > .form-card, :scope > .form-card")).toHaveLength(2);
+    expect(region).toHaveClass("page-grid"); // the region IS the grid, so the cards sit where the real ones do
+    expect(region.querySelectorAll(":scope > .page-card")).toHaveLength(2);
+    expect(region.querySelectorAll(":scope > .page-card > .page-card-head > .sk-block")).toHaveLength(2); // the icon tiles
+    expect(region.querySelectorAll(".form-card")).toHaveLength(0);
+    expect(screen.queryByRole("heading", { name: "About" })).not.toBeInTheDocument(); // the About card follows the data
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Timezone")).not.toBeInTheDocument();
@@ -463,14 +647,30 @@ describe("SettingsPage while it loads (W7f)", () => {
     expect(document.querySelector(".sk-region")).toBeNull();
   });
 
+  it("draws the two skeleton cards in the loaded cards' shape: head, fields, helper lines and a Save block in a foot, and no words", async () => {
+    const hold = mount("/api/settings/general");
+    const cards = Array.from(screen.getByText("Loading settings").parentElement!.querySelectorAll<HTMLElement>(":scope > .page-card"));
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      expect(card).toHaveAttribute("aria-hidden", "true");
+      expect(card.querySelector(":scope > .page-card-head > h2")?.textContent).toBe("");
+      expect(card.textContent).toBe("");
+      expect(card.querySelector(":scope > .settings-form > .form-foot .sk-block")).not.toBeNull(); // the Save block, in the foot like the real button
+    }
+    expect(cards[0].querySelectorAll(".sk-field")).toHaveLength(1);
+    expect(cards[1].querySelectorAll(".sk-field")).toHaveLength(2);
+    hold.release();
+    await screen.findByLabelText("Timezone");
+  });
+
   it("shows the sign-in card's own wait inside its real card and heading, with two field rows and no card of its own, then the form", async () => {
     const hold = mount("/api/settings/sign-in");
     await screen.findByLabelText("Timezone"); // the general settings are in; the policy is not
-    const card = screen.getByRole("heading", { name: "Sign-in protection" }).closest(".form-card")!;
+    const card = screen.getByRole("heading", { name: "Sign-in protection" }).closest(".page-card")!;
     const region = within(card as HTMLElement).getByText("Loading sign-in protection").parentElement!;
     expect(region).toHaveAttribute("role", "status");
     expect(region.querySelectorAll(".sk-field")).toHaveLength(2);
-    expect(card.querySelectorAll(".form-card")).toHaveLength(0);
+    expect(card.querySelectorAll(".page-card, .form-card")).toHaveLength(0);
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByRole("form", { name: "Sign-in protection" })).not.toBeInTheDocument();
     hold.release();

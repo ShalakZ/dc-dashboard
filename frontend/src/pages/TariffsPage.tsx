@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   useAssets, useBillingSettings, useCreateTariff, useDeleteTariff, usePutBillingSettings, useTariffs, useUpdateTariff,
 } from "../api/queries";
 import type { Asset, Tariff, TariffPatch } from "../api/types";
 import { assetLabels } from "../components/dashboard/AssetPicker";
-import { Icon, type IconName } from "../components/Icon";
+import { EmptyNote } from "../components/EmptyNote";
 import { InfoTip } from "../components/InfoTip";
+import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
 import { FormSkeleton, TableSkeleton } from "../components/Skeleton";
@@ -17,37 +18,19 @@ function errorText(error: unknown): string {
   return (error instanceof Error ? error.message : "request failed").replace(/Value error, /g, "");
 }
 
-// Inline SVG, 24-unit viewBox, decoration only (the sentence next to each one says everything).
+// Inline SVG, 24-unit viewBox, decoration only (the sentence next to it says everything).
 const InfoIcon = () => (
   <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5.5M12 7.5h.01" /></svg>
-);
-const TagIcon = () => (
-  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12V4h8l10 10-8 8L3 12Z" /><circle cx="7.5" cy="8.5" r="1.5" /></svg>
 );
 
 /** The words stay a direct child of the status element (a test reads the role off the element that owns the text). */
 function Note({ children }: { children: string }) {
   return <p role="status" className="banner banner-info"><InfoIcon />{children}</p>;
 }
-function Empty({ children }: { children: string }) {
-  return (
-    <div className="empty">
-      <div className="empty-icon"><TagIcon /></div>
-      <p>{children}</p>
-    </div>
-  );
-}
 
-/** A section's title (the h2 text is the section's name), with its icon and the one line that says what the section is for. */
-function SectionHead({ icon, title, children }: { icon: IconName; title: string; children: string }) {
-  return (
-    <div className="sect-head">
-      <Icon name={icon} />
-      <h2>{title}</h2>
-      <p className="sect-purpose muted">{children}</p>
-    </div>
-  );
-}
+const CURRENCY_PURPOSE = "The unit costs are shown in.";
+const SITE_DEFAULT_PURPOSE = "The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date.";
+const OVERRIDES_PURPOSE = "A different price per kWh for one asset and everything under it (unless a lower asset has its own), from its effective date.";
 
 const EFFECTIVE_TIP = "The first day (site time) this rate counts. Readings before that day keep the rate that applied then.";
 const RATE_TIP = "The price of one kilowatt-hour in the site currency, for example 0.18.";
@@ -76,11 +59,9 @@ function CurrencyForm() {
     }
     put.mutate({ currency: next });
   };
+  // The field, Save and (until a currency is set) the one message about it share a row; the message wraps under them in a narrow card.
   return (
-    <>
-      {stored === null && (
-        <Note>No currency is set, so costs show without a unit. Enter a three-letter code such as QAR.</Note>
-      )}
+    <div className="currency-row">
       <form aria-label="Site currency" className="inline-form" noValidate onSubmit={save}>
         <div className="has-tip currency-field">
           <label>
@@ -101,7 +82,10 @@ function CurrencyForm() {
         {problem && <p className="error" role="alert">{problem}</p>}
         {put.isError && <p className="error" role="alert">{errorText(put.error)}</p>}
       </form>
-    </>
+      {stored === null && (
+        <Note>No currency is set, so costs show without a unit. Enter a three-letter code such as QAR.</Note>
+      )}
+    </div>
   );
 }
 
@@ -126,7 +110,7 @@ function AddTariff({ assets, labels, assetsError = null }: {
     );
   };
   return (
-    <form aria-label={assets === null ? "Add site default rate" : "Add asset override"} className="inline-form" noValidate onSubmit={submit}>
+    <form aria-label={assets === null ? "Add site default rate" : "Add asset override"} className="inline-form add-form" noValidate onSubmit={submit}>
       {assets !== null && (
         <div className="has-tip asset-field">
           <label>
@@ -221,7 +205,7 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
         ) : fmtRate(tariff.rate_per_kwh)}
       </td>
       <td className="actions">
-        <div className="row-actions">
+        <div className={editing ? "row-actions editing" : "row-actions"}>
           {editing ? (
             <>
               <button type="button" className="quiet" onClick={save} disabled={busy}>Save</button>
@@ -240,88 +224,76 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
   );
 }
 
-/** Static, so the page draws it while the rates load too: the table skeleton sits under it, where the table will be. */
-function SiteDefaultHead() {
-  return (
-    <SectionHead icon="rate" title="Site default rate">
-      The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date.
-    </SectionHead>
-  );
+/** The two rate cards: static heads, so the page draws them while the rates load too (the skeleton sits under the first one, where the table will be). */
+function SiteDefaultCard({ children }: { children?: ReactNode }) {
+  return <PageCard icon="rate" title="Site default rate" purpose={SITE_DEFAULT_PURPOSE}>{children}</PageCard>;
+}
+function OverridesCard({ children }: { children?: ReactNode }) {
+  return <PageCard icon="override" title="Asset overrides" purpose={OVERRIDES_PURPOSE}>{children}</PageCard>;
 }
 
-function TariffTables({ tariffs, assets, assetsError, currencyUnset }: {
-  tariffs: Tariff[]; assets: Asset[]; assetsError: string | null; currencyUnset: boolean;
-}) {
+/** `tariffs === undefined` is the loading frame: the skeleton where the left table will be, and both add forms already drawn (they are pinned to the card bottoms, so they must not drop when the rates land; the same elements stay mounted, so what is typed survives). */
+function TariffTables({ tariffs, assets, assetsError }: { tariffs: Tariff[] | undefined; assets: Asset[]; assetsError: string | null }) {
   const labels = useMemo(() => assetLabels(assets), [assets]);
-  const defaults = tariffs.filter((t) => t.asset_id === null);
-  const perAsset = tariffs.filter((t) => t.asset_id !== null);
+  const defaults = tariffs?.filter((t) => t.asset_id === null);
+  const perAsset = tariffs?.filter((t) => t.asset_id !== null);
   return (
     <>
-      {currencyUnset && (
-        <Note>Set the currency first: rates are in the site currency, and it is not set yet.</Note>
-      )}
-      <SiteDefaultHead />
-      {defaults.length === 0 ? (
-        <Empty>No site default rate yet. Until one is set, assets with no override show a dash for cost. Add a rate below.</Empty>
-      ) : (
-        <div className="table-wrap">
-          <table aria-label="Site default rates" className="tariff-table">
-            <thead><tr><th>Effective from</th><th className="num">Rate per kWh</th><th className="actions">Actions</th></tr></thead>
-            <tbody>{defaults.map((t) => <TariffRow key={t.id} tariff={t} where={null} />)}</tbody>
-          </table>
-        </div>
-      )}
-      <AddTariff assets={null} labels={labels} />
-      <SectionHead icon="override" title="Asset overrides">
-        A different price per kWh for one asset and everything under it (unless a lower asset has its own), from its effective date.
-      </SectionHead>
-      {perAsset.length === 0 ? (
-        <Empty>No overrides. Every asset uses the site default rate.</Empty>
-      ) : (
-        <div className="table-wrap">
-          <table aria-label="Asset overrides" className="tariff-table">
-            <thead><tr><th>Asset</th><th>Effective from</th><th className="num">Rate per kWh</th><th className="actions">Actions</th></tr></thead>
-            <tbody>{perAsset.map((t) => (
-              <TariffRow key={t.id} tariff={t} where={(t.asset_id !== null ? labels.get(t.asset_id) : undefined) ?? t.asset_path ?? t.asset_name} />
-            ))}</tbody>
-          </table>
-        </div>
-      )}
-      <AddTariff assets={assets} labels={labels} assetsError={assetsError} />
+      <SiteDefaultCard>
+        {defaults === undefined ? (
+          <TableSkeleton columns={3} rows={2} label="Loading tariffs" />
+        ) : defaults.length === 0 ? (
+          <EmptyNote icon="rate">No site default rate yet. Until one is set, assets with no override show a dash for cost. Add a rate below.</EmptyNote>
+        ) : (
+          <div className="table-wrap">
+            <table aria-label="Site default rates" className="tariff-table">
+              <thead><tr><th>Effective from</th><th className="num">Rate per kWh</th><th className="actions">Actions</th></tr></thead>
+              <tbody>{defaults.map((t) => <TariffRow key={t.id} tariff={t} where={null} />)}</tbody>
+            </table>
+          </div>
+        )}
+        <AddTariff assets={null} labels={labels} />
+      </SiteDefaultCard>
+      <OverridesCard>
+        {perAsset === undefined ? null : perAsset.length === 0 ? (
+          <EmptyNote icon="override">No overrides. Every asset uses the site default rate.</EmptyNote>
+        ) : (
+          <div className="table-wrap">
+            <table aria-label="Asset overrides" className="tariff-table">
+              <thead><tr><th>Asset</th><th>Effective from</th><th className="num">Rate per kWh</th><th className="actions">Actions</th></tr></thead>
+              <tbody>{perAsset.map((t) => (
+                <TariffRow key={t.id} tariff={t} where={(t.asset_id !== null ? labels.get(t.asset_id) : undefined) ?? t.asset_path ?? t.asset_name} />
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+        <AddTariff assets={assets} labels={labels} assetsError={assetsError} />
+      </OverridesCard>
     </>
   );
 }
+
+const NO_ASSETS: Asset[] = [];
 
 /** Admin only (the route is wrapped in RequireRole): the site currency, the site default rates and per-asset overrides. */
 export function TariffsPage() {
   const tariffs = useTariffs();
   const assets = useAssets();
-  const settings = useBillingSettings();
   return (
     <section className="tariffs-page">
       <PageHeader
         title="Tariffs"
         sub="A rate applies from its effective date (a site-local date) until the next one. An asset's override replaces the site default from its own effective date. Editing a past rate recalculates history."
       />
-      <SectionHead icon="currency" title="Currency">
-        The unit costs are shown in. Set it first: every rate below is in this currency.
-      </SectionHead>
-      <CurrencyForm />
-      {tariffs.isPending && (
-        <>
-          <SiteDefaultHead />
-          <TableSkeleton columns={3} rows={3} label="Loading tariffs" />
-        </>
-      )}
-      {tariffs.isError && <p className="error" role="alert">{errorText(tariffs.error)}</p>}
-      {tariffs.data && (
-        <TariffTables
-          tariffs={tariffs.data}
-          assets={assets.data ?? []}
-          assetsError={assets.isError ? errorText(assets.error) : null}
-          currencyUnset={settings.data?.currency === null}
-        />
-      )}
+      <div className="page-grid">
+        <PageCard className="span-all" icon="currency" title="Currency" purpose={CURRENCY_PURPOSE}>
+          <CurrencyForm />
+        </PageCard>
+        {tariffs.isError && <p className="error span-all" role="alert">{errorText(tariffs.error)}</p>}
+        {(tariffs.isPending || tariffs.data) && (
+          <TariffTables tariffs={tariffs.data} assets={assets.data ?? NO_ASSETS} assetsError={assets.isError ? errorText(assets.error) : null} />
+        )}
+      </div>
     </section>
   );
 }

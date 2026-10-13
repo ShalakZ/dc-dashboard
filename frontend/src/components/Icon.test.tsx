@@ -1,0 +1,48 @@
+import { render } from "@testing-library/react";
+import { Icon, ICONS, type IconName } from "./Icon";
+
+// The interface icons W7j adds: the Audit toolbar and rows, the Storage tiles and cards. None starts with "kind" (assetIcons.test.ts compares every kind* key with the catalogue).
+const INTERFACE: IconName[] = [
+  "download", "calendar", "clock", "filter", "layers", "trend", "hourglass", "readings", "database", "chevron",
+  "evSignIn", "evProblem", "evCreate", "evChange", "evDelete", "evSettings", "evOther",
+];
+
+describe("the interface icons (W7j)", () => {
+  it("are all there, 17 of them, and none is named like an asset kind", () => {
+    expect(INTERFACE).toHaveLength(17);
+    expect(new Set(INTERFACE).size).toBe(17);
+    for (const name of INTERFACE) {
+      expect(Object.keys(ICONS), name).toContain(name);
+      expect(name.startsWith("kind"), name).toBe(false);
+    }
+  });
+
+  it.each(INTERFACE)("%s is one decorative svg of the 24-unit box with at least one shape", (name) => {
+    const { container } = render(<Icon name={name} />);
+    const svg = container.firstElementChild!;
+    expect(svg.tagName.toLowerCase()).toBe("svg");
+    expect(svg).toHaveClass("i");
+    expect(svg).toHaveAttribute("viewBox", "0 0 24 24");
+    expect(svg).toHaveAttribute("aria-hidden", "true");
+    expect(svg.querySelectorAll("path, circle, rect, ellipse").length).toBeGreaterThan(0);
+  });
+
+  it("are drawn differently from each other and from the icons they sit next to", () => {
+    const drawn = (name: IconName) => {
+      const { container, unmount } = render(<Icon name={name} />);
+      const html = container.querySelector("svg")!.innerHTML;
+      unmount();
+      return html;
+    };
+    const all = INTERFACE.map(drawn);
+    expect(new Set(all).size).toBe(INTERFACE.length);
+    for (const other of ["diagnostics", "storage", "assets", "settings", "signOut", "trash", "caret"] as const) {
+      expect(all, `not the same as ${other}`).not.toContain(drawn(other));
+    }
+  });
+
+  it("draws the chevron pointing right (CSS turns it when a row opens)", () => {
+    const { container } = render(<Icon name="chevron" />);
+    expect(container.querySelector("path")!.getAttribute("d")).toBe("m9 6 6 6-6 6");
+  });
+});

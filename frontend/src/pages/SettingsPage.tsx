@@ -4,8 +4,9 @@ import type { TlsStatus } from "../api/types";
 import { useGeneralSettings, usePutGeneralSettings, usePutSignInPolicy, useSignInPolicy, useTlsStatus, useVersion } from "../api/queries";
 import { daysLeftText } from "../components/CertificateNotice";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
-import { FormSkeleton, SkeletonRegion } from "../components/Skeleton";
+import { FormSkeleton, PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion } from "../components/Skeleton";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 /** ApiError.message already carries the API's `detail`; drop pydantic's "Value error, " prefix. */
@@ -31,6 +32,12 @@ function certificateText(tls: TlsStatus, timezone: string): string {
       return "not checked recently (the collector has not reported on it for over 3 hours)";
   }
 }
+
+// The two helper paragraphs, as one string each: the loading page draws a pill per word of them, so it breaks into as many lines.
+const TIMEZONE_HELP = "The site's time zone. It decides where a day and a month start (today, yesterday, this month and last month in "
+  + "energy totals, Billing and dashboard ranges) and the times shown in the app. Readings are stored in UTC.";
+const SIGN_IN_HELP = "After this many wrong passwords for one account from one computer, that account is blocked from that computer for "
+  + "this long. Restarting the api service clears every block; Unblock on the Users page lets one account in sooner.";
 
 // Inline SVG, 24-unit viewBox, decoration only (the sentence next to it says everything).
 const WarnIcon = () => (
@@ -64,12 +71,12 @@ function SignInProtection() {
     put.reset();
   };
   return (
-    <div className="form-card">
-      <h2 id="sign-in-protection" className="section-title">Sign-in protection</h2>
+    <PageCard icon="password" title="Sign-in protection" headingId="sign-in-protection">
       {policy.isPending && <FormSkeleton rows={2} bare label="Loading sign-in protection" />}
       {policy.isError && <p className="error" role="alert">{detailText(policy.error)}</p>}
       {policy.data && (
         <form
+          className="settings-form"
           aria-labelledby="sign-in-protection"
           onSubmit={(e) => {
             e.preventDefault();
@@ -124,15 +131,14 @@ function SignInProtection() {
             />
           </label>
           {!enabled && <p className="muted">Used when protection is switched on.</p>}
-          <p className="muted">
-            After this many wrong passwords for one account from one computer, that account is blocked from that computer for
-            this long. Restarting the api service clears every block; Unblock on the Users page lets one account in sooner.
-          </p>
-          <div className="row">
-            <button type="submit" className="primary" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
-            {put.isSuccess && <span className="muted"> saved</span>}
+          <p className="muted">{SIGN_IN_HELP}</p>
+          <div className="form-foot">
+            <div className="row">
+              <button type="submit" className="primary" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
+              {put.isSuccess && <span className="muted"> saved</span>}
+            </div>
+            {put.isError && !asking && <p className="error" role="alert">{detailText(put.error)}</p>}
           </div>
-          {put.isError && !asking && <p className="error" role="alert">{detailText(put.error)}</p>}
         </form>
       )}
       {asking && (
@@ -148,17 +154,18 @@ function SignInProtection() {
           onCancel={keepOn}
         />
       )}
-    </div>
+    </PageCard>
   );
 }
 
-/** "Version 227bd6a, built 2026-10-12 14:03:11": the commit the api image was built from and that commit's time on the site clock. Nothing while unknown. */
-function VersionLine({ timezone }: { timezone: string }) {
-  const version = useVersion();
-  if (!version.data) return null;
-  const { build_id, build_time } = version.data;
-  const built = build_time === "unknown" ? build_time : formatSiteDateTime(build_time, timezone);
-  return <p className="muted">Version {build_id}, built {built}</p>;
+/**
+ * The version line, in the site's time zone. "Version 227bd6a, built 2026-10-12 14:03:11" when the build time is known (also for the id
+ * `dev`, which a stack built from a checkout without a commit time can still carry). Without a readable time: "Version dev (this stack was
+ * built without a build id)" for `dev`, "Version 227bd6a (build time unknown)" for a real id. Never "built unknown".
+ */
+export function versionText(build_id: string, build_time: string, timezone: string): string {
+  if (!Number.isNaN(Date.parse(build_time))) return `Version ${build_id}, built ${formatSiteDateTime(build_time, timezone)}`;
+  return build_id === "dev" ? "Version dev (this stack was built without a build id)" : `Version ${build_id} (build time unknown)`;
 }
 
 const ZONES: string[] = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
@@ -167,70 +174,85 @@ export function SettingsPage() {
   const settings = useGeneralSettings();
   const put = usePutGeneralSettings();
   const tls = useTlsStatus();
+  const version = useVersion();
   const [timezone, setTimezone] = useState("");
   useEffect(() => {
     if (settings.data) setTimezone(settings.data.timezone);
   }, [settings.data]);
   if (settings.isPending) {
+    // The region IS the grid, so the two card shapes sit where the real cards do. The About card follows the data: it is not drawn here.
     return (
       <section className="admin-page settings-page">
         <PageHeader title="Settings" sub="Options that apply to the whole site." />
-        <SkeletonRegion label="Loading settings" className="settings-grid">
-          <div className="settings-col"><FormSkeleton rows={1} /></div>
-          <FormSkeleton rows={2} />
+        <SkeletonRegion label="Loading settings" className="page-grid">
+          <PageCardSkeleton>
+            <div className="settings-form">
+              <div className="sk-field"><Skeleton width="9ch" /><Skeleton variant="block" height={38} /></div>
+              <ParagraphSkeleton text={TIMEZONE_HELP} className="muted" />
+              <div className="form-foot"><div className="row"><Skeleton variant="block" width={64} height={34} /></div></div>
+            </div>
+          </PageCardSkeleton>
+          <PageCardSkeleton>
+            <div className="settings-form">
+              <div className="sk-switch"><Skeleton variant="circle" width={16} /><Skeleton width="36ch" /></div>
+              <div className="sk-field"><Skeleton width="22ch" /><Skeleton variant="block" height={38} /></div>
+              <div className="sk-field"><Skeleton width="18ch" /><Skeleton variant="block" height={38} /></div>
+              <ParagraphSkeleton text={SIGN_IN_HELP} className="muted" />
+              <div className="form-foot"><div className="row"><Skeleton variant="block" width={64} height={34} /></div></div>
+            </div>
+          </PageCardSkeleton>
         </SkeletonRegion>
       </section>
     );
   }
   if (settings.isError) return <p className="error" role="alert">{detailText(settings.error)}</p>;
+  const zone = settings.data.timezone;
+  const certificate = tls.data?.enabled ? certificateText(tls.data, zone) : null;
   return (
     <section className="admin-page settings-page">
       <PageHeader title="Settings" sub="Options that apply to the whole site." />
-      <div className="settings-grid">
-        <div className="settings-col">
-          <div className="form-card">
-            <h2 className="section-title">General</h2>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                put.mutate({ timezone });
-              }}
-            >
-              <label>
-                Timezone{" "}
-                <input
-                  list="tz-options"
-                  value={timezone}
-                  required
-                  onChange={(e) => {
-                    setTimezone(e.target.value);
-                    put.reset();
-                  }}
-                />
-              </label>
-              <datalist id="tz-options">
-                {ZONES.map((z) => <option key={z} value={z} />)}
-              </datalist>
-              <p className="muted">
-                The site's time zone. It decides where a day and a month start (today, yesterday, this month and last month in
-                energy totals, Billing and dashboard ranges) and the times shown in the app. Readings are stored in UTC.
-              </p>
+      <div className="page-grid">
+        <PageCard icon="settings" title="General">
+          <form
+            className="settings-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              put.mutate({ timezone });
+            }}
+          >
+            <label>
+              Timezone{" "}
+              <input
+                list="tz-options"
+                value={timezone}
+                required
+                onChange={(e) => {
+                  setTimezone(e.target.value);
+                  put.reset();
+                }}
+              />
+            </label>
+            <datalist id="tz-options">
+              {ZONES.map((z) => <option key={z} value={z} />)}
+            </datalist>
+            <p className="muted">{TIMEZONE_HELP}</p>
+            <div className="form-foot">
               <div className="row">
                 <button type="submit" className="primary" disabled={put.isPending}>Save</button>
                 {put.isSuccess && <span className="muted"> saved</span>}
               </div>
               {put.isError && <p className="error" role="alert">{detailText(put.error)}</p>}
-            </form>
-          </div>
-          {tls.data?.enabled && (
-            <p className="notice">
-              <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>
-              <span>Certificate: {certificateText(tls.data, settings.data.timezone)}</span>
-            </p>
-          )}
-          <VersionLine timezone={settings.data.timezone} />
-        </div>
+            </div>
+          </form>
+        </PageCard>
         <SignInProtection />
+        {/* What this stack is. Drawn only when it has something to say: no version yet and no certificate line is no card. */}
+        {(version.data || certificate) && (
+          <PageCard icon="diagnostics" title="About" className="span-all">
+            {version.data && <p className="about-line">{versionText(version.data.build_id, version.data.build_time, zone)}</p>}
+            {certificate && <p className="about-line">Certificate: {certificate}</p>}
+          </PageCard>
+        )}
       </div>
     </section>
   );

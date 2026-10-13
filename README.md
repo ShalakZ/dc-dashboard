@@ -542,6 +542,11 @@ Eighteen specs run in one `playwright test` run against the dev-profile stack on
   is back; the banner inside the app appears after two failed requests and goes with the first answer; an expired session still goes to
   the sign-in page; a 200-character asset kind wraps instead of widening the page; and the "Skip the tree" link moves focus to the asset
   details. `headers.spec.ts` also checks the cache and compression headers of the built site.
+- `w7j.spec.ts` (its own project, after `w7i`) checks the page layouts of W7j at 1920, 1440 and 1024 px: no sideways scroll on the Audit log,
+  Storage, Tariffs, Settings and Diagnostics; Settings' two cards the same height with their Save buttons level; Tariffs' and Storage's two cards
+  side by side at 1440 and stacked at 1024; Tariffs' description wider than 800 px; the Audit toolbar in at most two rows with every accessible
+  name still found, the table still a table with a header row and a Details button that opens a detail row; the version line never saying
+  "built unknown"; and the loading skeleton of each page landing within 2 px of the loaded page at 1024 (Settings at 1440 too).
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1298,6 +1303,26 @@ shell twin) now name the program that owns each listening port and note the firs
    nine `ok` lines. If a browser shows a white page or a broken layout right after the update, press Ctrl+F5 once: before this
    update the web server sent no caching rule for the page, so a browser may reuse the old copy of `index.html` one more time.
 4. **Going back.** Check out `65d9fab` and rebuild as in step 2. There is no database step.
+
+### Upgrading to W7j (no migration)
+
+Schema stays `0008`; nothing in the database or the API changes, so there is nothing to restore. The code to go back to is
+`eba2d92` (`main` before W7j).
+
+W7j (the pages use their space) changes the `web` image and the front end only. What you will notice: the Audit log has one compact
+toolbar (search, user, action, a From to To pair, quick-filter chips, Go to date and Export CSV), rows with an event icon, a user disc,
+a "how long ago" line and a Details arrow at the end; Storage has icons on its five tiles, Rows per day (with a small bar per day) and
+Retention and capacity side by side; Tariffs puts the site default rate and the asset overrides in two columns under a Currency card and
+says once that no currency is set; Settings has two equal cards and an About card whose version line says "Version dev, built ..." when a
+stack was built without a build id; Diagnostics uses the whole page width; and Automatic icons now pick a battery, a cooling unit, a fan,
+a pump and a sensor for kinds that say so. The pages go to one column below 1280 px.
+
+1. **Back up first** (a habit here: nothing in the database changes), as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). Only `web` is rebuilt. `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you.
+3. **Verify.** `docker compose exec api alembic current` still prints `0008 (head)`; `scripts/check_web.sh http://localhost` prints
+   nine `ok` lines; the Audit log, Storage, Tariffs, Settings and Diagnostics pages open. A stale page after the update reloads once by itself.
+4. **Going back.** Check out `eba2d92` and rebuild as in step 2. There is no database step.
 
 ## Add a connector
 

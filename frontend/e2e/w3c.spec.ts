@@ -98,7 +98,7 @@ test("W3c: the audit screen filters, links, exports and pages, and is for admins
   });
 
   await test.step("an entry has its own page with the friendly text and the raw JSON", async () => {
-    await rows.first().locator("td").first().getByRole("link").click();
+    await rows.first().locator("td.cell-time").getByRole("link").click(); // the Details chevron is the first cell (W7j)
     await expect(page).toHaveURL(/\/audit\/\d+$/);
     await expect(page.getByRole("heading", { name: /^Audit entry #\d+$/ })).toBeVisible();
     await expect(page.getByText(GONE).first()).toBeVisible();
@@ -143,7 +143,7 @@ test("W3c: the audit screen filters, links, exports and pages, and is for admins
     await filterBy("Go to date").fill(today);
     await page.getByRole("button", { name: "Go", exact: true }).click();
     await expect(page.getByText(/No entries on/)).toHaveCount(0);
-    await expect(rows.first().locator("td").first()).toContainText(today);
+    await expect(rows.first().locator("td.cell-time")).toContainText(today);
 
     await filterBy("Go to date").fill("2001-01-01");
     await page.getByRole("button", { name: "Go", exact: true }).click();

@@ -1241,3 +1241,38 @@ describe("the app-shell skeleton (W7h)", () => {
     });
   });
 });
+
+describe("the page card and the page grid (W7j)", () => {
+  // jsdom has no layout: the declarations are pinned, the pages were looked at in a browser at 1920, 1440, 1280 and 1024 px.
+  it("a form in a card has no 480 px cap and no outer margin (the global form rule would bring both back the moment a form leaves .form-card)", () => {
+    const found = rules.filter((r) => r.selector === ".page-card form");
+    expect(found, 'exactly one rule for ".page-card form"').toHaveLength(1);
+    expect(inLayer(found[0])).toBe(true);
+    expect(found[0].body).toMatch(/max-width:\s*none/);
+    expect(found[0].body).toMatch(/margin:\s*0\b/);
+    const globalForm = rules.find((r) => r.selector === "form")!;
+    expect(globalForm.body).toMatch(/max-width:\s*480px/); // what the rule above has to undo
+  });
+
+  it("the card and the grid make no containing block and no stacking context: a fixed dialog inside a card and a tip bubble at its edge must not be trapped or clipped", () => {
+    const own = rules.filter((r) => ["page-card", "page-grid"].some((cls) => new RegExp(`(^|[\\s,>+~])\\.${cls}(?![\\w-])`).test(r.selector)));
+    expect(own.length, "rules for the card and the grid").toBeGreaterThan(3);
+    for (const rule of own) {
+      expect(rule.body, `"${rule.selector}"`).not.toMatch(/(^|[;\s])(transform|filter|backdrop-filter|contain|will-change|perspective|clip-path|mask|z-index|position)\s*:/);
+      expect(rule.body, `"${rule.selector}"`).not.toMatch(/overflow(-[xy])?\s*:\s*(hidden|clip|auto|scroll)/);
+    }
+  });
+
+  it("the grid is one column, and two equal columns from a viewport of 1280 px", () => {
+    const grid = rules.filter((r) => r.selector === ".page-grid");
+    const base = grid.filter((r) => r.at.length === 1 && r.at[0] === "@layer w6");
+    expect(base).toHaveLength(1);
+    expect(base[0].body).toMatch(/display:\s*grid/);
+    expect(base[0].body).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+    const wide = grid.filter((r) => r.at.includes("@media (min-width: 1280px)"));
+    expect(wide).toHaveLength(1);
+    expect(wide[0].body).toMatch(/grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+    expect(wide[0].body).toMatch(/align-items:\s*stretch/);
+    expect(rules.find((r) => r.selector === ".page-grid > .span-all")?.body).toMatch(/grid-column:\s*1 \/ -1/);
+  });
+});

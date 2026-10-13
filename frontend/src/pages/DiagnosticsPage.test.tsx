@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch, type Routes } from "../test/fetchMock";
+import { parseRules, stripComments } from "../test/cssTools";
 import { renderWithProviders } from "../test/render";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 
@@ -247,4 +249,123 @@ describe("DiagnosticsPage connection check", () => {
     await waitFor(() => expect(screen.getByText("TCP connection")).toBeInTheDocument(), { timeout: 4000 });
     expect(screen.getByText("Every step passed.")).toBeInTheDocument();
   }, 15_000);
+});
+
+describe("DiagnosticsPage layout (W7j)", () => {
+  const cardOf = (name: string) => screen.getByRole("heading", { level: 2, name }).closest("section.page-card") as HTMLElement;
+
+  it("is two page cards in order, Report then Connection check, each with an icon that is decoration", async () => {
+    mockFetch(routes());
+    const { container } = renderWithProviders(<DiagnosticsPage />);
+    await screen.findByRole("combobox", { name: "Source" });
+    const cards = [...container.querySelectorAll("section.diag-page > .page-grid > .page-card.span-all")];
+    expect(cards).toHaveLength(2);
+    expect(cards.map((c) => c.querySelector("h2")?.textContent)).toEqual(["Report", "Connection check"]);
+    for (const card of cards) {
+      const icon = card.querySelector(".page-card-head > svg.i");
+      expect(icon, "an icon in the head").not.toBeNull();
+      expect(icon).toHaveAttribute("aria-hidden", "true");
+    }
+    expect(container.querySelector(".form-card")).toBeNull(); // the narrow card is gone; Users and Sources keep theirs
+    expect(screen.getAllByRole("heading", { level: 2 })).toHaveLength(2);
+  });
+
+  it("puts the detail group, the source select and the mask checkbox in one row, in that order, before the helper line and the Build row", async () => {
+    mockFetch(routes());
+    renderWithProviders(<DiagnosticsPage />);
+    await screen.findByRole("combobox", { name: "Limit to one source" });
+    const form = build().closest("form")!;
+    expect(form).toHaveClass("report-form");
+    const [fields, helper, row] = [...form.children] as HTMLElement[];
+    expect(fields).toHaveClass("report-fields");
+    expect([...fields.children].map((c) => c.tagName)).toEqual(["FIELDSET", "LABEL", "LABEL"]);
+    const [detail, source, mask] = [...fields.children] as HTMLElement[];
+    expect(within(detail).getByRole("radio", { name: "Summary" })).toBeInTheDocument();
+    expect(within(detail).getByRole("radio", { name: "Full" })).toBeInTheDocument();
+    expect(within(source).getByRole("combobox", { name: "Limit to one source" })).toBeInTheDocument();
+    expect(within(mask).getByRole("checkbox", { name: "Hide host names and addresses" })).toBeInTheDocument();
+    // The host-name explanation is a line of the form, not of the checkbox's narrow column, and the Build row follows it.
+    expect(helper.tagName).toBe("P");
+    expect(helper).toHaveTextContent(/^A report names the machines of your network\. Tick this to replace every host name and address with HOST-1, HOST-2 and so on; the key stays on this page\. Passwords and keys are never in a report\.$/);
+    expect(row).toHaveClass("row");
+    expect(within(row).getByRole("button", { name: "Build report" })).toBe(build());
+    // the helper line is the checkbox's description (read after its name), though it sits on a line of its own
+    const box = within(mask).getByRole("checkbox", { name: "Hide host names and addresses" });
+    expect(box).toHaveAttribute("aria-describedby", helper.id);
+    expect(helper.id).not.toBe("");
+    expect(box).toHaveAccessibleDescription(/^A report names the machines of your network\./);
+  });
+
+  it("keeps every helper line as plain text at the card's width: no hint cap, no info tip, the Detail help stays in its group", async () => {
+    mockFetch(routes());
+    const { container } = renderWithProviders(<DiagnosticsPage />);
+    await screen.findByRole("combobox", { name: "Source" });
+    expect(container.querySelector(".hint")).toBeNull();
+    expect(screen.queryByRole("button", { name: "What does this mean?" })).not.toBeInTheDocument();
+    const group = screen.getByRole("group", { name: "Detail" });
+    expect(within(group).getByText(/^Summary: one paste with the latest connection check/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: "Full" }));
+    expect(within(group).getByText(/^Full: everything, up to about 60,000 characters/)).toBeInTheDocument();
+    expect(within(group).queryByText(/^Summary: one paste/)).not.toBeInTheDocument();
+    expect(screen.getByText("Nothing built yet. Choose the detail and press Build report.")).toBeInTheDocument();
+  });
+
+  it("gives the connection check card its sentence as the purpose line, with the panel below it", async () => {
+    mockFetch(routes());
+    renderWithProviders(<DiagnosticsPage />);
+    await screen.findByRole("combobox", { name: "Source" });
+    const card = cardOf("Connection check");
+    const purpose = card.querySelector(".page-card-head > .sect-purpose");
+    expect(purpose).toHaveTextContent("Runs the steps one after the other and shows where a connection stops. It only reads from the source.");
+    expect(card.querySelector(".check-panel")).not.toBeNull();
+    expect(within(cardOf("Report")).queryByRole("combobox", { name: "Source" })).not.toBeInTheDocument();
+  });
+
+  it("builds the report inside the Report card: the bar, the parts and the key", async () => {
+    mockFetch(routes(reply({
+      mask: true,
+      parts: [part(1, 2, "FIRST", 5, 1), part(2, 2, "SECOND", 6, 1)],
+      legend: [{ alias: "HOST-1", original: "scada.example.net" }],
+    })));
+    renderWithProviders(<DiagnosticsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Build report" }));
+    await screen.findByRole("textbox", { name: "Report part 2 of 2" });
+    const card = cardOf("Report");
+    expect(within(card).getByRole("status", { name: "" })).toHaveTextContent(/^Built a summary report in 2 parts/);
+    expect(within(card).getByRole("button", { name: "Download .txt" })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Copy part 2 of 2" })).toBeInTheDocument();
+    expect(within(card).getByText("Address key")).toBeInTheDocument();
+    expect(within(cardOf("Connection check")).queryByRole("textbox")).not.toBeInTheDocument();
+  });
+});
+
+describe("the Diagnostics styles (W7j)", () => {
+  const rules = parseRules(stripComments(readFileSync("src/styles/pages-admin.css", "utf8")));
+  const one = (selector: string) => {
+    const found = rules.filter((r) => r.selector === selector);
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0].body;
+  };
+
+  it("sets no narrow width on the form or on any description of the page", () => {
+    const own = rules.filter((r) => /diag-page|report-/.test(r.selector) && !r.selector.includes(".page-head .sub")); // the shared description rule is tested below
+    expect(own.length).toBeGreaterThan(0);
+    for (const rule of own) {
+      expect(rule.body, `"${rule.selector}"`).not.toMatch(/max-width:\s*(?!none\b|100%)[\d.]+(px|ch|rem|em)/);
+    }
+    // no rule of its own: `.page-card form` (app.css, tested there) already lifts the global `form { max-width: 480px }` for every card's form
+    expect(rules.filter((r) => r.selector === ".diag-page .report-form")).toHaveLength(0);
+  });
+
+  it("holds the Detail group to a fixed basis so its two help texts do not move the neighbours", () => {
+    const body = one(".report-fields > fieldset");
+    expect(body).toMatch(/flex:\s*0 1 [\d.]+(rem|px)/);
+    expect(body).toMatch(/min-width:\s*0/); // a fieldset's own min-content would otherwise win over the basis
+  });
+
+  it("lets the page description run to about 110 characters, like the other four pages", () => {
+    const rule = rules.find((r) => r.selector.split(",").map((s) => s.trim()).includes(".diag-page .page-head .sub"));
+    expect(rule, "the shared .page-head .sub rule names .diag-page").toBeDefined();
+    expect(rule!.body).toMatch(/max-width:\s*110ch/);
+  });
 });

@@ -1,8 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { Icon, type IconName } from "../components/Icon";
 import { InfoTip } from "../components/InfoTip";
+import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
-import { FormSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
+import { PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
 import { useRowsPerDay, useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
 import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
 import { storageLoss } from "../lib/impact";
@@ -46,6 +48,14 @@ export function validate(s: StorageSettings): string | null {
   return null;
 }
 
+/** The note under the day table; the loading frame draws the same words as grey pills too. */
+export const UTC_NOTE = "Days are UTC days, midnight to midnight UTC, not days in the site's time zone.";
+/** The retention card's first paragraph; the loading frame draws the same words as grey pills, so it breaks into the same lines. */
+export const DISK_NOTE = "Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.";
+// What the summary paragraph under the buttons says, with typical numbers: while loading only the length of each word is used.
+const SUMMARY_SAMPLE = "This site's default: raw 30 days, compress after 7 days, 1-minute rollups 365 days, capacity 500 GB, warn at 85 %. "
+  + "Factory: raw 30 days, compress after 7 days, 1-minute rollups 365 days, capacity 500 GB, warn at 85 %. The two Resets only fill in the form; nothing changes until you press Save.";
+
 const summary = (d: StorageSettings) =>
   `raw ${d.raw_retention_days} days, compress after ${d.compress_after_days} days, 1-minute rollups ${d.rollup_1m_retention_days} days, capacity ${d.disk_capacity_gb} GB, warn at ${d.warn_threshold_pct} %`;
 
@@ -67,10 +77,10 @@ export function checkRange(start: string, end: string, lastDay: string): string 
   return null;
 }
 
-function Tile({ title, tip, big, note }: { title: string; tip: string; big: string; note?: string }) {
+function Tile({ icon, title, tip, big, note }: { icon: IconName; title: string; tip: string; big: string; note?: string }) {
   return (
     <div className="tile">
-      <div className="muted"><span>{title}</span><InfoTip>{tip}</InfoTip></div>
+      <div className="muted"><span className="tile-label"><Icon name={icon} /><span>{title}</span></span><InfoTip>{tip}</InfoTip></div>
       <div className="big">{big}</div>
       {note && <small className="muted">{note}</small>}
     </div>
@@ -115,8 +125,7 @@ function RowsPerDay({ initial }: { initial: StorageStats["rows_per_day"] }) {
     body = <DayTable days={query.data.days} total={query.data.total_rows} />;
   }
   return (
-    <div className="rows-day">
-      <h2 className="section-title">Rows per day</h2>
+    <PageCard className="rows-day" icon="calendar" title="Rows per day">
       <div className="rows-range">
         <label>
           Rows from day
@@ -129,21 +138,37 @@ function RowsPerDay({ initial }: { initial: StorageStats["rows_per_day"] }) {
         <button type="button" className="quiet" onClick={reset}>Last 7 days</button>
       </div>
       {problem && <p className="error" role="alert">{problem}</p>}
-      <p className="muted">Days are UTC days, midnight to midnight UTC, not days in the site's time zone.</p>
       {body}
-    </div>
+      {/* Under the table, not above it: how many lines the sentence takes depends on the card's width and the font, and above the table that would move the table and the skeleton's twin off each other */}
+      <p className="muted">{UTC_NOTE}</p>
+    </PageCard>
   );
 }
 
+/** A day's bar as a whole percent of the busiest day shown: nothing for a day with no rows, at least 1 % for any other (a sliver still reads as "some"). */
+const share = (rows: number, peak: number) => (rows > 0 ? Math.max(1, Math.round((rows / peak) * 100)) : 0);
+
+/** The day rows with a bar behind each number, scaled to the busiest day of the range shown. All zeros draw the empty tracks and no fill. The bar is decoration: the number is the text. */
 function DayTable({ days, total }: { days: { day: string; rows: number }[]; total: number }) {
+  const peak = Math.max(0, ...days.map((d) => d.rows));
   return (
     <>
       <p className="muted">{rowCount(total)}</p>
-      <div className="table-wrap">
+      <div className="table-wrap day-table">
         <table>
           <tbody>
             {days.map((d) => (
-              <tr key={d.day}><td>{d.day}</td><td className="num">{d.rows.toLocaleString("en-US")}</td></tr>
+              <tr key={d.day}>
+                <td>{d.day}</td>
+                <td className="num">
+                  <div className="databar-cell">
+                    <span className="databar" aria-hidden="true">
+                      {peak > 0 && <span className="databar-fill" style={{ width: `${share(d.rows, peak)}%` }} />}
+                    </span>
+                    <span className="databar-num">{d.rows.toLocaleString("en-US")}</span>
+                  </div>
+                </td>
+              </tr>
             ))}
           </tbody>
         </table>
@@ -170,28 +195,44 @@ export function StoragePage() {
   if (stats.isError) return <p className="error" role="alert">{stats.error.message}</p>;
   if (settings.isError) return <p className="error" role="alert">{settings.error.message}</p>;
   if (stats.isPending || settings.isPending || !form) {
-    // The page in its order: the five real tiles (three with their note line), the disk note, Rows per day (heading, range fields, the UTC
-    // note and the count, then the seven day rows with no header, as the real table has none), then the form, whose own height is a guess
-    // (its rows lay out in columns). All lines are placeholders: a region holds no words but its label. Banners are data and are not drawn.
+    // The page in its order: the five real tiles (an icon circle and a line each, three with their note line), then the two cards in the page
+    // grid as the loaded page draws them. Rows per day: the range fields and the count, then the seven day rows with no header, as the real table
+    // has none, then the UTC note under it. Retention and capacity: the disk note, the field grid, the buttons and the summary, whose paragraphs are word pills of
+    // the real sentences (the real lines wrap with the width). All lines are placeholders: a region holds no words but its label. Banners are data and are not drawn.
     return (
       <section className="admin-page storage-page">
         <PageHeader title="Storage" sub="How much space the readings take, and how long they are kept." />
         <SkeletonRegion label="Loading storage">
-          <TilesSkeleton count={5} plain className="storage-tiles" notes={[1, 2, 4]} />
-          <p className="muted" aria-hidden="true"><Skeleton width="90%" /></p>
-          <div className="rows-day" aria-hidden="true">
-            <h2 className="section-title"><Skeleton width="12ch" /></h2>
-            <div className="rows-range">
-              {[0, 1].map((i) => (
-                <div className="sk-field" key={i}><Skeleton width="12ch" /><Skeleton variant="block" width={150} height={34} /></div>
-              ))}
-              <Skeleton variant="block" width={96} height={30} />
-            </div>
-            <p className="muted"><Skeleton width="60%" /></p>
-            <p className="muted"><Skeleton width="16ch" /></p>
-            <TableSkeleton columns={2} rows={7} headless />
+          <TilesSkeleton count={5} className="storage-tiles" notes={[1, 2, 4]} />
+          <div className="page-grid">
+            <PageCardSkeleton className="rows-day">
+              <div className="rows-range">
+                {[0, 1].map((i) => (
+                  <div className="sk-field" key={i}><Skeleton width="12ch" /><Skeleton variant="block" width={150} height={34} /></div>
+                ))}
+                <Skeleton variant="block" width={96} height={30} />
+              </div>
+              <p className="muted"><Skeleton width="16ch" /></p>
+              <TableSkeleton columns={2} rows={7} headless />
+              <ParagraphSkeleton text={UTC_NOTE} className="muted" />
+            </PageCardSkeleton>
+            <PageCardSkeleton className="retention-card">
+              <ParagraphSkeleton text={DISK_NOTE} className="muted" />
+              <div className="retention-form">
+                <div className="retention-fields">
+                  {FIELDS.map(([key], i) => (
+                    <div className="sk-field" key={key}><Skeleton width={i % 2 ? "18ch" : "22ch"} /><Skeleton variant="block" height={38} /></div>
+                  ))}
+                </div>
+                <div className="retention-foot">
+                  <div className="row">
+                    {[62, 120, 124, 176].map((width) => <Skeleton key={width} variant="block" width={width} height={34} />)}
+                  </div>
+                  <ParagraphSkeleton text={SUMMARY_SAMPLE} className="muted" />
+                </div>
+              </div>
+            </PageCardSkeleton>
           </div>
-          <FormSkeleton rows={4} wide />
         </SkeletonRegion>
       </section>
     );
@@ -244,48 +285,52 @@ export function StoragePage() {
         </div>
       )}
       <div className="tiles storage-tiles">
-        <Tile title="Database size" tip={TILE_HELP.database} big={sizeText(s.database_bytes)} />
+        <Tile icon="storage" title="Database size" tip={TILE_HELP.database} big={sizeText(s.database_bytes)} />
         <Tile
+          icon="readings"
           title="Readings (raw)"
           tip={TILE_HELP.readings}
           big={sizeText(s.readings_bytes_total)}
           note={s.readings_bytes_uncompressed ? `compressed ${sizeText(s.readings_bytes_compressed)} of ${sizeText(s.readings_bytes_uncompressed)}, ratio ${ratio}` : "nothing compressed yet"}
         />
-        <Tile title="Rollups" tip={TILE_HELP.rollups} big={sizeText(s.rollup_1m_bytes + s.rollup_1h_bytes)} note={`1 min ${sizeText(s.rollup_1m_bytes)}, 1 h ${sizeText(s.rollup_1h_bytes)}`} />
-        <Tile title="Growth per day" tip={TILE_HELP.growth} big={`${sizeText(s.growth_bytes_per_day)} / day`} />
-        <Tile title="Projected full" tip={TILE_HELP.projected} big={projection(s.used_pct, s.days_until_full)} note={`${s.used_pct}% of ${sizeText(s.disk_capacity_bytes)}`} />
+        <Tile icon="layers" title="Rollups" tip={TILE_HELP.rollups} big={sizeText(s.rollup_1m_bytes + s.rollup_1h_bytes)} note={`1 min ${sizeText(s.rollup_1m_bytes)}, 1 h ${sizeText(s.rollup_1h_bytes)}`} />
+        <Tile icon="trend" title="Growth per day" tip={TILE_HELP.growth} big={`${sizeText(s.growth_bytes_per_day)} / day`} />
+        <Tile icon="hourglass" title="Projected full" tip={TILE_HELP.projected} big={projection(s.used_pct, s.days_until_full)} note={`${s.used_pct}% of ${sizeText(s.disk_capacity_bytes)}`} />
       </div>
-      <p className="muted">
-        Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.
-      </p>
-      <RowsPerDay initial={s.rows_per_day} />
-      <div className="form-card wide">
-        <h2 className="section-title">Retention and capacity</h2>
-        <form className="retention-form" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(false); }}>
-          {FIELDS.map(([key, label]) => (
-            <div className="has-tip" key={key}>
-              <label>
-                {label}
-                <input type="number" step="any" value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} />
-              </label>
-              <InfoTip>{FIELD_HELP[key]}</InfoTip>
+      <div className="page-grid">
+        <RowsPerDay initial={s.rows_per_day} />
+        <PageCard className="retention-card" icon="database" title="Retention and capacity">
+          <p className="muted">{DISK_NOTE}</p>
+          <form className="retention-form" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(false); }}>
+            <div className="retention-fields">
+              {FIELDS.map(([key, label]) => (
+                <div className="has-tip" key={key}>
+                  <label>
+                    {label}
+                    <input type="number" step="any" value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} />
+                  </label>
+                  <InfoTip>{FIELD_HELP[key]}</InfoTip>
+                </div>
+              ))}
             </div>
-          ))}
-          {error && <p className="error" role="alert">{error}</p>}
-          {note && !error && <p className="muted" role="status">{note}</p>}
-          <div className="row">
-            <button type="submit" className="primary" disabled={save.isPending}>Save</button>
-            <button type="button" onClick={rememberAsDefault} disabled={makeDefault.isPending}>Set as default</button>
-            <button type="button" className="quiet" onClick={() => fill(siteDefault ?? factory)}>Reset to default</button>
-            <button type="button" className="quiet" onClick={() => fill(factory)}>Reset to factory settings</button>
-          </div>
-          <p className="muted">
-            {siteDefault
-              ? `This site's default: ${summary(siteDefault)}.`
-              : "No site default has been set, so Reset to default loads the factory values."}{" "}
-            Factory: {summary(factory)}. The two Resets only fill in the form; nothing changes until you press Save.
-          </p>
-        </form>
+            <div className="retention-foot">
+              {error && <p className="error" role="alert">{error}</p>}
+              {note && !error && <p className="muted" role="status">{note}</p>}
+              <div className="row">
+                <button type="submit" className="primary" disabled={save.isPending}>Save</button>
+                <button type="button" onClick={rememberAsDefault} disabled={makeDefault.isPending}>Set as default</button>
+                <button type="button" className="quiet" onClick={() => fill(siteDefault ?? factory)}>Reset to default</button>
+                <button type="button" className="quiet" onClick={() => fill(factory)}>Reset to factory settings</button>
+              </div>
+              <p className="muted">
+                {siteDefault
+                  ? `This site's default: ${summary(siteDefault)}.`
+                  : "No site default has been set, so Reset to default loads the factory values."}{" "}
+                Factory: {summary(factory)}. The two Resets only fill in the form; nothing changes until you press Save.
+              </p>
+            </div>
+          </form>
+        </PageCard>
       </div>
       {needsConfirm && (
         <ConfirmDeleteDialog

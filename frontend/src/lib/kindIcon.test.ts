@@ -48,7 +48,7 @@ describe("kindIcon: matching", () => {
     ["Racks", "kindRack"],
     ["Meters", "kindMeter"],
     ["PDUs", "kindPdu"],
-    ["CRAH unit", "kindChiller"],
+    ["CRAH unit", "kindCrac"],
     ["ATS", "kindCircuit"],
     // camelCase and digit boundaries split
     ["LVPanel", "kindPanel"],
@@ -85,11 +85,62 @@ describe("kindIcon: transfer", () => {
     ["TransferSwitch", "kindCircuit"],
     ["transfer-switch", "kindCircuit"],
     ["ATS Transfer Switch", "kindCircuit"],
-    ["Fuel Transfer Pump", "kindGeneric"],
+    ["Fuel Transfer Pump", "kindPump"],
     ["Transfer", "kindGeneric"],
     ["Transfer Room", "kindRoom"],
     ["Transfer Switchgear", "kindPanel"],
     ["Switch Transfer", "kindGeneric"],
+  ])("%s is %s", (kind, icon) => {
+    expect(kindIcon(kind)).toBe(icon);
+  });
+});
+
+describe("kindIcon: battery, cooling unit, fan, pump and sensor have their own icons", () => {
+  it.each([
+    ["Battery", "kindBattery"],
+    ["Batteries", "kindBattery"],
+    ["BESS", "kindBattery"],
+    ["CRAC", "kindCrac"],
+    ["CRAH", "kindCrac"],
+    ["Cooling", "kindCrac"],
+    ["Cooler", "kindCrac"],
+    ["AHU", "kindCrac"],
+    ["Fan", "kindFan"],
+    ["Fans", "kindFan"],
+    ["Pump", "kindPump"],
+    ["Pumps", "kindPump"],
+    ["Sensor", "kindSensor"],
+    ["Sensors", "kindSensor"],
+  ])("%s is %s", (kind, icon) => {
+    expect(kindIcon(kind)).toBe(icon);
+  });
+
+  // The table order decides when a kind holds two known words.
+  it.each([
+    ["UPS Battery", "kindUps"],
+    ["Battery UPS", "kindUps"],
+    ["Battery Room", "kindBattery"],
+    ["CRAC Unit", "kindCrac"],
+    ["Cooling Tower", "kindCrac"],
+    ["Cooling Pump", "kindPump"],
+    ["Cooling Fan", "kindFan"],
+    ["AHU Fan", "kindCrac"],
+    ["Chiller", "kindChiller"],
+    ["Chiller Pump", "kindChiller"],
+    ["Fan Coil Unit", "kindFan"],
+    ["Fuel Transfer Pump", "kindPump"],
+    // a panel that serves a pump (or a cooling loop) is a panel; a pump room is a pump, as a UPS room is a UPS
+    ["Pump Panel", "kindPanel"],
+    ["Pump Control Panel", "kindPanel"],
+    ["Cooling Panel", "kindPanel"],
+    ["Pump Room", "kindPump"],
+    ["Transfer Switch", "kindCircuit"],
+    ["Rack Temperature Sensor", "kindSensor"],
+    ["Power Meter", "kindMeter"],
+    ["Sensor Meter", "kindMeter"],
+    ["LV Panel", "kindPanel"],
+    ["Cooling Plant", "kindCrac"],
+    ["Boiler", "kindGeneric"],
   ])("%s is %s", (kind, icon) => {
     expect(kindIcon(kind)).toBe(icon);
   });

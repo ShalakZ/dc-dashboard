@@ -31,34 +31,35 @@
   .billing-page ul.legend li { display: flex; align-items: center; gap: 6px; }
   .billing-page ul.legend abbr { display: inline-grid; place-items: center; min-width: 20px; height: 20px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-weight: 600; }
 
-  /* Tariffs: one column of sections, each a table (or its empty note) over the form that adds to it */
-  .tariffs-page .page-head .sub { max-width: 72ch; }
-  .tariffs-page :is(.table-wrap, .inline-form, .empty, .banner, .sect-head) { max-width: 760px; }
+  /* Tariffs (W7j): a Currency card across the page over the site default rates and the asset overrides side by side (the shared .page-grid
+     and .page-card in app.css). Each rate card is its table, or its compact empty note, over the form that adds to it. The page description
+     may run to about 110 characters like the other pages' (their rule is in pages-admin.css: a page's class is written in one file only). */
+  .tariffs-page .page-head .sub { max-width: 110ch; }
 
-  /* A section's head: an icon tile beside the title and, under it, the one line that says what the section is for */
-  .tariffs-page .sect-head { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 2px 12px; margin: 30px 0 12px; }
-  .tariffs-page .page-head + .sect-head { margin-top: 0; }
-  .tariffs-page .sect-head > svg.i { grid-row: 1 / span 2; align-self: start; width: 32px; height: 32px; padding: 7px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent); }
-  .tariffs-page .sect-head h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; line-height: 1.3; }
-  .tariffs-page .sect-purpose { margin: 0; font-size: var(--fs-sm); line-height: 1.45; }
-  .tariffs-page .banner { margin: 0 0 14px; }
-  .tariffs-page .empty { padding: 22px 24px; }
-  .tariffs-page .empty p { max-width: 520px; }
-
+  .tariff-table { --row-x: 12px; } /* a little tighter than the app's 14px: four columns and an edit row must fit a card of 434px */
   .tariff-table td { font-variant-numeric: tabular-nums; }
   .tariff-table td input { min-height: 34px; }
-  .tariff-table td input[type="date"] { width: 160px; }
-  .tariff-table td input[type="number"] { width: 120px; text-align: right; }
-  .tariff-table .asset-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tariff-table td input[type="date"] { width: 132px; }
+  .tariff-table td input[type="number"] { width: 11ch; text-align: right; } /* wide enough for a rate like 1234.5678 and its spin buttons */
+  .tariff-table :is(td.date-cell, td.num) { white-space: nowrap; }
+  .tariff-table .asset-cell { width: 100%; min-width: 4.5rem; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* the asset takes what the other columns leave (max-width 0 lets the cell shrink); its title carries the full name */
+  /* A row being edited (a date, a rate, Save and Cancel) in the 434px card of 1280px: tighter cells, so the asset keeps 88px (it was 72) and the wrap does not scroll. */
+  .tariff-table:has(.row-actions.editing) :is(th, td) { padding-inline: 8px; }
+  .tariff-table:has(.row-actions.editing) .asset-cell { min-width: 5.5rem; }
   .tariff-table :is(th, td).actions { width: 1%; text-align: right; white-space: nowrap; }
   .tariff-table td.actions { padding-block: 5px; }
   .tariff-table .row-actions { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 2px; } /* Edit and Delete stay on one line */
+  .tariff-table .row-actions.editing { flex-wrap: wrap; } /* Save and Cancel stack only when the card is too narrow for them side by side */
   .tariff-table td.actions .error { display: block; width: max-content; max-width: 280px; margin: 4px 0 0 auto; font-size: var(--fs-xs); font-weight: 600; white-space: normal; text-align: right; } /* a row error widens the column to 280px instead of wrapping in the buttons' width */
 
-  /* The add forms and the currency form are one-line bars on a surface; an error takes the whole last line */
-  .tariffs-page .inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 14px; margin: 12px 0 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  /* The currency form and the two add forms are bars of fields on the card's own background; an error takes the whole last line. The add
+     forms close their card (margin-top: auto keeps the two level) under a hairline. The skeleton's bar is a div of the same class. */
+  .tariffs-page .inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 14px; max-width: none; margin: 0; padding: 0; }
+  .tariffs-page .add-form { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border); }
+  .tariffs-page .currency-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 20px; }
+  .tariffs-page .currency-row .banner { flex: 0 1 auto; margin: 0; } /* beside the form while there is room, under it otherwise */
   .tariffs-page .inline-form .has-tip:not(.asset-field) { flex: none; } /* a label and its tip travel together */
-  .tariffs-page .inline-form .asset-field { flex: 1 1 260px; min-width: 0; }
+  .tariffs-page .inline-form .asset-field { flex: 1 1 100%; min-width: 0; } /* the Asset field has the first line of the override form to itself */
   .tariffs-page .inline-form .asset-field select { width: calc(100% + 28px); } /* the whole wrapper: the label keeps 28px free for the ? tip (app.css) and the field gives them back */
   .tariffs-page .inline-form input[type="date"] { width: 170px; }
   .tariffs-page .inline-form input[type="number"] { width: 130px; }

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import type { AuditOptions } from "../api/types";
@@ -42,6 +42,51 @@ const last = (spy: ReturnType<typeof vi.fn>) => spy.mock.lastCall![0] as AuditFi
 const quick = (name: string) => screen.getByRole("button", { name });
 
 afterEach(() => { vi.useRealTimers(); });
+
+describe("AuditFilterBar layout (W7j)", () => {
+  it("is the one search landmark and keeps every labelled control", () => {
+    setup();
+    const bar = screen.getByRole("search", { name: "Filter the audit log" });
+    for (const name of ["Search", "User", "Action", "From", "To", "Go to date"]) expect(within(bar).getByLabelText(name)).toBeInTheDocument();
+    for (const name of ["Today", "Last 7 days", "Deletions", "Sign-in problems", "Go", "Export CSV"]) expect(within(bar).getByRole("button", { name })).toBeInTheDocument();
+  });
+
+  it("reads Search, User, Action, From, To in the order it is laid out (Tab follows the eye)", () => {
+    setup();
+    const bar = screen.getByRole("search", { name: "Filter the audit log" });
+    const order = Array.from(bar.querySelectorAll<HTMLElement>("input, select, button")).map((el) => el.id ? bar.querySelector(`label[for="${el.id}"]`)?.textContent ?? el.textContent : el.textContent);
+    expect(order.slice(0, 5)).toEqual(["Search", "User", "Action", "From", "To"]);
+    expect(order.slice(5)).toEqual(["Today", "Last 7 days", "Deletions", "Sign-in problems", "Go to date", "Go", "Export CSV"]);
+  });
+
+  it("groups From and To in one control with a 'to' between, and keeps their labels", () => {
+    setup();
+    const group = screen.getByLabelText("From").closest(".range-group")!;
+    expect(group).toContainElement(screen.getByLabelText("To"));
+    const sep = group.querySelector(".range-sep")!;
+    expect(sep).toHaveTextContent("to");
+    expect(sep).toHaveAttribute("aria-hidden", "true");
+    expect(group).not.toContainElement(screen.getByLabelText("Go to date"));
+  });
+
+  it("gives each quick filter an icon (hidden from screen readers) that does not change its name", () => {
+    setup();
+    for (const name of ["Today", "Last 7 days", "Deletions", "Sign-in problems"]) {
+      const chip = quick(name);
+      expect(chip).toHaveClass("filter-chip");
+      expect(chip).not.toHaveClass("chip"); // .chip is the 22px status chip of other pages
+      expect(chip.querySelector("svg.i")).toHaveAttribute("aria-hidden", "true");
+    }
+  });
+
+  it("keeps Clear filters a quiet button and gives Export CSV a download icon", async () => {
+    setup();
+    expect(quick("Export CSV").querySelector("svg.i")).toHaveAttribute("aria-hidden", "true");
+    await userEvent.click(quick("Deletions"));
+    expect(quick("Clear filters")).toHaveClass("quiet");
+    expect(quick("Clear filters").querySelector("svg")).toBeNull();
+  });
+});
 
 describe("AuditFilterBar selects and dates", () => {
   it("lists the users with All users first and (no user) only when such entries exist, and picks by id", async () => {

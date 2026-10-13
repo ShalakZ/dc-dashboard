@@ -132,13 +132,14 @@ describe("TariffsPage", () => {
     await screen.findByRole("table", { name: "Site default rates" });
     expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Currency", "Site default rate", "Asset overrides"]);
     const purposes = [
-      ["Currency", "The unit costs are shown in. Set it first: every rate below is in this currency."],
+      ["Currency", "The unit costs are shown in."],
       ["Site default rate", "The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date."],
       ["Asset overrides", "A different price per kWh for one asset and everything under it (unless a lower asset has its own), from its effective date."],
     ];
     for (const [title, text] of purposes) {
       const head = screen.getByRole("heading", { level: 2, name: title }).closest(".sect-head")!;
       expect(head).not.toBeNull();
+      expect(head.parentElement).toHaveClass("page-card");
       expect(head.querySelector("svg.i")).toHaveAttribute("aria-hidden", "true");
       expect(head.querySelector("h2 svg")).toBeNull(); // the icon sits beside the heading, not in its name
       const purpose = within(head as HTMLElement).getByText(text);
@@ -181,13 +182,51 @@ describe("TariffsPage", () => {
     expect(await screen.findByLabelText("Currency")).toBeInTheDocument();
   });
 
-  it("puts the currency notes in info banners that keep role status", async () => {
+  it("puts the one currency message in an info banner that keeps role status, in the Currency card beside the form", async () => {
     currency = null;
     open();
-    for (const note of [await screen.findByText(/No currency is set/), await screen.findByText(/Set the currency first/)]) {
-      expect(note).toHaveClass("banner", "banner-info");
-      expect(note).toHaveAttribute("role", "status");
-    }
+    const note = await screen.findByText(/No currency is set/);
+    expect(note).toHaveClass("banner", "banner-info");
+    expect(note).toHaveAttribute("role", "status");
+    const card = screen.getByRole("heading", { level: 2, name: "Currency" }).closest(".page-card")!;
+    expect(card.contains(note)).toBe(true);
+    expect(card.contains(currencyForm())).toBe(true);
+    expect(note.closest(".currency-row")).not.toBeNull();
+    expect(note.closest(".currency-row")).toBe(currencyForm().closest(".currency-row")); // one row: the field, Save and the message
+  });
+
+  it("lays the page out as a Currency card across the page over the two rate cards, each with its own add form", async () => {
+    open();
+    await screen.findByRole("table", { name: "Site default rates" });
+    const grid = document.querySelector(".tariffs-page > .page-grid")!;
+    expect(grid).not.toBeNull();
+    const cards = [...grid.children] as HTMLElement[];
+    expect(cards.map((c) => c.querySelector("h2")?.textContent)).toEqual(["Currency", "Site default rate", "Asset overrides"]);
+    for (const card of cards) expect(card.tagName === "SECTION" && card.classList.contains("page-card")).toBe(true);
+    expect(cards[0]).toHaveClass("span-all");
+    expect(cards[1]).not.toHaveClass("span-all");
+    expect(cards[2]).not.toHaveClass("span-all");
+    expect(within(cards[0]).getByRole("form", { name: "Site currency" })).toBeInTheDocument();
+    const siteForm = within(cards[1]).getByRole("form", { name: "Add site default rate" });
+    const overrideForm = within(cards[2]).getByRole("form", { name: "Add asset override" });
+    expect(within(cards[1]).getByRole("table", { name: "Site default rates" })).toBeInTheDocument();
+    expect(within(cards[2]).getByRole("table", { name: "Asset overrides" })).toBeInTheDocument();
+    // the add form closes its card (the table is above it) and is not a bordered surface of its own
+    expect(cards[1].lastElementChild).toBe(siteForm);
+    expect(cards[2].lastElementChild).toBe(overrideForm);
+    expect(siteForm).toHaveClass("inline-form", "add-form");
+    expect(overrideForm).toHaveClass("inline-form", "add-form");
+    expect(within(cards[0]).getByRole("form", { name: "Site currency" })).not.toHaveClass("add-form");
+    expect(document.querySelector(".tariffs-page .empty, .tariffs-page .banner:not(.banner-info)")).toBeNull();
+  });
+
+  it("puts the Asset field of the override form first and the Effective from, Rate and Add rate after it", async () => {
+    open();
+    const form = await screen.findByRole("form", { name: "Add asset override" });
+    const labels = [...form.querySelectorAll("label")].map((l) => l.firstChild?.textContent?.trim());
+    expect(labels).toEqual(["Asset", "Effective from", "Rate per kWh"]);
+    expect(form.querySelector(".asset-field")).toBe(form.firstElementChild);
+    expect([...form.querySelectorAll("button")].filter((b) => !b.classList.contains("icon-btn")).map((b) => b.textContent)).toEqual(["Add rate"]);
   });
 
   it("shows empty states when there are no rates and no overrides", async () => {
@@ -197,8 +236,14 @@ describe("TariffsPage", () => {
       "No site default rate yet. Until one is set, assets with no override show a dash for cost. Add a rate below.",
     )).toBeInTheDocument();
     expect(screen.getByText("No overrides. Every asset uses the site default rate.")).toBeInTheDocument();
-    expect(screen.getByText(/No site default rate yet/).closest(".empty")).not.toBeNull();
-    expect(screen.getByText(/No overrides/).closest(".empty")).not.toBeNull();
+    // compact notes inside their cards: the sentence is the paragraph's own text, the icon is decoration
+    for (const [text, title] of [[/No site default rate yet/, "Site default rate"], [/No overrides/, "Asset overrides"]] as const) {
+      const note = screen.getByText(text).closest(".empty-note")!;
+      expect(note).not.toBeNull();
+      expect(note.querySelector(".empty-note-icon")).toHaveAttribute("aria-hidden", "true");
+      expect(note.closest(".page-card")).toBe(screen.getByRole("heading", { level: 2, name: title }).closest(".page-card"));
+    }
+    expect(document.querySelector(".empty, .empty-icon")).toBeNull(); // the large dashed box is gone
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
@@ -213,18 +258,45 @@ describe("TariffsPage", () => {
     await waitFor(() => expect(screen.queryByText(/No currency is set/)).not.toBeInTheDocument());
   });
 
-  it("tells the admin to set the currency first, above the rate forms, until one is set", async () => {
+  it("says the currency once: the second banner (Set the currency first) is not rendered, the first is, and Save removes it", async () => {
     currency = null;
     open();
-    const prompt = await screen.findByText(/Set the currency first/);
-    expect(prompt).toHaveAttribute("role", "status");
-    const forms = [screen.getByRole("form", { name: "Add site default rate" }), screen.getByRole("form", { name: "Add asset override" })];
-    for (const form of forms) {
-      expect(prompt.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    }
+    expect(await screen.findByText(/No currency is set/)).toBeInTheDocument();
+    await screen.findByRole("table", { name: "Site default rates" }); // the tables are in: the second banner would be above them by now
+    expect(screen.queryByText(/Set the currency first/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/rates are in the site currency/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Set it first/)).not.toBeInTheDocument(); // nor does the purpose line say it again: the note beside the field is the one message
+    expect(screen.getAllByRole("status")).toHaveLength(1);
     await userEvent.type(screen.getByLabelText("Currency"), "QAR");
     await userEvent.click(within(currencyForm()).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(screen.queryByText(/Set the currency first/)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/No currency is set/)).not.toBeInTheDocument());
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("keeps both rate forms enabled while no currency is set (nothing is locked), and Add rate still POSTs", async () => {
+    currency = null;
+    const calls = open();
+    expect(await screen.findByText(/No currency is set/)).toBeInTheDocument();
+    const siteForm = await screen.findByRole("form", { name: "Add site default rate" });
+    const overrideForm = screen.getByRole("form", { name: "Add asset override" });
+    expect(document.querySelector("fieldset")).toBeNull();
+    for (const form of [siteForm, overrideForm]) {
+      expect(within(form).getByRole("button", { name: "Add rate" })).toBeEnabled();
+      expect(within(form).getByLabelText("Effective from")).toBeEnabled();
+      expect(within(form).getByLabelText("Rate per kWh")).toBeEnabled();
+    }
+    expect(within(overrideForm).getByLabelText("Asset")).toBeEnabled();
+    await fillRate(siteForm, "2026-11-01", "0.2");
+    await userEvent.click(within(siteForm).getByRole("button", { name: "Add rate" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body)
+      .toEqual({ asset_id: null, rate_per_kwh: 0.2, effective_from: "2026-11-01" }));
+    await userEvent.selectOptions(within(overrideForm).getByLabelText("Asset"), "LV Panel 1");
+    await fillRate(overrideForm, "2026-12-01", "0.3");
+    await userEvent.click(within(overrideForm).getByRole("button", { name: "Add rate" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => c.body)).toContainEqual(
+      { asset_id: 5, rate_per_kwh: 0.3, effective_from: "2026-12-01" },
+    ));
+    expect(screen.getByText(/No currency is set/)).toBeInTheDocument(); // adding a rate does not touch the currency message
   });
 
   it("rejects a malformed currency without calling the API, and clears it when the field is emptied", async () => {
@@ -573,17 +645,67 @@ describe("TariffsPage while its lists load (W7f)", () => {
     expect(document.querySelector(".sk-region")).toBeNull();
   });
 
-  it("draws the Site default rate section head, its words and all, above the table skeleton, and keeps just the one head when the rates arrive (the skeleton must sit where the table will)", async () => {
+  it("draws both rate cards' real heads and purpose lines outside any region while the rates are held, and keeps them when the rates arrive (the skeleton must sit where the table will)", async () => {
     const hold = mount("/api/tariffs");
     await screen.findByRole("form", { name: "Site currency" });
-    const head = screen.getByRole("heading", { level: 2, name: "Site default rate" });
+    const siteHead = screen.getByRole("heading", { level: 2, name: "Site default rate" });
+    const overridesHead = screen.getByRole("heading", { level: 2, name: "Asset overrides" });
     expect(screen.getByText(/The price per kWh used for every asset that has no override/)).toBeInTheDocument();
+    expect(screen.getByText(/A different price per kWh for one asset and everything under it/)).toBeInTheDocument();
     const region = screen.getByText("Loading tariffs").parentElement!;
-    expect(head.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING, "the head comes before the skeleton").toBeTruthy();
-    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Currency", "Site default rate"]);
+    expect(siteHead.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING, "the head comes before the skeleton").toBeTruthy();
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Currency", "Site default rate", "Asset overrides"]);
+    for (const head of [siteHead, overridesHead]) expect(region.contains(head), "a head is real, never inside the region").toBe(false);
     hold.release();
     await screen.findByRole("table", { name: "Site default rates" });
     expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Currency", "Site default rate", "Asset overrides"]);
+  });
+
+  it("puts the one region round the left table only: nothing grey in the right card, and the Currency card keeps its real head", async () => {
+    const hold = mount("/api/tariffs");
+    await screen.findByRole("form", { name: "Site currency" });
+    const siteCard = screen.getByRole("heading", { level: 2, name: "Site default rate" }).closest(".page-card")!;
+    const overridesCard = screen.getByRole("heading", { level: 2, name: "Asset overrides" }).closest(".page-card")!;
+    const currencyCard = screen.getByRole("heading", { level: 2, name: "Currency" }).closest(".page-card")!;
+    expect(document.querySelectorAll(".sk-region")).toHaveLength(1);
+    expect(siteCard.querySelector(".sk-region")).not.toBeNull();
+    expect(siteCard.querySelectorAll(".sk-table")).toHaveLength(1);
+    expect(overridesCard.querySelector(".sk, .sk-region, .sk-table")).toBeNull();
+    expect(currencyCard.querySelector(".sk, .sk-region")).toBeNull(); // the currency has arrived: its real form, not a shape
+    expect([...document.querySelector(".tariffs-page > .page-grid")!.children]).toEqual([currencyCard, siteCard, overridesCard]);
+    hold.release();
+    await screen.findByRole("table", { name: "Site default rates" });
+  });
+
+  it("draws both real add forms under the skeleton while the rates are held, outside the region, and keeps what is typed when the rates arrive (so the pinned forms do not drop)", async () => {
+    const hold = mount("/api/tariffs");
+    await screen.findByRole("form", { name: "Site currency" });
+    const siteForm = screen.getByRole("form", { name: "Add site default rate" });
+    const overrideForm = await screen.findByRole("form", { name: "Add asset override" });
+    const region = screen.getByText("Loading tariffs").parentElement!;
+    expect(document.querySelectorAll(".sk-region")).toHaveLength(1);
+    for (const form of [siteForm, overrideForm]) expect(region.contains(form), "a form is real, never inside the region").toBe(false);
+    expect(screen.getByRole("heading", { level: 2, name: "Site default rate" }).closest(".page-card")!.contains(siteForm)).toBe(true);
+    expect(screen.getByRole("heading", { level: 2, name: "Asset overrides" }).closest(".page-card")!.contains(overrideForm)).toBe(true);
+    // the override form already lists the assets the shell fetched
+    await waitFor(() => expect(within(overrideForm).getAllByRole("option")).toHaveLength(assets.length + 1));
+    await userEvent.type(within(siteForm).getByLabelText("Rate per kWh"), "0.3");
+    hold.release();
+    await screen.findByRole("table", { name: "Site default rates" });
+    expect(screen.getByRole("form", { name: "Add site default rate" })).toBe(siteForm); // the same element: typing survived
+    expect(within(siteForm).getByLabelText("Rate per kWh")).toHaveValue(0.3);
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("draws the currency skeleton in the Currency card, under its real head, while the currency is held", async () => {
+    const hold = mount("/api/settings/billing");
+    const card = screen.getByRole("heading", { level: 2, name: "Currency" }).closest(".page-card")!;
+    expect(card.querySelector(".sect-purpose")).toHaveTextContent("The unit costs are shown in.");
+    expect(card.contains(screen.getByText("Loading the currency"))).toBe(true);
+    expect(card.querySelector(".inline-form")).not.toBeNull();
+    hold.release();
+    const form = await screen.findByRole("form", { name: "Site currency" });
+    expect(card.contains(form)).toBe(true);
   });
 
   it("ends with the errors as alerts, never a region, when the lists fail", async () => {

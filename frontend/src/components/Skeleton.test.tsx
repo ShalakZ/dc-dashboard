@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { StrictMode, type ReactElement } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
 import {
-  ActionsSpace, AssetSkeleton, CanvasSkeleton, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageHeaderSkeleton, PageSkeleton,
+  ActionsSpace, AssetSkeleton, CanvasSkeleton, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageCardSkeleton, PageHeaderSkeleton, PageSkeleton, ParagraphSkeleton,
   resetSkeletonClock, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton,
 } from "./Skeleton";
 
@@ -19,6 +19,8 @@ const shapes: Array<[string, (label?: string) => ReactElement]> = [
   ["TreeSkeleton", (label) => <TreeSkeleton label={label} />],
   ["PageHeaderSkeleton", (label) => <PageHeaderSkeleton label={label} />],
   ["PageHeaderSkeleton (all parts)", (label) => <PageHeaderSkeleton crumbs icon sub actions label={label} />],
+  ["PageCardSkeleton", (label) => <PageCardSkeleton purpose label={label}><FormSkeleton rows={2} bare /></PageCardSkeleton>],
+  ["ParagraphSkeleton", (label) => <ParagraphSkeleton text="The site's time zone. Readings are stored in UTC." label={label} />],
 ];
 
 describe("Skeleton", () => {
@@ -215,6 +217,18 @@ describe("TableSkeleton", () => {
     expect(container.querySelectorAll("tbody tr:first-child td")).toHaveLength(2);
   });
 
+  it("with widths has a <colgroup> of fixed columns (a null is the rest) and a narrow column gets a line that fits its cell", () => {
+    const { container } = render(<TableSkeleton columns={4} rows={2} widths={[200, 160, null, 44]} />);
+    const table = container.querySelector("table")!;
+    expect(table.style.tableLayout).toBe("fixed");
+    const cols = [...table.querySelectorAll<HTMLElement>("colgroup > col")];
+    expect(cols.map((c) => c.style.width)).toEqual(["200px", "160px", "", "44px"]);
+    const narrow = [...container.querySelectorAll<HTMLElement>("tbody tr:first-child td:last-child .sk-line")];
+    expect(narrow).toHaveLength(1);
+    expect(narrow[0].style.width).toBe("16px"); // 44px less the cell's 14px padding on both sides
+    expect(render(<TableSkeleton columns={2} rows={1} />).container.querySelector("colgroup")).toBeNull(); // unchanged without widths
+  });
+
   it("varies the widths but not from one render to the next", () => {
     const { container } = render(<TableSkeleton columns={4} rows={4} />);
     const widths = [...container.querySelectorAll<HTMLElement>("tbody .sk-line")].map((l) => l.style.width);
@@ -259,6 +273,49 @@ describe("FormSkeleton", () => {
   it("with wide takes the full-width card", () => {
     const { container } = render(<FormSkeleton rows={1} wide />);
     expect(container.firstElementChild).toHaveClass("form-card", "wide");
+  });
+});
+
+describe("PageCardSkeleton", () => {
+  it("is the real card and head, with a 32px block for the icon tile and a grey line in the h2", () => {
+    const { container } = render(<PageCardSkeleton />);
+    const card = container.firstElementChild!;
+    expect(card.tagName).toBe("SECTION");
+    expect(card).toHaveClass("page-card");
+    expect(card).toHaveAttribute("aria-hidden", "true");
+    const head = card.firstElementChild!;
+    expect(head).toHaveClass("page-card-head", "sect-head"); // the classes PageCard's head has
+    const tile = head.querySelector<HTMLElement>(":scope > .sk-block")!;
+    expect(tile.style.width).toBe("32px");
+    expect(tile.style.height).toBe("32px");
+    const title = head.querySelector("h2")!;
+    expect(title.querySelector(".sk-line")).not.toBeNull();
+    expect(title.textContent).toBe("");
+    expect(head.querySelector(".sect-purpose")).toBeNull();
+    expect(head.children).toHaveLength(2);
+  });
+
+  it("draws a purpose line only when asked, in the real purpose line's box", () => {
+    const { container } = render(<PageCardSkeleton purpose />);
+    const purpose = container.querySelector(".page-card-head > p")!;
+    expect(purpose).toHaveClass("sect-purpose", "muted");
+    expect(purpose.querySelector(".sk-line")).not.toBeNull();
+    expect(purpose.textContent).toBe("");
+  });
+
+  it("puts its children after the head, as the body, and takes a className next to its own", () => {
+    const { container } = render(<PageCardSkeleton className="rows-day"><TableSkeleton columns={2} rows={2} headless /></PageCardSkeleton>);
+    const card = container.firstElementChild!;
+    expect(card).toHaveClass("page-card", "rows-day");
+    expect(card.children).toHaveLength(2);
+    expect(card.children[1]).toHaveClass("table-wrap", "sk-table");
+  });
+
+  it("holds no words, no heading a reader can reach, and nothing focusable", () => {
+    const { container } = render(<PageCardSkeleton purpose><FormSkeleton rows={1} bare /></PageCardSkeleton>);
+    expect(container.textContent).toBe("");
+    expect(screen.queryByRole("heading")).toBeNull();
+    expect(container.querySelector(FOCUSABLE)).toBeNull();
   });
 });
 
@@ -665,5 +722,38 @@ describe("the instant rule (a region that follows a skeleton somebody saw does n
     at(10_600);
     render(<StrictMode>{regions(["Three"])}</StrictMode>);
     expect(instant("Three")).toBe(false); // a leaked region would leave every later one instant for good
+  });
+});
+
+describe("ParagraphSkeleton", () => {
+  const lines = (container: HTMLElement) => Array.from(container.querySelectorAll<HTMLElement>(".sk-line"));
+
+  it("is one paragraph with a grey pill per word of the text, as long as the word", () => {
+    const { container } = render(<ParagraphSkeleton text="A day at midnight." />);
+    const p = container.firstElementChild!;
+    expect(p.tagName).toBe("P");
+    expect(p).toHaveClass("sk-words");
+    const pills = lines(container);
+    expect(pills).toHaveLength(4);
+    const ch = pills.map((pill) => parseFloat(pill.style.width));
+    expect(pills.every((pill) => pill.style.width.endsWith("ch"))).toBe(true);
+    expect(ch[3]).toBeGreaterThan(ch[1]); // "midnight." is longer than "day"
+    expect(ch[0]).toBeLessThan(ch[1]); // "A" is shorter than "day"
+    expect(ch[3] / ch[1]).toBeCloseTo("midnight.".length / "day".length, 1); // proportional to the word's length
+  });
+
+  it("splits on any run of white space and ignores the ends, so the pills are the words and nothing else", () => {
+    const { container } = render(<ParagraphSkeleton text={"  one   two\nthree  "} />);
+    expect(lines(container)).toHaveLength(3);
+  });
+
+  it("holds none of the words, takes the caller's class and is the same markup every render", () => {
+    const text = "Wrong passwords no longer block anyone.";
+    const first = render(<ParagraphSkeleton text={text} className="muted" />);
+    expect(first.container.textContent).toBe("");
+    expect(first.container.firstElementChild).toHaveClass("sk-words", "muted");
+    const markup = first.container.innerHTML;
+    first.unmount();
+    expect(render(<ParagraphSkeleton text={text} className="muted" />).container.innerHTML).toBe(markup);
   });
 });

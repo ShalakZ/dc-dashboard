@@ -57,8 +57,10 @@ describe("assetIcon: a chosen icon wins, anything else follows the kind", () => 
     expect(assetIcon({ kind: "Pump", icon: "generic" })).toBe("kindGeneric");
   });
 
-  it("does not turn the kind Pump into the pump drawing by itself (Automatic is unchanged)", () => {
-    expect(assetIcon({ kind: "Pump" })).toBe("kindGeneric");
+  it("turns the kind Pump into the pump drawing by itself (Automatic), while a chosen icon still wins", () => {
+    expect(assetIcon({ kind: "Pump" })).toBe("kindPump");
+    expect(assetIcon({ kind: "Pump", icon: null })).toBe("kindPump");
+    expect(assetIcon({ kind: "Pump", icon: "fan" })).toBe("kindFan");
   });
 
   it.each(["zzz", "", "__proto__", "constructor", "toString", "Server", " server", "SERVER"])(
