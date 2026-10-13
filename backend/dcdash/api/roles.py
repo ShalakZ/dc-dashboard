@@ -42,6 +42,8 @@ INVISIBLE_MARKS = frozenset(
 # not take one, or the profile menu would show it as the real thing.
 BUILTIN_ROLE_LABELS = ("Administrator", "Operator", "Viewer")
 LISTED_MAX = 20  # an error that names offending ids names at most this many
+# What a duplicate of Admin says it is: Admin's own description claims users and roles, and a copy cannot manage roles.
+COPY_OF_ADMIN_DESCRIPTION = "Everything except managing roles."
 
 ROLE_NOT_FOUND = "role not found"
 BUILTIN_LOCKED = "built-in roles cannot be changed"
@@ -325,13 +327,16 @@ async def duplicate_role(
     if source is None:
         raise HTTPException(404, ROLE_NOT_FOUND)
     # What the source really grants, less what no custom role may hold: a copy of Admin is everything except roles.manage.
+    left_out = source.effective_permissions & NOT_FOR_CUSTOM_ROLES
     permissions = catalogue_order(source.effective_permissions - NOT_FOR_CUSTOM_ROLES)
     assert_can_grant(current, permissions)
+    # Admin's own description claims what the copy cannot hold, so the copy gets a true one; every other source keeps its words.
+    description = COPY_OF_ADMIN_DESCRIPTION if left_out else source.description
     if name is None:
         name = await free_copy_name(db, source.name)
     else:
         await assert_name_free(db, name)
-    role = Role(name=name, description=source.description, builtin=False, permissions=permissions)
+    role = Role(name=name, description=description, builtin=False, permissions=permissions)
     db.add(role)
     async with name_taken_is_409(db):
         await db.flush()

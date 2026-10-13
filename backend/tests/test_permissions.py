@@ -77,6 +77,13 @@ def test_every_entry_reads_as_text_a_person_can_show():
     assert len({p.label for p in CATALOGUE}) == len(CATALOGUE), "two permissions share a label"
 
 
+def test_the_two_descriptions_that_named_a_page_say_what_the_page_is_now():
+    # W9b renamed the Users page to Users & Roles (the Users tab) and made Tariffs open read-only for tariffs.view.
+    by_id = {p.id: p for p in CATALOGUE}
+    assert by_id["users.view"].description == "Open the Users tab of Users & Roles."
+    assert by_id["tariffs.view"].description == "Open the Tariffs page, read-only (it also needs See the Assets Tree)."
+
+
 def test_all_ids_is_the_catalogue():
     assert ALL_IDS == frozenset(IDS)
     assert isinstance(ALL_IDS, frozenset)

@@ -593,6 +593,21 @@ async def test_a_duplicate_of_admin_holds_everything_except_roles_manage(client,
     assert len(await stored_permissions(db, body["id"])) == 28
 
 
+async def test_a_duplicate_of_admin_does_not_claim_the_permission_it_leaves_out(client, db):
+    # Admin's own description says "including users and roles"; a copy that cannot manage roles must not say so.
+    await login_as(client, db)
+    assert "roles" in await db.fetchval("SELECT description FROM roles WHERE id = 3")
+    body = (await client.post("/api/roles/3/duplicate")).json()
+    assert body["description"] == "Everything except managing roles."
+    assert await db.fetchval("SELECT description FROM roles WHERE id = $1", body["id"]) == "Everything except managing roles."
+    # a duplicate that leaves nothing out keeps the source's words, built-in or custom
+    operator = (await client.post("/api/roles/2/duplicate")).json()
+    assert operator["description"] == await db.fetchval("SELECT description FROM roles WHERE id = 2")
+    # a copy of a copy of Admin already lacks roles.manage, so it carries the (now true) description on
+    again = (await client.post(f"/api/roles/{body['id']}/duplicate")).json()
+    assert again["description"] == "Everything except managing roles."
+
+
 async def test_a_duplicate_of_a_custom_role_carries_what_it_really_grants(client, db):
     await login_as(client, db)
     source = await make_role(db, "Messy", ["billing.view", "roles.manage", "no.such", 5, "assets.view"], description="mine")
