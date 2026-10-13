@@ -67,14 +67,18 @@ describe("the drawer's stylesheet", () => {
     expect(body).toMatch(/overscroll-behavior:\s*contain/);
   });
 
-  it("slides in over 200 ms (the backdrop fades over the same time) and does not move at all under prefers-reduced-motion", () => {
+  it("slides in over 200 ms (the dim fades in over the same time) and does not move at all under prefers-reduced-motion", () => {
     expect(rule(".drawer")).toMatch(/animation:\s*drawer-in 200ms\b/);
     expect(rule(".drawer-backdrop")).toMatch(/animation:\s*drawer-fade 200ms\b/);
     const frames = (name: string) => drawer.filter((r) => r.at.includes(`@keyframes ${name}`));
     expect(frames("drawer-in")).toHaveLength(1);
     expect(frames("drawer-in")[0].body).toMatch(/transform:\s*translateX\(100%\)/);
     expect(frames("drawer-fade")).toHaveLength(1);
-    expect(frames("drawer-fade")[0].body).toMatch(/opacity:\s*0/);
+    // Only the dim fades, never the backdrop's opacity: the panel is the backdrop's child, so an opacity fade would show the page through the panel.
+    expect(frames("drawer-fade")[0].body).toMatch(/background-color:\s*transparent/);
+    expect(frames("drawer-fade")[0].body).not.toMatch(/opacity/);
+    expect(rule(".drawer-backdrop")).not.toMatch(/opacity/);
+    expect(rule(".drawer")).not.toMatch(/opacity/);
     const reduced = drawer.filter((r) => r.at.some((a) => /prefers-reduced-motion:\s*reduce/.test(a)));
     expect(reduced).toHaveLength(1);
     expect(reduced[0].selector.split(",").map((s) => s.trim()).sort()).toEqual([".drawer", ".drawer-backdrop"]);

@@ -24,7 +24,8 @@
   body:has(.drawer):not(:has(.drawer-foot)) .toast-stack { bottom: 16px; }
 
   @keyframes drawer-in { from { transform: translateX(100%); } }
-  @keyframes drawer-fade { from { opacity: 0; } }
+  /* The dim only: the panel is the backdrop's child, and an opacity fade on the backdrop would make the panel see-through while it slides in. */
+  @keyframes drawer-fade { from { background-color: transparent; } }
   /* Reduced motion: it appears where it is. (app.css switches off transitions only; these are animations.) */
   @media (prefers-reduced-motion: reduce) {
     .drawer-backdrop, .drawer { animation: none; }
