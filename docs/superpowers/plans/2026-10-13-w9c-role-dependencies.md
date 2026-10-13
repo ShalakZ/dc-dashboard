@@ -52,10 +52,10 @@
 
 **Files:** the six files of `34c4d61` (above). **Produces:** `placeTip(trigger: Box, bubble: {width,height}, viewport: {width,height}, gap = 6): TipPlacement` in `frontend/src/lib/placeTip.ts` (`{ top, left, placement: "below" | "above" }`, window coordinates), used by Task 2.
 
-- [ ] **Step 1:** `git cherry-pick 34c4d61` (from branch `fix-infotip-overflow`). Resolve a conflict if W7k touched the neighbouring tip rules or `InfoTip` (W7k merged first; expect none).
-- [ ] **Step 2:** `cd frontend && npx vitest run src/lib/placeTip.test.ts src/components/InfoTip.test.tsx src/app.css.test.ts src/components/RoleEditor.test.tsx src/components/PageCard.test.tsx src/pages/TariffsPage.test.tsx src/pages/StoragePage.test.tsx` all green; `npm run typecheck`.
+- [x] **Step 1:** `git cherry-pick 34c4d61` (from branch `fix-infotip-overflow`). Resolve a conflict if W7k touched the neighbouring tip rules or `InfoTip` (W7k merged first; expect none).
+- [x] **Step 2:** `cd frontend && npx vitest run src/lib/placeTip.test.ts src/components/InfoTip.test.tsx src/app.css.test.ts src/components/RoleEditor.test.tsx src/components/PageCard.test.tsx src/pages/TariffsPage.test.tsx src/pages/StoragePage.test.tsx` all green; `npm run typecheck`.
 - [ ] **Step 3 (controller, look once):** on the scratch build, a `?` near the right edge of the Roles grid at 1024 and 1440: fully visible, grid shows no sideways scroll bar. (Done together with the scratch stack of Task 4; tick this step then.)
-- [ ] **Step 4:** `git worktree remove /home/ziad/Projects/DC_Dashboard_fix2` and `git branch -D fix-infotip-overflow`.
+- [x] **Step 4:** `git worktree remove /home/ziad/Projects/DC_Dashboard_fix2` and `git branch -D fix-infotip-overflow`.
 
 ### Task 1: the offer logic and the table's tests
 
