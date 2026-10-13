@@ -86,6 +86,15 @@
   .audit-page .jump-field { display: flex; align-items: center; gap: 8px; }
   .audit-page .jump-field label { white-space: nowrap; }
   .audit-page .jump-field input { width: 150px; }
+  @media (max-width: 1279.98px) {
+    .audit-page .filter-bar .field.grow { flex-basis: 100%; } /* Search has a line of its own (its placeholder is not cut); User, Action and the dates share the next one */
+    /* ...and the quick filters and the tools share the third, which needs the chips, the gaps, the buttons and the date field a little tighter
+       (927px to about 873px; the room is 884px at 1024px). The date field keeps 140px, the width of From and To, or its last letter is cut. */
+    .audit-page .filter-bar :is(.quick-row, .filter-tools) { gap: 8px; }
+    .audit-page .filter-chip { padding: 0 8px; }
+    .audit-page .filter-tools button { padding-inline: 10px; }
+    .audit-page .jump-field input { width: 140px; }
+  }
 
   /* The result line: the Friendly / Raw switch is one segmented control, the number of entries sits at the right */
   .row.seg { justify-content: space-between; gap: 12px; margin: 0 0 10px; }
@@ -114,7 +123,7 @@
   .audit-table .ev-tile:is([data-kind="delete"], [data-kind="problem"]) { background: var(--crit-tint); color: var(--crit); }
   .audit-table .ev-tile[data-kind="other"] { background: var(--surface); color: var(--text-2); }
   .audit-table .what-text { min-width: 0; overflow-wrap: anywhere; }
-  .audit-table .what-link { margin-left: 10px; }
+  .audit-table .what-link { margin-left: 6px; } /* with the space in the text (a copy or a screen reader's line reads two words) the gap is about 10px */
   .audit-table td.cell-more { padding-inline: 4px; text-align: center; } /* the 36px first column: the 28px button and 4px each side */
   .details-btn svg.i { transition: transform var(--motion); }
   .details-btn[aria-expanded="true"] svg.i { transform: rotate(90deg); }

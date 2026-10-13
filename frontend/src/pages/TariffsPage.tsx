@@ -28,7 +28,7 @@ function Note({ children }: { children: string }) {
   return <p role="status" className="banner banner-info"><InfoIcon />{children}</p>;
 }
 
-const CURRENCY_PURPOSE = "The unit costs are shown in. Set it first: every rate below is in this currency.";
+const CURRENCY_PURPOSE = "The unit costs are shown in.";
 const SITE_DEFAULT_PURPOSE = "The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date.";
 const OVERRIDES_PURPOSE = "A different price per kWh for one asset and everything under it (unless a lower asset has its own), from its effective date.";
 

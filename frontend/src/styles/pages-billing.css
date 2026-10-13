@@ -40,9 +40,12 @@
   .tariff-table td { font-variant-numeric: tabular-nums; }
   .tariff-table td input { min-height: 34px; }
   .tariff-table td input[type="date"] { width: 132px; }
-  .tariff-table td input[type="number"] { width: 92px; text-align: right; } /* an edit row (a date, a rate, Save and Cancel) fits a 434px card, the width of one at 1280px */
+  .tariff-table td input[type="number"] { width: 11ch; text-align: right; } /* wide enough for a rate like 1234.5678 and its spin buttons */
   .tariff-table :is(td.date-cell, td.num) { white-space: nowrap; }
   .tariff-table .asset-cell { width: 100%; min-width: 4.5rem; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* the asset takes what the other columns leave (max-width 0 lets the cell shrink); its title carries the full name */
+  /* A row being edited (a date, a rate, Save and Cancel) in the 434px card of 1280px: tighter cells, so the asset keeps 88px (it was 72) and the wrap does not scroll. */
+  .tariff-table:has(.row-actions.editing) :is(th, td) { padding-inline: 8px; }
+  .tariff-table:has(.row-actions.editing) .asset-cell { min-width: 5.5rem; }
   .tariff-table :is(th, td).actions { width: 1%; text-align: right; white-space: nowrap; }
   .tariff-table td.actions { padding-block: 5px; }
   .tariff-table .row-actions { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 2px; } /* Edit and Delete stay on one line */

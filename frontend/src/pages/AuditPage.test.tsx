@@ -99,6 +99,12 @@ describe("AuditPage", () => {
     expect(document.querySelector(".audit-table tbody tr:first-child > td:first-child")).toHaveClass("cell-time");
   });
 
+  it("puts a space between the sentence and its link in the text, so a copy or a screen reader's line does not join the words", async () => {
+    setup("/audit", list(1, [entry(9, "asset.created", { asset_id: 7, name: "Panel A" })]));
+    await screen.findByText("Created asset Panel A");
+    expect(document.querySelector(".what-text")!.textContent).toBe("Created asset Panel A Open asset Panel A");
+  });
+
   it("links an entry to the thing it is about and opens its details in a row under it from a Details button", async () => {
     setup("/audit", list(1, [entry(9, "asset.created", { asset_id: 7, name: "Panel A" })]));
     expect(await screen.findByText("Created asset Panel A")).toBeInTheDocument();

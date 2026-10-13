@@ -80,7 +80,7 @@ function FriendlyRow({ entry, timezone, now }: { entry: AuditEntry; timezone: st
             <span className="ev-tile" data-kind={kind} aria-hidden="true"><Icon name={KIND_ICON[kind]} /></span>
             <div className="what-text">
               <span className="what">{summary}</span>
-              {link && <Link className="what-link" to={link.to}>{link.label}</Link>}
+              {link && <>{" "}<Link className="what-link" to={link.to}>{link.label}</Link></>}
             </div>
           </div>
         </td>

@@ -132,7 +132,7 @@ describe("TariffsPage", () => {
     await screen.findByRole("table", { name: "Site default rates" });
     expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Currency", "Site default rate", "Asset overrides"]);
     const purposes = [
-      ["Currency", "The unit costs are shown in. Set it first: every rate below is in this currency."],
+      ["Currency", "The unit costs are shown in."],
       ["Site default rate", "The price per kWh used for every asset that has no override on itself or on an asset above it. A new rate counts from its effective date."],
       ["Asset overrides", "A different price per kWh for one asset and everything under it (unless a lower asset has its own), from its effective date."],
     ];
@@ -265,6 +265,7 @@ describe("TariffsPage", () => {
     await screen.findByRole("table", { name: "Site default rates" }); // the tables are in: the second banner would be above them by now
     expect(screen.queryByText(/Set the currency first/)).not.toBeInTheDocument();
     expect(screen.queryByText(/rates are in the site currency/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Set it first/)).not.toBeInTheDocument(); // nor does the purpose line say it again: the note beside the field is the one message
     expect(screen.getAllByRole("status")).toHaveLength(1);
     await userEvent.type(screen.getByLabelText("Currency"), "QAR");
     await userEvent.click(within(currencyForm()).getByRole("button", { name: "Save" }));
