@@ -301,6 +301,7 @@ export function AuditPage() {
     if (!plan || "reason" in plan || !onPage || stepping.current) return; // (a button that is off is not clicked: `busy` needs no check here)
     setStepNote(null);
     if ("entry" in plan) {
+      lastOpen.current = plan.entry.id; // the new address reaches the page a moment after the URL changes: a quick Escape must still find this row
       navigate({ pathname: `/audit/${plan.entry.id}`, search: location.search }, { replace: true, state: location.state });
       return;
     }
@@ -327,6 +328,7 @@ export function AuditPage() {
         return;
       }
       const search = writeUrl({ ...state, offset: plan.offset }).toString();
+      lastOpen.current = target.id;
       navigate({ pathname: `/audit/${target.id}`, search: search && `?${search}` }, { replace: true, state: location.state });
       landed = true;
     } catch (e) {
