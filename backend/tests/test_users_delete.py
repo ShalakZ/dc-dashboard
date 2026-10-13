@@ -57,7 +57,7 @@ def commits_meet(monkeypatch: pytest.MonkeyPatch, wait: float = 0.5):
 
 
 async def active_admins(db) -> int:
-    return await db.fetchval("SELECT count(*) FROM users WHERE role = 'admin' AND active")
+    return await db.fetchval("SELECT count(*) FROM users WHERE role_id = 3 AND active")
 
 
 @contextlib.contextmanager
@@ -193,7 +193,7 @@ async def test_the_guard_signs_out_an_acting_admin_who_is_no_longer_one(db):
     target = await make_user(db, "target", "viewer")
     async with get_sessionmaker()() as session:
         acting = await session.get(User, acting_id)
-        await db.execute("UPDATE users SET role = 'viewer' WHERE id = $1", acting_id)  # changed behind the loaded copy
+        await db.execute("UPDATE users SET role_id = 1 WHERE id = $1", acting_id)  # changed behind the loaded copy
         try:
             await users_module.lock_admin_changes(session, acting, target, removes_admin=True)
         except HTTPException as refusal:
@@ -313,7 +313,7 @@ async def test_two_admins_cannot_delete_each_other_at_once(app, db, monkeypatch)
     async with two_admins(app, db) as (a, b, a_id, b_id):
         with commits_meet(monkeypatch):
             responses = await asyncio.gather(a.delete(f"/api/users/{b_id}"), b.delete(f"/api/users/{a_id}"))
-    assert await db.fetchval("SELECT count(*) FROM users WHERE role = 'admin'") == 1, "no administrator is left"
+    assert await db.fetchval("SELECT count(*) FROM users WHERE role_id = 3") == 1, "no administrator is left"
     assert outcome(responses) == [204, 401]
 
 
@@ -374,7 +374,9 @@ async def test_every_kind_of_patch_waits_for_the_admin_lock(client, db, body, ro
         pass
     response = await asyncio.wait_for(patching, 10)
     assert response.status_code == 200, response.text
-    row = await db.fetchrow("SELECT role, active FROM users WHERE id = $1", victim)
+    row = await db.fetchrow(
+        "SELECT r.name AS role, u.active FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1", victim
+    )
     for field in ("role", "active"):
         if field in body:
             assert row[field] == body[field]

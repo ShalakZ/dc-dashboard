@@ -757,7 +757,7 @@ async def seed(db) -> dict[str, int]:
         [(10, "warning", "collector", a, "source.offline", "timeout", "read timed out"), (9, "warning", "collector", a, "source.offline", "timeout", "read timed out"),
          (8, "error", "api", None, "http.5xx", "500", "GET /api/x: ValueError"), (7, "info", "collector", b, "source.online", None, "up")],
     )
-    admin = await db.fetchval("INSERT INTO users (username, password_hash, role) VALUES ('boss', 'HASH-of-a-password-9', 'admin') RETURNING id")
+    admin = await db.fetchval("INSERT INTO users (username, password_hash, role_id) VALUES ('boss', 'HASH-of-a-password-9', 3) RETURNING id")
     await db.execute("INSERT INTO sessions (id, user_id, expires_at) VALUES ('SESSIONHASH-0123456789', $1, now() + interval '1 hour')", admin)
     await db.execute("INSERT INTO audit_log (user_id, action, detail) VALUES ($1, 'source.updated', '{\"source_id\": 1}')", admin)
     scan = await db.fetchval("INSERT INTO scans (scope_snapshot, status, progress) VALUES ('{}', 'done', '{\"hosts\": 12, \"open\": 3, \"junk\": 1}') RETURNING id")

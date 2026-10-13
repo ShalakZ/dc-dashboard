@@ -40,7 +40,7 @@ async def test_audit_pool_records_no_actor_for_a_user_that_no_longer_exists(db):
 
 
 async def test_audit_pool_still_records_the_actor_of_an_account_that_exists(db):
-    uid = await db.fetchval("INSERT INTO users (username, password_hash, role) VALUES ('a', 'x', 'admin') RETURNING id")
+    uid = await db.fetchval("INSERT INTO users (username, password_hash, role_id) VALUES ('a', 'x', 3) RETURNING id")
     await audit_pool(db, uid, "scan.finished", {})
     row = await db.fetchrow("SELECT user_id, actor_id, actor_name FROM audit_log WHERE action = 'scan.finished'")
     assert (row["user_id"], row["actor_id"], row["actor_name"]) == (uid, uid, "a")
