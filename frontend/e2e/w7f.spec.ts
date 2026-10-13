@@ -495,16 +495,18 @@ test.describe("W7f: loading skeletons", () => {
       await page.unrouteAll({ behavior: "ignoreErrors" });
     });
 
-    await test.step("a tree click again, every answer 140 ms late: a skeleton that has not yet begun to fade in is not a seen one, so the chart's block after it waits too", async () => {
+    await test.step("a tree click again, every answer 110 ms late: a skeleton that has not yet begun to fade in is not a seen one, so the chart's block after it waits too", async () => {
       await page.goto(`/assets/${asset.id}`);
       await expect(heading1(page, asset.name)).toBeVisible();
       await expect(chart).toBeVisible();
-      await delayApi(page, 140);
+      // 110 ms, not 140: the skeleton fades in after 150 ms and the real answer plus the render add 15 to 25 ms on a loaded machine, so a
+      // 10 ms margin failed in two of four full runs of W7i; 40 ms still proves the rule (a skeleton answered inside its delay is never seen).
+      await delayApi(page, 110);
       await page.evaluate(recordRegions, []);
       await treeLink(page, sibling.name).click();
       await expect(heading1(page, sibling.name)).toBeVisible();
-      await untilQuiet(page, `the click to ${sibling.name} at 140 ms`);
-      expectNoneVisible(await regionRecord(page), `the click to ${sibling.name} at 140 ms`);
+      await untilQuiet(page, `the click to ${sibling.name} at 110 ms`);
+      expectNoneVisible(await regionRecord(page), `the click to ${sibling.name} at 110 ms`);
       await page.unrouteAll({ behavior: "ignoreErrors" });
     });
 
