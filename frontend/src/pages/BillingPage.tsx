@@ -3,7 +3,9 @@ import { Link } from "react-router";
 import { useBillingCosts, useBillingMonths, useSite } from "../api/queries";
 import type { BillingCosts, CostFigure } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
+import { meets } from "../auth/need";
 import { ESTIMATED_TIP, Figure, PARTIAL_TIP } from "../components/Figure";
+import { PAGE_NEED } from "../components/navItems";
 import { PageHeader } from "../components/PageHeader";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import {
@@ -65,14 +67,15 @@ function Legend() {
   );
 }
 
-function BillingTable({ costs, isAdmin }: { costs: BillingCosts; isAdmin: boolean }) {
+/** `canSetRates`: the person may open the Tariffs page, so the note links to it; for anyone else it says to ask. */
+function BillingTable({ costs, canSetRates }: { costs: BillingCosts; canSetRates: boolean }) {
   const depth = useMemo(() => depthsByAsset(costs.assets), [costs.assets]);
   if (costs.assets.length === 0) return <Empty text="No assets yet." />;
   if (costs.assets.every((a) => a.total === null)) return <Empty text="No energy data for this month." />;
   const missingRate = costs.assets.some((a) => a.total !== null && a.total.kwh > 0 && (a.total.cost === null || a.total.partial));
   return (
     <>
-      {missingRate && (isAdmin ? (
+      {missingRate && (canSetRates ? (
         <div role="status" className="banner banner-warn">
           <WarnIcon />
           <span>Some consumption has no rate (shown as — or *). <Link to="/tariffs">Set a rate on the Tariffs page</Link>.</span>
@@ -150,7 +153,8 @@ function MonthJump({ month, firstMonth, current, onPick }: {
 }
 
 export function BillingPage() {
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
+  const canExport = can("billing.export");
   const site = useSite();
   const [picked, setPicked] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -179,7 +183,7 @@ export function BillingPage() {
     <section className="billing-page">
       <PageHeader
         title="Billing"
-        actions={month !== null ? (
+        actions={!canExport ? undefined : month !== null ? (
           <button type="button" className="primary" onClick={exportCsv} disabled={exporting}><DownloadIcon />Download CSV</button>
         ) : site.isPending ? <ActionsSpace /> : undefined /* the button waits for the site's month; its height does not */}
       />
@@ -203,7 +207,7 @@ export function BillingPage() {
         costs.errorUpdateCount === 0 ? <TableSkeleton columns={7} rows={5} label="Loading billing" caption /> : <p className="muted">loading…</p>
       )}
       {costs.isError && <p className="error" role="alert">{costs.error.message}</p>}
-      {costs.data && <BillingTable costs={costs.data} isAdmin={hasRole("admin")} />}
+      {costs.data && <BillingTable costs={costs.data} canSetRates={meets(PAGE_NEED.tariffs, can)} />}
     </section>
   );
 }
