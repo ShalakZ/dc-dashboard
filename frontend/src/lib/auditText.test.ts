@@ -245,7 +245,15 @@ describe("describeAudit: user.updated reads as what was done to the account", ()
     expect(update({}, { active: false }).summary).toBe("Deactivated user bob");
   });
 
-  it("says a role change with both roles", () => {
+  it("says a role change with both roles, and what the new role adds and removes when the entry carries it", () => {
+    const given = { added: ["audit.view", "future.thing"], removed: ["billing.view"] };
+    expect(update({ role: "viewer" }, { role: "Staff" }, given).summary).toBe(
+      "Changed the role of bob from viewer to Staff (adds See the audit log, future.thing; removes See billing)",
+    );
+    expect(update({ role: "viewer" }, { role: "Staff" }, { added: [], removed: ["billing.view"] }).summary).toBe(
+      "Changed the role of bob from viewer to Staff (removes See billing)",
+    );
+    expect(update({ role: "viewer" }, { role: "Staff" }, { added: [], removed: [] }).summary).toBe("Changed the role of bob from viewer to Staff");
     expect(update({ role: "viewer" }, { role: "admin" }).summary).toBe("Changed the role of bob from viewer to admin");
     expect(update({}, { role: "admin" }).summary).toBe("Changed the role of bob to admin");
   });

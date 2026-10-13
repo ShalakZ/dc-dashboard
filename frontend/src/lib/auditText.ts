@@ -146,30 +146,6 @@ function reasonSuffix(d: Detail): string {
   return reason ? ` (${reason.replace(/_/g, " ")})` : "";
 }
 
-/** What a user.updated entry did to the account, as one sentence; null when it changed none of role, active and password. */
-function userUpdate({ d, sides }: Context): string | null {
-  if (!sides) return null;
-  // audit_change keeps only the fields that changed; a side that shows no difference is not claimed as a change.
-  const changedKey = (key: string) => has(sides.after, key) && stable(get(sides.before, key)) !== stable(get(sides.after, key));
-  const name = text(d.username) ?? (idOf(d.user_id) !== null ? `#${idOf(d.user_id)}` : null);
-  const parts: string[] = [];
-  if (changedKey("role")) {
-    const from = text(get(sides.before, "role"));
-    const to = formatValue(get(sides.after, "role"));
-    parts.push(`Changed the role of ${name ?? "a user"}${from ? ` from ${from}` : ""} to ${to}`);
-  }
-  if (changedKey("active")) {
-    const now = get(sides.after, "active");
-    if (now === false) parts.push(`Deactivated user${name ? ` ${name}` : ""}`);
-    else if (now === true && get(sides.before, "active") === false) parts.push(`Reactivated user${name ? ` ${name}` : ""}`);
-  }
-  // `before.password` is always "set"; `after.password` is "changed" when an admin set a new one ("set" would mean unchanged and is never kept).
-  if (changedKey("password") && get(sides.after, "password") === "changed") {
-    parts.push(`Reset the password of ${name ?? "a user"}`);
-  }
-  return parts.length > 0 ? parts.join("; ") : null;
-}
-
 /** A permission id as people read it: its label, else the id itself (one this build does not know, or not text). */
 function permissionLabel(id: unknown): string {
   const raw = typeof id === "string" ? id : formatValue(id);
@@ -185,6 +161,38 @@ const MAX_NAMED_PERMISSIONS = 6;
 function labelList(labels: string[]): string {
   if (labels.length <= MAX_NAMED_PERMISSIONS) return labels.join(", ");
   return `${labels.slice(0, MAX_NAMED_PERMISSIONS).join(", ")} and ${labels.length - MAX_NAMED_PERMISSIONS} more`;
+}
+
+/** " (adds See billing; removes Export billing as CSV)" from the permissions a change of role gave and took away; "" when the entry has none. */
+function roleDifference(d: Detail): string {
+  const added = permissionLabels(d.added);
+  const removed = permissionLabels(d.removed);
+  const parts = [added.length > 0 ? `adds ${labelList(added)}` : "", removed.length > 0 ? `removes ${labelList(removed)}` : ""].filter(Boolean);
+  return parts.length > 0 ? ` (${parts.join("; ")})` : "";
+}
+
+/** What a user.updated entry did to the account, as one sentence; null when it changed none of role, active and password. */
+function userUpdate({ d, sides }: Context): string | null {
+  if (!sides) return null;
+  // audit_change keeps only the fields that changed; a side that shows no difference is not claimed as a change.
+  const changedKey = (key: string) => has(sides.after, key) && stable(get(sides.before, key)) !== stable(get(sides.after, key));
+  const name = text(d.username) ?? (idOf(d.user_id) !== null ? `#${idOf(d.user_id)}` : null);
+  const parts: string[] = [];
+  if (changedKey("role")) {
+    const from = text(get(sides.before, "role"));
+    const to = formatValue(get(sides.after, "role"));
+    parts.push(`Changed the role of ${name ?? "a user"}${from ? ` from ${from}` : ""} to ${to}${roleDifference(d)}`);
+  }
+  if (changedKey("active")) {
+    const now = get(sides.after, "active");
+    if (now === false) parts.push(`Deactivated user${name ? ` ${name}` : ""}`);
+    else if (now === true && get(sides.before, "active") === false) parts.push(`Reactivated user${name ? ` ${name}` : ""}`);
+  }
+  // `before.password` is always "set"; `after.password` is "changed" when an admin set a new one ("set" would mean unchanged and is never kept).
+  if (changedKey("password") && get(sides.after, "password") === "changed") {
+    parts.push(`Reset the password of ${name ?? "a user"}`);
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
 }
 
 /** What a role.updated entry did to the role, as one sentence; null when it changed none of name, description and permissions. */
