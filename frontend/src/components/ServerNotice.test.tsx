@@ -70,4 +70,59 @@ describe("ServerNotice", () => {
     expect(await screen.findByText("probe ok")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
   });
+
+  describe("when the server is back", () => {
+    /** A page whose query failed while the server was away, a healthy page beside it, and the shell's notice. */
+    function Pages() {
+      const failed = useQuery({ queryKey: ["probe"], queryFn: () => api.get<{ n: number }>("/api/probe"), retry: false });
+      const healthy = useQuery({ queryKey: ["healthy"], queryFn: () => api.get<{ n: number }>("/api/healthy") });
+      return <p>{`${failed.isError ? "probe failed" : failed.data ? "probe ok" : "probe loading"}, ${healthy.data ? "healthy ok" : "healthy loading"}`}</p>;
+    }
+    const pageRoutes = () => ({ ...routes(), "GET /api/healthy": { body: { n: 1 } } });
+    const settled = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20))); // the sign-in check's answers are in
+
+    it("asks again for the pages that failed, so they fill in without a click, and for no others", async () => {
+      probe.status = 502;
+      const calls = mockFetch(pageRoutes());
+      renderWithProviders(<><Pages /><ServerNotice /></>);
+      expect(await screen.findByText("probe failed, healthy ok")).toBeInTheDocument();
+      await settled();
+      act(() => { noteReach(false); noteReach(false); });
+      expect(await screen.findByRole("status")).toBeInTheDocument();
+      const asked = (path: string) => calls.filter((c) => c.path === path).length;
+      expect(asked("/api/probe")).toBe(1);
+
+      probe.status = 200;
+      act(() => noteReach(true)); // some other request, such as the status poll, got its answer
+      expect(await screen.findByText("probe ok, healthy ok")).toBeInTheDocument();
+      expect(asked("/api/probe")).toBe(2);
+      expect(asked("/api/healthy")).toBe(1);
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("does nothing after a blip, when the notice never showed", async () => {
+      probe.status = 502;
+      const calls = mockFetch(pageRoutes());
+      renderWithProviders(<><Pages /><ServerNotice /></>);
+      expect(await screen.findByText("probe failed, healthy ok")).toBeInTheDocument();
+      await settled();
+      act(() => noteReach(false));
+      probe.status = 200;
+      act(() => noteReach(true));
+      await settled();
+      expect(calls.filter((c) => c.path === "/api/probe")).toHaveLength(1);
+      expect(screen.getByText("probe failed, healthy ok")).toBeInTheDocument();
+    });
+
+    it("leaves a page that is still failing alone when the server stays away", async () => {
+      probe.status = 502;
+      const calls = mockFetch(pageRoutes());
+      renderWithProviders(<><Pages /><ServerNotice /></>);
+      expect(await screen.findByText("probe failed, healthy ok")).toBeInTheDocument();
+      await settled();
+      act(() => { noteReach(false); noteReach(false); });
+      await settled();
+      expect(calls.filter((c) => c.path === "/api/probe")).toHaveLength(1); // still down: nothing is refetched yet
+    });
+  });
 });

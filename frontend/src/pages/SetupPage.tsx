@@ -1,16 +1,19 @@
 import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
+import { ServerUnreachable } from "../components/ServerUnreachable";
 import { AuthBrand } from "./LoginPage";
 
 export function SetupPage() {
-  const { setup, setupNeeded, loading, user } = useAuth();
+  const { setup, setupNeeded, loading, unreachable, user } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // No answer yet is not "no first user needed": stay here (a first install opened while the server starts), and show the form once it answers.
+  if (!loading && unreachable) return <ServerUnreachable />;
   // After a successful setup the user is signed in; go straight to the app rather than /login.
   if (!loading && !setupNeeded) return <Navigate to={user ? "/assets" : "/login"} replace />;
 

@@ -1,13 +1,20 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { useServerDown } from "../lib/serverReach";
 
 /**
  * Shown in the app shell while the last two requests in a row got no answer from the server (it is stopped or restarting). The
- * page keeps polling and fills in again by itself; Retry now asks everything that is on screen again at once.
+ * page keeps polling and fills in again by itself; Retry now asks everything that is on screen again at once. When the server is back
+ * the pages whose request failed are asked again too: many have no polling and would otherwise keep their error until the next visit.
  */
 export function ServerNotice() {
   const down = useServerDown();
   const queryClient = useQueryClient();
+  const wasDown = useRef(false);
+  useEffect(() => {
+    if (wasDown.current && !down) void queryClient.refetchQueries({ type: "active", predicate: (query) => query.state.status === "error" });
+    wasDown.current = down;
+  }, [down, queryClient]);
   if (!down) return null;
   return (
     <div role="status" className="banner banner-warn warning">
