@@ -13,6 +13,7 @@ import "./styles/pages-auth.css";
 import "./styles/feedback-save.css";
 import "./styles/feedback-toasts.css";
 import "./styles/feedback-confirm.css";
+import "./styles/role-prompt.css";
 import { App } from "./App";
 import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";

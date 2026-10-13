@@ -674,7 +674,7 @@ describe("the page style files (src/styles/*.css)", () => {
     );
   });
 
-  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css"])(
+  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css", "role-prompt.css"])(
     "%s is one @layer w6 block with nothing outside it, no raw colour and no accent in a sidebar rule",
     (file) => {
       expect(existsSync(`${STYLES}/${file}`), `${STYLES}/${file} exists`).toBe(true);
@@ -773,6 +773,7 @@ describe("the page style files (src/styles/*.css)", () => {
     const bare: string[] = [];
     for (const p of parsed) {
       for (const r of p.rules) {
+        if (r.at.some((a) => a.startsWith("@keyframes"))) continue; // the frames of an animation ("from", "to", "50%") are not selectors of the page
         for (const part of selectorParts(r.selector)) {
           if (classesIn(part).length === 0) bare.push(`${p.file}: ${part}`);
         }
