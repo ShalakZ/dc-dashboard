@@ -161,7 +161,7 @@ export function FormSkeleton({ rows, label, wide, bare, inline }: { rows: number
   return (
     <Labelled label={label}>
       {inline ? (
-        <div className="inline-form" aria-hidden="true">{fields}<Skeleton variant="block" width={64} height={38} /></div>
+        <div className="inline-form" aria-hidden="true">{fields}<Skeleton variant="block" width={92} height={38} /></div>
       ) : bare ? (
         <div className="sk-stack" aria-hidden="true">{fields}</div>
       ) : (

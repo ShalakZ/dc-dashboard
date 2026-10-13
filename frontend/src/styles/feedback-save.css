@@ -1,3 +1,22 @@
 @layer w6 {
-  /* W7k feedback (save). Tokens only; every rule is scoped by a class this piece owns. */
+  /* W7k feedback (save). Tokens only; every rule is scoped by a class this piece owns (SaveButton.tsx). */
+
+  /* One width in every state: the idle label, "Saving…" and the check with "Saved" are three faces stacked in one grid cell, so the
+     button is as wide as the widest of them and the form around it never moves. The faces that are not showing stay in the layout
+     (visibility, not display), which is also what keeps the width. */
+  .save-btn { display: inline-grid; }
+  .save-face { grid-area: 1 / 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .save-face[aria-hidden="true"] { visibility: hidden; }
+
+  /* Saved: the --ok fill with the page colour on it. The attribute selector (and the :hover one, which must out-weigh
+     .primary:hover:not(:disabled)) wins over .primary, .primary:hover and .primary:disabled by specificity, not by order. */
+  button.save-btn[data-phase="saved"],
+  button.save-btn[data-phase="saved"]:hover:not(:disabled) {
+    border-color: var(--ok); background: var(--ok); color: var(--bg);
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+  }
+
+  /* Back to the idle colours (the button's own rules supply them); only the colours move, over 600 ms. The global reduced-motion rule in
+     app.css zeroes transitions, and SaveButton skips this phase altogether then. */
+  button.save-btn[data-phase="fading"] { transition: background-color 600ms ease, border-color 600ms ease, color 600ms ease; }
 }

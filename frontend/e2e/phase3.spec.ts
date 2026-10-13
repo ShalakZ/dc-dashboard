@@ -116,7 +116,7 @@ test("phase 3 journey: currency and tariff, billing, cost tile, an operator's da
     // Setting the currency from unset asks nothing. (Changing or clearing an existing one, or deleting a tariff, calls
     // window.confirm, which Playwright dismisses unless a handler accepts it; this journey does neither.)
     await currency.getByRole("button", { name: "Save" }).click();
-    await expect(currency.getByText("saved", { exact: true })).toBeVisible();
+    await expect(currency.getByRole("button", { name: "Saved", exact: true })).toBeVisible(); // green for 2.5 s
     await expect(page.getByText(/No currency is set/)).toHaveCount(0);
     expect((await getJson<{ currency: string | null }>("/api/site")).currency).toBe("USD");
   });

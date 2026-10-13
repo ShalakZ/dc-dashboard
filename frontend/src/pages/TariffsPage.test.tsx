@@ -265,7 +265,7 @@ describe("TariffsPage", () => {
     expect(await screen.findByText(/No currency is set/)).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Currency"), "qar");
     await userEvent.click(within(currencyForm()).getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("saved")).toBeInTheDocument();
+    expect(await within(currencyForm()).findByRole("button", { name: "Saved" })).toHaveAttribute("data-phase", "saved");
     expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ currency: "QAR" });
     await waitFor(() => expect(screen.queryByText(/No currency is set/)).not.toBeInTheDocument());
   });
@@ -344,7 +344,7 @@ describe("TariffsPage", () => {
     expect(calls.some((c) => c.method === "PUT")).toBe(false); // declined: nothing is sent
     await userEvent.click(save);
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ currency: "USD" }));
-    expect(await screen.findByText("saved")).toBeInTheDocument();
+    expect(await within(currencyForm()).findByRole("button", { name: "Saved" })).toHaveAttribute("data-phase", "saved");
   });
 
   it("does not ask when the currency is saved unchanged", async () => {

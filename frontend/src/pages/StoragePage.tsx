@@ -6,6 +6,7 @@ import { InfoTip } from "../components/InfoTip";
 import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
 import { READ_ONLY_TEXT, ReadOnlyNote } from "../components/ReadOnlyNote";
+import { SaveButton } from "../components/SaveButton";
 import { PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
 import { useRowsPerDay, useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
 import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
@@ -232,7 +233,7 @@ export function StoragePage() {
                 <div className="retention-foot">
                   {canEdit ? (
                     <div className="row">
-                      {[62, 120, 124, 176].map((width) => <Skeleton key={width} variant="block" width={width} height={34} />)}
+                      {[92, 120, 124, 176].map((width) => <Skeleton key={width} variant="block" width={width} height={34} />)}
                     </div>
                   ) : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
                   <ParagraphSkeleton text={canEdit ? SUMMARY_SAMPLE : SUMMARY_SAMPLE.replace(RESETS_SENTENCE, "")} className="muted" />
@@ -248,7 +249,10 @@ export function StoragePage() {
   const factory = settings.data.factory;
   const siteDefault = settings.data.site_default ?? null;
   const ratio = s.readings_bytes_uncompressed ? (s.readings_bytes_compressed / s.readings_bytes_uncompressed).toFixed(2) : "–";
-  const fill = (values: StorageSettings) => { setForm({ ...values }); setError(null); setNote(null); };  // the Resets only fill the form
+  // A change to the form drops the green Saved at once (the values on screen are no longer the saved ones). Not while a save is running:
+  // reset() would detach the mutation, and its 409 handler (the confirmation before readings are deleted) would never run.
+  const edited = () => { if (!save.isPending) save.reset(); };
+  const fill = (values: StorageSettings) => { setForm({ ...values }); setError(null); setNote(null); edited(); };  // the Resets only fill the form
   const checked = (): boolean => {
     setNote(null);
     const problem = validate(form);
@@ -258,7 +262,6 @@ export function StoragePage() {
   const submit = (confirm: boolean) => {
     if (!canEdit || !checked()) return;
     save.mutate({ values: form, confirm }, {
-      onSuccess: () => setNote("Saved."),
       onError: (err) => {
         const loss = storageLoss(err);  // the server asks first when this save deletes readings
         if (loss) setNeedsConfirm(loss); else setError(err.message);
@@ -268,7 +271,7 @@ export function StoragePage() {
   const rememberAsDefault = () => {
     if (!checked()) return;
     makeDefault.mutate(form, {
-      onSuccess: () => setNote("Saved as this site's default. It is not in use yet: press Save to use these values."),
+      onSuccess: () => setNote("This site's default is updated. It is not in use yet: press Save to use these values."),
       onError: (err) => setError(err.message),
     });
   };
@@ -314,7 +317,7 @@ export function StoragePage() {
                 <div className="has-tip" key={key}>
                   <label>
                     {label}
-                    <input type="number" step="any" value={form[key]} disabled={!canEdit} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} />
+                    <input type="number" step="any" value={form[key]} disabled={!canEdit} onChange={(e) => { setForm({ ...form, [key]: Number(e.target.value) }); edited(); }} />
                   </label>
                   <InfoTip>{FIELD_HELP[key]}</InfoTip>
                 </div>
@@ -325,7 +328,7 @@ export function StoragePage() {
               {note && !error && <p className="muted" role="status">{note}</p>}
               {canEdit ? (
                 <div className="row">
-                  <button type="submit" className="primary" disabled={save.isPending}>Save</button>
+                  <SaveButton state={save.status} className="primary" />
                   <button type="button" onClick={rememberAsDefault} disabled={makeDefault.isPending}>Set as default</button>
                   <button type="button" className="quiet" onClick={() => fill(siteDefault ?? factory)}>Reset to default</button>
                   <button type="button" className="quiet" onClick={() => fill(factory)}>Reset to factory settings</button>
@@ -349,7 +352,6 @@ export function StoragePage() {
           onConfirm={async () => {
             await save.mutateAsync({ values: form, confirm: true });
             setNeedsConfirm(null);
-            setNote("Saved.");
           }}
           onCancel={() => setNeedsConfirm(null)}
         />

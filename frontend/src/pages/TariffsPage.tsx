@@ -11,6 +11,7 @@ import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
 import { ReadOnlyNote } from "../components/ReadOnlyNote";
 import { RowActions } from "../components/RowActions";
+import { SaveButton } from "../components/SaveButton";
 import { FormSkeleton, Skeleton, SkeletonRegion, TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
 import { fmtRate } from "../lib/billing";
@@ -88,8 +89,7 @@ function CurrencyForm({ canEdit }: { canEdit: boolean }) {
           </label>
           <InfoTip>A three-letter code such as QAR.</InfoTip>
         </div>
-        <button type="submit" disabled={put.isPending}>Save</button>
-        {put.isSuccess && <span className="muted saved"> saved</span>}
+        <SaveButton state={put.status} />
         {problem && <p className="error" role="alert">{problem}</p>}
         {put.isError && <p className="error" role="alert">{errorText(put.error)}</p>}
       </form>

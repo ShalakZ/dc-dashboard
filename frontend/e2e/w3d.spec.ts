@@ -164,7 +164,8 @@ test("W3d: block, unblock and delete an account, and a source never shows the cr
     await failures.fill("3");
     await minutes.fill("1");
     await page.getByRole("button", { name: "Save sign-in protection", exact: true }).click();
-    await expect(page.getByText("saved", { exact: true })).toBeVisible();
+    // the button keeps its aria-label in every phase; the green shows as data-phase (for 2.5 s)
+    await expect(page.getByRole("button", { name: "Save sign-in protection", exact: true })).toHaveAttribute("data-phase", "saved");
     expect(await getJson(page, "/api/settings/sign-in")).toMatchObject({ max_failures: 3, block_minutes: 1 });
   });
 
