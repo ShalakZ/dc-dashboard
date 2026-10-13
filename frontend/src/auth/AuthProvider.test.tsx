@@ -15,8 +15,8 @@ function AssetCount() {
 }
 
 function WhoAmI() {
-  const { user, hasRole } = useAuth();
-  return <p>{user?.username} admin:{String(hasRole("admin"))} operator:{String(hasRole("operator"))}</p>;
+  const { user } = useAuth();
+  return <p>{user?.username}</p>;
 }
 
 function Held() {
@@ -66,13 +66,6 @@ describe("AuthProvider permissions", () => {
     renderWithProviders(<Held />);
     expect(await screen.findByText("nobody users:false assets:false any:false none:false")).toBeInTheDocument();
   });
-
-  // TEMPORARY: Task 4b deletes hasRole and this test with it.
-  it("hasRole (until the pages ask for permissions) answers from the three built-in role names only", async () => {
-    signedInAs(userFor("Night shift", { permissions: [...userFor("admin").permissions] }));
-    renderWithProviders(<RequireAuth><WhoAmI /></RequireAuth>);
-    await waitFor(() => expect(screen.getByText(/^u admin:false operator:false$/)).toBeInTheDocument());
-  });
 });
 
 describe("AuthProvider", () => {
@@ -101,13 +94,13 @@ describe("AuthProvider", () => {
     expect(sessionStorage.getItem("dcdash.returnTo")).toBe("/assets");
   });
 
-  it("exposes the user and role checks", async () => {
+  it("exposes the user", async () => {
     mockFetch({
       "GET /api/setup": { body: { needed: false } },
       "GET /api/me": { body: userFor("operator", { username: "op" }) },
     });
     renderWithProviders(<RequireAuth><WhoAmI /></RequireAuth>);
-    await waitFor(() => expect(screen.getByText(/op admin:false operator:true/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("op")).toBeInTheDocument());
   });
 });
 

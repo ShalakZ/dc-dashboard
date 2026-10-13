@@ -295,7 +295,7 @@ export interface ConnectionCheckResult {
   names: { hosts: string[]; uris: string[] };
 }
 
-/** GET /api/diagnostics/report?format=json (admin only). Part sizes are the server's (`chars` leaves out line breaks, as the part's footer does). */
+/** GET /api/diagnostics/report?format=json (needs diagnostics.view). Part sizes are the server's (`chars` leaves out line breaks, as the part's footer does). */
 export type ReportDetail = "summary" | "full";
 export interface ReportPart { index: number; of: number; text: string; chars: number; lines: number }
 export interface ReportReply {

@@ -275,7 +275,7 @@ function TariffTables({ tariffs, assets, assetsError }: { tariffs: Tariff[] | un
 
 const NO_ASSETS: Asset[] = [];
 
-/** Admin only (the route is wrapped in RequireRole): the site currency, the site default rates and per-asset overrides. */
+/** Needs tariffs.edit and assets.view (the route is wrapped in RequirePermission): the site currency, the site default rates and per-asset overrides. */
 export function TariffsPage() {
   const tariffs = useTariffs();
   const assets = useAssets();

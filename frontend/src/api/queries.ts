@@ -90,7 +90,7 @@ export const useCollectorStatus = () =>
 export const useStatus = () =>
   useQuery({ queryKey: keys.status, queryFn: () => api.get<LiveStatus>("/api/status"), refetchInterval: 10_000 });
 
-/** Operators and admins only (the Sources page). A fetch error shows nothing: the warning is an extra, not a gate. */
+/** Needs sources.view (the Sources page). A fetch error shows nothing: the warning is an extra, not a gate. */
 export const useSecretKeyStatus = () =>
   useQuery({ queryKey: keys.secretKey, queryFn: () => api.get<SecretKeyStatus>("/api/secret-key/status"), refetchInterval: 60_000 });
 
@@ -222,7 +222,7 @@ export function useSetStorageDefault() {
 
 export const useScopes = () => useQuery({ queryKey: keys.scopes, queryFn: () => api.get<Scope[]>("/api/scopes") });
 
-/** Admin-only on the server: callers enable it only for admins, and only while the new-scope form is open. */
+/** Needs discovery.edit on the server: callers enable it only for someone who holds it, and only while the new-scope form is open. */
 export const useScopeSuggestions = (enabled: boolean) =>
   useQuery({
     queryKey: keys.suggestions,

@@ -4,7 +4,7 @@ import { App } from "../App";
 import { Layout } from "../components/Layout";
 import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
-import { userFor } from "../test/users";
+import { userFor, type BuiltinRole } from "../test/users";
 
 /**
  * What Viewer, Operator and Admin see and may open. The tables below are literals, written from the sidebar and the route guards as
@@ -32,13 +32,12 @@ vi.mock("../pages/AuditEntryPage", () => ({ AuditEntryPage: () => <h1>the audit 
 vi.mock("../pages/DiagnosticsPage", () => ({ DiagnosticsPage: () => <h1>the diagnostics page</h1> }));
 vi.mock("../pages/PasswordPage", () => ({ PasswordPage: () => <h1>the password page</h1> }));
 
-type Role = "viewer" | "operator" | "admin";
-const ROLES: Role[] = ["viewer", "operator", "admin"];
+const ROLES: BuiltinRole[] = ["viewer", "operator", "admin"];
 
 /** The user the server answers for `role`. */
-const me = (role: Role) => userFor(role);
+const me = (role: BuiltinRole) => userFor(role);
 
-const routes = (role: Role, defaultDashboard: number | null = null) => ({
+const routes = (role: BuiltinRole, defaultDashboard: number | null = null) => ({
   ...shellRoutes,
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: me(role) },
@@ -46,7 +45,7 @@ const routes = (role: Role, defaultDashboard: number | null = null) => ({
   "GET /api/tls/status": { body: { enabled: false, state: null, not_after: null, days_left: null, subject: null, checked_at: null, error: null } },
 });
 
-const ROLE_WORD: Record<Role, string> = { viewer: "Viewer", operator: "Operator", admin: "Administrator" };
+const ROLE_WORD: Record<BuiltinRole, string> = { viewer: "Viewer", operator: "Operator", admin: "Administrator" };
 
 /** The sidebar: group headings and the links under them (label and address), in order. */
 const MONITOR = [["Assets Tree", "/assets"], ["Dashboards", "/dashboards"], ["Billing", "/billing"]];
@@ -54,7 +53,7 @@ const OPERATE = [["Sources", "/sources"], ["Scans", "/scans"], ["Discovery", "/d
 const ADMINISTER = [
   ["Users", "/users"], ["Settings", "/settings"], ["Tariffs", "/tariffs"], ["Storage", "/storage"], ["Audit", "/audit"], ["Diagnostics", "/diagnostics"],
 ];
-const SIDEBAR: Record<Role, [string, string[][]][]> = {
+const SIDEBAR: Record<BuiltinRole, [string, string[][]][]> = {
   viewer: [["Monitor", MONITOR]],
   operator: [["Monitor", MONITOR], ["Operate", OPERATE]],
   admin: [["Monitor", MONITOR], ["Operate", OPERATE], ["Administer", ADMINISTER]],
@@ -82,7 +81,7 @@ const PAGE: Record<string, string> = {
 const EVERYONE = ["/assets", "/dashboards", "/dashboards/3", "/billing", "/password"];
 const OPERATORS_ADD = ["/sources", "/scans", "/discovery"];
 const ADMINS_ADD = ["/sources/4/points", "/users", "/settings", "/tariffs", "/storage", "/audit", "/audit/7", "/diagnostics"];
-const MAY_OPEN: Record<Role, string[]> = {
+const MAY_OPEN: Record<BuiltinRole, string[]> = {
   viewer: EVERYONE,
   operator: [...EVERYONE, ...OPERATORS_ADD],
   admin: [...EVERYONE, ...OPERATORS_ADD, ...ADMINS_ADD],
@@ -92,7 +91,7 @@ const MAY_OPEN: Record<Role, string[]> = {
 const profileButton = () => screen.findByRole("button", { name: /^u (Administrator|Operator|Viewer)$/ });
 
 /** Opens `route` as `role` and returns the first level-1 heading that appears: the page's own, or the notice that keeps the person out. */
-async function opening(role: Role, route: string, defaultDashboard: number | null = null) {
+async function opening(role: BuiltinRole, route: string, defaultDashboard: number | null = null) {
   const calls = mockFetch(routes(role, defaultDashboard));
   renderWithProviders(<App />, { route, path: "*" });
   await profileButton();

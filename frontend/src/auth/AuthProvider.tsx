@@ -26,11 +26,6 @@ const sameSet = (a: readonly string[], b: readonly string[]) => {
   return new Set(a).size === held.size && a.every((id) => held.has(id));
 };
 
-// TEMPORARY: removed by Task 4b. The pages still ask "is this person at least an operator?" until they ask for the permission of what they
-// do; the answer comes from the role's NAME, for the three built-in names only (any other role is "no" to every level).
-const LEGACY_LEVEL: Record<string, number> = { viewer: 0, operator: 1, admin: 2 };
-export type LegacyRole = "viewer" | "operator" | "admin";
-
 interface AuthState {
   user: User | null;
   /**
@@ -55,8 +50,6 @@ interface AuthState {
   can(id: PermissionId): boolean;
   /** True when the signed-in user holds at least one of the permissions. */
   canAny(...ids: PermissionId[]): boolean;
-  /** TEMPORARY: removed by Task 4b (see LEGACY_LEVEL). */
-  hasRole(min: LegacyRole): boolean;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -265,7 +258,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthState>(
     () => ({
       user, accessChange, setupNeeded, unreachable, retryNow, signedOutOnPurpose, clearSignOutMark, loading, login, setup, logout, can, canAny,
-      hasRole: (min) => user !== null && Object.hasOwn(LEGACY_LEVEL, user.role) && LEGACY_LEVEL[user.role] >= LEGACY_LEVEL[min],
     }),
     [user, accessChange, setupNeeded, unreachable, retryNow, signedOutOnPurpose, clearSignOutMark, loading, login, setup, logout, can, canAny],
   );
