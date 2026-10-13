@@ -219,6 +219,74 @@ describe("SaveButton", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  describe("double-submit guard (the native disabled only arrives with the pending state, a render later)", () => {
+    /** A form like the real pages: one field, the Save button, a submit handler that records and does not navigate. */
+    function renderForm(onClick?: () => void) {
+      const submitted = vi.fn((e: { preventDefault: () => void }) => e.preventDefault());
+      render(
+        <form aria-label="f" onSubmit={submitted}>
+          <input aria-label="field" />
+          <SaveButton state="idle" onClick={onClick} />
+        </form>,
+      );
+      return submitted;
+    }
+
+    it("two clicks in the same tick submit once, and the caller's onClick runs once", () => {
+      const onClick = vi.fn();
+      const submitted = renderForm(onClick);
+      act(() => {
+        button().click();
+        button().click();
+      });
+      expect(submitted).toHaveBeenCalledTimes(1);
+      expect(onClick).toHaveBeenCalledTimes(1);
+    });
+
+    it("a click inside 400 ms of the last accepted one is refused, one at 400 ms is accepted again", () => {
+      const onClick = vi.fn();
+      const submitted = renderForm(onClick);
+      act(() => button().click());
+      tick(399);
+      act(() => button().click());
+      expect(submitted).toHaveBeenCalledTimes(1);
+      tick(1); // 400 ms after the accepted click
+      act(() => button().click());
+      expect(submitted).toHaveBeenCalledTimes(2);
+      expect(onClick).toHaveBeenCalledTimes(2);
+      act(() => button().click()); // right after the second accepted click: refused again
+      expect(submitted).toHaveBeenCalledTimes(2);
+    });
+
+    it("a refused click is not pushed back by the clicks that follow it", () => {
+      const submitted = renderForm();
+      act(() => button().click()); // t = 0, accepted
+      tick(300);
+      act(() => button().click()); // refused
+      tick(100);
+      act(() => button().click()); // t = 400 from the accepted one, so accepted even though the refused one was 100 ms ago
+      expect(submitted).toHaveBeenCalledTimes(2);
+    });
+
+    it("Enter in a field of the form is a click: two Enters in a row submit once", async () => {
+      vi.useRealTimers();
+      const submitted = renderForm();
+      await userEvent.type(screen.getByLabelText("field"), "{Enter}{Enter}");
+      expect(submitted).toHaveBeenCalledTimes(1);
+    });
+
+    it("a refused click does not submit the form (the default action is cancelled)", () => {
+      const submitted = renderForm();
+      let notCancelled = true;
+      act(() => {
+        button().click();
+        notCancelled = button().dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+      expect(notCancelled).toBe(false);
+      expect(submitted).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("a disabled prop disables the button (the form's own reasons), and Saving… keeps it disabled", () => {
     const { rerender } = render(<SaveButton state="idle" disabled />);
     expect(button()).toBeDisabled();

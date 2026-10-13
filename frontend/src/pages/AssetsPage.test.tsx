@@ -686,7 +686,7 @@ describe("AssetsPage", () => {
       await click("Delete Room A");
       const dialog = await dialogOf();
       expect(dialog).toHaveTextContent("Checking what this deletes…");
-      const confirm = within(dialog).getByRole("button", { name: "Delete anyway" });
+      const confirm = within(dialog).getByRole("button", { name: "Delete" }); // plain "Delete" until the answer says it takes more than the row
       expect(confirm).toBeDisabled();
       await userEvent.click(confirm);
       expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
@@ -757,8 +757,8 @@ describe("AssetsPage", () => {
       const { calls } = setup(branch, undefined, { preview: { status: 404, body: { detail: "Asset 2 not found" } } });
       await click("Delete Room A");
       const dialog = await dialogOf();
-      expect(await within(dialog).findByRole("alert")).toHaveTextContent("Asset 2 not found");
-      expect(within(dialog).getByRole("button", { name: "Delete anyway" })).toBeDisabled();
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not check what this deletes: Asset 2 not found");
+      expect(within(dialog).getByRole("button", { name: "Delete" })).toBeDisabled();
       await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(deletes(calls)).toBe(0);

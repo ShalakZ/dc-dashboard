@@ -51,9 +51,12 @@ export function ImpactDeleteDialog<I extends object>({ title, queryKey, load, lo
     <ConfirmDeleteDialog
       title={title}
       message={seen === null ? "" : plain ? plainMessage : loss(seen)}
-      confirmLabel={plain ? "Delete" : "Delete anyway"}
+      // "Anyway" is for a delete that takes more than the row; until that is known (or if it never is) the button reads plain Delete, so it does not
+      // change width, and does not alarm on a leaf, when the answer arrives.
+      confirmLabel={seen === null || plain ? "Delete" : "Delete anyway"}
       loading={preview.isPending}
-      loadError={preview.isError ? preview.error.message : undefined}
+      // The server's words alone ("Internal Server Error", "asset not found") say nothing about what failed.
+      loadError={preview.isError ? `Could not check what this deletes: ${preview.error.message}` : undefined}
       onConfirm={confirm}
       onCancel={onCancel}
     />

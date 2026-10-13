@@ -44,10 +44,24 @@ describe("ImpactDeleteDialog", () => {
     const held = holdFetch((method, path) => method === "GET" && path === "/api/assets/5/impact");
     open();
     expect(dialog()).toHaveTextContent("Checking what this deletes…");
-    expect(screen.getByRole("button", { name: "Delete anyway" })).toBeDisabled(); // the confirm button of a dialog that has nothing to say yet
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled(); // the confirm button of a dialog that has nothing to say yet
+    expect(screen.queryByRole("button", { name: "Delete anyway" })).not.toBeInTheDocument(); // "anyway" is for a delete that takes more than the row, which is not known yet
     expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
     await act(async () => held.release());
     expect(await screen.findByText("This can't be undone.")).toBeInTheDocument();
+  });
+
+  it("the confirm button reads Delete while the preview loads, for a leaf and for a branch alike, and a branch then turns it into Delete anyway", async () => {
+    for (const [counts, finalLabel] of [[leaf, "Delete"], [branch, "Delete anyway"]] as const) {
+      mockFetch(impactRoute(counts));
+      const held = holdFetch((method, path) => method === "GET" && path === "/api/assets/5/impact");
+      open();
+      expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "Delete anyway" })).not.toBeInTheDocument();
+      await act(async () => held.release());
+      expect(await screen.findByRole("button", { name: finalLabel })).toBeEnabled();
+      cleanup();
+    }
   });
 
   it("a leaf reads the plain sentence with a plain Delete button", async () => {
@@ -84,9 +98,10 @@ describe("ImpactDeleteDialog", () => {
     mockFetch(impactRoute({ detail: "Asset 5 not found" }, 404));
     const onConfirm = vi.fn(async () => undefined);
     const { onCancel } = open(onConfirm);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Asset 5 not found");
-    expect(screen.getByRole("button", { name: "Delete anyway" })).toBeDisabled();
-    await userEvent.click(screen.getByRole("button", { name: "Delete anyway" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check what this deletes: Asset 5 not found"); // the server's words, with the context they lack
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled(); // it keeps the label it had while loading
+    expect(screen.queryByRole("button", { name: "Delete anyway" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onConfirm).not.toHaveBeenCalled();
     expect(screen.queryByText("Checking what this deletes…")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));

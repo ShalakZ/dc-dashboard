@@ -68,13 +68,16 @@ export function ScansPage() {
     setPending(null);
     setForm(null);
   };
-  const remove = (scope: Scope) => run(async () => {
+  const remove = async (scope: Scope) => {
     setPending(null);
+    // Asked outside `run`: while the question is open nothing is in flight, so the trash button stays enabled and can take the focus back.
     if (!(await ask({ title: `Delete scope "${scope.name}"?`, message: "This can't be undone." }))) return;
-    await api.del(`/api/scopes/${scope.id}`);
-    toast.success(`Scan scope "${scope.name}" deleted`);
-    await invalidate(keys.scopes);
-  });
+    await run(async () => {
+      await api.del(`/api/scopes/${scope.id}`);
+      toast.success(`Scan scope "${scope.name}" deleted`);
+      await invalidate(keys.scopes);
+    });
+  };
 
   if (isLoading) {
     // The gap stands where the New scope button will be; a role without it has no actions slot (it would be 6.5px taller than the real one).

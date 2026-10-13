@@ -25,12 +25,12 @@ import { userBlock } from "./shell";
 //      closes the dialog while a toast shows; under reduced motion a toast still appears and leaves.
 //   6. Toasts and row menus: with "Source added" showing, the open menu of the last Sources row is inside the window and nothing covers any
 //      item, at 1440x900 and 1024x768; below 720 px the full-width toast keeps its 16 px margins and does not cover a dialog's Save.
-//   7. The keyboard: Tab goes from Cancel to the enabled confirm button and stays in the dialog; Cancel (Enter) and Esc give the focus back
-//      to the button that opened it.
+//   7. The keyboard: Tab goes from Cancel to the enabled confirm button and wraps round inside the dialog in both directions; Cancel (Enter)
+//      and Esc give the focus back to the button that opened it.
 //
 // "Asset created" and "Source added" come from the toast wiring of Task 5 (the strings are R14). Toasts are found as
 // `.toast-stack .toast` (the stack has no role: a `getByRole("status")` would not find them). The dialog's buttons are looked up inside
-// `getByRole("dialog", ...)` with `exact: true`: while the preview loads the confirm button is the disabled "Delete anyway", and a row's
+// `getByRole("dialog", ...)` with `exact: true`: while the preview loads the confirm button is the disabled "Delete", and a row's
 // trash button is named "Delete NAME" too. Only the PUT of a Save is held (a held GET would also hold the page's own first load).
 
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost/";
@@ -392,8 +392,9 @@ test.describe("W7k: the Save button, the one delete dialog, toasts", () => {
     await expect(dialog).toBeVisible();
     await expect(page.getByRole("dialog"), "exactly one dialog").toHaveCount(1);
     await expect(dialog).toContainText(CHECKING);
-    // While the preview is held nothing can be confirmed: the confirm button is the disabled "Delete anyway".
-    await expect(button(dialog, "Delete anyway")).toBeDisabled();
+    // While the preview is held nothing can be confirmed: the confirm button is the disabled "Delete" ("anyway" is for a branch, once known).
+    await expect(button(dialog, "Delete")).toBeDisabled();
+    await expect(button(dialog, "Delete anyway")).toHaveCount(0);
     await expect(button(dialog, "Cancel")).toBeFocused();
     await expect.poll(() => held.requests(), { message: "the preview was asked for once" }).toBe(1);
     held.release();
@@ -516,7 +517,7 @@ test.describe("W7k: the Save button, the one delete dialog, toasts", () => {
     const plain = dialogNamed(page, `Delete source "${name}"?`);
     await expect(plain).toBeVisible();
     await expect(plain).toContainText(CHECKING);
-    await expect(button(plain, "Delete anyway")).toBeDisabled();
+    await expect(button(plain, "Delete")).toBeDisabled();
     held.release();
     await expect(plain).toContainText("Its points go with it. This can't be undone.");
     const confirm = button(plain, "Delete");
@@ -688,7 +689,7 @@ test.describe("W7k: the Save button, the one delete dialog, toasts", () => {
   });
 
   // -------------------------------------------------------------------------------------------------------------------------------
-  test("the keyboard: Tab goes from Cancel to the confirm button and back; Cancel and Esc give the focus back to the trash button", async ({ page }) => {
+  test("the keyboard: Tab goes from Cancel to the confirm button and back, and wraps round at both ends; Cancel and Esc give the focus back to the trash button", async ({ page }) => {
     test.setTimeout(120_000);
     const name = `W7k keys ${RUN}`;
     const id = await makeSource(page, name);
@@ -711,7 +712,10 @@ test.describe("W7k: the Save button, the one delete dialog, toasts", () => {
         await expect(confirm, "Tab reaches the confirm button").toBeFocused();
         await page.keyboard.press("Shift+Tab");
         await expect(cancel, "Shift+Tab goes back to Cancel").toBeFocused();
-        // (Tab out of the LAST button is not pinned: the dialog has no wrap-around, a stray focus is pulled back by its focus guard.)
+        await page.keyboard.press("Shift+Tab");
+        await expect(confirm, "Shift+Tab from the first button wraps round to the last").toBeFocused();
+        await page.keyboard.press("Tab");
+        await expect(cancel, "Tab from the last button wraps round to the first").toBeFocused();
         if (how === "Cancel button") {
           await page.keyboard.press("Enter");
         } else {

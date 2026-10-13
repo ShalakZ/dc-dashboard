@@ -49,6 +49,30 @@ export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confi
       if (previous?.isConnected) previous.focus();
     };
   }, [previous]);
+  // Tab and Shift+Tab wrap round inside the dialog, as in Modal. The dialog is the last thing in the body, so without this the browser would
+  // take the focus on to its own chrome (and back in on the next Tab); keepFocus stays as the backstop for a click or a script. The controls
+  // are read at each keypress, so a disabled confirm button is skipped and one that comes alive counts as the last.
+  useEffect(() => {
+    const root = dialog.current;
+    if (!root) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const controls = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (controls.length === 0) { // both buttons are off while the request runs: there is nowhere to go, and the page behind is not an option
+        event.preventDefault();
+        return;
+      }
+      const [firstControl, lastControl] = [controls[0], controls[controls.length - 1]];
+      const at = document.activeElement;
+      const outside = !(at instanceof Node) || !root.contains(at); // a button that was disabled under the focus left it on the body
+      if (event.shiftKey ? at === firstControl || outside : at === lastControl || outside) {
+        event.preventDefault();
+        (event.shiftKey ? lastControl : firstControl).focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   // Escape is Cancel, except while the request is in flight.
   useEffect(() => {
     if (busy) return;

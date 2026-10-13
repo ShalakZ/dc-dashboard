@@ -8,6 +8,7 @@ import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { pastSaveWindow, useSaveClock } from "../test/saveWindow";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
 import { checkRange, DISK_NOTE, FIELDS, sizeText, StoragePage, UTC_NOTE, validate } from "./StoragePage";
@@ -24,6 +25,8 @@ const stats = {
   rows_per_day: Array.from({ length: 7 }, (_, i) => ({ day: `2026-10-0${i + 1}`, rows: 1000 * (i + 1) })),
   growth_bytes_per_day: 100 * 1024 ** 2, disk_capacity_bytes: 100 * 1024 ** 3, used_pct: 5, days_until_full: 972.8, warn: false, settings,
 };
+
+useSaveClock();
 
 describe("StoragePage", () => {
   it("shows sizes, projection and rows per day", async () => {
@@ -55,6 +58,7 @@ describe("StoragePage", () => {
     expect(put()).toHaveLength(0);
     await userEvent.clear(raw);
     await userEvent.type(raw, "45");
+    pastSaveWindow();
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
     await waitFor(() => expect(put()).toHaveLength(1));
     expect((put()[0].body as { raw_retention_days: number }).raw_retention_days).toBe(45);
@@ -92,6 +96,7 @@ describe("StoragePage", () => {
     expect(calls.some((c) => c.method === "PUT")).toBe(false);
     await userEvent.clear(raw);
     await userEvent.type(raw, "8");
+    pastSaveWindow();
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
     await waitFor(() => expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1));
     expect((calls.find((c) => c.method === "PUT")!.body as { raw_retention_days: number }).raw_retention_days).toBe(8);

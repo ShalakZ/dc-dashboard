@@ -9,6 +9,7 @@ import type { PermissionId } from "../lib/permissions";
 import { mockFetch, shellRoutes, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { pastSaveWindow, useSaveClock } from "../test/saveWindow";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
@@ -80,6 +81,8 @@ const edit = async (row: HTMLElement) => {
   await userEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
 };
 const trash = (row: HTMLElement) => within(row).getByRole("button", { name: /^Delete rate from / });
+
+useSaveClock();
 
 beforeEach(() => {
   // newest first per scope, as the API returns them: site default rates, then overrides
@@ -327,6 +330,7 @@ describe("TariffsPage", () => {
     expect(calls.some((c) => c.method === "PUT")).toBe(false);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument(); // nothing to confirm for a value that is refused
     await userEvent.clear(input);
+    pastSaveWindow();
     await userEvent.click(save);
     const dialog = await confirmation("Remove the currency?"); // removing an existing currency is a change too
     expect(dialog).toHaveTextContent("Remove the currency QAR? Costs will show without a unit. This relabels all past figures; no conversion is applied.");
@@ -356,6 +360,7 @@ describe("TariffsPage", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(calls.some((c) => c.method === "PUT")).toBe(false); // declined: nothing is sent
     expect(within(currencyForm()).getByRole("button", { name: "Save" })).toHaveAttribute("data-phase", "idle");
+    pastSaveWindow();
     await userEvent.click(save);
     await userEvent.click(within(await confirmation("Change the currency?")).getByRole("button", { name: "Change currency" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ currency: "USD" }));

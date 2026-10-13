@@ -70,7 +70,7 @@ describe("the stack", () => {
     setup();
     expect(stack()).toBeInTheDocument();
     expect(stack().getAttribute("aria-live")).toBe("polite");
-    expect(stack().getAttribute("aria-relevant")).toBe("additions");
+    expect(stack().getAttribute("aria-relevant")).toBe("additions text"); // text too: a repeat that collapses into the count badge changes text, not nodes, and is announced
     expect(stack().hasAttribute("role")).toBe(false);
     expect(toasts()).toHaveLength(0);
     fire(() => api.success("Asset created"));

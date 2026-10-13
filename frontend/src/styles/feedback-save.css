@@ -3,8 +3,10 @@
 
   /* One width in every state: the idle label, "Saving…" and the check with "Saved" are three faces stacked in one grid cell, so the
      button is as wide as the widest of them and the form around it never moves. The faces that are not showing stay in the layout
-     (visibility, not display), which is also what keeps the width. */
-  .save-btn { display: inline-grid; }
+     (visibility, not display), which is also what keeps the width. The floor is the width the loading skeletons draw in its place (92px, the
+     check with "Saved" in the page's own font here): a font that sets the text narrower no longer moves the neighbours when the page loads,
+     and a longer label still grows the button (min-width is a floor, not a size). */
+  .save-btn { display: inline-grid; min-width: 92px; }
   .save-face { grid-area: 1 / 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
   .save-face[aria-hidden="true"] { visibility: hidden; }
 

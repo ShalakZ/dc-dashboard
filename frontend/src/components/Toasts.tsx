@@ -188,8 +188,9 @@ export function ToastProvider({ children, timers = realTimers, now = Date.now }:
   return (
     <ToastContext.Provider value={store.api}>
       {children}
-      {/* One persistent region with no role of its own, so it never joins the page's role="status" or "alert" lookups; only an error toast carries a role. */}
-      <div className="toast-stack" aria-live="polite" aria-relevant="additions">
+      {/* One persistent region with no role of its own, so it never joins the page's role="status" or "alert" lookups; only an error toast carries a role.
+          "additions text": a repeat of a toast on screen is not a new node but a changed count badge, and that change is announced too. */}
+      <div className="toast-stack" aria-live="polite" aria-relevant="additions text">
         {items.map((toast) => <ToastView key={toast.id} toast={toast} store={store} />)}
       </div>
     </ToastContext.Provider>

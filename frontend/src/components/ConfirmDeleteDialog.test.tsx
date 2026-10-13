@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLayoutEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
@@ -67,6 +67,81 @@ describe("ConfirmDeleteDialog", () => {
       opener.remove();
       outside.remove();
     }
+  });
+
+  describe("the Tab key wraps inside the dialog (it sits last in the body, so the browser would leave the page for its own chrome)", () => {
+    // A control on the page behind, before the dialog in document order. `leaks` counts every time focus reached it, even for an instant
+    // (a leak that keepFocus pulls back at once is still a leak: the screen reader announced the page behind).
+    let behind: HTMLButtonElement;
+    let leaks: number;
+    const note = (event: FocusEvent) => { if (event.target === behind) leaks += 1; };
+    beforeEach(() => {
+      behind = document.createElement("button");
+      document.body.prepend(behind);
+      leaks = 0;
+      document.addEventListener("focusin", note);
+    });
+    afterEach(() => {
+      document.removeEventListener("focusin", note);
+      behind.remove();
+    });
+
+    it("Tab from the last button goes to the first, and Shift+Tab from the first goes to the last, without ever touching the page behind", async () => {
+      open();
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      const confirm = screen.getByRole("button", { name: "Delete anyway" });
+      expect(cancel).toHaveFocus();
+      await userEvent.tab();
+      expect(confirm).toHaveFocus();
+      await userEvent.tab(); // from the last: round to the first
+      expect(cancel).toHaveFocus();
+      await userEvent.tab({ shift: true }); // from the first: round to the last
+      expect(confirm).toHaveFocus();
+      await userEvent.tab({ shift: true });
+      expect(cancel).toHaveFocus();
+      expect(leaks).toBe(0);
+    });
+
+    it("cancels the browser's own move only at the edges (a cancelled keydown is what stops the browser from moving the focus itself)", () => {
+      open();
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      const confirm = screen.getByRole("button", { name: "Delete anyway" });
+      expect(fireEvent.keyDown(cancel, { key: "Tab" })).toBe(true); // middle: the browser moves on to the confirm button
+      confirm.focus();
+      expect(fireEvent.keyDown(confirm, { key: "Tab" })).toBe(false); // last, forwards
+      expect(cancel).toHaveFocus();
+      expect(fireEvent.keyDown(cancel, { key: "Tab", shiftKey: true })).toBe(false); // first, backwards
+      expect(confirm).toHaveFocus();
+      expect(fireEvent.keyDown(confirm, { key: "Tab", shiftKey: true })).toBe(true); // middle again
+    });
+
+    it("skips a disabled confirm button: with only Cancel usable, Tab and Shift+Tab stay on it", async () => {
+      render(<ConfirmDeleteDialog title="t" message="" onConfirm={async () => {}} onCancel={() => {}} loading />);
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      expect(screen.getByRole("button", { name: "Delete anyway" })).toBeDisabled();
+      await userEvent.tab();
+      expect(cancel).toHaveFocus();
+      await userEvent.tab({ shift: true });
+      expect(cancel).toHaveFocus();
+      expect(leaks).toBe(0);
+    });
+
+    it("counts the confirm button as the last control as soon as it is enabled", async () => {
+      const props = { title: "t", message: "", onConfirm: async () => {}, onCancel: () => {} };
+      const { rerender } = render(<ConfirmDeleteDialog {...props} loading />);
+      rerender(<ConfirmDeleteDialog {...props} confirmLabel="Delete" />);
+      await userEvent.tab({ shift: true });
+      expect(screen.getByRole("button", { name: "Delete" })).toHaveFocus();
+      expect(leaks).toBe(0);
+    });
+
+    it("keeps the focus away from the page behind while the confirmed request runs and both buttons are disabled", async () => {
+      let finish!: () => void;
+      open(() => new Promise<void>((resolve) => { finish = resolve; }));
+      await userEvent.click(screen.getByRole("button", { name: "Delete anyway" }));
+      expect(fireEvent.keyDown(document.body, { key: "Tab" })).toBe(false); // nothing to move to, and the page behind is not an option
+      await act(async () => finish());
+    });
   });
 
   it("labels the confirm button with confirmLabel and keeps 'Delete anyway' by default", () => {

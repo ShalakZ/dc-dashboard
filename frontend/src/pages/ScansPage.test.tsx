@@ -216,6 +216,22 @@ describe("ScansPage", () => {
     expect(screen.getByRole("button", { name: "Details" })).toBeInTheDocument(); // the history keeps its own link-like button
   });
 
+  it("hands focus back to the trash button after Cancel and after Escape (the button is not disabled while the question is open)", async () => {
+    mockFetch({ ...base("admin"), "DELETE /api/scopes/3": { status: 204 } });
+    open();
+    const trash = await screen.findByRole("button", { name: "Delete lab" });
+    await userEvent.click(trash);
+    expect(trash).toBeEnabled(); // the question is not an action in flight: a disabled opener cannot take the focus back
+    await userEvent.click(within(await screen.findByRole("dialog", { name: 'Delete scope "lab"?' })).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete lab" })).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    await screen.findByRole("dialog", { name: 'Delete scope "lab"?' });
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete lab" })).toHaveFocus();
+  });
+
   it("a delete that the server refuses is shown above the table, and raises no toast", async () => {
     mockFetch({ ...base("admin"), "DELETE /api/scopes/3": { status: 403, body: { detail: "admin role required" } } });
     const toasts = spyToasts();
