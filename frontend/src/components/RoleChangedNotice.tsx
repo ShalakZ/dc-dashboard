@@ -1,4 +1,5 @@
 import { useAuth } from "../auth/AuthProvider";
+import { roleLabel } from "./navItems";
 
 /**
  * Shown when an admin changed this person's role, or what the role allows, while the page was open. The page keeps the access it loaded
@@ -9,7 +10,7 @@ export function RoleChangedNotice() {
   if (!accessChange) return null;
   const text = accessChange.from === accessChange.to
     ? "Your access changed. Reload to see what you can use now."
-    : `Your role changed from ${accessChange.from} to ${accessChange.to}. Reload the page to continue.`;
+    : `Your role changed from ${roleLabel(accessChange.from)} to ${roleLabel(accessChange.to)}. Reload the page to continue.`;
   return (
     <div role="status" className="banner banner-warn warning">
       <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z" /><path d="M12 10v4.5M12 17.5h.01" /></svg>

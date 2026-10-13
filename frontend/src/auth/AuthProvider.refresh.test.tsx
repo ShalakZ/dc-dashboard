@@ -139,7 +139,7 @@ describe("AuthProvider refresh on focus", () => {
     server.role = "viewer";
     await focus();
     const banner = await screen.findByRole("status");
-    expect(banner).toHaveTextContent("Your role changed from operator to viewer. Reload the page to continue.");
+    expect(banner).toHaveTextContent("Your role changed from Operator to Viewer. Reload the page to continue.");
     expect(screen.getByText("u (operator)")).toBeInTheDocument(); // nothing under an open editor moved
     expect(capture.seen.size).toBe(1);
   });
@@ -161,12 +161,55 @@ describe("AuthProvider refresh on focus", () => {
     await open();
     server.role = "viewer";
     await focus();
-    await screen.findByText(/changed from operator to viewer/);
+    await screen.findByText(/changed from Operator to Viewer/);
     later(11_000);
     server.role = "admin";
     await focus();
-    expect(await screen.findByText(/changed from operator to admin/)).toBeInTheDocument();
+    expect(await screen.findByText(/changed from Operator to Administrator/)).toBeInTheDocument();
     expect(screen.getAllByRole("status")).toHaveLength(1);
+  });
+
+  it("words the built-in roles as the sidebar does (Administrator, Operator, Viewer) and a role an administrator made by its own name", async () => {
+    await open();
+    server.role = "Night shift";
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from Operator to Night shift. Reload the page to continue.");
+  });
+
+  it("follows the latest answer: permissions changed first, then the role itself changed, and the notice names the roles", async () => {
+    await open();
+    server.permissions = ["assets.view"];
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your access changed. Reload to see what you can use now.");
+    later(11_000);
+    server.permissions = null;
+    server.role = "Nothing";
+    await focus();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Your role changed from Operator to Nothing. Reload the page to continue."));
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+  });
+
+  it("follows the latest answer: a role change first, then another role, and the notice names the last one", async () => {
+    await open();
+    server.role = "viewer";
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from Operator to Viewer");
+    later(11_000);
+    server.role = "Nothing";
+    await focus();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Your role changed from Operator to Nothing. Reload the page to continue."));
+  });
+
+  it("follows the latest answer: a role change first, then the page's own role with other permissions, and the notice is about the permissions", async () => {
+    await open();
+    server.role = "viewer";
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from Operator to Viewer");
+    later(11_000);
+    server.role = "operator";
+    server.permissions = ["assets.view"];
+    await focus();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Your access changed. Reload to see what you can use now."));
   });
 
   it("takes the banner away when the role is back to the one the page loaded with", async () => {
@@ -202,7 +245,7 @@ describe("AuthProvider refresh on focus", () => {
     await open();
     server.role = "viewer"; // viewer's set differs from operator's too
     await focus();
-    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from operator to viewer");
+    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from Operator to Viewer");
   });
 
   it("announces a permission that was added as well as one that was removed", async () => {
@@ -316,7 +359,7 @@ describe("AuthProvider refresh after a 403", () => {
     await open();
     server.role = "viewer";
     await userEvent.setup({ advanceTimers: later }).click(screen.getByRole("button", { name: "load assets" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from operator to viewer");
+    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from Operator to Viewer");
   });
 
   it("does not refetch for a 403 from /api/login (a wrong-credentials style answer)", async () => {
@@ -382,7 +425,7 @@ describe("AuthProvider refresh after a 403 inside the 10 second window", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     await advance(5_000); // t = 10 s
     expect(meCalls()).toBe(3);
-    expect(screen.getByRole("status")).toHaveTextContent("Your role changed from operator to viewer");
+    expect(screen.getByRole("status")).toHaveTextContent("Your role changed from Operator to Viewer");
   });
 
   it("gives a burst of five 403s inside the window exactly one trailing check", async () => {

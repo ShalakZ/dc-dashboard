@@ -41,7 +41,7 @@ describe("RoleChangedNotice", () => {
     role = "viewer";
     act(() => { fireEvent.focus(window); });
     const notice = await screen.findByRole("status");
-    expect(notice).toHaveTextContent("Your role changed from operator to viewer. Reload the page to continue.");
+    expect(notice).toHaveTextContent("Your role changed from Operator to Viewer. Reload the page to continue.");
     expect(reload).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Reload" }));
     expect(reload).toHaveBeenCalledTimes(1);
