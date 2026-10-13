@@ -390,6 +390,87 @@ describe("Drawer", () => {
     });
   });
 
+  describe("keys that scroll the body while the panel itself has focus", () => {
+    // jsdom has no layout: the body's size is set by hand, and scrollTop is a plain number there. Real scrolling (a browser painting the
+    // result, smooth scrolling off) was not measured; the keys and the arithmetic are.
+    function body(over = 1000, shown = 400) {
+      const el = panel().querySelector<HTMLElement>(".drawer-body")!;
+      Object.defineProperty(el, "scrollHeight", { value: over, configurable: true });
+      Object.defineProperty(el, "clientHeight", { value: shown, configurable: true });
+      el.scrollTop = 0;
+      return el;
+    }
+    const press = (key: string, init: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+      panel().dispatchEvent(event);
+      return event;
+    };
+
+    it("PageDown and PageUp move by a page (the body's height less a little), never past either end", () => {
+      render(<Host startOpen />);
+      const el = body();
+      expect(press("PageDown").defaultPrevented).toBe(true);
+      expect(el.scrollTop).toBe(360);
+      press("PageDown");
+      expect(el.scrollTop).toBe(600); // the end: 1000 - 400
+      expect(press("PageDown").defaultPrevented, "nothing left to scroll: the key is left alone").toBe(false);
+      press("PageUp");
+      expect(el.scrollTop).toBe(240);
+      press("PageUp");
+      expect(el.scrollTop).toBe(0);
+      expect(press("PageUp").defaultPrevented).toBe(false);
+    });
+
+    it("the arrows move 40px, Home and End go to the ends", () => {
+      render(<Host startOpen />);
+      const el = body();
+      press("ArrowDown");
+      expect(el.scrollTop).toBe(40);
+      press("ArrowDown");
+      expect(el.scrollTop).toBe(80);
+      press("ArrowUp");
+      expect(el.scrollTop).toBe(40);
+      expect(press("End").defaultPrevented).toBe(true);
+      expect(el.scrollTop).toBe(600);
+      expect(press("Home").defaultPrevented).toBe(true);
+      expect(el.scrollTop).toBe(0);
+    });
+
+    it("leaves the keys alone when the body does not overflow", () => {
+      render(<Host startOpen />);
+      const el = body(300, 400);
+      for (const key of ["PageDown", "PageUp", "Home", "End", "ArrowDown", "ArrowUp"]) expect(press(key).defaultPrevented, key).toBe(false);
+      expect(el.scrollTop).toBe(0);
+    });
+
+    it("keeps focus on the panel (it names the dialog) and leaves other keys and modifier chords alone", () => {
+      render(<Host startOpen />);
+      const el = body();
+      expect(panel()).toHaveFocus();
+      press("PageDown");
+      expect(panel()).toHaveFocus();
+      expect(press("a").defaultPrevented).toBe(false);
+      expect(press(" ").defaultPrevented).toBe(false);
+      for (const init of [{ ctrlKey: true }, { altKey: true }, { metaKey: true }]) expect(press("End", init).defaultPrevented, JSON.stringify(init)).toBe(false);
+      expect(el.scrollTop).toBe(360); // only the PageDown above moved it
+    });
+
+    it("does nothing when the key comes from a control inside the panel (a textarea, a select and the page's own keys keep theirs)", () => {
+      render(<Host startOpen footer={<button>Next</button>}><textarea aria-label="note" /></Host>);
+      const el = body();
+      const note = screen.getByRole("textbox", { name: "note" });
+      const event = new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true });
+      note.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(el.scrollTop).toBe(0);
+    });
+
+    it("has no extra Tab stop: the body is not focusable", () => {
+      render(<Host startOpen />);
+      expect(panel().querySelector(".drawer-body")).not.toHaveAttribute("tabindex");
+    });
+  });
+
   describe("where focus goes when it closes", () => {
     it("back to the element that had it (a keyboard user's button)", async () => {
       render(<Host />);

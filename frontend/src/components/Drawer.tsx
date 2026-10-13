@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 
@@ -59,6 +59,19 @@ function giveFocusBack(opener: HTMLElement | null | undefined, returnFocus: (() 
   else document.getElementById("main")?.focus({ preventScroll: true }); // the whole page is taller than the window: do not let focus scroll it
 }
 
+/** How far one arrow press scrolls the body, in px. A page is the body's height less this, so the last line before the jump is still in view. */
+const ARROW_STEP = 40;
+
+/**
+ * Where a key that scrolls would take the body, or null for any other key. Focus rests on the panel (it names the dialog), and a browser
+ * scrolls the focused element's own scroller, not a child: without this the keys would do nothing until a Tab went into the body.
+ */
+function scrolledTo(key: string, body: HTMLElement): number | null {
+  const page = Math.max(body.clientHeight - ARROW_STEP, ARROW_STEP);
+  const to = { PageDown: body.scrollTop + page, PageUp: body.scrollTop - page, ArrowDown: body.scrollTop + ARROW_STEP, ArrowUp: body.scrollTop - ARROW_STEP, Home: 0, End: body.scrollHeight }[key];
+  return to === undefined ? null : Math.min(Math.max(to, 0), Math.max(body.scrollHeight - body.clientHeight, 0));
+}
+
 /**
  * A panel that slides in from the right over a dimmed page, for a record opened from a list. The page behind is dimmed, inert and not
  * scrollable; focus moves onto the panel, stays in it (Tab and Shift+Tab wrap round) and goes back when the drawer goes away. Escape and a
@@ -69,6 +82,9 @@ function giveFocusBack(opener: HTMLElement | null | undefined, returnFocus: (() 
  * gives an element that is still in the page, that gets focus; if it gives null, or the element is gone, #main does. Without `returnFocus`
  * the element that had focus on open gets it back, unless that is the body (a deep link) or gone: then #main. Controls marked tabindex -1
  * are not Tab stops. The drawer is portalled to document.body, so React events of its content still bubble through its React parents.
+ *
+ * Keys. Focus stays on the panel when it opens, so PageUp, PageDown, Home, End and the up and down arrows (only when they are pressed on the
+ * panel itself, never on a control inside it) scroll the body by hand; the key is taken (preventDefault) only if the body actually moves.
  */
 export function Drawer({ title, onClose, footer, returnFocus, children }: {
   title: string;
@@ -82,6 +98,16 @@ export function Drawer({ title, onClose, footer, returnFocus, children }: {
   const latest = useRef({ onClose, returnFocus });
   useEffect(() => { latest.current = { onClose, returnFocus }; }); // the latest callbacks, without re-running the focus effect
   const press = useRef({ down: false, up: false });
+  const body = useRef<HTMLDivElement>(null);
+
+  function scrollWithKeys(e: ReactKeyboardEvent<HTMLDivElement>) {
+    const el = body.current;
+    if (!el || e.target !== e.currentTarget || e.ctrlKey || e.altKey || e.metaKey) return;
+    const to = scrolledTo(e.key, el);
+    if (to === null || to === el.scrollTop) return; // another key, or already at that end: the browser keeps its own say
+    e.preventDefault();
+    el.scrollTop = to;
+  }
 
   useEffect(() => {
     const el = panel.current;
@@ -142,14 +168,14 @@ export function Drawer({ title, onClose, footer, returnFocus, children }: {
         if (wholeClick) latest.current.onClose();
       }}
     >
-      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className="drawer">
+      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className="drawer" onKeyDown={scrollWithKeys}>
         <div className="drawer-head">
           <h2 id={titleId} className="drawer-title">{title}</h2>
           <button type="button" className="icon-btn" aria-label="Close" onClick={() => latest.current.onClose()}>
             <Icon name="close" />
           </button>
         </div>
-        <div className="drawer-body">{children}</div>
+        <div ref={body} className="drawer-body">{children}</div>
         {footer ? <div className="drawer-foot">{footer}</div> : null}
       </div>
     </div>,
