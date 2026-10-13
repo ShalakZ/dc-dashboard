@@ -10,8 +10,10 @@ from sqlalchemy.orm.exc import StaleDataError
 from dcdash.api.security import ROLE_LEVEL, hash_token
 from dcdash.core.db import get_sessionmaker
 from dcdash.core.models import User, UserSession
+from dcdash.core.permissions import ALL_IDS
 
 COOKIE = "dcdash_session"
+INSUFFICIENT_PERMISSION = "insufficient permission"  # one text for every missing permission: it names nothing
 FOREIGN_KEY_VIOLATION = "23503"  # PostgreSQL SQLSTATE
 
 
@@ -48,6 +50,63 @@ def require_role(minimum: str) -> Callable[..., Awaitable[User]]:
             raise HTTPException(403, "insufficient role")
         return user
 
+    return dependency
+
+
+def _checked(ids: tuple[str, ...]) -> tuple[str, ...]:
+    """The ids of a gate, checked when the gate is built (at import): a typo cannot ship and no request meets the error."""
+    if not ids:
+        raise ValueError("a permission gate names at least one permission")
+    unknown = [item for item in ids if item not in ALL_IDS]
+    if unknown:
+        raise ValueError(f"unknown permission {unknown[0]!r}")
+    return ids
+
+
+def require_permission(*ids: str) -> Callable[..., Awaitable[User]]:
+    """A gate: the request passes only when the account holds ALL of these permissions, else 403.
+
+    Put it in the route decorator's `dependencies=[Depends(...)]` (one gate per route, tests/test_route_gates.py checks it),
+    and take the account itself as `user: User = Depends(current_user)` when the route needs it.
+    """
+    ids = _checked(ids)
+
+    async def dependency(user: User = Depends(current_user)) -> User:
+        if not user.can(*ids):
+            raise HTTPException(403, INSUFFICIENT_PERMISSION)
+        return user
+
+    dependency.permissions = ids  # read by the gate test
+    dependency.mode = "all"
+    return dependency
+
+
+def require_any_permission(*ids: str, own_session: bool = False) -> Callable[..., Awaitable[User]]:
+    """A gate: the request passes when the account holds AT LEAST ONE of these permissions, else 403.
+
+    `own_session=True` reads the account in a short-lived session of its own instead of the request's: a route that streams
+    for as long as the browser stays connected must not keep a database connection (and so a request session) open.
+    """
+    ids = _checked(ids)
+
+    if own_session:
+
+        async def dependency(request: Request) -> User:
+            async with get_sessionmaker()() as db:
+                user = await authenticate(request, db)
+                if not user.can_any(*ids):
+                    raise HTTPException(403, INSUFFICIENT_PERMISSION)
+            return user
+
+    else:
+
+        async def dependency(user: User = Depends(current_user)) -> User:
+            if not user.can_any(*ids):
+                raise HTTPException(403, INSUFFICIENT_PERMISSION)
+            return user
+
+    dependency.permissions = ids
+    dependency.mode = "any"
     return dependency
 
 

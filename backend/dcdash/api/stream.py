@@ -6,11 +6,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime, timezone
 
 import asyncpg
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
-from dcdash.api.deps import COOKIE, authenticate
+from dcdash.api.deps import COOKIE, authenticate, require_any_permission
 from dcdash.api.security import hash_token
 from dcdash.core.db import get_sessionmaker
 from dcdash.core.models import UserSession
@@ -20,6 +20,10 @@ router = APIRouter(prefix="/api", tags=["stream"])
 # How often, in wall-clock seconds, an open stream re-checks that its session is still valid, whatever the traffic.
 # Read when a stream starts, so a test can lower it.
 REVALIDATE_SECONDS = 60.0
+
+# The live values feed the Assets Tree and the dashboards: either permission opens the stream. The gate and the periodic
+# re-check read the same tuple, so a permission removed while the stream is open ends it at the next check.
+STREAM_PERMISSIONS = ("assets.view", "dashboards.view")
 
 
 class Broadcaster:
@@ -115,24 +119,25 @@ async def event_stream(
         broadcaster.unsubscribe(queue)
 
 
-@router.get("/stream")
+@router.get("/stream", dependencies=[Depends(require_any_permission(*STREAM_PERMISSIONS, own_session=True))])
 async def stream(request: Request) -> StreamingResponse:
-    # Authenticate with a short-lived session: a dependency-held session would
-    # keep a database connection open for as long as the browser stays connected.
+    # The gate above read the account in a short-lived session of its own, and so does everything here: a
+    # dependency-held session would keep a database connection open for as long as the browser stays connected.
     async def still_authenticated() -> bool:
         try:
             async with get_sessionmaker()() as db:
-                await authenticate(request, db)
+                user = await authenticate(request, db)
+                return user.can_any(*STREAM_PERMISSIONS)
         except HTTPException:
             return False
-        return True
 
     async with get_sessionmaker()() as db:
-        await authenticate(request, db)
         # A session's expiry is fixed when it is created, so reading it once is enough.
         expires_at = await db.scalar(
             select(UserSession.expires_at).where(UserSession.id == hash_token(request.cookies[COOKIE]))
         )
+    if expires_at is None:
+        raise HTTPException(401, "not authenticated")  # the session ended between the gate and this read
     return StreamingResponse(
         event_stream(
             request.app.state.broadcaster, is_still_authenticated=still_authenticated, session_expires_at=expires_at
