@@ -609,7 +609,36 @@ describe("UsersTab shows what a role is for, and speaks in sentences (W9b)", () 
     await userEvent.selectOptions(createRole(), "operator"); // a role without a description: no line and no pointer
     expect(screen.queryByText("Runs the floor at night.")).not.toBeInTheDocument();
     expect(createRole()).not.toHaveAttribute("aria-describedby");
-    expect(document.querySelector(".role-note")).toBeNull();
+    // The slot stays so the card keeps its height (W7l): the same paragraph, empty, hidden from assistive technology, nothing points at it.
+    const slot = document.querySelector(".role-note");
+    expect(slot).not.toBeNull();
+    expect(slot).toHaveTextContent("");
+    expect(slot).toHaveAttribute("aria-hidden", "true");
+    expect(slot).not.toHaveAttribute("id");
+    expect(slot?.closest("label")).toBeNull();
+    expect(createRole()).toHaveAccessibleDescription("");
+    expect(createRole()).toHaveAccessibleName("Role");
+  });
+
+  it("the Create user card draws the role-note slot for a role without a description too (one slot, the same element, so the card does not change height)", async () => {
+    show();
+    renderWithProviders(<UsersTab onDeleted={() => {}} />, { route: "/users", path: "/users" });
+    await screen.findByText("ops", { selector: "td" });
+    await waitFor(() => expect(createRole()).toHaveAttribute("aria-describedby"));
+    const slots = document.querySelectorAll(".role-note");
+    expect(slots).toHaveLength(1);
+    const slot = slots[0];
+    expect(slot).toHaveTextContent("Can look, not change.");
+    expect(slot).not.toHaveAttribute("aria-hidden");
+    expect(slot).toHaveAttribute("id");
+    await userEvent.selectOptions(createRole(), "operator"); // no description
+    expect(document.querySelectorAll(".role-note")).toHaveLength(1);
+    expect(document.querySelector(".role-note")).toBe(slot); // the same paragraph, emptied, never unmounted and mounted again
+    await userEvent.selectOptions(createRole(), "Night shift"); // and filled again
+    expect(document.querySelector(".role-note")).toBe(slot);
+    expect(slot).toHaveTextContent("Runs the floor at night.");
+    expect(slot).not.toHaveAttribute("aria-hidden");
+    expect(createRole()).toHaveAttribute("aria-describedby", slot.id);
   });
 
   it("a row's role cell carries the role's description as its title (none for a role without one)", async () => {

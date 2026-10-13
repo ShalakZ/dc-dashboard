@@ -29,7 +29,7 @@
   .form-card .create-user { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); align-items: end; }
   .form-card .create-user > button { justify-self: start; min-height: 38px; }
   .form-card .create-user > p { grid-column: 1 / -1; }
-  .form-card .create-user > p.role-note { margin-top: -6px; font-size: var(--fs-sm); } /* what the chosen role is for: a line under the row, close to it */
+  .form-card .create-user > p.role-note { min-height: 1lh; margin-top: -6px; font-size: var(--fs-sm); } /* what the chosen role is for: a line under the row, close to it. The paragraph is always there; min-height keeps the line when it is empty, so the card has one height for every role (a description that wraps may still grow it) */
 
   /* Tabs (Users & Roles, W9b): a flat strip over one panel. The selected tab is marked by the theme's accent underline and a heavier weight
      (never a fill or a pill); the strip's own line runs under all of them and the selected underline sits on it. No motion to switch off. */

@@ -68,4 +68,7 @@
   .tariffs-page .inline-form .currency-field input { width: 110px; }
   .tariffs-page .inline-form button:not(.icon-btn) { min-height: 38px; } /* not the ? tips: they stay 24px and keep their place on the label line */
   .tariffs-page .inline-form p.error { flex: 0 0 100%; margin: 0; font-size: var(--fs-sm); font-weight: 600; }
+  /* The add forms' message line: always one line tall, so a validation problem or a server refusal changes nothing around it. It restates the
+     errors' size and the document's line-height (1.4), so its 1lh is exactly the line of the p.error inside. A long asset-list failure may wrap and grow it. */
+  .tariffs-page .add-status { flex: 0 0 100%; min-height: 1lh; font-size: var(--fs-sm); font-weight: 600; line-height: 1.4; }
 }
