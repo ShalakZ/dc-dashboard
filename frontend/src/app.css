@@ -421,6 +421,7 @@
   .banner svg.i { margin-top: 1px; }
   .banner strong { font-weight: 600; }
   .banner .b-act { margin: -5px 0 -5px auto; min-height: 28px; white-space: nowrap; } /* a button as tall as one text line, so the text and the button centre on each other */
+  .banner .b-link { flex: none; color: inherit; font-weight: 600; text-decoration: underline; white-space: nowrap; } /* a link in a banner: the banner's own ink, like the one on the Billing page */
   .banner-warn { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
   .banner-warn svg.i { color: var(--warn-icon); }
   .banner > span { flex: 1 1 auto; min-width: 0; }

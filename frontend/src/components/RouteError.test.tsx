@@ -39,6 +39,14 @@ describe("RouteError", () => {
     expect(screen.queryByText(/internal detail/)).not.toBeInTheDocument();
   });
 
+  it("offers a plain link to the Assets Tree, so a missing chunk never leaves a user without a way into the app", async () => {
+    renderRoute();
+    await screen.findByRole("alert");
+    const link = screen.getByRole("link", { name: "Assets Tree" });
+    expect(link).toHaveAttribute("href", "/assets"); // a real <a>, not a router link: the router is the thing that failed, a full page load starts clean
+    expect(link.closest("[role=alert]")).not.toBeNull(); // in the notice, beside its Reload button
+  });
+
   it("reloads the page from its Reload button", async () => {
     const reload = vi.fn();
     vi.stubGlobal("location", { ...window.location, reload });
