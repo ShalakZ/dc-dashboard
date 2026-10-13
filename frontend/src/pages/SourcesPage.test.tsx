@@ -7,7 +7,9 @@ import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
+import type { PermissionId } from "../lib/permissions";
 import { SourcesPage } from "./SourcesPage";
 
 const source = { id: 2, name: "sim", connector_type: "simulator", config: { url: "http://simulator:9000" }, enabled: true, status: "online", last_seen: "2026-10-07T10:00:00+00:00", last_error: null, has_secret: true, last_reading_age_seconds: 5 };
@@ -134,7 +136,7 @@ describe("SourcesPage", () => {
   describe("adding and editing", () => {
     const withConnectors = { "GET /api/connectors": { body: connectors } };
 
-    it("gives admins Edit, Points and a trash button in the menu of every row, and operators and viewers only Test and Check connection", async () => {
+    it("gives admins Edit, Points and a trash button in the menu of every row, and operators only Test and Check connection", async () => {
       mockFetch({ ...routes("admin"), "GET /api/sources": { body: [source, { ...source, id: 3, name: "second" }] } });
       const admin = renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
       const triggers = await screen.findAllByRole("button", { name: /^Actions for / });
@@ -143,7 +145,8 @@ describe("SourcesPage", () => {
       await userEvent.click(triggers[1]);
       expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Test", "Check connection", "Edit", "Points"]);
       admin.unmount();
-      for (const role of ["operator", "viewer"]) {
+      // (a viewer is not in this loop any more: it holds no permission of this page, so it cannot open it at all, see builtinAccess.test.tsx)
+      for (const role of ["operator"]) {
         mockFetch(routes(role));
         const view = renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
         await userEvent.click(await trigger());
@@ -827,5 +830,67 @@ describe("SourcesPage while the list loads (W7f)", () => {
     expect(screen.getByText("sim")).toBeInTheDocument();
     expect(document.querySelector(".sk-region")).toBeNull();
     held.release();
+  });
+});
+
+describe("SourcesPage controls follow the permissions of the role (a custom role)", () => {
+  /** A role called "custom" that holds sources.view and `permissions`; the page is up and the account is known when this returns. */
+  const show = async (permissions: PermissionId[], over: Record<string, unknown> = {}) => {
+    const calls = mockFetch({ ...routes("custom"), "GET /api/me": { body: userFor("custom", { permissions: ["sources.view", ...permissions] }) }, ...over });
+    renderWithProviders(<><SourcesPage /><SignedIn /></>, { route: "/sources", path: "/sources" });
+    await screen.findByText("sim");
+    await accountKnown();
+    return calls;
+  };
+  const menuTexts = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: /^Actions for / }));
+    return screen.getAllByRole("menuitem").map((el) => el.textContent);
+  };
+
+  it("sources.view alone: the list and its status, and no button, no menu, no trash", async () => {
+    await show([]);
+    expect(screen.getByText("timeout")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Test all" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add source" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
+  });
+
+  it("sources.test: Test all in the header and Test in the menu, and nothing else", async () => {
+    const calls = await show(["sources.test"]);
+    expect(screen.queryByRole("button", { name: "Add source" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
+    expect(await menuTexts()).toEqual(["Test"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Test" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/api/sources/2/test")).toBe(true));
+    await userEvent.click(screen.getByRole("button", { name: "Test all" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/api/sources/test-all")).toBe(true));
+  });
+
+  it("diagnostics.run: Check connection in the menu, no Test, no Test all", async () => {
+    await show(["diagnostics.run"]);
+    expect(screen.queryByRole("button", { name: "Test all" })).not.toBeInTheDocument();
+    expect(await menuTexts()).toEqual(["Check connection"]);
+  });
+
+  it("sources.edit: Add source, Edit, Points and the trash, but not Test, Check connection or Test all", async () => {
+    await show(["sources.edit"]);
+    expect(screen.getByRole("button", { name: "Add source" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete sim" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Test all" })).not.toBeInTheDocument();
+    expect(await menuTexts()).toEqual(["Edit", "Points"]);
+  });
+
+  it("sources.test and diagnostics.run and sources.edit: the menu an administrator has, in the same order", async () => {
+    await show(["sources.test", "diagnostics.run", "sources.edit"]);
+    expect(await menuTexts()).toEqual(["Test", "Check connection", "Edit", "Points"]);
+    expect(screen.getByRole("button", { name: "Test all" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add source" })).toBeInTheDocument();
+  });
+
+  it("Add source opens the form for sources.edit (a role with no other source permission)", async () => {
+    await show(["sources.edit"], { "GET /api/connectors": { body: connectors } });
+    await userEvent.click(screen.getByRole("button", { name: "Add source" }));
+    expect(await screen.findByRole("dialog", { name: "Add source" })).toBeInTheDocument();
   });
 });

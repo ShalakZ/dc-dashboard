@@ -3,10 +3,12 @@ import { api } from "../api/client";
 import { keys, useCollectorStatus, useInvalidate, useSecretKeyStatus, useSite, useSources } from "../api/queries";
 import type { Source, SourceImpact } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
+import { meets } from "../auth/need";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { ConnectionCheck } from "../components/ConnectionCheck";
 import { JobStatus } from "../components/JobStatus";
 import { Modal } from "../components/Modal";
+import { PAGE_NEED } from "../components/navItems";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions, type RowAction } from "../components/RowActions";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
@@ -35,7 +37,7 @@ const SourcesIcon = () => (
 );
 
 export function SourcesPage() {
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const { data, error, isLoading, errorUpdateCount, dataUpdatedAt: sourcesAnsweredAt } = useSources();
   const sources = data ?? [];
   const collector = useCollectorStatus();
@@ -89,14 +91,16 @@ export function SourcesPage() {
     }
   });
 
-  const isAdmin = hasRole("admin");
+  // Each control asks for the permission of the call it makes. A person with none of them gets an empty menu, which renders nothing.
+  const canTest = can("sources.test");
+  const canCheck = can("diagnostics.run");
+  const canEdit = can("sources.edit"); // add, edit, delete and browse
+  const canOpenPoints = meets(PAGE_NEED.sourcePoints, can); // the points page has its own permission
   const actionsOf = (s: Source): RowAction[] => [
-    { label: "Test", onSelect: () => testOne(s.id), disabled: locked },
-    { label: "Check connection", onSelect: () => openCheck(s), disabled: locked },
-    ...(isAdmin ? [
-      { label: "Edit", onSelect: () => openEdit(s), disabled: locked },
-      { label: "Points", to: `/sources/${s.id}/points` },
-    ] : []),
+    ...(canTest ? [{ label: "Test", onSelect: () => testOne(s.id), disabled: locked }] : []),
+    ...(canCheck ? [{ label: "Check connection", onSelect: () => openCheck(s), disabled: locked }] : []),
+    ...(canEdit ? [{ label: "Edit", onSelect: () => openEdit(s), disabled: locked }] : []),
+    ...(canOpenPoints ? [{ label: "Points", to: `/sources/${s.id}/points` }] : []),
   ];
 
   if (isLoading) {
@@ -116,8 +120,8 @@ export function SourcesPage() {
       <PageHeader
         title="Sources"
         actions={<>
-          <button onClick={testAll} disabled={sources.length === 0 || busy}>Test all</button>
-          {hasRole("admin") && <button className="primary" onClick={openAdd} disabled={locked}>Add source</button>}
+          {canTest && <button onClick={testAll} disabled={sources.length === 0 || busy}>Test all</button>}
+          {canEdit && <button className="primary" onClick={openAdd} disabled={locked}>Add source</button>}
         </>}
       />
       {error && <p className="error" role="alert">{error.message}</p>}
@@ -190,7 +194,7 @@ export function SourcesPage() {
                     <td><JobStatus jobId={jobs[s.id] ?? null} /></td>
                     <td className="row-actions">
                       <RowActions label={`Actions for ${s.name}`} items={actionsOf(s)} />
-                      {isAdmin && <TrashButton label={`Delete ${s.name}`} onClick={() => remove(s.id, s.name)} disabled={locked} />}
+                      {canEdit && <TrashButton label={`Delete ${s.name}`} onClick={() => remove(s.id, s.name)} disabled={locked} />}
                     </td>
                   </tr>
                 );
