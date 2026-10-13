@@ -6,14 +6,19 @@ type KindIcon = Extract<IconName, `kind${string}`>;
 // and the voltage-class words (a weak hint: "LV Meter" is a meter, "MV Room" a room) come last. Words match WHOLE tokens only:
 // "Panelling" must not look like a panel, so the aliases ("panelboard") are listed instead of guessing at substrings.
 const TABLE: ReadonlyArray<readonly [KindIcon, ReadonlySet<string>]> = [
-  ["kindUps", new Set(["ups", "battery", "batteries", "bess", "rectifier", "inverter"])],
+  ["kindUps", new Set(["ups", "rectifier", "inverter"])],
+  ["kindBattery", new Set(["battery", "batteries", "bess"])],
   ["kindPdu", new Set(["pdu", "rpp", "rpdu", "strip"])],
   ["kindGenerator", new Set(["generator", "genset", "gen"])],
   ["kindTransformer", new Set(["transformer", "trafo", "xfmr", "substation"])],
-  ["kindChiller", new Set(["chiller", "crac", "crah", "cooling", "cooler", "ahu", "fan"])],
+  ["kindChiller", new Set(["chiller"])],
+  ["kindCrac", new Set(["crac", "crah", "cooling", "cooler", "ahu"])],
+  ["kindFan", new Set(["fan"])],
+  ["kindPump", new Set(["pump"])],
   ["kindCircuit", new Set(["circuit", "breaker", "feeder", "ats", "sts", "busway", "busbar", "mcb", "mccb", "transferswitch"])],
   ["kindPanel", new Set(["panel", "panelboard", "switchboard", "switchgear", "mdb"])],
-  ["kindMeter", new Set(["meter", "submeter", "metering", "sensor"])],
+  ["kindMeter", new Set(["meter", "submeter", "metering"])],
+  ["kindSensor", new Set(["sensor"])],
   ["kindRack", new Set(["rack", "cabinet", "enclosure"])],
   ["kindRow", new Set(["row", "aisle", "pod"])],
   ["kindRoom", new Set(["room", "hall", "suite", "floor", "cage", "zone"])],
