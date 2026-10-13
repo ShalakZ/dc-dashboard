@@ -172,11 +172,11 @@ test("W3d: block, unblock and delete an account, and a source never shows the cr
     await victimPage.goto("/login");
     for (let i = 1; i <= 3; i++) {
       const wrong = await refusedAttempt(victimPage, VICTIM, `not-the-password-${i}`);
-      expect(wrong, `wrong password ${i}`).toEqual({ status: 401, message: "invalid username or password" });
+      expect(wrong, `wrong password ${i}`).toEqual({ status: 401, message: "Invalid username or password" });
     }
     const blocked = await refusedAttempt(victimPage, VICTIM, VICTIM.password);
     expect(blocked.status).toBe(429);
-    await expect(victimPage.getByRole("alert")).toHaveText("too many failed attempts, try again in about 1 minute");
+    await expect(victimPage.getByRole("alert")).toHaveText("Too many failed attempts, try again in about 1 minute");
     await expect(victimPage.getByRole("heading", { name: "Sign in" })).toBeVisible();
   });
 
@@ -208,7 +208,7 @@ test("W3d: block, unblock and delete an account, and a source never shows the cr
     await expect(page.getByRole("cell", { name: VICTIM.username, exact: true })).toHaveCount(0);
 
     const refused = await refusedAttempt(victimPage, VICTIM, VICTIM.password);
-    expect(refused).toEqual({ status: 401, message: "invalid username or password" });
+    expect(refused).toEqual({ status: 401, message: "Invalid username or password" });
   });
 
   await test.step("the Audit page names the deletion, and the earlier entries still read w3d-victim", async () => {

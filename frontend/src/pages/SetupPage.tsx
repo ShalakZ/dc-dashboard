@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
 import { ServerUnreachable } from "../components/ServerUnreachable";
+import { upperFirst } from "../lib/upperFirst";
 import { AuthBrand } from "./LoginPage";
 
 export function SetupPage() {
@@ -39,7 +40,7 @@ export function SetupPage() {
           <label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus /></label>
           <label>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
           <label>Confirm password<input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} /></label>
-          {error && <p className="error" role="alert">{error}</p>}
+          {error && <p className="error" role="alert">{upperFirst(error)}</p>}
           <button type="submit" className="primary" disabled={!username || !password}>Create admin</button>
         </form>
       </div>

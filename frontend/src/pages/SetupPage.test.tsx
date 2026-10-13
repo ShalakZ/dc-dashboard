@@ -79,4 +79,37 @@ describe("SetupPage", () => {
     mount();
     expect(await screen.findByRole("heading", { name: "First-run setup" })).toBeInTheDocument();
   });
+
+  describe("its error line", () => {
+    const fill = async (password: string, confirm: string) => {
+      server.setup = "needed";
+      await screen.findByRole("heading", { name: "First-run setup" });
+      await userEvent.type(screen.getByLabelText("Username"), "boss");
+      await userEvent.type(screen.getByLabelText("Password", { exact: true }), password);
+      await userEvent.type(screen.getByLabelText("Confirm password"), confirm);
+      await userEvent.click(screen.getByRole("button", { name: "Create admin" }));
+    };
+
+    it("starts with a capital letter: the page's own checks", async () => {
+      server.setup = "needed";
+      mockFetch(routes());
+      mount();
+      await fill("long-enough-1", "different-1");
+      expect(await screen.findByRole("alert")).toHaveTextContent(/^Passwords do not match$/);
+      await userEvent.clear(screen.getByLabelText("Confirm password"));
+      await userEvent.clear(screen.getByLabelText("Password", { exact: true }));
+      await userEvent.type(screen.getByLabelText("Password", { exact: true }), "short");
+      await userEvent.type(screen.getByLabelText("Confirm password"), "short");
+      await userEvent.click(screen.getByRole("button", { name: "Create admin" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(/^Password must be at least 8 characters$/);
+    });
+
+    it("starts with a capital letter: the API's answer, which is written in lower case", async () => {
+      server.setup = "needed";
+      mockFetch({ ...routes(), "POST /api/setup": { status: 409, body: { detail: "setup already completed" } } });
+      mount();
+      await fill("long-enough-1", "long-enough-1");
+      expect(await screen.findByRole("alert")).toHaveTextContent(/^Setup already completed$/);
+    });
+  });
 });

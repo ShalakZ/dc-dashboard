@@ -56,7 +56,7 @@ describe("LoginPage", () => {
     await userEvent.type(await screen.findByLabelText("Username"), "admin");
     await userEvent.type(screen.getByLabelText("Password"), "wrong");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByText("invalid username or password")).toBeInTheDocument();
+    expect(await screen.findByText("Invalid username or password")).toBeInTheDocument(); // the API writes it in lower case
   });
 
   it("shows the lockout message on 429", async () => {
@@ -65,6 +65,6 @@ describe("LoginPage", () => {
     await userEvent.type(await screen.findByLabelText("Username"), "admin");
     await userEvent.type(screen.getByLabelText("Password"), "wrong");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByText("too many failed attempts, try again in about 5 minutes")).toBeInTheDocument();
+    expect(await screen.findByText("Too many failed attempts, try again in about 5 minutes")).toBeInTheDocument();
   });
 });
