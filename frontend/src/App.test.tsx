@@ -32,10 +32,20 @@ const visit = (role: string, route: string) => {
 };
 
 describe("App routes", () => {
-  it.each(["viewer", "operator"])("keeps Tariffs away from a %s", async (role) => {
-    const calls = visit(role, "/tariffs");
+  it("keeps Tariffs away from a viewer", async () => {
+    const calls = visit("viewer", "/tariffs");
     expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/tariffs")).toBe(false);
+  });
+
+  it("opens Tariffs read-only for an operator (tariffs.view, assets.view, not tariffs.edit): the rates and the currency are read, nothing can be added", async () => {
+    const calls = visit("operator", "/tariffs");
+    expect(await screen.findByRole("heading", { level: 1, name: "Tariffs" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "No access" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Your role can see this page but not change it.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add rate" })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/tariffs")).toBe(true);
+    expect(calls.some((c) => c.path === "/api/settings/billing")).toBe(true);
   });
 
   it.each(["viewer", "operator"])("keeps Diagnostics away from a %s, and asks the report route nothing", async (role) => {

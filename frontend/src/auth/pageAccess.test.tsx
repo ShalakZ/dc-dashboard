@@ -231,8 +231,9 @@ describe("where a role lands", () => {
   });
 
   it("a list of permissions is met only by holding all of it", () => {
-    expect(meets(PAGE_NEED.tariffs, (id) => id === "tariffs.edit")).toBe(false);
-    expect(meets(PAGE_NEED.tariffs, (id) => id === "tariffs.edit" || id === "assets.view")).toBe(true);
+    expect(meets(PAGE_NEED.tariffs, (id) => id === "tariffs.view")).toBe(false);
+    expect(meets(PAGE_NEED.tariffs, (id) => id === "tariffs.view" || id === "assets.view")).toBe(true);
+    expect(meets(PAGE_NEED.tariffs, (id) => id === "tariffs.edit" || id === "assets.view")).toBe(false); // changing rates without seeing them opens nothing
     expect(meets(undefined, () => false)).toBe(true);
   });
 });
@@ -251,7 +252,7 @@ describe("the page map", () => {
       discovery: "discovery.view",
       users: "users.view",
       settings: "settings.view",
-      tariffs: ["tariffs.edit", "assets.view"],
+      tariffs: ["tariffs.view", "assets.view"],
       storage: "storage.view",
       audit: "audit.view",
       diagnostics: ["diagnostics.view", "sources.view"],

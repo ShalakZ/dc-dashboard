@@ -39,7 +39,11 @@ function certificateText(tls: TlsStatus, timezone: string): string {
 const TIMEZONE_HELP = "The site's time zone. It decides where a day and a month start (today, yesterday, this month and last month in "
   + "energy totals, Billing and dashboard ranges) and the times shown in the app. Readings are stored in UTC.";
 const SIGN_IN_HELP = "After this many wrong passwords for one account from one computer, that account is blocked from that computer for "
-  + "this long. Restarting the api service clears every block; Unblock on the Users page lets one account in sooner.";
+  + "this long. Restarting the api service clears every block; Unblock on the Users & Roles page lets one account in sooner.";
+
+// What the Sign-in protection card says to a role that has `settings.view` but not `settings.security` (W9b): the page-wide line would be
+// wrong here, because the same role may well be able to change General.
+const SIGN_IN_READ_ONLY_TEXT = "Your role can see this but not change it: changing sign-in protection is a separate permission.";
 
 // Inline SVG, 24-unit viewBox, decoration only (the sentence next to it says everything).
 const WarnIcon = () => (
@@ -48,7 +52,7 @@ const WarnIcon = () => (
 
 /** Whether wrong passwords block anyone, how many and for how long. Its own query: a failure here leaves the timezone form working. */
 function SignInProtection() {
-  const canEdit = useAuth().can("settings.edit");
+  const canEdit = useAuth().can("settings.security");
   const policy = useSignInPolicy();
   const put = usePutSignInPolicy();
   const [enabled, setEnabled] = useState(true);
@@ -145,7 +149,7 @@ function SignInProtection() {
                 <button type="submit" className="primary" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
                 {put.isSuccess && <span className="muted"> saved</span>}
               </div>
-            ) : <ReadOnlyNote />}
+            ) : <p className="muted">{SIGN_IN_READ_ONLY_TEXT}</p>}
             {put.isError && !asking && <p className="error" role="alert">{detailText(put.error)}</p>}
           </div>
         </form>
@@ -180,7 +184,9 @@ export function versionText(build_id: string, build_time: string, timezone: stri
 const ZONES: string[] = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
 
 export function SettingsPage() {
-  const canEdit = useAuth().can("settings.edit");
+  const { can } = useAuth();
+  const canEdit = can("settings.edit");
+  const canEditSignIn = can("settings.security");
   const settings = useGeneralSettings();
   const put = usePutGeneralSettings();
   const tls = useTlsStatus();
@@ -211,7 +217,7 @@ export function SettingsPage() {
               <div className="sk-field"><Skeleton width="18ch" /><Skeleton variant="block" height={38} /></div>
               <ParagraphSkeleton text={SIGN_IN_HELP} className="muted" />
               <div className="form-foot">
-                {canEdit ? <div className="row"><Skeleton variant="block" width={64} height={34} /></div> : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
+                {canEditSignIn ? <div className="row"><Skeleton variant="block" width={64} height={34} /></div> : <ParagraphSkeleton text={SIGN_IN_READ_ONLY_TEXT} className="muted" />}
               </div>
             </div>
           </PageCardSkeleton>

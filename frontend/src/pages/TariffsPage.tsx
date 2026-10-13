@@ -3,13 +3,15 @@ import {
   useAssets, useBillingSettings, useCreateTariff, useDeleteTariff, usePutBillingSettings, useTariffs, useUpdateTariff,
 } from "../api/queries";
 import type { Asset, Tariff, TariffPatch } from "../api/types";
+import { useAuth } from "../auth/AuthProvider";
 import { assetLabels } from "../components/dashboard/AssetPicker";
 import { EmptyNote } from "../components/EmptyNote";
 import { InfoTip } from "../components/InfoTip";
 import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
+import { ReadOnlyNote } from "../components/ReadOnlyNote";
 import { RowActions } from "../components/RowActions";
-import { FormSkeleton, TableSkeleton } from "../components/Skeleton";
+import { FormSkeleton, Skeleton, SkeletonRegion, TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
 import { fmtRate } from "../lib/billing";
 
@@ -37,14 +39,23 @@ const RATE_TIP = "The price of one kilowatt-hour in the site currency, for examp
 
 const validRate = (text: string) => text.trim() !== "" && Number.isFinite(Number(text)) && Number(text) >= 0;
 
-function CurrencyForm() {
+const NO_CURRENCY_TEXT = "No currency is set, so costs show without a unit.";
+
+/** `canEdit` false (tariffs.view without tariffs.edit): the currency as text, no field, no Save, nothing that could be sent. */
+function CurrencyForm({ canEdit }: { canEdit: boolean }) {
   const settings = useBillingSettings();
   const put = usePutBillingSettings();
   const [typed, setTyped] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  if (settings.isPending) return <FormSkeleton rows={1} inline label="Loading the currency" />;
+  if (settings.isPending) {
+    // A read-only person gets a line where the value will be, not the field and the button: the card must not change height when the data lands.
+    return canEdit
+      ? <FormSkeleton rows={1} inline label="Loading the currency" />
+      : <SkeletonRegion label="Loading the currency"><Skeleton width="4ch" /></SkeletonRegion>;
+  }
   if (settings.isError) return <p className="error" role="alert">{errorText(settings.error)}</p>;
   const stored = settings.data.currency;
+  if (!canEdit) return <div className="currency-row">{stored === null ? <Note>{NO_CURRENCY_TEXT}</Note> : <p className="currency-read">{stored}</p>}</div>;
   const shown = typed ?? stored ?? "";
   const save = (e: FormEvent) => {
     e.preventDefault();
@@ -83,7 +94,7 @@ function CurrencyForm() {
         {put.isError && <p className="error" role="alert">{errorText(put.error)}</p>}
       </form>
       {stored === null && (
-        <Note>No currency is set, so costs show without a unit. Enter a three-letter code such as QAR.</Note>
+        <Note>{`${NO_CURRENCY_TEXT} Enter a three-letter code such as QAR.`}</Note>
       )}
     </div>
   );
@@ -146,7 +157,7 @@ function AddTariff({ assets, labels, assetsError = null }: {
 }
 
 /** `where` names the asset of an override (its path when the name alone is ambiguous); the API's `asset_path`, then `asset_name`, is the fallback. */
-function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) {
+function TariffRow({ tariff, where, canEdit }: { tariff: Tariff; where: string | null; canEdit: boolean }) {
   const update = useUpdateTariff();
   const remove = useDeleteTariff();
   const [editing, setEditing] = useState(false);
@@ -204,22 +215,24 @@ function TariffRow({ tariff, where }: { tariff: Tariff; where: string | null }) 
           <input type="number" min="0" step="0.01" aria-label="Rate per kWh" value={rate} onChange={(e) => setRate(e.target.value)} />
         ) : fmtRate(tariff.rate_per_kwh)}
       </td>
-      <td className="actions">
-        <div className={editing ? "row-actions editing" : "row-actions"}>
-          {editing ? (
-            <>
-              <button type="button" className="quiet" onClick={save} disabled={busy}>Save</button>
-              <button type="button" className="quiet" onClick={() => setEditing(false)}>Cancel</button>
-            </>
-          ) : (
-            <>
-              <RowActions label={`Actions for ${what}`} items={[{ label: "Edit", onSelect: startEdit, disabled: busy }]} />
-              <TrashButton label={`Delete ${what}`} onClick={del} disabled={busy} />
-            </>
-          )}
-        </div>
-        {failure && <span className="error" role="alert"> {failure}</span>}
-      </td>
+      {canEdit && (
+        <td className="actions">
+          <div className={editing ? "row-actions editing" : "row-actions"}>
+            {editing ? (
+              <>
+                <button type="button" className="quiet" onClick={save} disabled={busy}>Save</button>
+                <button type="button" className="quiet" onClick={() => setEditing(false)}>Cancel</button>
+              </>
+            ) : (
+              <>
+                <RowActions label={`Actions for ${what}`} items={[{ label: "Edit", onSelect: startEdit, disabled: busy }]} />
+                <TrashButton label={`Delete ${what}`} onClick={del} disabled={busy} />
+              </>
+            )}
+          </div>
+          {failure && <span className="error" role="alert"> {failure}</span>}
+        </td>
+      )}
     </tr>
   );
 }
@@ -232,8 +245,10 @@ function OverridesCard({ children }: { children?: ReactNode }) {
   return <PageCard icon="override" title="Asset overrides" purpose={OVERRIDES_PURPOSE}>{children}</PageCard>;
 }
 
-/** `tariffs === undefined` is the loading frame: the skeleton where the left table will be, and both add forms already drawn (they are pinned to the card bottoms, so they must not drop when the rates land; the same elements stay mounted, so what is typed survives). */
-function TariffTables({ tariffs, assets, assetsError }: { tariffs: Tariff[] | undefined; assets: Asset[]; assetsError: string | null }) {
+/** `tariffs === undefined` is the loading frame: the skeleton where the left table will be, and both add forms already drawn (they are pinned to the card bottoms, so they must not drop when the rates land; the same elements stay mounted, so what is typed survives). Without `canEdit` there are no add forms (in either frame) and no Actions column. */
+function TariffTables({ tariffs, assets, assetsError, canEdit }: {
+  tariffs: Tariff[] | undefined; assets: Asset[]; assetsError: string | null; canEdit: boolean;
+}) {
   const labels = useMemo(() => assetLabels(assets), [assets]);
   const defaults = tariffs?.filter((t) => t.asset_id === null);
   const perAsset = tariffs?.filter((t) => t.asset_id !== null);
@@ -243,16 +258,16 @@ function TariffTables({ tariffs, assets, assetsError }: { tariffs: Tariff[] | un
         {defaults === undefined ? (
           <TableSkeleton columns={3} rows={2} label="Loading tariffs" />
         ) : defaults.length === 0 ? (
-          <EmptyNote icon="rate">No site default rate yet. Until one is set, assets with no override show a dash for cost. Add a rate below.</EmptyNote>
+          <EmptyNote icon="rate">No site default rate yet. Until one is set, assets with no override show a dash for cost.{canEdit && " Add a rate below."}</EmptyNote>
         ) : (
           <div className="table-wrap">
             <table aria-label="Site default rates" className="tariff-table">
-              <thead><tr><th>Effective from</th><th className="num">Rate per kWh</th><th className="actions">Actions</th></tr></thead>
-              <tbody>{defaults.map((t) => <TariffRow key={t.id} tariff={t} where={null} />)}</tbody>
+              <thead><tr><th>Effective from</th><th className="num">Rate per kWh</th>{canEdit && <th className="actions">Actions</th>}</tr></thead>
+              <tbody>{defaults.map((t) => <TariffRow key={t.id} tariff={t} where={null} canEdit={canEdit} />)}</tbody>
             </table>
           </div>
         )}
-        <AddTariff assets={null} labels={labels} />
+        {canEdit && <AddTariff assets={null} labels={labels} />}
       </SiteDefaultCard>
       <OverridesCard>
         {perAsset === undefined ? null : perAsset.length === 0 ? (
@@ -260,14 +275,14 @@ function TariffTables({ tariffs, assets, assetsError }: { tariffs: Tariff[] | un
         ) : (
           <div className="table-wrap">
             <table aria-label="Asset overrides" className="tariff-table">
-              <thead><tr><th>Asset</th><th>Effective from</th><th className="num">Rate per kWh</th><th className="actions">Actions</th></tr></thead>
+              <thead><tr><th>Asset</th><th>Effective from</th><th className="num">Rate per kWh</th>{canEdit && <th className="actions">Actions</th>}</tr></thead>
               <tbody>{perAsset.map((t) => (
-                <TariffRow key={t.id} tariff={t} where={(t.asset_id !== null ? labels.get(t.asset_id) : undefined) ?? t.asset_path ?? t.asset_name} />
+                <TariffRow key={t.id} tariff={t} where={(t.asset_id !== null ? labels.get(t.asset_id) : undefined) ?? t.asset_path ?? t.asset_name} canEdit={canEdit} />
               ))}</tbody>
             </table>
           </div>
         )}
-        <AddTariff assets={assets} labels={labels} assetsError={assetsError} />
+        {canEdit && <AddTariff assets={assets} labels={labels} assetsError={assetsError} />}
       </OverridesCard>
     </>
   );
@@ -275,8 +290,12 @@ function TariffTables({ tariffs, assets, assetsError }: { tariffs: Tariff[] | un
 
 const NO_ASSETS: Asset[] = [];
 
-/** Needs tariffs.edit and assets.view (the route is wrapped in RequirePermission): the site currency, the site default rates and per-asset overrides. */
+/**
+ * Needs tariffs.view and assets.view (the route is wrapped in RequirePermission): the site currency, the site default rates and per-asset
+ * overrides. Without tariffs.edit it is all read-only (W9b): the built-in Operator opens it this way.
+ */
 export function TariffsPage() {
+  const canEdit = useAuth().can("tariffs.edit");
   const tariffs = useTariffs();
   const assets = useAssets();
   return (
@@ -286,12 +305,13 @@ export function TariffsPage() {
         sub="A rate applies from its effective date (a site-local date) until the next one. An asset's override replaces the site default from its own effective date. Editing a past rate recalculates history."
       />
       <div className="page-grid">
+        {!canEdit && <div className="span-all"><ReadOnlyNote /></div>}
         <PageCard className="span-all" icon="currency" title="Currency" purpose={CURRENCY_PURPOSE}>
-          <CurrencyForm />
+          <CurrencyForm canEdit={canEdit} />
         </PageCard>
         {tariffs.isError && <p className="error span-all" role="alert">{errorText(tariffs.error)}</p>}
         {(tariffs.isPending || tariffs.data) && (
-          <TariffTables tariffs={tariffs.data} assets={assets.data ?? NO_ASSETS} assetsError={assets.isError ? errorText(assets.error) : null} />
+          <TariffTables tariffs={tariffs.data} assets={assets.data ?? NO_ASSETS} assetsError={assets.isError ? errorText(assets.error) : null} canEdit={canEdit} />
         )}
       </div>
     </section>

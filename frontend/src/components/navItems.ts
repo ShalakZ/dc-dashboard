@@ -22,7 +22,7 @@ export const PAGE_NEED = {
   discovery: "discovery.view",
   users: "users.view",
   settings: "settings.view",
-  tariffs: ["tariffs.edit", "assets.view"],
+  tariffs: ["tariffs.view", "assets.view"], // read-only without tariffs.edit (W9b); the built-in Operator opens it
   storage: "storage.view",
   audit: "audit.view",
   diagnostics: ["diagnostics.view", "sources.view"],

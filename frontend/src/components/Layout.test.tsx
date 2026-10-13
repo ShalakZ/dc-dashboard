@@ -176,14 +176,15 @@ describe("RequirePermission", () => {
 });
 
 describe("Layout phase 3 links", () => {
-  it.each(["viewer", "operator", "admin"] as const)("%s sees Dashboards and Billing, and Tariffs only as admin", async (role) => {
+  it.each(["viewer", "operator", "admin"] as const)("%s sees Dashboards and Billing, and Tariffs unless a viewer", async (role) => {
     mockFetch(routes(role));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     expect(await profileButton()).toHaveAccessibleName(`u ${ROLE_WORD[role]}`); // the user has loaded, so role-gated links are decided; the role is written out
     expect(screen.getByRole("link", { name: "Dashboards" })).toHaveAttribute("href", "/dashboards");
     expect(screen.getByRole("link", { name: "Billing" })).toHaveAttribute("href", "/billing");
-    if (role === "admin") expect(screen.getByRole("link", { name: "Tariffs" })).toHaveAttribute("href", "/tariffs");
-    else expect(screen.queryByRole("link", { name: "Tariffs" })).not.toBeInTheDocument();
+    // The Operator holds tariffs.view and assets.view, so since W9b it has the (read-only) Tariffs page too.
+    if (role === "viewer") expect(screen.queryByRole("link", { name: "Tariffs" })).not.toBeInTheDocument();
+    else expect(screen.getByRole("link", { name: "Tariffs" })).toHaveAttribute("href", "/tariffs");
   });
 });
 
@@ -407,7 +408,7 @@ describe("Layout sidebar landmarks and groups", () => {
 
   it.each([
     ["viewer", ["Monitor"], ["Operate", "Administer"]],
-    ["operator", ["Monitor", "Operate"], ["Administer"]],
+    ["operator", ["Monitor", "Operate", "Administer"], []], // Administer holds Tariffs alone (W9b)
     ["admin", ["Monitor", "Operate", "Administer"], []],
   ] as const)("%s sees the groups %j and not %j", async (role, shown, absent) => {
     mockFetch(routes(role));
@@ -415,6 +416,13 @@ describe("Layout sidebar landmarks and groups", () => {
     await profileButton(); // the user has loaded, so a missing group is really gated away
     for (const name of shown) expect(screen.getByRole("group", { name })).toBeInTheDocument();
     for (const name of absent) expect(screen.queryByRole("group", { name })).not.toBeInTheDocument();
+  });
+
+  it("the Operator's Administer group holds the Tariffs link and nothing else", async () => {
+    mockFetch(routes("operator"));
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    expect(within(screen.getByRole("group", { name: "Administer" })).getAllByRole("link").map((a) => a.textContent)).toEqual(["Tariffs"]);
   });
 
   it("a role that opens no page has no sidebar column (no navigation, no toggle), and keeps the top bar and the main area", async () => {

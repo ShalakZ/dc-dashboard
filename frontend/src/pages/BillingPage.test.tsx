@@ -8,7 +8,7 @@ import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
-import { userFor } from "../test/users";
+import { BUILTIN_PERMISSIONS, userFor } from "../test/users";
 import type { PermissionId } from "../lib/permissions";
 import { BillingPage } from "./BillingPage";
 
@@ -534,9 +534,22 @@ describe("BillingPage controls follow the permissions of the role (a custom role
     expect(screen.getByRole("status")).toHaveTextContent("Ask an administrator to set one.");
   });
 
-  it("tariffs.edit and assets.view: the link to the Tariffs page, the page the person may open", async () => {
-    await show(["tariffs.edit", "assets.view"]);
+  it("tariffs.edit, tariffs.view and assets.view: the link to the Tariffs page, the page the person may open and change", async () => {
+    await show(["tariffs.edit", "tariffs.view", "assets.view"]);
     expect(screen.getByRole("link", { name: /Set a rate on the Tariffs page/ })).toHaveAttribute("href", "/tariffs");
     expect(screen.queryByRole("button", { name: "Download CSV" })).not.toBeInTheDocument(); // billing.export is separate
+  });
+
+  // W9b: the Tariffs page opens read-only for tariffs.view, but nothing can be set there without tariffs.edit, so the note must not send the person to it.
+  it("tariffs.view and assets.view without tariffs.edit: the page opens, but the note still says to ask and has no link", async () => {
+    await show(["tariffs.view", "assets.view"]);
+    expect(screen.queryByRole("link", { name: /Tariffs/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Some consumption has no rate (shown as — or *). Ask an administrator to set one.");
+  });
+
+  it("the built-in Operator holds tariffs.view and assets.view but not tariffs.edit: Ask an administrator, no link (unchanged by W9b)", async () => {
+    await show(BUILTIN_PERMISSIONS.operator);
+    expect(screen.queryByRole("link", { name: /Tariffs/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Some consumption has no rate (shown as — or *). Ask an administrator to set one.");
   });
 });
