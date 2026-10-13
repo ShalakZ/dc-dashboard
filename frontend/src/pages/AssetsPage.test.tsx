@@ -289,6 +289,15 @@ describe("AssetsPage", () => {
     const link = (name: string) => screen.queryByRole("link", { name });
     const typeFilter = (text: string) => userEvent.type(screen.getByLabelText("Filter assets"), text);
 
+    it("has a pane that Skip the tree can land on: #asset-detail takes focus, and a click on the link puts it there", async () => {
+      await show("viewer", "/assets/3");
+      const pane = document.getElementById("asset-detail")!;
+      expect(pane).toHaveClass("assets-detail");
+      expect(pane).toHaveAttribute("tabindex", "-1");
+      await userEvent.click(within(column()).getByRole("link", { name: "Skip the tree" }));
+      expect(pane).toHaveFocus();
+    });
+
     it("is a region named Asset tree; the title is plain text, so the h1 is the only heading named Assets Tree, and there is no legend", async () => {
       await show();
       expect(within(column()).getByText("Assets Tree")).toBeInTheDocument();
@@ -401,7 +410,7 @@ describe("AssetsPage", () => {
       await show();
       await typeFilter("zzz");
       expect(screen.getByText("No assets match the filter.")).toBeInTheDocument();
-      expect(screen.queryAllByRole("link")).toHaveLength(0);
+      expect(screen.queryAllByRole("link").map((l) => l.textContent)).toEqual(["Skip the tree"]); // no row is left, only the skip link
     });
 
     it("gives each name a title with the full name; the selected one (the asset in the URL) carries aria-current", async () => {

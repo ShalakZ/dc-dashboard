@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Page, type Route } from "@playwright/test";
-import { navLink } from "./shell";
+import { mainNav, navLink } from "./shell";
 
 // W7i (polish after the W7e to W7h waves). Part D2, "Can't reach the server": what a visitor sees when the API is not there. The scratch stack's
 // Caddy answers 502 when the api container is stopped; here the answer is made up with `page.route`, which is the same thing to the page and needs
@@ -149,6 +149,25 @@ test.describe("a very long asset kind (F2)", () => {
           expect(spill, "no text runs past the sub line's own box").toBeLessThanOrEqual(0);
         }
       }
+    });
+  });
+});
+
+test.describe("keyboard users and a big tree (K1)", () => {
+  test("Skip the tree is the first stop in the tree column, and Enter on it puts the focus on the asset pane", async ({ browser }) => {
+    await withPage(browser, async (page) => {
+      await page.goto("/assets");
+      await expect(heading1(page, "Assets Tree")).toBeVisible();
+      const skip = page.getByRole("region", { name: "Asset tree" }).getByRole("link", { name: "Skip the tree", exact: true });
+      await expect(skip).toBeAttached();
+      // From the last stop of the sidebar, Tab: a shell notice is the only thing that may sit between it and the tree column.
+      await mainNav(page).locator(".side-toggle").focus();
+      for (let presses = 0; presses < 4 && !(await skip.evaluate((el) => el === document.activeElement)); presses++) await page.keyboard.press("Tab");
+      await expect(skip, "the link is the first tab stop of the tree column").toBeFocused();
+      await expect(skip, "visible while it has the focus").toBeVisible();
+      await page.keyboard.press("Enter");
+      expect(await page.evaluate(() => document.activeElement?.id), "the asset pane has the focus").toBe("asset-detail");
+      await expect(page).toHaveURL(/\/assets$/); // no hash was added
     });
   });
 });

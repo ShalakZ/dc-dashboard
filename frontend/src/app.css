@@ -320,6 +320,7 @@
      meets the sidebar; it is sticky, as tall as the window below the top bar, and the detail area beside it restores the page gutter. */
   .assets-layout { display: flex; align-items: flex-start; min-height: calc(100vh - var(--bar-h)); }
   .assets-detail { flex: 1; min-width: 0; padding: 0 var(--gutter) 48px; }
+  .assets-detail:focus { outline: none; } /* focused by "Skip the tree" (as main is by "Skip to content"): a ring round the whole pane would only be noise */
   .tree-col { --w: var(--tree-user-w, var(--tree-w)); position: sticky; top: var(--bar-h); align-self: flex-start; width: var(--w); max-width: max(220px, min(50%, calc(100% - 560px))); height: calc(100vh - var(--bar-h)); flex: none; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border-strong); background: var(--bg); } /* --tree-user-w is the width the user chose (inline, from the handle); the max-width is for a window or sidebar that changed after that (a % is of .assets-layout, the room right of the sidebar), as treeMax() and PANE_MIN in lib/treeWidth.ts */
   .shell.ready .tree-col { transition: width var(--motion); } /* from the second frame on, so a remembered state does not animate in */
   .shell.ready .tree-col.is-resizing { transition: none; user-select: none; } /* one class more than the rule above, which it must outrank: while dragging, the column follows the pointer */

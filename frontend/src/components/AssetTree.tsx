@@ -282,6 +282,12 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
       data-state={state}
       style={width.shown === null ? undefined : ({ "--tree-user-w": `${width.shown}px` } as CSSProperties)}
     >
+      {/* With thousands of assets a keyboard user would otherwise pass every row before the page's own controls. The router owns the hash, so the click moves focus itself. */}
+      {!minimized && (
+        <a className="skip-link" href="#asset-detail" onClick={(event) => { event.preventDefault(); document.getElementById("asset-detail")?.focus(); }}>
+          Skip the tree
+        </a>
+      )}
       <div className="tree-head">
         {!minimized && <p className="tree-title" title="Assets Tree">Assets Tree</p>}
         {!minimized && onAddTop && (
