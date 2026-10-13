@@ -11,7 +11,7 @@ import { mainNav, navLink, userBlock } from "./shell";
 // the only gate); (3) a custom role with one permission sees one page and lands on it; a role with no permission lands on a plain
 // "no pages yet" screen; a permission taken away is noticed by an open page; (4) a role that may change users still cannot make or
 // take over an Admin; (5) an Admin cannot demote, deactivate or delete itself (the self rules; the last-Admin count is covered by the backend tests),
-// a role in use cannot be deleted and the built-in roles cannot be changed. There is no Roles page yet (W9b), so roles are made through the API here, as an administrator would today.
+// a role in use cannot be deleted and the built-in roles cannot be changed. The Roles tab has its own spec (w9b.spec.ts); here roles are made through the API.
 //
 // What a broken gate could do to the stack: the denial probes aim at id 999999 with an empty body, so a broken gate answers 404 or 422 and
 // changes nothing; the escalation probes aim at a throwaway Admin (`w9a-admin2`), and the one probe at the real `admin` sends the password
@@ -47,12 +47,14 @@ const STAFF_USER: Account = { username: "w9a-staffer", password: "w9a-staffer-pa
 // The sidebar in the order it is drawn (components/navItems.ts): three groups.
 const MONITOR = ["Assets Tree", "Dashboards", "Billing"];
 const OPERATE = ["Sources", "Scans", "Discovery"];
-const ADMINISTER = ["Users", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"];
+const ADMINISTER = ["Users & Roles", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"];
 const EVERY_LINK = [...MONITOR, ...OPERATE, ...ADMINISTER];
 const PAGE_OF: Record<string, string> = {
   Sources: "/sources", Scans: "/scans", Discovery: "/discovery",
-  Users: "/users", Settings: "/settings", Tariffs: "/tariffs", Storage: "/storage", Audit: "/audit", Diagnostics: "/diagnostics",
+  "Users & Roles": "/users", Settings: "/settings", Tariffs: "/tariffs", Storage: "/storage", Audit: "/audit", Diagnostics: "/diagnostics",
 };
+// The one Administer page the built-in Operator opens since W9b (tariffs.view): read-only.
+const OPERATOR_ADMINISTER = ["Tariffs"];
 
 // What /api/me lists for the built-in roles (backend core/permissions.py BUILTIN), sorted.
 const VIEWER_PERMISSIONS = ["assets.view", "billing.export", "billing.view", "dashboards.view"];
@@ -82,7 +84,7 @@ const ADMIN_TIER: Probe[] = [
   post("/api/mappings"), patch(`/api/mappings/${GONE}`), del(`/api/mappings/${GONE}`),
   put("/api/dashboards/default", { dashboard_id: GONE }),
   post("/api/tariffs"), patch(`/api/tariffs/${GONE}`), del(`/api/tariffs/${GONE}`),
-  get("/api/settings/billing"), put("/api/settings/billing"),
+  put("/api/settings/billing"), // the GET moved to OPERATOR_TIER in W9b: the Tariffs page reads the currency with tariffs.view
   post("/api/sources"), patch(`/api/sources/${GONE}`), del(`/api/sources/${GONE}`), post(`/api/sources/${GONE}/browse`),
   get("/api/connectors"),
   get("/api/diagnostics/report?format=bogus"), // a gate that lets it through answers 422 and builds no report
@@ -101,7 +103,7 @@ const ADMIN_TIER: Probe[] = [
 /** Every route a Viewer is refused and an Operator may call. */
 const OPERATOR_TIER: Probe[] = [
   post("/api/dashboards"), put(`/api/dashboards/${GONE}`), del(`/api/dashboards/${GONE}`),
-  get("/api/tariffs"),
+  get("/api/tariffs"), get("/api/settings/billing"),
   get("/api/sources"), get(`/api/sources/${GONE}/points`), get("/api/collector/status"), get("/api/secret-key/status"),
   post("/api/sources/test-all"), post(`/api/sources/${GONE}/test`), post(`/api/sources/${GONE}/check`),
   get("/api/discovery/graph"), get("/api/scans"), get(`/api/scans/${GONE}`), get("/api/scopes"),
@@ -269,7 +271,7 @@ test.describe("W9a: roles and permissions", () => {
     await asAdmin(browser, async (request) => {
       await removeMine(request);
       catalogue = await json<ApiPermission[]>(request, "/api/permissions");
-      expect(catalogue, "the catalogue has the 28 permissions").toHaveLength(28);
+      expect(catalogue, "the catalogue has the 29 permissions").toHaveLength(29);
       const mostOfThem = catalogue.map((p) => p.id).filter((id) => id !== "roles.manage");
       roleIds[ROLE_ASSETS] = await createRole(request, ROLE_ASSETS, ["assets.view"]);
       roleIds[ROLE_LOOK] = await createRole(request, ROLE_LOOK, ["assets.view", "dashboards.view"]);
@@ -304,17 +306,23 @@ test.describe("W9a: roles and permissions", () => {
     });
   });
 
-  test("an operator also sees Sources, Scans and Discovery, and is turned away from the Administer pages", async ({ browser }) => {
+  test("an operator also sees Sources, Scans, Discovery and Tariffs (read-only), and is turned away from the other Administer pages", async ({ browser }) => {
     test.setTimeout(180_000);
     await asUser(browser, OPERATOR, async (page) => {
-      await test.step("the sidebar holds Monitor and Operate", async () => {
-        await expectSidebar(page, [...MONITOR, ...OPERATE], ["Monitor", "Operate"]);
+      await test.step("the sidebar holds Monitor, Operate and Tariffs alone in Administer", async () => {
+        await expectSidebar(page, [...MONITOR, ...OPERATE, ...OPERATOR_ADMINISTER], ["Monitor", "Operate", "Administer"]);
       });
-      await test.step("Sources opens; every Administer page says No access, and so does a source's points page", async () => {
+      await test.step("Sources opens; every other Administer page says No access, and so does a source's points page", async () => {
         await page.goto("/sources");
         await expect(heading1(page, "Sources")).toBeVisible();
-        for (const name of ADMINISTER) await expectDenied(page, PAGE_OF[name]);
+        for (const name of ADMINISTER.filter((each) => !OPERATOR_ADMINISTER.includes(each))) await expectDenied(page, PAGE_OF[name]);
         await expectDenied(page, "/sources/1/points");
+      });
+      await test.step("Tariffs opens, and says the role can see it but not change it", async () => {
+        await page.goto("/tariffs");
+        await expect(heading1(page, "Tariffs")).toBeVisible();
+        await expect(page.getByText("Your role can see this page but not change it.", { exact: true })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Add rate", exact: true })).toHaveCount(0);
       });
       await test.step("/api/me lists the Operator's ten permissions", async () => {
         const answer = await me(page.request);
@@ -330,9 +338,9 @@ test.describe("W9a: roles and permissions", () => {
       await test.step("the sidebar holds all twelve pages in three groups", async () => {
         await expectSidebar(page, EVERY_LINK, ["Monitor", "Operate", "Administer"]);
       });
-      await test.step("the Users page and the Assets Tree open, with their buttons", async () => {
+      await test.step("the Users & Roles page and the Assets Tree open, with their buttons", async () => {
         await page.goto("/users");
-        await expect(heading1(page, "Users")).toBeVisible();
+        await expect(heading1(page, "Users & Roles")).toBeVisible();
         await expect(page.getByRole("button", { name: "Create user", exact: true })).toBeVisible();
         await page.goto("/assets");
         await expect(heading1(page, "Assets Tree")).toBeVisible();
@@ -365,7 +373,7 @@ test.describe("W9a: roles and permissions", () => {
     test.setTimeout(180_000);
     await as(browser, OPERATOR, async (api) => {
       expect(await notRefused(api, ADMIN_TIER), "routes an Operator must be refused").toEqual([]);
-      expect(await wronglyRefused(api, [get("/api/sources"), get("/api/tariffs"), get("/api/scans"), get("/api/scopes"), ...SIGNED_IN]),
+      expect(await wronglyRefused(api, [get("/api/sources"), get("/api/tariffs"), get("/api/settings/billing"), get("/api/scans"), get("/api/scopes"), ...SIGNED_IN]),
         "routes an Operator may call").toEqual([]);
     });
   });
@@ -515,7 +523,7 @@ test.describe("W9a: roles and permissions", () => {
     try {
       await as(browser, STAFF_USER, async (api) => {
         const own = await me(api);
-        expect(own.permissions, "27 permissions: all but roles.manage").toHaveLength(27);
+        expect(own.permissions, "28 permissions: all but roles.manage").toHaveLength(28);
         expect(own.permissions).toContain("users.edit");
         expect(own.permissions).not.toContain("roles.manage");
         const ownId = (await json<ApiUser[]>(api, "/api/users")).find((u) => u.username === STAFF_USER.username)!.id;
@@ -615,7 +623,7 @@ test.describe("W9a: roles and permissions", () => {
         expect(roles.slice(0, 3).map((r) => [r.name, r.builtin])).toEqual([["viewer", true], ["operator", true], ["admin", true]]);
         expect([...roles[0].permissions!].sort()).toEqual(VIEWER_PERMISSIONS);
         expect([...roles[1].permissions!].sort()).toEqual(OPERATOR_PERMISSIONS);
-        expect(roles[2].permissions).toHaveLength(28);
+        expect(roles[2].permissions).toHaveLength(29);
         for (const role of roles.slice(0, 3)) {
           const deleted = await api.delete(`/api/roles/${role.id}`);
           expect(deleted.status(), `deleting ${role.name}: ${await deleted.text()}`).toBe(409);
@@ -627,7 +635,7 @@ test.describe("W9a: roles and permissions", () => {
         const copy = await api.post(`/api/roles/${roles[2].id}/duplicate`, { data: { name: "w9a-copy-of-admin" } });
         expect(copy.status(), await copy.text()).toBe(201);
         const copied = (await copy.json()) as ApiRole;
-        expect(copied.permissions, "a copy of Admin holds everything but roles.manage").toHaveLength(27);
+        expect(copied.permissions, "a copy of Admin holds everything but roles.manage").toHaveLength(28);
         expect(copied.permissions).not.toContain("roles.manage");
         expect((await api.delete(`/api/roles/${copied.id}`)).status()).toBe(204);
       });
@@ -658,7 +666,7 @@ test.describe("W9a: roles and permissions", () => {
         expect((await json<ApiRole[]>(api, "/api/roles")).find((r) => r.id === spareId)).toBeUndefined();
       });
 
-      await test.step("the permission list is the 28 permissions, in the catalogue's order, with an area, a label and a description each", async () => {
+      await test.step("the permission list is the 29 permissions, in the catalogue's order, with an area, a label and a description each", async () => {
         const served = await json<ApiPermission[]>(api, "/api/permissions");
         expect(served.map((p) => p.id)).toEqual(catalogue.map((p) => p.id));
         for (const p of served) {

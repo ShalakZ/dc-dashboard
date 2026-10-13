@@ -297,7 +297,7 @@ test.describe("W7f: loading skeletons", () => {
     await test.step("Users", async () => {
       const users = await hold(page, "/api/users");
       await page.goto("/users");
-      await expect(heading1(page, "Users")).toBeVisible();
+      await expect(heading1(page, "Users & Roles")).toBeVisible();
       await expect(skeleton(page, "Loading users")).toBeVisible();
       await expect(page.getByRole("table")).toHaveCount(0);
       await expect(page.getByRole("row")).toHaveCount(0);

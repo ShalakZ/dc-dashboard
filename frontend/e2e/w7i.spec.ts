@@ -64,7 +64,7 @@ test.describe("the server cannot be reached (D2)", () => {
       await expect(notice(page)).toHaveCount(0);
 
       await page.route(isApi, badGateway);
-      await navLink(page, "Users").click(); // new requests: the sources page's own poll could be ten seconds away
+      await navLink(page, "Users & Roles").click(); // new requests: the sources page's own poll could be ten seconds away
       await expect(notice(page)).toBeVisible({ timeout: 30_000 });
       await expect(notice(page).getByRole("button", { name: "Retry now", exact: true })).toBeVisible();
       await expect(page).toHaveURL(/\/users$/); // still the same page, not the sign-in page
@@ -72,7 +72,7 @@ test.describe("the server cannot be reached (D2)", () => {
       await page.unroute(isApi, badGateway);
       await notice(page).getByRole("button", { name: "Retry now", exact: true }).click();
       await expect(notice(page)).toHaveCount(0, { timeout: 30_000 });
-      await expect(heading1(page, "Users")).toBeVisible();
+      await expect(heading1(page, "Users & Roles")).toBeVisible();
     });
   });
 
@@ -81,7 +81,7 @@ test.describe("the server cannot be reached (D2)", () => {
       await page.goto("/sources");
       await expect(heading1(page, "Sources")).toBeVisible();
       await page.context().clearCookies();
-      await navLink(page, "Users").click();
+      await navLink(page, "Users & Roles").click();
       await expect(heading1(page, "Sign in")).toBeVisible();
       await expect(page.getByText("Can't reach the server")).toHaveCount(0);
     });

@@ -57,8 +57,8 @@ async function signIn(page: Page, who: Account) {
 }
 
 async function createUser(page: Page, who: Account) {
-  await navLink(page, "Users").click();
-  await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
+  await navLink(page, "Users & Roles").click();
+  await expect(page.getByRole("heading", { name: "Users & Roles", exact: true })).toBeVisible();
   const form = page.locator("form").filter({ has: page.getByRole("button", { name: "Create user" }) });
   await form.getByLabel("Username").fill(who.username);
   await form.getByLabel("Password").fill(who.password);
@@ -204,7 +204,7 @@ test("phase 3 journey: currency and tariff, billing, cost tile, an operator's da
   let saved: ApiDashboard;
   await test.step("operator builds a dashboard: a stat and a bar widget, saved", async () => {
     await signIn(page, OPERATOR);
-    await expect(navLink(page, "Tariffs")).toHaveCount(0);
+    await expect(navLink(page, "Tariffs")).toBeVisible(); // since W9b the built-in Operator reads the rates (the page is read-only for it)
     await navLink(page, "Dashboards").click();
     await expect(page.getByRole("heading", { name: "Dashboards", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "New dashboard" }).click();
