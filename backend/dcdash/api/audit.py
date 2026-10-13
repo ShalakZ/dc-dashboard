@@ -1,5 +1,6 @@
 import json
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Annotated, Any
@@ -14,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from dcdash.api.deps import get_db, require_permission
 from dcdash.api.settings import current_timezone
 from dcdash.core.csvout import write_csv
-from dcdash.core.models import AuditLog, User
+from dcdash.core.models import Asset, AuditLog, Dashboard, Point, Source, User
 from dcdash.core.timeutil import local_midnight
 
 router = APIRouter(prefix="/api", tags=["audit"])
@@ -101,10 +102,60 @@ def _entries() -> Select[Any]:
     )
 
 
-def _item(entry: AuditLog, username: str | None) -> dict[str, Any]:
+# The detail keys that hold the id of something with a name, and which kind of thing each one points at.
+REF_KEYS = {
+    "asset_id": "asset", "parent_id": "asset", "user_id": "user",
+    "source_id": "source", "dashboard_id": "dashboard", "point_id": "point",
+}
+# For each kind, the id and the ONE column that names it: nothing else of these rows (config, secret, hash) is read.
+REF_COLUMNS = {
+    "asset": (Asset.id, Asset.name), "user": (User.id, User.username), "source": (Source.id, Source.name),
+    "dashboard": (Dashboard.id, Dashboard.name), "point": (Point.id, Point.name),
+}
+MAX_ID = 2_147_483_647  # the database's integer; a stored detail is arbitrary JSON and must never push a bigger one into an IN
+
+
+def _ref_ids(detail: Any) -> dict[str, set[int]]:
+    """The ids an entry's detail points at, by kind: read from the detail itself and from its `before` and `after`
+    objects (one level, no deeper). Only a real positive integer in range counts (not a bool, string, float or list)."""
+    ids: dict[str, set[int]] = {}
+    if not isinstance(detail, dict):
+        return ids
+    for scope in (detail, detail.get("before"), detail.get("after")):
+        if not isinstance(scope, dict):
+            continue
+        for key, kind in REF_KEYS.items():
+            value = scope.get(key)
+            if type(value) is int and 0 < value <= MAX_ID:
+                ids.setdefault(kind, set()).add(value)
+    return ids
+
+
+async def _refs_for(db: AsyncSession, entries: Sequence[AuditLog]) -> list[dict[str, dict[str, str]]]:
+    """For each entry, the current names of the things its detail points at: `{kind: {"id": name}}`. A kind or an id
+    that no longer exists is left out (the caller reads that as a deleted target); an entry with none gets `{}`.
+    One query per kind that has ids, for all the entries together, and none for a kind without ids."""
+    wanted = [_ref_ids(entry.detail) for entry in entries]
+    names: dict[str, dict[int, str]] = {}
+    for kind, (id_column, name_column) in REF_COLUMNS.items():
+        every_id = set().union(*(ids_by_kind.get(kind, ()) for ids_by_kind in wanted))
+        if every_id:
+            names[kind] = dict((await db.execute(select(id_column, name_column).where(id_column.in_(every_id)))).all())
+    refs = []
+    for ids_by_kind in wanted:
+        found: dict[str, dict[str, str]] = {}
+        for kind, ids in ids_by_kind.items():
+            current = {str(i): names[kind][i] for i in sorted(ids) if i in names[kind]}
+            if current:
+                found[kind] = current
+        refs.append(found)
+    return refs
+
+
+def _item(entry: AuditLog, username: str | None, refs: dict[str, dict[str, str]]) -> dict[str, Any]:
     return {
         "id": entry.id, "user_id": entry.user_id, "actor_id": entry.actor_id, "username": username,
-        "action": entry.action, "detail": entry.detail, "ts": entry.ts,
+        "action": entry.action, "detail": entry.detail, "ts": entry.ts, "refs": refs,
     }
 
 
@@ -117,8 +168,10 @@ async def list_audit(
 ) -> dict[str, Any]:
     clauses = where_clauses(f, await current_timezone(db))
     total = await db.scalar(select(func.count()).select_from(AuditLog).where(*clauses))
-    rows = await db.execute(_entries().where(*clauses).order_by(AuditLog.id.desc()).limit(limit).offset(offset))
-    return {"total": total, "offset": offset, "limit": limit, "items": [_item(e, username) for e, username in rows]}
+    rows = (await db.execute(_entries().where(*clauses).order_by(AuditLog.id.desc()).limit(limit).offset(offset))).all()
+    refs = await _refs_for(db, [entry for entry, _ in rows])
+    items = [_item(entry, username, entry_refs) for (entry, username), entry_refs in zip(rows, refs, strict=True)]
+    return {"total": total, "offset": offset, "limit": limit, "items": items}
 
 
 @router.get("/audit.csv", dependencies=[Depends(require_permission("audit.export"))])
@@ -212,4 +265,5 @@ async def get_audit_entry(
     row = (await db.execute(_entries().where(AuditLog.id == entry_id))).first()
     if row is None:
         raise HTTPException(404, "audit entry not found")
-    return _item(*row)
+    entry, username = row
+    return _item(entry, username, (await _refs_for(db, [entry]))[0])
