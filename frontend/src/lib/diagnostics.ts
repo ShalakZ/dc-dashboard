@@ -66,6 +66,8 @@ export const partSize = (part: Pick<ReportPart, "chars" | "lines">): string =>
 export function reportErrorText(error: unknown): string {
   if (error instanceof ApiError && error.status === 403) return "Only administrators can build a report.";
   const message = error instanceof Error ? error.message : String(error);
+  // The api client turns a request that never completed into an ApiError with status 0 (it used to let the browser's TypeError through).
+  if (error instanceof ApiError && error.status === 0) return "Could not reach the server.";
   if (!(error instanceof ApiError) && (error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(message))) {
     return "Could not reach the server.";
   }

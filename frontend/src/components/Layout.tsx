@@ -9,6 +9,7 @@ import { DASHBOARDS_PATH, GROUPS, type NavItem } from "./navItems";
 import { ProfileMenu } from "./ProfileMenu";
 import { QuickFind } from "./QuickFind";
 import { RoleChangedNotice } from "./RoleChangedNotice";
+import { ServerNotice } from "./ServerNotice";
 import { SiteClock } from "./SiteClock";
 import { StatusChip } from "./StatusChip";
 
@@ -186,6 +187,7 @@ export function Layout() {
           <main id="main" tabIndex={-1}>
             <div className="shell-notices">
               <RoleChangedNotice />
+              <ServerNotice />
               {hasRole("admin") && <CertificateNotice />}
             </div>
             <Outlet />

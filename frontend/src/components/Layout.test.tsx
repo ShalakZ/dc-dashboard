@@ -3,6 +3,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { keys } from "../api/queries";
 import { RequireRole } from "../auth/RequireAuth";
+import { noteReach, resetServerReach } from "../lib/serverReach";
 import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { Layout } from "./Layout";
@@ -594,5 +595,25 @@ describe("Layout minimized tooltip", () => {
     expect(tip()).not.toHaveAttribute("hidden");
     await userEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
     expect(tip()).toHaveAttribute("hidden");
+  });
+});
+
+describe("Layout server notice", () => {
+  afterEach(() => {
+    act(() => resetServerReach());
+  });
+
+  it("shows the can't-reach-the-server notice among the shell notices while two requests in a row got no answer, and removes it after one that did", async () => {
+    mockFetch(routes("viewer"));
+    const { container } = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    await act(() => new Promise<void>((resolve) => setTimeout(resolve, 20))); // the shell's first answers are in
+    expect(screen.queryByText(/Can't reach the server/)).not.toBeInTheDocument();
+    act(() => { noteReach(false); noteReach(false); });
+    const notice = screen.getByText(/Can't reach the server/).closest("[role=status]");
+    expect(notice).toHaveClass("banner-warn");
+    expect(container.querySelector(".shell-notices")).toContainElement(notice as HTMLElement);
+    act(() => noteReach(true));
+    expect(screen.queryByText(/Can't reach the server/)).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { mockFetch } from "../test/fetchMock";
-import { api, ApiError, notifyForbidden, setForbiddenHandler, setUnauthorizedHandler } from "./client";
+import { api, ApiError, isUnreachable, notifyForbidden, setForbiddenHandler, setUnauthorizedHandler } from "./client";
 
 describe("api client", () => {
   it("sends JSON with same-origin credentials and parses the reply", async () => {
@@ -18,11 +18,39 @@ describe("api client", () => {
     await expect(api.get("/api/me")).rejects.toBeInstanceOf(ApiError);
   });
 
-  it("reads Caddy's plain-text 502 (the api is restarting) as an ApiError, the way it read the empty body before", async () => {
+  it("reads Caddy's plain-text 502 (the api is restarting) as an ApiError that says so, whatever the body, and keeps the body", async () => {
+    const text = "The server is not answering (status 502). It may be restarting; try again in a moment.";
     vi.stubGlobal("fetch", vi.fn(async () => new Response("502 Bad Gateway", { status: 502, headers: { "content-type": "text/plain" } })));
-    await expect(api.get("/api/sources")).rejects.toMatchObject({ status: 502, detail: "502 Bad Gateway", message: "502 Bad Gateway" });
+    await expect(api.get("/api/sources")).rejects.toMatchObject({ status: 502, detail: "502 Bad Gateway", body: "502 Bad Gateway", message: text });
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 502 })));
-    await expect(api.get("/api/sources")).rejects.toMatchObject({ status: 502, message: "request failed with status 502" });
+    await expect(api.get("/api/sources")).rejects.toMatchObject({ status: 502, message: text });
+  });
+
+  it("describes 503 and 504 the same way, even when the api sent a reason of its own, and leaves other 5xx alone", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "database unavailable" }), { status: 503, headers: { "content-type": "application/json" } })));
+    await expect(api.get("/api/status")).rejects.toMatchObject({
+      status: 503, detail: "database unavailable", message: "The server is not answering (status 503). It may be restarting; try again in a moment.",
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 504 })));
+    await expect(api.get("/api/status")).rejects.toMatchObject({ message: "The server is not answering (status 504). It may be restarting; try again in a moment." });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "internal error" }), { status: 500, headers: { "content-type": "application/json" } })));
+    await expect(api.get("/api/status")).rejects.toMatchObject({ status: 500, message: "internal error" });
+  });
+
+  it("turns a fetch that rejects (no network, the connection refused) into an ApiError with status 0 and a plain message", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
+    const error = await api.get("/api/sources").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 0, message: "Can't reach the server. Check the network and try again." });
+    await expect(api.post("/api/login", {})).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("isUnreachable is true for status 0, 502, 503 and 504 and for nothing else", () => {
+    for (const status of [0, 502, 503, 504]) expect(isUnreachable(new ApiError(status, "x")), String(status)).toBe(true);
+    for (const status of [200, 400, 401, 403, 404, 409, 422, 500, 501]) expect(isUnreachable(new ApiError(status, "x")), String(status)).toBe(false);
+    expect(isUnreachable(new TypeError("Failed to fetch"))).toBe(false);
+    expect(isUnreachable(null)).toBe(false);
+    expect(isUnreachable(undefined)).toBe(false);
   });
 
   it("calls the unauthorized handler on 401, except for auth endpoints", async () => {
