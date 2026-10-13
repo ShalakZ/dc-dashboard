@@ -259,7 +259,7 @@ test.describe("W7j: pages that use their space", () => {
       await expect(headers, "four column headers").toHaveCount(4);
       await expect(table.getByRole("columnheader", { name: "User", exact: true })).toHaveCount(1);
       await expect(table.getByRole("columnheader", { name: "What happened", exact: true })).toHaveCount(1);
-      await expect(table.getByRole("columnheader", { name: "Details", exact: true }), "the last column is named for screen readers").toHaveCount(1);
+      await expect(table.getByRole("columnheader", { name: "Details", exact: true }), "the first column (the Details buttons) is named for screen readers").toHaveCount(1);
     });
 
     await test.step("Details opens the detail row under the entry, and closes it again", async () => {
