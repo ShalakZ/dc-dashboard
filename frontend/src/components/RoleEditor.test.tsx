@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { ApiError } from "../api/client";
@@ -444,5 +444,211 @@ describe("RoleEditor: the keyboard", () => {
     expect(first).not.toBeChecked();
     await userEvent.keyboard(" ");
     expect(first).toBeChecked();
+  });
+});
+
+describe("RoleEditor: offering what a permission needs", () => {
+  const USERS_NEED = "Change users also needs See users to show anything.";
+  const UNTICK_USERS = "Change users needs See users to show anything. Also untick Change users?";
+  // Not a bare getByRole("group"): fieldset.role-sensitive is a group too. Every sentence the prompt can say contains "to show anything".
+  const cards = () => screen.queryAllByRole("group", { name: /to show anything/ });
+  const button = (name: string) => screen.getByRole("button", { name });
+  const cardOf = (name: string) => screen.getByRole("group", { name });
+  const hints = () => within(summary()).queryAllByRole("listitem").map((li) => li.textContent);
+
+  it("opens a group right after the box that was ticked, names it with its sentence, focuses the primary button and keeps the hint line", async () => {
+    open(NEW);
+    await tick("Change users");
+    const group = cardOf(USERS_NEED);
+    expect(box("Change users").closest("label")!.nextElementSibling).toBe(group);
+    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(["Also tick See users", "Not now"]);
+    expect(within(group).getByRole("button", { name: "Also tick See users" })).toHaveFocus();
+    expect(hints()).toEqual([USERS_NEED]);
+  });
+
+  it("Also tick ticks both, closes the group, puts the focus back on the box, takes the hint away and saves exactly both", async () => {
+    const { calls, onClose } = open(NEW, { routes: { "POST /api/roles": { status: 201, body: roleRow({ id: 9 }) } } });
+    await userEvent.type(screen.getByLabelText("Name"), "Staff");
+    await tick("Change users");
+    await userEvent.click(button("Also tick See users"));
+    expect(cards()).toEqual([]);
+    expect(box("Change users")).toBeChecked();
+    expect(box("See users")).toBeChecked();
+    expect(box("Change users")).toHaveFocus();
+    expect(hints()).toEqual([]);
+    await userEvent.click(save());
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(sorted(sentBody(calls, "POST").permissions)).toEqual(["users.edit", "users.view"]);
+  });
+
+  it("Not now keeps only the box that was ticked, hands the focus back and leaves the hint; it asks again only after an untick and a tick", async () => {
+    open(NEW);
+    await tick("Change users");
+    await userEvent.click(button("Not now"));
+    expect(cards()).toEqual([]);
+    expect(checked()).toEqual(["Change users"]);
+    expect(box("Change users")).toHaveFocus();
+    expect(hints()).toEqual([USERS_NEED]);
+    await tick("See the audit log"); // nothing to offer, and no memory of the earlier offer either
+    expect(cards()).toEqual([]);
+    await tick("Change users"); // unticked: nobody needs it, nothing opens
+    expect(cards()).toEqual([]);
+    await tick("Change users");
+    expect(cardOf(USERS_NEED)).toBeInTheDocument();
+  });
+
+  it("lists several needs and one click ticks them all", async () => {
+    open(NEW);
+    await tick("See dashboards");
+    await tick("Change dashboards");
+    const group = cardOf("Change dashboards also needs these to show anything:");
+    expect(within(group).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["See the Assets Tree", "See scans and the graph"]);
+    await userEvent.click(within(group).getByRole("button", { name: "Also tick 2 permissions" }));
+    expect(cards()).toEqual([]);
+    expect(checked().sort()).toEqual(["Change dashboards", "See dashboards", "See scans and the graph", "See the Assets Tree"]);
+    expect(hints()).toEqual([]);
+  });
+
+  it("Escape closes only the group and gives the box the focus; a second Escape closes the dialog", async () => {
+    const { onClose } = open(NEW);
+    await tick("Change users");
+    await userEvent.keyboard("{Escape}");
+    expect(cards()).toEqual([]);
+    expect(screen.getByRole("dialog", { name: "New role" })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(box("Change users")).toBeChecked();
+    expect(box("Change users")).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("a press outside (the Name field) closes the group and keeps the tick", async () => {
+    open(NEW);
+    await tick("Change users");
+    expect(cards()).toHaveLength(1);
+    await userEvent.click(screen.getByLabelText("Name"));
+    expect(cards()).toEqual([]);
+    expect(box("Change users")).toBeChecked();
+    expect(screen.getByLabelText("Name")).toHaveFocus();
+  });
+
+  it("never shows more than one group, however quickly the boxes are ticked", async () => {
+    open(NEW);
+    for (const label of ["Change assets", "Change dashboards", "Change tariffs", "Change sources", "Change storage settings"]) {
+      await tick(label);
+      expect(cards().length, `after ticking ${label}`).toBe(1);
+    }
+    expect(cards()[0]).toHaveAccessibleName("Change storage settings also needs See storage to show anything.");
+  });
+
+  it("offers to untick what needs the box that was unticked, and Also untick does both", async () => {
+    open(NEW);
+    await tick("See users");
+    await tick("Change users");
+    expect(cards()).toEqual([]); // its need is ticked: nothing to offer
+    await tick("See users");
+    const group = cardOf(UNTICK_USERS);
+    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(["Also untick Change users", "Leave ticked"]);
+    expect(within(group).getByRole("button", { name: "Also untick Change users" })).toHaveFocus();
+    await userEvent.click(within(group).getByRole("button", { name: "Also untick Change users" }));
+    expect(cards()).toEqual([]);
+    expect(checked()).toEqual([]);
+    expect(box("See users")).toHaveFocus();
+  });
+
+  it("Leave ticked keeps the dependent ticked, and the hint line then says what it lacks", async () => {
+    open(NEW);
+    await tick("See users");
+    await tick("Change users");
+    await tick("See users");
+    await userEvent.click(button("Leave ticked"));
+    expect(cards()).toEqual([]);
+    expect(checked()).toEqual(["Change users"]);
+    expect(hints()).toEqual([USERS_NEED]);
+  });
+
+  it("unticking something nobody needs opens nothing", async () => {
+    open(NEW);
+    await tick("See users");
+    await tick("See users");
+    expect(cards()).toEqual([]);
+  });
+
+  it("does not prompt when Start from fills the ticks, and an open group is gone after Start from", async () => {
+    open(NEW);
+    const select = screen.getByLabelText("Start from");
+    await userEvent.selectOptions(select, "Operator");
+    expect(cards()).toEqual([]);
+    await userEvent.selectOptions(select, "Viewer");
+    expect(cards()).toEqual([]);
+    await userEvent.selectOptions(select, "Nothing");
+    await tick("Change users");
+    expect(cards()).toHaveLength(1);
+    fireEvent.change(select, { target: { value: "Viewer" } }); // no pointer press, no focus move: only chooseStart can close the group here
+    expect(cards()).toEqual([]);
+  });
+
+  it("does not prompt when a role is opened for editing, even one whose ticks break a dependency (the hint line says so)", () => {
+    open(editing(roleRow({ id: 7, name: "Odd", permissions: ["users.edit"] })));
+    expect(cards()).toEqual([]);
+    expect(hints()).toEqual([USERS_NEED]);
+  });
+
+  it("does not prompt in a built-in role: its boxes cannot be clicked", async () => {
+    open(editing(builtinRoles()[1]));
+    await userEvent.click(box("Change users"));
+    expect(box("Change users")).not.toBeChecked();
+    expect(cards()).toEqual([]);
+  });
+
+  it("a new offer on the same box is a fresh card that takes the focus (a keyboard untick right after a tick)", async () => {
+    open(NEW);
+    await tick("Change tariffs"); // needs See tariffs and See the Assets Tree
+    await userEvent.click(button("Not now"));
+    await tick("See tariffs"); // opens "See tariffs also needs See the Assets Tree", focus on its primary button
+    expect(cardOf("See tariffs also needs See the Assets Tree to show anything.")).toBeInTheDocument();
+    await userEvent.tab({ shift: true });
+    expect(box("See tariffs")).toHaveFocus();
+    await userEvent.keyboard(" "); // unticks it: Change tariffs needs it, so the same box now has an untick offer
+    const group = cardOf("Change tariffs needs See tariffs to show anything. Also untick Change tariffs?");
+    expect(cards()).toHaveLength(1);
+    expect(within(group).getByRole("button", { name: "Also untick Change tariffs" })).toHaveFocus();
+  });
+
+  it("unticking the box that has an open offer closes the offer (nobody needs it, so there is nothing new to say)", async () => {
+    open(NEW);
+    await tick("Change users");
+    await userEvent.tab({ shift: true }); // from the card's primary button back to its box: the card stays
+    expect(box("Change users")).toHaveFocus();
+    expect(cards()).toHaveLength(1);
+    await userEvent.keyboard(" ");
+    expect(box("Change users")).not.toBeChecked();
+    expect(cards()).toEqual([]);
+  });
+
+  it("keyboard: Space on a box with a need, Enter on the primary button, and both are ticked with the focus back on the box", async () => {
+    open(NEW);
+    box("Change users").focus();
+    await userEvent.keyboard(" ");
+    expect(button("Also tick See users")).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    expect(cards()).toEqual([]);
+    expect(checked().sort()).toEqual(["Change users", "See users"]);
+    expect(box("Change users")).toHaveFocus();
+  });
+
+  it("keyboard: Tab from the box goes to the primary button first, then Not now, and past them the group closes", async () => {
+    open(NEW);
+    await tick("Change users");
+    box("Change users").focus(); // the focus is on the card's button after a tick; the box is still its anchor, so the card stays
+    expect(cards()).toHaveLength(1);
+    await userEvent.tab();
+    expect(button("Also tick See users")).toHaveFocus();
+    await userEvent.tab();
+    expect(button("Not now")).toHaveFocus();
+    await userEvent.tab();
+    expect(within(box("Change users").closest(".role-perm") as HTMLElement).getByRole("button", { name: "What does this mean?" })).toHaveFocus();
+    expect(cards()).toEqual([]);
+    expect(box("Change users")).toBeChecked();
   });
 });

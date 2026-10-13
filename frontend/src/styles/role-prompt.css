@@ -1,0 +1,19 @@
+@layer w6 {
+  /* W9c: the card the Roles editor opens under a checkbox to offer the permissions it needs (components/DependencyPrompt.tsx). Tokens only;
+     every rule is scoped by a class this piece owns. */
+
+  /* Fixed, so the grid's scrolling boxes cannot clip it or grow a scroll bar for it; the component puts it with top and left (placeTip).
+     z-index 5 is enough: it sits in the dialog's own stacking context (the backdrop is 1000), above the grid, below the help bubble (1100)
+     and the toasts (900, outside the dialog's context). Its width does not depend on where it is put (max-content, capped).
+     The arming delay: for its first 400ms the card takes no pointer at all (the from frame, held by `backwards`), so a click aimed at the
+     checkbox below it, in the same column, goes through to that checkbox. The keyboard is not affected. Once the delay is over the
+     animation has no effect on the card (no forwards fill). */
+  .dep-prompt { position: fixed; z-index: 5; width: max-content; max-width: min(360px, calc(100vw - 16px)); display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); font-size: var(--fs-sm); line-height: 1.45; text-align: left; overflow-wrap: anywhere; transition: opacity var(--motion); animation: dep-prompt-arm 1ms linear 400ms backwards; }
+  @starting-style {
+    .dep-prompt { opacity: 0; }
+  }
+  @keyframes dep-prompt-arm { from { pointer-events: none; } }
+  .dep-prompt p { margin: 0; }
+  .dep-prompt ul { margin: 0; padding-left: 18px; }
+  .dep-prompt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+}

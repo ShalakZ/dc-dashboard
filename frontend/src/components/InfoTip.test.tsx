@@ -32,12 +32,13 @@ describe("InfoTip", () => {
     expect(screen.getByRole("button", { name: "About retention" })).toBeInTheDocument();
   });
 
-  it("opens on a click, pinned: the note is next to the button and the button points at it", async () => {
+  it("opens on a click, pinned: the note is a portal on the body (no scrolling box around the button can clip it) and the button points at it", async () => {
     render(<InfoTip>The disk size.</InfoTip>);
     await userEvent.click(button());
     expect(note()).toHaveTextContent("The disk size.");
     expect(note()).toHaveClass("tip-bubble");
-    expect(button().parentElement).toContainElement(note());
+    expect(note()!.parentElement).toBe(document.body);
+    expect(button().parentElement).not.toContainElement(note());
     expect(button()).toHaveAttribute("aria-expanded", "true");
     expect(button()).toHaveAttribute("aria-controls", note()!.id);
     await userEvent.click(button());
@@ -66,11 +67,26 @@ describe("InfoTip", () => {
     expect(note()).toBeNull();
   });
 
-  it("does not close on a scroll (the bubble is part of the page and moves with it)", async () => {
-    render(<InfoTip>Hint</InfoTip>);
-    await userEvent.click(button());
-    fireEvent.scroll(window);
-    expect(note()).not.toBeNull();
+  describe("scrolling", () => {
+    let clock = 10_000;
+    beforeEach(() => { clock = 10_000; vi.spyOn(performance, "now").mockImplementation(() => clock); });
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it("closes on a scroll, because the fixed bubble would be left behind when its button moves", async () => {
+      render(<InfoTip>Hint</InfoTip>);
+      await userEvent.click(button());
+      clock += 500; // past the settle time of the popover hook
+      fireEvent.scroll(window);
+      expect(note()).toBeNull();
+    });
+
+    it("closes on a scroll of a box around the button (the Roles grid's own scrolling box)", async () => {
+      render(<div className="table-wrap"><InfoTip>Hint</InfoTip></div>);
+      await userEvent.click(button());
+      clock += 500;
+      fireEvent.scroll(document.querySelector(".table-wrap")!);
+      expect(note()).toBeNull();
+    });
   });
 
   describe("with a mouse", () => {
@@ -110,18 +126,42 @@ describe("InfoTip", () => {
     });
   });
 
-  it("opens leftwards when the bubble would run off the right edge of the window", async () => {
-    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      const right = this.getAttribute("role") === "note" ? 1100 : 1000; // jsdom's window is 1024 wide
-      return { x: 0, y: 0, top: 0, bottom: 0, left: right - 100, right, width: 100, height: 0, toJSON: () => ({}) };
+  describe("where the bubble goes (window coordinates; jsdom's window is 1024 by 768)", () => {
+    // The button is a 24 px square at (left, top); the bubble measures 300 by 60.
+    const mockBoxes = (left: number, top: number) =>
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+        if (this.getAttribute("role") === "note") return { x: 0, y: 0, top: 0, bottom: 60, left: 0, right: 300, width: 300, height: 60, toJSON: () => ({}) };
+        return { x: left, y: top, top, bottom: top + 24, left, right: left + 24, width: 24, height: 24, toJSON: () => ({}) };
+      });
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it("under the button, left edges aligned", async () => {
+      mockBoxes(100, 100);
+      render(<InfoTip>Hint</InfoTip>);
+      await userEvent.click(button());
+      expect(note()).toHaveStyle({ top: "130px", left: "100px" });
     });
-    render(<InfoTip>Hint</InfoTip>);
-    await userEvent.click(button());
-    expect(note()).toHaveAttribute("data-align", "end");
-    spy.mockRestore();
-    await userEvent.click(button());
-    await userEvent.click(button());
-    expect(note()).toHaveAttribute("data-align", "start");
+
+    it("right edges aligned when the bubble would run off the right of the window", async () => {
+      mockBoxes(900, 100); // 900 + 300 is past the 8 px margin of a 1024 window
+      render(<InfoTip>Hint</InfoTip>);
+      await userEvent.click(button());
+      expect(note()).toHaveStyle({ left: `${900 + 24 - 300}px` });
+    });
+
+    it("never closer than 8 px to the window's edge, even for a button flush against it", async () => {
+      mockBoxes(1000, 100); // right edge at 1024: aligning the right edges would put the bubble's edge at the window's
+      render(<InfoTip>Hint</InfoTip>);
+      await userEvent.click(button());
+      expect(note()).toHaveStyle({ left: `${1024 - 8 - 300}px` });
+    });
+
+    it("above the button when there is no room below", async () => {
+      mockBoxes(100, 740);
+      render(<InfoTip>Hint</InfoTip>);
+      await userEvent.click(button());
+      expect(note()).toHaveStyle({ top: `${740 - 6 - 60}px` });
+    });
   });
 
   it("opening a tip closes another one", async () => {

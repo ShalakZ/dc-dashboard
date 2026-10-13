@@ -238,10 +238,10 @@ test("Storage: tips open and close, and the rows per day follow the chosen days"
   await test.step("a tile tip opens on a click, and Escape closes it with the focus back on its button", async () => {
     const database = tile("Database size");
     await tipIn(database).click();
-    await expect(database.getByRole("note")).toContainText("Everything the database holds on disk");
+    await expect(page.getByRole("note")).toContainText("Everything the database holds on disk"); // the bubble is a portal on <body>: read it from the page
     await expect(tipIn(database)).toHaveAttribute("aria-expanded", "true");
     await page.keyboard.press("Escape");
-    await expect(database.getByRole("note")).toHaveCount(0);
+    await expect(page.getByRole("note")).toHaveCount(0);
     await expect(tipIn(database)).toBeFocused();
     await expect(tipIn(database)).toHaveAttribute("aria-expanded", "false");
   });
@@ -250,20 +250,22 @@ test("Storage: tips open and close, and the rows per day follow the chosen days"
     const database = tile("Database size");
     const rollups = tile("Rollups");
     await tipIn(database).click();
-    await expect(database.getByRole("note")).toBeVisible();
+    await expect(page.getByRole("note")).toContainText("Everything the database holds on disk");
     await tipIn(rollups).click();
-    await expect(rollups.getByRole("note")).toBeVisible();
-    await expect(database.getByRole("note")).toHaveCount(0);
+    await expect(page.getByRole("note")).toHaveCount(1); // the first one closed when the second opened
+    await expect(page.getByRole("note")).not.toContainText("Everything the database holds on disk");
+    await expect(tipIn(rollups)).toHaveAttribute("aria-expanded", "true");
+    await expect(tipIn(database)).toHaveAttribute("aria-expanded", "false");
     await page.keyboard.press("Escape");
-    await expect(rollups.getByRole("note")).toHaveCount(0);
+    await expect(page.getByRole("note")).toHaveCount(0);
   });
 
   await test.step("a field tip explains the setting next to it", async () => {
     const field = page.locator(".retention-form .has-tip").filter({ has: page.getByLabel("Raw retention (days)", { exact: true }) });
     await tipIn(field).click();
-    await expect(field.getByRole("note")).toContainText("deleted by a daily job");
+    await expect(page.getByRole("note")).toContainText("deleted by a daily job");
     await page.keyboard.press("Escape");
-    await expect(field.getByRole("note")).toHaveCount(0);
+    await expect(page.getByRole("note")).toHaveCount(0);
   });
 
   const rowsDay = page.locator(".rows-day");
@@ -488,8 +490,8 @@ test("Tariffs: each section says what it is for, and a tip explains the rate fie
     .filter({ hasText: "Rate per kWh" });
   const tip = rate.getByRole("button", { name: "What does this mean?" });
   await tip.click();
-  await expect(rate.getByRole("note")).toContainText("price of one kilowatt-hour");
+  await expect(page.getByRole("note")).toContainText("price of one kilowatt-hour");
   await page.keyboard.press("Escape");
-  await expect(rate.getByRole("note")).toHaveCount(0);
+  await expect(page.getByRole("note")).toHaveCount(0);
   await expect(tip).toBeFocused();
 });

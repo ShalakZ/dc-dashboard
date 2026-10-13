@@ -288,8 +288,10 @@
   .trash-btn:hover:not(:disabled) .lid, .trash-btn:focus-visible .lid { transform: translateY(-1.5px) rotate(-16deg); }
   .tip { position: relative; display: inline-flex; align-items: center; vertical-align: middle; }
   .tip-btn { width: 24px; height: 24px; }
-  .tip-bubble { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; width: max-content; max-width: min(320px, 80vw); padding: 8px 12px; border-radius: var(--radius); background: var(--tooltip-bg); color: var(--tooltip-text); box-shadow: var(--shadow-tip); font-size: var(--fs-sm); font-weight: 400; line-height: 1.45; text-align: left; white-space: normal; }
-  .tip-bubble[data-align="end"] { left: auto; right: 0; } /* a tip at the right end of a line opens leftwards, so the page gets no sideways scroll */
+  .tip-bubble { position: fixed; z-index: 1100; width: max-content; max-width: min(320px, 80vw); padding: 8px 12px; border-radius: var(--radius); background: var(--tooltip-bg); color: var(--tooltip-text); box-shadow: var(--shadow-tip); font-size: var(--fs-sm); font-weight: 400; line-height: 1.45; text-align: left; white-space: normal; }
+  /* The bubble is a portal on the body, placed in window coordinates by InfoTip (lib/placeTip.ts): no scrolling box around its button can clip it or
+     grow a scroll bar for it. z-index 1100 is above the dialogs (1000) because a tip in a dialog's own grid (the Roles editor) is outside the dialog's
+     stacking context; a tip never stays open while a dialog opens (a press or focus outside closes it). */
   .has-tip { position: relative; }
   /* A tip at the end of a label line without being inside the <label>. The label keeps 28px free on the right, so a long label wraps
      before the tip instead of running under it, and the field takes the room back with a negative margin, so it still spans the whole

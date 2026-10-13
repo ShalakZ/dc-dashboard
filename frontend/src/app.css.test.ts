@@ -674,7 +674,7 @@ describe("the page style files (src/styles/*.css)", () => {
     );
   });
 
-  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css"])(
+  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css", "role-prompt.css"])(
     "%s is one @layer w6 block with nothing outside it, no raw colour and no accent in a sidebar rule",
     (file) => {
       expect(existsSync(`${STYLES}/${file}`), `${STYLES}/${file} exists`).toBe(true);
@@ -773,6 +773,7 @@ describe("the page style files (src/styles/*.css)", () => {
     const bare: string[] = [];
     for (const p of parsed) {
       for (const r of p.rules) {
+        if (r.at.some((a) => a.startsWith("@keyframes"))) continue; // the frames of an animation ("from", "to", "50%") are not selectors of the page
         for (const part of selectorParts(r.selector)) {
           if (classesIn(part).length === 0) bare.push(`${p.file}: ${part}`);
         }
@@ -830,9 +831,9 @@ describe("the row menu, the trash button and the info tip (W7b)", () => {
     expect(zIndex(".row-menu-panel")).toBeLessThan(zIndex(".dialog-backdrop"));
   });
 
-  it("the tip bubble sits above the page chrome (sidebar, bar) and below the dialogs", () => {
+  it("the tip bubble sits above the page chrome (sidebar, bar) AND above the dialogs: it is a portal on the body, so a tip in a dialog's own grid (the Roles editor) is outside the dialog's stacking context", () => {
     expect(zIndex(".tip-bubble")).toBeGreaterThan(zIndex(".navbar"));
-    expect(zIndex(".tip-bubble")).toBeLessThan(zIndex(".dialog-backdrop"));
+    expect(zIndex(".tip-bubble")).toBeGreaterThan(zIndex(".dialog-backdrop"));
   });
 
   it("a menu item is a flat, left-aligned, 34px row that undoes the base button (no border, no centring), ringed inside the panel", () => {
@@ -880,14 +881,14 @@ describe("the row menu, the trash button and the info tip (W7b)", () => {
     expect(calm[0].order).toBeGreaterThan(lifted.order);
   });
 
-  it("the tip bubble is white on the tooltip navy, wraps at 320px (80vw on a small window), and a tip at the line end opens leftwards", () => {
+  it("the tip bubble is white on the tooltip navy, wraps at 320px (80vw on a small window), and is fixed (placed in window coordinates by placeTip, so no scrolling box clips it)", () => {
     const bubble = only(".tip-bubble").body;
     expect(bubble).toMatch(/max-width:\s*min\(320px,\s*80vw\)/);
-    expect(bubble).toMatch(/position:\s*absolute/);
+    expect(bubble).toMatch(/position:\s*fixed/);
     expect(bubble).toMatch(/box-shadow:\s*var\(--shadow-tip\)/);
     expect(bubble).toMatch(/white-space:\s*normal/);
     expect(contrast(tok("tooltip-text"), tok("tooltip-bg"))).toBeGreaterThanOrEqual(AA);
-    expect(only('.tip-bubble[data-align="end"]').body).toMatch(/left:\s*auto;\s*right:\s*0/);
+    expect(css).not.toContain('.tip-bubble[data-align="end"]'); // the old leftwards rule: placeTip aligns the edges now
   });
 
   it("a tip sits at the end of a label line without being inside the label: .has-tip anchors it", () => {

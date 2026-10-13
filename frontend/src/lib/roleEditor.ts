@@ -1,6 +1,6 @@
 import type { PermissionRow, RoleRow } from "../api/types";
 import { roleLabel, visibleGroups } from "../components/navItems";
-import { PERMISSIONS, type PermissionId } from "./permissions";
+import { isPermissionId, PERMISSIONS, type PermissionId } from "./permissions";
 
 /** One row of the editor's grid: an area with its See and Change checkboxes (a cell may hold several). */
 export interface AreaRow { area: string; see: PermissionRow[]; change: PermissionRow[] }
@@ -67,11 +67,65 @@ export const PERMISSION_NEEDS: Record<PermissionId, readonly PermissionId[]> = {
   "diagnostics.run": ["sources.view"],
 };
 
+/** What `id` needs that is not ticked, in the table's order (the order the hint prints). The table is closed (tested), so one level is exact. */
+export function missingNeeds(id: PermissionId, ticked: ReadonlySet<string>): PermissionId[] {
+  return PERMISSION_NEEDS[id].filter((needed) => !ticked.has(needed));
+}
+
+/** The ticked permissions, other than `id`, that list `id` among their needs, in catalogue order. */
+export function dependentsOf(id: PermissionId, ticked: ReadonlySet<string>): PermissionId[] {
+  return PERMISSIONS.filter((other) => other !== id && ticked.has(other) && PERMISSION_NEEDS[other].includes(id));
+}
+
 /** The ticked permissions whose needs are not all ticked, in catalogue order, with what each lacks. Ids this build does not know are skipped. */
 export function permissionGaps(ticked: ReadonlySet<string>): { id: PermissionId; missing: PermissionId[] }[] {
   return PERMISSIONS.filter((id) => ticked.has(id))
-    .map((id) => ({ id, missing: PERMISSION_NEEDS[id].filter((needed) => !ticked.has(needed)) }))
+    .map((id) => ({ id, missing: missingNeeds(id, ticked) }))
     .filter((gap) => gap.missing.length > 0);
+}
+
+/** What the editor offers right after a checkbox was clicked: `kind: "tick"` = `id` was just ticked and `others` are its unticked needs; `"untick"` = `id` was just unticked and `others` are the ticked ones that need it. */
+export interface DependencyOffer { kind: "tick" | "untick"; id: PermissionId; others: PermissionId[] }
+
+/** The offer for a click on `id`; `before` is the ticked set BEFORE the click (a ticked id is being unticked, an unticked one ticked). Null when there is nothing to offer or the id is unknown to this build. */
+export function offerFor(id: string, before: ReadonlySet<string>): DependencyOffer | null {
+  if (!isPermissionId(id)) return null;
+  if (before.has(id)) {
+    const after = new Set(before);
+    after.delete(id);
+    const others = dependentsOf(id, after);
+    return others.length > 0 ? { kind: "untick", id, others } : null;
+  }
+  const others = missingNeeds(id, before);
+  return others.length > 0 ? { kind: "tick", id, others } : null;
+}
+
+/** The hint's sentence, shared with the popover so the two can never disagree. */
+export function needSentence(id: string, missing: readonly string[], labelOf: (id: string) => string): string {
+  return `${labelOf(id)} also needs ${joinWords(missing.map(labelOf))} to show anything.`;
+}
+
+/** An offer in plain words: the sentence, the names to list under it (several only), and the two button labels. */
+export interface OfferWords { sentence: string; items: string[]; accept: string; decline: string }
+
+export function offerWords(offer: DependencyOffer, labelOf: (id: string) => string): OfferWords {
+  const { kind, id, others } = offer;
+  const labels = others.map(labelOf);
+  const many = others.length > 1;
+  if (kind === "tick") {
+    return {
+      sentence: many ? `${labelOf(id)} also needs these to show anything:` : needSentence(id, others, labelOf),
+      items: many ? labels : [],
+      accept: many ? `Also tick ${others.length} permissions` : `Also tick ${labels[0]}`,
+      decline: "Not now",
+    };
+  }
+  return {
+    sentence: many ? `These need ${labelOf(id)} to show anything. Also untick them?` : `${labels[0]} needs ${labelOf(id)} to show anything. Also untick ${labels[0]}?`,
+    items: many ? labels : [],
+    accept: many ? `Also untick ${others.length} permissions` : `Also untick ${labels[0]}`,
+    decline: "Leave ticked",
+  };
 }
 
 /**

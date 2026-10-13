@@ -2,8 +2,9 @@ import { useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { useCreateRole, usePatchRole } from "../api/queries";
 import type { PermissionRow, RoleRow } from "../api/types";
 import { PERMISSION_LABELS, isPermissionId } from "../lib/permissions";
-import { groupPermissions, joinWords, LOCKED_PERMISSION, permissionGaps, roleDisplayName, summarizeRole } from "../lib/roleEditor";
+import { groupPermissions, LOCKED_PERMISSION, needSentence, offerFor, offerWords, permissionGaps, roleDisplayName, summarizeRole, type DependencyOffer, type OfferWords } from "../lib/roleEditor";
 import { sentence } from "../lib/sentence";
+import { DependencyPrompt } from "./DependencyPrompt";
 import { InfoTip } from "./InfoTip";
 import { Modal, useModalBusy } from "./Modal";
 import { roleLabel } from "./navItems";
@@ -29,17 +30,34 @@ const START_FROM = ["viewer", "operator"];
 
 const messageOf = (error: unknown) => sentence(error instanceof Error ? error.message : "request failed");
 
+/** The open offer, as the one `Item` it is about receives it. `serial` only keys the card: see `toggle`. */
+interface Prompt { words: OfferWords; serial: number; onAccept: () => void; onDecline: () => void }
+
 /**
  * One permission: a checkbox with its label and, NEXT to the label (never inside it, or the tip's button would be part of the checkbox's
- * name), a tip carrying the server's description.
+ * name), a tip carrying the server's description. The offer card, when this is the box it is about, sits between the two: right after the
+ * label, so Tab goes from the box into the card.
  */
-function Item({ entry, ticked, locked, onToggle }: { entry: PermissionRow; ticked: boolean; locked: boolean; onToggle: (id: string) => void }) {
+function Item({ entry, ticked, locked, onToggle, prompt }: { entry: PermissionRow; ticked: boolean; locked: boolean; onToggle: (id: string) => void; prompt?: Prompt }) {
+  const input = useRef<HTMLInputElement>(null);
   return (
     <div className="role-perm">
       <label className="check">
-        <input type="checkbox" checked={ticked} disabled={locked} onChange={() => onToggle(entry.id)} />
+        <input ref={input} type="checkbox" checked={ticked} disabled={locked} onChange={() => onToggle(entry.id)} />
         {entry.label}
       </label>
+      {prompt && (
+        <DependencyPrompt
+          key={prompt.serial}
+          anchor={input}
+          sentence={prompt.words.sentence}
+          items={prompt.words.items}
+          acceptLabel={prompt.words.accept}
+          declineLabel={prompt.words.decline}
+          onAccept={prompt.onAccept}
+          onDecline={prompt.onDecline}
+        />
+      )}
       {entry.description ? <InfoTip>{entry.description}</InfoTip> : null}
     </div>
   );
@@ -47,8 +65,9 @@ function Item({ entry, ticked, locked, onToggle }: { entry: PermissionRow; ticke
 
 /**
  * Makes, edits or shows (a built-in role) one role: a name, a description, the permission grid by area (See and Change), the sensitive
- * actions, and a plain summary of what the ticks add up to. Dependencies between permissions are hints, never automatic ticks: the server
- * accepts any combination, and a role may be deliberately odd. The parent gives it a `key` per role, so nothing typed leaks to another role.
+ * actions, and a plain summary of what the ticks add up to. Dependencies between permissions are hints and offers, never automatic ticks:
+ * clicking a box may open a card that offers to tick what it needs (or to untick what needs it), but the server accepts any combination,
+ * a role may be deliberately odd, and declining loses nothing. The parent gives it a `key` per role, so nothing typed leaks to another role.
  */
 export function RoleEditor({ mode, roles, permissions, onClose, onSaved, onDuplicate }: Props) {
   const title = mode.kind === "new" ? "New role" : mode.role.builtin ? `Role ${roleDisplayName(mode.role)}` : `Edit role ${mode.role.name}`;
@@ -69,6 +88,9 @@ function EditorForm({ mode, roles, permissions, onClose, onSaved, onDuplicate }:
   const [description, setDescription] = useState(role?.description ?? "");
   const [ticked, setTicked] = useState<ReadonlySet<string>>(() => new Set(role?.permissions ?? []));
   const [startFrom, setStartFrom] = useState("");
+  // The one open offer, always the answer to a click or key on a checkbox: never the initial state, a loaded role, Start from or the server's data.
+  const [offer, setOffer] = useState<DependencyOffer | null>(null);
+  const [serial, setSerial] = useState(0); // bumped by every toggle, so a new offer is a new card even on the same box (it re-focuses and re-measures)
   const [duplicating, setDuplicating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false); // a double click can submit twice before the screen shows the disabled button
@@ -84,13 +106,30 @@ function EditorForm({ mode, roles, permissions, onClose, onSaved, onDuplicate }:
   const startRoles = START_FROM.flatMap((wanted) => roles.filter((each) => each.builtin && each.name === wanted));
   const cleanName = name.trim();
 
-  const toggle = (id: string) => setTicked((before) => {
-    const next = new Set(before);
+  // Clicks are discrete events and React re-renders between them, so the render's `ticked` is exactly the set before this click.
+  const toggle = (id: string) => {
+    const next = new Set(ticked);
     if (!next.delete(id)) next.add(id);
-    return next;
-  });
+    setTicked(next);
+    setOffer(offerFor(id, ticked)); // a new tick or untick replaces an open offer; unticking the box that has a tick offer closes it
+    setSerial((n) => n + 1);
+  };
+  const accept = () => {
+    if (!offer) return;
+    setTicked((prev) => {
+      const next = new Set(prev);
+      for (const id of offer.others) {
+        if (offer.kind === "tick") next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+    setOffer(null);
+  };
+  const decline = () => setOffer(null);
   const chooseStart = (value: string) => {
     setStartFrom(value);
+    setOffer(null);
     const source = startRoles.find((each) => each.name === value);
     setTicked(new Set((source?.permissions ?? []).filter((id) => id !== LOCKED_PERMISSION))); // replaces what is ticked
   };
@@ -146,8 +185,16 @@ function EditorForm({ mode, roles, permissions, onClose, onSaved, onDuplicate }:
     }
   }
 
+  const words = offer ? offerWords(offer, labelOf) : null;
   const item = (entry: PermissionRow) => (
-    <Item key={entry.id} entry={entry} ticked={ticked.has(entry.id)} locked={builtin} onToggle={toggle} />
+    <Item
+      key={entry.id}
+      entry={entry}
+      ticked={ticked.has(entry.id)}
+      locked={builtin}
+      onToggle={toggle}
+      prompt={words && offer?.id === entry.id ? { words, serial, onAccept: accept, onDecline: decline } : undefined}
+    />
   );
   const none = (words: string[], empty: string) => (words.length > 0 ? words.join(", ") : empty);
   // The built-in Administrator is the one role that holds Manage roles; its box is shown ticked and locked. Everywhere else it is a line of text.
@@ -209,7 +256,7 @@ function EditorForm({ mode, roles, permissions, onClose, onSaved, onDuplicate }:
           {gaps.length > 0 && (
             <ul className="role-gaps muted">
               {gaps.map((gap) => (
-                <li key={gap.id}>{`${labelOf(gap.id)} also needs ${joinWords(gap.missing.map(labelOf))} to show anything.`}</li>
+                <li key={gap.id}>{needSentence(gap.id, gap.missing, labelOf)}</li>
               ))}
             </ul>
           )}
