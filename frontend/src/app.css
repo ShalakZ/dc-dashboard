@@ -425,6 +425,7 @@
   .banner > span { flex: 1 1 auto; min-width: 0; }
   .banner-bad { border-color: var(--crit); background: var(--crit-tint); color: var(--crit); } /* an expired certificate: tint, border and ink are all the critical token */
   .banner-info { border-color: var(--info-line); background: var(--info-tint); color: var(--info-ink); }
+  .route-error { max-width: 640px; margin: 15vh auto 0; } /* RouteError: the shell went with the failed page, so the one banner sits high and centred on the plain page */
   .notice { display: flex; gap: 12px; align-items: flex-start; margin-top: 16px; padding: 12px 16px; border: 1px solid var(--border); border-left: 3px solid var(--text-disabled); border-radius: var(--radius); font-size: var(--fs-sm); color: var(--text); }
   .notice svg.i { margin-top: 1px; color: var(--text-2); }
 
