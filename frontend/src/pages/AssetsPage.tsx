@@ -84,7 +84,11 @@ export function AssetsPage() {
   const closeDialog = () => setDialog(null);
   // The fleet figures (counts, sums, the attention list) change with every asset change.
   const finish = async () => { await invalidate(keys.assets, keys.fleet); setDialog(null); };
-  const create = async (body: AssetIn) => { await api.post("/api/assets", body); await finish(); };
+  const create = async (body: AssetIn) => {
+    await api.post("/api/assets", body);
+    toast.success("Asset created"); // right after the request: the dialog closes and the tree is the only other sign (an edit needs no word)
+    await finish();
+  };
   const update = async (body: AssetIn) => { await api.patch(`/api/assets/${selected!.id}`, body); await finish(); };
   // `seen`: the counts the dialog showed; the server refuses (and the dialog shows the new numbers) if more would go now.
   const removed = async (asset: Asset, seen: AssetImpact) => {

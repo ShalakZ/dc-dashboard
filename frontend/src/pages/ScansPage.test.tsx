@@ -68,7 +68,8 @@ describe("ScansPage", () => {
 
   it("creates a scope from a prefilled form and sends parsed targets and ports", async () => {
     const calls = mockFetch({ ...base("admin"), "POST /api/scopes": { status: 201, body: scope } });
-    open();
+    const toasts = spyToasts();
+    open(toasts.api);
     await userEvent.click(await screen.findByRole("button", { name: "New scope" }));
     expect(await screen.findByLabelText("Targets")).toHaveValue("172.18.0.0/24");
     expect(screen.getByLabelText("Ports")).toHaveValue("502, 4840, 9000");
@@ -76,6 +77,18 @@ describe("ScansPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     const post = calls.find((c) => c.method === "POST" && c.path === "/api/scopes");
     expect(post?.body).toEqual({ name: "lab", targets: ["172.18.0.0/24"], ports: [502, 4840, 9000] });
+    await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "Scan scope created" }]));
+  });
+
+  it("raises no toast when the new scope is refused: the error line is the feedback", async () => {
+    mockFetch({ ...base("admin"), "POST /api/scopes": { status: 409, body: { detail: "a scope with that name already exists" } } });
+    const toasts = spyToasts();
+    open(toasts.api);
+    await userEvent.click(await screen.findByRole("button", { name: "New scope" }));
+    await userEvent.type(await screen.findByLabelText("Name"), "lab");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(toasts.calls).toEqual([]);
   });
 
   it("shows a port error without calling the API", async () => {
@@ -167,6 +180,7 @@ describe("ScansPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ name: "lab", targets: ["simulator"], ports: [4840] });
+    expect(toasts.calls).toEqual([]); // an edit closes its form: no toast
     await userEvent.click(screen.getByRole("button", { name: "Delete lab" }));
     expect(calls.some((c) => c.method === "DELETE")).toBe(false); // asked first
     const dialog = await screen.findByRole("dialog", { name: 'Delete scope "lab"?' });

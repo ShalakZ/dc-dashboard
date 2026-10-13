@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { parseRules, stripComments } from "../test/cssTools";
 import { renderWithProviders } from "../test/render";
+import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
 import type { PermissionId } from "../lib/permissions";
@@ -115,11 +116,14 @@ describe("DiagnosticsPage report", () => {
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
       saved.push({ download: this.download, href: this.href });
     });
-    renderWithProviders(<DiagnosticsPage />);
+    const toasts = spyToasts();
+    renderWithProviders(<DiagnosticsPage />, { toasts: toasts.api });
     await userEvent.click(await screen.findByRole("button", { name: "Build report" }));
     const before = calls.length;
+    expect(toasts.calls).toEqual([]);
     await userEvent.click(await screen.findByRole("button", { name: "Download .txt" }));
     expect(calls).toHaveLength(before);
+    expect(toasts.calls).toEqual([{ kind: "info", text: "Report downloaded" }]);
     expect(saved).toEqual([{ download: "dcdash-report-227bd6a-full.txt", href: "blob:report" }]);
     const blob = (URL.createObjectURL as ReturnType<typeof vi.fn>).mock.calls[0][0] as Blob;
     expect(await new Promise<string>((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.readAsText(blob); })).toBe("FIRST\n\nSECOND");

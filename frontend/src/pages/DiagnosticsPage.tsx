@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { ConnectionCheck } from "../components/ConnectionCheck";
 import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
+import { useToast } from "../components/Toasts";
 import { copyText, partSize, reportErrorText, reportFileName, reportText, saveTextFile } from "../lib/diagnostics";
 
 const DETAIL_HELP: Record<ReportDetail, string> = {
@@ -33,6 +34,7 @@ function AddressKey({ legend }: { legend: ReportReply["legend"] }) {
 
 function ReportResult({ report }: { report: ReportReply }) {
   const areas = useRef<Record<number, HTMLTextAreaElement | null>>({});
+  const toast = useToast();
   const [copied, setCopied] = useState<{ index: number; ok: boolean } | null>(null);
   const n = report.parts.length;
   const characters = report.parts.reduce((sum, part) => sum + part.chars, 0);
@@ -46,7 +48,13 @@ function ReportResult({ report }: { report: ReportReply }) {
           Built a {report.detail} report in {n} {n === 1 ? "part" : "parts"}, {characters.toLocaleString("en-US")} characters of content, build {report.build_id}
           {report.mask ? ", host names and addresses hidden." : "."}
         </p>
-        <button type="button" onClick={() => saveTextFile(reportFileName(report), reportText(report))}>Download .txt</button>
+        <button
+          type="button"
+          onClick={() => {
+            saveTextFile(reportFileName(report), reportText(report));
+            toast.info("Report downloaded"); // nothing on the page changes when the file is saved (the copy buttons keep their own line)
+          }}
+        >Download .txt</button>
       </div>
       {report.parts.map((part) => (
         <div key={part.index} className="report-part">

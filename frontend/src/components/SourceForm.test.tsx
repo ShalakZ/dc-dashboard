@@ -6,6 +6,7 @@ import { keys } from "../api/queries";
 import type { Source } from "../api/types";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
 import { SourceForm } from "./SourceForm";
 
@@ -34,6 +35,32 @@ const probeFetches = (calls: { path: string }[]) =>
   Object.fromEntries(Object.keys(PROBED).map((name) => [name, calls.filter((c) => c.path === `/api/probe/${name}`).length]));
 
 const patchOf = (calls: { method: string; path: string; body: unknown }[]) => calls.find((c) => c.method === "PATCH");
+
+describe("SourceForm, adding a source", () => {
+  it("raises one toast after the POST succeeded, then closes", async () => {
+    const calls = mockFetch({ ...auth, "POST /api/sources": { status: 201, body: { id: 3 } } });
+    const onDone = vi.fn();
+    const toasts = spyToasts();
+    renderWithProviders(<SourceForm onDone={onDone} />, { toasts: toasts.api });
+    await userEvent.type(await screen.findByLabelText("Name"), "new one");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/api/sources"]);
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Source added" }]);
+  });
+
+  it("raises none when the POST is refused: the error line is the feedback and the form stays open", async () => {
+    mockFetch({ ...auth, "POST /api/sources": { status: 422, body: { detail: "name already in use" } } });
+    const onDone = vi.fn();
+    const toasts = spyToasts();
+    renderWithProviders(<SourceForm onDone={onDone} />, { toasts: toasts.api });
+    await userEvent.type(await screen.findByLabelText("Name"), "sim");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(toasts.calls).toEqual([]);
+  });
+});
 
 describe("SourceForm, editing a source", () => {
   it("shows the stored name and config, and the connector as plain text that cannot be changed", async () => {
@@ -75,13 +102,15 @@ describe("SourceForm, editing a source", () => {
   it("sends the changed values to PATCH and no secret key when the Secret box is left blank", async () => {
     const calls = mockFetch({ ...auth, "PATCH /api/sources/2": { body: { id: 2 } } });
     const onDone = vi.fn();
-    renderWithProviders(<SourceForm source={sim} onDone={onDone} />);
+    const toasts = spyToasts();
+    renderWithProviders(<SourceForm source={sim} onDone={onDone} />, { toasts: toasts.api });
     const name = await screen.findByLabelText("Name");
     await userEvent.clear(name);
     await userEvent.type(name, "renamed");
     await userEvent.click(screen.getByLabelText("Enabled"));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(toasts.calls).toEqual([]); // an edit closes its dialog: that is its confirmation
     const patch = patchOf(calls)!;
     expect(patch.path).toBe("/api/sources/2");
     expect(patch.body).toEqual({ name: "renamed", config: { url: "http://sim:9000", timeout_seconds: 2.5 }, enabled: false });

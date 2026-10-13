@@ -205,7 +205,8 @@ describe("AssetsPage", () => {
 
     it("the + opens one dialog titled Add asset with that node as the parent, and Save posts it and closes", async () => {
       const calls = mockFetch({ ...authed("admin"), "POST /api/assets": created });
-      renderWorkspace("/assets");
+      const toasts = spyToasts();
+      renderWorkspace("/assets", { toasts: toasts.api });
       await userEvent.click(await screen.findByRole("button", { name: "Add child of Site" }));
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
       const dialog = screen.getByRole("dialog", { name: "Add asset" });
@@ -214,6 +215,7 @@ describe("AssetsPage", () => {
       await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(posts(calls).map((c) => c.body)).toEqual([{ name: "Room B", parent_id: 1, kind: "generic", sort_order: 0 }]);
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Asset created" }]);
     });
 
     it.each([
@@ -567,13 +569,15 @@ describe("AssetsPage", () => {
       ...authed("admin"),
       "POST /api/assets": { status: 409, body: { detail: 'an asset named "Room A" already exists under "Site"; choose another name' } },
     });
-    renderWorkspace("/assets");
+    const toasts = spyToasts();
+    renderWorkspace("/assets", { toasts: toasts.api });
     await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
     await userEvent.type(screen.getByLabelText("Name"), "Room A");
     await userEvent.selectOptions(screen.getByLabelText("Parent"), "1");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent('an asset named "Room A" already exists under "Site"');
     expect(screen.getByLabelText("Name")).toHaveValue("Room A"); // the form stays open with what was typed
+    expect(toasts.calls).toEqual([]);
   });
 
   describe("saving refreshes the fleet figures too", () => {
@@ -583,7 +587,8 @@ describe("AssetsPage", () => {
         "POST /api/assets": { status: 201, body: { id: 3, parent_id: 1, name: "Room B", kind: "generic", sort_order: 0 } },
         "PATCH /api/assets/2": { body: { ...assets[1], name: "Room A2" } },
       });
-      renderWorkspace("/assets/2", { extra: <FleetProbe /> });
+      const toasts = spyToasts();
+      renderWorkspace("/assets/2", { extra: <FleetProbe />, toasts: toasts.api });
       const fleet = () => cacheCounts(calls).fleet;
       await waitFor(() => expect(fleet()).toBe(1));
       await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
@@ -594,6 +599,7 @@ describe("AssetsPage", () => {
       await userEvent.click(screen.getByRole("button", { name: "Edit" }));
       await userEvent.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(fleet()).toBe(3));
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Asset created" }]); // the edit closes its dialog and says nothing
     });
   });
 

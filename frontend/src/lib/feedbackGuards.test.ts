@@ -95,3 +95,44 @@ describe("no browser confirmation box anywhere (every delete goes through the st
     expect(found).toEqual([]);
   });
 });
+
+describe("one feedback per action (a form that saves in place has the Save button; a toast is for actions with no confirming control)", () => {
+  const imports = (text: string, name: string) => new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from`).test(text);
+  /** Both a SaveButton and a toast in one file is two feedbacks for one save, unless the file holds two different forms. */
+  const both = (text: string) => imports(text, "SaveButton") && imports(text, "useToast");
+  /** Files that hold two different forms: the one with a SaveButton does not toast; the other form does. Add a line only with the reason. */
+  const ALLOWED_BOTH: Record<string, string> = {
+    "src/pages/TariffsPage.tsx": "the Currency card saves in place (SaveButton, no toast); the Add rate form clears its fields and toasts; the rate delete toasts",
+  };
+
+  it("the guard can fail: a file with both imports is found, a file with one is not", () => {
+    const save = 'import { SaveButton } from "../components/SaveButton";';
+    const toast = 'import { useToast } from "../components/Toasts";';
+    expect(both(`${save}\n${toast}`)).toBe(true);
+    expect(both(`${toast}\nimport { SaveButton, type SaveState } from "../components/SaveButton";`)).toBe(true);
+    expect(both(save)).toBe(false);
+    expect(both(toast)).toBe(false);
+    expect(both('// SaveButton and useToast are named here only in a comment')).toBe(false);
+  });
+
+  it("no file imports both SaveButton and useToast, except the one that holds two different forms", () => {
+    const files = components();
+    expect(files.length).toBeGreaterThan(50);
+    const found = files.filter(([, text]) => both(text)).map(([path]) => path).sort();
+    expect(found).toEqual(Object.keys(ALLOWED_BOTH).sort()); // also fails when an allow-list entry is stale
+    // The two pages that were converted in this wave must pass without an allow-list.
+    expect(found).not.toContain("src/pages/SettingsPage.tsx");
+    expect(found).not.toContain("src/pages/StoragePage.tsx");
+  });
+
+  it("the password page confirms with a toast only: no success flag and no success paragraph in it", () => {
+    const SUCCESS = /isSuccess|className="form-ok"/;
+    expect(SUCCESS.test("{change.isSuccess && (<p className=\"form-ok\">Password changed.</p>)}")).toBe(true); // the guard can fail
+    expect(SUCCESS.test("toast.success(\"Password changed. Other sessions were signed out.\")")).toBe(false);
+    const page = readFileSync(`${SRC}/pages/PasswordPage.tsx`, "utf8");
+    expect(page).toContain("useToast");
+    expect(SUCCESS.test(page)).toBe(false);
+    // and the rule that styled it is gone from every stylesheet
+    expect(stylesheets().filter(([, css]) => css.includes(".form-ok")).map(([path]) => path)).toEqual([]);
+  });
+});

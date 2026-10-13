@@ -76,7 +76,8 @@ describe("DashboardsPage", () => {
   });
 
   it("lets an operator create a dashboard and opens it in edit mode", async () => {
-    const calls = open("operator", { "POST /api/dashboards": { status: 201, body: dashboard({ id: 9, name: "Hall C", range: "7d" }) } });
+    const toasts = spyToasts();
+    const calls = open("operator", { "POST /api/dashboards": { status: 201, body: dashboard({ id: 9, name: "Hall C", range: "7d" }) } }, undefined, toasts.api);
     await userEvent.click(await screen.findByRole("button", { name: "New dashboard" }));
     const dialog = screen.getByRole("dialog", { name: "New dashboard" });
     expect(screen.getByLabelText("Name")).toHaveFocus();
@@ -86,10 +87,12 @@ describe("DashboardsPage", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent('/dashboards/9|{"edit":true}'));
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ name: "Hall C", range: "7d" });
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Dashboard created" }]); // the page opens in edit mode, but nothing there says it was made
   });
 
   it("keeps the dialog open with the server's message when the name is taken, and Escape closes it", async () => {
-    open("operator", { "POST /api/dashboards": { status: 409, body: { detail: "a dashboard with this name already exists" } } });
+    const toasts = spyToasts();
+    open("operator", { "POST /api/dashboards": { status: 409, body: { detail: "a dashboard with this name already exists" } } }, undefined, toasts.api);
     await userEvent.click(await screen.findByRole("button", { name: "New dashboard" }));
     await userEvent.type(screen.getByLabelText("Name"), "Hall A");
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -97,6 +100,7 @@ describe("DashboardsPage", () => {
     expect(screen.getByRole("dialog", { name: "New dashboard" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toasts.calls).toEqual([]);
   });
 
   it("deletes after confirmation, refreshes the list and raises one toast; Cancel deletes nothing and raises none", async () => {
@@ -160,13 +164,14 @@ describe("DashboardsPage", () => {
 
     it("sends the id when making a default, and null when clearing it, and shows the badge move", async () => {
       let current: number | null = null;
+      const toasts = spyToasts();
       const calls = open("admin", {
         "GET /api/dashboards/default": () => ({ body: { dashboard_id: current } }),
         "PUT /api/dashboards/default": ({ body }) => {
           current = (body as { dashboard_id: number | null }).dashboard_id;
           return { body: { dashboard_id: current } };
         },
-      });
+      }, undefined, toasts.api);
       await userEvent.click(await screen.findByRole("button", { name: "Actions for Hall B" }));
       await userEvent.click(screen.getByRole("menuitem", { name: "Make default" }));
       expect(await within(screen.getByRole("link", { name: "Hall B" }).closest("tr")!).findByText("Default")).toBeInTheDocument();
@@ -175,13 +180,19 @@ describe("DashboardsPage", () => {
       await userEvent.click(await screen.findByRole("menuitem", { name: "Clear default" }));
       await waitFor(() => expect(screen.queryByText("Default")).not.toBeInTheDocument());
       expect(calls.filter((c) => c.method === "PUT").map((c) => c.body)).toEqual([{ dashboard_id: 4 }, { dashboard_id: null }]);
+      expect(toasts.calls).toEqual([
+        { kind: "success", text: '"Hall B" is now the default dashboard' },
+        { kind: "success", text: "Default dashboard cleared" },
+      ]);
     });
 
     it("shows the server's message when setting the default fails", async () => {
-      open("admin", { "PUT /api/dashboards/default": { status: 404, body: { detail: "dashboard not found" } } });
+      const toasts = spyToasts();
+      open("admin", { "PUT /api/dashboards/default": { status: 404, body: { detail: "dashboard not found" } } }, undefined, toasts.api);
       await userEvent.click(await screen.findByRole("button", { name: "Actions for Hall A" }));
       await userEvent.click(screen.getByRole("menuitem", { name: "Make default" }));
       expect(await screen.findByRole("alert")).toHaveTextContent("dashboard not found");
+      expect(toasts.calls).toEqual([]);
     });
 
     it("keeps the menu from an operator, who may only delete", async () => {

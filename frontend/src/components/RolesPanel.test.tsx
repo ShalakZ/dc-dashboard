@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { RoleRow } from "../api/types";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { builtinRoles, catalogue, roleRow } from "../test/permissionFixtures";
+import { spyToasts } from "../test/toasts";
 import { RolesPanel } from "./RolesPanel";
 
 // jsdom 26 has no PointerEvent; the row menu and the tips need a pointerType to tell a mouse from a touch.
@@ -19,6 +20,9 @@ afterAll(() => { (globalThis as { PointerEvent?: unknown }).PointerEvent = RealP
 const EXECUTIVE = roleRow({ id: 7, name: "Executive", description: "The board", user_count: 0, permissions: ["assets.view", "dashboards.view", "billing.view", "billing.export"] });
 const HELD = roleRow({ id: 8, name: "Night shift", description: "", user_count: 2, permissions: ["assets.view"] });
 
+let toasts = spyToasts();
+beforeEach(() => { toasts = spyToasts(); });
+
 function show(routes: Routes = {}, list: () => RoleRow[] = () => [...builtinRoles(), EXECUTIVE, HELD]) {
   const calls = mockFetch({
     "GET /api/roles": () => ({ body: list() }),
@@ -28,7 +32,7 @@ function show(routes: Routes = {}, list: () => RoleRow[] = () => [...builtinRole
     ...routes,
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><RolesPanel /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}>{toasts.wrap(<RolesPanel />)}</QueryClientProvider>);
   return calls;
 }
 
@@ -112,6 +116,7 @@ describe("RolesPanel: the editor", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(await rowOf("Auditor")).toBeInTheDocument();
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ name: "Auditor", description: "", permissions: ["audit.view"] });
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Role created" }]);
   });
 
   it("Edit opens the editor on that role, with its ticks", async () => {
@@ -135,6 +140,7 @@ describe("RolesPanel: the editor", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(await rowOf("Board")).toBeInTheDocument();
     expect(within(await table()).queryByRole("row", { name: /Executive/ })).toBeNull();
+    expect(toasts.calls).toEqual([]); // an edit closes its dialog: that is its confirmation
   });
 
   it("View opens a built-in role read-only", async () => {
@@ -192,6 +198,7 @@ describe("RolesPanel: Duplicate", () => {
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({});
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(await rowOf("Copy of operator")).toBeInTheDocument(); // Cancel keeps the copy
+    expect(toasts.calls).toEqual([]); // the copy's editor opening is the feedback
   });
 
   it("View Operator, then Duplicate in the editor: the editor is editable and titled with the copy's name", async () => {
@@ -215,6 +222,7 @@ describe("RolesPanel: Duplicate", () => {
     await chooseFromMenu("Administrator", "Duplicate");
     expect(await screen.findByRole("alert")).toHaveTextContent("Cannot save a role with more access than yours.");
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(toasts.calls).toEqual([]);
   });
 });
 
@@ -257,6 +265,7 @@ describe("RolesPanel: Delete", () => {
     expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/api/roles/7"]);
     await waitFor(() => expect(within(screen.getByRole("table", { name: "Roles" })).queryByRole("row", { name: /Executive/ })).toBeNull());
     expect(screen.getByRole("button", { name: "New role" })).toHaveFocus();
+    expect(toasts.calls).toEqual([{ kind: "success", text: 'Role "Executive" deleted' }]);
   });
 
   it("Cancel deletes nothing", async () => {
@@ -266,6 +275,7 @@ describe("RolesPanel: Delete", () => {
     await userEvent.click(within(await dialog("Delete role Executive?")).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(calls.filter((c) => c.method === "DELETE")).toEqual([]);
+    expect(toasts.calls).toEqual([]);
   });
 
   it("when the role was given to an account meanwhile: shows the server's sentence, keeps the row, and refreshes the list", async () => {
@@ -286,5 +296,6 @@ describe("RolesPanel: Delete", () => {
     await userEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
     expect(await rowOf("Executive")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Delete Executive" })).toBeDisabled());
+    expect(toasts.calls).toEqual([]); // the refusal stays in the dialog
   });
 });

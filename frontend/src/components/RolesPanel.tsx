@@ -8,6 +8,7 @@ import { PageCard } from "./PageCard";
 import { RoleEditor, type EditorMode } from "./RoleEditor";
 import { RowActions } from "./RowActions";
 import { TableSkeleton } from "./Skeleton";
+import { useToast } from "./Toasts";
 import { TrashButton } from "./TrashButton";
 
 const messageOf = (error: unknown) => sentence(error instanceof Error ? error.message : "request failed");
@@ -60,6 +61,7 @@ export function RolesPanel() {
   const permissions = usePermissions();
   const duplicate = useDuplicateRole();
   const remove = useDeleteRole();
+  const toast = useToast();
   const [editor, setEditor] = useState<EditorMode | null>(null);
   const [deleting, setDeleting] = useState<RoleRow | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -133,6 +135,7 @@ export function RolesPanel() {
             } catch (e) {
               throw new Error(messageOf(e)); // shown in the dialog; the list has been refreshed (the role may be in use now)
             }
+            toast.success(`Role "${roleDisplayName(deleting)}" deleted`);
             setDeleting(null);
             setDeletions((n) => n + 1);
           }}

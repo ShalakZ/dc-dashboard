@@ -385,13 +385,32 @@ describe("TariffsPage", () => {
   });
 
   it("adds a site default rate and shows it", async () => {
-    const calls = open();
+    const toasts = spyToasts();
+    const calls = open(toasts.api);
     const form = await screen.findByRole("form", { name: "Add site default rate" });
     await fillRate(form, "2026-11-01", "0.2");
     await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body)
       .toEqual({ asset_id: null, rate_per_kwh: 0.2, effective_from: "2026-11-01" }));
     expect(await within(screen.getByRole("table", { name: "Site default rates" })).findByText("2026-11-01")).toBeInTheDocument();
+    await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "Rate added" }]));
+  });
+
+  it("raises no toast when a rate is refused, and none when the form is not submitted", async () => {
+    overrides = {
+      "POST /api/tariffs": { status: 409, body: { detail: "a rate for this asset (or the site default) already starts on that date" } },
+    };
+    const toasts = spyToasts();
+    open(toasts.api);
+    const form = await screen.findByRole("form", { name: "Add site default rate" });
+    await fillRate(form, "2026-10-01", "0.2");
+    await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("already starts on that date");
+    const override = screen.getByRole("form", { name: "Add asset override" });
+    await fillRate(override, "2026-11-01", "0.1");
+    await userEvent.click(within(override).getByRole("button", { name: "Add rate" })); // no asset chosen: refused before any request
+    expect(await within(override).findByRole("alert")).toHaveTextContent("Choose an asset.");
+    expect(toasts.calls).toEqual([]);
   });
 
   it("steps both rate inputs by cents, the add forms' and an edit row's", async () => {
@@ -540,13 +559,15 @@ describe("TariffsPage", () => {
   });
 
   it("edits the effective date and sends only that", async () => {
-    const calls = open();
+    const toasts = spyToasts();
+    const calls = open(toasts.api);
     const row = (await screen.findByText("2026-10-01")).closest("tr")!;
     await edit(row);
     fireEvent.change(within(row).getByLabelText("Effective from"), { target: { value: "2026-10-05" } });
     await userEvent.click(within(row).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ effective_from: "2026-10-05" }));
     expect(await within(row).findByText("2026-10-05")).toBeInTheDocument();
+    expect(toasts.calls).toEqual([]); // the row edit shows its result in place
   });
 
   it("shows the server's reason in the row when an edit is refused", async () => {

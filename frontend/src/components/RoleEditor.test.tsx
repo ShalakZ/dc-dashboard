@@ -8,6 +8,7 @@ import type { PermissionRow, RoleRow } from "../api/types";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { builtinRoles, catalogue, roleRow } from "../test/permissionFixtures";
+import { spyToasts } from "../test/toasts";
 import { RoleEditor, type EditorMode } from "./RoleEditor";
 
 // jsdom 26 has no PointerEvent; the tip needs a pointerType to tell a mouse from a touch.
@@ -29,6 +30,9 @@ function RolesProbe() {
 const NEW: EditorMode = { kind: "new" };
 const editing = (role: RoleRow, justCopied = false): EditorMode => ({ kind: "edit", role, justCopied });
 
+let toasts = spyToasts();
+beforeEach(() => { toasts = spyToasts(); });
+
 function open(mode: EditorMode, { routes = {}, permissions = catalogue() }: { routes?: Routes; permissions?: PermissionRow[] } = {}) {
   const calls = mockFetch({ "GET /api/roles": { body: [] }, "GET /api/users": { body: [] }, "GET /api/audit/options": { body: {} }, ...routes });
   const onClose = vi.fn();
@@ -38,7 +42,7 @@ function open(mode: EditorMode, { routes = {}, permissions = catalogue() }: { ro
   const view = render(
     <QueryClientProvider client={client}>
       <RolesProbe />
-      <RoleEditor mode={mode} roles={[...builtinRoles(), roleRow()]} permissions={permissions} onClose={onClose} onSaved={onSaved} onDuplicate={onDuplicate} />
+      {toasts.wrap(<RoleEditor mode={mode} roles={[...builtinRoles(), roleRow()]} permissions={permissions} onClose={onClose} onSaved={onSaved} onDuplicate={onDuplicate} />)}
     </QueryClientProvider>,
   );
   return { calls, onClose, onSaved, onDuplicate, ...view };
@@ -117,6 +121,7 @@ describe("RoleEditor: saving a new role", () => {
     expect(body.description).toBe("The board");
     expect(sorted(body.permissions)).toEqual(["assets.view", "billing.export", "billing.view", "dashboards.view"]);
     expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: 9 }));
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Role created" }]);
   });
 
   it("saves a role with no permissions at all: the summary says no pages", async () => {
@@ -207,6 +212,7 @@ describe("RoleEditor: what the server refuses", () => {
     expect(save()).toBeEnabled();
     expect(onClose).not.toHaveBeenCalled();
     expect(onSaved).not.toHaveBeenCalled();
+    expect(toasts.calls).toEqual([]);
   });
 
   it("shows a built-in role's name being refused, and a 422 validation text, the same way", async () => {
@@ -288,6 +294,7 @@ describe("RoleEditor: editing a custom role", () => {
     await userEvent.click(save());
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(sentBody(calls, "PATCH")).toEqual({ name: "Board" });
+    expect(toasts.calls).toEqual([]); // an edit closes its dialog: no toast
   });
 
   it("shows the line about a copy that already exists, only for a fresh copy", () => {

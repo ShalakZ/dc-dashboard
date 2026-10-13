@@ -6,6 +6,7 @@ import type { Source, SourceIn } from "../api/types";
 import { coerceValues, fieldsFromSchema, initialValues, valuesFromConfig, type RawValues } from "../lib/schemaForm";
 import { useModalBusy } from "./Modal";
 import { SchemaForm } from "./SchemaForm";
+import { useToast } from "./Toasts";
 
 /** Without `source` the form adds one; with it, it edits that source (its connector cannot change). */
 export function SourceForm({ source, onDone }: { source?: Source; onDone: () => void }) {
@@ -13,6 +14,7 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
   const connectors = data ?? [];
   const invalidate = useInvalidate();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const secretHintId = useId();
   const hiddenNoteId = useId();
   const [name, setName] = useState(source?.name ?? "");
@@ -58,6 +60,7 @@ export function SourceForm({ source, onDone }: { source?: Source; onDone: () => 
       } else {
         const body: SourceIn = { name, connector_type: connector!.type, config: coerceValues(fields, values), secret: secret || null, enabled };
         await api.post("/api/sources", body);
+        toast.success("Source added"); // right after the request: the dialog closes and the new row is the only other sign
         setSecret("");
         await invalidate(keys.sources, keys.secretKey);
       }

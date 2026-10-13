@@ -6,6 +6,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { RowActions, type RowAction } from "../components/RowActions";
 import { TableSkeleton } from "../components/Skeleton";
+import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
 import { roleLabel } from "../components/navItems";
 import { sentence } from "../lib/sentence";
@@ -43,6 +44,7 @@ function UserRowView({ user, self, canEdit, offered, open, about, onDeleted }: {
   const patch = usePatchUser();
   const remove = useDeleteUser();
   const unblock = useUnblockUser();
+  const toast = useToast();
   const [newPassword, setNewPassword] = useState("");
   const [resetting, setResetting] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -100,7 +102,14 @@ function UserRowView({ user, self, canEdit, offered, open, about, onDeleted }: {
                   e.preventDefault();
                   patch.mutate(
                     { id: user.id, body: { password: newPassword } },
-                    { onSuccess: () => { setNewPassword(""); closeReset(); } },
+                    {
+                      onSuccess: () => {
+                        setNewPassword("");
+                        closeReset();
+                        // The form closes exactly as Cancel does and nothing else on the row changes: the toast is the only sign it worked.
+                        toast.success(`Password reset for ${user.username}`);
+                      },
+                    },
                   );
                 }}
               >
@@ -133,6 +142,7 @@ function UserRowView({ user, self, canEdit, offered, open, about, onDeleted }: {
                 } catch (e) {
                   throw new Error(errorText(e)); // the dialog shows the message as it is: a sentence, like the row's own errors
                 }
+                toast.success(`User "${user.username}" deleted`); // right after the request, before the row goes
                 setDeleting(false);
                 onDeleted();
               }}
@@ -156,6 +166,7 @@ export function UsersTab({ onDeleted }: { onDeleted: () => void }) {
   const roles = useRoles(canEdit); // only the people who can change an account need to know which roles they may hand out
   const offered = offeredRoles(roles.data);
   const create = useCreateUser();
+  const toast = useToast();
   const [form, setForm] = useState({ username: "", password: "", role: "viewer" });
   const noteId = useId();
   // The form starts on viewer; a person who may not hand that out starts on the first role they may.
@@ -193,7 +204,12 @@ export function UsersTab({ onDeleted }: { onDeleted: () => void }) {
             className="create-user"
             onSubmit={(e) => {
               e.preventDefault();
-              create.mutate({ ...form, role: chosen }, { onSuccess: () => setForm({ username: "", password: "", role: "viewer" }) });
+              create.mutate({ ...form, role: chosen }, {
+                onSuccess: () => {
+                  setForm({ username: "", password: "", role: "viewer" });
+                  toast.success("User created"); // the fields clear, but nothing says the account exists until the list refreshes
+                },
+              });
             }}
           >
             <label>

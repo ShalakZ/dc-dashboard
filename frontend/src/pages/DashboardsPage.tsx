@@ -38,6 +38,16 @@ export function DashboardsPage() {
     toast.success(`Dashboard "${d.name}" deleted`);
   });
 
+  // The menu closes when an item is chosen and the badge moves only after the list is read again: the toast says what just happened.
+  const makeDefault = (d: DashboardListItem) => run(async () => {
+    await setDefault.mutateAsync({ dashboard_id: d.id });
+    toast.success(`"${d.name}" is now the default dashboard`);
+  });
+  const clearDefault = () => run(async () => {
+    await setDefault.mutateAsync({ dashboard_id: null });
+    toast.success("Default dashboard cleared");
+  });
+
   // The heading is always there (App.test.tsx finds the page by it); the body waits for the list and the site zone.
   return (
     <>
@@ -79,8 +89,8 @@ export function DashboardsPage() {
                           <RowActions
                             label={`Actions for ${d.name}`}
                             items={[d.id === defaultId
-                              ? { label: "Clear default", onSelect: () => run(() => setDefault.mutateAsync({ dashboard_id: null })) }
-                              : { label: "Make default", onSelect: () => run(() => setDefault.mutateAsync({ dashboard_id: d.id })) }]}
+                              ? { label: "Clear default", onSelect: clearDefault }
+                              : { label: "Make default", onSelect: () => makeDefault(d) }]}
                           />
                         )}
                         {canEdit && <TrashButton label={`Delete ${d.name}`} onClick={() => confirmDelete(d)} />}

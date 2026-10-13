@@ -354,7 +354,8 @@ describe("SourcesPage", () => {
 
     it("Add source opens a dialog with the same fields as before; pressing the button again does not close it; Escape does", async () => {
       const calls = mockFetch({ ...routes("admin"), ...withConnectors, "POST /api/sources": { status: 201, body: { id: 3 } } });
-      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      const toasts = spyToasts();
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources", toasts: toasts.api });
       const add = await screen.findByRole("button", { name: "Add source" });
       await userEvent.click(add);
       const dialog = await screen.findByRole("dialog", { name: "Add source" });
@@ -368,6 +369,7 @@ describe("SourcesPage", () => {
       await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(calls.find((c) => c.method === "POST" && c.path === "/api/sources")?.body).toMatchObject({ name: "new one", connector_type: "simulator" });
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Source added" }]);
       await userEvent.click(add);
       await screen.findByRole("dialog", { name: "Add source" });
       await userEvent.keyboard("{Escape}");

@@ -116,6 +116,7 @@ function AddTariff({ assets, labels, assetsError = null }: {
   assets: Asset[] | null; labels: ReadonlyMap<number, string>; assetsError?: string | null;
 }) {
   const create = useCreateTariff();
+  const toast = useToast();
   const [assetId, setAssetId] = useState("");
   const [from, setFrom] = useState("");
   const [rate, setRate] = useState("");
@@ -128,7 +129,13 @@ function AddTariff({ assets, labels, assetsError = null }: {
     setProblem(null);
     create.mutate(
       { asset_id: assets === null ? null : Number(assetId), rate_per_kwh: Number(rate), effective_from: from },
-      { onSuccess: () => { setRate(""); setFrom(""); } },
+      {
+        onSuccess: () => {
+          setRate("");
+          setFrom("");
+          toast.success("Rate added"); // the fields clear; the new row appears in a table that may be below the fold
+        },
+      },
     );
   };
   return (

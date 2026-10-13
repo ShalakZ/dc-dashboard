@@ -16,9 +16,8 @@
   .auth-card button.primary { width: 100%; min-height: 38px; margin-top: 4px; }
 
   /* Change password: the one primary button sits left under the fields; its errors take the card's alert box (rule above) and the
-     confirmation is a mark plus the sentence */
+     confirmation is a toast */
   .password-page button.primary { justify-self: start; }
-  .form-ok { display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--ok); }
 
   /* Dashboards list: the name truncates with an ellipsis (the link carries a title), the figures and the row action stay compact */
   .dashboards-table td.name { width: 55%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

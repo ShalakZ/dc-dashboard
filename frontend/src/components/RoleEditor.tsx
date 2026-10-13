@@ -7,6 +7,7 @@ import { sentence } from "../lib/sentence";
 import { InfoTip } from "./InfoTip";
 import { Modal, useModalBusy } from "./Modal";
 import { roleLabel } from "./navItems";
+import { useToast } from "./Toasts";
 
 /** `justCopied`: the role was made by Duplicate a moment ago, so Cancel does not undo it (the copy already exists). */
 export type EditorMode = { kind: "new" } | { kind: "edit"; role: RoleRow; justCopied?: boolean };
@@ -63,6 +64,7 @@ function EditorForm({ mode, roles, permissions, onClose, onSaved, onDuplicate }:
   const builtin = role?.builtin === true;
   const create = useCreateRole();
   const patch = usePatchRole();
+  const toast = useToast();
   const [name, setName] = useState(role ? roleDisplayName(role) : "");
   const [description, setDescription] = useState(role?.description ?? "");
   const [ticked, setTicked] = useState<ReadonlySet<string>>(() => new Set(role?.permissions ?? []));
@@ -118,6 +120,7 @@ function EditorForm({ mode, roles, permissions, onClose, onSaved, onDuplicate }:
         saved = await patch.mutateAsync({ id: role.id, body });
       } else {
         saved = await create.mutateAsync({ name: cleanName, description: cleanDescription, permissions: ids });
+        toast.success("Role created"); // an edit closes its dialog and needs no word; a new role would otherwise vanish into the list
       }
       onSaved?.(saved);
       onClose();
