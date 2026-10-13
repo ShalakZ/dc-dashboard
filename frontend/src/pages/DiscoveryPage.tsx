@@ -175,6 +175,7 @@ function Canvas({ model }: { model: GraphModel }) {
             onNodeDragStop={onNodeDragStop}
             colorMode={dark ? "dark" : "light"}
             nodesConnectable={false}
+            edgesFocusable={false} // an edge is a Tab stop with no visible ring; the nodes stay focusable
             deleteKeyCode={null}
             fitView
           >
