@@ -6,7 +6,10 @@ import { userFor } from "../test/users";
 import { AuditEntryPage } from "./AuditEntryPage";
 
 const detail = { tariff_id: 3, asset_id: 7, before: { rate_per_kwh: 0.1 }, after: { rate_per_kwh: 0.12 } };
-const stored = { id: 9, user_id: 1, actor_id: 1, username: "admin", action: "tariff.updated", detail, ts: "2026-10-07T10:00:00Z" };
+const stored = {
+  id: 9, user_id: 1, actor_id: 1, username: "admin", action: "tariff.updated", detail, ts: "2026-10-07T10:00:00Z",
+  refs: { asset: { "7": "Panel A" } },
+};
 const admin: Routes = {
   "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin") },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: null } },
@@ -24,7 +27,7 @@ describe("AuditEntryPage", () => {
     expect(screen.getByText("2026-10-07 13:00:00")).toBeInTheDocument(); // 10:00Z in Asia/Qatar (UTC+3)
     expect(screen.getByText("Asia/Qatar", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("admin")).toBeInTheDocument();
-    expect(screen.getByText("Changed tariff #3: rate per kwh")).toBeInTheDocument();
+    expect(screen.getByText("Changed the tariff for asset Panel A: rate per kwh")).toBeInTheDocument();
     const table = screen.getByRole("table");
     expect(table).toHaveTextContent("Rate per kwh");
     expect(screen.getByRole("link", { name: "Open Tariffs" })).toHaveAttribute("href", "/tariffs");

@@ -24,7 +24,7 @@ const EXPECTED: Record<string, AuditKind> = {
 describe("auditKind", () => {
   it("names the kind of every one of the 45 actions in the audit text table", () => {
     const source = readFileSync("src/lib/auditText.ts", "utf8"); // vitest runs from the frontend directory
-    const table = source.slice(source.indexOf("const RULES"), source.indexOf("function factLabel"));
+    const table = source.slice(source.indexOf("const RULES"), source.indexOf("function build("));
     const actions = [...table.matchAll(/^ {2}"([a-z_.]+)":/gm)].map((m) => m[1]);
     expect(actions).toHaveLength(45);
     expect([...actions].sort()).toEqual(Object.keys(EXPECTED).sort());

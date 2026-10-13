@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "../api/client";
+import type { AuditRefs } from "../api/types";
 import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
@@ -17,7 +18,9 @@ vi.mock("../lib/download", () => ({ downloadCsv: vi.fn() }));
 const entry = (id: number, action: string, detail: Record<string, unknown> = { scan_id: id }, username: string | null = "admin") => ({
   id, user_id: username ? 1 : null, actor_id: username ? 1 : null, username, action, detail, ts: "2026-10-07T10:00:00Z",
 });
-const list = (total: number, items: ReturnType<typeof entry>[], offset = 0) => ({ body: { total, offset, limit: 50, items } });
+const list = (total: number, items: (ReturnType<typeof entry> & { refs?: AuditRefs })[], offset = 0) => ({
+  body: { total, offset, limit: 50, items },
+});
 
 const admin: Routes = {
   "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin") },
@@ -110,6 +113,17 @@ describe("AuditPage", () => {
     expect(document.querySelector(".what-text")!.textContent).toBe("Created asset Panel A Open asset Panel A");
   });
 
+  it("names the asset of a tariff entry from the entry's refs, and says 'a deleted asset' when the server did not find it", async () => {
+    const tariff = { tariff_id: 3, asset_id: 7, rate_per_kwh: 0.16, effective_from: "2026-10-13" };
+    setup("/audit", list(2, [
+      { ...entry(9, "tariff.created", tariff), refs: { asset: { "7": "MV2-R1-LV-Panel-02" } } },
+      { ...entry(8, "tariff.created", tariff), refs: {} },
+    ]));
+    expect(await screen.findByText("Created tariff 0.16 per kWh from 2026-10-13 for asset MV2-R1-LV-Panel-02")).toBeInTheDocument();
+    expect(screen.getByText("Created tariff 0.16 per kWh from 2026-10-13 for a deleted asset")).toBeInTheDocument();
+    expect(screen.queryByText(/#\d/)).not.toBeInTheDocument(); // no id in any visible text
+  });
+
   it("links an entry to the thing it is about and opens its details in a row under it from a Details button", async () => {
     setup("/audit", list(1, [entry(9, "asset.created", { asset_id: 7, name: "Panel A" })]));
     expect(await screen.findByText("Created asset Panel A")).toBeInTheDocument();
@@ -117,19 +131,21 @@ describe("AuditPage", () => {
     const details = screen.getByRole("button", { name: "Details of entry #9" });
     expect(details).toHaveAttribute("aria-expanded", "false");
     expect(details).not.toHaveAttribute("aria-controls"); // nothing to control while the row is not drawn
-    expect(screen.queryByText("Asset id")).not.toBeInTheDocument(); // closed: nothing drawn yet
+    expect(document.querySelector(".detail-summary")).toBeNull(); // closed: nothing drawn yet
     const body = document.querySelector(".audit-table tbody")!;
     expect(body.querySelectorAll("tr")).toHaveLength(1);
     await userEvent.click(details);
-    expect(await screen.findByText("Asset id")).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector(".detail-summary")).not.toBeNull());
     expect(details).toHaveAttribute("aria-expanded", "true");
     const opened = body.querySelectorAll("tr");
     expect(opened).toHaveLength(2);
     expect(opened[1]).toHaveAttribute("id", details.getAttribute("aria-controls")); // the row under the entry
     expect(opened[1].querySelector("td")).toHaveAttribute("colspan", "4");
-    expect(opened[1]).toContainElement(screen.getByText("Asset id"));
+    // The sentence is in the row and again in the detail under it; no list of stored fields (the ids) is drawn.
+    expect(opened[1].querySelector(".detail-summary")).toHaveTextContent("Created asset Panel A");
+    expect(within(opened[1] as HTMLElement).queryByText("Asset id")).not.toBeInTheDocument();
     await userEvent.click(details);
-    expect(screen.queryByText("Asset id")).not.toBeInTheDocument();
+    expect(document.querySelector(".detail-summary")).toBeNull();
     expect(body.querySelectorAll("tr")).toHaveLength(1);
     expect(details).toHaveAttribute("aria-expanded", "false");
     expect(details).not.toHaveAttribute("aria-controls");

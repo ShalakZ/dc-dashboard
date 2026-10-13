@@ -1,4 +1,4 @@
-import type { AuditEntry } from "../api/types";
+import type { AuditEntry, AuditRefs, RefKind } from "../api/types";
 import { assetIconLabel } from "./assetIcons";
 import { PERMISSION_LABELS, type PermissionId } from "./permissions";
 
@@ -12,7 +12,7 @@ export interface AuditView {
   changes: AuditChange[];
   /** Fields on both sides with equal values (a storage save lists every field). */
   unchanged: number;
-  /** The stored fields when there is no before/after, else the subject fields (everything except before and after). */
+  /** Always empty: the drawer's JSON block replaced the list of stored fields (Task 4 removes the member with the old detail views). */
   facts: { label: string; value: string }[];
   link: { to: string; label: string } | null;
 }
@@ -20,7 +20,7 @@ export interface AuditView {
 type Detail = Record<string, unknown>;
 type AuditLink = NonNullable<AuditView["link"]>;
 interface Sides { before: Detail; after: Detail }
-interface Context { d: Detail; sides: Sides | null; fields: string }
+interface Context { d: Detail; sides: Sides | null; fields: string; refs: AuditRefs | undefined }
 interface Rule { summary: (c: Context) => string; link?: (c: Context) => AuditLink | null }
 
 const isObject = (value: unknown): value is Detail => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -32,6 +32,34 @@ const text = (value: unknown): string | null => (typeof value === "string" && va
 const idOf = (value: unknown): number | null =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
+// A friendly sentence never shows a database id (the Scan numbers excepted): a name comes from the stored detail or from
+// the server's `refs` lookup, a target the lookup could not find reads "a deleted asset", and with no lookup at all
+// (`refs` undefined: a test fixture or a future caller) it reads "an asset".
+const REF_KINDS: readonly RefKind[] = ["asset", "user", "source", "dashboard", "point"];
+const kindOf = (noun: string): RefKind | undefined => REF_KINDS.find((kind) => kind === noun);
+const article = (noun: string) => `${/^[aeiou]/.test(noun) ? "an" : "a"} ${noun}`;
+
+/** What the lookup says about one id: the name it has now, gone (a lookup was made and the id is not in it) or unknown (none was made). */
+type Found = { is: "name"; name: string } | { is: "gone" } | { is: "unknown" };
+
+function ref(refs: AuditRefs | undefined, kind: RefKind, id: number): Found {
+  if (!isObject(refs)) return { is: "unknown" };
+  const names = get(refs, kind);
+  const name = isObject(names) ? text(get(names, String(id))) : null;
+  return name ? { is: "name", name } : { is: "gone" };
+}
+
+/** What stands for a target the lookup has no name for: "a deleted asset", or "an asset" when no lookup was made. */
+const nameless = (found: Found, kind: RefKind) => (found.is === "gone" ? `a deleted ${kind}` : article(kind));
+
+/** "asset Panel A", "a deleted asset" or "an asset"; null when `id` is not a usable id, so there is no target to name. */
+function target(refs: AuditRefs | undefined, kind: RefKind, id: unknown): string | null {
+  const n = idOf(id);
+  if (n === null) return null;
+  const found = ref(refs, kind, n);
+  return found.is === "name" ? `${kind} ${found.name}` : nameless(found, kind);
+}
 
 /** "rate_per_kwh" -> "Rate per kwh". */
 export function humanise(key: string): string {
@@ -70,22 +98,47 @@ function fieldValue(key: string, value: unknown): string {
   return (typeof value === "string" ? assetIconLabel(value) : null) ?? formatValue(value);
 }
 
+// The fields of a before/after side that hold the id of another record: shown as a label without "id" and as the name.
+const ID_FIELDS: Record<string, { kind: RefKind; label: string }> = {
+  parent_id: { kind: "asset", label: "Parent asset" },
+  asset_id: { kind: "asset", label: "Asset" },
+  user_id: { kind: "user", label: "User" },
+  source_id: { kind: "source", label: "Source" },
+  dashboard_id: { kind: "dashboard", label: "Dashboard" },
+  point_id: { kind: "point", label: "Point" },
+};
+
+/** An id field's value: the name, "a deleted asset", "an asset" without a lookup, "—" for none; anything that is not an id as it is stored. */
+function idFieldValue(refs: AuditRefs | undefined, kind: RefKind, value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  const id = idOf(value);
+  if (id === null) return formatValue(value);
+  const found = ref(refs, kind, id);
+  return found.is === "name" ? found.name : nameless(found, kind);
+}
+
 // What a field is called, and how its value reads, where the stored form is not for people.
-function describeChange(key: string, before: unknown, after: unknown): AuditChange {
+function describeChange(refs: AuditRefs | undefined, key: string, before: unknown, after: unknown): AuditChange {
   if (key === "widgets_hash") return { field: "Widget layout", before: "earlier layout", after: "the widget layout changed" };
+  if (has(ID_FIELDS, key)) {
+    const { kind, label } = ID_FIELDS[key];
+    return { field: label, before: idFieldValue(refs, kind, before), after: idFieldValue(refs, kind, after) };
+  }
   return { field: humanise(key), before: fieldValue(key, before), after: fieldValue(key, after) };
 }
 
-function diff(sides: Sides): { changes: AuditChange[]; unchanged: number } {
+function diff(sides: Sides, refs: AuditRefs | undefined): { changes: AuditChange[]; unchanged: number } {
   const changes: AuditChange[] = [];
   let unchanged = 0;
+  // dashboard.default_changed keeps the dashboard's name beside its id; the name row says it, so the id row would say it twice.
+  const namedDashboard = has(sides.before, "dashboard") || has(sides.after, "dashboard");
   for (const key of new Set([...Object.keys(sides.before), ...Object.keys(sides.after)])) {
     const before = get(sides.before, key);
     const after = get(sides.after, key);
     if (stable(before) === stable(after)) {
       if (has(sides.before, key) && has(sides.after, key)) unchanged += 1;
-    } else {
-      changes.push(describeChange(key, before, after));
+    } else if (!(key === "dashboard_id" && namedDashboard)) {
+      changes.push(describeChange(refs, key, before, after));
     }
   }
   return { changes, unchanged };
@@ -102,11 +155,21 @@ function fieldList(changes: AuditChange[]): string {
 
 const withFields = (sentence: string, fields: string) => (fields ? `${sentence}: ${fields}` : sentence);
 
-/** "asset Panel A", else "asset #7", else "asset". `fit` shapes the name for the sentence. */
-function thing(noun: string, d: Detail, idKey: string, fit: (name: string) => string = (name) => name): string {
-  const name = text(d.name) ?? text(d.username);
-  const id = idOf(d[idKey]);
-  return name ? `${noun} ${fit(name)}` : id !== null ? `${noun} #${id}` : noun;
+/**
+ * "asset Panel A", else the lookup's "asset Panel B" / "a deleted asset" (only for a `kind` the server looks up), else "asset".
+ * The name stored in the entry wins (R2): it is the name at the time of the event, and "Deleted asset Panel A" must keep saying Panel A.
+ * `fit` shapes a stored name for the sentence.
+ */
+function thing(c: Context, noun: string, idKey: string, kind?: RefKind, fit: (name: string) => string = (name) => name): string {
+  const name = text(c.d.name) ?? text(c.d.username);
+  if (name) return `${noun} ${fit(name)}`;
+  const id = idOf(c.d[idKey]);
+  if (kind && id !== null) {
+    const found = ref(c.refs, kind, id);
+    if (found.is === "name") return `${noun} ${found.name}`;
+    if (found.is === "gone") return `a deleted ${noun}`;
+  }
+  return noun;
 }
 
 const MAX_NAME_LENGTH = 80;
@@ -117,39 +180,39 @@ function shortName(name: string): string {
   return characters.length > MAX_NAME_LENGTH ? `${characters.slice(0, MAX_NAME_LENGTH).join("")}…` : name;
 }
 
-/** "role Executive", else "role #4", else "role", with the name cut. */
-const roleThing = (d: Detail) => thing("role", d, "role_id", shortName);
+/** "role Executive", else "role", with the name cut. */
+const roleThing = (c: Context) => thing(c, "role", "role_id", undefined, shortName);
 
 const page = (to: string, label: string) => (): AuditLink => ({ to, label });
-const assetLink = (id: number, name?: string | null): AuditLink => ({
-  to: `/assets/${id}`, label: name ? `Open asset ${name}` : `Open asset #${id}`,
-});
 
+/**
+ * "Open asset Panel A" to /assets/7. No link for a target the lookup says is gone (R6: it would lead to a not-found page),
+ * none without a usable id, and "Open asset" when no name is known. The stored name wins, like in the sentence.
+ */
+function linkTo(c: Context, kind: "asset" | "dashboard", id: unknown, storedName?: string | null): AuditLink | null {
+  const n = idOf(id);
+  if (n === null) return null;
+  const found = ref(c.refs, kind, n);
+  if (found.is === "gone") return null;
+  const name = storedName ?? (found.is === "name" ? found.name : null);
+  return { to: `/${kind}s/${n}`, label: name ? `Open ${kind} ${name}` : `Open ${kind}` };
+}
+
+// The ref kind of a noun, when the server looks that kind up (a role, scan scope, mapping or tariff has no name to look up).
 const made = (noun: string, idKey: string, link?: Rule["link"]): Rule => ({
-  summary: (c) => `Created ${thing(noun, c.d, idKey)}`, link,
+  summary: (c) => `Created ${thing(c, noun, idKey, kindOf(noun))}`, link,
 });
 const changed = (noun: string, idKey: string, link?: Rule["link"]): Rule => ({
-  summary: (c) => withFields(`Changed ${thing(noun, c.d, idKey)}`, c.fields), link,
+  summary: (c) => withFields(`Changed ${thing(c, noun, idKey, kindOf(noun))}`, c.fields), link,
 });
-const removed = (noun: string, idKey: string): Rule => ({ summary: (c) => `Deleted ${thing(noun, c.d, idKey)}` });
+// A deleted record is gone by definition: with no stored name the sentence says only what kind it was, never "a deleted user".
+const removed = (noun: string, idKey: string): Rule => ({ summary: (c) => `Deleted ${thing(c, noun, idKey)}` });
 
-const ownAsset = ({ d }: Context): AuditLink | null => {
-  const id = idOf(d.asset_id);
-  return id === null ? null : assetLink(id, text(d.name));
-};
-const ownDashboard = ({ d }: Context): AuditLink | null => {
-  const id = idOf(d.dashboard_id);
-  return id === null ? null : { to: `/dashboards/${id}`, label: `Open ${thing("dashboard", d, "dashboard_id")}` };
-};
-const assetOfDetail = ({ d }: Context): AuditLink | null => {
-  const id = idOf(d.asset_id);
-  return id === null ? null : assetLink(id);
-};
+const ownAsset = (c: Context): AuditLink | null => linkTo(c, "asset", c.d.asset_id, text(c.d.name));
+const ownDashboard = (c: Context): AuditLink | null => linkTo(c, "dashboard", c.d.dashboard_id, text(c.d.name));
+const assetOfDetail = (c: Context): AuditLink | null => linkTo(c, "asset", c.d.asset_id);
 // audit_change keeps only the changed fields, so a mapping moved to another asset carries the new one in `after`.
-const assetOfAfter = ({ sides }: Context): AuditLink | null => {
-  const id = sides ? idOf(get(sides.after, "asset_id")) : null;
-  return id === null ? null : assetLink(id);
-};
+const assetOfAfter = (c: Context): AuditLink | null => (c.sides ? linkTo(c, "asset", get(c.sides.after, "asset_id")) : null);
 
 /** " (wrong password)" from the stored reason ("wrong_password"), or "" when there is none. */
 function reasonSuffix(d: Detail): string {
@@ -183,25 +246,33 @@ function roleDifference(d: Detail): string {
 }
 
 /** What a user.updated entry did to the account, as one sentence; null when it changed none of role, active and password. */
-function userUpdate({ d, sides }: Context): string | null {
+function userUpdate(c: Context): string | null {
+  const { d, sides } = c;
   if (!sides) return null;
   // audit_change keeps only the fields that changed; a side that shows no difference is not claimed as a change.
   const changedKey = (key: string) => has(sides.after, key) && stable(get(sides.before, key)) !== stable(get(sides.after, key));
-  const name = text(d.username) ?? (idOf(d.user_id) !== null ? `#${idOf(d.user_id)}` : null);
+  // The stored username, else the account's name now; an account the lookup cannot find is "a deleted user" and one with no id "a user".
+  const stored = text(d.username);
+  const userId = idOf(d.user_id);
+  const found = userId !== null ? ref(c.refs, "user", userId) : null;
+  const name = stored ?? (found?.is === "name" ? found.name : null);
+  const who = name ?? (found?.is === "gone" ? "a deleted user" : "a user");
   const parts: string[] = [];
   if (changedKey("role")) {
     const from = text(get(sides.before, "role"));
     const to = formatValue(get(sides.after, "role"));
-    parts.push(`Changed the role of ${name ?? "a user"}${from ? ` from ${from}` : ""} to ${to}${roleDifference(d)}`);
+    parts.push(`Changed the role of ${who}${from ? ` from ${from}` : ""} to ${to}${roleDifference(d)}`);
   }
   if (changedKey("active")) {
     const now = get(sides.after, "active");
-    if (now === false) parts.push(`Deactivated user${name ? ` ${name}` : ""}`);
-    else if (now === true && get(sides.before, "active") === false) parts.push(`Reactivated user${name ? ` ${name}` : ""}`);
+    // "Deactivated user bob", "Deactivated a deleted user", "Deactivated user" (no id to go by).
+    const whom = name ? `user ${name}` : found?.is === "gone" ? "a deleted user" : "user";
+    if (now === false) parts.push(`Deactivated ${whom}`);
+    else if (now === true && get(sides.before, "active") === false) parts.push(`Reactivated ${whom}`);
   }
   // `before.password` is always "set"; `after.password` is "changed" when an admin set a new one ("set" would mean unchanged and is never kept).
   if (changedKey("password") && get(sides.after, "password") === "changed") {
-    parts.push(`Reset the password of ${name ?? "a user"}`);
+    parts.push(`Reset the password of ${who}`);
   }
   return parts.length > 0 ? parts.join("; ") : null;
 }
@@ -235,7 +306,7 @@ function roleUpdate(c: Context): string | null {
   if (added.length > 0) parts.push(`added ${labelList(added)}`);
   if (removed.length > 0) parts.push(`removed ${labelList(removed)}`);
   if (changedKey("description")) parts.push("changed the description");
-  return parts.length > 0 ? `Changed ${name ? `role ${shortName(name)}` : roleThing(d)}: ${parts.join("; ")}` : null;
+  return parts.length > 0 ? `Changed ${name ? `role ${shortName(name)}` : roleThing(c)}: ${parts.join("; ")}` : null;
 }
 
 const sourcesPage = page("/sources", "Open Sources");
@@ -250,18 +321,36 @@ function settingSide(side: Detail | undefined, key: string): string {
   return (side && text(get(side, key))) || "not set";
 }
 
-/** "tariff 0.1 per kWh from 2026-01-01 (site default)" from the stored fields, else "tariff #3". */
-function tariffName(d: Detail): string {
-  if (typeof d.rate_per_kwh !== "number") return thing("tariff", d, "tariff_id");
+/** "tariff 0.1 per kWh from 2026-01-01 for asset Panel A" ("(site default)" for no asset) from the stored fields, else "tariff". */
+function tariffName(c: Context): string {
+  const { d } = c;
+  if (typeof d.rate_per_kwh !== "number") return "tariff";
   const from = text(d.effective_from);
-  const asset = idOf(d.asset_id);
-  const where = d.asset_id === null ? " (site default)" : asset !== null ? ` for asset #${asset}` : "";
+  const asset = target(c.refs, "asset", d.asset_id);
+  const where = d.asset_id === null ? " (site default)" : asset !== null ? ` for ${asset}` : "";
   return `tariff ${d.rate_per_kwh} per kWh${from ? ` from ${from}` : ""}${where}`;
+}
+
+/** Which tariff an update was to: "the tariff for asset Panel A", "the site default tariff", else "a tariff". */
+function tariffOf(c: Context): string {
+  if (c.d.asset_id === null) return "the site default tariff";
+  const asset = target(c.refs, "asset", c.d.asset_id);
+  return asset !== null ? `the tariff for ${asset}` : "a tariff";
 }
 
 function scanName(d: Detail): string {
   const id = idOf(d.scan_id);
   return id !== null ? `Scan #${id}` : "A scan";
+}
+
+/** One side of dashboard.default_changed: the stored name, else the lookup's, else "a deleted dashboard"; null when the side has no dashboard. `bare` suits "from X to Y", `full` suits "Made X the default". */
+function defaultSide(c: Context, side: Detail | undefined): { bare: string; full: string } | null {
+  if (!side) return null;
+  const name = text(get(side, "dashboard"));
+  if (name) return { bare: name, full: `dashboard ${name}` };
+  const named = target(c.refs, "dashboard", get(side, "dashboard_id"));
+  if (named === null) return null;
+  return { bare: named.replace(/^dashboard /, ""), full: named };
 }
 
 // One entry per action the backend writes. backend/tests/test_audit_describers.py fails when an action is missing.
@@ -281,42 +370,37 @@ const RULES: Record<string, Rule> = {
   "dashboard.created": made("dashboard", "dashboard_id", ownDashboard),
   "dashboard.updated": changed("dashboard", "dashboard_id", ownDashboard),
   "dashboard.deleted": {
-    summary: (c) => `Deleted ${thing("dashboard", c.d, "dashboard_id")}${c.d.was_default === true ? " (it was the default dashboard)" : ""}`,
+    summary: (c) => `Deleted ${thing(c, "dashboard", "dashboard_id")}${c.d.was_default === true ? " (it was the default dashboard)" : ""}`,
   },
   // before/after carry the dashboard's id and name, null when there was none.
   "dashboard.default_changed": {
-    summary: ({ sides }) => {
-      const from = sides ? text(get(sides.before, "dashboard")) : null;
-      const to = sides ? text(get(sides.after, "dashboard")) : null;
-      if (from && to) return `Changed the default dashboard from ${from} to ${to}`;
-      if (to) return `Made dashboard ${to} the default dashboard`;
-      if (from) return `Cleared the default dashboard (was ${from})`;
+    summary: (c) => {
+      const from = defaultSide(c, c.sides?.before);
+      const to = defaultSide(c, c.sides?.after);
+      if (from && to) return `Changed the default dashboard from ${from.bare} to ${to.bare}`;
+      if (to) return `Made ${to.full} the default dashboard`;
+      if (from) return `Cleared the default dashboard (was ${from.bare})`;
       return "Changed the default dashboard";
     },
-    link: ({ sides }) => {
-      const id = sides ? idOf(get(sides.after, "dashboard_id")) : null;
-      const name = sides ? text(get(sides.after, "dashboard")) : null;
-      return id === null ? null : { to: `/dashboards/${id}`, label: name ? `Open dashboard ${name}` : `Open dashboard #${id}` };
-    },
+    link: (c) => (c.sides ? linkTo(c, "dashboard", get(c.sides.after, "dashboard_id"), text(get(c.sides.after, "dashboard"))) : null),
   },
 
   // The report text is never stored: this row says only how it was asked for.
   "diagnostics.report": {
-    summary: ({ d }) => {
-      const source = idOf(d.source_id);
-      const detail = d.detail === "full" ? "full" : "summary";
-      return `Generated a diagnostics report (${detail}, ${d.mask === true ? "masked" : "not masked"}${source !== null ? `, source #${source}` : ""})`;
+    summary: (c) => {
+      const source = target(c.refs, "source", c.d.source_id);
+      const detail = c.d.detail === "full" ? "full" : "summary";
+      return `Generated a diagnostics report (${detail}, ${c.d.mask === true ? "masked" : "not masked"}${source !== null ? `, ${source}` : ""})`;
     },
     link: page("/diagnostics", "Open Diagnostics"),
   },
 
   "discovery.accepted": {
-    summary: ({ d }) => {
-      const asset = idOf(d.asset_id);
+    summary: ({ d, refs }) => {
       const mappings = typeof d.mappings === "number" ? count(d.mappings, "mapping") : null;
-      const target = asset !== null ? `asset #${asset}` : "an asset";
-      if (d.created_asset === true) return `Accepted discovery: created ${target}${mappings ? ` with ${mappings}` : ""}`;
-      return `Accepted discovery: added ${mappings ?? "mappings"} to ${target}`;
+      const asset = target(refs, "asset", d.asset_id) ?? "an asset";
+      if (d.created_asset === true) return `Accepted discovery: created ${asset}${mappings ? ` with ${mappings}` : ""}`;
+      return `Accepted discovery: added ${mappings ?? "mappings"} to ${asset}`;
     },
     link: assetOfDetail,
   },
@@ -329,42 +413,49 @@ const RULES: Record<string, Rule> = {
   "login.locked": { summary: ({ d }) => `Sign-in blocked after repeated failures${reasonSuffix(d)}` },
   "login.succeeded": { summary: () => "Signed in" },
   // The User column is the admin who unblocked; user_id in the detail is the account that was unblocked.
-  "login.unblocked": { summary: (c) => `Unblocked sign-in for ${thing("user", c.d, "user_id")}`, link: usersPage },
+  "login.unblocked": { summary: (c) => `Unblocked sign-in for ${thing(c, "user", "user_id", "user")}`, link: usersPage },
 
+  // A mapping has no name: it is described by its point and its asset, never by its own id.
   "mapping.created": {
-    summary: ({ d }) => {
-      const point = idOf(d.point_id);
-      const asset = idOf(d.asset_id);
+    summary: ({ d, refs }) => {
+      const point = target(refs, "point", d.point_id);
+      const asset = target(refs, "asset", d.asset_id);
       const metric = text(d.metric);
-      return [
-        point !== null ? `Mapped point #${point}` : "Created a mapping",
-        asset !== null ? ` to asset #${asset}` : "",
-        metric ? ` as ${metric}` : "",
-      ].join("");
+      return [point !== null ? `Mapped ${point}` : "Created a mapping", asset !== null ? ` to ${asset}` : "", metric ? ` as ${metric}` : ""].join("");
     },
     link: assetOfDetail,
   },
   "mapping.updated": {
-    summary: (c) => withFields(`Changed ${thing("mapping", c.d, "mapping_id")}`, c.fields),
+    summary: (c) => {
+      const point = target(c.refs, "point", c.d.point_id);
+      return withFields(point !== null ? `Changed the mapping of ${point}` : "Changed a mapping", c.fields);
+    },
     link: assetOfAfter,
   },
-  "mapping.deleted": removed("mapping", "mapping_id"),
+  "mapping.deleted": {
+    summary: ({ d, refs }) => {
+      const point = target(refs, "point", d.point_id);
+      const asset = target(refs, "asset", d.asset_id);
+      return `Deleted ${point !== null ? `the mapping of ${point}` : "a mapping"}${asset !== null ? ` to ${asset}` : ""}`;
+    },
+  },
 
   "password.change_failed": { summary: () => "Failed password change (wrong current password)" },
   "password.changed": { summary: () => "Changed own password" },
 
   "role.created": {
-    summary: ({ d }) => {
+    summary: (c) => {
+      const { d } = c;
       const copied = text(d.copied_from);
       const labels = permissionLabels(d.permissions);
       const granted = Array.isArray(d.permissions) ? `: ${labels.length > 0 ? labelList(labels) : "no permissions"}` : "";
-      return `Created ${roleThing(d)}${copied ? ` as a copy of ${shortName(copied)}` : ""}${granted}`;
+      return `Created ${roleThing(c)}${copied ? ` as a copy of ${shortName(copied)}` : ""}${granted}`;
     },
     link: rolesPage,
   },
-  "role.deleted": { summary: ({ d }) => `Deleted ${roleThing(d)}` },
+  "role.deleted": { summary: (c) => `Deleted ${roleThing(c)}` },
   "role.updated": {
-    summary: (c) => roleUpdate(c) ?? withFields(`Changed ${roleThing(c.d)}`, c.fields),
+    summary: (c) => roleUpdate(c) ?? withFields(`Changed ${roleThing(c)}`, c.fields),
     link: rolesPage,
   },
 
@@ -384,21 +475,21 @@ const RULES: Record<string, Rule> = {
     link: scansPage,
   },
 
-  "scope.created": { summary: (c) => `Created scan ${thing("scope", c.d, "scope_id")}`, link: scansPage },
+  "scope.created": { summary: (c) => `Created scan ${thing(c, "scope", "scope_id")}`, link: scansPage },
   "scope.updated": {
-    summary: (c) => withFields(`Changed scan ${thing("scope", c.d, "scope_id")}`, c.fields),
+    summary: (c) => withFields(`Changed scan ${thing(c, "scope", "scope_id")}`, c.fields),
     link: scansPage,
   },
-  "scope.deleted": { summary: (c) => `Deleted scan ${thing("scope", c.d, "scope_id")}` },
+  "scope.deleted": { summary: (c) => `Deleted scan ${thing(c, "scope", "scope_id")}` },
 
   "settings.sign_in_changed": {
-    summary: ({ d, sides, fields }) => {
+    summary: ({ d, sides, fields, refs }) => {
       // audit_change keeps only the changed fields, so `enabled` is in `after` exactly when the switch was thrown.
       const now = sides ? get(sides.after, "enabled") : undefined;
       if (!sides || typeof now !== "boolean" || stable(get(sides.before, "enabled")) === stable(now)) {
         return withFields("Changed the sign-in protection", fields);
       }
-      const numbers = fieldList(diff(sides).changes.filter((change) => change.field !== "Enabled"));
+      const numbers = fieldList(diff(sides, refs).changes.filter((change) => change.field !== "Enabled"));
       // Switching off ends every current block; the subject says how many.
       const ended = idOf(d.blocks_ended); // a positive whole number, which is all this needs
       return withFields(`Sign-in protection switched ${now ? "on" : "off"}${ended !== null ? ` (${count(ended, "block")} ended)` : ""}`, numbers);
@@ -415,9 +506,9 @@ const RULES: Record<string, Rule> = {
 
   "setup.completed": { summary: () => "Completed the first-run setup" },
 
-  "source.browsed": { summary: (c) => `Started a browse of ${thing("source", c.d, "source_id")}`, link: sourcesPage },
+  "source.browsed": { summary: (c) => `Started a browse of ${thing(c, "source", "source_id", "source")}`, link: sourcesPage },
   "source.checked": {
-    summary: (c) => `Started a connection check of ${thing("source", c.d, "source_id")}`,
+    summary: (c) => `Started a connection check of ${thing(c, "source", "source_id", "source")}`,
     link: sourcesPage,
   },
   "source.created": made("source", "source_id", sourcesPage),
@@ -428,7 +519,7 @@ const RULES: Record<string, Rule> = {
     link: sourcesPage,
   },
   "source.tested": {
-    summary: (c) => `Started a connection test of ${thing("source", c.d, "source_id")}`,
+    summary: (c) => `Started a connection test of ${thing(c, "source", "source_id", "source")}`,
     link: sourcesPage,
   },
   "source.updated": changed("source", "source_id", sourcesPage),
@@ -443,46 +534,40 @@ const RULES: Record<string, Rule> = {
     link: storagePage,
   },
 
-  "tariff.created": { summary: ({ d }) => `Created ${tariffName(d)}`, link: tariffsPage },
-  "tariff.updated": changed("tariff", "tariff_id", tariffsPage),
-  "tariff.deleted": { summary: ({ d }) => `Deleted ${tariffName(d)}` },
+  "tariff.created": { summary: (c) => `Created ${tariffName(c)}`, link: tariffsPage },
+  "tariff.updated": { summary: (c) => withFields(`Changed ${tariffOf(c)}`, c.fields), link: tariffsPage },
+  "tariff.deleted": { summary: (c) => `Deleted ${tariffName(c)}` },
 
   "user.created": {
-    summary: ({ d }) => {
-      const role = text(d.role);
-      return `Created ${thing("user", d, "user_id")}${role ? ` (${role})` : ""}`;
+    summary: (c) => {
+      const role = text(c.d.role);
+      return `Created ${thing(c, "user", "user_id", "user")}${role ? ` (${role})` : ""}`;
     },
     link: usersPage,
   },
   "user.deleted": removed("user", "user_id"),
   "user.updated": {
-    summary: (c) => userUpdate(c) ?? withFields(`Changed ${thing("user", c.d, "user_id")}`, c.fields),
+    summary: (c) => userUpdate(c) ?? withFields(`Changed ${thing(c, "user", "user_id", "user")}`, c.fields),
     link: usersPage,
   },
 };
-
-function factLabel(action: string, key: string): string {
-  // In a user.* entry user_id is the account that was changed; the actor is the entry's own user.
-  return (action.startsWith("user.") || action === "login.unblocked") && key === "user_id" ? "Account id" : humanise(key);
-}
 
 function build(entry: AuditEntry): AuditView {
   const action = typeof entry.action === "string" ? entry.action : "";
   const detail: Detail = isObject(entry.detail) ? entry.detail : {};
   const sides: Sides | null =
     isObject(detail.before) && isObject(detail.after) ? { before: detail.before, after: detail.after } : null;
-  const { changes, unchanged } = sides ? diff(sides) : { changes: [], unchanged: 0 };
-  const context: Context = { d: detail, sides, fields: fieldList(changes) };
+  // undefined = the server made no lookup; an object (even an empty one) = it did, and what it lacks no longer exists.
+  const refs = isObject(entry.refs) ? entry.refs : undefined;
+  const { changes, unchanged } = sides ? diff(sides, refs) : { changes: [], unchanged: 0 };
+  const context: Context = { d: detail, sides, fields: fieldList(changes), refs };
 
   const rule = Object.prototype.hasOwnProperty.call(RULES, action) ? RULES[action] : null;
-  const hidden = sides ? ["before", "after"] : [];
   return {
     summary: rule ? rule.summary(context) : humanise(action),
     changes,
     unchanged,
-    facts: Object.keys(detail)
-      .filter((key) => !hidden.includes(key))
-      .map((key) => ({ label: factLabel(action, key), value: fieldValue(key, get(detail, key)) })),
+    facts: [],
     link: rule?.link ? rule.link(context) : null,
   };
 }

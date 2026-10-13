@@ -3,22 +3,22 @@ import { MemoryRouter } from "react-router";
 import type { AuditEntry } from "../api/types";
 import { AuditEntryDetail } from "./AuditEntryDetail";
 
-const entry = (action: string, detail: unknown): AuditEntry => ({
-  id: 9, user_id: 1, actor_id: 1, username: "admin", action, detail: detail as Record<string, unknown>, ts: "2026-10-11T08:00:00Z",
+const entry = (action: string, detail: unknown, refs?: AuditEntry["refs"]): AuditEntry => ({
+  id: 9, user_id: 1, actor_id: 1, username: "admin", action, detail: detail as Record<string, unknown>, ts: "2026-10-11T08:00:00Z", refs,
 });
 const show = (e: AuditEntry, view: "friendly" | "raw" = "friendly") =>
   render(<MemoryRouter><AuditEntryDetail entry={e} view={view} /></MemoryRouter>);
 
 describe("AuditEntryDetail", () => {
   it("shows the sentence and a Field / Before / After table for an entry with before and after", () => {
-    show(entry("tariff.updated", { tariff_id: 3, asset_id: 7, before: { rate_per_kwh: 0.1 }, after: { rate_per_kwh: 0.12 } }));
-    expect(screen.getByText("Changed tariff #3: rate per kwh")).toBeInTheDocument();
+    show(entry("tariff.updated", { tariff_id: 3, asset_id: 7, before: { rate_per_kwh: 0.1 }, after: { rate_per_kwh: 0.12 } }, { asset: { "7": "Panel A" } }));
+    expect(screen.getByText("Changed the tariff for asset Panel A: rate per kwh")).toBeInTheDocument();
     const table = screen.getByRole("table");
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Field", "Before", "After"]);
     const row = within(table).getByRole("row", { name: /Rate per kwh/ });
     expect(within(row).getAllByRole("cell").map((c) => c.textContent)).toEqual(["Rate per kwh", "0.1", "0.12"]);
     expect(screen.getByRole("link", { name: "Open Tariffs" })).toHaveAttribute("href", "/tariffs");
-    expect(screen.getByText("Tariff id")).toBeInTheDocument(); // the subject fields
+    expect(screen.queryByText("Tariff id")).not.toBeInTheDocument(); // no list of stored fields: the ids stay in the raw view
   });
 
   it("lists two changed fields that read the same once humanised, with no repeated-key warning", () => {
@@ -44,19 +44,18 @@ describe("AuditEntryDetail", () => {
     expect(screen.getByText("2 unchanged values not shown")).toBeInTheDocument();
   });
 
-  it("lists the stored fields of an old entry that has no before and after, and draws no table", () => {
+  it("draws a sentence and no table or field list for an old entry that has no before and after", () => {
     show(entry("tariff.updated", { tariff_id: 3, rate_per_kwh: 0.12 }));
+    expect(screen.getByText("Changed a tariff")).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
-    expect(screen.getByText("Rate per kwh")).toBeInTheDocument();
-    expect(screen.getByText("0.12")).toBeInTheDocument();
+    expect(screen.queryByText("Rate per kwh")).not.toBeInTheDocument();
+    expect(screen.queryByText("0.12")).not.toBeInTheDocument();
   });
 
   it("does not throw for an action it does not know, nested values, null and arrays", () => {
     show(entry("foo.bar_baz", { nested: { a: [1, 2] }, nothing: null, list: ["x"], flag: true }));
     expect(screen.getByText("Foo bar baz")).toBeInTheDocument();
-    expect(screen.getByText('{"a":[1,2]}')).toBeInTheDocument();
-    expect(screen.getByText("—")).toBeInTheDocument();
-    expect(screen.getByText("yes")).toBeInTheDocument();
+    expect(screen.queryByText('{"a":[1,2]}')).not.toBeInTheDocument(); // the stored fields are not listed
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
