@@ -58,6 +58,20 @@ describe("initialSidebar", () => {
     expect(() => initialSidebar()).not.toThrow();
   });
 
+  it("a matchMedia that throws falls back to the stored choice instead of breaking the app", () => {
+    Object.defineProperty(window, "matchMedia", { value: () => { throw new Error("blocked"); }, configurable: true, writable: true });
+    expect(initialSidebar()).toBe("expanded");
+    localStorage.setItem(KEY, "minimized");
+    expect(initialSidebar()).toBe("minimized");
+  });
+
+  it("a matchMedia that answers nothing usable falls back to the stored choice too", () => {
+    Object.defineProperty(window, "matchMedia", { value: () => undefined, configurable: true, writable: true });
+    expect(initialSidebar()).toBe("expanded");
+    localStorage.setItem(KEY, "minimized");
+    expect(initialSidebar()).toBe("minimized");
+  });
+
   it("falls back to expanded when reading storage throws", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("blocked");
