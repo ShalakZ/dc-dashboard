@@ -37,7 +37,7 @@ export function Tabs({ label, tabs, active, onSelect, children }: { label: strin
             role="tab"
             id={`tab-${tab.id}`}
             aria-selected={tab.id === active}
-            aria-controls={`panel-${tab.id}`}
+            aria-controls={tab.id === active ? `panel-${tab.id}` : undefined} // only the selected tab's panel is drawn; the others have no element to point at
             tabIndex={tab.id === active ? 0 : -1}
             onClick={() => { if (tab.id !== active) onSelect(tab.id); }}
             onKeyDown={(event) => move(event, i)}

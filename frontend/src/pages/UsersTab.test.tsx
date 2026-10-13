@@ -366,6 +366,8 @@ describe("UsersTab controls follow the permissions of the role (a custom role)",
     const night = screen.getByText("night", { selector: "td.cell-user" }).closest("tr")!;
     expect(within(night).getByText("night-shift")).toBeInTheDocument();
     expect(within(night).getByText("blocked")).toBeInTheDocument(); // the state is still shown
+    const ops = screen.getByText("ops", { selector: "td.cell-user" }).closest("tr")!;
+    expect(within(ops).getAllByRole("cell")[1].textContent).toBe("Operator"); // a built-in role is written as the Roles tab writes it
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Create user" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create user" })).not.toBeInTheDocument();
@@ -388,7 +390,7 @@ describe("UsersTab controls follow the permissions of the role (a custom role)",
     const night = screen.getByText("night", { selector: "td.cell-user" }).closest("tr")!;
     const select = within(night).getByRole("combobox", { name: "Role for night" }) as HTMLSelectElement;
     expect(select.value).toBe("night-shift");
-    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["viewer", "operator", "admin", "night-shift"]);
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["Viewer", "Operator", "Administrator", "night-shift"]);
   });
 
   it("the skeleton has three columns for users.view alone, and four for users.edit", async () => {
@@ -410,7 +412,18 @@ describe("UsersTab controls follow the permissions of the role (a custom role)",
   it("the Create user form still offers the built-in roles", async () => {
     await show(["users.edit"]);
     const role = screen.getByLabelText("Role", { selector: "select:not([aria-label])" });
-    expect(within(role).getAllByRole("option").map((o) => o.textContent)).toEqual(["viewer", "operator", "admin"]);
+    expect(within(role).getAllByRole("option").map((o) => o.textContent)).toEqual(["Viewer", "Operator", "Administrator"]);
+  });
+
+  it("writes the built-in roles the way the Roles tab does, but the options keep the role names as their values", async () => {
+    await show(["users.edit"]);
+    const form = screen.getByLabelText("Role", { selector: "select:not([aria-label])" });
+    const ops = within(screen.getByText("ops", { selector: "td.cell-user" }).closest("tr")!).getByRole("combobox", { name: "Role for ops" });
+    for (const select of [form, ops]) {
+      expect(within(select).getAllByRole("option").slice(0, 3).map((o) => (o as HTMLOptionElement).value)).toEqual(["viewer", "operator", "admin"]);
+    }
+    expect(ops).toHaveValue("operator");
+    expect(ops).toHaveDisplayValue("Operator");
   });
 });
 
@@ -456,7 +469,7 @@ describe("UsersTab offers the roles the server says this person may hand out (GE
   it("a People manager sees the Admin, Operator and Auditor rows read-only: the role as text, no select, no menu, no trash can", async () => {
     await show("people-manager");
     await waitFor(() => expect(screen.queryByRole("combobox", { name: "Role for admin" })).not.toBeInTheDocument());
-    for (const [name, text] of [["admin", "admin"], ["ops", "operator"], ["auditor", "Auditor"]]) {
+    for (const [name, text] of [["admin", "Administrator"], ["ops", "Operator"], ["auditor", "Auditor"]]) {
       const row = rowOf(name);
       expect(within(row).getAllByRole("cell")[1].textContent).toBe(text); // the role cell: plain text
       expect(within(row).queryByRole("combobox")).not.toBeInTheDocument();
@@ -498,8 +511,8 @@ describe("UsersTab offers the roles the server says this person may hand out (GE
   it("an Admin is offered every role: the built-ins in their order, then the others by name, and every row is editable", async () => {
     await show("admin");
     const role = screen.getByLabelText("Role", { selector: "select:not([aria-label])" });
-    await waitFor(() => expect(optionsOf(role)).toEqual(["viewer", "operator", "admin", "Auditor", "Nothing", "People manager"]));
-    expect(optionsOf(within(rowOf("ops")).getByRole("combobox"))).toEqual(["viewer", "operator", "admin", "Auditor", "Nothing", "People manager"]);
+    await waitFor(() => expect(optionsOf(role)).toEqual(["Viewer", "Operator", "Administrator", "Auditor", "Nothing", "People manager"]));
+    expect(optionsOf(within(rowOf("ops")).getByRole("combobox"))).toEqual(["Viewer", "Operator", "Administrator", "Auditor", "Nothing", "People manager"]);
     for (const name of ["ops", "pm", "nobody", "auditor"]) {
       expect(within(rowOf(name)).getByRole("combobox")).toBeEnabled();
       expect(within(rowOf(name)).getByRole("button", { name: `Delete ${name}` })).toBeEnabled();
@@ -519,8 +532,8 @@ describe("UsersTab offers the roles the server says this person may hand out (GE
     renderWithProviders(<UsersTab onDeleted={() => {}} />, { route: "/users", path: "/users" });
     await screen.findByText("ops", { selector: "td" });
     const role = screen.getByLabelText("Role", { selector: "select:not([aria-label])" });
-    expect(optionsOf(role)).toEqual(["viewer", "operator", "admin"]);
-    expect(optionsOf(within(rowOf("ops")).getByRole("combobox"))).toEqual(["viewer", "operator", "admin"]);
+    expect(optionsOf(role)).toEqual(["Viewer", "Operator", "Administrator"]);
+    expect(optionsOf(within(rowOf("ops")).getByRole("combobox"))).toEqual(["Viewer", "Operator", "Administrator"]);
     expect(within(rowOf("auditor")).getByRole("combobox")).toBeEnabled();
     expect(screen.queryByText("roles are down")).not.toBeInTheDocument();
   });

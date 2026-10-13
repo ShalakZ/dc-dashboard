@@ -33,7 +33,9 @@ function RoleRowView({ role, canOpen, onOpen, onDuplicate, onDelete }: {
               { label: "Duplicate", disabled: !canOpen, onSelect: () => onDuplicate(role) },
             ]}
           />
-          {role.builtin ? null : (
+          {role.builtin ? (
+            <span className="icon-btn-spacer" aria-hidden="true" />
+          ) : (
             <TrashButton
               label={`Delete ${role.name}`}
               disabled={inUse}

@@ -7,6 +7,7 @@ import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { RowActions, type RowAction } from "../components/RowActions";
 import { TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
+import { roleLabel } from "../components/navItems";
 import { sentence } from "../lib/sentence";
 
 /** The built-in roles in the order they are offered. They stand in for the server's list of roles while it is not known (still loading, or its answer failed), which is the page as it was before roles could be made. */
@@ -74,11 +75,11 @@ function UserRowView({ user, self, canEdit, offered, open, about, onDeleted }: {
             onChange={(e) => patch.mutate({ id: user.id, body: { role: e.target.value } })}
           >
             {offered.map((r) => (
-              <option key={r} value={r}>{r}</option>
+              <option key={r} value={r}>{roleLabel(r)}</option>
             ))}
-            {!offered.includes(user.role) && <option value={user.role} disabled>{user.role}</option>}
+            {!offered.includes(user.role) && <option value={user.role} disabled>{roleLabel(user.role)}</option>}
           </select>
-        ) : user.role}
+        ) : roleLabel(user.role)}
       </td>
       <td>
         <span className="chips">
@@ -207,7 +208,7 @@ export function UsersTab({ onDeleted }: { onDeleted: () => void }) {
               Role{" "}
               <select value={chosen} aria-describedby={chosenNote ? noteId : undefined} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                 {offered.map((r) => (
-                  <option key={r} value={r}>{r}</option>
+                  <option key={r} value={r}>{roleLabel(r)}</option>
                 ))}
               </select>
             </label>

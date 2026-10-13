@@ -69,7 +69,7 @@ async function hold(page: Page, path: string, answer: (route: Route) => Promise<
 /** The skeleton region of an area, by its label, matched whole. */
 const skeleton = (page: Page, label: string) => page.getByRole("status").filter({ hasText: new RegExp(`^${label}$`) });
 const heading1 = (page: Page, name: string) => page.getByRole("heading", { level: 1, name, exact: true });
-/** The admin's own row on the Users page (the role select's cell is named "admin" too, hence the first). */
+/** The admin's own row on the Users page (its username cell; `first` is a guard from when the role cell was named "admin" too, before it read "Administrator"). */
 const adminCell = (page: Page) => page.getByRole("cell", { name: ADMIN.username, exact: true }).first();
 const tree = (page: Page) => page.getByRole("region", { name: "Asset tree" });
 const html = (page: Page) => page.locator("html");

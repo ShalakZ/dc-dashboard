@@ -83,6 +83,8 @@
   /* "Built in": a plain outlined tag. The status chips (.chip) say a state (active, blocked); this says what the role is. */
   .role-badge { display: inline-block; margin-left: 8px; padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; vertical-align: 1px; }
   .roles-panel .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; white-space: nowrap; }
+  /* A built-in row has no bin; this empty box (the bin's 28px, see .icon-btn) keeps its "..." in the column of the custom rows' "...". */
+  .roles-panel .icon-btn-spacer { flex: none; width: 28px; height: 28px; }
   /* The editor is wider than the 440px every other dialog has (the grid has three columns), and on a short window the body scrolls while
      the error line and Save / Cancel stay in sight; the same two-row grid as the connection check's dialog. */
   .dialog.narrow:has(> .role-editor) { width: min(56rem, 96vw); overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
@@ -92,6 +94,8 @@
   .role-editor > .row, .role-editor > p.error { flex: none; }
   .role-editor > p.error { font-weight: 600; }
   .role-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 12px; }
+  /* The View of a built-in role: Name and Description are read-only, so they wear the disabled look of the greyed boxes below them (the same two properties as app.css's :disabled fields) instead of reading as fields to type in. */
+  .role-fields input[readonly] { background: var(--surface); color: var(--text-disabled); }
   .role-start { display: grid; gap: 4px; justify-items: start; }
   .role-start p, .role-builtin p { margin: 0; font-size: var(--fs-sm); }
   .role-builtin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }

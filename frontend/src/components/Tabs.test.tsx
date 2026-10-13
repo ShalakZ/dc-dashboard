@@ -35,6 +35,7 @@ describe("Tabs", () => {
     const panel = screen.getByRole("tabpanel");
     expect(tab("Users")).toHaveAttribute("id", "tab-users");
     expect(tab("Users")).toHaveAttribute("aria-controls", "panel-users");
+    expect(tab("Roles")).not.toHaveAttribute("aria-controls"); // its panel is not drawn, so there is nothing for it to control
     expect(panel).toHaveAttribute("id", "panel-users");
     expect(panel).toHaveAttribute("aria-labelledby", "tab-users");
     expect(panel).toHaveAttribute("tabindex", "0");
@@ -52,6 +53,8 @@ describe("Tabs", () => {
     expect(tab("Users")).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "panel-roles");
     expect(screen.getByRole("tabpanel")).toHaveTextContent("the roles panel");
+    expect(tab("Roles")).toHaveAttribute("aria-controls", "panel-roles");
+    expect(tab("Users")).not.toHaveAttribute("aria-controls");
   });
 
   it("ArrowRight and ArrowLeft move to the next and the previous tab, select it and take the focus there, and both wrap", async () => {

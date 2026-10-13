@@ -231,6 +231,20 @@ describe("RolesPanel: Delete", () => {
     expect(within(await rowOf("Night shift")).getAllByRole("cell")[2]).toHaveTextContent("2"); // the Users column shows the count
   });
 
+  it("gives a built-in row an invisible bin-sized gap so its menu button lines up with the custom rows' (hidden from the keyboard and screen readers)", async () => {
+    show();
+    await table();
+    const gap = (row: HTMLElement) => row.querySelector<HTMLElement>(".icon-btn-spacer");
+    for (const name of ["Viewer", "Operator", "Administrator"]) {
+      const spacer = gap(await rowOf(name));
+      expect(spacer, name).not.toBeNull();
+      expect(spacer).toHaveAttribute("aria-hidden", "true");
+      expect(spacer!.tagName).toBe("SPAN"); // not a button: nothing to focus
+      expect(spacer).toBeEmptyDOMElement();
+    }
+    expect(gap(await rowOf("Executive"))).toBeNull(); // a custom row has the real bin
+  });
+
   it("asks first, deletes on confirmation, closes, and puts the focus on New role", async () => {
     let list = [...builtinRoles(), EXECUTIVE];
     const calls = show({ "DELETE /api/roles/7": () => { list = list.filter((r) => r.id !== 7); return { status: 204 }; } }, () => list);

@@ -521,8 +521,9 @@ because the server accepts any combination. A row's menu has **Edit** and **Dupl
 it opens locked, with a Duplicate button), and the bin deletes a role nobody holds (it is disabled, with the reason, while an account has it).
 
 The Executive, who reads energy and cost and nothing else: Roles > **New role**, name `Executive`, tick **See the Assets Tree**,
-**See dashboards**, **See billing** and **Export billing as CSV**, **Save**. On the Users tab, create the account and choose `Executive`
-in **Role** (a line under the form says what the role is for). That person's sidebar is Assets Tree, Dashboards and Billing, every other
+**See dashboards**, **See billing** and **Export billing as CSV**, a **Description** such as `Sees energy and cost` (optional), **Save**. On
+the Users tab, create the account and choose `Executive` in **Role** (when the role has a description, a line under the form shows it; a role
+without one shows no line). That person's sidebar is Assets Tree, Dashboards and Billing, every other
 page says "No access", and the API refuses the rest. Tick **See tariffs** later and the open page of that account offers a Reload.
 
 **The same through the API.** `GET /api/permissions` lists the ids; `POST /api/roles` creates a role (201, with its id and the sorted permissions);
@@ -1517,7 +1518,8 @@ the upgrade (2026-10-13): it has only the three built-in roles and no custom rol
 4. **Verify.** `docker compose exec api alembic current` still prints `0009 (head)`; sign in as an administrator, open Users & Roles >
    Roles and see the three built-in roles with their account counts.
 5. **Going back.** Check out `2276b28` and rebuild as in step 3. There is no database step; the roles you made keep working (the W9a
-   code ignores the extra permission).
+   code ignores the extra permission). To edit a role that already holds `settings.security` under the W9a code, untick **Change sign-in
+   protection** first, or send the permission list without it: the W9a code refuses the id it does not know on `PATCH /api/roles/{id}`.
 
 ## Add a connector
 
