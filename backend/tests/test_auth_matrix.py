@@ -25,11 +25,6 @@ from helpers import login_as
 FIXTURE = Path(__file__).parent / "fixtures" / "auth_matrix_pre_w9a.json"
 ROLES = ("anon", "viewer", "operator", "admin")
 LOGOUT = "POST /api/logout"
-# The routes the permission table has that the fixture does not: the roles API, added after the freeze.
-ADDED_AFTER_FREEZE = {
-    "GET /api/permissions", "GET /api/roles", "POST /api/roles", "PATCH /api/roles/{role_id}",
-    "DELETE /api/roles/{role_id}", "POST /api/roles/{role_id}/duplicate",
-}
 
 
 async def collect(app, db) -> dict[str, dict[str, int]]:
@@ -106,10 +101,12 @@ def test_every_route_added_after_the_freeze_is_in_the_permission_table():
 def test_every_frozen_route_is_public_open_to_any_account_or_in_the_permission_table():
     # The agreement test below reads the table with the fixture's keys. A key that the table spells differently (Appendix B
     # writes {id} where the router writes {asset_id}) would be skipped there, so the two key sets must be the same set.
+    # The routes added after the freeze (the roles API) are in the table and not in the fixture: they are the app's routes
+    # the fixture lacks. A table key that is not a route of the app stays on the right and fails the comparison.
     frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert ADDED_AFTER_FREEZE <= set(ROUTE_PERMISSIONS)
-    assert ADDED_AFTER_FREEZE.isdisjoint(frozen)
-    assert set(frozen) == (set(ROUTE_PERMISSIONS) | set(PUBLIC) | set(SIGNED_IN)) - ADDED_AFTER_FREEZE
+    added_after_freeze = set(route_requests(create_app())) - set(frozen)
+    assert added_after_freeze <= set(ROUTE_PERMISSIONS), "a route the fixture does not know must be in ROUTE_PERMISSIONS"
+    assert set(frozen) == (set(ROUTE_PERMISSIONS) | set(PUBLIC) | set(SIGNED_IN)) - added_after_freeze
 
 
 def test_the_permission_table_agrees_with_the_frozen_matrix_for_the_built_in_roles():
