@@ -240,7 +240,8 @@ function roleUpdate(c: Context): string | null {
 
 const sourcesPage = page("/sources", "Open Sources");
 const scansPage = page("/scans", "Open Scans");
-const usersPage = page("/users", "Open Users");
+const usersPage = page("/users", "Open Users & Roles");
+const rolesPage = page("/users/roles", "Open Roles");
 const tariffsPage = page("/tariffs", "Open Tariffs");
 const storagePage = page("/storage", "Open Storage");
 
@@ -359,10 +360,12 @@ const RULES: Record<string, Rule> = {
       const granted = Array.isArray(d.permissions) ? `: ${labels.length > 0 ? labelList(labels) : "no permissions"}` : "";
       return `Created ${roleThing(d)}${copied ? ` as a copy of ${shortName(copied)}` : ""}${granted}`;
     },
+    link: rolesPage,
   },
   "role.deleted": { summary: ({ d }) => `Deleted ${roleThing(d)}` },
   "role.updated": {
     summary: (c) => roleUpdate(c) ?? withFields(`Changed ${roleThing(c.d)}`, c.fields),
+    link: rolesPage,
   },
 
   "scan.finished": {

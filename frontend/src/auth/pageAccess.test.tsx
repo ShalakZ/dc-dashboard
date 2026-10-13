@@ -56,7 +56,15 @@ const sideLink = (label: string) => {
   const side = screen.queryByRole("navigation", { name: "Main" });
   return side ? within(side).queryByRole("link", { name: label }) : null;
 };
-const needIds = (need: Need): PermissionId[] => (typeof need === "string" ? [need] : [...need]);
+const isAny = (need: Need) => typeof need !== "string" && "any" in need;
+/** The permissions a need names, however it combines them. */
+const needIds = (need: Need): PermissionId[] => (typeof need === "string" ? [need] : "any" in need ? [...need.any] : [...need]);
+/** What a need asks for, to compare two needs: "all" of these ids or "any" one of them. */
+const shapeOf = (need: Need) => ({ kind: isAny(need) ? "any" : "all", ids: needIds(need).sort() });
+/** The sets of permissions that open a page: all of the list, or each id alone for an any-of need (W9b: Users & Roles opens for users.view OR roles.manage). */
+const opens = (need: Need): PermissionId[][] => (isAny(need) ? needIds(need).map((id) => [id]) : [needIds(need)]);
+/** The sets that fall just short: one id of an all-of list missing, or nothing at all for an any-of need. */
+const falls = (need: Need): PermissionId[][] => (isAny(need) ? [[]] : needIds(need).map((missing) => needIds(need).filter((id) => id !== missing)));
 
 /** Every address behind sign-in that is guarded, with what it needs and the page that opens. */
 const ROUTES: [string, Need, string][] = [
@@ -80,12 +88,15 @@ const ROUTES: [string, Need, string][] = [
 
 describe("a page opens for exactly the permissions it needs", () => {
   it.each(ROUTES)("%s opens for %j and for no less", async (route, need, page) => {
-    const wanted = needIds(need);
-    const { heading } = await opening(wanted, route);
-    expect(heading).toBe(page);
+    for (const wanted of opens(need)) {
+      const view = await opening(wanted, route);
+      expect(view.heading, wanted.join(" + ")).toBe(page);
+      view.unmount();
+    }
   });
 
-  const missingOne = ROUTES.flatMap(([route, need]) => needIds(need).map((missing) => [route, missing, needIds(need).filter((id) => id !== missing)] as const));
+  // An all-of list is short of its page when any one id is missing; an any-of need only when every id is.
+  const missingOne = ROUTES.flatMap(([route, need]) => falls(need).map((held) => [route, isAny(need) ? `any of ${needIds(need).join(", ")}` : needIds(need).find((id) => !held.includes(id)), held] as const));
   it.each(missingOne)("%s without %s shows No access (holding %j)", async (route, _missing, held) => {
     const { heading } = await opening(held, route);
     expect(heading).toBe("No access");
@@ -105,6 +116,10 @@ describe("a page opens for exactly the permissions it needs", () => {
   it("holding other pages' permissions does not open this one", async () => {
     const everythingElse = (["users.view", "settings.edit", "storage.view", "audit.view", "sources.edit", "billing.view"] as PermissionId[]);
     expect((await opening(everythingElse, "/tariffs")).heading).toBe("No access");
+  });
+
+  it("the Users & Roles page is not opened by the other permissions of its own area (changing accounts, or the roles' neighbours)", async () => {
+    expect((await opening(["users.edit", "audit.view", "settings.view"], "/users")).heading).toBe("No access");
   });
 });
 
@@ -129,15 +144,16 @@ describe("the sidebar follows the permissions", () => {
   });
 
   it.each(GROUPS.flatMap((group) => group.items))("$label is in the sidebar for exactly the permissions its page needs", async (item) => {
-    const wanted = needIds(item.need);
-    (await opening(wanted, "/password")).unmount();
-    for (const missing of wanted) {
-      const view = await opening(wanted.filter((id) => id !== missing), "/password");
-      expect(sideLink(item.label)).toBeNull();
+    for (const held of falls(item.need)) {
+      const view = await opening(held, "/password");
+      expect(sideLink(item.label), `holding ${held.join(" + ") || "nothing"}`).toBeNull();
       view.unmount();
     }
-    await opening(wanted, "/password");
-    expect(nav().getByRole("link", { name: item.label })).toBeInTheDocument();
+    for (const held of opens(item.need)) {
+      const view = await opening(held, "/password");
+      expect(nav().getByRole("link", { name: item.label }), `holding ${held.join(" + ")}`).toBeInTheDocument();
+      view.unmount();
+    }
   });
 
   it("every sidebar link has a route with the same need", async () => {
@@ -145,7 +161,7 @@ describe("the sidebar follows the permissions", () => {
     for (const item of GROUPS.flatMap((group) => group.items)) {
       const route = ROUTES.find(([path]) => path === item.to);
       expect(route, item.to).toBeDefined();
-      expect(needIds(route![1]).sort()).toEqual(needIds(item.need).sort());
+      expect(shapeOf(route![1])).toEqual(shapeOf(item.need));
     }
   });
 
@@ -175,14 +191,20 @@ describe("the shell asks only for what the role may read", () => {
 });
 
 describe("the quick find lists the pages the role may open", () => {
-  it("finds Users for users.view and not Settings", async () => {
+  it("finds Users & Roles for users.view and not Settings", async () => {
     await opening(["users.view"], "/password");
     const field = screen.getByRole("combobox");
     await userEvent.type(field, "Users");
-    expect(await screen.findByRole("option", { name: "Users" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Users & Roles" })).toBeInTheDocument();
     await userEvent.clear(field);
     await userEvent.type(field, "Settings");
     expect(await screen.findByText("No match")).toBeInTheDocument();
+  });
+
+  it("finds Users & Roles for roles.manage alone, as the sidebar shows it", async () => {
+    await opening(["roles.manage"], "/password");
+    await userEvent.type(screen.getByRole("combobox"), "Roles");
+    expect(await screen.findByRole("option", { name: "Users & Roles" })).toBeInTheDocument();
   });
 });
 
@@ -236,6 +258,13 @@ describe("where a role lands", () => {
     expect(meets(PAGE_NEED.tariffs, (id) => id === "tariffs.edit" || id === "assets.view")).toBe(false); // changing rates without seeing them opens nothing
     expect(meets(undefined, () => false)).toBe(true);
   });
+
+  it("Users & Roles is met by either of its two permissions, and by nothing else", () => {
+    expect(meets(PAGE_NEED.users, (id) => id === "users.view")).toBe(true);
+    expect(meets(PAGE_NEED.users, (id) => id === "roles.manage")).toBe(true);
+    expect(meets(PAGE_NEED.users, (id) => id === "users.edit" || id === "audit.view")).toBe(false);
+    expect(meets(PAGE_NEED.users, () => false)).toBe(false);
+  });
 });
 
 describe("the page map", () => {
@@ -250,7 +279,7 @@ describe("the page map", () => {
       sourcePoints: "sources.edit",
       scans: "discovery.view",
       discovery: "discovery.view",
-      users: "users.view",
+      users: { any: ["users.view", "roles.manage"] },
       settings: "settings.view",
       tariffs: ["tariffs.view", "assets.view"],
       storage: "storage.view",

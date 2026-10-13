@@ -91,14 +91,21 @@ const MAY_OPEN: Record<BuiltinRole, string[]> = {
 const profileButton = () => screen.findByRole("button", { name: /^u (Administrator|Operator|Viewer)$/ });
 
 /**
- * The ONE change W9b made to what a built-in role sees, kept apart from the literal tables above and applied on top of them (it mirrors the
+ * The ONE change W9b made to what a built-in role may see or open (the rename below only changes a label), kept apart from the literal tables above and applied on top of them (it mirrors the
  * backend's CHANGED_AFTER_FREEZE; amendment A3a of the W9b plan). The Operator holds `tariffs.view`, so the Tariffs page opens for it,
  * read-only: it gains the Tariffs link (in an Administer group of one link), the Tariffs hit in the quick find, and the route `/tariffs`.
  */
 const CHANGED_IN_W9B: Partial<Record<BuiltinRole, { sidebar: [string, string[][]][]; pages: string[]; quickFind: string[] }>> = {
   operator: { sidebar: [["Administer", [["Tariffs", "/tariffs"]]]], pages: ["/tariffs"], quickFind: ["Tariffs"] },
 };
-const sidebarOf = (role: BuiltinRole) => [...SIDEBAR[role], ...(CHANGED_IN_W9B[role]?.sidebar ?? [])];
+/**
+ * The other thing W9b did to the sidebar, also kept apart from the literal tables: the Users page is now called Users & Roles (its address and who may
+ * open it did not change). `sidebarOf` shows the new name; the quick find is still typed with the old word and offers the new name.
+ */
+const RENAMED_IN_W9B: Record<string, string> = { Users: "Users & Roles" };
+const shown = (label: string) => RENAMED_IN_W9B[label] ?? label;
+const sidebarOf = (role: BuiltinRole) =>
+  [...SIDEBAR[role], ...(CHANGED_IN_W9B[role]?.sidebar ?? [])].map(([heading, links]) => [heading, links.map(([label, to]) => [shown(label), to])]);
 const mayOpen = (role: BuiltinRole) => [...MAY_OPEN[role], ...(CHANGED_IN_W9B[role]?.pages ?? [])];
 const quickFindOffers = (role: BuiltinRole) => [
   ...SIDEBAR[role].flatMap(([, links]) => links.map(([label]) => label)), ...(CHANGED_IN_W9B[role]?.quickFind ?? []),
@@ -115,6 +122,10 @@ async function opening(role: BuiltinRole, route: string, defaultDashboard: numbe
 const isAPage = (heading: string | null) => /^the .+ page$|^the assets summary$/.test(heading ?? "");
 
 describe("what W9b changed for the built-in roles", () => {
+  it("renamed one page and nothing else: Users is Users & Roles", () => {
+    expect(RENAMED_IN_W9B).toEqual({ Users: "Users & Roles" });
+  });
+
   it("is only the Operator, and only the Tariffs page", () => {
     expect(Object.keys(CHANGED_IN_W9B)).toEqual(["operator"]);
     expect(CHANGED_IN_W9B.operator).toEqual({ sidebar: [["Administer", [["Tariffs", "/tariffs"]]]], pages: ["/tariffs"], quickFind: ["Tariffs"] });
@@ -179,7 +190,7 @@ describe("the quick find of each built-in role lists the pages it may open", () 
     for (const label of LABELS) {
       await userEvent.clear(field);
       await userEvent.type(field, label);
-      if (offered.includes(label)) expect(await screen.findByRole("option", { name: label })).toBeInTheDocument();
+      if (offered.includes(label)) expect(await screen.findByRole("option", { name: shown(label) })).toBeInTheDocument();
       else expect(await screen.findByText("No match")).toBeInTheDocument();
     }
   });

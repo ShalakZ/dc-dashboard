@@ -231,7 +231,7 @@ describe("describeAudit: updates with before and after", () => {
       { label: "Account id", value: "9" },
       { label: "Username", value: "bob" },
     ]);
-    expect(view.link).toEqual({ to: "/users", label: "Open Users" });
+    expect(view.link).toEqual({ to: "/users", label: "Open Users & Roles" });
   });
 });
 
@@ -310,7 +310,7 @@ describe("describeAudit: roles", () => {
       }),
     );
     expect(view.summary).toBe("Created role Executive: See the Assets Tree, See billing, Export billing as CSV");
-    expect(view.link).toBeNull();
+    expect(view.link).toEqual({ to: "/users/roles", label: "Open Roles" }); // the Roles tab of Users & Roles
     expect(view.facts.map((fact) => fact.label)).toEqual(["Role id", "Name", "Description", "Permissions"]);
   });
 
@@ -347,7 +347,7 @@ describe("describeAudit: roles", () => {
     });
     expect(view.summary).toBe("Changed role Executive: added Export billing as CSV, See tariffs; removed See dashboards");
     expect(view.changes.map((change) => change.field)).toEqual(["Permissions"]);
-    expect(view.link).toBeNull();
+    expect(view.link).toEqual({ to: "/users/roles", label: "Open Roles" });
   });
 
   it("says a rename and a new description, and joins everything in the order name, added, removed, description", () => {
@@ -568,10 +568,10 @@ describe("describeAudit: creations, deletions and events", () => {
     expect(describeAudit(entry("login.succeeded", { client: "10.0.0.5" })).facts).toEqual([{ label: "Client", value: "10.0.0.5" }]);
   });
 
-  it("says whose sign-in an admin unblocked, links to the Users page and labels the account id", () => {
+  it("says whose sign-in an admin unblocked, links to the Users & Roles page and labels the account id", () => {
     const view = describeAudit(entry("login.unblocked", { user_id: 9, username: "bob", cleared: 2 }));
     expect(view.summary).toBe("Unblocked sign-in for user bob");
-    expect(view.link).toEqual({ to: "/users", label: "Open Users" });
+    expect(view.link).toEqual({ to: "/users", label: "Open Users & Roles" });
     expect(view.facts).toContainEqual({ label: "Account id", value: "9" });
     expect(view.facts).toContainEqual({ label: "Cleared", value: "2" });
     expect(describeAudit(entry("login.unblocked", { user_id: 9, cleared: 1 })).summary).toBe("Unblocked sign-in for user #9");

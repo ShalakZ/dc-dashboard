@@ -17,7 +17,7 @@
   .kv dd { margin: 0; overflow-wrap: anywhere; }
 
   /* Users */
-  .users-page .table-wrap { margin-bottom: 22px; }
+  .users-page .table-wrap:has(> .users-table) { margin-bottom: 22px; } /* the Users table only: the Roles card (also inside .users-page) has its own spacing */
   .users-table select { min-height: 32px; padding: 0 8px; }
   .chips { display: inline-flex; flex-wrap: wrap; gap: 6px; }
   /* The Users row's action box, a div in a cell. Scoped: Sources, Scans and Tariffs also have a .row-actions, and a bare rule here
@@ -29,6 +29,15 @@
   .form-card .create-user { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); align-items: end; }
   .form-card .create-user > button { justify-self: start; min-height: 38px; }
   .form-card .create-user > p { grid-column: 1 / -1; }
+  .form-card .create-user > p.role-note { margin-top: -6px; font-size: var(--fs-sm); } /* what the chosen role is for: a line under the row, close to it */
+
+  /* Tabs (Users & Roles, W9b): a flat strip over one panel. The selected tab is marked by the theme's accent underline and a heavier weight
+     (never a fill or a pill); the strip's own line runs under all of them and the selected underline sits on it. No motion to switch off. */
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 18px; border-bottom: 1px solid var(--border); }
+  .tabs > [role="tab"] { min-height: 40px; margin-bottom: -1px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--text-2); font-size: var(--fs-base); font-weight: 500; }
+  .tabs > [role="tab"]:hover { color: var(--text); }
+  .tabs > [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text); font-weight: 600; }
+  .tabs > [role="tab"]:focus-visible { outline-offset: -2px; } /* inside: the strip's neighbours would clip a ring drawn outside */
 
   /* Settings: General and Sign-in protection are two page cards of one height, the About card spans both (.page-grid, .page-card and .span-all
      are in app.css). The form is the card's column and its foot, the Save and what it says, sits at the bottom, so the two Saves are level;

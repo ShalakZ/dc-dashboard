@@ -9,8 +9,8 @@ export const roleLabel = (name: string) => (Object.hasOwn(BUILTIN_ROLE_LABELS, n
 
 /**
  * What each page needs, in one place: the sidebar, the quick find, the landing page and the routes (App) all read it, so they cannot
- * disagree. An array means ALL OF. A page that reads from more than one area names every area it reads (Tariffs lists the assets its
- * rates belong to, Diagnostics the sources it checks); the built-in roles that pass today are the ones that hold them all.
+ * disagree. An array means ALL OF, `{ any: [...] }` ANY ONE OF. A page that reads from more than one area names every area it reads
+ * (Tariffs lists the assets its rates belong to, Diagnostics the sources it checks); the built-in roles that pass today are the ones that hold them all.
  */
 export const PAGE_NEED = {
   assets: "assets.view",
@@ -20,7 +20,7 @@ export const PAGE_NEED = {
   sourcePoints: "sources.edit",
   scans: "discovery.view",
   discovery: "discovery.view",
-  users: "users.view",
+  users: { any: ["users.view", "roles.manage"] }, // Users & Roles: the Users tab needs the first, the Roles tab the second (the page checks each)
   settings: "settings.view",
   tariffs: ["tariffs.view", "assets.view"], // read-only without tariffs.edit (W9b); the built-in Operator opens it
   storage: "storage.view",
@@ -56,7 +56,7 @@ export const GROUPS: NavGroup[] = [
   {
     id: "nav-administer", title: "Administer",
     items: [
-      { to: "/users", label: "Users", icon: "users", need: PAGE_NEED.users },
+      { to: "/users", label: "Users & Roles", icon: "users", match: "/users", need: PAGE_NEED.users }, // match: /users/roles is this page too
       { to: "/settings", label: "Settings", icon: "settings", need: PAGE_NEED.settings },
       { to: "/tariffs", label: "Tariffs", icon: "tariffs", need: PAGE_NEED.tariffs },
       { to: "/storage", label: "Storage", icon: "storage", need: PAGE_NEED.storage },

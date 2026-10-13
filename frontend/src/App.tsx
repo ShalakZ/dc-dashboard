@@ -67,7 +67,7 @@ export function App() {
         <Route path="/sources/:id/points" element={<RequirePermission need={PAGE_NEED.sourcePoints}><SourcePointsPage /></RequirePermission>} />
         <Route path="/scans" element={<RequirePermission need={PAGE_NEED.scans}><ScansPage /></RequirePermission>} />
         <Route path="/discovery" element={<RequirePermission need={PAGE_NEED.discovery}><Suspense fallback={loading}><DiscoveryPage /></Suspense></RequirePermission>} />
-        <Route path="/users" element={<RequirePermission need={PAGE_NEED.users}><UsersPage /></RequirePermission>} />
+        <Route path="/users/:tab?" element={<RequirePermission need={PAGE_NEED.users}><UsersPage /></RequirePermission>} />
         <Route path="/settings" element={<RequirePermission need={PAGE_NEED.settings}><SettingsPage /></RequirePermission>} />
         <Route path="/tariffs" element={<RequirePermission need={PAGE_NEED.tariffs}><TariffsPage /></RequirePermission>} />
         <Route path="/storage" element={<RequirePermission need={PAGE_NEED.storage}><StoragePage /></RequirePermission>} />

@@ -8,7 +8,7 @@ describe("pageTitle", () => {
     ["/sources", "Sources"],
     ["/scans", "Scans"],
     ["/discovery", "Discovery"],
-    ["/users", "Users"],
+    ["/users", "Users & Roles"],
     ["/settings", "Settings"],
     ["/tariffs", "Tariffs"],
     ["/storage", "Storage"],
@@ -24,6 +24,8 @@ describe("pageTitle", () => {
     expect(pageTitle("/dashboards/3")).toBe("Dashboards · DC Dashboard");
     expect(pageTitle("/sources/4/points")).toBe("Sources · DC Dashboard");
     expect(pageTitle("/audit/99")).toBe("Audit log · DC Dashboard");
+    expect(pageTitle("/users/roles")).toBe("Users & Roles · DC Dashboard"); // the Roles tab is the same page
+    expect(pageTitle("/users/nonsense")).toBe("Users & Roles · DC Dashboard"); // an unknown tab shows Not found under this title: accepted
   });
 
   it("matches whole path segments: /assetsfoo is not the Assets Tree", () => {

@@ -40,14 +40,14 @@ describe("Layout nav", () => {
   it("shows admin links only to admins, Password link to everyone", async () => {
     mockFetch(routes("admin"));
     const { unmount } = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
-    expect(await screen.findByRole("link", { name: "Users" })).toHaveAttribute("href", "/users");
+    expect(await screen.findByRole("link", { name: "Users & Roles" })).toHaveAttribute("href", "/users");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
     expect(within(await openProfile()).getByRole("link", { name: "Password" })).toHaveAttribute("href", "/password");
     unmount();
     mockFetch(routes("viewer"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     expect(within(await openProfile()).getByRole("link", { name: "Password" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Users & Roles" })).not.toBeInTheDocument(); // (Testing Library names are exact: the old "Users" would pass for any reason)
     expect(screen.queryByRole("link", { name: "Sources" })).not.toBeInTheDocument();
   });
 });
@@ -69,8 +69,8 @@ describe("Layout tab title", () => {
     renderWithProviders(<Layout />, { route: "/billing" }); // the route is "*", so the layout stays mounted when the address changes
     await profileButton();
     expect(document.title).toBe("Billing \u00b7 DC Dashboard");
-    await userEvent.click(screen.getByRole("link", { name: "Users" }));
-    expect(document.title).toBe("Users \u00b7 DC Dashboard");
+    await userEvent.click(screen.getByRole("link", { name: "Users & Roles" }));
+    expect(document.title).toBe("Users & Roles \u00b7 DC Dashboard");
   });
 });
 
@@ -454,7 +454,7 @@ describe("Layout sidebar landmarks and groups", () => {
     const linksOf = (group: string) => within(screen.getByRole("group", { name: group })).getAllByRole("link").map((a) => a.textContent);
     expect(linksOf("Monitor")).toEqual(["Assets Tree", "Dashboards", "Billing"]);
     expect(linksOf("Operate")).toEqual(["Sources", "Scans", "Discovery"]);
-    expect(linksOf("Administer")).toEqual(["Users", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"]);
+    expect(linksOf("Administer")).toEqual(["Users & Roles", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"]);
   });
 
   it("marks the current page and no other link", async () => {
@@ -500,7 +500,7 @@ describe("Layout sidebar toggle", () => {
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     await profileButton();
     await userEvent.click(screen.getByRole("button", { name: "Minimize sidebar" }));
-    for (const name of ["Assets Tree", "Dashboards", "Billing", "Sources", "Scans", "Discovery", "Users", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"]) {
+    for (const name of ["Assets Tree", "Dashboards", "Billing", "Sources", "Scans", "Discovery", "Users & Roles", "Settings", "Tariffs", "Storage", "Audit", "Diagnostics"]) {
       expect(screen.getByRole("link", { name })).toBeInTheDocument();
     }
     expect(screen.getByRole("group", { name: "Monitor" })).toBeInTheDocument(); // the headings stay in the DOM too
