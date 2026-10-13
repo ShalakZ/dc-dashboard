@@ -123,5 +123,11 @@ export default defineConfig({
       dependencies: ["w7i"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
     },
+    {
+      name: "w9a",
+      testMatch: "w9a.spec.ts",
+      dependencies: ["w7j"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
+    },
   ],
 });
