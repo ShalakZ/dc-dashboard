@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
 import { Navigate, useLocation } from "react-router";
-import type { Role } from "../api/types";
 import { AppShellSkeleton } from "../components/AppShellSkeleton";
 import { Pending } from "../components/Pending";
 import { ServerUnreachable } from "../components/ServerUnreachable";
 import { TopProgress } from "../components/TopProgress";
 import { RETURN_KEY, useAuth } from "./AuthProvider";
+import { meets, type Need } from "./need";
 
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { user, setupNeeded, signedOutOnPurpose, loading, unreachable } = useAuth();
@@ -29,14 +29,17 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   return <><TopProgress />{body}</>;
 }
 
-/** Client-side guard for role-restricted routes, so a direct visit shows a short notice, not an API error. */
-export function RequireRole({ min, children }: { min: Role; children: ReactNode }) {
-  const { hasRole } = useAuth();
-  if (!hasRole(min)) {
+/**
+ * Client-side guard for routes that need permissions, so a direct visit shows a short notice, not an API error. `need` is one permission,
+ * or an array that means ALL OF them. It sits inside RequireAuth, so by the time it renders the user is known: no flash of the page.
+ */
+export function RequirePermission({ need, children }: { need: Need; children: ReactNode }) {
+  const { can } = useAuth();
+  if (!meets(need, can)) {
     return (
       <section>
-        <h1>{min === "admin" ? "Admins only" : "Operators only"}</h1>
-        <p className="muted">Your account does not have access to this page.</p>
+        <h1>No access</h1>
+        <p className="muted">Your role does not include this page.</p>
       </section>
     );
   }
