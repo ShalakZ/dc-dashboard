@@ -15,7 +15,9 @@ import { userBlock } from "./shell";
 // Change column (the grid's right edge) is whole and the grid does not scroll sideways; (6) a quick click on the box the card covers goes
 // to that box, and a press on the card's own text keeps it open; (7) the card is whole inside the window at 1024 and 1440 wide, for a
 // box in the See column, the Change column and Sensitive actions; (8) in the New role dialog as it opens, at 1440 and at 1024 wide, the card
-// stays inside the editor's visible body and never covers Cancel or Save, and a click on Cancel's centre with the card open cancels.
+// stays inside the editor's visible body and never covers Cancel or Save, and a click on Cancel's centre with the card open cancels;
+// (9) at 800 x 600, where the visible band around a box is short, a card that fits neither above nor below its label goes above it and
+// never covers its own label or checkbox, Cancel or Save, and the checkbox's centre still hits the checkbox.
 //
 // Locators: a card is `role="group"` named by its sentence, so it is always found by that sentence with `exact: true`. A bare
 // getByRole("group") would also match `fieldset.role-sensitive` (the Sensitive actions box), so "any card" is the name /to show anything/,
@@ -172,19 +174,22 @@ async function expectNoSidewaysScroll(dialog: Locator, what: string) {
 
 /**
  * The part of the window the scrolling boxes around `label` leave visible, as a vertical band: the window cut down by every ancestor (up to
- * <body>) whose overflow-y is not visible. The same rule as the app's clipBand, so the placement below can be told apart from "the window
- * had room"; the two new geometry facts that do not lean on it are asserted by step 8.
+ * <body>, and up to the first `position: fixed` one, the modal backdrop, which still counts) whose overflow-y is not visible. The same rule
+ * as the app's clipBand, so the placement below can be told apart from "the window had room"; the geometry facts that do not lean on it
+ * are asserted by steps 8 and 9.
  */
 const visibleBand = (label: Locator) =>
   label.evaluate((node) => {
     let top = 0;
     let bottom = window.innerHeight;
     for (let box = node.parentElement; box && box !== document.body; box = box.parentElement) {
-      const overflowY = getComputedStyle(box).overflowY;
-      if (overflowY === "" || overflowY === "visible") continue;
-      const r = box.getBoundingClientRect();
-      top = Math.max(top, r.top);
-      bottom = Math.min(bottom, r.bottom);
+      const style = getComputedStyle(box);
+      if (style.overflowY !== "" && style.overflowY !== "visible") {
+        const r = box.getBoundingClientRect();
+        top = Math.max(top, r.top);
+        bottom = Math.min(bottom, r.bottom);
+      }
+      if (style.position === "fixed") break;
     }
     return { top, bottom };
   });
@@ -193,8 +198,10 @@ const visibleBand = (label: Locator) =>
  * The card is whole inside the window, shown whole (the topmost thing at its inner corners is the card), off the label of the box it is
  * about, and where `placeTip` puts it: under the label when it fits there, else above it. "Fits" is judged against the visible part of the
  * scrolling boxes around the label (`visibleBand`: in the editor, the body that scrolls and the grid), not against the window: the card
- * stays inside that band, so it never hangs over the Cancel/Save row. Waits until the card takes the pointer (the arming delay), so the
- * corner test sees the card and not the box beneath it.
+ * stays inside that band, so it never hangs over the Cancel/Save row. When it fits on neither side the card is above the label, next to it
+ * (it may then reach over the band's top edge, up to the window's), or below the label when the window leaves less room above than the
+ * card is tall: never on the label. Waits until the card takes the pointer (the arming delay), so the corner test sees the card and not
+ * the box beneath it.
  */
 async function expectPlaced(page: Page, group: Locator, label: Locator, what: string) {
   await expect(group).toHaveCSS("pointer-events", "auto");
@@ -213,14 +220,21 @@ async function expectPlaced(page: Page, group: Locator, label: Locator, what: st
   const useBand = band.bottom - band.top >= c.height;
   const lo = useBand ? Math.max(8, band.top) : 8;
   const hi = useBand ? Math.min(view!.height - 8, band.bottom) : view!.height - 8;
-  if (useBand) {
-    expect(c.y, `${note}: the card starts above the visible band`).toBeGreaterThanOrEqual(lo - 0.5);
-    expect(c.y + c.height, `${note}: the card ends below the visible band`).toBeLessThanOrEqual(hi + 0.5);
-  }
   const fitsBelow = l.y + l.height + 6 >= lo && l.y + l.height + 6 + c.height <= hi;
   const fitsAbove = l.y - 6 - c.height >= lo && l.y - 6 <= hi;
+  // The label is inside the band and the card fits neither side of it: the new rule. Above, if the window has the room; else below.
+  const roomAbove = l.y - 6 - c.height - 8; // to the window's top edge (8 px kept free): negative when the card is taller than the room
+  const neither = useBand && !fitsBelow && !fitsAbove && l.y + l.height > lo && l.y < hi;
+  const belowAnyway = neither && roomAbove < -0.5;
+  if (useBand) {
+    // (Above the band's top only in the new "neither side fits" case; below its bottom never, except the same case's below fallback.)
+    if (!neither) expect(c.y, `${note}: the card starts above the visible band`).toBeGreaterThanOrEqual(lo - 0.5);
+    if (!belowAnyway) expect(c.y + c.height, `${note}: the card ends below the visible band`).toBeLessThanOrEqual(hi + 0.5);
+  }
   if (fitsBelow) expect(c.y, `${note}: there is room below, so the card is below`).toBeGreaterThanOrEqual(l.y + l.height - 0.5);
   else if (fitsAbove) expect(c.y + c.height, `${note}: no room below, so the card is above`).toBeLessThanOrEqual(l.y + 0.5);
+  else if (neither && roomAbove >= 0.5) expect(c.y + c.height, `${note}: it fits neither side of the label, so the card is above the label`).toBeLessThanOrEqual(l.y + 0.5);
+  else if (belowAnyway) expect(c.y, `${note}: no room above to the window's top, so the card is below the label`).toBeGreaterThanOrEqual(l.y + l.height - 0.5);
   expect(await isShownWhole(group), `${note}: something clips or covers the card`).toBe(true);
 }
 
@@ -636,5 +650,98 @@ test.describe("W9c: the Roles editor offers what a permission needs", () => {
         await expect(dialog, `${note}: the click on Cancel's centre did not cancel`).toBeHidden();
       }, view);
     }
+  });
+
+  // 9 ---------------------------------------------------------------------------------------------------------------------------
+
+  // The re-review of the fix (R-I1): at 800 x 600 the visible band around a box is short (the editor's body is 437 px high, and the grid
+  // starts part way down it), and a card that fitted neither above nor below its label inside that band was pushed into the band ON the
+  // label: it hid the box and swallowed a click on it. Now it goes above the label (below it when the window has no room above) and never
+  // onto it. Each case checks the card against its label, its checkbox, Cancel and Save, and that a click at the checkbox's centre would
+  // reach the checkbox (the topmost thing there is the checkbox or its own label).
+  const SMALL = { width: 800, height: 600 };
+
+  /** The open card leaves its own box alone. Waits until the card takes the pointer (the arming delay), so a covered box would be found out. */
+  async function expectClearOfBox(page: Page, dialog: Locator, offer: Locator, box: Locator, what: string) {
+    await expect(offer, what).toBeVisible();
+    await expect(offer, what).toHaveCSS("pointer-events", "auto");
+    const c = await rectOf(offer, `${what}: the card`);
+    const l = await rectOf(labelOf(box), `${what}: the label`);
+    const b = await rectOf(box, `${what}: the checkbox`);
+    const cancel = await rectOf(dialog.getByRole("button", { name: "Cancel", exact: true }), `${what}: Cancel`);
+    const saveBox = await rectOf(save(dialog), `${what}: Save`);
+    const body = await rectOf(dialog.locator(".role-editor-body"), `${what}: the editor's body`);
+    const note = `${what}: card ${JSON.stringify(c)}, label ${JSON.stringify(l)}, checkbox ${JSON.stringify(b)}, Cancel ${JSON.stringify(cancel)}, Save ${JSON.stringify(saveBox)}, body ${JSON.stringify(body)}`;
+    expect(l.y >= body.y - 0.5 && l.y + l.height <= body.y + body.height + 0.5, `${note}: the case needs the label inside the body (else nothing could be clicked)`).toBe(true);
+    expect(overlaps(c, l), `${note}: the card covers the label`).toBe(false);
+    expect(overlaps(c, b), `${note}: the card covers the checkbox`).toBe(false);
+    expect(overlaps(c, cancel), `${note}: the card covers Cancel`).toBe(false);
+    expect(overlaps(c, saveBox), `${note}: the card covers Save`).toBe(false);
+    const reachable = await box.evaluate((node) => {
+      const r = node.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return hit !== null && (hit === node || hit.closest("label") === node.closest("label"));
+    });
+    expect(reachable, `${note}: something other than the checkbox is at its centre, so a click on it would not reach it`).toBe(true);
+    await expectPlaced(page, offer, labelOf(box), what);
+  }
+
+  /** Two animation frames: a scroll event has been handled and the card re-placed (React has re-rendered in between). */
+  const settled = (page: Page) => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+
+  test("at 800 x 600, as the dialog opens: ticking See dashboards and then Change dashboards puts the card clear of Change dashboards", async ({ browser }) => {
+    test.setTimeout(120_000);
+    await asAdminPage(browser, async (page) => {
+      const dialog = await openNewRole(page);
+      await tick(dialog, "See dashboards").check(); // no scrolling of ours: the dialog is used as it opens (the box is in view at 800 x 600)
+      await expect(cards(dialog)).toHaveCount(0);
+      const changeDashboards = tick(dialog, "Change dashboards");
+      await changeDashboards.check();
+      const offer = card(dialog, "Change dashboards also needs these to show anything:");
+      await expectClearOfBox(page, dialog, offer, changeDashboards, "800 x 600, Change dashboards as the dialog opens");
+    }, SMALL);
+  });
+
+  test("at 800 x 600, with the editor's body scrolled to its end: the card for Change users is clear of Change users", async ({ browser }) => {
+    test.setTimeout(120_000);
+    await asAdminPage(browser, async (page) => {
+      const dialog = await openNewRole(page);
+      const changeUsers = tick(dialog, "Change users");
+      await changeUsers.check();
+      const offer = card(dialog, "Change users also needs See users to show anything.");
+      await expect(offer).toBeVisible();
+      await dialog.locator(".role-editor-body").evaluate((body) => { body.scrollTop = body.scrollHeight; });
+      await settled(page);
+      await expectClearOfBox(page, dialog, offer, changeUsers, "800 x 600, Change users with the body scrolled to its end");
+    }, SMALL);
+  });
+
+  test("at 800 x 600, with everything ticked and See the Assets Tree in the middle of the body: the long untick card is clear of that box", async ({ browser }) => {
+    test.setTimeout(120_000);
+    await asAdminPage(browser, async (page) => {
+      const dialog = await openNewRole(page);
+      // Tick every box in the page in one go (28 clicks through Playwright would take long); the last box may leave one card open.
+      await dialog.locator('input[type="checkbox"]:not(:disabled)').evaluateAll((nodes) => {
+        for (const node of nodes) if (!(node as HTMLInputElement).checked) (node as HTMLInputElement).click();
+      });
+      if ((await cards(dialog).count()) > 0) await page.keyboard.press("Escape");
+      await expect(cards(dialog)).toHaveCount(0);
+      await expect(dialog.locator('input[type="checkbox"]:not(:checked):not(:disabled)')).toHaveCount(0);
+
+      const assets = tick(dialog, "See the Assets Tree");
+      // The label in the middle of the visible body: a card of 200 px or so fits neither under it nor over it inside the 437 px body.
+      await labelOf(assets).evaluate((label) => {
+        const body = label.closest(".role-editor-body")!;
+        const b = body.getBoundingClientRect();
+        const l = label.getBoundingClientRect();
+        body.scrollTop += l.top - (b.top + (b.height - l.height) / 2);
+      });
+      await settled(page);
+      await assets.uncheck();
+      const offer = cards(dialog);
+      await expect(offer).toHaveCount(1);
+      await expect(offer.getByRole("button").first()).toHaveText(/^Also untick \d+ permissions$/); // the long list form
+      await expectClearOfBox(page, dialog, offer, assets, "800 x 600, the untick card of See the Assets Tree");
+    }, SMALL);
   });
 });

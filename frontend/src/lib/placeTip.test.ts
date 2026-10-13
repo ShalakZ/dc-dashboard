@@ -59,8 +59,9 @@ describe("placeTip with bounds (the vertical band the bubble must stay inside)",
     expect(place.top).toBe(band.top);
   });
 
-  it("starts at the band's top when it is taller than the band (the top wins)", () => {
-    const place = placeTip(at(100, 150), { width: 300, height: 500 }, window1000, 6, band);
+  it("starts at the band's top when it is taller than the band and the trigger is outside the band (the top wins)", () => {
+    // (This used to put the trigger at 150, inside the band, and expect the clamp onto it; a trigger inside the band is the next block.)
+    const place = placeTip(at(100, 500), { width: 300, height: 500 }, window1000, 6, band);
     expect(place.top).toBe(band.top);
   });
 
@@ -69,6 +70,51 @@ describe("placeTip with bounds (the vertical band the bubble must stay inside)",
     expect(place.top).toBeGreaterThanOrEqual(8);
     expect(place.top + bubble.height).toBeLessThanOrEqual(700 - 8);
     expect(place.placement).toBe("above");
+  });
+
+  describe("the trigger is inside the band and the card fits neither below nor above it: never onto the trigger", () => {
+    // The Roles editor at 800 x 600: a 437 px high body, a 208 px card, a label that wraps (39 px) near the middle.
+    const body = { top: 79, bottom: 516 };
+    const tall = { width: 300, height: 208 };
+    const label = (top: number, height: number) => ({ left: 100, top, right: 400, bottom: top + height });
+
+    it("goes above the trigger, next to it, and ends inside the band", () => {
+      const trigger = label(290, 39); // below would end at 543 (past 516), above would start at 76 (above 79)
+      const place = placeTip(trigger, tall, window1000, 6, body);
+      expect(place.placement).toBe("above");
+      expect(place.top).toBe(76);
+      expect(place.top + tall.height).toBeLessThanOrEqual(trigger.top); // does not overlap the trigger
+      expect(place.top + tall.height).toBeLessThanOrEqual(body.bottom); // never below the band: that is where Cancel and Save are
+      expect(place.left).toBe(100);
+    });
+
+    it("may reach above the band (over what lies over it): it is clamped to the window's top, not to the band's", () => {
+      // below would end at 126 (past the band's 110) and above starts at 14 (above the band's 40), so neither fits the band
+      const trigger = label(60, 20);
+      const place = placeTip(trigger, { width: 300, height: 40 }, window1000, 6, { top: 40, bottom: 110 });
+      expect(place).toEqual({ top: 14, left: 100, placement: "above" });
+    });
+
+    it("goes below the trigger when the room above, down to the window's top, is smaller than the card", () => {
+      const trigger = label(30, 20); // above would start at 30 - 6 - 280, far off the top of the window
+      const place = placeTip(trigger, { width: 300, height: 280 }, window1000, 6, { top: 0, bottom: 300 });
+      expect(place.placement).toBe("below");
+      expect(place.top).toBe(trigger.bottom + 6);
+      expect(place.top).toBeGreaterThanOrEqual(trigger.bottom); // does not overlap the trigger (it may run past the band: the trigger comes first)
+    });
+
+    it("also holds when the card is taller than the band", () => {
+      const trigger = label(150, 24);
+      const place = placeTip(trigger, { width: 300, height: 500 }, window1000, 6, { top: 100, bottom: 400 });
+      expect(place.top).toBeGreaterThanOrEqual(trigger.bottom); // the room above is 136 px, so it goes below, over nothing the trigger needs
+    });
+
+    it("is unchanged when the trigger is outside the band: pinned inside the band at its edge", () => {
+      const lowTrigger = placeTip(label(700, 20), tall, window1000, 6, body);
+      expect(lowTrigger).toEqual({ top: body.bottom - tall.height, left: 100, placement: "below" });
+      const highTrigger = placeTip(label(10, 20), tall, window1000, 6, body);
+      expect(highTrigger.top).toBe(body.top);
+    });
   });
 
   it("keeps the horizontal placement of a call without bounds", () => {
@@ -89,11 +135,12 @@ describe("clipBand (the part of the window the scrolling boxes around an element
   const rect = (top: number, bottom: number) =>
     ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
   /** A box inside the one before it, each with its own overflow-y and vertical extent. */
-  function nest(...boxes: { overflowY?: string; top: number; bottom: number }[]) {
+  function nest(...boxes: { overflowY?: string; position?: string; top: number; bottom: number }[]) {
     let parent: HTMLElement = document.body;
     const made = boxes.map((spec) => {
       const el = document.createElement("div");
       if (spec.overflowY !== undefined) el.style.overflowY = spec.overflowY;
+      if (spec.position !== undefined) el.style.position = spec.position;
       vi.spyOn(el, "getBoundingClientRect").mockReturnValue(rect(spec.top, spec.bottom));
       parent.appendChild(el);
       parent = el;
@@ -136,6 +183,25 @@ describe("clipBand (the part of the window the scrolling boxes around an element
     } finally {
       document.body.style.overflowY = "";
     }
+  });
+
+  it("stops at the first position: fixed ancestor, which still counts: what lies above it (the page behind a dialog) clips nothing of it", () => {
+    // A (hidden, 300-350: the page behind) > B (fixed, auto, 100-600: the modal backdrop) > C (static, auto, 150-500) > the label
+    const { leaf } = nest(
+      { overflowY: "hidden", top: 300, bottom: 350 },
+      { position: "fixed", overflowY: "auto", top: 100, bottom: 600 },
+      { position: "static", overflowY: "auto", top: 150, bottom: 500 },
+    );
+    expect(clipBand(leaf, 700)).toEqual({ top: 150, bottom: 500 });
+  });
+
+  it("stops at a position: fixed ancestor whose own overflow is visible, without counting it or anything above it", () => {
+    const { leaf } = nest(
+      { overflowY: "hidden", top: 300, bottom: 350 },
+      { position: "fixed", top: 0, bottom: 9999 },
+      { overflowY: "auto", top: 150, bottom: 500 },
+    );
+    expect(clipBand(leaf, 700)).toEqual({ top: 150, bottom: 500 });
   });
 
   it("is empty (bottom not above top) when a box has scrolled clean out of the window", () => {
