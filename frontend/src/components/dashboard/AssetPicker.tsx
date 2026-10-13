@@ -91,7 +91,7 @@ export function AssetPicker({ assets, selected, onChange, single, max, tree, not
           </label>
         ))}
       </div>
-      {!single && <p className="muted">{selected.length} of {max} selected</p>}
+      {!single && <p className="muted">{selected.length} selected (up to {max})</p>}
     </fieldset>
   );
 }
