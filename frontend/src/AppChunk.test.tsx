@@ -13,7 +13,7 @@ const chunks = vi.hoisted(() => {
     const promise = new Promise<void>((resolve) => { open = resolve; });
     return { promise, open };
   };
-  return { list: gate(), one: gate(), discovery: gate() };
+  return { list: gate(), one: gate(), discovery: gate(), discoveryAsked: 0 };
 });
 vi.mock("./pages/DashboardsPage", async () => {
   await chunks.list.promise;
@@ -25,6 +25,7 @@ vi.mock("./pages/DashboardPage", async () => {
 });
 
 vi.mock("./pages/DiscoveryPage", async () => {
+  chunks.discoveryAsked += 1;
   await chunks.discovery.promise;
   return { DiscoveryPage: () => <h1>the discovery page</h1> };
 });
@@ -69,6 +70,15 @@ describe("the lazy routes while their chunk loads", () => {
 });
 
 describe("the discovery route (its graph library loads with the page, not with the app)", () => {
+  // First in the file to ask for the module: the count stays 0 only while nothing has imported it yet.
+  it("a viewer gets Operators only, with no skeleton, and the chunk is never asked for", async () => {
+    mockFetch(routes);
+    renderWithProviders(<App />, { route: "/discovery", path: "*" });
+    expect(await screen.findByRole("heading", { name: "Operators only" })).toBeInTheDocument();
+    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
+    expect(chunks.discoveryAsked).toBe(0);
+  });
+
   it("/discovery shows the page skeleton as one status region and the loading bar counts it; then the page", async () => {
     mockFetch({ ...routes, "GET /api/me": { body: { id: 1, username: "u", role: "operator" } } });
     renderWithProviders(<App />, { route: "/discovery", path: "*" });
@@ -76,17 +86,11 @@ describe("the discovery route (its graph library loads with the page, not with t
     expect(region()).toHaveAttribute("role", "status");
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     await waitFor(() => expect(progress.getCount("pending")).toBe(1));
+    expect(chunks.discoveryAsked).toBe(1);
     chunks.discovery.open();
     expect(await screen.findByRole("heading", { name: "the discovery page" })).toBeInTheDocument();
     expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
     await waitFor(() => expect(progress.getCount("pending")).toBe(0));
-  });
-
-  it("a viewer is refused before the chunk is asked for", async () => {
-    mockFetch(routes);
-    renderWithProviders(<App />, { route: "/discovery", path: "*" });
-    expect(await screen.findByRole("heading", { name: "Operators only" })).toBeInTheDocument();
-    expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
   });
 });
 
