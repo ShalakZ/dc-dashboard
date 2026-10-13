@@ -4,6 +4,7 @@ import json
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from helpers import login_as, make_role, make_user
 
 from dcdash.api import roles as roles_module
@@ -202,6 +203,13 @@ BAD_NAMES = {
     "a left-to-right mark": "Ex‎ec", "a line separator": "Ex ec", "a paragraph separator": "Ex ec",
     "a null character": "Ex\x00ec", "a bell": "Ex\x07ec", "a delete character": "Ex\x7fec", "a private-use character": "Exec",
     "a hangul filler": "ㅤ", "a braille blank": "⠀⠀", "a soft hyphen": "Ex­ec",
+    # default-ignorable marks (category Mn): they draw nothing, yet "admin" + one of them is not "admin" to the database
+    "a combining grapheme joiner": "admin\u034f", "a khmer inherent vowel aq": "viewer\u17b4", "a khmer inherent vowel aa": "viewer\u17b5",
+    "a mongolian free variation selector one": "operator\u180b", "a mongolian free variation selector two": "operator\u180c",
+    "a mongolian free variation selector three": "operator\u180d", "a mongolian free variation selector four": "operator\u180f",
+    "a variation selector one": "Viewer\ufe00", "a variation selector sixteen": "admin\ufe0f",
+    "a variation selector seventeen": "Admin\U000e0100", "a variation selector two hundred fifty six": "Admin\U000e01ef",
+    "only a variation selector": "\ufe0f",
 }
 
 
@@ -239,6 +247,41 @@ async def test_a_name_may_not_be_a_built_in_name_in_any_case(client, db):
         response = await client.post("/api/roles", json={"name": name, "permissions": []})
         assert (response.status_code, response.json()) == (409, {"detail": "that name belongs to a built-in role"}), name
     assert await db.fetchval("SELECT count(*) FROM roles") == 3
+
+
+@pytest.mark.parametrize(
+    "first, last", [(0x034F, 0x034F), (0x17B4, 0x17B5), (0x180B, 0x180F), (0xFE00, 0xFE0F), (0xE0100, 0xE01EF)]
+)
+def test_every_default_ignorable_mark_is_refused_not_only_the_ones_with_a_row(first, last):
+    for code in range(first, last + 1):
+        with pytest.raises(HTTPException) as refused:
+            roles_module.refuse_unseen_characters(f"ad{chr(code)}min", "a role name")
+        assert refused.value.status_code == 422, hex(code)
+
+
+BUILT_IN_LOOKALIKES = [
+    "Administrator", "ADMINISTRATOR", "  administrator  ", "Ａｄｍｉｎ", "ＶＩＥＷＥＲ", "Ｏperator", "ＡＤＭＩＮＩＳＴＲＡＴＯＲ",
+]
+
+
+@pytest.mark.parametrize("name", BUILT_IN_LOOKALIKES)
+async def test_a_name_that_reads_as_a_built_in_role_is_refused_on_create_rename_and_duplicate(client, db, name):
+    await login_as(client, db)
+    refused = {"detail": "that name belongs to a built-in role"}
+    response = await client.post("/api/roles", json={"name": name, "permissions": []})
+    assert (response.status_code, response.json()) == (409, refused)
+    role = await new_role(client, name="Execs", permissions=[])
+    renamed = await client.patch(f"/api/roles/{role['id']}", json={"name": name})
+    assert (renamed.status_code, renamed.json()) == (409, refused)
+    copied = await client.post("/api/roles/1/duplicate", json={"name": name})
+    assert (copied.status_code, copied.json()) == (409, refused)
+    assert await db.fetchval("SELECT count(*) FROM roles") == 4 and (await role_row(db, role["id"]))["name"] == "Execs"
+
+
+async def test_a_name_that_only_contains_a_built_in_name_is_still_free(client, db):
+    await login_as(client, db)
+    for name in ("Administrators", "Night administrator", "Viewers", "Operator 2", "Admin team"):
+        assert (await new_role(client, name=name, permissions=[]))["name"] == name
 
 
 async def test_names_are_compared_ignoring_case_by_the_database_not_by_python(client, db):
@@ -478,6 +521,14 @@ async def test_a_role_nobody_holds_is_deleted_and_audited(client, db):
     (event,) = await audit_details(db, "role.deleted")
     assert event == {"role_id": role["id"], "name": "Short lived", "permissions": ["assets.view", "billing.view"]}
     assert (await client.delete(f"/api/roles/{role['id']}")).status_code == 404
+
+
+async def test_the_audit_of_a_deleted_role_lists_what_it_granted_not_what_was_stored(client, db):
+    await login_as(client, db)
+    junk = await make_role(db, "J", ["assets.view", "bogus", "roles.manage"])  # made in SQL: the API would refuse this list
+    assert (await client.delete(f"/api/roles/{junk}")).status_code == 204
+    (event,) = await audit_details(db, "role.deleted")
+    assert event == {"role_id": junk, "name": "J", "permissions": ["assets.view"]}
 
 
 async def test_a_role_that_accounts_hold_cannot_be_deleted_until_they_are_moved(client, db):

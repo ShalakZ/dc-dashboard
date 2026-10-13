@@ -32,6 +32,15 @@ DESCRIPTION_MAX = 200
 UNIQUE_VIOLATION = "23505"  # PostgreSQL SQLSTATE
 # Letters that draw nothing: a name made of them looks empty or like another name.
 BLANK_LETTERS = frozenset("ᅟᅠㅤﾠ⠀")
+# Default-ignorable marks (category Mn, so neither C nor Z): they draw nothing, yet "admin" followed by one is another name.
+INVISIBLE_MARKS = frozenset(
+    chr(code)
+    for first, last in ((0x034F, 0x034F), (0x17B4, 0x17B5), (0x180B, 0x180F), (0xFE00, 0xFE0F), (0xE0100, 0xE01EF))
+    for code in range(first, last + 1)
+)
+# The built-in roles as people read them (BUILTIN_ROLE_LABELS in frontend/src/components/navItems.ts): a custom role may
+# not take one, or the profile menu would show it as the real thing.
+BUILTIN_ROLE_LABELS = ("Administrator", "Operator", "Viewer")
 LISTED_MAX = 20  # an error that names offending ids names at most this many
 
 ROLE_NOT_FOUND = "role not found"
@@ -79,11 +88,12 @@ class DuplicateRole(BaseModel):
 
 def refuse_unseen_characters(text: str, what: str) -> None:
     """422 for control and format characters (tab, newline, zero-width space, bidi marks), any space-like character other
-    than the plain space (no-break space, line and paragraph separators), private-use and unassigned code points, and the
-    letters that draw nothing: none of them has a place in a name that people read and compare by eye."""
+    than the plain space (no-break space, line and paragraph separators), private-use and unassigned code points, the
+    letters that draw nothing and the marks that draw nothing (variation selectors): none of them has a place in a name
+    that people read and compare by eye."""
     for char in text:
         category = unicodedata.category(char)
-        if (category[0] in "CZ" and char != " ") or char in BLANK_LETTERS:
+        if (category[0] in "CZ" and char != " ") or char in BLANK_LETTERS or char in INVISIBLE_MARKS:
             raise HTTPException(
                 422, f"{what} cannot contain control characters, invisible characters or white space other than plain spaces"
             )
@@ -132,10 +142,18 @@ def assert_can_grant(actor: User, permissions: Iterable[str]) -> None:
         raise HTTPException(403, CANNOT_SAVE)
 
 
+def lookalike(name: str) -> str:
+    """The name as it compares for "looks the same": compatibility forms folded (full-width letters), then case folded."""
+    return unicodedata.normalize("NFKC", name).casefold()
+
+
 async def assert_name_free(db: AsyncSession, name: str, *, own_id: int | None = None) -> None:
-    """409 when another role has this name, ignoring case (the database's lower(), as the unique index uses it)."""
+    """409 when another role has this name, ignoring case (the database's lower(), as the unique index uses it), and
+    when the name is a built-in role's name or its label ("Administrator") in any case or full-width form."""
     same = func.lower(Role.name) == func.lower(name)
-    if await db.scalar(select(Role.id).where(same, Role.builtin)) is not None:
+    builtin_names = (await db.scalars(select(Role.name).where(Role.builtin))).all()
+    taken_by_builtin = {lookalike(each) for each in (*builtin_names, *BUILTIN_ROLE_LABELS)}
+    if lookalike(name) in taken_by_builtin or await db.scalar(select(Role.id).where(same, Role.builtin)) is not None:
         raise HTTPException(409, "that name belongs to a built-in role")
     taken = select(Role.id).where(same)
     if own_id is not None:

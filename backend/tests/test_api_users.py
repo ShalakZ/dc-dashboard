@@ -147,7 +147,7 @@ async def test_a_patch_that_demotes_or_deactivates_the_only_other_admin_is_allow
     assert await db.fetchval("SELECT count(*) FROM users WHERE role_id = 3 AND active") == 1  # the acting admin
 
 
-async def test_a_patch_that_cannot_remove_an_admin_takes_the_lock_but_skips_the_last_admin_check(
+async def test_a_patch_that_cannot_remove_an_admin_loads_its_target_without_the_last_admin_check(
     client, db, monkeypatch
 ):
     await login_as(client, db)
@@ -164,6 +164,26 @@ async def test_a_patch_that_cannot_remove_an_admin_takes_the_lock_but_skips_the_
     for body in bodies:
         assert (await client.patch(f"/api/users/{uid}", json=body)).status_code == 200, body
     assert taken == [(uid, False)] * len(bodies)
+
+
+async def test_naming_the_admin_role_in_another_case_does_not_remove_an_admin(client, db, monkeypatch):
+    # removes_admin follows the role the name RESOLVES to, not the text typed: "ADMIN" is the Admin role.
+    await login_as(client, db)
+    taken: list[tuple[int, bool]] = []
+    real = users_module.load_target
+
+    async def spy(db_, current, target_id, *, removes_admin):
+        taken.append((target_id, removes_admin))
+        return await real(db_, current, target_id, removes_admin=removes_admin)
+
+    monkeypatch.setattr(users_module, "load_target", spy)
+    other = await make_user(db, "other", "admin")
+    for body in ({"role": "ADMIN"}, {"role": "Admin"}, {"role": "admin"}):
+        assert (await client.patch(f"/api/users/{other}", json=body)).status_code == 200, body
+    assert taken == [(other, False)] * 3
+    assert await role_name_of(db, other) == "admin"
+    assert (await client.patch(f"/api/users/{other}", json={"role": "VIEWER"})).status_code == 200
+    assert taken[-1] == (other, True)  # a real demotion is still counted
 
 
 async def test_a_blocked_name_is_forgotten_when_an_admin_resets_the_password(client, db):
@@ -226,6 +246,36 @@ async def test_the_audit_rows_of_a_role_change_carry_role_names(client, db):
     assert created["role"] == "viewer"
     updated = await db.fetchval("SELECT detail FROM audit_log WHERE action = 'user.updated'")
     assert updated["before"]["role"] == "viewer" and updated["after"]["role"] == "Night shift"
+
+
+async def test_a_role_of_64_characters_can_be_given_by_its_decomposed_spelling(client, db):
+    # 64 x "é" is a legal role name; typed with a combining accent it is 128 characters long before it is matched.
+    await login_as(client, db)
+    await make_role(db, "é" * 64, ["assets.view"])
+    typed = "e\u0301" * 64
+    assert len(typed) == 128
+    created = await client.post("/api/users", json={"username": "eve", "password": "longenough", "role": typed})
+    assert created.status_code == 201, created.text
+    assert created.json()["role"] == "é" * 64
+    uid = await make_user(db, "ann")
+    patched = await client.patch(f"/api/users/{uid}", json={"role": typed})
+    assert patched.status_code == 200, patched.text
+    assert await role_name_of(db, uid) == "é" * 64
+
+
+async def test_a_long_role_that_matches_nothing_is_an_unknown_role_up_to_the_raw_limit(client, db):
+    await login_as(client, db)
+    uid = await make_user(db, "ann")
+    for length, status, detail in ((256, 422, "unknown role"), (257, 422, None)):
+        role = "x" * length
+        created = await client.post("/api/users", json={"username": "new", "password": "longenough", "role": role})
+        patched = await client.patch(f"/api/users/{uid}", json={"role": role})
+        assert (created.status_code, patched.status_code) == (status, status), length
+        if detail:
+            assert created.json() == patched.json() == {"detail": detail}
+        else:
+            assert created.json()["detail"][0]["type"] == "string_too_long"
+    assert await role_name_of(db, uid) == "viewer"
 
 
 @pytest.mark.parametrize("role", ["root", "viewer ", " viewer", "vie wer", "3", "x" * 65, ""])

@@ -43,11 +43,13 @@ class Unblocked(BaseModel):
 class NewUser(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8, max_length=256)
-    role: str = Field(min_length=1, max_length=64)  # the NAME of a role, matched ignoring case
+    # The NAME of a role, matched ignoring case. The raw limit only keeps an enormous body out (as NewRole.name's does): a
+    # 64-character name typed with combining accents is longer, and find_role answers "unknown role" to what matches nothing.
+    role: str = Field(min_length=1, max_length=256)
 
 
 class UserPatch(BaseModel):
-    role: str | None = Field(default=None, min_length=1, max_length=64)
+    role: str | None = Field(default=None, min_length=1, max_length=256)  # the raw limit is explained above, on NewUser
     active: bool | None = None
     password: str | None = Field(default=None, min_length=8, max_length=256)
 
