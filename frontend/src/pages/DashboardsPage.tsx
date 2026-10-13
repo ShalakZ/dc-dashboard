@@ -12,9 +12,10 @@ import { useAction } from "../hooks/useAction";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 export function DashboardsPage() {
-  const { hasRole } = useAuth();
-  const canEdit = hasRole("operator");
-  const isAdmin = hasRole("admin");
+  const { can } = useAuth();
+  const canEdit = can("dashboards.edit"); // New dashboard and the trash
+  const canDefault = can("dashboards.default"); // the Make default menu
+  const hasActions = canEdit || canDefault;
   const list = useDashboards();
   const site = useSite();
   const remove = useDeleteDashboard();
@@ -41,7 +42,7 @@ export function DashboardsPage() {
       />
       {actionError && <p className="error" role="alert">{actionError}</p>}
       {failure && <p className="error" role="alert">{failure.message}</p>}
-      {!failure && (!list.data || timezone === undefined) && <TableSkeleton columns={canEdit ? 4 : 3} rows={4} label="Loading dashboards" />}
+      {!failure && (!list.data || timezone === undefined) && <TableSkeleton columns={hasActions ? 4 : 3} rows={4} label="Loading dashboards" />}
       {list.data && timezone !== undefined && list.data.length === 0 && (
         <div className="empty">
           <span className="empty-icon" aria-hidden="true">
@@ -53,7 +54,7 @@ export function DashboardsPage() {
       {list.data && timezone !== undefined && list.data.length > 0 && (
         <div className="table-wrap">
           <table className="dashboards-table">
-            <thead><tr><th>Name</th><th className="num">Widgets</th><th>Updated</th>{canEdit && <th className="act">Actions</th>}</tr></thead>
+            <thead><tr><th>Name</th><th className="num">Widgets</th><th>Updated</th>{hasActions && <th className="act">Actions</th>}</tr></thead>
             <tbody>
               {list.data.map((d) => (
                 <tr key={d.id}>
@@ -65,10 +66,10 @@ export function DashboardsPage() {
                   </td>
                   <td className="num">{d.widget_count}</td>
                   <td className="when">{formatSiteDateTime(d.updated_at, timezone)}</td>
-                  {canEdit && (
+                  {hasActions && (
                     <td className="act">
                       <div className="act-row">
-                        {isAdmin && (
+                        {canDefault && (
                           <RowActions
                             label={`Actions for ${d.name}`}
                             items={[d.id === defaultId
@@ -76,7 +77,7 @@ export function DashboardsPage() {
                               : { label: "Make default", onSelect: () => run(() => setDefault.mutateAsync({ dashboard_id: d.id })) }]}
                           />
                         )}
-                        <TrashButton label={`Delete ${d.name}`} onClick={() => confirmDelete(d)} />
+                        {canEdit && <TrashButton label={`Delete ${d.name}`} onClick={() => confirmDelete(d)} />}
                       </div>
                     </td>
                   )}
