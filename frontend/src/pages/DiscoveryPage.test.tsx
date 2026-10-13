@@ -4,7 +4,9 @@ import type { GraphModel, GraphPoint } from "../api/types";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
+import type { PermissionId } from "../lib/permissions";
 import { DiscoveryPage } from "./DiscoveryPage";
 
 // What React Flow reports as overlapping the dropped node; set per test.
@@ -79,7 +81,7 @@ const routes = (role: string, model: GraphModel | (() => GraphModel) = graph()) 
   "GET /api/discovery/graph": () => ({ body: typeof model === "function" ? model() : model }),
   "PUT /api/discovery/layout": { status: 204 },
 });
-const open = () => renderWithProviders(<DiscoveryPage />, { route: "/discovery", path: "/discovery" });
+const open = () => renderWithProviders(<><DiscoveryPage /><SignedIn /></>, { route: "/discovery", path: "/discovery" });
 const node = (id: string) => document.querySelector(`[data-id="${id}"]`) as HTMLElement;
 
 describe("DiscoveryPage", () => {
@@ -568,5 +570,83 @@ describe("DiscoveryPage while the graph loads", () => {
     open();
     expect(await screen.findByText(/Nothing discovered yet/)).toBeInTheDocument();
     expect(document.querySelector(".sk-region")).toBeNull();
+  });
+});
+
+describe("DiscoveryPage controls follow the permissions of the role (a custom role)", () => {
+  beforeEach(() => {
+    flow.state.intersecting = [];
+    flow.getIntersectingNodes.mockClear();
+  });
+
+  /** A role called "custom" that holds discovery.view and `permissions`; the graph is up with Plant OPC and LVP01 open and the account is known. */
+  const start = async (permissions: PermissionId[]) => {
+    const calls = mockFetch({ ...routes("custom"), "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view", ...permissions] }) } });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Expand Plant OPC" }));
+    await userEvent.click(screen.getByRole("button", { name: "Expand LVP01" }));
+    await accountKnown();
+    return calls;
+  };
+  const drop = async (id: string, onto: { id: string; type: string }[]) => {
+    flow.state.intersecting = onto;
+    await userEvent.click(screen.getByTestId(`drag-${id}`));
+  };
+  const puts = (calls: { method: string }[]) => calls.filter((c) => c.method === "PUT");
+
+  it("discovery.view alone: arranges the graph for itself, maps nothing, saves nothing, and its source panel has no Browse", async () => {
+    const calls = await start([]);
+    expect(screen.queryByRole("button", { name: /to asset…|New asset from/ })).not.toBeInTheDocument();
+    await drop("cluster:1:LVP01", [{ id: "asset:11", type: "asset" }]);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(node("cluster:1:LVP01")).toHaveAttribute("data-x", "7");
+    await drop("cluster:1:LVP02", []);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument(); // no "Create asset" offer
+    await userEvent.click(screen.getByText("Plant OPC"));
+    expect(within(await screen.findByRole("complementary", { name: "Source details" })).queryByRole("button", { name: "Browse again" })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method === "PUT" || c.method === "POST")).toBe(false);
+  });
+
+  it("discovery.edit: a drag saves the layout, and nothing maps", async () => {
+    const calls = await start(["discovery.edit"]);
+    expect(screen.queryByRole("button", { name: /to asset…|New asset from/ })).not.toBeInTheDocument();
+    await drop("cluster:1:LVP01", [{ id: "asset:11", type: "asset" }]); // onto an asset: only a move, since it cannot map
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(puts(calls)[0]).toMatchObject({ path: "/api/discovery/layout", body: { nodes: [{ node_id: "cluster:1:LVP01", x: 7, y: 8 }] } });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await drop("cluster:1:LVP02", []);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("discovery.accept: the map buttons, the review on a drop and the offer, and no layout save", async () => {
+    const calls = await start(["discovery.accept"]);
+    expect(screen.getByRole("button", { name: "Map LVP01 to asset…" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New asset from LVP01…" })).toBeInTheDocument();
+    await drop("cluster:1:LVP01", [{ id: "asset:11", type: "asset" }]);
+    expect(await screen.findByRole("dialog", { name: "Review mappings" })).toBeInTheDocument();
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await drop("cluster:1:LVP02", []);
+    expect(await screen.findByRole("status")).toHaveTextContent('Create asset "LVP02" from this cluster?');
+    expect(puts(calls)).toHaveLength(0); // a role that may accept results may not change the shared layout
+  });
+
+  it("sources.edit: Browse again in the source's panel, and nothing else of the page's admin controls", async () => {
+    const calls = await start(["sources.edit"]);
+    expect(screen.queryByRole("button", { name: /to asset…|New asset from/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByText("Plant OPC"));
+    const panel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(panel).getByRole("button", { name: "Browse again" })).toBeInTheDocument();
+    await drop("cluster:1:LVP01", []);
+    expect(puts(calls)).toHaveLength(0);
+  });
+
+  it("all of them: what an administrator has", async () => {
+    const calls = await start(["discovery.edit", "discovery.accept", "sources.edit"]);
+    expect(screen.getByRole("button", { name: "Map LVP01 to asset…" })).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Plant OPC"));
+    expect(within(await screen.findByRole("complementary", { name: "Source details" })).getByRole("button", { name: "Browse again" })).toBeInTheDocument();
+    await drop("cluster:1:LVP02", []);
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(await screen.findByRole("status")).toBeInTheDocument();
   });
 });

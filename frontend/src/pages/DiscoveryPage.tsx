@@ -39,29 +39,32 @@ type Callbacks = {
 /**
  * The callbacks a node gets in its data (it renders a button only for a callback it has). Sources and clusters toggle and
  * sources open their details;
- * for an admin, a cluster with something left to map offers both mapping buttons and an unmapped point offers "Map".
+ * for someone who may accept scan results (`canAccept`), a cluster with something left to map offers both mapping buttons and an
+ * unmapped point offers "Map".
  * The conditions mirror what `dropPayload` accepts, so a button is never shown for something that could not be mapped.
  */
-function nodeData(node: Node, isAdmin: boolean, { onToggle, onSelect, onMap, onNewAsset }: Callbacks): Node["data"] {
+function nodeData(node: Node, canAccept: boolean, { onToggle, onSelect, onMap, onNewAsset }: Callbacks): Node["data"] {
   if (node.type === "source") return { ...node.data, onToggle, onSelect };
   if (node.type === "cluster") {
     const cluster = node.data as ClusterNodeData;
-    const mappable = isAdmin && !cluster.ungrouped && cluster.mappedCount < cluster.count;
+    const mappable = canAccept && !cluster.ungrouped && cluster.mappedCount < cluster.count;
     return { ...cluster, onToggle, ...(mappable ? { onMap, onNewAsset } : {}) };
   }
-  if (node.type === "point" && isAdmin && (node.data as PointNodeData).point.asset_id === null) return { ...node.data, onMap };
+  if (node.type === "point" && canAccept && (node.data as PointNodeData).point.asset_id === null) return { ...node.data, onMap };
   return node.data;
 }
 
 function Canvas({ model }: { model: GraphModel }) {
-  const { hasRole } = useAuth();
-  const isAdmin = hasRole("admin");
+  const { can } = useAuth();
+  const canAccept = can("discovery.accept"); // map and accept: the buttons on the nodes, a drop onto an asset, the offer and the review
+  const canLayout = can("discovery.edit"); // the shared layout
+  const canEditSource = can("sources.edit"); // the source panel's credentials and Browse again
   const invalidate = useInvalidate();
   const { run, error: saveError } = useAction();
   const [open, setOpen] = useState<OpenState>({ sources: new Set(), clusters: new Set() });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Where the user has dragged nodes this session. A rebuild (expand, collapse, refresh) puts these back instead of
-  // snapping the nodes to the saved layout, which an operator never changes and an admin's save may not have reloaded yet.
+  // snapping the nodes to the saved layout, which this person may never change or whose save may not have reloaded yet.
   const moved = useRef(new Map<string, { x: number; y: number }>());
   // Where the dragged nodes were when the drag began, so a drop onto an asset can put them back.
   const dragStart = useRef(new Map<string, { x: number; y: number }>());
@@ -107,10 +110,10 @@ function Canvas({ model }: { model: GraphModel }) {
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
       position: moved.current.get(n.id) ?? n.position,
-      data: nodeData(n, isAdmin, { onToggle, onSelect, onMap, onNewAsset }),
+      data: nodeData(n, canAccept, { onToggle, onSelect, onMap, onNewAsset }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, isAdmin, onToggle, onSelect, onMap, onNewAsset]);
+  }, [model, open, canAccept, onToggle, onSelect, onMap, onNewAsset]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
@@ -128,8 +131,8 @@ function Canvas({ model }: { model: GraphModel }) {
   }, []);
 
   const onNodeDragStop: OnNodeDrag<Node> = useCallback((_event, node, dragged) => {
-    // Operators arrange the graph for themselves (kept in `moved`); only an admin's layout is shared, and only an admin maps.
-    if (isAdmin && dragged.length <= 1) {
+    // Everyone arranges the graph for themselves (kept in `moved`); only discovery.edit shares the layout, and only discovery.accept maps.
+    if (canAccept && dragged.length <= 1) {
       const payload = dropPayload(model, node.id);
       const assetId = payload ? pickDropTarget(getIntersectingNodes(node)) : null;
       if (payload && assetId !== null) {
@@ -143,13 +146,13 @@ function Canvas({ model }: { model: GraphModel }) {
       if (payload?.kind === "cluster") setOffer({ nodeId: node.id, label: payload.label });
     }
     for (const n of dragged) moved.current.set(n.id, { x: n.position.x, y: n.position.y });
-    if (!isAdmin) return;
+    if (!canLayout) return;
     // A node with an over-long id stays where it was dragged for this session but is not sent: the server would reject
     // the whole request and take every other position down with it.
     const saved = dragged.filter((n) => n.id.length <= MAX_LAYOUT_ID);
     if (saved.length === 0) return;
     void run(() => api.put("/api/discovery/layout", { nodes: saved.map((n) => ({ node_id: n.id, x: n.position.x, y: n.position.y })) }));
-  }, [isAdmin, model, getIntersectingNodes, setNodes, openReview, run]);
+  }, [canAccept, canLayout, model, getIntersectingNodes, setNodes, openReview, run]);
 
   // The panel reads the source from the current model, so it follows a refresh instead of showing stale facts.
   const selected = selectedId === null ? undefined : model.sources.find((s) => s.id === selectedId);
@@ -182,7 +185,7 @@ function Canvas({ model }: { model: GraphModel }) {
             <Controls />
             <Background />
           </ReactFlow>
-          {isAdmin && offer && (
+          {canAccept && offer && (
             <div className="offer-bar" role="status">
               <span>{`Create asset "${offer.label}" from this cluster?`}</span>
               <button className="primary" onClick={() => {
@@ -194,9 +197,9 @@ function Canvas({ model }: { model: GraphModel }) {
             </div>
           )}
         </div>
-        {selected && <SourcePanel key={selected.id} source={selected} canEdit={isAdmin} onClose={closePanel} />}
+        {selected && <SourcePanel key={selected.id} source={selected} canEdit={canEditSource} onClose={closePanel} />}
       </div>
-      {isAdmin && review && (
+      {canAccept && review && (
         <ReviewDialog key={review.key} model={model} payload={review.payload} initialTarget={review.initialTarget} onClose={closeReview} />
       )}
     </>

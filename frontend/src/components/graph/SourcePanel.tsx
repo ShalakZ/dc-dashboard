@@ -9,12 +9,12 @@ import { JobStatus } from "../JobStatus";
 
 interface Props {
   source: GraphSource;
-  /** Admins only: saving credentials and browsing change the source. */
+  /** Whoever holds sources.edit: saving credentials and browsing change the source. */
   canEdit: boolean;
   onClose: () => void;
 }
 
-/** Facts about one source, and for admins the way to give it credentials (or browse it again). Never shows a stored secret. */
+/** Facts about one source, and, for someone who may edit sources, the way to give it credentials (or browse it again). Never shows a stored secret. */
 export function SourcePanel({ source, canEdit, onClose }: Props) {
   const queryClient = useQueryClient();
   const { run, busy, error } = useAction();
