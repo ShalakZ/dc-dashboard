@@ -62,7 +62,7 @@
   .storage-page .retention-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; align-items: end; }
   .storage-page .retention-foot { display: grid; gap: 14px; margin-top: auto; }
 
-  /* Audit log (W7j). The page description may run to about 110 characters; Tariffs, Settings and Diagnostics add themselves to this selector. */
+  /* Audit log (W7j). The page description may run to about 110 characters; Settings and Diagnostics add themselves to this selector (Tariffs has its own in pages-billing.css). */
   .audit-page .page-head .sub, .storage-page .page-head .sub { max-width: 110ch; }
 
   /* The toolbar: Search (it grows), User, Action and From to To as one joined control; under it the quick filters at the left and "Go to date"
