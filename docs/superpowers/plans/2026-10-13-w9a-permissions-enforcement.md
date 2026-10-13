@@ -135,7 +135,7 @@ SIGNED_IN (any account; today `current_user` or viewer): `GET /api/me`, `POST /a
 | `diagnostics.run` | POST /api/sources/{id}/check (operator) |
 | `diagnostics.view` | GET /api/diagnostics/report (admin) |
 | `discovery.view` | GET /api/discovery/graph, GET /api/scans, GET /api/scans/{id}, GET /api/scopes (all operator) |
-| `discovery.edit` | PUT /api/discovery/layout, POST /api/scopes, PATCH /api/scopes/{id}, DELETE /api/scopes/{id}, GET /api/scopes/suggestions, GET /api/scopes/{id}/preview (all admin) |
+| `discovery.edit` | PUT /api/discovery/layout, POST /api/scopes, PATCH /api/scopes/{id}, DELETE /api/scopes/{id}, GET /api/scopes/suggestions (all admin) |
 | `discovery.scan` | POST /api/scopes/{id}/scan (admin) |
 | `discovery.accept` | POST /api/discovery/accept (admin) |
 | `storage.view` | GET /api/storage, GET /api/storage/rows-per-day, GET /api/settings/storage (admin) |
@@ -147,6 +147,7 @@ SIGNED_IN (any account; today `current_user` or viewer): `GET /api/me`, `POST /a
 | `users.view` | GET /api/users (admin) |
 | `users.edit` | POST /api/users, PATCH /api/users/{id}, DELETE /api/users/{id}, POST /api/users/{id}/unblock (admin) |
 | any of `sources.test`, `diagnostics.run`, `discovery.scan`, `sources.edit` | GET /api/jobs/{id} (operator) |
+| any of `discovery.edit`, `discovery.scan` | GET /api/scopes/{id}/preview (admin; Ruling in Task 2: a scan is confirmed against its preview, so a role that may start scans must read it; the built-in roles are unchanged) |
 | any of `assets.view`, `dashboards.view` | GET /api/stream (any account, own short session) |
 | NEW in Task 3 | `roles.manage`: GET /api/permissions, POST /api/roles, PATCH /api/roles/{id}, DELETE /api/roles/{id}, POST /api/roles/{id}/duplicate. Any of `roles.manage`, `users.view`, `users.edit`: GET /api/roles. |
 
