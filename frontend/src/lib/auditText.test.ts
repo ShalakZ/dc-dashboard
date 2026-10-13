@@ -381,6 +381,57 @@ describe("describeAudit: roles", () => {
     expect(describeAudit(entry("role.deleted", { role_id: 4 })).summary).toBe("Deleted role #4");
   });
 
+  it("works out what an edit added and removed from the permissions before and after when the entry has no lists", () => {
+    const view = updated({
+      before: { permissions: ["assets.view", "dashboards.view"] }, after: { permissions: ["assets.view", "billing.export", "tariffs.view"] },
+    });
+    expect(view.summary).toBe("Changed role Executive: added Export billing as CSV, See tariffs; removed See dashboards");
+    expect(updated({ before: { permissions: ["assets.view"] }, after: { permissions: [] } }).summary).toBe(
+      "Changed role Executive: removed See the Assets Tree",
+    );
+    expect(updated({ before: { permissions: [] }, after: { permissions: ["future.thing"] } }).summary).toBe(
+      "Changed role Executive: added future.thing",
+    );
+  });
+
+  it("prefers the lists the server wrote, and does not guess from sides that are not lists", () => {
+    expect(
+      updated({ added: ["audit.view"], removed: [], before: { permissions: ["assets.view"] }, after: { permissions: ["billing.view"] } }).summary,
+    ).toBe("Changed role Executive: added See the audit log");
+    expect(updated({ before: { permissions: "assets.view" }, after: { permissions: 7 } }).summary).toBe("Changed role Executive: permissions");
+    expect(updated({ before: { permissions: ["assets.view", "billing.view"] }, after: { permissions: ["billing.view", "assets.view"] } }).summary).toBe(
+      "Changed role Executive: permissions",
+    );
+  });
+
+  describe("a name in a role sentence is cut at 80 characters", () => {
+    const exact = "n".repeat(80);
+    const long = "n".repeat(5000);
+    const cut = `${exact}…`;
+
+    it("cuts the name of a new role, of the role it was copied from, of an edit and of a deletion", () => {
+      expect(describeAudit(entry("role.created", { role_id: 4, name: long, permissions: ["assets.view"], copied_from: long })).summary).toBe(
+        `Created role ${cut} as a copy of ${cut}: See the Assets Tree`,
+      );
+      expect(updated({ name: long, before: { name: long }, after: { name: "Short" } }).summary).toBe(`Changed role ${cut}: renamed from ${cut}`);
+      expect(describeAudit(entry("role.deleted", { role_id: 4, name: long })).summary).toBe(`Deleted role ${cut}`);
+    });
+
+    it("leaves a name of 80 characters whole and cuts one of 81", () => {
+      expect(describeAudit(entry("role.deleted", { role_id: 4, name: exact })).summary).toBe(`Deleted role ${exact}`);
+      expect(describeAudit(entry("role.deleted", { role_id: 4, name: `${exact}x` })).summary).toBe(`Deleted role ${cut}`);
+    });
+
+    it("counts characters, not UTF-16 units, so a cut never splits an emoji", () => {
+      const view = describeAudit(entry("role.deleted", { role_id: 4, name: "😀".repeat(81) }));
+      expect(view.summary).toBe(`Deleted role ${"😀".repeat(80)}…`);
+    });
+
+    it("does not touch the names in other entries", () => {
+      expect(describeAudit(entry("asset.deleted", { asset_id: 1, name: long })).summary).toBe(`Deleted asset ${long}`);
+    });
+  });
+
   it("never throws on a role entry with the wrong shapes", () => {
     for (const action of ["role.created", "role.updated", "role.deleted"]) {
       for (const detail of [{ permissions: "assets.view" }, { permissions: {} }, { added: 5, removed: "x" }, { name: 7 }, { copied_from: {} }]) {
