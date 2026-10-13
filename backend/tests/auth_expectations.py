@@ -67,9 +67,11 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     _all("dashboards.default", "PUT /api/dashboards/default"),
     _all("billing.view", "GET /api/billing/costs", "GET /api/billing/months"),
     _all("billing.export", "GET /api/billing/costs.csv"),
-    _all("tariffs.view", "GET /api/tariffs"),
+    # The currency read moved from tariffs.edit to tariffs.view in W9b (the read-only Tariffs page shows it): the one cell of
+    # the frozen matrix that differs on purpose, named in test_auth_matrix.py (CHANGED_AFTER_FREEZE).
+    _all("tariffs.view", "GET /api/tariffs", "GET /api/settings/billing"),
     _all("tariffs.edit", "POST /api/tariffs", "PATCH /api/tariffs/{tariff_id}", "DELETE /api/tariffs/{tariff_id}",
-         "GET /api/settings/billing", "PUT /api/settings/billing"),
+         "PUT /api/settings/billing"),
     _all("sources.view", "GET /api/sources", "GET /api/sources/{source_id}/points", "GET /api/collector/status",
          "GET /api/secret-key/status"),
     _all("sources.edit", "POST /api/sources", "PATCH /api/sources/{source_id}", "DELETE /api/sources/{source_id}",
@@ -87,7 +89,9 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     _all("storage.view", "GET /api/storage", "GET /api/storage/rows-per-day", "GET /api/settings/storage"),
     _all("storage.edit", "PUT /api/settings/storage", "PUT /api/settings/storage/default"),
     _all("settings.view", "GET /api/settings/general", "GET /api/settings/sign-in", "GET /api/tls/status"),
-    _all("settings.edit", "PUT /api/settings/general", "PUT /api/settings/sign-in"),
+    _all("settings.edit", "PUT /api/settings/general"),
+    # Added in W9b: the sign-in protection left settings.edit. The built-in roles are unaffected (Admin holds every id).
+    _all("settings.security", "PUT /api/settings/sign-in"),
     _all("audit.view", "GET /api/audit", "GET /api/audit/options", "GET /api/audit/position",
          "GET /api/audit/{entry_id:int}"),
     _all("audit.export", "GET /api/audit.csv"),

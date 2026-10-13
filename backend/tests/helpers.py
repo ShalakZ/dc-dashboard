@@ -125,12 +125,19 @@ async def make_role(db, name: str, permissions: Iterable[str] = (), description:
     )
 
 
+# Permission ids added to the catalogue after migration 0009 wrote the built-in rows. The `roles.permissions` column of a
+# built-in row is that migration's snapshot: never refreshed, no migration for it, and it grants nothing (a built-in role's
+# permissions come from BUILTIN in code). So the Admin row below is the live catalogue MINUS these ids, which is what the
+# 0009 seed wrote; add an id here whenever the catalogue grows, or test_schema_roles.py fails on the seed comparison.
+ADDED_AFTER_0009: frozenset[str] = frozenset({"settings.security"})
+
 # The three rows migration 0009 seeds, as (id, name, description, permissions). The permissions are the mirror of
-# permissions.BUILTIN in catalogue order; test_schema_roles.py checks that the migration seeds exactly these.
+# permissions.BUILTIN in catalogue order as of 0009; test_schema_roles.py checks that the migration seeds exactly these.
 BUILTIN_ROLE_ROWS: list[tuple[int, str, str, list[str]]] = [
     (1, "viewer", "Sees assets, dashboards and billing.", [p.id for p in CATALOGUE if p.id in BUILTIN["viewer"]]),
     (2, "operator", "Also edits dashboards, tests sources and sees scans.", [p.id for p in CATALOGUE if p.id in BUILTIN["operator"]]),
-    (3, "admin", "Everything, including users and roles.", [p.id for p in CATALOGUE if p.id in BUILTIN["admin"]]),
+    (3, "admin", "Everything, including users and roles.",
+     [p.id for p in CATALOGUE if p.id in BUILTIN["admin"] and p.id not in ADDED_AFTER_0009]),
 ]
 
 

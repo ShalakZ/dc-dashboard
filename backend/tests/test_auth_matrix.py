@@ -26,6 +26,21 @@ FIXTURE = Path(__file__).parent / "fixtures" / "auth_matrix_pre_w9a.json"
 ROLES = ("anon", "viewer", "operator", "admin")
 LOGOUT = "POST /api/logout"
 
+# The ONE cell of the frozen matrix W9b changed on purpose (amendment A3a): the Tariffs page opens read-only to `tariffs.view`,
+# which the built-in Operator holds, and it reads the currency from this route. Nothing else may differ from the fixture.
+# route key -> role -> (the answer the fixture records, the answer today). The fixture file itself is never edited.
+CHANGED_AFTER_FREEZE = {"GET /api/settings/billing": {"operator": ("403", "pass")}}
+
+
+def with_the_named_changes(frozen: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    """The fixture's cells with CHANGED_AFTER_FREEZE applied; each change must start from what the fixture really says."""
+    expected = {key: dict(cells) for key, cells in frozen.items()}
+    for key, by_role in CHANGED_AFTER_FREEZE.items():
+        for role, (old, new) in by_role.items():
+            assert frozen[key][role] == old, f"{key} as {role}: the fixture says {frozen[key][role]}, not {old}"
+            expected[key][role] = new
+    return expected
+
 
 async def collect(app, db) -> dict[str, dict[str, int]]:
     """Route key -> role -> HTTP status, for each of ROLES. Logout goes last, on a fresh sign-in of its own."""
@@ -65,8 +80,9 @@ async def test_every_built_in_role_gets_the_answer_it_got_before_w9a(app, db, mo
 
     frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert set(frozen) <= set(current), f"routes that existed before W9a are gone: {sorted(set(frozen) - set(current))}"
+    expected = with_the_named_changes(frozen)
     # Only the frozen keys are compared: a route added after the freeze (the roles API) is covered by the gate tests.
-    changed = {key: {"before": frozen[key], "now": current[key]} for key in frozen if frozen[key] != current[key]}
+    changed = {key: {"before": expected[key], "now": current[key]} for key in frozen if expected[key] != current[key]}
     assert changed == {}
 
 
@@ -111,12 +127,22 @@ def test_every_frozen_route_is_public_open_to_any_account_or_in_the_permission_t
 
 def test_the_permission_table_agrees_with_the_frozen_matrix_for_the_built_in_roles():
     frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    expected = with_the_named_changes(frozen)
     gated = sorted(set(frozen) - set(PUBLIC) - set(SIGNED_IN))
     assert gated == sorted(set(ROUTE_PERMISSIONS) & set(frozen)), "every frozen route is public, open to any account, or in the table"
     disagree = {}
     for key in gated:
         mode, ids = ROUTE_PERMISSIONS[key]
         for role in ("viewer", "operator", "admin"):
-            if satisfies(BUILTIN[role], mode, ids) != (frozen[key][role] == "pass"):
-                disagree[f"{key} as {role}"] = {"before": frozen[key][role], "table says": [mode, ids]}
+            if satisfies(BUILTIN[role], mode, ids) != (expected[key][role] == "pass"):
+                disagree[f"{key} as {role}"] = {"expected": expected[key][role], "table says": [mode, ids]}
     assert disagree == {}
+
+
+def test_the_named_changes_are_only_what_the_table_says_the_operator_gets_today():
+    frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    with_the_named_changes(frozen)  # each change starts from the fixture's own answer
+    for key, by_role in CHANGED_AFTER_FREEZE.items():
+        assert set(by_role) == {"operator"}, f"{key}: W9b changed the Operator's cell and no other"
+        mode, ids = ROUTE_PERMISSIONS[key]
+        assert by_role["operator"][1] == ("pass" if satisfies(BUILTIN["operator"], mode, ids) else "403"), key

@@ -2,7 +2,7 @@ import asyncpg
 import pytest
 
 from dcdash.core.permissions import ALL_IDS, BUILTIN
-from helpers import BUILTIN_ROLE_ROWS, make_role, make_user, restore_builtin_roles, run_alembic
+from helpers import ADDED_AFTER_0009, BUILTIN_ROLE_ROWS, make_role, make_user, restore_builtin_roles, run_alembic
 
 ROLE_COLUMNS = {
     ("roles", "id", "bigint", "NO", None),
@@ -132,7 +132,8 @@ async def test_the_seed_is_viewer_operator_and_admin_with_the_mirrors_of_the_cod
     assert len(by_name["admin"]) == len(set(by_name["admin"])) == 28
     assert set(by_name["viewer"]) == BUILTIN["viewer"]
     assert set(by_name["operator"]) == BUILTIN["operator"]
-    assert set(by_name["admin"]) == ALL_IDS
+    # The Admin row is the 0009 snapshot: 28 ids, no `settings.security` (added later; the column grants nothing, code does).
+    assert set(by_name["admin"]) == ALL_IDS - ADDED_AFTER_0009
     assert next_id == 4, "the id sequence must continue after the three seeded rows"
 
 

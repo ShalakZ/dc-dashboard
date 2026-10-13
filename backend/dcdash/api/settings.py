@@ -111,7 +111,8 @@ async def put_general(
     return body
 
 
-@router.get("/settings/billing", response_model=BillingSettings, dependencies=[Depends(require_permission("tariffs.edit"))])
+# Reading the currency needs only tariffs.view (the read-only Tariffs page shows it); setting it stays tariffs.edit.
+@router.get("/settings/billing", response_model=BillingSettings, dependencies=[Depends(require_permission("tariffs.view"))])
 async def get_billing(db: AsyncSession = Depends(get_db)) -> BillingSettings:
     return BillingSettings(currency=await get_currency(db))
 
@@ -167,7 +168,8 @@ async def get_sign_in(db: AsyncSession = Depends(get_db)) -> SignInPolicyOut:
     return _sign_in_out(await get_sign_in_policy(db))
 
 
-@router.put("/settings/sign-in", response_model=SignInPolicyOut, dependencies=[Depends(require_permission("settings.edit"))])
+# Its own permission (not settings.edit): switching the brute-force protection off or loosening it is a risky act.
+@router.put("/settings/sign-in", response_model=SignInPolicyOut, dependencies=[Depends(require_permission("settings.security"))])
 async def put_sign_in(
     body: SignInPolicyIn,
     confirm: bool = False,
