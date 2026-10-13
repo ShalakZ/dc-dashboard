@@ -145,10 +145,11 @@ the user `sim` with that password. Modbus needs none.
 
 UI screens, besides Assets Tree, Sources and Points:
 
-- **Users** (admin): create users, change roles, deactivate / reactivate, reset a password, delete a user
+- **Users & Roles** (admin): on its **Users** tab, create users, change roles, deactivate / reactivate, reset a password, delete a user
   (after a confirmation; never yourself and never the last administrator). Deactivating signs that user out
   everywhere. You cannot deactivate, demote or delete yourself. An account that has been blocked after too many
   failed sign-ins shows `blocked`, and **Unblock** lets it in at once; see "If you are blocked from signing in".
+  Its **Roles** tab makes and edits roles; see "Roles and permissions".
 - **Settings** (admin): site timezone (IANA name). It decides where a day and a month start for energy
   totals, Billing and dashboard ranges, and it must have a whole-hour UTC offset in both January and
   July (Settings refuses any other zone). `DCDASH_TIMEZONE` in `.env` (or the `-Timezone` / `--timezone` flag of the setup script) only seeds this on first start.
@@ -170,7 +171,7 @@ UI screens, besides Assets Tree, Sources and Points:
   admin can mark one as the default, and the sidebar entry and the first page after signing in then open
   it; see "Dashboards and billing".
 - **Billing** (everyone): cost per asset per day and per month, with a CSV export.
-- **Tariffs** (admin): the site currency and the rates that cost is calculated with.
+- **Tariffs** (admin sets, the Operator reads): the site currency and the rates that cost is calculated with.
 
 ### Protocols
 
@@ -331,7 +332,7 @@ Roles are enforced by the API; the screens only hide what you cannot use. The ta
 | Open dashboards and Billing, export CSV | yes | yes | yes |
 | Create, edit and delete dashboards | no | yes | yes |
 | Choose the default dashboard (Dashboards list, row menu) | no | no | yes |
-| Read tariffs (through the API; operators have no Tariffs screen) | no | yes | yes |
+| Read tariffs and the currency (Tariffs screen, read-only for an Operator) | no | yes | yes |
 | Set tariffs and the currency (Tariffs screen) | no | no | yes |
 
 **Dashboards** are shared by everyone. A dashboard holds up to 24 widgets (the site up to 50
@@ -382,7 +383,7 @@ measurement. The CSV button exports one row per asset per day
 (`asset,date,kwh,cost,currency,estimated,partial,no_data`). The asset page shows today's cost next to
 today's energy.
 
-**Tariffs** (admin) hold the site currency (one three-letter code for the whole site; when it is unset,
+**Tariffs** (an administrator sets them) hold the site currency (one three-letter code for the whole site; when it is unset,
 costs show without a unit) and the rates, in that currency per kWh. Changing or clearing the currency
 asks for confirmation: it relabels every past figure and converts nothing. A rate is a number of zero or
 more with up to six decimals and an effective date (a date in the site timezone). For an asset on a
@@ -429,19 +430,19 @@ used in widgets.
 ## Roles and permissions
 
 Every action in the API needs a named permission, and an account holds one role: a role is a set of permissions. The screens only hide
-what the server would refuse. There are 28 permissions, in groups by area. A **See** permission opens a page, a **Change** permission
+what the server would refuse. There are 29 permissions, in groups by area. A **See** permission opens a page, a **Change** permission
 edits what is on it, and a few risky actions are separate on purpose (deleting assets, exporting billing or the audit log, running
-scans, accepting scan results, choosing the default dashboard, managing roles).
+scans, accepting scan results, choosing the default dashboard, changing sign-in protection, managing roles).
 
 **Built-in roles.** Viewer, Operator and Admin exist from the start. They cannot be edited or deleted (the API answers 409), and they
-behave exactly as they did before roles were made of permissions:
+behave as they did before roles were made of permissions (the one change, in W9b, is below):
 
 - **Viewer**: `assets.view`, `dashboards.view`, `billing.view`, `billing.export`.
 - **Operator**: everything a Viewer has, plus `dashboards.edit`, `tariffs.view`, `sources.view`, `sources.test`, `discovery.view` and
   `diagnostics.run`.
 - **Admin**: every permission in the catalogue, now and when a later release adds one (it is computed from the catalogue, not stored).
 
-**The 28 permissions** (`backend/dcdash/core/permissions.py` is the one list; the Roles page of the next wave will draw from it):
+**The 29 permissions** (`backend/dcdash/core/permissions.py` is the one list; the Roles tab draws from it):
 
 | Area | Permission | What it allows |
 |---|---|---|
@@ -453,8 +454,8 @@ behave exactly as they did before roles were made of permissions:
 | | `dashboards.default` | Choose the dashboard everybody lands on. |
 | Billing and tariffs | `billing.view` | Open the Billing page: energy and cost per asset and month. |
 | | `billing.export` | Download the billing table as a CSV file. |
-| | `tariffs.view` | Read the tariff list through the API. No page opens on it alone (see "easy to miss" below). |
-| | `tariffs.edit` | Open the Tariffs page (with `assets.view`) and set the currency, the site rate and per-asset rates. |
+| | `tariffs.view` | Open the Tariffs page, read-only (with `assets.view`), and read the tariff list and the currency. |
+| | `tariffs.edit` | Set the currency, the site rate and per-asset rates (with `tariffs.view` and `assets.view`). |
 | Sources and discovery | `sources.view` | Open the Sources page, a source's points and the collector status. |
 | | `sources.edit` | Add, edit and delete data sources and browse their points. |
 | | `sources.test` | Make the server try to reach a source (Test and Test all). |
@@ -465,10 +466,11 @@ behave exactly as they did before roles were made of permissions:
 | Storage and settings | `storage.view` | Open the Storage page. |
 | | `storage.edit` | Change retention, compression and disk limits. |
 | | `settings.view` | Open the Settings page. |
-| | `settings.edit` | Change general settings and the sign-in protection switch. |
+| | `settings.edit` | Change the general settings, such as the time zone. |
+| | `settings.security` | Switch the sign-in protection on or off and change its limits. |
 | Audit log | `audit.view` | Open the audit log and its entries. |
 | | `audit.export` | Download the audit log as CSV. |
-| Users | `users.view` | Open the Users page. |
+| Users | `users.view` | Open the Users tab of Users & Roles. |
 | | `users.edit` | Create, edit, deactivate and delete accounts; reset passwords; lift sign-in blocks. |
 | Roles | `roles.manage` | Create, edit and delete roles. Only the built-in Admin role holds it. |
 | Diagnostics | `diagnostics.view` | Open the Diagnostics page (with `sources.view`) and build a report, which includes settings, retention, the audit tail and each source's security settings. |
@@ -476,8 +478,9 @@ behave exactly as they did before roles were made of permissions:
 
 A few things that are easy to miss:
 
-- **The sign-in protection switch** (Settings, section Sign-in protection) is part of `settings.edit`, with the two numbers beside it.
-  Whoever holds `settings.edit` can switch the protection off.
+- **Sign-in protection has its own permission.** The Settings page has two cards: General (`settings.edit`, the time zone) and
+  Sign-in protection (`settings.security`: the switch and its two numbers). Whoever holds `settings.security` can switch the protection
+  off, so it is a sensitive action; a role with only `settings.edit` sees that card read-only, and the API refuses it (403).
 - **A custom role can never manage roles.** `roles.manage` is held by the built-in Admin role only: the API refuses a role that lists it
   (422), and a stored list that happens to name it grants nothing.
 - **Nobody can pass on more than they hold** (the subset rule). You can save a role, or give an account a role, only if you hold every
@@ -486,9 +489,9 @@ A few things that are easy to miss:
   Admin: resetting an Admin's password, or giving anyone the Admin role, needs `roles.manage`, which no custom role has. Changing your
   own role is refused (409), and so is deactivating or deleting yourself; the last active Admin can never be removed.
 - **Two pages need more than their own permission.** The Diagnostics page needs `diagnostics.view` and `sources.view`, and the
-  Tariffs page needs `tariffs.edit` and `assets.view` (it lists the assets its rates belong to). `tariffs.view` alone is for the API
-  until the Roles page arrives: it opens no page, so a role that holds only that sees no Tariffs link. A role with only
-  `diagnostics.view` gets "No access" on the Diagnostics page.
+  Tariffs page needs `tariffs.view` and `assets.view` (it lists the assets its rates belong to); `tariffs.edit` turns its forms on. A role
+  with only `diagnostics.view` gets "No access" on the Diagnostics page, and one with only `tariffs.view` gets it on Tariffs. The Roles tab
+  says so in words under the role's ticks ("... also needs ...") before you save.
 - **A role that accounts hold cannot be deleted** (409, with the number of accounts). Duplicating Admin gives a role with every
   permission except `roles.manage`.
 - **There is no per-site or per-asset scoping yet.** A permission applies to the whole site: `assets.view` shows every asset.
@@ -508,8 +511,21 @@ A few things that are easy to miss:
 - **Everything is audited.** `role.created`, `role.updated` and `role.deleted` are in the Audit log with the permissions added and removed,
   and a change of an account's role lists the permissions it adds and removes.
 
-**Making a role today.** The Roles page comes with the next wave (W9b), so a role is made through the API, signed in as an
-administrator. `GET /api/permissions` lists the ids; `POST /api/roles` creates a role (201, with its id and the sorted permissions);
+**Making a role.** Signed in as an administrator, open **Users & Roles**, then the **Roles** tab (only the Administrator role has it). The
+list shows each role's accounts. **New role** opens an editor: a name (1 to 64 characters, unique
+ignoring case, not a built-in name), an optional description, and the permissions as a grid with one row per area, **See** (opens the page)
+and **Change** (edits what is on it), then **Sensitive actions**. **Start from** Viewer or Operator ticks their permissions for you
+(choosing one replaces the ticks). Under the grid a summary says what the ticks add up to ("Opens: Assets Tree, Dashboards, Billing."),
+and a line names a tick whose page would still show nothing ("Export billing as CSV also needs See billing ..."), but that line never ticks anything,
+because the server accepts any combination. A row's menu has **Edit** and **Duplicate** (a built-in role says **View** instead:
+it opens locked, with a Duplicate button), and the bin deletes a role nobody holds (it is disabled, with the reason, while an account has it).
+
+The Executive, who reads energy and cost and nothing else: Roles > **New role**, name `Executive`, tick **See the Assets Tree**,
+**See dashboards**, **See billing** and **Export billing as CSV**, **Save**. On the Users tab, create the account and choose `Executive`
+in **Role** (a line under the form says what the role is for). That person's sidebar is Assets Tree, Dashboards and Billing, every other
+page says "No access", and the API refuses the rest. Tick **See tariffs** later and the open page of that account offers a Reload.
+
+**The same through the API.** `GET /api/permissions` lists the ids; `POST /api/roles` creates a role (201, with its id and the sorted permissions);
 `PATCH /api/roles/{id}` changes its name, description or permissions; `DELETE /api/roles/{id}` removes it; `POST /api/roles/{id}/duplicate`
 makes an editable copy of any role (an optional `{"name": "..."}` names it). A role name is 1 to 64 characters, unique ignoring case, and
 may not be a built-in name. An example body for a role that reads energy and cost and nothing else:
@@ -523,11 +539,20 @@ From the browser's developer console on any page of the site, signed in as an ad
         permissions: ["assets.view", "dashboards.view", "billing.view", "billing.export"] }) }).then((r) => r.json())
 
 Give the role to an account by its **name**, matched ignoring case: `POST /api/users` or `PATCH /api/users/{id}` with `"role": "Executive"`.
-The Users page lists the role of every account (an account with a custom role keeps it when you edit its other fields). Its Create
+The Users tab lists the role of every account (an account with a custom role keeps it when you edit its other fields). Its Create
 user form and role choice offer the roles the server says you may hand out (the built-in names first, then the others by name), and a
 row whose role grants something you lack is shown read-only, with no role choice, menu or trash can. A person who may not hand out a role
 never sees it offered once the page has the server's list of roles (while that list is loading, or could not be read, the three built-in
 names are shown and the server still refuses what is not allowed).
+
+**What changed in W9b.** The built-in roles keep their permissions; the one thing a person will notice is that the built-in **Operator**,
+who has held `tariffs.view` since W9a, now sees **Tariffs** in the sidebar and the quick find (Ctrl+K), opens the page read-only (no forms,
+no row menus) and may read the currency (`GET /api/settings/billing` answers 200 instead of 403; setting it stays `tariffs.edit`). The
+missing-rate banner on Billing still tells the Operator to "Ask an administrator". Sign-in protection moved out of `settings.edit` into
+`settings.security`, so **a role made through the API before W9b that holds `settings.edit` lacks `settings.security` until someone ticks
+it** on the Roles tab (the Administrator has every permission and is unaffected). The `permissions` column of the three built-in rows in
+the database is the snapshot migration `0009` wrote (28 ids, no `settings.security`) and is never refreshed: a built-in role's permissions
+come from the code, so reading that column shows an Admin row without `settings.security`, and nothing is affected.
 
 ## Develop
 
@@ -563,7 +588,7 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Twenty specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Twenty-one specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
 
 - `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
@@ -590,11 +615,11 @@ Twenty specs run in one `playwright test` run against the dev-profile stack on `
   that Save stays disabled until something changes), that a parent asset shows the sum of its sub-assets' live power, that the asset
   page's Trend says when it was updated, and that a dashboard with a 45-character asset name draws its bar and time series widgets.
 - `w3c.spec.ts` and `w3d.spec.ts` (after it, at 1600×1000) cover the Audit screen (filters, search, a link per entry, CSV export, paging,
-  administrators only) and sign-in protection with the Users page (a blocked account, Unblock, Delete, and no screen or API answer showing
+  administrators only) and sign-in protection with the Users & Roles page (a blocked account, Unblock, Delete, and no screen or API answer showing
   the password stored inside a source's URL).
 - `w7a.spec.ts` (after `w3d`, at 1600×1000) checks the Assets workspace and the shell: a tree node opens its asset with one click and the tree
   stays, the "Assets Tree" crumb returns to the summary, the tree column resizes by keyboard and keeps its width and its folds across a reload,
-  quick find (Ctrl+K) and its Esc keys, the "Live" status chip, Billing and Users at the full width of a 1920 px window, the summary's four
+  quick find (Ctrl+K) and its Esc keys, the "Live" status chip, Billing and Users & Roles at the full width of a 1920 px window, the summary's four
   tiles and "Needs attention", and the profile panel's Sign out with its Cancel.
 - `w8.spec.ts` (after `w7a`, at 1600×1000) checks field diagnostics: an administrator's Diagnostics page builds a summary report (a header,
   a size and a checksum line per part, the build id) and leaves an audit row without the content; a masked report names no source
@@ -623,7 +648,7 @@ Twenty specs run in one `playwright test` run against the dev-profile stack on `
   look. It makes two assets and a dashboard and removes them again.
 - `w7f.spec.ts` (its own project, after `w7e`, at 1600×1000) holds a page's first data request and checks the loading skeletons: one status
   region per area and none of the content, and the content back with the region gone once the data arrives (an asset page, the summary,
-  the Dashboards list, Users); the skeleton against the loaded page to 2 px (the asset page, the Trend frame's height, the summary at 1440
+  the Dashboards list, Users & Roles); the skeleton against the loaded page to 2 px (the asset page, the Trend frame's height, the summary at 1440
   and 1024 px); the stored tree width while the asset list loads; no flash for an answer within 40 ms and a fade-in from nothing for a
   slow one; no skeleton on a poll, and none after a failed poll; the error alert replacing the skeleton; no sweep under reduced motion;
   the dark token in dark mode.
@@ -660,6 +685,13 @@ Twenty specs run in one `playwright test` run against the dev-profile stack on `
   or reset, deactivate, demote, unblock or delete one; an Admin cannot demote, deactivate or delete itself (409), the built-in roles
   cannot be changed or deleted, `roles.manage` cannot be put in a custom role, and a role an account holds cannot be deleted (409). It
   makes its accounts and roles (every name starts with `w9a-`) and removes them again, users first.
+- `w9b.spec.ts` (its own project, after `w9a`, at 1600×1000) checks Users & Roles: the tabs follow the arrow keys, the address, a reload and
+  Back; an administrator makes the Executive role with four ticks, gives it to a new account, whose sidebar is exactly Assets Tree,
+  Dashboards and Billing (other pages say "No access", the API answers 403 except the billing export), and a tick added later reaches
+  that account's open page (the Reload notice) and opens Tariffs read-only; a role in use has a disabled bin (a direct delete is 409), the
+  admin cannot change their own role, a taken name keeps the dialog open; Duplicate of the Operator opens `Copy of operator` with its
+  ticks; the Operator's Tariffs has no form; `settings.edit` and `settings.security` each open one card of Settings (the spec puts the
+  time zone back); and the editor works from the keyboard. Every name starts with `w9b-`; they are removed again, users first.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -750,7 +782,7 @@ After too many wrong passwords for one account from one computer, that account i
 says `too many failed attempts, try again in about N minutes`. Other accounts are not affected. The block ends by itself. To get in
 sooner:
 
-1. **Another admin presses Unblock.** On the Users page a blocked account shows `blocked` and an `Unblock <name>` button; it clears
+1. **Another admin presses Unblock.** On the Users tab of Users & Roles a blocked account shows `blocked` and an `Unblock <name>` button; it clears
    that account's blocks from every computer. Resetting the account's password or deleting it clears them too.
 2. **An admin changes the numbers** on the Settings page, section Sign-in protection: how many failed sign-ins block an account
    (3 to 20, default 5) and for how many minutes (1 to 60, default 5). A change applies to the next sign-in attempt, also to a block
@@ -1340,7 +1372,7 @@ Schema stays at `0007`; nothing in the database or the API changes, so there is 
 
 W7f (loading skeletons) is front end only, so only the `web` image changes: while a page waits for its first data it shows quiet grey
 shapes in the layout the data will have (the Assets tree, the summary tiles, the asset page and its chart, the tables of Dashboards,
-Billing, Sources, Scans, Users, Tariffs, Storage and Audit, the forms of Settings and Storage, the dashboard and the Discovery graph)
+Billing, Sources, Scans, Users & Roles, Tariffs, Storage and Audit, the forms of Settings and Storage, the dashboard and the Discovery graph)
 instead of a bare "loading..." line. The shapes appear only if the wait lasts longer than about a sixth of a second, so a quick page
 shows none, and only on the first load of a page: the pages that refresh themselves in the background never bring them back, and a
 failed load shows its error as before. Screen readers hear one "Loading ..." line per area. With "reduce motion" switched on in the
@@ -1351,7 +1383,7 @@ system the shapes do not shimmer. Sign-in, setup, Password and Diagnostics are u
 2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
    the simulator). Only `web` is rebuilt. Reload open browser tabs.
 3. **Verify.** `docker compose exec api alembic current` still prints `0007 (head)`. In the browser's developer tools set the network
-   to "Slow 4G", open the Users page and watch grey bars take the place of the table until the list arrives.
+   to "Slow 4G", open the Users & Roles page and watch grey bars take the place of the table until the list arrives.
 4. **Going back.** Check out `10feba7` and rebuild as in step 2. There is no database step.
 
 ### Upgrading to W7g (migration 0008)
@@ -1450,8 +1482,8 @@ exist, which the old check did not allow, would become Viewer: least privilege).
 will notice: **nothing changes for Viewer, Operator and Admin** except the screen a person sees when they open a page their role lacks, which
 now reads "No access" and "Your role does not include this page." (it said "Admins only" or "Operators only"). Behind it every API route needs a named permission (see "Roles and permissions"), `/api/me`,
 sign-in and setup answer with the account's `permissions` next to its `role` (still the role's name, so a script that reads `role` keeps
-working), and `/api/permissions` and `/api/roles` are new. Custom roles are made through the API until the Roles page arrives
-(W9b). The `api` container applies the migration the first time it starts from the new image.
+working), and `/api/permissions` and `/api/roles` are new. Custom roles were made through the API until
+the Roles tab arrived in W9b. The `api` container applies the migration the first time it starts from the new image.
 
 1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0008`).
 2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
@@ -1464,6 +1496,28 @@ working), and `/api/permissions` and `/api/roles` are new. Custom roles are made
    **write down which accounts hold a custom role before you go back**. `upgrade` seeds the three built-in roles again and gives every
    account the role of its name. A restart of the W9a `api` would run `alembic upgrade head` and apply `0009` again, so the W9a `api`
    must not be running once the schema is back at `0008`.
+
+### Upgrading to W9b (no migration)
+
+Schema stays `0009`; no data is rewritten, so there is nothing to restore. The code to go back to is `2276b28` (`main` before W9b).
+
+W9b (the Roles tab) rebuilds the `api` and `web` images. What you will notice: the Users page is now **Users & Roles**, with a **Users**
+tab (as before) and a **Roles** tab where an administrator makes, duplicates, edits and deletes roles (see "Roles and permissions").
+The catalogue grows to 29 permissions: `settings.security` now guards the sign-in protection switch and `settings.edit` covers the
+general settings only. The built-in Operator now sees Tariffs, read-only; nothing else changes for the built-in roles. A custom role made
+before W9b that holds `settings.edit` lacks `settings.security` until someone ticks it. On the development stack this was checked before
+the upgrade (2026-10-13): it has only the three built-in roles and no custom role, so no account loses a right there.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back".
+2. **List your custom roles.** `docker compose exec db psql -U dcdash -d dcdash -c "SELECT name, permissions FROM roles WHERE NOT builtin"`
+   (read-only). For each one that lists `settings.edit` and should keep switching the sign-in protection, tick **Change sign-in
+   protection** on the Roles tab after the upgrade.
+3. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has the
+   simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+4. **Verify.** `docker compose exec api alembic current` still prints `0009 (head)`; sign in as an administrator, open Users & Roles >
+   Roles and see the three built-in roles with their account counts.
+5. **Going back.** Check out `2276b28` and rebuild as in step 3. There is no database step; the roles you made keep working (the W9a
+   code ignores the extra permission).
 
 ## Add a connector
 
