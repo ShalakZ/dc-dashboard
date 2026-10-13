@@ -64,8 +64,10 @@
   .storage-page .retention-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; align-items: end; }
   .storage-page .retention-foot { display: grid; gap: 14px; margin-top: auto; }
 
-  /* Audit log (W7j). The page description may run to about 110 characters; Diagnostics adds itself to this selector (Tariffs has its own in pages-billing.css). */
-  .audit-page .page-head .sub, .storage-page .page-head .sub, .settings-page .page-head .sub { max-width: 110ch; }
+  /* The five W7j pages: the page description may run to about 110 characters (Tariffs has its own copy of the rule in pages-billing.css). */
+  .audit-page .page-head .sub, .storage-page .page-head .sub, .settings-page .page-head .sub, .diag-page .page-head .sub { max-width: 110ch; }
+
+  /* Audit log (W7j) */
 
   /* The toolbar: Search (it grows), User, Action and From to To as one joined control; under it the quick filters at the left and "Go to date"
      and Export CSV at the right. The selects have a fixed width, so the rows wrap at the same place before and after the options arrive. */
@@ -159,16 +161,26 @@
   .check-step[data-state="failed"] .check-hint { border-left-color: var(--crit); }
   .check-at { font-size: var(--fs-sm); }
 
-  /* Diagnostics: the report form, then the built parts. The text is data, so it may be monospace; nothing else on the page is. */
-  .diag-page .report-form { max-width: 560px; }
-  .report-form fieldset { display: grid; gap: 8px; margin: 0; padding: 10px 14px; }
-  .report-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 22px 0 14px; padding-top: 18px; border-top: 1px solid var(--border); }
+  /* Diagnostics: two page cards (.page-card is in app.css) at the page's full width. The report form is a row of three fields that wraps onto
+     further lines in a narrow card, then its helper line at the card's width, then the Build row; the built parts follow. The form states
+     `max-width: none` itself: deleting a cap would leave the global `form { max-width: 480px }` behind it. The text is data, so it may be
+     monospace; nothing else on the page is. */
+  .diag-page .report-form { max-width: none; }
+  .diag-page .report-form p, .diag-page .page-card > p { margin: 0; } /* the form's and the card's own gap spaces the lines */
+  .report-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 24px; }
+  /* The Detail group has a fixed basis (and may shrink in a narrow card): its two help texts, one at a time, do not move the other fields. */
+  .report-fields > fieldset { flex: 0 1 32rem; min-width: 0; display: grid; grid-template-columns: repeat(2, max-content) minmax(0, 1fr); gap: 8px 20px; margin: 0; padding: 10px 14px; }
+  .report-fields > fieldset > p { grid-column: 1 / -1; min-height: 2lh; } /* both help texts are two lines at this basis; the reserve covers a font that sets one of them in one */
+  .report-fields > .report-source { flex: 0 1 18rem; grid-template-columns: minmax(0, 1fr); min-width: 12rem; }
+  .report-source select { width: 100%; min-width: 0; } /* the select takes its field's width, not that of its longest source name */
+  .report-fields > .report-mask { min-height: 38px; } /* level with the select beside it */
+  .report-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 0; padding-top: 18px; border-top: 1px solid var(--border); } /* the card's 14px gap comes on top of these margins */
   .report-built { margin: 0; font-weight: 600; }
-  .report-part { display: grid; gap: 8px; margin: 0 0 22px; }
+  .report-part { display: grid; gap: 8px; margin: 0 0 8px; }
   .report-part-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
   .report-part-head h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
   .report-text { height: 18em; font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.5; white-space: pre; overflow: auto; resize: vertical; }
-  .address-key { margin: 0 0 8px; }
+  .address-key { margin: 0; }
   .address-key > summary { width: fit-content; font-weight: 600; cursor: pointer; }
   .address-key > p { margin: 8px 0; }
 }

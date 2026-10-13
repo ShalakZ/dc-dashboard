@@ -2,6 +2,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { useBuildReport, useSources } from "../api/queries";
 import type { ReportDetail, ReportReply } from "../api/types";
 import { ConnectionCheck } from "../components/ConnectionCheck";
+import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
 import { copyText, partSize, reportErrorText, reportFileName, reportText, saveTextFile } from "../lib/diagnostics";
 
@@ -90,39 +91,40 @@ export function DiagnosticsPage() {
   return (
     <section className="admin-page diag-page">
       <PageHeader title="Diagnostics" sub="One report to paste when something does not work, and a step-by-step check of a source's connection." />
-      <div className="form-card wide">
-        <h2 className="section-title">Report</h2>
-        <form className="report-form" onSubmit={submit}>
-          <fieldset>
-            <legend>Detail</legend>
-            <label><input type="radio" name="report-detail" checked={detail === "summary"} onChange={() => setDetail("summary")} />Summary</label>
-            <label><input type="radio" name="report-detail" checked={detail === "full"} onChange={() => setDetail("full")} />Full</label>
-            <p className="muted">{DETAIL_HELP[detail]}</p>
-          </fieldset>
-          <label>
-            Limit to one source
-            <select value={source ?? ""} onChange={(e) => setSource(e.target.value === "" ? null : Number(e.target.value))}>
-              <option value="">All sources</option>
-              {sources.data?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </label>
-          <label><input type="checkbox" checked={mask} onChange={(e) => setMask(e.target.checked)} />Hide host names and addresses</label>
-          <p className="muted">
-            A report names the machines of your network. Tick this to replace every host name and address with HOST-1, HOST-2 and so on;
-            the key stays on this page. Passwords and keys are never in a report.
-          </p>
-          <div className="row">
-            <button type="submit" className="primary" disabled={build.isPending}>Build report</button>
-            {build.isPending && <span className="muted" role="status">Building the report…</span>}
-          </div>
-          {build.isError && <p className="error" role="alert">{reportErrorText(build.error)}</p>}
-        </form>
-        {build.data ? <ReportResult report={build.data} /> : !build.isPending && <p className="muted">Nothing built yet. Choose the detail and press Build report.</p>}
-      </div>
-      <div className="form-card wide">
-        <h2 className="section-title">Connection check</h2>
-        <p className="muted">Runs the steps one after the other and shows where a connection stops. It only reads from the source.</p>
-        <ConnectionCheck />
+      <div className="page-grid">
+        <PageCard icon="diagnostics" title="Report" className="span-all">
+          <form className="report-form" onSubmit={submit}>
+            <div className="report-fields">
+              <fieldset>
+                <legend>Detail</legend>
+                <label><input type="radio" name="report-detail" checked={detail === "summary"} onChange={() => setDetail("summary")} />Summary</label>
+                <label><input type="radio" name="report-detail" checked={detail === "full"} onChange={() => setDetail("full")} />Full</label>
+                <p className="muted">{DETAIL_HELP[detail]}</p>
+              </fieldset>
+              <label className="report-source">
+                Limit to one source
+                <select value={source ?? ""} onChange={(e) => setSource(e.target.value === "" ? null : Number(e.target.value))}>
+                  <option value="">All sources</option>
+                  {sources.data?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </label>
+              <label className="report-mask"><input type="checkbox" checked={mask} onChange={(e) => setMask(e.target.checked)} />Hide host names and addresses</label>
+            </div>
+            <p className="muted">
+              A report names the machines of your network. Tick this to replace every host name and address with HOST-1, HOST-2 and so on;
+              the key stays on this page. Passwords and keys are never in a report.
+            </p>
+            <div className="row">
+              <button type="submit" className="primary" disabled={build.isPending}>Build report</button>
+              {build.isPending && <span className="muted" role="status">Building the report…</span>}
+            </div>
+            {build.isError && <p className="error" role="alert">{reportErrorText(build.error)}</p>}
+          </form>
+          {build.data ? <ReportResult report={build.data} /> : !build.isPending && <p className="muted">Nothing built yet. Choose the detail and press Build report.</p>}
+        </PageCard>
+        <PageCard icon="sources" title="Connection check" className="span-all" purpose="Runs the steps one after the other and shows where a connection stops. It only reads from the source.">
+          <ConnectionCheck />
+        </PageCard>
       </div>
     </section>
   );
