@@ -51,6 +51,28 @@ describe("Layout nav", () => {
   });
 });
 
+describe("Layout tab title", () => {
+  afterEach(() => { document.title = "DC Dashboard"; });
+
+  it("names the page in the tab, and goes back to the application's name when the layout goes away", async () => {
+    mockFetch(routes("admin"));
+    const view = renderWithProviders(<Layout />, { route: "/audit/7", path: "/audit/:id" });
+    await profileButton();
+    expect(document.title).toBe("Audit log \u00b7 DC Dashboard");
+    view.unmount();
+    expect(document.title).toBe("DC Dashboard");
+  });
+
+  it("follows the address: another page, another title", async () => {
+    mockFetch(routes("admin"));
+    renderWithProviders(<Layout />, { route: "/billing" }); // the route is "*", so the layout stays mounted when the address changes
+    await profileButton();
+    expect(document.title).toBe("Billing \u00b7 DC Dashboard");
+    await userEvent.click(screen.getByRole("link", { name: "Users" }));
+    expect(document.title).toBe("Users \u00b7 DC Dashboard");
+  });
+});
+
 describe("Layout scans link", () => {
   it("shows Scans to operators and admins but not viewers", async () => {
     mockFetch(routes("operator"));
