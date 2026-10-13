@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
+import type { PermissionId } from "../lib/permissions";
 import { ScansPage } from "./ScansPage";
 
 const scope = { id: 3, name: "lab", targets: ["simulator"], ports: [9000, 4840, 5020], created_at: "2026-10-07T10:00:00Z" };
@@ -430,5 +432,74 @@ describe("ScansPage while the lists load (W7f)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("history is down");
     expect(screen.getByRole("heading", { name: "Recent scans" })).toBeInTheDocument();
     expect(document.querySelector(".sk-region")).toBeNull();
+  });
+});
+
+describe("ScansPage controls follow the permissions of the role (a custom role)", () => {
+  const preview = { "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } } };
+  /** A role called "custom" that holds discovery.view and `permissions`; the page is up and the account is known when this returns. */
+  const show = async (permissions: PermissionId[], over: Record<string, unknown> = {}) => {
+    const calls = mockFetch({ ...base("custom"), "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view", ...permissions] }) }, ...over });
+    renderWithProviders(<><ScansPage /><SignedIn /></>, { route: "/scans", path: "/scans" });
+    await screen.findAllByText("lab");
+    await accountKnown();
+    return calls;
+  };
+  const menuTexts = async () => {
+    await userEvent.click(await menuButton());
+    return screen.getAllByRole("menuitem").map((el) => el.textContent);
+  };
+
+  it("discovery.view alone: scopes and history, and no New scope, no menu, no trash", async () => {
+    const calls = await show([]);
+    expect(screen.queryByRole("button", { name: "New scope" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Details" })).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/scopes/suggestions")).toBe(false);
+  });
+
+  it("discovery.edit: New scope (which asks for the suggestions), Edit in the menu and the trash, but not Scan", async () => {
+    const calls = await show(["discovery.edit"]);
+    expect(await menuTexts()).toEqual(["Edit"]);
+    expect(screen.getByRole("button", { name: "Delete lab" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "New scope" }));
+    expect(await screen.findByLabelText("Targets")).toHaveValue("172.18.0.0/24");
+    expect(calls.some((c) => c.path === "/api/scopes/suggestions")).toBe(true);
+  });
+
+  it("discovery.scan alone: no menu at all (a scan starts from the preview, which is discovery.edit)", async () => {
+    await show(["discovery.scan"]);
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New scope" })).not.toBeInTheDocument();
+  });
+
+  it("discovery.edit and discovery.scan: Scan and Edit, and a scan runs from the confirmation", async () => {
+    const calls = await show(["discovery.edit", "discovery.scan"], {
+      ...preview, "POST /api/scopes/3/scan": { status: 202, body: { scan_id: 7, job_id: 1 } }, "GET /api/scans/7": { body: done },
+    });
+    expect(await menuTexts()).toEqual(["Scan", "Edit"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Scan" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start scan" }));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({ confirm_host_count: 2, digest: "d1g3st" });
+  });
+
+  it("the empty state names New scope only for discovery.edit", async () => {
+    mockFetch({ ...base("custom"), "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view", "discovery.scan"] }) }, "GET /api/scopes": { body: [] }, "GET /api/scans": { body: [] } });
+    renderWithProviders(<><ScansPage /><SignedIn /></>, { route: "/scans", path: "/scans" });
+    expect(await screen.findByText("No scopes have been defined yet.")).toBeInTheDocument();
+    await accountKnown();
+    expect(screen.queryByText(/New scope/)).not.toBeInTheDocument();
+  });
+
+  it("the skeleton has the actions column and the header gap for discovery.edit", async () => {
+    mockFetch({ ...base("custom"), "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view", "discovery.edit"] }) } });
+    const held = holdFetch((_method, path) => path === "/api/scopes");
+    renderWithProviders(<ScansPage />, { route: "/scans", path: "/scans" });
+    await waitFor(() => expect(document.querySelectorAll(".sk-table thead th")).toHaveLength(4));
+    expect(document.querySelector(".page-head > .actions > [aria-hidden]")).not.toBeNull();
+    held.release();
+    await screen.findByRole("button", { name: "New scope" });
   });
 });
