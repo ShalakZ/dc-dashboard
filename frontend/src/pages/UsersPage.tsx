@@ -8,7 +8,10 @@ import { RowActions, type RowAction } from "../components/RowActions";
 import { TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
 
-const ROLES: string[] = ["viewer", "operator", "admin"]; // TEMPORARY: Task 4b lists the roles the server knows
+/** The built-in roles. TEMPORARY: W9b lists the roles the server knows (GET /api/roles); until then a role an administrator made is not offered here. */
+const ROLES: string[] = ["viewer", "operator", "admin"];
+/** The options of a row's role select: the offered roles, and the account's own role when it is not one of them (else the select would show the first option as if it were the account's). */
+const optionsFor = (role: string) => (ROLES.includes(role) ? ROLES : [...ROLES, role]);
 
 /** ApiError.message already carries the API's `detail` (string or formatted validation list). */
 function errorText(error: unknown): string {
@@ -16,7 +19,8 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "request failed";
 }
 
-function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; onDeleted: () => void }) {
+/** `canEdit` (users.edit): the role select and the actions column; without it the row is read-only. */
+function UserRowView({ user, self, canEdit, onDeleted }: { user: UserRow; self: boolean; canEdit: boolean; onDeleted: () => void }) {
   const patch = usePatchUser();
   const remove = useDeleteUser();
   const unblock = useUnblockUser();
@@ -44,16 +48,18 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
     <tr ref={row}>
       <td className="cell-user" title={user.username}>{user.username}</td>
       <td>
-        <select
-          aria-label={`Role for ${user.username}`}
-          value={user.role}
-          disabled={self || patch.isPending}
-          onChange={(e) => patch.mutate({ id: user.id, body: { role: e.target.value } })}
-        >
-          {ROLES.map((r) => (
-            <option key={r} value={r}>{r}</option>
-          ))}
-        </select>
+        {canEdit ? (
+          <select
+            aria-label={`Role for ${user.username}`}
+            value={user.role}
+            disabled={self || patch.isPending}
+            onChange={(e) => patch.mutate({ id: user.id, body: { role: e.target.value } })}
+          >
+            {optionsFor(user.role).map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+        ) : user.role}
       </td>
       <td>
         <span className="chips">
@@ -61,53 +67,55 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
           {user.blocked && <span className="chip chip-bad">blocked</span>}
         </span>
       </td>
-      <td>
-        <div className="row-actions">
-          {resetting && (
-            <form
-              ref={form}
-              className="reset-form"
-              onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); closeReset(); } }}
-              onSubmit={(e) => {
-                e.preventDefault();
-                patch.mutate(
-                  { id: user.id, body: { password: newPassword } },
-                  { onSuccess: () => { setNewPassword(""); closeReset(); } },
-                );
+      {canEdit && (
+        <td>
+          <div className="row-actions">
+            {resetting && (
+              <form
+                ref={form}
+                className="reset-form"
+                onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); closeReset(); } }}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  patch.mutate(
+                    { id: user.id, body: { password: newPassword } },
+                    { onSuccess: () => { setNewPassword(""); closeReset(); } },
+                  );
+                }}
+              >
+                <input
+                  ref={field}
+                  aria-label={`New password for ${user.username}`}
+                  type="password"
+                  minLength={8}
+                  required
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+                <button type="submit" disabled={patch.isPending}>Save</button>
+                <button type="button" className="quiet" onClick={closeReset}>Cancel</button>
+              </form>
+            )}
+            <RowActions label={`Actions for ${user.username}`} items={items} />
+            <TrashButton label={`Delete ${user.username}`} disabled={self} onClick={() => setDeleting(true)} />
+          </div>
+          {patch.isError && <span className="error row-error" role="alert"> {errorText(patch.error)}</span>}
+          {unblock.isError && <span className="error row-error" role="alert"> {errorText(unblock.error)}</span>}
+          {deleting && (
+            <ConfirmDeleteDialog
+              title={`Delete user ${user.username}?`}
+              message={`${user.username} will no longer be able to sign in. This cannot be undone. Their name stays in the audit log. To keep the account but stop it signing in, deactivate it instead.`}
+              confirmLabel="Delete user"
+              onConfirm={async () => {
+                await remove.mutateAsync(user.id);
+                setDeleting(false);
+                onDeleted();
               }}
-            >
-              <input
-                ref={field}
-                aria-label={`New password for ${user.username}`}
-                type="password"
-                minLength={8}
-                required
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-              />
-              <button type="submit" disabled={patch.isPending}>Save</button>
-              <button type="button" className="quiet" onClick={closeReset}>Cancel</button>
-            </form>
+              onCancel={() => setDeleting(false)}
+            />
           )}
-          <RowActions label={`Actions for ${user.username}`} items={items} />
-          <TrashButton label={`Delete ${user.username}`} disabled={self} onClick={() => setDeleting(true)} />
-        </div>
-        {patch.isError && <span className="error row-error" role="alert"> {errorText(patch.error)}</span>}
-        {unblock.isError && <span className="error row-error" role="alert"> {errorText(unblock.error)}</span>}
-        {deleting && (
-          <ConfirmDeleteDialog
-            title={`Delete user ${user.username}?`}
-            message={`${user.username} will no longer be able to sign in. This cannot be undone. Their name stays in the audit log. To keep the account but stop it signing in, deactivate it instead.`}
-            confirmLabel="Delete user"
-            onConfirm={async () => {
-              await remove.mutateAsync(user.id);
-              setDeleting(false);
-              onDeleted();
-            }}
-            onCancel={() => setDeleting(false)}
-          />
-        )}
-      </td>
+        </td>
+      )}
     </tr>
   );
 }
@@ -123,7 +131,8 @@ function UsersHead({ heading }: { heading?: Ref<HTMLHeadingElement> }) {
 }
 
 export function UsersPage() {
-  const { user: me } = useAuth();
+  const { user: me, can } = useAuth();
+  const canEdit = can("users.edit");
   const users = useUsers();
   const create = useCreateUser();
   const [form, setForm] = useState({ username: "", password: "", role: "viewer" });
@@ -135,7 +144,7 @@ export function UsersPage() {
     return (
       <section className="admin-page users-page">
         <UsersHead heading={heading} />
-        <TableSkeleton columns={4} rows={3} label="Loading users" />
+        <TableSkeleton columns={canEdit ? 4 : 3} rows={3} label="Loading users" />
       </section>
     );
   }
@@ -146,42 +155,44 @@ export function UsersPage() {
       <div className="table-wrap">
         <table className="users-table">
           <thead>
-            <tr><th>Username</th><th>Role</th><th>Status</th><th></th></tr>
+            <tr><th>Username</th><th>Role</th><th>Status</th>{canEdit && <th></th>}</tr>
           </thead>
           <tbody>
-            {users.data.map((u) => <UserRowView key={u.id} user={u} self={u.id === me?.id} onDeleted={() => setDeletions((n) => n + 1)} />)}
+            {users.data.map((u) => <UserRowView key={u.id} user={u} self={u.id === me?.id} canEdit={canEdit} onDeleted={() => setDeletions((n) => n + 1)} />)}
           </tbody>
         </table>
       </div>
-      <div className="form-card wide">
-        <h2 className="section-title">Create user</h2>
-        <form
-          className="create-user"
-          onSubmit={(e) => {
-            e.preventDefault();
-            create.mutate(form, { onSuccess: () => setForm({ username: "", password: "", role: "viewer" }) });
-          }}
-        >
-          <label>
-            Username{" "}
-            <input value={form.username} required maxLength={64} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-          </label>
-          <label>
-            Password{" "}
-            <input type="password" value={form.password} required minLength={8} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-          </label>
-          <label>
-            Role{" "}
-            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-              {ROLES.map((r) => (
-                <option key={r} value={r}>{r}</option>
-              ))}
-            </select>
-          </label>
-          <button type="submit" className="primary" disabled={create.isPending}>Create user</button>
-          {create.isError && <p className="error" role="alert">{errorText(create.error)}</p>}
-        </form>
-      </div>
+      {canEdit && (
+        <div className="form-card wide">
+          <h2 className="section-title">Create user</h2>
+          <form
+            className="create-user"
+            onSubmit={(e) => {
+              e.preventDefault();
+              create.mutate(form, { onSuccess: () => setForm({ username: "", password: "", role: "viewer" }) });
+            }}
+          >
+            <label>
+              Username{" "}
+              <input value={form.username} required maxLength={64} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+            </label>
+            <label>
+              Password{" "}
+              <input type="password" value={form.password} required minLength={8} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+            </label>
+            <label>
+              Role{" "}
+              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                {ROLES.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </label>
+            <button type="submit" className="primary" disabled={create.isPending}>Create user</button>
+            {create.isError && <p className="error" role="alert">{errorText(create.error)}</p>}
+          </form>
+        </div>
+      )}
     </section>
   );
 }

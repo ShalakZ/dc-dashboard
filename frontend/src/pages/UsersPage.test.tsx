@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
+import type { PermissionId } from "../lib/permissions";
 import { UsersPage } from "./UsersPage";
 
 type Row = { id: number; username: string; role: string; active: boolean; blocked?: boolean };
@@ -321,7 +323,7 @@ describe("UsersPage while the list loads (W7f)", () => {
     const region = screen.getByText(LABEL).parentElement!;
     expect(region).toHaveAttribute("role", "status");
     expect(page.contains(region)).toBe(true);
-    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(4);
+    await waitFor(() => expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(4)); // (the permissions arrive with /api/me, a moment after the first render; in the app the page mounts after them)
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument(); // the placeholder is not a table to assistive technology
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
@@ -349,5 +351,78 @@ describe("UsersPage while the list loads (W7f)", () => {
     mount();
     expect(await screen.findByRole("alert")).toHaveTextContent("users are down");
     expect(document.querySelector(".sk-region")).toBeNull();
+  });
+});
+
+describe("UsersPage controls follow the permissions of the role (a custom role)", () => {
+  const rows = (): Row[] => [
+    { id: 1, username: "admin", role: "admin", active: true },
+    { id: 2, username: "ops", role: "operator", active: true },
+    { id: 3, username: "night", role: "night-shift", active: true, blocked: true },
+  ];
+  /** A role called "custom" that holds users.view and `permissions`, signed in as user 9; the list and the account are there when this returns. */
+  const show = async (permissions: PermissionId[]) => {
+    const calls = mockFetch({
+      "GET /api/setup": { body: { needed: false } },
+      "GET /api/me": { body: userFor("custom", { id: 9, username: "boss", permissions: ["users.view", ...permissions] }) },
+      "GET /api/users": { body: rows() },
+    });
+    renderWithProviders(<><UsersPage /><SignedIn /></>, { route: "/users", path: "/users" });
+    await screen.findByText("ops", { selector: "td" });
+    await accountKnown();
+    return calls;
+  };
+
+  it("users.view alone: the list with each role as text, and no form, no menu, no trash, no role select", async () => {
+    await show([]);
+    expect(screen.getByText("admin", { selector: "td.cell-user" })).toBeInTheDocument();
+    const night = screen.getByText("night", { selector: "td.cell-user" }).closest("tr")!;
+    expect(within(night).getByText("night-shift")).toBeInTheDocument();
+    expect(within(night).getByText("blocked")).toBeInTheDocument(); // the state is still shown
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Create user" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create user" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Username", "Role", "Status"]);
+  });
+
+  it("users.edit: the role select, the menu with Unblock on a blocked account, the trash and the Create user form", async () => {
+    await show(["users.edit"]);
+    expect(screen.getAllByRole("combobox").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Create user" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete ops" })).toBeInTheDocument();
+    const night = screen.getByText("night", { selector: "td.cell-user" }).closest("tr")!;
+    expect(within(await openMenu(night, "night")).getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Deactivate", "Reset password", "Unblock"]);
+  });
+
+  it("an account whose role is not one of the built-in names keeps its role in the select, and does not show the first option instead", async () => {
+    await show(["users.edit"]);
+    const night = screen.getByText("night", { selector: "td.cell-user" }).closest("tr")!;
+    const select = within(night).getByRole("combobox", { name: "Role for night" }) as HTMLSelectElement;
+    expect(select.value).toBe("night-shift");
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["viewer", "operator", "admin", "night-shift"]);
+  });
+
+  it("the skeleton has three columns for users.view alone, and four for users.edit", async () => {
+    for (const [permissions, columns] of [[["users.view"], 3], [["users.view", "users.edit"], 4]] as const) {
+      mockFetch({
+        "GET /api/setup": { body: { needed: false } },
+        "GET /api/me": { body: userFor("custom", { permissions: [...permissions] }) },
+        "GET /api/users": { body: rows() },
+      });
+      const held = holdFetch((_method, path) => path === "/api/users");
+      const view = renderWithProviders(<UsersPage />, { route: "/users", path: "/users" });
+      await waitFor(() => expect(document.querySelectorAll(".sk-table thead th")).toHaveLength(columns));
+      held.release();
+      await screen.findByText("ops", { selector: "td" });
+      view.unmount();
+    }
+  });
+
+  it("the Create user form still offers the built-in roles", async () => {
+    await show(["users.edit"]);
+    const role = screen.getByLabelText("Role", { selector: "select:not([aria-label])" });
+    expect(within(role).getAllByRole("option").map((o) => o.textContent)).toEqual(["viewer", "operator", "admin"]);
   });
 });
