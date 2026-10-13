@@ -871,6 +871,10 @@ describe("the row menu, the trash button and the info tip (W7b)", () => {
     expect(lifted.body).toMatch(/transform:\s*translateY\(-1\.5px\) rotate\(-16deg\)/);
   });
 
+  it("the bin's icon does not clip: a lifted lid swings past the icon's own box (with the default hidden overflow the handle lost its top edge and its slot closed)", () => {
+    expect(only(".trash-btn svg").body).toMatch(/overflow:\s*visible/);
+  });
+
   it("with reduced motion the lid does not move: the hover and focus selectors are repeated, because the plain one would lose on specificity", () => {
     const calm = rules.filter((r) => r.at.some((a) => a.includes("prefers-reduced-motion: reduce")) && parts(r.selector).includes(".trash-btn .lid"));
     expect(calm, "a reduced-motion rule for .trash-btn .lid").toHaveLength(1);

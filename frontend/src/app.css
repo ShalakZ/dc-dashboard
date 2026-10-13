@@ -284,6 +284,7 @@
   .row-menu-panel .danger-item { color: var(--crit); }
   .row-menu-panel .danger-item:hover:not(:disabled), .row-menu-panel .danger-item:focus-visible { background: var(--crit-tint); }
   .trash-btn:hover:not(:disabled), .trash-btn:focus-visible { background: var(--crit-tint); color: var(--crit); }
+  .trash-btn svg { overflow: visible; } /* a lifted lid swings past the icon's own box: clipped there, the handle lost its top edge and its slot closed */
   .trash-btn .lid { transform-box: fill-box; transform-origin: 0% 100%; transition: transform var(--motion); } /* about the lid's left end, its hinge */
   .trash-btn:hover:not(:disabled) .lid, .trash-btn:focus-visible .lid { transform: translateY(-1.5px) rotate(-16deg); }
   .tip { position: relative; display: inline-flex; align-items: center; vertical-align: middle; }
