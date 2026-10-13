@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Any, Self
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import distinct, exists, func, or_, select, text
@@ -253,16 +253,9 @@ async def update_source(
     return SourceOut.of(source)
 
 
-@router.delete(
-    "/sources/{source_id}", status_code=204, response_model=None, dependencies=[Depends(require_permission("sources.edit"))]
-)
-async def delete_source(
-    source_id: int,
-    confirm: bool = False,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(current_user),
-) -> JSONResponse | None:
-    source = await get_source(db, source_id)
+async def _mapped_counts(db: AsyncSession, source_id: int) -> tuple[int, int]:
+    """(mapped points, mappings) of the source: what a delete takes with it that anything depends on. Unmapped points go
+    too, but no figure on billing or a dashboard depends on them, so they are not counted."""
     mapped_points, mappings = (
         await db.execute(
             select(func.count(distinct(Mapping.point_id)), func.count(Mapping.id))
@@ -270,21 +263,68 @@ async def delete_source(
             .where(Point.source_id == source_id)
         )
     ).one()
-    if not confirm and mapped_points:
+    return mapped_points, mappings
+
+
+async def _lock_source(db: AsyncSession, source_id: int) -> bool:
+    """Lock the source and its points until this transaction ends; False if the source is gone.
+
+    A point being added holds FOR KEY SHARE on the source's row and a mapping being added holds it on its point's row, so
+    either waits for this lock, or this waits for it and the count that follows sees the new row (see _lock_subtree in
+    assets.py). ORDER BY id keeps two deletes that meet in the same order.
+    """
+    if await db.scalar(select(Source.id).where(Source.id == source_id).with_for_update()) is None:
+        return False  # a delete that finished while this one waited leaves no row to lock
+    await db.execute(select(Point.id).where(Point.source_id == source_id).order_by(Point.id).with_for_update())
+    return True
+
+
+@router.get("/sources/{source_id}/impact", dependencies=[Depends(require_permission("sources.edit"))])
+async def source_impact(source_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, int]:
+    """What deleting the source would take with it that anything depends on: mapped points and their mappings, counts
+    only, for the confirmation dialog. Changes nothing (no lock: it is a read) and writes no audit row."""
+    await get_source(db, source_id)  # 404
+    points, mappings = await _mapped_counts(db, source_id)
+    return {"points": points, "mappings": mappings}
+
+
+@router.delete(
+    "/sources/{source_id}", status_code=204, response_model=None, dependencies=[Depends(require_permission("sources.edit"))]
+)
+async def delete_source(
+    source_id: int,
+    confirm: bool = False,
+    # What the caller was shown (GET .../impact). A real count above its expectation means the source grew since: refuse.
+    expect_points: int | None = Query(None, ge=0),
+    expect_mappings: int | None = Query(None, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+) -> JSONResponse | None:
+    # Lock first, then decide whether the source exists and what it takes with it (see _lock_source).
+    if not await _lock_source(db, source_id):
+        raise HTTPException(404, "source not found")
+    source = await get_source(db, source_id)
+    mapped_points, mappings = await _mapped_counts(db, source_id)  # its own statement: it sees what committed while waiting
+    grown = any(
+        expected is not None and count > expected
+        for count, expected in ((mapped_points, expect_points), (mappings, expect_mappings))
+    )
+    if grown or (not confirm and mapped_points):
         # Past energy and cost are recomputed from today's mappings (spec 6), so this changes billing history.
-        return JSONResponse(
-            status_code=409,
-            content={
-                "detail": (
-                    f'Source "{source.name}" has {mapped_points} mapped point{"" if mapped_points == 1 else "s"}; '
-                    "deleting it deletes them and their mappings, and the past energy and cost figures that "
-                    "depend on them disappear from billing and dashboards. "
-                    "Repeat the request with confirm=true to go ahead."
-                ),
-                "points": mapped_points,
-                "mappings": mappings,
-            },
-        )
+        if grown:  # also when confirmed: the confirmation was for the smaller numbers
+            detail = (
+                f"More than you were shown would be deleted now: {mapped_points} mapped point"
+                f'{"" if mapped_points == 1 else "s"} and {mappings} mapping{"" if mappings == 1 else "s"}. '
+                "Check the new numbers and repeat the request."
+            )
+        else:
+            detail = (
+                f'Source "{source.name}" has {mapped_points} mapped point{"" if mapped_points == 1 else "s"}; '
+                "deleting it deletes them and their mappings, and the past energy and cost figures that "
+                "depend on them disappear from billing and dashboards. "
+                "Repeat the request with confirm=true to go ahead."
+            )
+        return JSONResponse(status_code=409, content={"detail": detail, "points": mapped_points, "mappings": mappings})
     await db.delete(source)
     await audit(
         db, user.id, "source.deleted",

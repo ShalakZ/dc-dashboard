@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
@@ -59,10 +59,28 @@ async def _is_self_or_descendant(db: AsyncSession, candidate_id: int, asset_id: 
     return False
 
 
+def _subtree(asset_id: int):
+    """The recursive CTE of the asset and everything below it (column `id`)."""
+    subtree = select(Asset.id).where(Asset.id == asset_id).cte("subtree", recursive=True)
+    return subtree.union(select(Asset.id).where(Asset.parent_id == subtree.c.id))  # UNION, so a bad cycle ends
+
+
+async def _lock_subtree(db: AsyncSession, asset_id: int) -> bool:
+    """Lock the asset and everything below it until this transaction ends; False if the asset is gone.
+
+    A child, mapping or tariff being inserted under one of these rows holds FOR KEY SHARE on it for its foreign key, so
+    it waits for this lock, or this waits for it and the count that follows sees the new row. Without it a row
+    committed between the count and the DELETE is removed by the database's cascade although the caller never saw it.
+    ORDER BY id: two deletes of overlapping subtrees take their locks in the same order, so they cannot deadlock.
+    """
+    ids = select(_subtree(asset_id).c.id)
+    locked = await db.scalars(select(Asset.id).where(Asset.id.in_(ids)).order_by(Asset.id).with_for_update())
+    return asset_id in locked.all()  # a delete that finished while this one waited leaves no row to lock
+
+
 async def _subtree_impact(db: AsyncSession, asset_id: int) -> dict[str, int]:
     """What deleting the asset takes with it: its subtree's assets (itself included), their mappings and tariffs."""
-    subtree = select(Asset.id).where(Asset.id == asset_id).cte("subtree", recursive=True)
-    subtree = subtree.union(select(Asset.id).where(Asset.parent_id == subtree.c.id))  # UNION, so a bad cycle ends
+    subtree = _subtree(asset_id)
     ids = select(subtree.c.id)
     return {
         "assets": await db.scalar(select(func.count()).select_from(subtree)) or 0,
@@ -134,33 +152,50 @@ async def update_asset(
     return asset
 
 
+@router.get("/assets/{asset_id}/impact", dependencies=[Depends(require_permission("assets.delete"))])
+async def asset_impact(asset_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, int]:
+    """What deleting the asset would take with it: counts only, for the confirmation dialog. Changes nothing (it takes
+    no lock either: it is a read) and writes no audit row."""
+    await get_asset(db, asset_id)  # 404
+    return await _subtree_impact(db, asset_id)
+
+
 @router.delete(
     "/assets/{asset_id}", status_code=204, response_model=None, dependencies=[Depends(require_permission("assets.delete"))]
 )
 async def delete_asset(
     asset_id: int,
     confirm: bool = False,
+    # What the caller was shown (GET .../impact). A real count above its expectation means the tree grew since: refuse.
+    expect_assets: int | None = Query(None, ge=0),
+    expect_mappings: int | None = Query(None, ge=0),
+    expect_tariffs: int | None = Query(None, ge=0),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ) -> JSONResponse | None:
+    # Lock first, then decide whether the asset exists and what it takes with it (see _lock_subtree).
+    if not await _lock_subtree(db, asset_id):
+        raise HTTPException(404, "asset not found")
     asset = await get_asset(db, asset_id)
-    impact = await _subtree_impact(db, asset_id)
-    if not confirm and (impact["assets"] > 1 or impact["mappings"] or impact["tariffs"]):
+    impact = await _subtree_impact(db, asset_id)  # its own statement: it sees whatever committed while the lock was awaited
+    grown = any(
+        expected is not None and impact[key] > expected
+        for key, expected in (("assets", expect_assets), ("mappings", expect_mappings), ("tariffs", expect_tariffs))
+    )
+    if grown or (not confirm and (impact["assets"] > 1 or impact["mappings"] or impact["tariffs"])):
         # Past energy and cost are recomputed from today's configuration (spec 6), so this changes billing history.
         lost = (
             f"{_counted(impact['assets'], 'asset')}, {_counted(impact['mappings'], 'mapping')} "
             f"and {_counted(impact['tariffs'], 'tariff')}"
         )
-        return JSONResponse(
-            status_code=409,
-            content={
-                "detail": (
-                    f'Deleting "{asset.name}" deletes {lost}, and their past energy and cost figures disappear '
-                    "from billing and dashboards. Repeat the request with confirm=true to go ahead."
-                ),
-                **impact,
-            },
-        )
+        if grown:  # also when confirmed: the confirmation was for the smaller numbers
+            detail = f"More than you were shown would be deleted now: {lost}. Check the new numbers and repeat the request."
+        else:
+            detail = (
+                f'Deleting "{asset.name}" deletes {lost}, and their past energy and cost figures disappear '
+                "from billing and dashboards. Repeat the request with confirm=true to go ahead."
+            )
+        return JSONResponse(status_code=409, content={"detail": detail, **impact})
     await db.delete(asset)
     await audit(db, user.id, "asset.deleted", {"asset_id": asset_id, "name": asset.name, **impact})
     await notify(db, CONFIG_CHANNEL)  # its mappings are gone, so the collector must reload
