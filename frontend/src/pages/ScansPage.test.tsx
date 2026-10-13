@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { ScansPage } from "./ScansPage";
 
 const scope = { id: 3, name: "lab", targets: ["simulator"], ports: [9000, 4840, 5020], created_at: "2026-10-07T10:00:00Z" };
@@ -17,7 +18,7 @@ const done = {
 };
 const base = (role: string) => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/me": { body: userFor(role) },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
   "GET /api/scopes": { body: [scope] },
   "GET /api/scans": { body: [{ ...done, findings: undefined }] },

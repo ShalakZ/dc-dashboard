@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { SettingsPage, versionText } from "./SettingsPage";
 
 const policy = (max_failures = 5, block_minutes = 5, enabled = true) => ({
@@ -13,7 +14,7 @@ const policy = (max_failures = 5, block_minutes = 5, enabled = true) => ({
 
 const base = {
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "admin", role: "admin" } },
+  "GET /api/me": { body: userFor("admin", { username: "admin" }) },
   "GET /api/settings/sign-in": { body: policy() },
 };
 

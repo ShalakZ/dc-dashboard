@@ -1,6 +1,5 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Role } from "../api/types";
 import { defaultSize, nextPosition, toDrafts } from "../lib/layout";
 import { assetList, authed, config, dashboard, widget, widgetDataRoute } from "../test/dashboardFixtures";
 import { FakeEventSource } from "../test/fakeEventSource";
@@ -52,7 +51,7 @@ const graph = model({
 const putBody = (calls: Call[]) => calls.find((c) => c.method === "PUT")?.body;
 const puts = (calls: Call[]) => calls.filter((c) => c.method === "PUT");
 
-function open(role: Role, entry: string | { pathname: string; state?: unknown } = "/dashboards/3", over: Routes = {}) {
+function open(role: string, entry: string | { pathname: string; state?: unknown } = "/dashboards/3", over: Routes = {}) {
   const calls = mockFetch({
     ...authed(role),
     "GET /api/dashboards/3": { body: base },

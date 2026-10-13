@@ -5,6 +5,7 @@ import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithDataRouter } from "../test/render";
+import { userFor } from "../test/users";
 import { AuditPage } from "./AuditPage";
 
 vi.mock("../lib/download", () => ({ downloadCsv: vi.fn() }));
@@ -15,7 +16,7 @@ const entry = (id: number, action: string, detail: Record<string, unknown> = { s
 const list = (total: number, items: ReturnType<typeof entry>[], offset = 0) => ({ body: { total, offset, limit: 50, items } });
 
 const admin: Routes = {
-  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "u", role: "admin" } },
+  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin") },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: null } },
   "GET /api/audit/options": {
     body: { actions: ["asset.created", "scan.finished"], users: [{ id: 1, name: "admin" }], unattributed: true },

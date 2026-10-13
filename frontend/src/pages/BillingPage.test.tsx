@@ -7,6 +7,7 @@ import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { BillingPage } from "./BillingPage";
 
 vi.mock("../lib/download", () => ({ downloadCsv: vi.fn() }));
@@ -42,7 +43,7 @@ const costs: BillingCosts = {
 let requested: (string | null)[];
 const routes = (role: string, reply: { status?: number; body?: unknown }, zone: string, months: { status?: number; body?: unknown }): Routes => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/me": { body: userFor(role) },
   "GET /api/site": { body: { timezone: zone, currency: "QAR" } },
   "GET /api/billing/costs": ({ url }) => {
     requested.push(new URL(url, "http://x").searchParams.get("month"));

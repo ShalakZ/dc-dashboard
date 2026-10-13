@@ -4,6 +4,7 @@ import type { GraphModel, GraphPoint } from "../api/types";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { DiscoveryPage } from "./DiscoveryPage";
 
 // What React Flow reports as overlapping the dropped node; set per test.
@@ -74,7 +75,7 @@ const graph = (over: Partial<GraphModel> = {}): GraphModel => ({
 });
 const routes = (role: string, model: GraphModel | (() => GraphModel) = graph()) => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/me": { body: userFor(role) },
   "GET /api/discovery/graph": () => ({ body: typeof model === "function" ? model() : model }),
   "PUT /api/discovery/layout": { status: 204 },
 });
@@ -108,7 +109,7 @@ describe("DiscoveryPage", () => {
   });
 
   it("hands React Flow the dark colour mode when the account chose dark", async () => {
-    mockFetch({ ...routes("operator"), "GET /api/me": { body: { id: 1, username: "u", role: "operator", preferences: { mode: "dark", theme: "navy-gold" } } } });
+    mockFetch({ ...routes("operator"), "GET /api/me": { body: userFor("operator", { preferences: { mode: "dark", theme: "navy-gold" } }) } });
     open();
     await screen.findByText("Plant OPC");
     await waitFor(() => expect(screen.getByTestId("flow")).toHaveAttribute("data-color-mode", "dark"));

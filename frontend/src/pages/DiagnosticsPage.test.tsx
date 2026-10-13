@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { parseRules, stripComments } from "../test/cssTools";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 
 const part = (index: number, of: number, text: string, chars: number, lines: number) => ({ index, of, text, chars, lines });
@@ -16,7 +17,7 @@ const reply = (over: Record<string, unknown> = {}) => ({
 let reportUrls: string[];
 const routes = (report: unknown = reply(), extra: Routes = {}): Routes => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "a", role: "admin" } },
+  "GET /api/me": { body: userFor("admin", { username: "a" }) },
   "GET /api/site": { body: { timezone: "UTC", currency: null } },
   "GET /api/sources": { body: [{ id: 5, name: "Main SCADA", connector_type: "opcua", enabled: true }, { id: 6, name: "Backup", connector_type: "opcua", enabled: true }] },
   "GET /api/diagnostics/report": ({ url }) => { reportUrls.push(url); return { body: report }; },

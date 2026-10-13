@@ -6,11 +6,12 @@ import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { checkRange, DISK_NOTE, FIELDS, sizeText, StoragePage, UTC_NOTE, validate } from "./StoragePage";
 
 const base = {
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "a", role: "admin" } },
+  "GET /api/me": { body: userFor("admin", { username: "a" }) },
 };
 const settings = { raw_retention_days: 30, compress_after_days: 7, rollup_1m_retention_days: 730, disk_capacity_gb: 100, warn_threshold_pct: 80 };
 const settingsOut = { ...settings, factory: { ...settings } };

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { UsersPage } from "./UsersPage";
 
 type Row = { id: number; username: string; role: string; active: boolean; blocked?: boolean };
@@ -14,7 +15,7 @@ const routes = () => {
   ];
   return {
     "GET /api/setup": { body: { needed: false } },
-    "GET /api/me": { body: { id: 1, username: "admin", role: "admin" } },
+    "GET /api/me": { body: userFor("admin", { username: "admin" }) },
     "GET /api/users": () => ({ body: users }),
     "POST /api/users": ({ body }: { body: unknown }) => {
       users.push({ id: 3, active: true, ...(body as { username: string; role: string }) });
@@ -86,7 +87,7 @@ describe("UsersPage delete and unblock", () => {
     const users = rows();
     const calls = mockFetch({
       "GET /api/setup": { body: { needed: false } },
-      "GET /api/me": { body: { id: 1, username: "admin", role: "admin" } },
+      "GET /api/me": { body: userFor("admin", { username: "admin" }) },
       "GET /api/users": () => ({ body: users }),
       "DELETE /api/users/2": () => { users.splice(1, 1); return { status: 204 }; },
       "POST /api/users/3/unblock": () => { users[2].blocked = false; return { body: { cleared: 1 } }; },
@@ -230,7 +231,7 @@ describe("UsersPage reset password", () => {
   function open(extra: Parameters<typeof mockFetch>[0] = {}) {
     const calls = mockFetch({
       "GET /api/setup": { body: { needed: false } },
-      "GET /api/me": { body: { id: 1, username: "admin", role: "admin" } },
+      "GET /api/me": { body: userFor("admin", { username: "admin" }) },
       "GET /api/users": { body: rows() },
       "PATCH /api/users/2": { body: { id: 2, username: "ops", role: "operator", active: true } },
       ...extra,

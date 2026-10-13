@@ -1,7 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router";
-import type { Role } from "../api/types";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { authed, dashboard } from "../test/dashboardFixtures";
 import { mockFetch, type Routes } from "../test/fetchMock";
@@ -19,7 +18,7 @@ function Probe() {
   return <output data-testid="location">{`${location.pathname}|${JSON.stringify(location.state)}`}</output>;
 }
 /** `hold` keeps back the requests it matches until `release()` (installed before the page mounts, so none gets through). */
-function open(role: Role, over: Routes = {}, hold?: (method: string, path: string) => boolean) {
+function open(role: string, over: Routes = {}, hold?: (method: string, path: string) => boolean) {
   const calls = mockFetch({ ...authed(role), "GET /api/dashboards": { body: items }, "GET /api/dashboards/default": { body: { dashboard_id: null } }, ...over });
   const held = hold ? holdFetch(hold) : { release: () => {} };
   renderWithProviders(<><DashboardsPage /><Probe /></>, { route: "/dashboards", path: "*" });

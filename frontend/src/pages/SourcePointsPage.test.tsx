@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { SourcePointsPage } from "./SourcePointsPage";
 
 const points = [
@@ -16,7 +17,7 @@ async function choose(row: HTMLElement, item: string) {
   await userEvent.click(await screen.findByRole("menuitem", { name: item }));
 }
 const routes = {
-  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "a", role: "admin" } },
+  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin", { username: "a" }) },
   "GET /api/assets": { body: [{ id: 4, parent_id: null, name: "Panel 1", kind: "panel", sort_order: 0 }] },
   "GET /api/sources": { body: [{ id: 2, name: "sim", connector_type: "simulator", config: {}, enabled: true, status: "online", last_seen: null, last_error: null, has_secret: false }] },
   "GET /api/sources/2/points": { body: points },

@@ -8,6 +8,7 @@ import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { FakeEventSource } from "../test/fakeEventSource";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { AssetPage } from "./AssetPage";
 import { AssetsPage } from "./AssetsPage";
 import { AssetsSummary } from "./AssetsSummary";
@@ -33,7 +34,7 @@ const emptyFleet = { power: { kw: null, counted: 0, of: 0 }, energy_today: null,
 const authed = (role: string, list: Fixture = assets) => ({
   "GET /api/fleet/summary": { body: emptyFleet },
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/me": { body: userFor(role) },
   "GET /api/assets": { body: list },
   ...pageRoutes(list),
 });

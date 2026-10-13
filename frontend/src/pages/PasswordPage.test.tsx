@@ -2,11 +2,12 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { PasswordPage } from "./PasswordPage";
 
 const base = {
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 5, username: "v", role: "viewer" } },
+  "GET /api/me": { body: userFor("viewer", { id: 5, username: "v" }) },
 };
 
 describe("PasswordPage", () => {

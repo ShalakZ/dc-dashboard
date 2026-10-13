@@ -7,11 +7,12 @@ import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { SourcesPage } from "./SourcesPage";
 
 const source = { id: 2, name: "sim", connector_type: "simulator", config: { url: "http://simulator:9000" }, enabled: true, status: "online", last_seen: "2026-10-07T10:00:00+00:00", last_error: null, has_secret: true, last_reading_age_seconds: 5 };
 const routes = (role: string) => ({
-  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor(role) },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
   "GET /api/sources": { body: [{ ...source, status: "offline", last_error: "timeout" }] },
   "POST /api/sources/2/test": { status: 202, body: { job_id: 9 } },

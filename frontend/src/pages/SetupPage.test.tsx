@@ -2,6 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithDataRouter } from "../test/render";
+import { userFor } from "../test/users";
 import { SetupPage } from "./SetupPage";
 
 /** What the fake server answers to the first sign-in check; changed between events. */
@@ -12,7 +13,7 @@ const routes = () => ({
     if (server.setup === "network") throw new TypeError("Failed to fetch");
     return { body: { needed: server.setup === "needed" } };
   },
-  "GET /api/me": () => (server.me === 401 ? { status: 401, body: { detail: "not authenticated" } } : { body: { id: 1, username: "u", role: "admin" } }),
+  "GET /api/me": () => (server.me === 401 ? { status: 401, body: { detail: "not authenticated" } } : { body: userFor("admin") }),
 });
 
 const mount = () => renderWithDataRouter(<SetupPage />, { route: "/setup", path: "/setup" });
