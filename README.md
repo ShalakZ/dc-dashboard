@@ -453,8 +453,8 @@ behave exactly as they did before roles were made of permissions:
 | | `dashboards.default` | Choose the dashboard everybody lands on. |
 | Billing and tariffs | `billing.view` | Open the Billing page: energy and cost per asset and month. |
 | | `billing.export` | Download the billing table as a CSV file. |
-| | `tariffs.view` | Read the tariff list. |
-| | `tariffs.edit` | Set the currency, the site rate and per-asset rates. |
+| | `tariffs.view` | Read the tariff list through the API. No page opens on it alone (see "easy to miss" below). |
+| | `tariffs.edit` | Open the Tariffs page (with `assets.view`) and set the currency, the site rate and per-asset rates. |
 | Sources and discovery | `sources.view` | Open the Sources page, a source's points and the collector status. |
 | | `sources.edit` | Add, edit and delete data sources and browse their points. |
 | | `sources.test` | Make the server try to reach a source (Test and Test all). |
@@ -471,7 +471,7 @@ behave exactly as they did before roles were made of permissions:
 | Users | `users.view` | Open the Users page. |
 | | `users.edit` | Create, edit, deactivate and delete accounts; reset passwords; lift sign-in blocks. |
 | Roles | `roles.manage` | Create, edit and delete roles. Only the built-in Admin role holds it. |
-| Diagnostics | `diagnostics.view` | Open the Diagnostics page and build a report, which includes settings, retention, the audit tail and each source's security settings. |
+| Diagnostics | `diagnostics.view` | Open the Diagnostics page (with `sources.view`) and build a report, which includes settings, retention, the audit tail and each source's security settings. |
 | | `diagnostics.run` | Run the step-by-step connection check of a source. |
 
 A few things that are easy to miss:
@@ -485,6 +485,10 @@ A few things that are easy to miss:
   it, delete it) only if you hold every permission its role grants. That second half is why `users.edit` cannot be used to become
   Admin: resetting an Admin's password, or giving anyone the Admin role, needs `roles.manage`, which no custom role has. Changing your
   own role is refused (409), and so is deactivating or deleting yourself; the last active Admin can never be removed.
+- **Two pages need more than their own permission.** The Diagnostics page needs `diagnostics.view` and `sources.view`, and the
+  Tariffs page needs `tariffs.edit` and `assets.view` (it lists the assets its rates belong to). `tariffs.view` alone is for the API
+  until the Roles page arrives: it opens no page, so a role that holds only that sees no Tariffs link. A role with only
+  `diagnostics.view` gets "No access" on the Diagnostics page.
 - **A role that accounts hold cannot be deleted** (409, with the number of accounts). Duplicating Admin gives a role with every
   permission except `roles.manage`.
 - **There is no per-site or per-asset scoping yet.** A permission applies to the whole site: `assets.view` shows every asset.
@@ -497,7 +501,8 @@ A few things that are easy to miss:
   validated; the one exception is a body that is not valid JSON at all, which gets its 422 first, signed in or not.
 - **A page the role lacks** shows the heading "No access" and "Your role does not include this page." (this replaces the old "Admins
   only" and "Operators only"). A role that holds no permission at all can sign in, change its own password and read the site name, the
-  version and the status chip, and lands on "Your role has no pages yet."
+  version and the status chip, and lands on "Your role has no pages yet." (the top bar and the page, with no sidebar). An action the
+  role lacks is refused with "Your role does not allow this."
 - **Where an account lands** after signing in: the default dashboard if there is one and the role may see dashboards, else the Assets
   Tree, else the first page its sidebar offers.
 - **Everything is audited.** `role.created`, `role.updated` and `role.deleted` are in the Audit log with the permissions added and removed,
@@ -518,8 +523,10 @@ From the browser's developer console on any page of the site, signed in as an ad
         permissions: ["assets.view", "dashboards.view", "billing.view", "billing.export"] }) }).then((r) => r.json())
 
 Give the role to an account by its **name**, matched ignoring case: `POST /api/users` or `PATCH /api/users/{id}` with `"role": "Executive"`.
-The Users page lists the role of every account (an account with a custom role keeps it when you edit its other fields), but its Create
-user form and role choice offer only the three built-in names until the Roles page arrives.
+The Users page lists the role of every account (an account with a custom role keeps it when you edit its other fields). Its Create
+user form and role choice offer the roles the server says you may hand out (the built-in names first, then the others by name), and a
+row whose role grants something you lack is shown read-only, with no role choice, menu or trash can. A person who may not hand out a role
+never sees it offered.
 
 ## Develop
 
@@ -649,7 +656,7 @@ Twenty specs run in one `playwright test` run against the dev-profile stack on `
   keeps setup closed (409); a role made through the API with only `assets.view` sees only the Assets Tree and lands on it, a role with no permission lands on "Your role has no pages yet.", and a
   permission taken from a role is refused at once while the open page of that account says "Your access changed" on its next focus check and
   the Audit log words the change; a role that may change users (every permission but `roles.manage`) cannot make an Admin, give itself Admin
-  or reset, deactivate, demote, unblock or delete one; the only Admin cannot demote, deactivate or delete itself (409), the built-in roles
+  or reset, deactivate, demote, unblock or delete one; an Admin cannot demote, deactivate or delete itself (409), the built-in roles
   cannot be changed or deleted, `roles.manage` cannot be put in a custom role, and a role an account holds cannot be deleted (409). It
   makes its accounts and roles (every name starts with `w9a-`) and removes them again, users first.
 
