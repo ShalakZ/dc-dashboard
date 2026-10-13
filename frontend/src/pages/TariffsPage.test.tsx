@@ -676,6 +676,26 @@ describe("TariffsPage while its lists load (W7f)", () => {
     await screen.findByRole("table", { name: "Site default rates" });
   });
 
+  it("draws both real add forms under the skeleton while the rates are held, outside the region, and keeps what is typed when the rates arrive (so the pinned forms do not drop)", async () => {
+    const hold = mount("/api/tariffs");
+    await screen.findByRole("form", { name: "Site currency" });
+    const siteForm = screen.getByRole("form", { name: "Add site default rate" });
+    const overrideForm = await screen.findByRole("form", { name: "Add asset override" });
+    const region = screen.getByText("Loading tariffs").parentElement!;
+    expect(document.querySelectorAll(".sk-region")).toHaveLength(1);
+    for (const form of [siteForm, overrideForm]) expect(region.contains(form), "a form is real, never inside the region").toBe(false);
+    expect(screen.getByRole("heading", { level: 2, name: "Site default rate" }).closest(".page-card")!.contains(siteForm)).toBe(true);
+    expect(screen.getByRole("heading", { level: 2, name: "Asset overrides" }).closest(".page-card")!.contains(overrideForm)).toBe(true);
+    // the override form already lists the assets the shell fetched
+    await waitFor(() => expect(within(overrideForm).getAllByRole("option")).toHaveLength(assets.length + 1));
+    await userEvent.type(within(siteForm).getByLabelText("Rate per kWh"), "0.3");
+    hold.release();
+    await screen.findByRole("table", { name: "Site default rates" });
+    expect(screen.getByRole("form", { name: "Add site default rate" })).toBe(siteForm); // the same element: typing survived
+    expect(within(siteForm).getByLabelText("Rate per kWh")).toHaveValue(0.3);
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
   it("draws the currency skeleton in the Currency card, under its real head, while the currency is held", async () => {
     const hold = mount("/api/settings/billing");
     const card = screen.getByRole("heading", { level: 2, name: "Currency" }).closest(".page-card")!;

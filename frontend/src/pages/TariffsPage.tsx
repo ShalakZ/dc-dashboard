@@ -232,14 +232,17 @@ function OverridesCard({ children }: { children?: ReactNode }) {
   return <PageCard icon="override" title="Asset overrides" purpose={OVERRIDES_PURPOSE}>{children}</PageCard>;
 }
 
-function TariffTables({ tariffs, assets, assetsError }: { tariffs: Tariff[]; assets: Asset[]; assetsError: string | null }) {
+/** `tariffs === undefined` is the loading frame: the skeleton where the left table will be, and both add forms already drawn (they are pinned to the card bottoms, so they must not drop when the rates land; the same elements stay mounted, so what is typed survives). */
+function TariffTables({ tariffs, assets, assetsError }: { tariffs: Tariff[] | undefined; assets: Asset[]; assetsError: string | null }) {
   const labels = useMemo(() => assetLabels(assets), [assets]);
-  const defaults = tariffs.filter((t) => t.asset_id === null);
-  const perAsset = tariffs.filter((t) => t.asset_id !== null);
+  const defaults = tariffs?.filter((t) => t.asset_id === null);
+  const perAsset = tariffs?.filter((t) => t.asset_id !== null);
   return (
     <>
       <SiteDefaultCard>
-        {defaults.length === 0 ? (
+        {defaults === undefined ? (
+          <TableSkeleton columns={3} rows={2} label="Loading tariffs" />
+        ) : defaults.length === 0 ? (
           <EmptyNote icon="rate">No site default rate yet. Until one is set, assets with no override show a dash for cost. Add a rate below.</EmptyNote>
         ) : (
           <div className="table-wrap">
@@ -252,7 +255,7 @@ function TariffTables({ tariffs, assets, assetsError }: { tariffs: Tariff[]; ass
         <AddTariff assets={null} labels={labels} />
       </SiteDefaultCard>
       <OverridesCard>
-        {perAsset.length === 0 ? (
+        {perAsset === undefined ? null : perAsset.length === 0 ? (
           <EmptyNote icon="override">No overrides. Every asset uses the site default rate.</EmptyNote>
         ) : (
           <div className="table-wrap">
@@ -270,6 +273,8 @@ function TariffTables({ tariffs, assets, assetsError }: { tariffs: Tariff[]; ass
   );
 }
 
+const NO_ASSETS: Asset[] = [];
+
 /** Admin only (the route is wrapped in RequireRole): the site currency, the site default rates and per-asset overrides. */
 export function TariffsPage() {
   const tariffs = useTariffs();
@@ -284,15 +289,9 @@ export function TariffsPage() {
         <PageCard className="span-all" icon="currency" title="Currency" purpose={CURRENCY_PURPOSE}>
           <CurrencyForm />
         </PageCard>
-        {tariffs.isPending && (
-          <>
-            <SiteDefaultCard><TableSkeleton columns={3} rows={3} label="Loading tariffs" /></SiteDefaultCard>
-            <OverridesCard />
-          </>
-        )}
         {tariffs.isError && <p className="error span-all" role="alert">{errorText(tariffs.error)}</p>}
-        {tariffs.data && (
-          <TariffTables tariffs={tariffs.data} assets={assets.data ?? []} assetsError={assets.isError ? errorText(assets.error) : null} />
+        {(tariffs.isPending || tariffs.data) && (
+          <TariffTables tariffs={tariffs.data} assets={assets.data ?? NO_ASSETS} assetsError={assets.isError ? errorText(assets.error) : null} />
         )}
       </div>
     </section>
