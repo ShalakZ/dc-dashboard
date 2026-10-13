@@ -13,7 +13,9 @@ import { ReadOnlyNote } from "../components/ReadOnlyNote";
 import { RowActions } from "../components/RowActions";
 import { SaveButton } from "../components/SaveButton";
 import { FormSkeleton, Skeleton, SkeletonRegion, TableSkeleton } from "../components/Skeleton";
+import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
+import { useConfirm } from "../hooks/useConfirm";
 import { fmtRate } from "../lib/billing";
 
 /** ApiError.message already carries the API's `detail` (a string for 404/409, a joined list for 422); drop pydantic's prefix. */
@@ -46,6 +48,7 @@ const NO_CURRENCY_TEXT = "No currency is set, so costs show without a unit.";
 function CurrencyForm({ canEdit }: { canEdit: boolean }) {
   const settings = useBillingSettings();
   const put = usePutBillingSettings();
+  const [ask, confirmDialog] = useConfirm();
   const [typed, setTyped] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   if (settings.isPending) {
@@ -58,7 +61,7 @@ function CurrencyForm({ canEdit }: { canEdit: boolean }) {
   const stored = settings.data.currency;
   if (!canEdit) return <div className="currency-row">{stored === null ? <Note>{NO_CURRENCY_TEXT}</Note> : <p className="currency-read">{stored}</p>}</div>;
   const shown = typed ?? stored ?? "";
-  const save = (e: FormEvent) => {
+  const save = async (e: FormEvent) => {
     e.preventDefault();
     const code = shown.trim().toUpperCase();
     if (code !== "" && !/^[A-Z]{3}$/.test(code)) return setProblem("Use a three-letter currency code, for example QAR.");
@@ -67,7 +70,14 @@ function CurrencyForm({ canEdit }: { canEdit: boolean }) {
     // Past figures are recalculated, never converted: a new code only changes the label on every one of them.
     if (stored !== null && next !== stored) {
       const change = next === null ? `Remove the currency ${stored}? Costs will show without a unit.` : `Change the currency from ${stored} to ${next}?`;
-      if (!window.confirm(`${change} This relabels all past figures; no conversion is applied.`)) return;
+      // Nothing is destroyed, so the button is the primary one, not the red one. The Save button's green is this change's own feedback: no toast.
+      const confirmed = await ask({
+        title: next === null ? "Remove the currency?" : "Change the currency?",
+        message: `${change} This relabels all past figures; no conversion is applied.`,
+        confirmLabel: next === null ? "Remove currency" : "Change currency",
+        tone: "primary",
+      });
+      if (!confirmed) return;
     }
     put.mutate({ currency: next });
   };
@@ -96,6 +106,7 @@ function CurrencyForm({ canEdit }: { canEdit: boolean }) {
       {stored === null && (
         <Note>{`${NO_CURRENCY_TEXT} Enter a three-letter code such as QAR.`}</Note>
       )}
+      {confirmDialog}
     </div>
   );
 }
@@ -160,6 +171,8 @@ function AddTariff({ assets, labels, assetsError = null }: {
 function TariffRow({ tariff, where, canEdit }: { tariff: Tariff; where: string | null; canEdit: boolean }) {
   const update = useUpdateTariff();
   const remove = useDeleteTariff();
+  const [ask, confirmDialog] = useConfirm();
+  const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [rate, setRate] = useState(String(tariff.rate_per_kwh));
   const [from, setFrom] = useState(tariff.effective_from);
@@ -198,10 +211,17 @@ function TariffRow({ tariff, where, canEdit }: { tariff: Tariff; where: string |
     setProblem(null);
     update.mutate({ id: tariff.id, body }, { onSuccess: () => setEditing(false) });
   };
-  const del = () => {
+  const del = async () => {
     const forAsset = where ? ` for ${where}` : "";
     const question = `Delete the rate of ${fmtRate(tariff.rate_per_kwh)} from ${tariff.effective_from}${forAsset}? Costs for those days will change.`;
-    if (window.confirm(question)) remove.mutate(tariff.id);
+    if (!(await ask({ title: "Delete this rate?", message: question }))) return;
+    try {
+      // mutateAsync, not mutate with a callback: the refresh that follows removes this row, and react-query drops the per-call callbacks of an unmounted component.
+      await remove.mutateAsync(tariff.id);
+      toast.success("Rate deleted");
+    } catch {
+      // The row shows the failure (remove.isError below).
+    }
   };
 
   return (
@@ -226,11 +246,12 @@ function TariffRow({ tariff, where, canEdit }: { tariff: Tariff; where: string |
             ) : (
               <>
                 <RowActions label={`Actions for ${what}`} items={[{ label: "Edit", onSelect: startEdit, disabled: busy }]} />
-                <TrashButton label={`Delete ${what}`} onClick={del} disabled={busy} />
+                <TrashButton label={`Delete ${what}`} onClick={() => void del()} disabled={busy} />
               </>
             )}
           </div>
           {failure && <span className="error" role="alert"> {failure}</span>}
+          {confirmDialog}
         </td>
       )}
     </tr>

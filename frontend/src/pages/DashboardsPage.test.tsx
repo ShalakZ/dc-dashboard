@@ -7,7 +7,9 @@ import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
+import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
+import type { ToastApi } from "../components/Toasts";
 import type { PermissionId } from "../lib/permissions";
 import { DashboardsPage } from "./DashboardsPage";
 
@@ -21,10 +23,10 @@ function Probe() {
   return <output data-testid="location">{`${location.pathname}|${JSON.stringify(location.state)}`}</output>;
 }
 /** `hold` keeps back the requests it matches until `release()` (installed before the page mounts, so none gets through). */
-function open(role: string, over: Routes = {}, hold?: (method: string, path: string) => boolean) {
+function open(role: string, over: Routes = {}, hold?: (method: string, path: string) => boolean, toasts?: ToastApi) {
   const calls = mockFetch({ ...authed(role), "GET /api/dashboards": { body: items }, "GET /api/dashboards/default": { body: { dashboard_id: null } }, ...over });
   const held = hold ? holdFetch(hold) : { release: () => {} };
-  renderWithProviders(<><DashboardsPage /><Probe /><SignedIn /></>, { route: "/dashboards", path: "*" });
+  renderWithProviders(<><DashboardsPage /><Probe /><SignedIn /></>, { route: "/dashboards", path: "*", toasts });
   return Object.assign(calls, { release: held.release });
 }
 
@@ -58,13 +60,19 @@ describe("DashboardsPage", () => {
     expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument(); // no empty three-dot menu
   });
 
-  it("deletes from the keyboard: Enter on the trash button asks first", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    open("operator");
+  it("deletes from the keyboard: Enter on the trash button asks first, in the styled dialog (the browser's own box is never asked)", async () => {
+    const browserBox = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const calls = open("operator");
     await screen.findByRole("link", { name: "Hall A" });
     screen.getByRole("button", { name: "Delete Hall A" }).focus();
     await userEvent.keyboard("{Enter}");
-    expect(confirm).toHaveBeenCalledWith('Delete dashboard "Hall A" and its widgets?');
+    const dialog = await screen.findByRole("dialog", { name: 'Delete dashboard "Hall A"?' });
+    expect(dialog).toHaveTextContent("Its widgets go with it.");
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(browserBox).not.toHaveBeenCalled();
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "Delete Hall A" })).toHaveFocus(); // back where it was
   });
 
   it("lets an operator create a dashboard and opens it in edit mode", async () => {
@@ -91,20 +99,33 @@ describe("DashboardsPage", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("deletes after confirmation and refreshes the list; declining deletes nothing", async () => {
+  it("deletes after confirmation, refreshes the list and raises one toast; Cancel deletes nothing and raises none", async () => {
     let deleted = false;
+    const toasts = spyToasts();
     const calls = open("operator", {
       "GET /api/dashboards": () => ({ body: deleted ? [items[1]] : items }),
       "DELETE /api/dashboards/3": () => { deleted = true; return { status: 204 }; },
-    });
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    }, undefined, toasts.api);
     await userEvent.click(await screen.findByRole("button", { name: "Delete Hall A" }));
-    expect(confirm).toHaveBeenCalledWith('Delete dashboard "Hall A" and its widgets?');
+    await userEvent.click(within(await screen.findByRole("dialog", { name: 'Delete dashboard "Hall A"?' })).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
-    confirm.mockReturnValue(true);
+    expect(toasts.calls).toEqual([]);
     await userEvent.click(screen.getByRole("button", { name: "Delete Hall A" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: 'Delete dashboard "Hall A"?' })).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(screen.queryByRole("link", { name: "Hall A" })).not.toBeInTheDocument());
     expect(screen.getByRole("link", { name: "Hall B" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toasts.calls).toEqual([{ kind: "success", text: 'Dashboard "Hall A" deleted' }]);
+  });
+
+  it("a delete the server refuses is shown above the list and raises no toast", async () => {
+    const toasts = spyToasts();
+    open("operator", { "DELETE /api/dashboards/3": { status: 404, body: { detail: "dashboard not found" } } }, undefined, toasts.api);
+    await userEvent.click(await screen.findByRole("button", { name: "Delete Hall A" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: 'Delete dashboard "Hall A"?' })).getByRole("button", { name: "Delete" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("dashboard not found");
+    expect(toasts.calls).toEqual([]);
   });
 
   describe("the default dashboard", () => {
@@ -169,13 +190,17 @@ describe("DashboardsPage", () => {
       expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
     });
 
-    it("warns when the dashboard to delete is the default", async () => {
-      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    it("warns when the dashboard to delete is the default, and only then", async () => {
       open("admin", withDefault);
+      await waitFor(() => expect(screen.getByText("Default")).toBeInTheDocument()); // the default is known before the dialog is built from it
       await userEvent.click(await screen.findByRole("button", { name: "Delete Hall A" }));
-      expect(confirm).toHaveBeenCalledWith('Delete dashboard "Hall A" and its widgets? It is the default dashboard: nobody will land on it any more.');
+      const first = await screen.findByRole("dialog", { name: 'Delete dashboard "Hall A"?' });
+      expect(first).toHaveTextContent("Its widgets go with it. It is the default dashboard: nobody will land on it any more.");
+      await userEvent.click(within(first).getByRole("button", { name: "Cancel" }));
       await userEvent.click(screen.getByRole("button", { name: "Delete Hall B" }));
-      expect(confirm).toHaveBeenLastCalledWith('Delete dashboard "Hall B" and its widgets?');
+      const second = await screen.findByRole("dialog", { name: 'Delete dashboard "Hall B"?' });
+      expect(second).toHaveTextContent("Its widgets go with it.");
+      expect(second).not.toHaveTextContent("default dashboard");
     });
   });
 

@@ -19,6 +19,16 @@ export const assetImpact = (error: unknown): AssetImpact | null => counts(error,
 /** DELETE /api/sources/{id} wants confirmation: what it would delete, otherwise null. */
 export const sourceImpact = (error: unknown): SourceImpact | null => counts(error, ["points", "mappings"]);
 
+/**
+ * The confirmed DELETE of an asset. `seen` is what the dialog showed: the server refuses (409 with the new counts) when more than that
+ * would go now, so a child added while the dialog was open is never deleted unseen. Zeros are sent too; an absent count would be unchecked.
+ */
+export const assetDeletePath = (id: number, seen: AssetImpact) =>
+  `/api/assets/${id}?confirm=true&expect_assets=${seen.assets}&expect_mappings=${seen.mappings}&expect_tariffs=${seen.tariffs}`;
+/** The confirmed DELETE of a source, with the counts the dialog showed (see `assetDeletePath`). */
+export const sourceDeletePath = (id: number, seen: SourceImpact) =>
+  `/api/sources/${id}?confirm=true&expect_points=${seen.points}&expect_mappings=${seen.mappings}`;
+
 const counted = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 const HISTORY = "disappear from Billing and dashboards.";
 

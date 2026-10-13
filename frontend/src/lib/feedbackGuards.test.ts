@@ -69,3 +69,29 @@ describe("no loose 'saved' note next to a form (the Save button is the confirmat
     expect(found).toEqual([]);
   });
 });
+
+describe("no browser confirmation box anywhere (every delete goes through the styled dialog)", () => {
+  /** Block comments and line comments out (a `//` right after a colon or a quote is part of a URL or a string, not a comment). */
+  const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`\\])\/\/.*$/gm, "$1");
+  /**
+   * `window.confirm(` and a bare `confirm(`. A word character before the name keeps `onConfirm(`, `useConfirm(` and the like out, a dot
+   * before it keeps `foo.confirm(` out unless it is `window.`, and `?confirm=true` (the API's query flag) has no parenthesis.
+   */
+  const BROWSER_BOX = /(?<![\w$.])(?:window\.)?confirm\s*\(/;
+  const production = () => sources(SRC, [".ts", ".tsx"]).filter(([path]) => !/\.test\.tsx?$/.test(path) && !path.startsWith("src/test/") && !path.endsWith(".d.ts"));
+
+  it("the guard can fail: it finds both spellings in a fixture, and not the look-alikes", () => {
+    expect(BROWSER_BOX.test(code("if (!window.confirm(`Delete ${x}?`)) return;"))).toBe(true);
+    expect(BROWSER_BOX.test(code("if (!confirm('Sure?')) return;"))).toBe(true);
+    expect(BROWSER_BOX.test(code("const ok = await confirm({ title })"))).toBe(true); // the name belongs to the browser: a hook's result is named ask
+    expect(BROWSER_BOX.test(code("onConfirm(seen); const [ask, dialog] = useConfirm(); api.del(`/api/a/1?confirm=true`)"))).toBe(false);
+    expect(BROWSER_BOX.test(code("// the old window.confirm( is gone\n/* confirm( */ const a = 1;"))).toBe(false);
+  });
+
+  it("no component, page, hook or helper of src calls it", () => {
+    const files = production();
+    expect(files.length).toBeGreaterThan(100); // it really read the tree
+    const found = files.filter(([, text]) => BROWSER_BOX.test(code(text))).map(([path]) => path);
+    expect(found).toEqual([]);
+  });
+});

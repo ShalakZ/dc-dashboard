@@ -1,3 +1,10 @@
 @layer w6 {
-  /* W7k feedback (confirm). Tokens only; every rule is scoped by a class this piece owns. */
+  /* W7k feedback (confirm). Tokens only; every rule is scoped by a class this piece owns (naming .dialog here would clash with pages-admin.css's
+     rules in app.css.test.ts). The dialog itself (.dialog.confirm, its buttons and its error line) is app.css's: this file only styles what the
+     preview step added to it. */
+
+  /* The line shown while the server is asked what the delete takes with it. Quiet: it is a wait, not a warning. */
+  .confirm-checking { color: var(--text-2); }
+  /* Nothing to say (the preview failed and the error line speaks): no empty row and no gap in the dialog's grid. */
+  .confirm-body:empty { display: none; }
 }

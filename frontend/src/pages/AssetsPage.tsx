@@ -1,16 +1,16 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Outlet, useMatch, useNavigate, useOutletContext } from "react-router";
 import { api } from "../api/client";
-import { keys, useAssets, useInvalidate } from "../api/queries";
+import { keys, loadAssetImpact, useAssets, useInvalidate } from "../api/queries";
 import type { Asset, AssetImpact, AssetIn } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { AssetForm } from "../components/AssetForm";
 import { AssetTree } from "../components/AssetTree";
-import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { ImpactDeleteDialog } from "../components/ImpactDeleteDialog";
 import { Modal } from "../components/Modal";
+import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
-import { useAction } from "../hooks/useAction";
-import { assetImpact, assetLoss } from "../lib/impact";
+import { assetDeletePath, assetImpact, assetLoss } from "../lib/impact";
 import { buildTree, descendantIds, parseAssetId } from "../lib/tree";
 
 /** Inline SVG, 24-unit viewBox, drawn with the 1.7 stroke of `svg.i`; decoration only (the text beside it is the name). */
@@ -24,13 +24,13 @@ export interface AssetsContext {
   canEdit: boolean;
   /** assets.delete: the trash. */
   canDelete: boolean;
-  /** A delete is running or awaiting its confirmation, or the asset list has not arrived: no form may open next to it, and none without the parent list. */
+  /** A delete confirmation is open, or the asset list has not arrived: no form may open next to it, and none without the parent list. */
   locked: boolean;
   /** The Add asset dialog; null = top level. */
   openAdd: (parentId: number | null) => void;
   /** Edits the asset in the URL. */
   openEdit: () => void;
-  /** Deletes the asset in the URL: the confirmation, the API's impact check, then back to /assets. */
+  /** Deletes the asset in the URL: the confirmation (which first asks the server what goes with it), then back to /assets. */
   remove: () => void;
 }
 
@@ -68,15 +68,16 @@ export function AssetsPage() {
   const { data: assets = [], error, isLoading } = useAssets();
   const invalidate = useInvalidate();
   const navigate = useNavigate();
+  const toast = useToast();
   const selectedId = parseAssetId(useMatch("/assets/:id")?.params.id); // null for a URL that cannot be an asset's: nothing is selected
   const [dialog, setDialog] = useState<{ kind: "add"; parentId: number | null } | { kind: "edit" } | null>(null);
-  const [confirming, setConfirming] = useState<{ asset: Asset; impact: AssetImpact } | null>(null);
+  // The asset whose delete confirmation is open. It opens at once (the trash is the only way in) and asks the server what goes with it.
+  const [deleting, setDeleting] = useState<Asset | null>(null);
   const tree = useMemo(() => buildTree(assets), [assets]);
   const selected = assets.find((a) => a.id === selectedId) ?? null;
-  const { run, busy, error: actionError } = useAction();
-  // While a delete runs or its confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap);
+  // While the delete confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap);
   // and none opens before the list is there, since the form's parent picker needs it.
-  const locked = busy || confirming !== null || isLoading;
+  const locked = deleting !== null || isLoading;
   const openAdd = (parentId: number | null) => { if (!locked) setDialog({ kind: "add", parentId }); };
   const openEdit = () => { if (!locked) setDialog({ kind: "edit" }); };
 
@@ -85,25 +86,18 @@ export function AssetsPage() {
   const finish = async () => { await invalidate(keys.assets, keys.fleet); setDialog(null); };
   const create = async (body: AssetIn) => { await api.post("/api/assets", body); await finish(); };
   const update = async (body: AssetIn) => { await api.patch(`/api/assets/${selected!.id}`, body); await finish(); };
-  const removed = async (asset: Asset, confirm: boolean) => {
-    await api.del(`/api/assets/${asset.id}${confirm ? "?confirm=true" : ""}`);
-    setConfirming(null);
+  // `seen`: the counts the dialog showed; the server refuses (and the dialog shows the new numbers) if more would go now.
+  const removed = async (asset: Asset, seen: AssetImpact) => {
+    await api.del(assetDeletePath(asset.id, seen));
+    // Right after the request, before the bookkeeping: a failing refresh must not swallow the one confirmation the person gets.
+    toast.success(`Asset "${asset.name}" deleted`);
+    setDeleting(null);
     // Leave the page first: refreshing the asset list refetches every asset query that is still mounted, including this asset's summary, which would flash a 404.
     navigate("/assets");
     // Its sums, its widgets' figures and its rate overrides (deleted with it) are on other pages' caches too.
     await Promise.all([finish(), invalidate(keys.billing, keys.widgetData, keys.tariffs)]);
   };
-  const remove = () => run(async () => {
-    if (!selected || !window.confirm(`Delete "${selected.name}" and its mappings?`)) return;
-    try {
-      await removed(selected, false);
-    } catch (e) {
-      // The API refuses to delete more than this one row without being told to: ask, then repeat the request with confirm.
-      const impact = assetImpact(e);
-      if (!impact) throw e;
-      setConfirming({ asset: selected, impact });
-    }
-  });
+  const remove = () => { if (selected && !locked) setDeleting(selected); };
 
   if (error) return <p className="error" role="alert">{error.message}</p>;
   const canEdit = can("assets.edit");
@@ -120,16 +114,20 @@ export function AssetsPage() {
           loading={isLoading}
         />
         <div className="assets-detail" id="asset-detail" tabIndex={-1}>
-          {actionError && <p className="error" role="alert">{actionError}</p>}
           <Outlet context={context} />
         </div>
       </div>
-      {confirming && (
-        <ConfirmDeleteDialog
-          title={`Delete "${confirming.asset.name}"?`}
-          message={assetLoss(confirming.impact)}
-          onConfirm={() => removed(confirming.asset, true)}
-          onCancel={() => setConfirming(null)}
+      {deleting && (
+        <ImpactDeleteDialog<AssetImpact>
+          title={`Delete "${deleting.name}"?`}
+          queryKey={["impact", "asset", deleting.id]}
+          load={() => loadAssetImpact(deleting.id)}
+          loss={assetLoss}
+          isPlain={(impact) => impact.assets === 1 && impact.mappings === 0 && impact.tariffs === 0}
+          plainMessage="This can't be undone."
+          grown={assetImpact}
+          onConfirm={(seen) => removed(deleting, seen)}
+          onCancel={() => setDeleting(null)}
         />
       )}
       {dialog?.kind === "add" && (

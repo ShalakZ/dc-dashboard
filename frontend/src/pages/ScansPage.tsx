@@ -8,8 +8,10 @@ import { RowActions } from "../components/RowActions";
 import { ScanProgress } from "../components/ScanProgress";
 import { ScopeForm } from "../components/ScopeForm";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
+import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
+import { useConfirm } from "../hooks/useConfirm";
 import { claimedCount } from "../lib/scanText";
 import { formatSiteDateTime } from "../lib/siteTime";
 
@@ -33,6 +35,8 @@ export function ScansPage() {
   const site = useSite();
   const invalidate = useInvalidate();
   const { run, busy, error: actionError } = useAction();
+  const [ask, confirmDialog] = useConfirm();
+  const toast = useToast();
   const [form, setForm] = useState<FormState>(null);
   const suggestions = useScopeSuggestions(canEdit && form === "new");
   const [pending, setPending] = useState<{ scope: Scope; preview: ScopePreview } | null>(null);
@@ -66,8 +70,9 @@ export function ScansPage() {
   };
   const remove = (scope: Scope) => run(async () => {
     setPending(null);
-    if (!window.confirm(`Delete scope "${scope.name}"?`)) return;
+    if (!(await ask({ title: `Delete scope "${scope.name}"?`, message: "This can't be undone." }))) return;
     await api.del(`/api/scopes/${scope.id}`);
+    toast.success(`Scan scope "${scope.name}" deleted`);
     await invalidate(keys.scopes);
   });
 
@@ -91,6 +96,7 @@ export function ScansPage() {
         ) : undefined}
       />
       {actionError && <p className="error" role="alert">{actionError}</p>}
+      {confirmDialog}
       {form === "new" && suggestions.isPending && <p className="muted">loading suggestions…</p>}
       {form === "new" && !suggestions.isPending && (
         <div className="scope-card">

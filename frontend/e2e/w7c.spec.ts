@@ -224,15 +224,14 @@ test.describe("W7c: the default dashboard", () => {
       await expect(badge(page, OTHER)).toBeVisible();
       await expect(navLink(page, "Dashboards")).toHaveAttribute("href", `/dashboards/${other}`);
 
-      let asked = "";
-      page.once("dialog", async (dialog) => {
-        asked = dialog.message();
-        await dialog.accept();
-      });
       await dashRow(page, OTHER).getByRole("button", { name: `Delete ${OTHER}`, exact: true }).click();
+      // The page's own dialog (the browser's box is gone). Scoped by the dialog: the row's trash button is named "Delete NAME" too.
+      const asked = page.getByRole("dialog", { name: /Delete dashboard/ });
+      await expect(asked).toBeVisible();
+      await expect(asked).toContainText(`Delete dashboard "${OTHER}"`);
+      await expect(asked).toContainText("It is the default dashboard");
+      await asked.getByRole("button", { name: "Delete", exact: true }).click();
       await expect(page.getByRole("link", { name: OTHER, exact: true })).toHaveCount(0);
-      expect(asked).toContain(`Delete dashboard "${OTHER}"`);
-      expect(asked).toContain("It is the default dashboard");
 
       expect(await getJson(page, "/api/dashboards/default")).toEqual({ dashboard_id: null });
       await expect(navLink(page, "Dashboards")).toHaveAttribute("href", "/dashboards");

@@ -3,9 +3,9 @@ import { apiQuery, type AuditFilters } from "../lib/auditFilters";
 import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { ApiError, api } from "./client";
 import type {
-  Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
+  Asset, AssetImpact, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
   FleetSummary, GeneralSettings, GraphModel, Metric, PermissionRow, PointRow, RangePreset, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
-  RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
+  RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
 
@@ -84,6 +84,11 @@ export const useSeries = (id: number, metric: Metric | null, range: Range, mappi
 
 export const useSources = () =>
   useQuery({ queryKey: keys.sources, queryFn: () => api.get<Source[]>("/api/sources"), refetchInterval: 10_000 });
+
+/** What deleting this asset would take with it (read-only; the delete dialog asks at every open, so these are not cached hooks). */
+export const loadAssetImpact = (id: number) => api.get<AssetImpact>(`/api/assets/${id}/impact`);
+/** What deleting this source would take with it (read-only; see `loadAssetImpact`). */
+export const loadSourceImpact = (id: number) => api.get<SourceImpact>(`/api/sources/${id}/impact`);
 
 export const useCollectorStatus = () =>
   useQuery({ queryKey: keys.collectorStatus, queryFn: () => api.get<CollectorStatus>("/api/collector/status"), refetchInterval: 10_000 });
