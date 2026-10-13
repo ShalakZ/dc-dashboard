@@ -128,6 +128,11 @@ describe("downloadCsv", () => {
     }
   });
 
+  it("a refused export says it in words: the api's insufficient permission reads as a sentence", async () => {
+    stubFetch(new Response(JSON.stringify({ detail: "insufficient permission" }), { status: 403, headers: { "content-type": "application/json" } }));
+    await expect(downloadCsv("/api/billing/costs.csv?month=2026-10")).rejects.toMatchObject({ status: 403, message: "Your role does not allow this." });
+  });
+
   it("does not tell the app about a 403 for other failures or a successful download", async () => {
     const forbidden = vi.fn();
     setForbiddenHandler(forbidden);

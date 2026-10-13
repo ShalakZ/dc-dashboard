@@ -18,6 +18,17 @@ describe("api client", () => {
     await expect(api.get("/api/me")).rejects.toBeInstanceOf(ApiError);
   });
 
+  it("reads the server's one refusal text (403 insufficient permission) as a sentence for a person, and keeps the detail", async () => {
+    mockFetch({
+      "GET /api/users": { status: 403, body: { detail: "insufficient permission" } },
+      "GET /api/roles": { status: 403, body: { detail: "cannot give an account a role with more access than yours" } },
+      "GET /api/sources": { status: 409, body: { detail: "insufficient permission" } },
+    });
+    await expect(api.get("/api/users")).rejects.toMatchObject({ status: 403, detail: "insufficient permission", message: "Your role does not allow this." });
+    await expect(api.get("/api/roles")).rejects.toMatchObject({ message: "cannot give an account a role with more access than yours" }); // another 403 keeps its own words
+    await expect(api.get("/api/sources")).rejects.toMatchObject({ message: "insufficient permission" }); // only a 403 is rewritten
+  });
+
   it("reads Caddy's plain-text 502 (the api is restarting) as an ApiError that says so, whatever the body, and keeps the body", async () => {
     const text = "The server is not answering (status 502). It may be restarting; try again in a moment.";
     vi.stubGlobal("fetch", vi.fn(async () => new Response("502 Bad Gateway", { status: 502, headers: { "content-type": "text/plain" } })));

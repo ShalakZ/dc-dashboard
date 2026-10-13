@@ -19,6 +19,8 @@ export class ApiError extends Error {
   static describe(status: number, detail: unknown): string {
     // The proxy's own page ("502 Bad Gateway") or whatever the api sent: either way the server is not answering, and that is what the person needs to read.
     if (NOT_ANSWERING.includes(status)) return `The server is not answering (status ${status}). It may be restarting; try again in a moment.`;
+    // The one text the api gives for every missing permission (it names none): a sentence for a person, wherever the error is shown.
+    if (status === 403 && detail === "insufficient permission") return "Your role does not allow this.";
     if (typeof detail === "string") return detail;
     if (Array.isArray(detail)) {
       return (detail as ValidationItem[])
