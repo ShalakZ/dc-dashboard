@@ -28,6 +28,42 @@ test("the page and the API carry the security headers and no Server header", asy
   }
 });
 
+// Static files (deploy/Caddyfile, W7i): the shell revalidates, a hashed file is compressed and cached for a year, a hashed file that is
+// gone is a 404 (never the shell, never `immutable`), the SPA routes under /assets still get the shell, and an ETag earns a 304.
+test("the shell revalidates, hashed files are compressed and immutable, and a missing hashed file is an uncached 404", async ({ request }) => {
+  const gzip = { "Accept-Encoding": "gzip" };
+
+  const shell = await request.get("/", { headers: gzip });
+  expect(shell.status(), "/").toBe(200);
+  expect(shell.headers()["cache-control"], "/ cache-control").toBe("no-cache");
+  const html = await shell.text();
+  const entry = /src="(\/assets\/index-[^"]+\.js)"/.exec(html)?.[1];
+  expect(entry, "the entry script named in the page").toBeTruthy();
+
+  const script = await request.get(entry!, { headers: gzip });
+  expect(script.status(), entry).toBe(200);
+  expect(script.headers()["cache-control"], `${entry} cache-control`).toContain("immutable");
+  expect(["gzip", "zstd"], `${entry} content-encoding`).toContain(script.headers()["content-encoding"]);
+
+  const missing = await request.get("/assets/nope.js", { headers: gzip });
+  expect(missing.status(), "/assets/nope.js").toBe(404);
+  expect(missing.headers()["cache-control"] ?? "", "/assets/nope.js cache-control").not.toContain("immutable");
+
+  for (const route of ["/assets", "/assets/4"]) {
+    const spa = await request.get(route, { headers: gzip }); // the Assets Tree page and an asset's page share the prefix of the hashed files
+    expect(spa.status(), route).toBe(200);
+    expect(spa.headers()["cache-control"], `${route} cache-control`).toBe("no-cache");
+    expect(await spa.text(), `${route} is the shell`).toContain('<div id="root">');
+  }
+
+  for (const [path, answer] of [["/", shell], [entry!, script]] as const) {
+    const etag = answer.headers()["etag"];
+    expect(etag, `${path} etag`).toBeTruthy();
+    const again = await request.get(path, { headers: { ...gzip, "If-None-Match": etag } });
+    expect(again.status(), `${path} with If-None-Match`).toBe(304);
+  }
+});
+
 test("every page an admin can open runs under the policy without one violation, and the live stream still delivers", async ({ page }) => {
   test.setTimeout(240_000);
   const violations: string[] = [];
