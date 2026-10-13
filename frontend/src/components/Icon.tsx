@@ -30,6 +30,26 @@ export const ICONS = {
   override: <><path d="M5 21V4h9v17" /><path d="M14 9h5v12" /><path d="M3 21h18" /><path d="M8.5 8h2M8.5 12h2M8.5 16h2" /></>,
   // The Energy tile's own icon: a bolt in a circle (the Live power tile reuses `rate`, the Cost tile `currency`).
   energy: <><circle cx="12" cy="12" r="9" /><path d="M13 6 8.5 13H12l-1 5 4.5-7H12l1-5Z" /></>,
+  // Interface icons of the Audit and Storage pages (W7j): a tray arrow, a calendar, a clock face, a funnel, two stacked layers, a rising line, an hourglass,
+  // rows with bullets, a tall can with two bands and a right-pointing chevron (CSS turns it when a row opens). None starts with "kind": the asset catalogue owns that prefix.
+  download: <><path d="M12 4v11" /><path d="m7.5 11 4.5 4.5 4.5-4.5" /><path d="M5 20h14" /></>,
+  calendar: <><rect x="3.5" y="5" width="17" height="15.5" rx="2" /><path d="M3.5 10h17M8 3v4M16 3v4" /></>,
+  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" /></>,
+  filter: <path d="M4 5h16l-6.2 7.6V19l-3.6-2v-4.4L4 5Z" />,
+  layers: <><path d="M12 4 21 9l-9 5-9-5 9-5Z" /><path d="m3 14 9 5 9-5" /></>,
+  trend: <><path d="m3 17 6-6 4 4 8-9" /><path d="M15 6h6v6" /></>,
+  hourglass: <><path d="M6.5 3h11M6.5 21h11" /><path d="M7.5 3c0 4.5 2.2 6 4.5 9-2.3 3-4.5 4.5-4.5 9" /><path d="M16.5 3c0 4.5-2.2 6-4.5 9 2.3 3 4.5 4.5 4.5 9" /></>,
+  readings: <><path d="M9 6h12M9 12h12M9 18h12" /><path d="M4 6h.01M4 12h.01M4 18h.01" /></>,
+  database: <><ellipse cx="12" cy="5" rx="8" ry="2.5" /><path d="M4 5v14c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5V5" /><path d="M4 9.7c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5M4 14.4c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" /></>,
+  chevron: <path d="m9 6 6 6-6 6" />,
+  // One per kind of audit event (`lib/auditKind.ts`): a door with an arrow in, a warning triangle, a plus, a pencil, a bin, upright sliders and an "i" in a circle.
+  evSignIn: <><path d="M15 4h5v16h-5" /><path d="m10 8 4 4-4 4M14 12H4" /></>,
+  evProblem: <><path d="M12 3.5 21.5 20h-19L12 3.5Z" /><path d="M12 10v4.5M12 17.5h.01" /></>,
+  evCreate: <><circle cx="12" cy="12" r="9" /><path d="M12 8v8M8 12h8" /></>,
+  evChange: <><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z" /><path d="m13.5 6.5 4 4" /></>,
+  evDelete: <><path d="M6.5 9.5 7.4 20h9.2l.9-10.5" /><path d="M10 12.5v5M14 12.5v5" /><path d="M4 6.5h16" /><path d="M9 6.5V4h6v2.5" /></>,
+  evSettings: <><path d="M6 4v5M6 13v7M12 4v9M12 17v3M18 4v3M18 11v9" /><circle cx="6" cy="11" r="2" /><circle cx="12" cy="15" r="2" /><circle cx="18" cy="9" r="2" /></>,
+  evOther: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5.5M12 7.5h.01" /></>,
   // One per kind of asset (`lib/kindIcon.ts` picks from the kind text; `lib/assetIcons.ts` lists all 28 for the picker in the asset dialog):
   // a pin, a tower, a floor plan, a line of racks, one rack, a two-door switch cabinet,
   // a gauge, a switch, a battery, a socket strip, a motor, two coils, a snowflake and a cube for "anything else". The 14 after the cube are picker-only:

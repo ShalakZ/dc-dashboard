@@ -159,6 +159,27 @@ export function FormSkeleton({ rows, label, wide, bare, inline }: { rows: number
   );
 }
 
+/**
+ * The card of a page (`PageCard`): the same section and head, a 32px block for the icon tile, an h2 holding a grey line, a purpose line when the
+ * real card has one, and `children` as the body (other skeleton bodies). Like the other shapes its root is aria-hidden, so the page puts the one
+ * region round it, and children are bare bodies without a `label` (a status inside a hidden root could not be found). `className` adds a class
+ * the page's CSS or tests know the card by (`rows-day`).
+ */
+export function PageCardSkeleton({ purpose, className, label, children }: { purpose?: boolean; className?: string; label?: string; children?: ReactNode }) {
+  return (
+    <Labelled label={label}>
+      <section className={className ? `page-card ${className}` : "page-card"} aria-hidden="true">
+        <div className="page-card-head sect-head">
+          <Skeleton variant="block" width={32} height={32} />
+          <h2><Skeleton width="14ch" /></h2>
+          {purpose ? <p className="sect-purpose muted"><Skeleton width="40ch" /></p> : null}
+        </div>
+        {children}
+      </section>
+    </Labelled>
+  );
+}
+
 /** The trend chart's box. */
 export function ChartBlock({ label }: { label?: string }) {
   return <Labelled label={label}><Skeleton variant="block" height={CHART_HEIGHT} /></Labelled>;

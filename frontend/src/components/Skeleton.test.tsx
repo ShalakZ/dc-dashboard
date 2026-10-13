@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { StrictMode, type ReactElement } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
 import {
-  ActionsSpace, AssetSkeleton, CanvasSkeleton, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageHeaderSkeleton, PageSkeleton,
+  ActionsSpace, AssetSkeleton, CanvasSkeleton, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageCardSkeleton, PageHeaderSkeleton, PageSkeleton,
   resetSkeletonClock, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton,
 } from "./Skeleton";
 
@@ -19,6 +19,7 @@ const shapes: Array<[string, (label?: string) => ReactElement]> = [
   ["TreeSkeleton", (label) => <TreeSkeleton label={label} />],
   ["PageHeaderSkeleton", (label) => <PageHeaderSkeleton label={label} />],
   ["PageHeaderSkeleton (all parts)", (label) => <PageHeaderSkeleton crumbs icon sub actions label={label} />],
+  ["PageCardSkeleton", (label) => <PageCardSkeleton purpose label={label}><FormSkeleton rows={2} bare /></PageCardSkeleton>],
 ];
 
 describe("Skeleton", () => {
@@ -259,6 +260,49 @@ describe("FormSkeleton", () => {
   it("with wide takes the full-width card", () => {
     const { container } = render(<FormSkeleton rows={1} wide />);
     expect(container.firstElementChild).toHaveClass("form-card", "wide");
+  });
+});
+
+describe("PageCardSkeleton", () => {
+  it("is the real card and head, with a 32px block for the icon tile and a grey line in the h2", () => {
+    const { container } = render(<PageCardSkeleton />);
+    const card = container.firstElementChild!;
+    expect(card.tagName).toBe("SECTION");
+    expect(card).toHaveClass("page-card");
+    expect(card).toHaveAttribute("aria-hidden", "true");
+    const head = card.firstElementChild!;
+    expect(head).toHaveClass("page-card-head", "sect-head"); // the classes PageCard's head has
+    const tile = head.querySelector<HTMLElement>(":scope > .sk-block")!;
+    expect(tile.style.width).toBe("32px");
+    expect(tile.style.height).toBe("32px");
+    const title = head.querySelector("h2")!;
+    expect(title.querySelector(".sk-line")).not.toBeNull();
+    expect(title.textContent).toBe("");
+    expect(head.querySelector(".sect-purpose")).toBeNull();
+    expect(head.children).toHaveLength(2);
+  });
+
+  it("draws a purpose line only when asked, in the real purpose line's box", () => {
+    const { container } = render(<PageCardSkeleton purpose />);
+    const purpose = container.querySelector(".page-card-head > p")!;
+    expect(purpose).toHaveClass("sect-purpose", "muted");
+    expect(purpose.querySelector(".sk-line")).not.toBeNull();
+    expect(purpose.textContent).toBe("");
+  });
+
+  it("puts its children after the head, as the body, and takes a className next to its own", () => {
+    const { container } = render(<PageCardSkeleton className="rows-day"><TableSkeleton columns={2} rows={2} headless /></PageCardSkeleton>);
+    const card = container.firstElementChild!;
+    expect(card).toHaveClass("page-card", "rows-day");
+    expect(card.children).toHaveLength(2);
+    expect(card.children[1]).toHaveClass("table-wrap", "sk-table");
+  });
+
+  it("holds no words, no heading a reader can reach, and nothing focusable", () => {
+    const { container } = render(<PageCardSkeleton purpose><FormSkeleton rows={1} bare /></PageCardSkeleton>);
+    expect(container.textContent).toBe("");
+    expect(screen.queryByRole("heading")).toBeNull();
+    expect(container.querySelector(FOCUSABLE)).toBeNull();
   });
 });
 
