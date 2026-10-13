@@ -4,6 +4,7 @@ import os
 import socket
 import subprocess
 import sys
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -18,6 +19,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from dcdash.api.security import hash_password
 from dcdash.connectors.simulator import SimulatorConfig, SimulatorConnector
 from dcdash.core.crypto import encrypt
+from dcdash.core.permissions import BUILTIN, CATALOGUE
 from dcdash.simulator.faults import Faults
 from dcdash.simulator.model import Simulator
 from dcdash.simulator.modbus import ModbusSim
@@ -92,7 +94,7 @@ async def login_as(client, db, role="admin", username=None, password="correct-ho
     """Create a user with the given role if needed, and sign the client in as them."""
     username = username or role
     await db.execute(
-        "INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3) "
+        "INSERT INTO users (username, password_hash, role_id) VALUES ($1, $2, (SELECT id FROM roles WHERE name = $3)) "
         "ON CONFLICT (username) DO NOTHING",
         username, hash_password(password), role,
     )
@@ -107,11 +109,42 @@ async def login_as(client, db, role="admin", username=None, password="correct-ho
 
 
 async def make_user(db, username: str, role: str = "viewer", active: bool = True) -> int:
-    """A user whose password is `correct-horse` (the one login_as uses)."""
+    """A user whose password is `correct-horse` (the one login_as uses). `role` is the NAME of a role that exists."""
     return await db.fetchval(
-        "INSERT INTO users (username, password_hash, role, active) VALUES ($1, $2, $3, $4) RETURNING id",
+        "INSERT INTO users (username, password_hash, role_id, active) "
+        "VALUES ($1, $2, (SELECT id FROM roles WHERE name = $3), $4) RETURNING id",
         username, hash_password("correct-horse"), role, active,
     )
+
+
+async def make_role(db, name: str, permissions: Iterable[str] = (), description: str = "") -> int:
+    """A custom role holding `permissions` (stored as given: pass junk to test that it is ignored)."""
+    return await db.fetchval(
+        "INSERT INTO roles (name, description, permissions) VALUES ($1, $2, $3) RETURNING id",
+        name, description, list(permissions),
+    )
+
+
+# The three rows migration 0009 seeds, as (id, name, description, permissions). The permissions are the mirror of
+# permissions.BUILTIN in catalogue order; test_schema_roles.py checks that the migration seeds exactly these.
+BUILTIN_ROLE_ROWS: list[tuple[int, str, str, list[str]]] = [
+    (1, "viewer", "Sees assets, dashboards and billing.", [p.id for p in CATALOGUE if p.id in BUILTIN["viewer"]]),
+    (2, "operator", "Also edits dashboards, tests sources and sees scans.", [p.id for p in CATALOGUE if p.id in BUILTIN["operator"]]),
+    (3, "admin", "Everything, including users and roles.", [p.id for p in CATALOGUE if p.id in BUILTIN["admin"]]),
+]
+
+
+async def restore_builtin_roles(db) -> None:
+    """Put the roles table back to the 0009 seed: drop every other role, reset the three built-in rows (a test may have
+    edited them) and make the next new role id 4. Run it after the users are truncated (a role a user holds cannot go)."""
+    await db.execute("DELETE FROM roles WHERE id NOT IN (1, 2, 3)")
+    await db.executemany(
+        "INSERT INTO roles (id, name, description, builtin, permissions) VALUES ($1, $2, $3, true, $4) "
+        "ON CONFLICT (id) DO UPDATE SET name = excluded.name, description = excluded.description, builtin = true, "
+        "permissions = excluded.permissions",
+        BUILTIN_ROLE_ROWS,
+    )
+    await db.execute("SELECT setval(pg_get_serial_sequence('roles', 'id'), 3)")
 
 
 def free_port() -> int:

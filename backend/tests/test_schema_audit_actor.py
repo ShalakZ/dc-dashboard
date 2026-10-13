@@ -2,6 +2,14 @@ from helpers import run_alembic
 
 
 async def make_account(db, username: str) -> int:
+    """An admin account as the schema at head stores it (a role_id)."""
+    return await db.fetchval(
+        "INSERT INTO users (username, password_hash, role_id) VALUES ($1, 'x', 3) RETURNING id", username
+    )
+
+
+async def make_account_old(db, username: str) -> int:
+    """An admin account as 0004 stores it (a role column). Only for a database that is below 0009."""
     return await db.fetchval(
         "INSERT INTO users (username, password_hash, role) VALUES ($1, 'x', 'admin') RETURNING id", username
     )
@@ -58,7 +66,7 @@ async def test_the_migration_backfills_existing_rows_and_downgrade_drops_the_col
             "SELECT column_name FROM information_schema.columns WHERE table_name = 'audit_log'")}
         assert "actor_id" not in columns and "actor_name" not in columns
         assert await db.fetchval("SELECT count(*) FROM pg_trigger WHERE tgname = 'audit_log_snapshot_actor'") == 0
-        uid = await make_account(db, "alice")
+        uid = await make_account_old(db, "alice")
         await db.execute(
             "INSERT INTO audit_log (user_id, action) VALUES ($1, 'before-0005'), (NULL, 'system-row')", uid
         )

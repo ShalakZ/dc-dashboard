@@ -83,7 +83,7 @@ async def test_deleting_an_asset_deletes_its_tariffs_but_not_the_site_default(db
 
 
 async def test_deleting_a_user_keeps_their_tariffs_and_dashboards(db):
-    user = await db.fetchval("INSERT INTO users (username, password_hash, role) VALUES ('u', 'x', 'admin') RETURNING id")
+    user = await db.fetchval("INSERT INTO users (username, password_hash, role_id) VALUES ('u', 'x', 3) RETURNING id")
     tariff = await add_tariff(db, None, DAY)
     dashboard = await add_dashboard(db)
     await db.execute("UPDATE tariffs SET created_by = $1 WHERE id = $2", user, tariff)
