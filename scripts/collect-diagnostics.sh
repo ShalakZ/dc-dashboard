@@ -215,13 +215,14 @@ AWK_END
 # (b) a Caddy admin API request, (c) TimescaleDB's continuous aggregate refresh and checkpoint chatter. Everything else stays.
 # Colour codes are removed from every line first (also with -v raw=1), so a colour-wrapped routine line is still recognised and a line that
 # held nothing else is blank: ESC [ digits;digits m, and the same without the ESC byte when it was lost on the way ("[0m", "[37;1m"). The
-# ESC-less form needs the m and must not be followed by "]", so a "[5m]" in running text stays (an ERE has no lookahead: a loop does it).
+# ESC-less form needs a digit and the m and must not be followed by "]", so "[5m]", "cfg[mode]" and "[main]" in running text stay (an ERE has
+# no lookahead: a loop does it). A lone "[m" is not stripped; the reset is written "[0m".
 IFS= read -r -d '' FILTER_PROGRAM <<'AWK_END' || true
 function unansi(s,    out) {
   if (index(s, "[") == 0) return s
   gsub(/\033\[[0-9;]*m/, "", s)
   out = ""
-  while (match(s, /\[([0-9][0-9]?[0-9]?(;[0-9][0-9]?[0-9]?)*)?m/)) {
+  while (match(s, /\[[0-9][0-9]?[0-9]?(;[0-9][0-9]?[0-9]?)*m/)) {
     if (substr(s, RSTART + RLENGTH, 1) == "]") { out = out substr(s, 1, RSTART); s = substr(s, RSTART + 1) }   # ordinary text: go on after its "["
     else { out = out substr(s, 1, RSTART - 1); s = substr(s, RSTART + RLENGTH) }
   }

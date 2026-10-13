@@ -391,8 +391,8 @@ function Test-InsideOneDrive([string]$Path) {   # the folder name says OneDrive,
   }
   return $false
 }
-function Remove-Ansi([string]$Line) {   # colour codes: ESC [ 37;1 m, and the same without the ESC byte when it was lost on the way; a [5m] in running text is no code
-  return $Line -creplace '\x1b\[[0-9;]*m', '' -creplace '\[(?:[0-9]{1,3}(?:;[0-9]{1,3})*)?m(?!\])', ''
+function Remove-Ansi([string]$Line) {   # colour codes: ESC [ 37;1 m, and the same without the ESC byte when it was lost on the way; it needs a digit, so [5m] and cfg[mode] in running text are no code
+  return $Line -creplace '\x1b\[[0-9;]*m', '' -creplace '\[[0-9]{1,3}(?:;[0-9]{1,3})*m(?!\])', ''
 }
 function Test-Routine([string]$Line) {   # a log line nobody needs to read (Decision 1 of the W8c plan); anything that could be a failure is kept
   if ($Line -match $KeepAlways) { return $false }

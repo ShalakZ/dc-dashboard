@@ -730,7 +730,7 @@ _ANSI_LOGS = {
             f"{_ESC}[0m", "[0m",   # nothing is left of these once the codes are gone: not lines read
             *_prefixed("api", [_colour("ERROR:    boom happened"),
                                f"INFO:     {_ESC}[32m127.0.0.1{_ESC}[0m - [1;31m\"GET /api/sources HTTP/1.1\" 500 Internal Server Error[0m",
-                               "the [5m] marker and [0m] and [1234m stay, a background worker idles"])],
+                               "the [5m] marker and [0m] and [1234m stay, cfg[mode] [main] x[m], a background worker idles"])],
     "db": _prefixed("db", [_colour(_PG + "checkpoint starting: time"), _colour(_BOOT_LOCALE, esc=False), _colour("database system is ready", esc=False)]),
     "ts": _prefixed("ts", [_colour(_BOOT_WORKER)]),
     "web": _prefixed("web", [_colour(_ADMIN, esc=i % 2 == 1) for i in range(20)]
@@ -753,7 +753,7 @@ def test_a_colour_wrapped_routine_line_is_dropped_and_no_escape_byte_reaches_eit
     assert _block(main, "db")[0] == "-- db (last 2 of 2 kept lines; dropped 1 routine lines of 3 read)"
     assert _block(main, "web")[0] == "-- web (last 2 of 2 kept lines; dropped 20 routine lines of 22 read)"
     api = _prefixed("api", ["ERROR:    boom happened", 'INFO:     127.0.0.1 - "GET /api/sources HTTP/1.1" 500 Internal Server Error',
-                            "the [5m] marker and [0m] and [1234m stay, a background worker idles"])
+                            "the [5m] marker and [0m] and [1234m stay, cfg[mode] [main] x[m], a background worker idles"])
     assert [l.strip() for l in _block(main, "api")[1:]] == api
     assert _logs_block(logs, "api") == api
     assert _logs_block(logs, "db") == _prefixed("db", [_BOOT_LOCALE, "database system is ready"])

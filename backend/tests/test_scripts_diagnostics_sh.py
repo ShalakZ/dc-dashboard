@@ -1193,16 +1193,17 @@ def test_text_that_only_looks_like_a_colour_code_is_kept_as_it_is(awk_path, tmp_
     lines = [
         "web-1  | the [5m] marker and [0m] and [1;31m] and [m] stay",   # a bracket closed by "]" is ordinary text
         "web-1  | [1234m is not a code (four digits), nor is [1;m or [;1m or [12;m or [Mm or [5M or [5 m",
-        "web-1  | ids [2m] and [12] and [m and a bare [ stay",
+        "web-1  | ids [2m] and [12] and [m and a bare [ stay",   # a lone "[m" has no digit: not a code any more
+        "web-1  | settings[model] and cfg[mode] and [main] and [migrate] and x[m] and [mb stay",
     ]
     kept, counts = _filter(awk_path, tmp_path, lines)
-    assert kept == [*lines[:2], "web-1  | ids [2m] and [12] and  and a bare [ stay"] and counts == "3 0"   # "[m " is the reset code
+    assert kept == lines and counts == "4 0"
 
 
 def test_a_code_next_to_a_kept_bracket_is_still_stripped(awk_path, tmp_path):
-    lines = [f"web-1  | [5m] then {ESC}[1mbold{ESC}[0m and [0m[0m[37;1mgrey[0m [3m] a[mb [1m,[2m"]
+    lines = [f"web-1  | [5m] then {ESC}[1mbold{ESC}[0m and [0m[0m[37;1mgrey[0m [3m] a[mb [1m,[2m cfg[mode]"]
     kept, _ = _filter(awk_path, tmp_path, lines)
-    assert kept == ["web-1  | [5m] then bold and grey [3m] ab ,"]
+    assert kept == ["web-1  | [5m] then bold and grey [3m] a[mb , cfg[mode]"]
 
 
 def test_a_hostile_line_full_of_bracket_markers_is_filtered_in_seconds(awk_path, tmp_path):
@@ -1216,7 +1217,7 @@ ANSI_FILES = {
     "services.txt": "api\ndb\nts\nweb\n",
     "log-api.txt": "".join(f"api-1  | {_colour(_health(i), esc=i % 2 == 0)}\n" for i in range(60))
                    + f"{ESC}[0m\n[0m\n" + f"api-1  | {_colour('ERROR:    boom happened')}\n"
-                   + "api-1  | the [5m] marker and [0m] stay, a background worker idles\n",
+                   + "api-1  | the [5m] marker and [0m] stay, cfg[mode] [main] x[m], a background worker idles\n",
     "log-db.txt": f"db-1  | {_colour('2026-10-12 09:30:00.100 UTC [27] LOG:  checkpoint starting: time')}\n"
                   f"db-1  | {_colour(BOOT_LOCALE, esc=False)}\ndb-1  | {_colour('database system is ready', esc=False)}\n",
     "log-ts.txt": f"ts-1  | {_colour(BOOT_WORKER)}\n",
@@ -1243,7 +1244,7 @@ def test_a_colour_wrapped_routine_line_is_dropped_and_no_escape_byte_reaches_eit
     assert "-- api (last 2 of 2 kept lines; dropped 60 routine lines of 62 read)\n" in logs
     assert "-- db (last 2 of 2 kept lines; dropped 1 routine lines of 3 read)\n" in logs
     assert "-- web (last 2 of 2 kept lines; dropped 20 routine lines of 22 read)\n" in logs
-    api = ["api-1  | ERROR:    boom happened", "api-1  | the [5m] marker and [0m] stay, a background worker idles"]
+    api = ["api-1  | ERROR:    boom happened", "api-1  | the [5m] marker and [0m] stay, cfg[mode] [main] x[m], a background worker idles"]
     assert [l.strip() for l in _block(run.main, "api")] == api
     assert [l for l in run.logs.splitlines() if l.startswith("api-1  |")] == api
     assert [l for l in run.logs.splitlines() if l.startswith("db-1  |")] == ["db-1  | " + BOOT_LOCALE, "db-1  | database system is ready"]
