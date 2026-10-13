@@ -502,7 +502,7 @@ A few things that are easy to miss:
 - **A page the role lacks** shows the heading "No access" and "Your role does not include this page." (this replaces the old "Admins
   only" and "Operators only"). A role that holds no permission at all can sign in, change its own password and read the site name, the
   version and the status chip, and lands on "Your role has no pages yet." (the top bar and the page, with no sidebar). An action the
-  role lacks is refused with "Your role does not allow this."
+  role lacks is refused, and where the page shows the reason it reads "Your role does not allow this."
 - **Where an account lands** after signing in: the default dashboard if there is one and the role may see dashboards, else the Assets
   Tree, else the first page its sidebar offers.
 - **Everything is audited.** `role.created`, `role.updated` and `role.deleted` are in the Audit log with the permissions added and removed,
@@ -526,7 +526,8 @@ Give the role to an account by its **name**, matched ignoring case: `POST /api/u
 The Users page lists the role of every account (an account with a custom role keeps it when you edit its other fields). Its Create
 user form and role choice offer the roles the server says you may hand out (the built-in names first, then the others by name), and a
 row whose role grants something you lack is shown read-only, with no role choice, menu or trash can. A person who may not hand out a role
-never sees it offered.
+never sees it offered once the page has the server's list of roles (while that list is loading, or could not be read, the three built-in
+names are shown and the server still refuses what is not allowed).
 
 ## Develop
 
