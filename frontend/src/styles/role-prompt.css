@@ -8,7 +8,7 @@
      The arming delay: for its first 400ms the card takes no pointer at all (the from frame, held by `backwards`), so a click aimed at the
      checkbox below it, in the same column, goes through to that checkbox. The keyboard is not affected. Once the delay is over the
      animation has no effect on the card (no forwards fill). */
-  .dep-prompt { position: fixed; z-index: 5; width: max-content; max-width: min(320px, calc(100vw - 16px)); display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); font-size: var(--fs-sm); line-height: 1.45; text-align: left; overflow-wrap: anywhere; transition: opacity var(--motion); animation: dep-prompt-arm 1ms linear 400ms backwards; }
+  .dep-prompt { position: fixed; z-index: 5; width: max-content; max-width: min(360px, calc(100vw - 16px)); display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); font-size: var(--fs-sm); line-height: 1.45; text-align: left; overflow-wrap: anywhere; transition: opacity var(--motion); animation: dep-prompt-arm 1ms linear 400ms backwards; }
   @starting-style {
     .dep-prompt { opacity: 0; }
   }

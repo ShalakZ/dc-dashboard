@@ -14,7 +14,8 @@ import { userBlock } from "./shell";
 // (4) unticking a permission that another ticked one needs offers to untick that one too; (5) the `?` bubble of every permission in the
 // Change column (the grid's right edge) is whole and the grid does not scroll sideways; (6) a quick click on the box the card covers goes
 // to that box, and a press on the card's own text keeps it open; (7) the card is whole inside the window at 1024 and 1440 wide, for a
-// box in the See column, the Change column and Sensitive actions.
+// box in the See column, the Change column and Sensitive actions; (8) in the New role dialog as it opens, at 1440 and at 1024 wide, the card
+// stays inside the editor's visible body and never covers Cancel or Save, and a click on Cancel's centre with the card open cancels.
 //
 // Locators: a card is `role="group"` named by its sentence, so it is always found by that sentence with `exact: true`. A bare
 // getByRole("group") would also match `fieldset.role-sensitive` (the Sensitive actions box), so "any card" is the name /to show anything/,
@@ -170,9 +171,30 @@ async function expectNoSidewaysScroll(dialog: Locator, what: string) {
 }
 
 /**
+ * The part of the window the scrolling boxes around `label` leave visible, as a vertical band: the window cut down by every ancestor (up to
+ * <body>) whose overflow-y is not visible. The same rule as the app's clipBand, so the placement below can be told apart from "the window
+ * had room"; the two new geometry facts that do not lean on it are asserted by step 8.
+ */
+const visibleBand = (label: Locator) =>
+  label.evaluate((node) => {
+    let top = 0;
+    let bottom = window.innerHeight;
+    for (let box = node.parentElement; box && box !== document.body; box = box.parentElement) {
+      const overflowY = getComputedStyle(box).overflowY;
+      if (overflowY === "" || overflowY === "visible") continue;
+      const r = box.getBoundingClientRect();
+      top = Math.max(top, r.top);
+      bottom = Math.min(bottom, r.bottom);
+    }
+    return { top, bottom };
+  });
+
+/**
  * The card is whole inside the window, shown whole (the topmost thing at its inner corners is the card), off the label of the box it is
- * about, and where `placeTip` puts it: under the label when it fits there, else above it. Waits until the card takes the pointer
- * (the arming delay), so the corner test sees the card and not the box beneath it.
+ * about, and where `placeTip` puts it: under the label when it fits there, else above it. "Fits" is judged against the visible part of the
+ * scrolling boxes around the label (`visibleBand`: in the editor, the body that scrolls and the grid), not against the window: the card
+ * stays inside that band, so it never hangs over the Cancel/Save row. Waits until the card takes the pointer (the arming delay), so the
+ * corner test sees the card and not the box beneath it.
  */
 async function expectPlaced(page: Page, group: Locator, label: Locator, what: string) {
   await expect(group).toHaveCSS("pointer-events", "auto");
@@ -180,15 +202,25 @@ async function expectPlaced(page: Page, group: Locator, label: Locator, what: st
   expect(view, "the page has a viewport").not.toBeNull();
   const c = await rectOf(group, `${what}: the card`);
   const l = await rectOf(label, `${what}: the label`);
-  const note = `${what}: card ${JSON.stringify(c)}, label ${JSON.stringify(l)}, window ${view!.width}x${view!.height}`;
+  const band = await visibleBand(label);
+  const note = `${what}: card ${JSON.stringify(c)}, label ${JSON.stringify(l)}, band ${JSON.stringify(band)}, window ${view!.width}x${view!.height}`;
   expect(c.x, `${note}: left edge`).toBeGreaterThanOrEqual(-0.5);
   expect(c.y, `${note}: top edge`).toBeGreaterThanOrEqual(-0.5);
   expect(c.x + c.width, `${note}: right edge`).toBeLessThanOrEqual(view!.width + 0.5);
   expect(c.y + c.height, `${note}: bottom edge`).toBeLessThanOrEqual(view!.height + 0.5);
   expect(overlaps(c, l), `${note}: the card covers its label`).toBe(false);
-  const fitsBelow = l.y + l.height + 6 + c.height <= view!.height - 8; // placeTip's own rule
+  // A band too small for the card is not used (the app falls back to the window rule); the editor's body is never that small here.
+  const useBand = band.bottom - band.top >= c.height;
+  const lo = useBand ? Math.max(8, band.top) : 8;
+  const hi = useBand ? Math.min(view!.height - 8, band.bottom) : view!.height - 8;
+  if (useBand) {
+    expect(c.y, `${note}: the card starts above the visible band`).toBeGreaterThanOrEqual(lo - 0.5);
+    expect(c.y + c.height, `${note}: the card ends below the visible band`).toBeLessThanOrEqual(hi + 0.5);
+  }
+  const fitsBelow = l.y + l.height + 6 >= lo && l.y + l.height + 6 + c.height <= hi;
+  const fitsAbove = l.y - 6 - c.height >= lo && l.y - 6 <= hi;
   if (fitsBelow) expect(c.y, `${note}: there is room below, so the card is below`).toBeGreaterThanOrEqual(l.y + l.height - 0.5);
-  else expect(c.y + c.height, `${note}: no room below, so the card is above`).toBeLessThanOrEqual(l.y + 0.5);
+  else if (fitsAbove) expect(c.y + c.height, `${note}: no room below, so the card is above`).toBeLessThanOrEqual(l.y + 0.5);
   expect(await isShownWhole(group), `${note}: something clips or covers the card`).toBe(true);
 }
 
@@ -560,6 +592,48 @@ test.describe("W9c: the Roles editor offers what a permission needs", () => {
         }
         await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
         await expect(dialog).toBeHidden();
+      }, view);
+    }
+  });
+
+  // 8 ---------------------------------------------------------------------------------------------------------------------------
+
+  // The whole-wave review (I-1): with the box low in the editor's body (Change users at 1440 x 900, Change storage settings at 1024 x 768),
+  // the card used to go BELOW it because the window had room, and hung over the dialog's Cancel and Save buttons (swallowing a click on
+  // them). The dialog is used as it opens: nothing here scrolls it (Playwright only scrolls the box into view when it is out of view).
+  test("in the New role dialog as it opens, the card stays inside the editor's visible body, covers neither Cancel nor Save, and a click on Cancel's centre cancels", async ({ browser }) => {
+    test.setTimeout(180_000);
+    const CASES = [
+      { view: { width: 1440, height: 900 }, label: "Change users" },
+      { view: { width: 1024, height: 768 }, label: "Change storage settings" },
+    ] as const;
+    for (const { view, label } of CASES) {
+      await asAdminPage(browser, async (page) => {
+        const at = `${view.width} wide, ${label}`;
+        const dialog = await openNewRole(page);
+        await expect(cards(dialog), at).toHaveCount(0);
+        await tick(dialog, label).check();
+        const offer = cards(dialog);
+        await expect(offer, at).toHaveCount(1);
+        await expect(offer, at).toBeVisible();
+        await expect(offer, at).toHaveCSS("pointer-events", "auto"); // the arming delay is over: the card takes the pointer, so a covered button would be swallowed
+
+        const c = await rectOf(offer, `${at}: the card`);
+        const cancel = await rectOf(dialog.getByRole("button", { name: "Cancel", exact: true }), `${at}: Cancel`);
+        const saveBox = await rectOf(save(dialog), `${at}: Save`);
+        const body = await rectOf(dialog.locator(".role-editor-body"), `${at}: the editor's body`);
+        const note = `${at}: card ${JSON.stringify(c)}, Cancel ${JSON.stringify(cancel)}, Save ${JSON.stringify(saveBox)}, body ${JSON.stringify(body)}`;
+        expect(overlaps(c, cancel), `${note}: the card covers Cancel`).toBe(false);
+        expect(overlaps(c, saveBox), `${note}: the card covers Save`).toBe(false);
+        expect(c.y, `${note}: the card starts above the body's visible rectangle`).toBeGreaterThanOrEqual(body.y - 0.5);
+        expect(c.y + c.height, `${note}: the card ends below the body's visible rectangle`).toBeLessThanOrEqual(body.y + body.height + 0.5);
+        expect(c.x, `${note}: the card starts left of the body's visible rectangle`).toBeGreaterThanOrEqual(body.x - 0.5);
+        expect(c.x + c.width, `${note}: the card ends right of the body's visible rectangle`).toBeLessThanOrEqual(body.x + body.width + 0.5);
+        expect(await isShownWhole(offer), `${note}: something clips or covers the card`).toBe(true);
+
+        // The card is still open: the first click on Cancel's centre must be Cancel's (a press outside only dismisses the card, then the click goes on).
+        await page.mouse.click(cancel.x + cancel.width / 2, cancel.y + cancel.height / 2);
+        await expect(dialog, `${note}: the click on Cancel's centre did not cancel`).toBeHidden();
       }, view);
     }
   });

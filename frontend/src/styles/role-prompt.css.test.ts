@@ -37,7 +37,7 @@ describe("the dependency prompt's stylesheet", () => {
     expect(z).toBeGreaterThanOrEqual(1);
     expect(z).toBeLessThanOrEqual(100);
     expect(card).toMatch(/width:\s*max-content/); // its measured width does not depend on where it is put
-    expect(card).toMatch(/max-width:\s*min\(320px,\s*calc\(100vw - 16px\)\)/);
+    expect(card).toMatch(/max-width:\s*min\(360px,\s*calc\(100vw - 16px\)\)/);
   });
 
   it("looks like the toast: --bg card, --border-strong edge, --shadow-pop, no pill", () => {

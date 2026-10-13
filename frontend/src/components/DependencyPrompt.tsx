@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { placeTip, type TipPlacement } from "../lib/placeTip";
+import { clipBand, placeTip, type TipPlacement } from "../lib/placeTip";
 
 export interface DependencyPromptProps {
   /** The checkbox the offer is about: the card sits under its label and the focus goes back to it. */
@@ -19,7 +19,10 @@ export interface DependencyPromptProps {
  * is blocked, and leaving it any way at all counts as "not now". It is drawn INLINE right after the checkbox's label (so Tab goes from the
  * box into it and the Modal's focus trap just works) with position: fixed (so the scrolling boxes around it neither clip it nor grow a
  * scroll bar for it); role-prompt.css.test.ts keeps the boxes around it free of a transform or filter, which would turn fixed into
- * relative-to-that-box. Where it goes comes from placeTip, and it follows its checkbox when the page scrolls.
+ * relative-to-that-box. Where it goes comes from placeTip, inside the visible part of the scrolling boxes around the checkbox (clipBand),
+ * and it follows its checkbox when the page scrolls; a checkbox that has scrolled out of its box leaves the card pinned at the box's edge,
+ * as long as what the boxes still show is tall enough for the card (a small window with a tall card and the checkbox far out of view
+ * leaves the card where the window rule puts it, which can be out of sight until the checkbox is scrolled back).
  */
 export function DependencyPrompt({ anchor, sentence, items, acceptLabel, declineLabel, onAccept, onDecline }: DependencyPromptProps) {
   const card = useRef<HTMLDivElement>(null);
@@ -39,7 +42,13 @@ export function DependencyPrompt({ anchor, sentence, items, acceptLabel, decline
       const at = anchor.current?.closest("label") ?? anchor.current;
       if (!at) return;
       const { width, height } = box.getBoundingClientRect();
-      const next = placeTip(at.getBoundingClientRect(), { width, height }, { width: window.innerWidth, height: window.innerHeight });
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      // The card is fixed, so no box around it clips it; it is kept inside the visible part of the scrolling boxes its checkbox is in
+      // instead (in the Roles editor: the body that scrolls, so the card never hangs over the Cancel/Save row under it). A band too small
+      // for the card to fit (a box with no size, as in jsdom, or one scrolled away) is not worth keeping it in: the window rule applies.
+      const band = clipBand(at, viewport.height);
+      const bounds = band.bottom - band.top > 0 && band.bottom - band.top >= height ? band : undefined;
+      const next = placeTip(at.getBoundingClientRect(), { width, height }, viewport, undefined, bounds);
       setPlace((prev) => (prev && prev.top === next.top && prev.left === next.left ? prev : next)); // a scroll event per frame must not re-render for nothing
     };
     put();

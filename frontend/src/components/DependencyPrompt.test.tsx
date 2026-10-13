@@ -257,11 +257,12 @@ describe("DependencyPrompt: where it sits", () => {
   const rect = (left: number, top: number, width: number, height: number) =>
     ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
 
-  /** jsdom measures nothing: the card is 200 x 80 and the label is wherever the test says. */
-  function measure(labelAt: { current: DOMRect }) {
+  /** jsdom measures nothing: the card is 200 x 80 and the label is wherever the test says (and the scrolling box, when a test has one). */
+  function measure(labelAt: { current: DOMRect }, scroller?: DOMRect) {
     return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains("dep-prompt")) return rect(0, 0, 200, 80);
       if (this.tagName === "LABEL") return labelAt.current;
+      if (scroller && this.dataset.testid === "scroller") return scroller;
       return rect(0, 0, 0, 0);
     });
   }
@@ -302,6 +303,38 @@ describe("DependencyPrompt: where it sits", () => {
     labelAt.current = rect(100, 100, 140, 30);
     act(() => { fireEvent(window, new Event("resize")); });
     expect(top()).toBe("136px");
+  });
+
+  it("stays inside the scrolling box around its checkbox: near the box's bottom it goes above, although the window has room below (whole-wave review I-1)", () => {
+    // The box is 100 to 400; the label ends at 370, so the card (80 high) would end at 456 below it: past the box, inside the window.
+    const labelAt = { current: rect(100, 340, 140, 30) };
+    measure(labelAt, rect(0, 100, 600, 300));
+    render(<div data-testid="scroller" style={{ overflowY: "auto" }}><Host /></div>);
+    const withoutBounds = placeTip(labelAt.current, { width: 200, height: 80 }, viewport);
+    expect(withoutBounds.placement, "the window alone would put it below").toBe("below");
+    const top = parseFloat(card().style.top);
+    expect(top).toBe(340 - 6 - 80);
+    expect(top + 80).toBeLessThanOrEqual(400);
+    expect(top).toBeGreaterThanOrEqual(100);
+  });
+
+  it("pins itself to the scrolling box's edge when its checkbox has scrolled out of the box (the parked M-9)", () => {
+    const labelAt = { current: rect(100, 450, 140, 30) }; // below the box, which ends at 400
+    measure(labelAt, rect(0, 100, 600, 300));
+    render(<div data-testid="scroller" style={{ overflowY: "auto" }}><Host /></div>);
+    expect(parseFloat(card().style.top) + 80).toBe(400);
+    labelAt.current = rect(100, 20, 140, 30); // and above it
+    act(() => { fireEvent.scroll(window); });
+    expect(parseFloat(card().style.top)).toBe(100);
+  });
+
+  it("puts the card where the window rule puts it when nothing is measured (jsdom's zero rectangles give no usable band, so no bounds)", () => {
+    render(<div data-testid="scroller" style={{ overflowY: "auto" }}><Host /></div>); // no stub: every rectangle is 0 x 0
+    const zero = { left: 0, top: 0, right: 0, bottom: 0 };
+    const expected = placeTip(zero, { width: 0, height: 0 }, viewport);
+    expect(expected.top, "bounds would have clamped this to 8").toBe(6);
+    expect(card().style.top).toBe(`${expected.top}px`);
+    expect(card().style.left).toBe(`${expected.left}px`);
   });
 
   it("removes its window listeners when it goes away", () => {
