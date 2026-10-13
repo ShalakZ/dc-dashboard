@@ -39,6 +39,12 @@
   /* Fleet summary (the index page): the kinds as a wrapped row of name and count with a hairline between them, and the attention table */
   .kind-list { display: flex; flex-wrap: wrap; row-gap: 10px; margin: 0 0 0 -17px; padding: 0; list-style: none; clip-path: inset(0 0 0 17px); }
   .kind-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; margin-left: -1px; padding: 0 18px 0 17px; border-left: 1px solid var(--border); } /* the first item of a line has its hairline clipped away, with the 17px that the list is pulled out to the left; a kind of 200 characters shrinks to the row and its count drops below the name */
+  /* The four tiles are two and two until all four fit in one row (4 x 170px and 3 gaps of 16px = 728px): "3 + 1" left "Cost today" alone. The row is a
+     container, so its own width decides, not the window's (the sidebar and the tree column take a changing share of it). */
+  .tiles.fleet-tiles { display: flex; flex-wrap: wrap; container-type: inline-size; }
+  .tiles.fleet-tiles > .tile { flex: 1 1 calc(50% - 8px); }
+  @container (min-width: 728px) { .tiles.fleet-tiles > .tile { flex-basis: calc(25% - 12px); } }
+  @container (max-width: 355.98px) { .tiles.fleet-tiles > .tile { flex-basis: 100%; } }
   .fleet-tiles .tile .big:not(.none) { font-size: var(--fs-title); } /* four tiles share the row: a figure such as 1605.00 kWh must fit on one line (the asset page's three tiles keep the larger size) */
   .kind-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; color: var(--text); font-size: var(--fs-base); }
   .kind-name svg.i { width: 16px; height: 16px; color: var(--text-2); }
