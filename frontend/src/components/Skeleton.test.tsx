@@ -216,6 +216,18 @@ describe("TableSkeleton", () => {
     expect(container.querySelectorAll("tbody tr:first-child td")).toHaveLength(2);
   });
 
+  it("with widths has a <colgroup> of fixed columns (a null is the rest) and a narrow column gets a line that fits its cell", () => {
+    const { container } = render(<TableSkeleton columns={4} rows={2} widths={[200, 160, null, 44]} />);
+    const table = container.querySelector("table")!;
+    expect(table.style.tableLayout).toBe("fixed");
+    const cols = [...table.querySelectorAll<HTMLElement>("colgroup > col")];
+    expect(cols.map((c) => c.style.width)).toEqual(["200px", "160px", "", "44px"]);
+    const narrow = [...container.querySelectorAll<HTMLElement>("tbody tr:first-child td:last-child .sk-line")];
+    expect(narrow).toHaveLength(1);
+    expect(narrow[0].style.width).toBe("16px"); // 44px less the cell's 14px padding on both sides
+    expect(render(<TableSkeleton columns={2} rows={1} />).container.querySelector("colgroup")).toBeNull(); // unchanged without widths
+  });
+
   it("varies the widths but not from one render to the next", () => {
     const { container } = render(<TableSkeleton columns={4} rows={4} />);
     const widths = [...container.querySelectorAll<HTMLElement>("tbody .sk-line")].map((l) => l.style.width);

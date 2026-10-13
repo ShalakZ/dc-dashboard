@@ -84,16 +84,124 @@ describe("AuditPage", () => {
     expect(first).toHaveTextContent("2026-10-07 13:00:00");
     expect(screen.getByRole("link", { name: "Entry #50, 2026-10-07 13:00:00" })).toHaveAttribute("href", "/audit/50");
     expect(screen.getByRole("columnheader", { name: "Time (Asia/Qatar)" })).toBeInTheDocument();
-    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Time (Asia/Qatar)", "User", "What happened"]);
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Time (Asia/Qatar)", "User", "What happened", "Details"]);
   });
 
-  it("links an entry to the thing it is about and holds the details in a Details section", async () => {
+  it("links an entry to the thing it is about and opens its details in a row under it from a Details button", async () => {
     setup("/audit", list(1, [entry(9, "asset.created", { asset_id: 7, name: "Panel A" })]));
     expect(await screen.findByText("Created asset Panel A")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open asset Panel A" })).toHaveAttribute("href", "/assets/7");
+    const details = screen.getByRole("button", { name: "Details of entry #9" });
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    expect(details).not.toHaveAttribute("aria-controls"); // nothing to control while the row is not drawn
     expect(screen.queryByText("Asset id")).not.toBeInTheDocument(); // closed: nothing drawn yet
-    await userEvent.click(screen.getByText("Details"));
+    const body = document.querySelector(".audit-table tbody")!;
+    expect(body.querySelectorAll("tr")).toHaveLength(1);
+    await userEvent.click(details);
     expect(await screen.findByText("Asset id")).toBeInTheDocument();
+    expect(details).toHaveAttribute("aria-expanded", "true");
+    const opened = body.querySelectorAll("tr");
+    expect(opened).toHaveLength(2);
+    expect(opened[1]).toHaveAttribute("id", details.getAttribute("aria-controls")); // the row under the entry
+    expect(opened[1].querySelector("td")).toHaveAttribute("colspan", "4");
+    expect(opened[1]).toContainElement(screen.getByText("Asset id"));
+    await userEvent.click(details);
+    expect(screen.queryByText("Asset id")).not.toBeInTheDocument();
+    expect(body.querySelectorAll("tr")).toHaveLength(1);
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    expect(details).not.toHaveAttribute("aria-controls");
+  });
+
+  it("gives every entry its own Details button, named by the entry", async () => {
+    setup("/audit");
+    await screen.findByText("Scan #51 finished (done)");
+    expect(screen.getAllByRole("button", { name: /^Details of entry #/ }).map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Details of entry #51", "Details of entry #50",
+    ]);
+  });
+
+  it("shows the number of entries the filters match, singular for one, and nothing while the next query loads", async () => {
+    setup("/audit", (req) => (req.url.includes("offset=50") ? list(1234, [entry(1, "scope.created", { scope_id: 1, name: "Lab" })], 50) : list(1234, [entry(51, "scan.finished")])));
+    expect(await screen.findByText("1,234 entries")).toBeInTheDocument();
+    const release = hold((url) => url.includes("offset=50"));
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("Updating…")).toBeInTheDocument();
+    expect(screen.queryByText(/ entries?$/)).not.toBeInTheDocument(); // the old query's total says nothing about the next page's query
+    await act(async () => { release(); });
+    expect(await screen.findByText("1,234 entries")).toBeInTheDocument();
+  });
+
+  it("says '1 entry' for a log of one", async () => {
+    setup("/audit", list(1, [entry(9, "asset.created", { asset_id: 7, name: "Panel A" })]));
+    expect(await screen.findByText("1 entry")).toBeInTheDocument();
+  });
+
+  it("puts the count on the result line beside the View switch, which keeps its name", async () => {
+    setup("/audit");
+    const view = await screen.findByRole("group", { name: "View" });
+    expect(within(view).getAllByRole("button").map((b) => b.textContent)).toEqual(["Friendly", "Raw"]);
+    const line = view.parentElement!;
+    expect(line).toHaveClass("row", "seg");
+    expect(within(line).getByText("51 entries")).toBeInTheDocument();
+  });
+
+  it("marks each friendly row with the kind of event as an icon, and the sentence is still there", async () => {
+    setup("/audit", list(3, [
+      entry(7, "asset.deleted", { asset_id: 3, name: "Old pump" }),
+      entry(6, "login.failed", { username: "ops" }, null),
+      entry(5, "scan.started", { scan_id: 5 }),
+    ]));
+    const row = (await screen.findByText("Deleted asset Old pump")).closest("tr")!;
+    const icon = row.querySelector("[data-kind]")!;
+    expect(icon).toHaveAttribute("data-kind", "delete");
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(icon.querySelector("svg")).not.toBeNull();
+    const kinds = Array.from(document.querySelectorAll(".audit-table tbody [data-kind]")).map((el) => el.getAttribute("data-kind"));
+    expect(kinds).toEqual(["delete", "problem", "other"]);
+  });
+
+  it("draws the user as an initial disc (hidden from screen readers) and the name; no user is a bare dash", async () => {
+    setup("/audit", list(2, [entry(2, "scan.finished", { scan_id: 2, status: "done" }), entry(1, "scope.created", { scope_id: 1, name: "Lab" }, null)]));
+    const cells = (await screen.findAllByRole("cell", { name: "admin" })).filter((c) => c.classList.contains("cell-user"));
+    expect(cells).toHaveLength(1); // the disc's letter is not part of the cell's name
+    const disc = cells[0].querySelector(".user-disc")!;
+    expect(disc).toHaveAttribute("aria-hidden", "true");
+    expect(disc).toHaveTextContent("A");
+    expect(cells[0]).toHaveAttribute("title", "admin");
+    const dash = screen.getByText("—");
+    expect(dash.tagName).toBe("TD");
+    expect(dash.querySelector(".user-disc")).toBeNull();
+  });
+
+  describe("how long ago (the site clock, taken once per render)", () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    it("says how long ago under the exact time, outside the entry link", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-07T12:30:00Z")); // 2 h 30 min after the entries, the same site day (Asia/Qatar is UTC+3)
+      setup("/audit");
+      const link = await screen.findByRole("link", { name: "Entry #51, 2026-10-07 13:00:00" });
+      expect(link).toHaveTextContent(/^2026-10-07 13:00:00$/); // the link's text stays exactly the time
+      const ago = within(link.closest("td")!).getByText("2 h ago");
+      expect(link).not.toContainElement(ago);
+    });
+
+    it("shows no line for an entry older than two weeks", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-12-01T12:00:00Z"));
+      setup("/audit");
+      const link = await screen.findByRole("link", { name: "Entry #51, 2026-10-07 13:00:00" });
+      expect(link.closest("td")).toHaveTextContent(/^2026-10-07 13:00:00$/);
+    });
+
+    it("has the same time and user cells in the raw view", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-07T12:30:00Z"));
+      setup("/audit?view=raw");
+      const link = await screen.findByRole("link", { name: "Entry #51, 2026-10-07 13:00:00" });
+      expect(within(link.closest("td")!).getByText("2 h ago")).toBeInTheDocument();
+      expect(link.closest("tr")!.querySelector(".cell-user .user-disc")).not.toBeNull();
+    });
   });
 
   it("shows the action code and the stored JSON in the raw view, which is part of the address", async () => {
@@ -128,14 +236,17 @@ describe("AuditPage", () => {
 
   it("says so when there is nothing yet", async () => {
     setup("/audit", list(0, []));
-    expect(await screen.findByText("No audit entries yet.")).toBeInTheDocument();
+    const note = await screen.findByText("No audit entries yet.");
+    expect(note.closest(".empty-note")).not.toBeNull(); // the compact note, not the big dashed box
+    expect(document.querySelector(".audit-page .empty")).toBeNull();
     expect(screen.queryByRole("button", { name: "Next" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/ entries?$/)).not.toBeInTheDocument(); // no count line for an empty log
   });
 
   it("says nothing matches when filters leave no entry, and Clear filters brings the log back", async () => {
     const { urls, search } = setup("/audit?action=asset.created", (req) =>
       req.url.includes("action=") ? list(0, []) : twoRows);
-    expect(await screen.findByText("No entries match these filters.")).toBeInTheDocument();
+    expect((await screen.findByText("No entries match these filters.")).closest(".empty-note")).not.toBeNull();
     expect(screen.queryByText("No audit entries yet.")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(await screen.findByText("Scan #51 finished (done)")).toBeInTheDocument();
@@ -375,7 +486,7 @@ describe("AuditPage while the log loads (W7f)", () => {
     expect(screen.getByLabelText("Action")).toBeInTheDocument(); // the filter bar does not wait
     const region = screen.getByText(LABEL).parentElement!;
     expect(region).toHaveAttribute("role", "status");
-    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(3); // Time, User, What happened
+    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(4); // Time, User, What happened, Details
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByText("No audit entries yet.")).not.toBeInTheDocument();

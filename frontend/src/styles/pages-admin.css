@@ -53,25 +53,61 @@
   .retention-form { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); align-items: end; } /* inputs line up even when a label wraps */
   .retention-form > :is(p, .row) { grid-column: 1 / -1; }
 
-  /* Audit log: the Friendly / Raw switch is one segmented control; rows read from the top */
-  .row.seg { gap: 0; margin: 0 0 10px; }
-  .seg > button { border-radius: 0; }
-  .seg > button:first-child { border-radius: var(--radius) 0 0 var(--radius); }
-  .seg > button:last-of-type { border-radius: 0 var(--radius) var(--radius) 0; }
-  .seg > button + button { margin-left: -1px; }
-  .seg > button[aria-pressed="true"] { position: relative; z-index: 1; }
-  .seg > .muted { margin-left: 12px; }
-  .audit-page .empty { margin-top: 8px; }
-  .audit-table td { vertical-align: top; }
+  /* Audit log (W7j). The page description may run to about 110 characters; Storage, Tariffs, Settings and Diagnostics add themselves to this selector. */
+  .audit-page .page-head .sub { max-width: 110ch; }
+
+  /* The toolbar: Search (it grows), User, Action and From to To as one joined control; under it the quick filters at the left and "Go to date"
+     and Export CSV at the right. The selects have a fixed width, so the rows wrap at the same place before and after the options arrive. */
+  .audit-page .filter-bar .field.grow { grid-template-columns: minmax(0, 1fr); flex-basis: 170px; min-width: 150px; } /* the column may shrink below the input's own width */
+  .audit-page .filter-bar select { width: 176px; max-width: 100%; }
+  @media (min-width: 1400px) {
+    .audit-page .filter-bar select { width: 220px; } /* a long action name or "Deletions (quick filter)" fits */
+  }
+  .audit-page .range-group { display: flex; flex: none; align-items: flex-end; }
+  .audit-page .range-group input { width: 140px; }
+  .audit-page .range-group .field:first-child input { border-radius: var(--radius) 0 0 var(--radius); }
+  .audit-page .range-group .field:last-child input { border-radius: 0 var(--radius) var(--radius) 0; }
+  .audit-page .range-sep { display: grid; place-items: center; height: 38px; padding: 0 10px; border: solid var(--field-border); border-width: 1px 0; background: var(--surface); color: var(--text-2); font-size: var(--fs-sm); }
+  .audit-page .filter-bar .quick-row { align-items: center; justify-content: space-between; }
+  .audit-page .filter-bar .filter-tools { align-items: center; margin-left: auto; }
+  .audit-page .jump-field { display: flex; align-items: center; gap: 8px; }
+  .audit-page .jump-field label { white-space: nowrap; }
+  .audit-page .jump-field input { width: 150px; }
+
+  /* The result line: the Friendly / Raw switch is one segmented control, the number of entries sits at the right */
+  .row.seg { justify-content: space-between; gap: 12px; margin: 0 0 10px; }
+  .seg-switch { display: inline-flex; align-items: center; }
+  .seg-switch > button { border-radius: 0; }
+  .seg-switch > button:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+  .seg-switch > button:last-of-type { border-radius: 0 var(--radius) var(--radius) 0; }
+  .seg-switch > button + button { margin-left: -1px; }
+  .seg-switch > button[aria-pressed="true"] { position: relative; z-index: 1; }
+  .seg-switch > .muted { margin-left: 12px; }
+  .result-count { margin: 0; color: var(--text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+
+  /* The table has fixed columns (the <colgroup> in AuditPage.tsx); a long word wraps in its cell, the user's name is cut with an ellipsis (td.cell-user above).
+     Rows read from the middle: the time has a second line, the user a disc, the event a tile. No sticky header: .table-wrap scrolls, so it could never stick (backlog). */
+  .audit-table { table-layout: fixed; }
+  .audit-table th { overflow: hidden; text-overflow: ellipsis; }
   .audit-table td.cell-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .audit-table td.cell-action { white-space: nowrap; }
-  .audit-table code { font-size: var(--fs-xs); }
-  .audit-table .what { overflow-wrap: anywhere; }
-  .audit-more { margin-top: 4px; }
-  .audit-more > summary { width: fit-content; font-size: var(--fs-xs); color: var(--text-2); cursor: pointer; }
-  .audit-more > summary:hover, .audit-more[open] > summary { color: var(--text); }
-  .audit-more .audit-detail { margin: 8px 0 4px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
-  .audit-more .detail-summary { display: none; } /* the row above already says it */
+  .audit-table .ago { display: block; color: var(--text-2); font-size: var(--fs-xs); }
+  .audit-table td.cell-action, .audit-table td.cell-detail { overflow-wrap: anywhere; }
+  .audit-table code { font-size: var(--fs-xs); overflow-wrap: anywhere; }
+  .audit-table .user-disc { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 8px; border-radius: 50%; background: var(--accent-tint); color: var(--accent-ink); font-size: var(--fs-xs); font-weight: 600; vertical-align: middle; }
+  .audit-table .what-line { display: flex; align-items: center; gap: 10px; }
+  .audit-table .ev-tile { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent); }
+  .audit-table .ev-tile svg.i { width: 16px; height: 16px; }
+  .audit-table .ev-tile:is([data-kind="signin"], [data-kind="create"]) { background: var(--ok-tint); color: var(--ok); }
+  .audit-table .ev-tile:is([data-kind="delete"], [data-kind="problem"]) { background: var(--crit-tint); color: var(--crit); }
+  .audit-table .ev-tile[data-kind="other"] { background: var(--surface); color: var(--text-2); }
+  .audit-table .what-text { min-width: 0; overflow-wrap: anywhere; }
+  .audit-table .what-link { margin-left: 10px; }
+  .audit-table td.cell-more { padding-inline: 8px; text-align: center; }
+  .details-btn svg.i { transition: transform var(--motion); }
+  .details-btn[aria-expanded="true"] svg.i { transform: rotate(90deg); }
+  /* An opened entry: one row under it holding the account; the panel is the surface colour with white boxes in it */
+  .audit-table tr.detail-row > td { padding-block: 14px; overflow-wrap: anywhere; vertical-align: top; background: var(--surface); }
+  .detail-row .detail-summary { display: none; } /* the row above already says it */
 
   /* One entry's detail (also inside an opened Audit row) */
   .audit-detail p { margin: 0 0 10px; }

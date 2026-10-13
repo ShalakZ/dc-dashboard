@@ -1,10 +1,14 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { AuditOptions } from "../api/types";
 import { FIRST_DAY, isFiltered, LAST_DAY, NO_FILTERS, QUICK_FILTERS, quickActive, type AuditFilters } from "../lib/auditFilters";
+import { Icon, type IconName } from "./Icon";
 
 const SEARCH_PAUSE_MS = 400;
 // The value of the Action select's disabled option, shown while the filter is a pattern or several actions.
 const GROUP = "*group"; // no real action contains "*"
+
+// The icon of each quick filter, by its id.
+const QUICK_ICONS: Record<string, IconName> = { today: "calendar", week: "clock", deletions: "evDelete", signin: "evProblem" };
 
 /** Whitespace alone is no search (the address drops it too). */
 const searchValue = (text: string) => (text.trim() === "" ? "" : text);
@@ -93,6 +97,17 @@ export function AuditFilterBar({ filters, onChange, today, options, onJump, jump
   return (
     <div role="search" aria-label="Filter the audit log" className="filter-bar">
       <div className="row">
+        <div className="field grow">
+          <label htmlFor={ids.search}>Search</label>
+          <input
+            id={ids.search}
+            type="text"
+            value={text}
+            placeholder="Search action, user and details"
+            onChange={(e) => typeSearch(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") applySearch(text); }}
+          />
+        </div>
         <div className="field">
           <label htmlFor={ids.user}>User</label>
           <select id={ids.user} value={filters.user} onChange={(e) => onChange({ ...filters, user: e.target.value })}>
@@ -115,55 +130,50 @@ export function AuditFilterBar({ filters, onChange, today, options, onJump, jump
             {actions.map((action) => <option key={action} value={action}>{action}</option>)}
           </select>
         </div>
-        <div className="field">
-          <label htmlFor={ids.from}>From</label>
-          <input
-            id={ids.from}
-            type="date"
-            min={FIRST_DAY}
-            max={filters.to || LAST_DAY}
-            value={filters.from}
-            onChange={(e) => onChange({ ...filters, from: e.target.value })}
-          />
-        </div>
-        <div className="field">
-          <label htmlFor={ids.to}>To</label>
-          <input
-            id={ids.to}
-            type="date"
-            min={filters.from || FIRST_DAY}
-            max={LAST_DAY}
-            value={filters.to}
-            onChange={(e) => onChange({ ...filters, to: e.target.value })}
-          />
-        </div>
-        <div className="field grow">
-          <label htmlFor={ids.search}>Search</label>
-          <input
-            id={ids.search}
-            type="text"
-            value={text}
-            placeholder="Search action, user and details"
-            onChange={(e) => typeSearch(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") applySearch(text); }}
-          />
+        <div className="range-group">
+          <div className="field">
+            <label htmlFor={ids.from}>From</label>
+            <input
+              id={ids.from}
+              type="date"
+              min={FIRST_DAY}
+              max={filters.to || LAST_DAY}
+              value={filters.from}
+              onChange={(e) => onChange({ ...filters, from: e.target.value })}
+            />
+          </div>
+          <span className="range-sep" aria-hidden="true">to</span>
+          <div className="field">
+            <label htmlFor={ids.to}>To</label>
+            <input
+              id={ids.to}
+              type="date"
+              min={filters.from || FIRST_DAY}
+              max={LAST_DAY}
+              value={filters.to}
+              onChange={(e) => onChange({ ...filters, to: e.target.value })}
+            />
+          </div>
         </div>
       </div>
-      <div className="row" role="group" aria-label="Quick filters">
-        {QUICK_FILTERS.map((quick) => (
-          <button key={quick.id} type="button" aria-pressed={quickActive(quick, filters, today)} onClick={() => toggleQuick(quick.id)}>
-            {quick.label}
-          </button>
-        ))}
-        {isFiltered(filters) && <button type="button" onClick={clearAll}>Clear filters</button>}
-      </div>
-      <div className="row">
-        <div className="field">
-          <label htmlFor={ids.jump}>Go to date</label>
-          <input id={ids.jump} type="date" min={FIRST_DAY} max={LAST_DAY} value={jumpDate} onChange={(e) => setJumpDate(e.target.value)} />
+      <div className="row quick-row">
+        <div className="row" role="group" aria-label="Quick filters">
+          {QUICK_FILTERS.map((quick) => (
+            <button key={quick.id} type="button" className="filter-chip" aria-pressed={quickActive(quick, filters, today)} onClick={() => toggleQuick(quick.id)}>
+              <Icon name={QUICK_ICONS[quick.id] ?? "filter"} />
+              {quick.label}
+            </button>
+          ))}
+          {isFiltered(filters) && <button type="button" className="quiet" onClick={clearAll}>Clear filters</button>}
         </div>
-        <button type="button" onClick={() => onJump(jumpDate)} disabled={jumpDate === "" || jumping}>Go</button>
-        <button type="button" onClick={onExport} disabled={exporting}>Export CSV</button>
+        <div className="row filter-tools">
+          <div className="jump-field">
+            <label htmlFor={ids.jump}>Go to date</label>
+            <input id={ids.jump} type="date" min={FIRST_DAY} max={LAST_DAY} value={jumpDate} onChange={(e) => setJumpDate(e.target.value)} />
+          </div>
+          <button type="button" onClick={() => onJump(jumpDate)} disabled={jumpDate === "" || jumping}>Go</button>
+          <button type="button" onClick={onExport} disabled={exporting}><Icon name="download" />Export CSV</button>
+        </div>
       </div>
       {error && <p className="error" role="alert">{error}</p>}
       {notice && <p className="muted" role="status">{notice}</p>}

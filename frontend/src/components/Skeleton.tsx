@@ -105,27 +105,39 @@ export function TilesSkeleton({ count, fleet, notes, plain, className, label }: 
 // Line widths in `ch`, in a fixed order, so a table looks irregular and is the same every render (a percentage inside a table cell would be cyclic).
 const HEAD_WIDTHS = ["7ch", "10ch", "6ch", "9ch", "8ch"];
 const CELL_WIDTHS = ["11ch", "8ch", "14ch", "6ch", "10ch", "12ch"];
+const CELL_PAD = 14; // the table cell's side padding (--row-x)
+const NARROW = 80; // a fixed column narrower than this gets a line that fits its cell
 
 /**
  * A real table in the real `.table-wrap`, so the header and row heights come from the same CSS (`--row-y`). Its rows are not in the
  * accessibility tree; it never scrolls. `caption` adds the muted how-to-read row above the header (Billing's), `headless` leaves the header
- * out (Storage's rows per day has body rows only): a table is as tall as the real one only if it has the same rows.
+ * out (Storage's rows per day has body rows only): a table is as tall as the real one only if it has the same rows. `widths` is for a table
+ * whose real columns are fixed (the audit log's `table-layout: fixed`): one px width per column, null for the rest, drawn as a `<colgroup>`
+ * in a fixed layout, and a column narrower than 80px gets a line that fits inside its cell padding.
  */
-export function TableSkeleton({ columns, rows, label, caption, headless }: { columns: number; rows: number; label?: string; caption?: boolean; headless?: boolean }) {
+export function TableSkeleton({ columns, rows, label, caption, headless, widths }: {
+  columns: number; rows: number; label?: string; caption?: boolean; headless?: boolean; widths?: readonly (number | null)[];
+}) {
   const cols = Array.from({ length: columns }, (_, c) => c);
+  const narrow = (c: number) => {
+    const w = widths?.[c];
+    return w != null && w < NARROW ? w - 2 * CELL_PAD : null;
+  };
+  const line = (c: number, wide: string) => <Skeleton width={narrow(c) ?? wide} />;
   return (
     <Labelled label={label}>
       <div className="table-wrap sk-table" aria-hidden="true">
-        <table>
+        <table style={widths ? { tableLayout: "fixed" } : undefined}>
+          {widths ? <colgroup>{cols.map((c) => <col key={c} style={widths[c] != null ? { width: widths[c]! } : undefined} />)}</colgroup> : null}
           {caption ? <caption className="muted"><Skeleton width="44ch" /></caption> : null}
           {headless ? null : (
             <thead>
-              <tr>{cols.map((c) => <th key={c}><Skeleton width={HEAD_WIDTHS[c % HEAD_WIDTHS.length]} /></th>)}</tr>
+              <tr>{cols.map((c) => <th key={c}>{line(c, HEAD_WIDTHS[c % HEAD_WIDTHS.length])}</th>)}</tr>
             </thead>
           )}
           <tbody>
             {Array.from({ length: rows }, (_, r) => (
-              <tr key={r}>{cols.map((c) => <td key={c}><Skeleton width={CELL_WIDTHS[(r * 2 + c * 3) % CELL_WIDTHS.length]} /></td>)}</tr>
+              <tr key={r}>{cols.map((c) => <td key={c}>{line(c, CELL_WIDTHS[(r * 2 + c * 3) % CELL_WIDTHS.length])}</td>)}</tr>
             ))}
           </tbody>
         </table>

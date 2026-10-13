@@ -1,42 +1,95 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { auditPosition, useAudit, useAuditOptions, useSite } from "../api/queries";
 import type { AuditEntry } from "../api/types";
 import { AuditEntryDetail } from "../components/AuditEntryDetail";
 import { AuditFilterBar } from "../components/AuditFilterBar";
 import { AuditPager } from "../components/AuditPager";
+import { EmptyNote } from "../components/EmptyNote";
+import { Icon, type IconName } from "../components/Icon";
 import { PageHeader } from "../components/PageHeader";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { apiQuery, isFiltered, readUrl, writeUrl, type AuditFilters, type AuditUrlState } from "../lib/auditFilters";
+import { auditKind, type AuditKind } from "../lib/auditKind";
 import { describeAudit } from "../lib/auditText";
 import { downloadCsv } from "../lib/download";
+import { relativeTime } from "../lib/relativeTime";
 import { formatSiteDateTime, siteDay } from "../lib/siteTime";
 
 const messageOf = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback);
 
-/** The time of an entry, linked to its page; the link's name says which entry it opens. */
-function TimeLink({ id, ts, timezone }: { id: number; ts: string; timezone: string }) {
+// The icon of each kind of event (lib/auditKind.ts); it is decoration, the sentence says the same.
+const KIND_ICON: Record<AuditKind, IconName> = {
+  signin: "evSignIn", problem: "evProblem", create: "evCreate", change: "evChange", delete: "evDelete", settings: "evSettings", other: "evOther",
+};
+
+// Column widths in px, null for the rest: the friendly table gives "What happened" the room, the raw one the detail. They sum to less than the
+// narrowest table; the skeleton draws the same columns.
+const FRIENDLY_COLS = [200, 160, null, 44] as const;
+const RAW_COLS = [200, 160, 220, null] as const;
+
+/** The time of an entry, linked to its page (the link's name says which entry it opens), and under it how long ago, outside the link. */
+function TimeCell({ id, ts, timezone, now }: { id: number; ts: string; timezone: string; now: Date }) {
   const time = formatSiteDateTime(ts, timezone);
-  return <Link to={`/audit/${id}`} aria-label={`Entry #${id}, ${time}`}>{time}</Link>;
+  const ago = relativeTime(ts, now, timezone);
+  return (
+    <td className="cell-time">
+      <Link to={`/audit/${id}`} aria-label={`Entry #${id}, ${time}`}>{time}</Link>
+      {ago && <span className="ago">{ago}</span>}
+    </td>
+  );
 }
 
-/** One friendly row: the sentence and the link to the thing, with the full account one click away (drawn only when opened). */
-function FriendlyRow({ entry, timezone }: { entry: AuditEntry; timezone: string }) {
-  const [open, setOpen] = useState(false);
-  const { summary, link } = describeAudit(entry);
+/** Who did it: an initial disc (decoration) and the name, in the cell itself so a long name is cut with an ellipsis; no user is a dash. */
+function UserCell({ name }: { name: string | null }) {
+  const initial = name ? (Array.from(name.trim())[0] ?? "").toUpperCase() : "";
   return (
-    <tr>
-      <td className="cell-time"><TimeLink id={entry.id} ts={entry.ts} timezone={timezone} /></td>
-      <td className="cell-user" title={entry.username ?? undefined}>{entry.username ?? "—"}</td>
-      <td>
-        <div className="what">{summary}</div>
-        {link && <div className="sub"><Link to={link.to}>{link.label}</Link></div>}
-        <details className="audit-more" onToggle={(e) => setOpen(e.currentTarget.open)}>
-          <summary>Details</summary>
-          {open && <AuditEntryDetail entry={entry} view="friendly" />}
-        </details>
-      </td>
-    </tr>
+    <td className="cell-user" title={name ?? undefined}>
+      {name ? <><span className="user-disc" aria-hidden="true">{initial}</span>{name}</> : "—"}
+    </td>
+  );
+}
+
+/** One friendly row: the event's icon, the sentence and the link to the thing, with the full account one click away in a row under it (drawn only when opened). */
+function FriendlyRow({ entry, timezone, now }: { entry: AuditEntry; timezone: string; now: Date }) {
+  const [open, setOpen] = useState(false);
+  const detailId = useId();
+  const { summary, link } = describeAudit(entry);
+  const kind = auditKind(entry.action);
+  return (
+    <>
+      <tr>
+        <TimeCell id={entry.id} ts={entry.ts} timezone={timezone} now={now} />
+        <UserCell name={entry.username} />
+        <td className="cell-what">
+          <div className="what-line">
+            <span className="ev-tile" data-kind={kind} aria-hidden="true"><Icon name={KIND_ICON[kind]} /></span>
+            <div className="what-text">
+              <span className="what">{summary}</span>
+              {link && <Link className="what-link" to={link.to}>{link.label}</Link>}
+            </div>
+          </div>
+        </td>
+        <td className="cell-more">
+          <button
+            type="button"
+            className="icon-btn details-btn"
+            aria-label={`Details of entry #${entry.id}`}
+            title="Details"
+            aria-expanded={open}
+            aria-controls={open ? detailId : undefined}
+            onClick={() => setOpen(!open)}
+          >
+            <Icon name="chevron" />
+          </button>
+        </td>
+      </tr>
+      {open && (
+        <tr id={detailId} className="detail-row">
+          <td colSpan={4}><AuditEntryDetail entry={entry} view="friendly" /></td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -49,7 +102,8 @@ export function AuditPage() {
   const site = useSite();
   const timezone = site.data?.timezone ?? "UTC"; // falls back to UTC if the site cannot be read
   const ready = !site.isPending;
-  const today = siteDay(new Date(), timezone);
+  const now = new Date(); // once per render: every row's "how long ago" is counted from the same moment
+  const today = siteDay(now, timezone);
   const options = useAuditOptions();
   const { data, error, isLoading, isPlaceholderData } = useAudit(filters, size, offset);
 
@@ -114,12 +168,7 @@ export function AuditPage() {
   const fresh = ready && !isPlaceholderData ? data : undefined;
   const raw = view === "raw";
 
-  // The two "nothing to show" messages keep their exact words; the icon only fills the empty space around them.
-  const emptyIcon = (
-    <div className="empty-icon">
-      <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" /></svg>
-    </div>
-  );
+  const count = fresh ? `${fresh.total.toLocaleString("en-US")} ${fresh.total === 1 ? "entry" : "entries"}` : null;
 
   return (
     <div className="admin-page audit-page">
@@ -140,44 +189,48 @@ export function AuditPage() {
         <>
           {/* the Friendly/Raw switch needs rows to show; its place is kept (the same row and margin), or the table would sit 44px higher than it lands */}
           <div className="row seg" aria-hidden="true"><ActionsSpace /></div>
-          <TableSkeleton columns={raw ? 4 : 3} rows={8} label="Loading the audit log" />
+          <TableSkeleton columns={4} rows={8} widths={raw ? RAW_COLS : FRIENDLY_COLS} label="Loading the audit log" />
         </>
       )}
       {error && <p className="error" role="alert">{error.message}</p>}
+      {/* The two "nothing to show" messages keep their exact words; the icon only fills the empty space around them. */}
       {fresh && fresh.total === 0 && (
-        <div className="empty">
-          {emptyIcon}
-          <p>{isFiltered(filters) ? "No entries match these filters." : "No audit entries yet."}</p>
-        </div>
+        <EmptyNote icon={isFiltered(filters) ? "filter" : "audit"}>
+          {isFiltered(filters) ? "No entries match these filters." : "No audit entries yet."}
+        </EmptyNote>
       )}
       {fresh && fresh.total > 0 && rows.length === 0 && <p className="muted">This page is past the end of the log.</p>}
       {isPlaceholderData && rows.length === 0 && <p className="muted">Updating…</p>}
       {rows.length > 0 && (
         <>
-          <div className="row seg" role="group" aria-label="View">
-            <button type="button" aria-pressed={!raw} onClick={() => go({ ...state, view: "friendly" })}>Friendly</button>
-            <button type="button" aria-pressed={raw} onClick={() => go({ ...state, view: "raw" })}>Raw</button>
-            {isPlaceholderData && <span className="muted">Updating…</span>}
+          <div className="row seg">
+            <div className="seg-switch" role="group" aria-label="View">
+              <button type="button" aria-pressed={!raw} onClick={() => go({ ...state, view: "friendly" })}>Friendly</button>
+              <button type="button" aria-pressed={raw} onClick={() => go({ ...state, view: "raw" })}>Raw</button>
+              {isPlaceholderData && <span className="muted">Updating…</span>}
+            </div>
+            {count && <p className="result-count">{count}</p>}
           </div>
           <div className="table-wrap">
             <table className="audit-table" aria-busy={isPlaceholderData}>
+              <colgroup>{(raw ? RAW_COLS : FRIENDLY_COLS).map((w, i) => <col key={i} style={w ? { width: w } : undefined} />)}</colgroup>
               <thead>
                 <tr>
-                  <th>Time ({timezone})</th><th>User</th>
-                  {raw ? <><th>Action</th><th>Detail</th></> : <th>What happened</th>}
+                  <th title={`Time (${timezone})`}>Time ({timezone})</th><th>User</th>
+                  {raw ? <><th>Action</th><th>Detail</th></> : <><th>What happened</th><th><span className="sr-only">Details</span></th></>}
                 </tr>
               </thead>
               <tbody>
                 {rows.map((e) =>
                   raw ? (
                     <tr key={e.id}>
-                      <td className="cell-time"><TimeLink id={e.id} ts={e.ts} timezone={timezone} /></td>
-                      <td className="cell-user" title={e.username ?? undefined}>{e.username ?? "—"}</td>
+                      <TimeCell id={e.id} ts={e.ts} timezone={timezone} now={now} />
+                      <UserCell name={e.username} />
                       <td className="cell-action">{e.action}</td>
-                      <td><code>{JSON.stringify(e.detail)}</code></td>
+                      <td className="cell-detail"><code>{JSON.stringify(e.detail)}</code></td>
                     </tr>
                   ) : (
-                    <FriendlyRow key={e.id} entry={e} timezone={timezone} />
+                    <FriendlyRow key={e.id} entry={e} timezone={timezone} now={now} />
                   ),
                 )}
               </tbody>
