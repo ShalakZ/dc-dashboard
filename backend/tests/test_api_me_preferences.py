@@ -135,6 +135,16 @@ async def test_every_signed_in_role_can_set_its_own(client, db, role):
     assert await stored(db, role) == {"mode": "dark", "theme": "graphite"}
 
 
+async def test_saving_a_choice_locks_the_account_and_not_the_role_every_account_of_it_shares(client, db):
+    # The user query joins the role row; a bare FOR UPDATE would lock that row too, so one person saving a theme would make
+    # everybody with the same role (and an edit of the role) wait.
+    await login_as(client, db, "viewer")
+    async with db.acquire() as other, other.transaction():
+        await other.execute("SELECT 1 FROM roles WHERE id = 1 FOR UPDATE")  # someone else holds the viewer role row
+        response = await asyncio.wait_for(client.put(URL, json={"mode": "dark"}), 5)
+    assert response.status_code == 200, response.text
+
+
 async def test_a_deactivated_account_is_refused(client, db):
     await login_as(client, db, "viewer")
     await db.execute("UPDATE users SET active = false WHERE username = 'viewer'")
