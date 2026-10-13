@@ -94,6 +94,11 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     _all("users.view", "GET /api/users"),
     _all("users.edit", "POST /api/users", "PATCH /api/users/{user_id}", "DELETE /api/users/{user_id}",
          "POST /api/users/{user_id}/unblock"),
+    # Added after the freeze (the roles API): not in auth_matrix_pre_w9a.json, covered by the gate and isolation tests.
+    _all("roles.manage", "GET /api/permissions", "POST /api/roles", "PATCH /api/roles/{role_id}",
+         "DELETE /api/roles/{role_id}", "POST /api/roles/{role_id}/duplicate"),
+    # The Users page needs the role names for its select, so whoever may see or change users may list the roles.
+    _any(("roles.manage", "users.view", "users.edit"), "GET /api/roles"),
     # Every kind of job the API starts needs one of these, so whoever started one may follow it.
     _any(("sources.test", "diagnostics.run", "discovery.scan", "sources.edit"), "GET /api/jobs/{job_id}"),
     # The live values: the Assets Tree and the dashboards both show them.
