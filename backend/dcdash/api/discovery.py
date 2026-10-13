@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.asset_names import AssetName, require_free_name
 from dcdash.api.assets import get_asset
-from dcdash.api.deps import get_db, notify, require_role
+from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.api.sources import get_source
 from dcdash.core.audit import audit, hidden_values, safe_config, scrub_url_credentials
 from dcdash.core.discovery import MappingGuess, PointInfo, guess_mapping, suggest_groups
@@ -19,8 +19,6 @@ from dcdash.core.models import Asset, GraphLayout, Mapping, Point, Scan, ScanFin
 from dcdash.core.pg import CONFIG_CHANNEL
 
 router = APIRouter(prefix="/api/discovery", tags=["discovery"])
-Admin = Depends(require_role("admin"))
-Operator = Depends(require_role("operator"))
 MAX_UNIT_LENGTH = 20  # keep in step with MAX_UNIT_LENGTH in frontend/src/lib/drop.ts
 
 
@@ -119,7 +117,7 @@ def source_json(
     }
 
 
-@router.get("/graph", dependencies=[Operator])
+@router.get("/graph", dependencies=[Depends(require_permission("discovery.view"))])
 async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     sources = (await db.scalars(select(Source).order_by(Source.name, Source.id))).all()
     points = await db.execute(
@@ -161,7 +159,7 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     }
 
 
-@router.put("/layout", status_code=204, dependencies=[Admin])
+@router.put("/layout", status_code=204, dependencies=[Depends(require_permission("discovery.edit"))])
 async def save_layout(body: LayoutIn, db: AsyncSession = Depends(get_db)) -> None:
     if not all(math.isfinite(n.x) and math.isfinite(n.y) for n in body.nodes):
         # Checked here, not by the schema: a schema error would echo the NaN back and fail to serialize.
@@ -178,8 +176,10 @@ async def save_layout(body: LayoutIn, db: AsyncSession = Depends(get_db)) -> Non
         await db.commit()
 
 
-@router.post("/accept", status_code=201)
-async def accept(body: AcceptIn, user: User = Admin, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+@router.post("/accept", status_code=201, dependencies=[Depends(require_permission("discovery.accept"))])
+async def accept(
+    body: AcceptIn, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
+) -> dict[str, Any]:
     source = await get_source(db, body.source_id)
     point_ids = [p.point_id for p in body.points]
     if len(set(point_ids)) != len(point_ids):
