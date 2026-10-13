@@ -125,3 +125,11 @@ describe("the room a page leaves under its end for a settled toast (whole-wave r
     }
   });
 });
+
+describe("the Discovery graph page keeps its old 48px (re-review m-2: its canvas has no last row for a toast to cover)", () => {
+  it("main:has(.graph-page) sets padding-bottom: 48px, which beats the shared --toast-clear of main", () => {
+    const found = appRules.filter((r) => r.selector === "main:has(.graph-page)");
+    expect(found).toHaveLength(1);
+    expect(found[0].body).toMatch(/padding-bottom:\s*48px/);
+  });
+});
