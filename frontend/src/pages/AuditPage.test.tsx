@@ -1405,6 +1405,21 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       await waitFor(() => expect(previous()).toHaveFocus());
     });
 
+    it("the whole path at the end of the log: focus stays on Next during the read, the page lands, Next turns off for good, focus goes to the panel (never the body)", async () => {
+      const { reply } = log(101); // 200..100: the last page holds one entry
+      setup("/audit?offset=50", reply);
+      await openAt(101);
+      const { release } = holdOffset("offset=100");
+      await userEvent.click(next());
+      await waitFor(() => waits(next()));
+      expect(next()).toHaveFocus(); // not dropped to the body while the page is read
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #100");
+      await waitFor(() => expect(next()).toBeDisabled());
+      await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+      expect(document.body).not.toHaveFocus();
+    });
+
     it("goes to the panel after a page was fetched that ends the log", async () => {
       const { reply } = log(101); // 200..100: the last page holds one entry
       setup("/audit?offset=50", reply);
