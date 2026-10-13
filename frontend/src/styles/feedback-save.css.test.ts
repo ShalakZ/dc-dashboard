@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { THEMES } from "../lib/appearance";
 import { AA, contrast, customProperties, parseRules, stripComments } from "../test/cssTools";
 
@@ -90,11 +90,19 @@ describe("the SaveButton section", () => {
     expect(hidden).not.toMatch(/display:\s*none/);
   });
 
-  it("the button's display beats the base `button` rule of app.css (grid instead of flex)", () => {
-    expect(beats(specificity(".save-btn"), specificity("button"))).toBe(true);
-    // nothing in the page files sets `display` on a button inside the forms that use SaveButton
-    for (const rule of appRules.filter((r) => /(^|[\s>])button\b/.test(r.selector) && /(^|;|\s)display\s*:/.test(r.body))) {
-      expect(beats(specificity(".save-btn"), specificity(rule.selector)) || rule.selector === "button", rule.selector).toBe(true);
+  it("the button's display beats every other rule that sets `display` on a button (app.css and the page style files): grid, not flex", () => {
+    const pageRules = readdirSync("src/styles")
+      .filter((f) => f.endsWith(".css") && !f.startsWith("feedback-"))
+      .flatMap((f) => parseRules(stripComments(readFileSync(`src/styles/${f}`, "utf8"))));
+    const setsDisplay = (r: { selector: string; body: string }) => /(^|;|\s)display\s*:/.test(r.body);
+    // a rule for a <button> element: its last compound selector is `button` or starts with it (`button.danger`, `.row button:not(.x)`)
+    const forButtons = (r: { selector: string }) => r.selector.split(",").some((part) => /(^|[\s>+~])button(?![\w-])/.test(part.trim()));
+    const rivals = [...appRules, ...pageRules].filter((r) => forButtons(r) && setsDisplay(r));
+    expect(rivals.length, "app.css's base `button` rule is among them").toBeGreaterThan(0);
+    for (const rule of rivals) {
+      for (const part of rule.selector.split(",").map((p) => p.trim()).filter((p) => /(^|[\s>+~])button(?![\w-])/.test(p))) {
+        expect(beats(specificity(".save-btn"), specificity(part)), `".save-btn" against "${part}"`).toBe(true);
+      }
     }
   });
 
