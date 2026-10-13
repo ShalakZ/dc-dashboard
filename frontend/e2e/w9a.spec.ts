@@ -10,14 +10,14 @@ import { mainNav, navLink, userBlock } from "./shell";
 // sidebar and gets `No access` on a page it lacks; (2) the API refuses what each role lacks, whatever the screen shows (the UI is never
 // the only gate); (3) a custom role with one permission sees one page and lands on it; a role with no permission lands on a plain
 // "no pages yet" screen; a permission taken away is noticed by an open page; (4) a role that may change users still cannot make or
-// take over an Admin; (5) the only Admin cannot demote, deactivate or delete itself, a role in use cannot be deleted and the built-in
-// roles cannot be changed. There is no Roles page yet (W9b), so roles are made through the API here, as an administrator would today.
+// take over an Admin; (5) an Admin cannot demote, deactivate or delete itself (the self rules; the last-Admin count is covered by the backend tests),
+// a role in use cannot be deleted and the built-in roles cannot be changed. There is no Roles page yet (W9b), so roles are made through the API here, as an administrator would today.
 //
 // What a broken gate could do to the stack: the denial probes aim at id 999999 with an empty body, so a broken gate answers 404 or 422 and
 // changes nothing; the escalation probes aim at a throwaway Admin (`w9a-admin2`), and the one probe at the real `admin` sends the password
 // it already has; the built-in roles are only ever sent an empty PATCH (a rename would break every Viewer) and a DELETE that the foreign key
-// would refuse anyway. The one place that deliberately hits the real thing is (f): the only Admin is asked to demote, deactivate and delete
-// itself, and must answer 409.
+// would refuse anyway. The one place that deliberately hits the real thing is (f): the seeded Admin is asked to demote, deactivate and delete
+// itself, and must answer 409 (the self rules).
 //
 // Locators: sidebar links go through `mainNav` / `navLink` (e2e/shell.ts, matched by whole name). The two denied/empty screens are
 // matched by their level-1 heading with `exact: true`: "No access" and "Your role has no pages yet." do not contain each other, and
@@ -586,9 +586,9 @@ test.describe("W9a: roles and permissions", () => {
     }
   });
 
-  // (f) the last Admin, a role in use, the built-in roles ------------------------------------------------------------------------
+  // (f) an Admin acting on itself, a role in use, the built-in roles ------------------------------------------------------------------------
 
-  test("the only Admin cannot be demoted, deactivated or deleted, and the roles Admin made are managed with their safeguards", async ({ browser }) => {
+  test("an Admin cannot demote, deactivate or delete itself, and the roles Admin made are managed with their safeguards", async ({ browser }) => {
     test.setTimeout(180_000);
     await asAdmin(browser, async (api) => {
       const users = await json<ApiUser[]>(api, "/api/users");
