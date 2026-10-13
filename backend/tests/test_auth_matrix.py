@@ -94,7 +94,7 @@ def test_public_and_signed_in_routes_are_what_the_frozen_matrix_says():
 def test_every_route_added_after_the_freeze_is_in_the_permission_table():
     frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
     later = sorted(set(route_requests(create_app())) - set(frozen))
-    missing = [key for key in later if key not in ROUTE_PERMISSIONS and key not in PUBLIC and key not in SIGNED_IN]
+    missing = [key for key in later if key not in ROUTE_PERMISSIONS]  # PUBLIC and SIGNED_IN are subsets of the frozen keys
     assert missing == [], "a route the matrix does not know must declare its permission in ROUTE_PERMISSIONS"
 
 
