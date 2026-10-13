@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { auditPosition, useAudit, useAuditOptions, useSite } from "../api/queries";
 import type { AuditEntry } from "../api/types";
+import { useAuth } from "../auth/AuthProvider";
 import { AuditEntryDetail } from "../components/AuditEntryDetail";
 import { AuditFilterBar } from "../components/AuditFilterBar";
 import { AuditPager } from "../components/AuditPager";
@@ -95,6 +96,7 @@ function FriendlyRow({ entry, timezone, now }: { entry: AuditEntry; timezone: st
 }
 
 export function AuditPage() {
+  const { can } = useAuth();
   const [params, setParams] = useSearchParams();
   const state = useMemo(() => readUrl(params), [params]);
   const { filters, offset, size, view } = state;
@@ -181,7 +183,7 @@ export function AuditPage() {
         options={options.data}
         onJump={jump}
         jumping={jumping}
-        onExport={exportCsv}
+        onExport={can("audit.export") ? exportCsv : undefined}
         exporting={exporting}
         error={problem}
         notice={hint && hint.at === current && data && data.total > 0 ? hint.text : null}

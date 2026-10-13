@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 import { ApiError } from "../api/client";
 import type { TlsStatus } from "../api/types";
 import { useGeneralSettings, usePutGeneralSettings, usePutSignInPolicy, useSignInPolicy, useTlsStatus, useVersion } from "../api/queries";
+import { useAuth } from "../auth/AuthProvider";
 import { daysLeftText } from "../components/CertificateNotice";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
+import { READ_ONLY_TEXT, ReadOnlyNote } from "../components/ReadOnlyNote";
 import { FormSkeleton, PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion } from "../components/Skeleton";
 import { formatSiteDateTime } from "../lib/siteTime";
 
@@ -46,6 +48,7 @@ const WarnIcon = () => (
 
 /** Whether wrong passwords block anyone, how many and for how long. Its own query: a failure here leaves the timezone form working. */
 function SignInProtection() {
+  const canEdit = useAuth().can("settings.edit");
   const policy = useSignInPolicy();
   const put = usePutSignInPolicy();
   const [enabled, setEnabled] = useState(true);
@@ -80,6 +83,7 @@ function SignInProtection() {
           aria-labelledby="sign-in-protection"
           onSubmit={(e) => {
             e.preventDefault();
+            if (!canEdit) return;
             // Only the step from ON to OFF asks first; every other save is sent as it is, without `confirm`.
             if (policy.data.enabled !== false && !enabled) setAsking(true);
             else put.mutate({ ...values(), enabled });
@@ -90,6 +94,7 @@ function SignInProtection() {
               type="checkbox"
               role="switch"
               checked={enabled}
+              disabled={!canEdit}
               onChange={(e) => {
                 setEnabled(e.target.checked);
                 put.reset();
@@ -114,6 +119,7 @@ function SignInProtection() {
               required
               min={policy.data.limits.max_failures[0]}
               max={policy.data.limits.max_failures[1]}
+              disabled={!canEdit}
               value={failures}
               onChange={edit(setFailures)}
             />
@@ -126,6 +132,7 @@ function SignInProtection() {
               required
               min={policy.data.limits.block_minutes[0]}
               max={policy.data.limits.block_minutes[1]}
+              disabled={!canEdit}
               value={minutes}
               onChange={edit(setMinutes)}
             />
@@ -133,10 +140,12 @@ function SignInProtection() {
           {!enabled && <p className="muted">Used when protection is switched on.</p>}
           <p className="muted">{SIGN_IN_HELP}</p>
           <div className="form-foot">
-            <div className="row">
-              <button type="submit" className="primary" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
-              {put.isSuccess && <span className="muted"> saved</span>}
-            </div>
+            {canEdit ? (
+              <div className="row">
+                <button type="submit" className="primary" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
+                {put.isSuccess && <span className="muted"> saved</span>}
+              </div>
+            ) : <ReadOnlyNote />}
             {put.isError && !asking && <p className="error" role="alert">{detailText(put.error)}</p>}
           </div>
         </form>
@@ -171,6 +180,7 @@ export function versionText(build_id: string, build_time: string, timezone: stri
 const ZONES: string[] = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
 
 export function SettingsPage() {
+  const canEdit = useAuth().can("settings.edit");
   const settings = useGeneralSettings();
   const put = usePutGeneralSettings();
   const tls = useTlsStatus();
@@ -189,7 +199,9 @@ export function SettingsPage() {
             <div className="settings-form">
               <div className="sk-field"><Skeleton width="9ch" /><Skeleton variant="block" height={38} /></div>
               <ParagraphSkeleton text={TIMEZONE_HELP} className="muted" />
-              <div className="form-foot"><div className="row"><Skeleton variant="block" width={64} height={34} /></div></div>
+              <div className="form-foot">
+                {canEdit ? <div className="row"><Skeleton variant="block" width={64} height={34} /></div> : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
+              </div>
             </div>
           </PageCardSkeleton>
           <PageCardSkeleton>
@@ -198,7 +210,9 @@ export function SettingsPage() {
               <div className="sk-field"><Skeleton width="22ch" /><Skeleton variant="block" height={38} /></div>
               <div className="sk-field"><Skeleton width="18ch" /><Skeleton variant="block" height={38} /></div>
               <ParagraphSkeleton text={SIGN_IN_HELP} className="muted" />
-              <div className="form-foot"><div className="row"><Skeleton variant="block" width={64} height={34} /></div></div>
+              <div className="form-foot">
+                {canEdit ? <div className="row"><Skeleton variant="block" width={64} height={34} /></div> : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
+              </div>
             </div>
           </PageCardSkeleton>
         </SkeletonRegion>
@@ -217,7 +231,7 @@ export function SettingsPage() {
             className="settings-form"
             onSubmit={(e) => {
               e.preventDefault();
-              put.mutate({ timezone });
+              if (canEdit) put.mutate({ timezone });
             }}
           >
             <label>
@@ -225,6 +239,7 @@ export function SettingsPage() {
               <input
                 list="tz-options"
                 value={timezone}
+                disabled={!canEdit}
                 required
                 onChange={(e) => {
                   setTimezone(e.target.value);
@@ -237,10 +252,12 @@ export function SettingsPage() {
             </datalist>
             <p className="muted">{TIMEZONE_HELP}</p>
             <div className="form-foot">
-              <div className="row">
-                <button type="submit" className="primary" disabled={put.isPending}>Save</button>
-                {put.isSuccess && <span className="muted"> saved</span>}
-              </div>
+              {canEdit ? (
+                <div className="row">
+                  <button type="submit" className="primary" disabled={put.isPending}>Save</button>
+                  {put.isSuccess && <span className="muted"> saved</span>}
+                </div>
+              ) : <ReadOnlyNote />}
               {put.isError && <p className="error" role="alert">{detailText(put.error)}</p>}
             </div>
           </form>

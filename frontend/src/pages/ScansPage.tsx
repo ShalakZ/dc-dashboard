@@ -25,8 +25,9 @@ const ScansIcon = () => (
 
 export function ScansPage() {
   const { can } = useAuth();
-  const canEdit = can("discovery.edit"); // New scope, Edit, Delete and the suggestions; the Scan item starts from the preview, which needs it too
-  const canScan = can("discovery.scan");
+  const canEdit = can("discovery.edit"); // New scope, Edit, Delete and the suggestions
+  const canScan = can("discovery.scan"); // the Scan item: the preview it starts from opens to either permission
+  const hasActions = canEdit || canScan;
   const { data: scopes = [], error: scopesError, isLoading } = useScopes();
   const { data: scans = [], error: scansError, isLoading: scansLoading } = useScans();
   const site = useSite();
@@ -75,7 +76,7 @@ export function ScansPage() {
     return (
       <>
         <PageHeader title="Scans" actions={canEdit ? <ActionsSpace /> : undefined} />
-        <TableSkeleton columns={canEdit ? 4 : 3} rows={3} label="Loading scopes" />
+        <TableSkeleton columns={hasActions ? 4 : 3} rows={3} label="Loading scopes" />
       </>
     );
   }
@@ -122,18 +123,18 @@ export function ScansPage() {
       ) : (
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Targets</th><th>Ports</th>{canEdit && <th className="row-actions"></th>}</tr></thead>
+            <thead><tr><th>Name</th><th>Targets</th><th>Ports</th>{hasActions && <th className="row-actions"></th>}</tr></thead>
             <tbody>
               {scopes.map((s) => (
                 <tr key={s.id}>
                   <td><span className="cell-name" title={s.name}>{s.name}</span></td><td className="wrap-any">{s.targets.join(", ")}</td><td className="wrap-any">{s.ports.join(", ")}</td>
-                  {canEdit && (
+                  {hasActions && (
                     <td className="row-actions">
                       <RowActions label={`Actions for ${s.name}`} items={[
                         ...(canScan ? [{ label: "Scan", onSelect: () => requestPreview(s), disabled: busy }] : []),
-                        { label: "Edit", onSelect: () => edit(s) },
+                        ...(canEdit ? [{ label: "Edit", onSelect: () => edit(s) }] : []),
                       ]} />
-                      <TrashButton label={`Delete ${s.name}`} onClick={() => remove(s)} disabled={busy} />
+                      {canEdit && <TrashButton label={`Delete ${s.name}`} onClick={() => remove(s)} disabled={busy} />}
                     </td>
                   )}
                 </tr>

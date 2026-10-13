@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { Icon, type IconName } from "../components/Icon";
 import { InfoTip } from "../components/InfoTip";
 import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
+import { READ_ONLY_TEXT, ReadOnlyNote } from "../components/ReadOnlyNote";
 import { PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
 import { useRowsPerDay, useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
 import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
@@ -52,9 +54,11 @@ export function validate(s: StorageSettings): string | null {
 export const UTC_NOTE = "Days are UTC days, midnight to midnight UTC, not days in the site's time zone.";
 /** The retention card's first paragraph; the loading frame draws the same words as grey pills, so it breaks into the same lines. */
 export const DISK_NOTE = "Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.";
+/** The last sentence of the summary under the buttons; a role that cannot change the settings has no Resets and does not read it. */
+const RESETS_SENTENCE = " The two Resets only fill in the form; nothing changes until you press Save.";
 // What the summary paragraph under the buttons says, with typical numbers: while loading only the length of each word is used.
 const SUMMARY_SAMPLE = "This site's default: raw 30 days, compress after 7 days, 1-minute rollups 365 days, capacity 500 GB, warn at 85 %. "
-  + "Factory: raw 30 days, compress after 7 days, 1-minute rollups 365 days, capacity 500 GB, warn at 85 %. The two Resets only fill in the form; nothing changes until you press Save.";
+  + "Factory: raw 30 days, compress after 7 days, 1-minute rollups 365 days, capacity 500 GB, warn at 85 %." + RESETS_SENTENCE;
 
 const summary = (d: StorageSettings) =>
   `raw ${d.raw_retention_days} days, compress after ${d.compress_after_days} days, 1-minute rollups ${d.rollup_1m_retention_days} days, capacity ${d.disk_capacity_gb} GB, warn at ${d.warn_threshold_pct} %`;
@@ -178,6 +182,7 @@ function DayTable({ days, total }: { days: { day: string; rows: number }[]; tota
 }
 
 export function StoragePage() {
+  const canEdit = useAuth().can("storage.edit"); // Save, Set as default and the Resets; without it the form is read-only
   const stats = useStorage();
   const settings = useStorageSettings();
   const save = useSaveStorageSettings();
@@ -225,10 +230,12 @@ export function StoragePage() {
                   ))}
                 </div>
                 <div className="retention-foot">
-                  <div className="row">
-                    {[62, 120, 124, 176].map((width) => <Skeleton key={width} variant="block" width={width} height={34} />)}
-                  </div>
-                  <ParagraphSkeleton text={SUMMARY_SAMPLE} className="muted" />
+                  {canEdit ? (
+                    <div className="row">
+                      {[62, 120, 124, 176].map((width) => <Skeleton key={width} variant="block" width={width} height={34} />)}
+                    </div>
+                  ) : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
+                  <ParagraphSkeleton text={canEdit ? SUMMARY_SAMPLE : SUMMARY_SAMPLE.replace(RESETS_SENTENCE, "")} className="muted" />
                 </div>
               </div>
             </PageCardSkeleton>
@@ -249,7 +256,7 @@ export function StoragePage() {
     return problem === null;
   };
   const submit = (confirm: boolean) => {
-    if (!checked()) return;
+    if (!canEdit || !checked()) return;
     save.mutate({ values: form, confirm }, {
       onSuccess: () => setNote("Saved."),
       onError: (err) => {
@@ -307,7 +314,7 @@ export function StoragePage() {
                 <div className="has-tip" key={key}>
                   <label>
                     {label}
-                    <input type="number" step="any" value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} />
+                    <input type="number" step="any" value={form[key]} disabled={!canEdit} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} />
                   </label>
                   <InfoTip>{FIELD_HELP[key]}</InfoTip>
                 </div>
@@ -316,17 +323,19 @@ export function StoragePage() {
             <div className="retention-foot">
               {error && <p className="error" role="alert">{error}</p>}
               {note && !error && <p className="muted" role="status">{note}</p>}
-              <div className="row">
-                <button type="submit" className="primary" disabled={save.isPending}>Save</button>
-                <button type="button" onClick={rememberAsDefault} disabled={makeDefault.isPending}>Set as default</button>
-                <button type="button" className="quiet" onClick={() => fill(siteDefault ?? factory)}>Reset to default</button>
-                <button type="button" className="quiet" onClick={() => fill(factory)}>Reset to factory settings</button>
-              </div>
+              {canEdit ? (
+                <div className="row">
+                  <button type="submit" className="primary" disabled={save.isPending}>Save</button>
+                  <button type="button" onClick={rememberAsDefault} disabled={makeDefault.isPending}>Set as default</button>
+                  <button type="button" className="quiet" onClick={() => fill(siteDefault ?? factory)}>Reset to default</button>
+                  <button type="button" className="quiet" onClick={() => fill(factory)}>Reset to factory settings</button>
+                </div>
+              ) : <ReadOnlyNote />}
               <p className="muted">
                 {siteDefault
                   ? `This site's default: ${summary(siteDefault)}.`
-                  : "No site default has been set, so Reset to default loads the factory values."}{" "}
-                Factory: {summary(factory)}. The two Resets only fill in the form; nothing changes until you press Save.
+                  : canEdit ? "No site default has been set, so Reset to default loads the factory values." : "No site default has been set."}{" "}
+                Factory: {summary(factory)}.{canEdit && RESETS_SENTENCE}
               </p>
             </div>
           </form>

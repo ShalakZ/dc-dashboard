@@ -2,7 +2,10 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
+import { READ_ONLY_TEXT } from "../components/ReadOnlyNote";
+import type { PermissionId } from "../lib/permissions";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
 import { SettingsPage, versionText } from "./SettingsPage";
 
@@ -620,15 +623,17 @@ describe("SettingsPage cards and the About card (W7j)", () => {
 
 describe("SettingsPage while it loads (W7f)", () => {
   const general = { "GET /api/settings/general": { body: { timezone: "UTC" } } };
-  const mount = (held: string) => {
+  // The page is mounted once the account is known, as RequireAuth does: what a role may change decides the shape of the loading page.
+  const mount = async (held: string) => {
     mockFetch({ ...base, ...general });
     const hold = holdFetch((_method, path) => path === held);
-    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    renderWithProviders(<><SettingsPage /><SignedIn /></>, { route: "/settings", path: "/settings" });
+    await accountKnown();
     return hold;
   };
 
   it("shows the page's wrapper, the real header and the page grid of two card skeletons in one region while the settings are held, then the page", async () => {
-    const hold = mount("/api/settings/general");
+    const hold = await mount("/api/settings/general");
     const page = document.querySelector("section.admin-page.settings-page")!;
     expect(page).not.toBeNull();
     expect(within(page as HTMLElement).getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
@@ -649,7 +654,7 @@ describe("SettingsPage while it loads (W7f)", () => {
   });
 
   it("draws the two skeleton cards in the loaded cards' shape: head, fields, helper lines and a Save block in a foot, and no words", async () => {
-    const hold = mount("/api/settings/general");
+    const hold = await mount("/api/settings/general");
     const cards = Array.from(screen.getByText("Loading settings").parentElement!.querySelectorAll<HTMLElement>(":scope > .page-card"));
     expect(cards).toHaveLength(2);
     for (const card of cards) {
@@ -665,7 +670,7 @@ describe("SettingsPage while it loads (W7f)", () => {
   });
 
   it("shows the sign-in card's own wait inside its real card and heading, with two field rows and no card of its own, then the form", async () => {
-    const hold = mount("/api/settings/sign-in");
+    const hold = await mount("/api/settings/sign-in");
     await screen.findByLabelText("Timezone"); // the general settings are in; the policy is not
     const card = screen.getByRole("heading", { name: "Sign-in protection" }).closest(".page-card")!;
     const region = within(card as HTMLElement).getByText("Loading sign-in protection").parentElement!;
@@ -690,5 +695,56 @@ describe("SettingsPage while it loads (W7f)", () => {
     renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
     expect(await screen.findByRole("alert")).toHaveTextContent("policy is down");
     expect(document.querySelector(".sk-region")).toBeNull();
+  });
+});
+
+describe("SettingsPage controls follow the permissions of the role (a custom role)", () => {
+  /** A role called "custom" that holds `permissions`; the page is up and the account is known when this returns. */
+  const show = async (permissions: PermissionId[]) => {
+    const calls = mockFetch({
+      ...base,
+      "GET /api/me": { body: userFor("custom", { permissions }) },
+      "GET /api/settings/general": { body: { timezone: "UTC" } },
+      "PUT /api/settings/general": { body: { timezone: "Asia/Qatar" } },
+      "PUT /api/settings/sign-in": { body: policy() },
+    });
+    renderWithProviders(<><SettingsPage /><SignedIn /></>, { route: "/settings", path: "/settings" });
+    await screen.findByLabelText("Timezone");
+    await screen.findByRole("form", { name: "Sign-in protection" });
+    await accountKnown();
+    return calls;
+  };
+
+  it("settings.view alone: every field is disabled, there is no Save, each form says so once, and nothing is sent", async () => {
+    const calls = await show(["settings.view"]);
+    expect(screen.getByLabelText("Timezone")).toBeDisabled();
+    expect(screen.getByRole("switch")).toBeDisabled();
+    expect(screen.getByLabelText("Failed sign-ins before a block")).toBeDisabled();
+    expect(screen.getByLabelText("Block time in minutes")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /save/i })).not.toBeInTheDocument();
+    expect(screen.getAllByText(READ_ONLY_TEXT)).toHaveLength(2);
+    expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
+  });
+
+  it("settings.edit: the fields are enabled, both Save buttons are there, no read-only line, and a save is sent", async () => {
+    const calls = await show(["settings.view", "settings.edit"]);
+    expect(screen.getByLabelText("Timezone")).toBeEnabled();
+    expect(screen.getByRole("switch")).toBeEnabled();
+    expect(screen.queryByText(READ_ONLY_TEXT)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save sign-in protection" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.path === "/api/settings/sign-in")).toBe(true));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.path === "/api/settings/general")).toBe(true));
+  });
+
+  it("the Administrator role is unchanged: enabled fields, both Saves, no read-only line", async () => {
+    mockFetch({ ...base, "GET /api/settings/general": { body: { timezone: "UTC" } } });
+    renderWithProviders(<><SettingsPage /><SignedIn /></>, { route: "/settings", path: "/settings" });
+    await screen.findByRole("form", { name: "Sign-in protection" });
+    await accountKnown();
+    expect(screen.getByLabelText("Timezone")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save sign-in protection" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.queryByText(READ_ONLY_TEXT)).not.toBeInTheDocument();
   });
 });

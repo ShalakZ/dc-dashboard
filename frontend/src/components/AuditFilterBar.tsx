@@ -21,7 +21,8 @@ interface Props {
   options: AuditOptions | undefined;
   onJump: (date: string) => void;
   jumping: boolean;
-  onExport: () => void;
+  /** Left out when the role may not export (audit.export): the button is not drawn. */
+  onExport?: () => void;
   exporting: boolean;
   error: string | null;
   notice: string | null;
@@ -172,7 +173,7 @@ export function AuditFilterBar({ filters, onChange, today, options, onJump, jump
             <input id={ids.jump} type="date" min={FIRST_DAY} max={LAST_DAY} value={jumpDate} onChange={(e) => setJumpDate(e.target.value)} />
           </div>
           <button type="button" onClick={() => onJump(jumpDate)} disabled={jumpDate === "" || jumping}>Go</button>
-          <button type="button" onClick={onExport} disabled={exporting}><Icon name="download" />Export CSV</button>
+          {onExport && <button type="button" onClick={onExport} disabled={exporting}><Icon name="download" />Export CSV</button>}
         </div>
       </div>
       {error && <p className="error" role="alert">{error}</p>}

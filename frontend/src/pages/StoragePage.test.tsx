@@ -2,10 +2,13 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Icon, type IconName } from "../components/Icon";
+import { READ_ONLY_TEXT } from "../components/ReadOnlyNote";
+import type { PermissionId } from "../lib/permissions";
 import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
 import { checkRange, DISK_NOTE, FIELDS, sizeText, StoragePage, UTC_NOTE, validate } from "./StoragePage";
 
@@ -639,15 +642,17 @@ describe("StoragePage cards and data bars (W7j)", () => {
 
 describe("StoragePage while it loads (W7f)", () => {
   const LABEL = "Loading storage";
-  const mount = (held: string) => {
+  // The page is mounted once the account is known, as RequireAuth does: what a role may change decides the shape of the loading page.
+  const mount = async (held: string) => {
     mockFetch({ ...base, "GET /api/storage": { body: stats }, "GET /api/settings/storage": { body: settingsOut } });
     const hold = holdFetch((_method, path) => path === held);
-    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    renderWithProviders(<><StoragePage /><SignedIn /></>, { route: "/storage", path: "/storage" });
+    await accountKnown();
     return hold;
   };
 
   it.each(["/api/storage", "/api/settings/storage"])("shows the real header, five tiles and a form skeleton in one region while %s is held, then the page and no region", async (held) => {
-    const hold = mount(held);
+    const hold = await mount(held);
     expect(screen.getByRole("heading", { level: 1, name: "Storage" })).toBeInTheDocument();
     const region = screen.getByText(LABEL).parentElement!;
     expect(region).toHaveAttribute("role", "status");
@@ -666,7 +671,7 @@ describe("StoragePage while it loads (W7f)", () => {
   });
 
   it("lays the page out as it will be: tiles with an icon circle each, then the two cards (Rows per day: range fields, the count, 7 day rows with no header, the UTC note; Retention: the disk note, the field grid and the buttons), all as placeholders", async () => {
-    const hold = mount("/api/storage");
+    const hold = await mount("/api/storage");
     const region = screen.getByText(LABEL).parentElement!;
     expect(region.textContent, "a region holds no words but its label").toBe(LABEL);
     const order = [...region.children].filter((child) => !child.classList.contains("sr-only")).map((child) => child.tagName + "." + child.className.split(" ")[0]);
@@ -711,5 +716,82 @@ describe("StoragePage while it loads (W7f)", () => {
     renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
     expect(await screen.findByRole("alert")).toHaveTextContent("storage is down");
     expect(document.querySelector(".sk-region")).toBeNull();
+  });
+});
+
+describe("StoragePage controls follow the permissions of the role (a custom role)", () => {
+  /** A role called "custom" that holds `permissions`; the page is up and the account is known when this returns. */
+  const show = async (permissions: PermissionId[], siteDefault?: typeof settings) => {
+    const calls = mockFetch({
+      ...base,
+      "GET /api/me": { body: userFor("custom", { permissions }) },
+      "GET /api/storage": { body: stats },
+      "GET /api/settings/storage": { body: { ...settingsOut, site_default: siteDefault } },
+      "PUT /api/settings/storage": (req) => ({ body: { ...settings, ...(req.body as object) } }),
+      "PUT /api/settings/storage/default": (req) => ({ body: { ...settings, ...(req.body as object) } }),
+    });
+    renderWithProviders(<><StoragePage /><SignedIn /></>, { route: "/storage", path: "/storage" });
+    await screen.findByLabelText(/raw retention/i);
+    await accountKnown();
+    return calls;
+  };
+
+  it("storage.view alone: the five fields are disabled, no Save, Set as default or Reset, one read-only line, and nothing is sent", async () => {
+    const calls = await show(["storage.view"]);
+    for (const [, label] of FIELDS) expect(screen.getByLabelText(label)).toBeDisabled();
+    for (const name of ["Save", "Set as default", "Reset to default", "Reset to factory settings"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+    expect(screen.getAllByText(READ_ONLY_TEXT)).toHaveLength(1);
+    expect(screen.queryByText(/The two Resets/)).not.toBeInTheDocument();
+    expect(screen.getByText(/No site default has been set\./)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Retention and capacity" })).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
+  });
+
+  it("storage.view alone still reads out the site default and the factory values", async () => {
+    await show(["storage.view"], { ...settings, raw_retention_days: 60 });
+    expect(screen.getByText(/This site's default: raw 60 days/)).toBeInTheDocument();
+    expect(screen.getByText(/Factory: raw 30 days/)).toBeInTheDocument();
+  });
+
+  it("storage.edit: the fields are enabled with Save, Set as default and both Resets, and a save and a default are sent", async () => {
+    const calls = await show(["storage.view", "storage.edit"]);
+    for (const [, label] of FIELDS) expect(screen.getByLabelText(label)).toBeEnabled();
+    for (const name of ["Save", "Set as default", "Reset to default", "Reset to factory settings"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByText(READ_ONLY_TEXT)).not.toBeInTheDocument();
+    expect(screen.getByText(/The two Resets only fill in the form/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.path === "/api/settings/storage")).toBe(true));
+    await userEvent.click(screen.getByRole("button", { name: "Set as default" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.path === "/api/settings/storage/default")).toBe(true));
+  });
+
+  it("the Administrator role is unchanged: enabled fields, all four buttons, no read-only line", async () => {
+    mockFetch({ ...base, "GET /api/storage": { body: stats }, "GET /api/settings/storage": { body: settingsOut } });
+    renderWithProviders(<><StoragePage /><SignedIn /></>, { route: "/storage", path: "/storage" });
+    await screen.findByLabelText(/raw retention/i);
+    await accountKnown();
+    expect(screen.getByLabelText(/raw retention/i)).toBeEnabled();
+    for (const name of ["Save", "Set as default", "Reset to default", "Reset to factory settings"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByText(READ_ONLY_TEXT)).not.toBeInTheDocument();
+  });
+
+  it("while it loads, a role without storage.edit has the read-only line's words where the buttons will not be, and no button blocks", async () => {
+    mockFetch({ ...base, "GET /api/me": { body: userFor("custom", { permissions: ["storage.view"] }) }, "GET /api/storage": { body: stats }, "GET /api/settings/storage": { body: settingsOut } });
+    const hold = holdFetch((_method, path) => path === "/api/storage");
+    renderWithProviders(<><StoragePage /><SignedIn /></>, { route: "/storage", path: "/storage" });
+    await accountKnown();
+    const retention = screen.getByText("Loading storage").parentElement!.querySelector(".retention-card")!;
+    expect(retention.querySelectorAll(".retention-foot .row > .sk-block")).toHaveLength(0);
+    const paragraphs = retention.querySelectorAll("p.sk-words.muted");
+    expect(paragraphs).toHaveLength(3);
+    expect(paragraphs[1].querySelectorAll(".sk-line")).toHaveLength(READ_ONLY_TEXT.split(/\s+/).length);
+    hold.release();
+    expect(await screen.findByText(READ_ONLY_TEXT)).toBeInTheDocument();
   });
 });

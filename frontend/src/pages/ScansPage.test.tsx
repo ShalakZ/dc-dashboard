@@ -469,10 +469,17 @@ describe("ScansPage controls follow the permissions of the role (a custom role)"
     expect(calls.some((c) => c.path === "/api/scopes/suggestions")).toBe(true);
   });
 
-  it("discovery.scan alone: no menu at all (a scan starts from the preview, which is discovery.edit)", async () => {
-    await show(["discovery.scan"]);
-    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+  it("discovery.scan alone: only Scan in the menu, no New scope, no Edit, no trash, and a scan runs from the confirmation", async () => {
+    const calls = await show(["discovery.scan"], {
+      ...preview, "POST /api/scopes/3/scan": { status: 202, body: { scan_id: 7, job_id: 1 } }, "GET /api/scans/7": { body: done },
+    });
     expect(screen.queryByRole("button", { name: "New scope" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete / })).not.toBeInTheDocument();
+    expect(await menuTexts()).toEqual(["Scan"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Scan" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start scan" }));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({ confirm_host_count: 2, digest: "d1g3st" });
+    expect(calls.some((c) => c.path === "/api/scopes/suggestions")).toBe(false);
   });
 
   it("discovery.edit and discovery.scan: Scan and Edit, and a scan runs from the confirmation", async () => {
