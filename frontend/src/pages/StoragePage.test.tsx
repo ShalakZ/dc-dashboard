@@ -1,6 +1,7 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { Icon, type IconName } from "../components/Icon";
 import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
@@ -352,6 +353,23 @@ describe("StoragePage summary tiles and explanations", () => {
     }
   });
 
+  it("each caption is an icon and the title in one label group, then the tip at the right; the icon is decoration", async () => {
+    mockFetch(routes());
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByText("Database size");
+    const ICON: Record<keyof typeof CAPTIONS, IconName> = { database: "storage", readings: "readings", rollups: "layers", growth: "trend", projected: "hourglass" };
+    const glyph = (name: IconName) => render(<Icon name={name} />).container.querySelector("svg")!.innerHTML;
+    for (const [key, caption] of Object.entries(CAPTIONS) as [keyof typeof CAPTIONS, string][]) {
+      const head = tileOf(caption).firstElementChild!;
+      expect([...head.children].map((child) => child.className), caption).toEqual(["tile-label", "tip"]);
+      const icon = head.querySelector(".tile-label > svg.i")!;
+      expect(icon, caption).toHaveAttribute("aria-hidden", "true");
+      expect(icon.innerHTML, caption).toBe(glyph(ICON[key]));
+      expect(head.querySelector(".tile-label"), caption).toHaveTextContent(caption);
+    }
+    expect(screen.getAllByRole("button", { name: "What does this mean?" }).length).toBeGreaterThanOrEqual(5);
+  });
+
   it("each retention and capacity field has a tip beside its label, never inside it, with the sentence from storageHelp", async () => {
     mockFetch(routes());
     renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
@@ -505,6 +523,119 @@ describe("StoragePage rows per day by date", () => {
   });
 });
 
+describe("StoragePage cards and data bars (W7j)", () => {
+  const glyph = (name: IconName) => render(<Icon name={name} />).container.querySelector("svg")!.innerHTML;
+  const withRows = (counts: number[]) => ({ ...stats, rows_per_day: counts.map((rows, i) => ({ day: `2026-10-0${i + 1}`, rows })) });
+  const dayRows = () => [...document.querySelectorAll<HTMLElement>(".rows-day tbody tr")];
+  const fillOf = (row: HTMLElement) => row.querySelector<HTMLElement>(".databar-fill");
+  const open = async (body: object = stats) => {
+    mockFetch(routes({ "GET /api/storage": { body } }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByLabelText(/raw retention/i);
+  };
+
+  it("puts Rows per day and Retention and capacity side by side in one page grid under the tiles, each card with its icon", async () => {
+    await open();
+    const grid = document.querySelector(".storage-page > .page-grid")!;
+    expect(document.querySelector(".storage-tiles")!.nextElementSibling).toBe(grid);
+    expect([...grid.children].map((card) => card.tagName + "." + [...card.classList].join("."))).toEqual(["SECTION.page-card.rows-day", "SECTION.page-card.retention-card"]);
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["Rows per day", "Retention and capacity"]);
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    const [days, retention] = [...grid.children];
+    expect(days.querySelector(":scope > .page-card-head > svg.i")).toHaveAttribute("aria-hidden", "true");
+    expect(days.querySelector(":scope > .page-card-head > svg.i")!.innerHTML).toBe(glyph("calendar"));
+    expect(retention.querySelector(":scope > .page-card-head > svg.i")!.innerHTML).toBe(glyph("database"));
+    expect(days.querySelector("h2.section-title")).toBeNull(); // the card's own head replaces the loose heading
+  });
+
+  it("keeps the range fields, Last 7 days, the UTC note and the count in the Rows per day card", async () => {
+    await open();
+    const card = screen.getByRole("heading", { name: "Rows per day" }).closest(".page-card") as HTMLElement;
+    expect(within(card).getByLabelText("Rows from day")).toBeInTheDocument();
+    expect(within(card).getByLabelText("Rows to day")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Last 7 days" })).toBeInTheDocument();
+    expect(within(card).getByText(/Days are UTC days/)).toBeInTheDocument();
+    expect(within(card).getByText("28,000 rows in total")).toBeInTheDocument();
+    expect(within(card).getAllByRole("row")).toHaveLength(7);
+  });
+
+  it("puts the count above the day table and the UTC note under it, in the skeleton's order (the note's line count depends on the card's width, so it must not sit above the table)", async () => {
+    await open();
+    const card = screen.getByRole("heading", { name: "Rows per day" }).closest(".page-card") as HTMLElement;
+    const order = [...card.children].map((child) => (child.matches("p") ? "p:" + child.textContent!.slice(0, 8) : child.className.split(" ")[0]));
+    expect(order).toEqual(["page-card-head", "rows-range", "p:28,000 r", "table-wrap", "p:Days are"]);
+    expect(card.querySelector(".table-wrap")).toHaveClass("day-table"); // the class the 24rem height limit hangs on; the skeleton's table has none
+  });
+
+  it("keeps Save, Set as default and both Resets inside the retention form, with the free-disk sentence in the card above them (R3)", async () => {
+    await open();
+    const card = screen.getByRole("heading", { name: "Retention and capacity" }).closest(".page-card") as HTMLElement;
+    const form = card.querySelector(":scope > form.retention-form")!;
+    for (const name of ["Save", "Set as default", "Reset to default", "Reset to factory settings"]) {
+      expect(screen.getByRole("button", { name }).closest("form"), name).toBe(form);
+    }
+    expect(form.querySelectorAll(".page-card-foot")).toHaveLength(0);
+    expect(card.querySelector(":scope > .page-card-foot")).toBeNull(); // Save is not in a footer outside its form
+    const sentence = within(card as HTMLElement).getByText("Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.");
+    expect(sentence.compareDocumentPosition(screen.getByRole("button", { name: "Save" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByText(/Free disk space is not visible/)).toHaveLength(1);
+    expect(FIELDS).toHaveLength(5);
+    expect(form.querySelectorAll(".retention-fields > .has-tip")).toHaveLength(5);
+  });
+
+  it("Save in the card still sends the five settings through the form", async () => {
+    const calls = mockFetch(routes({ "PUT /api/settings/storage": (req: { body: unknown }) => ({ body: { ...settings, ...(req.body as object) } }) }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1));
+    expect(calls.find((c) => c.method === "PUT")!.body).toEqual(settings);
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+  });
+
+  it("draws a bar in every row's number cell: the largest day full, the others a share of it, a day with no rows empty", async () => {
+    await open(withRows([0, 500, 1000, 250]));
+    const rows = dayRows();
+    expect(rows).toHaveLength(4);
+    expect(rows.map((row) => fillOf(row)?.style.width)).toEqual(["0%", "50%", "100%", "25%"]);
+    for (const row of rows) {
+      expect(row.querySelectorAll(":scope > td")).toHaveLength(2); // the skeleton's two columns stay right
+      const track = row.querySelector(":scope > td:last-child > .databar-cell > .databar")!;
+      expect(track).toHaveAttribute("aria-hidden", "true");
+      expect(track.querySelector(":scope > .databar-fill")).not.toBeNull();
+    }
+    expect(rows.map((row) => row.querySelector(".databar-num")!.textContent)).toEqual(["0", "500", "1,000", "250"]);
+    expect(screen.getByText("1,750 rows in total")).toBeInTheDocument();
+  });
+
+  it("gives a day with only a few rows a visible sliver and rounds the others to whole percents", async () => {
+    await open(withRows([1, 1_000_000, 333_333]));
+    expect(dayRows().map((row) => fillOf(row)?.style.width)).toEqual(["1%", "100%", "33%"]);
+  });
+
+  it("draws no fill at all when every day has zero rows, and no division by zero", async () => {
+    await open(withRows([0, 0, 0, 0, 0, 0, 0]));
+    const rows = dayRows();
+    expect(rows).toHaveLength(7);
+    expect(document.querySelectorAll(".databar-fill")).toHaveLength(0);
+    expect(document.querySelectorAll(".rows-day .databar")).toHaveLength(7);
+    expect(rows.every((row) => row.querySelector(".databar-num")!.textContent === "0")).toBe(true);
+    expect(screen.getByText("0 rows in total")).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toMatch(/NaN|Infinity/);
+  });
+
+  it("scales the bars of a chosen range to that range's own largest day", async () => {
+    const range = {
+      start: "2026-09-28", end: "2026-09-29", first_day: "2026-09-01", last_day: "2026-10-07", total_rows: 6,
+      days: [{ day: "2026-09-28", rows: 2 }, { day: "2026-09-29", rows: 4 }],
+    };
+    mockFetch(routes({ "GET /api/storage/rows-per-day": { body: range } }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    fireEvent.change(await screen.findByLabelText("Rows from day"), { target: { value: "2026-09-28" } });
+    expect(await screen.findByText("6 rows in total")).toBeInTheDocument();
+    expect(dayRows().map((row) => fillOf(row)?.style.width)).toEqual(["50%", "100%"]);
+  });
+});
+
 describe("StoragePage while it loads (W7f)", () => {
   const LABEL = "Loading storage";
   const mount = (held: string) => {
@@ -521,7 +652,8 @@ describe("StoragePage while it loads (W7f)", () => {
     expect(region).toHaveAttribute("role", "status");
     expect(region.querySelectorAll(".tiles.storage-tiles > .tile")).toHaveLength(5);
     expect(region.querySelectorAll(".storage-tiles .tile > small")).toHaveLength(3); // three of the five real tiles carry a note
-    expect(region.querySelector(".form-card.wide")).not.toBeNull();
+    expect(region.querySelectorAll(".page-grid > .page-card")).toHaveLength(2); // both cards, drawn as the loaded page draws them
+    expect(region.querySelector(".form-card")).toBeNull();
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument(); // the tiles' tips and the form's buttons wait for the data
     expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
@@ -532,25 +664,33 @@ describe("StoragePage while it loads (W7f)", () => {
     expect(await screen.findByLabelText(/raw retention/i)).toBeInTheDocument();
   });
 
-  it("lays the middle of the page out as it will be: the disk note, the Rows per day section (heading, range fields, two note lines, 7 day rows with no header), then the form skeleton, all as placeholders", async () => {
+  it("lays the page out as it will be: tiles with an icon circle each, then the two cards (Rows per day: range fields, the count, 7 day rows with no header, the UTC note; Retention: the disk note, the field grid and the buttons), all as placeholders", async () => {
     const hold = mount("/api/storage");
     const region = screen.getByText(LABEL).parentElement!;
     expect(region.textContent, "a region holds no words but its label").toBe(LABEL);
     const order = [...region.children].filter((child) => !child.classList.contains("sr-only")).map((child) => child.tagName + "." + child.className.split(" ")[0]);
-    expect(order).toEqual(["DIV.tiles", "P.muted", "DIV.rows-day", "DIV.form-card"]);
-    expect(region.querySelector(":scope > p.muted .sk-line")).not.toBeNull();
-    const day = region.querySelector(".rows-day")!;
+    expect(order).toEqual(["DIV.tiles", "DIV.page-grid"]); // the disk note moved into the retention card, so no line under the tiles
+    expect(region.querySelectorAll(":scope > p")).toHaveLength(0);
+    const day = region.querySelector(".page-grid > .page-card.rows-day")!;
     expect(day).toHaveAttribute("aria-hidden", "true");
-    expect(day.querySelector("h2.section-title .sk-line")).not.toBeNull();
+    expect(day.querySelector(":scope > .page-card-head > .sk-block")).not.toBeNull(); // the icon tile
+    expect(day.querySelector(":scope > .page-card-head h2 .sk-line")).not.toBeNull();
     expect(day.querySelectorAll(".rows-range .sk-field")).toHaveLength(2);
     expect(day.querySelectorAll(".rows-range > .sk-block")).toHaveLength(1); // the Last 7 days button
-    expect(day.querySelectorAll(":scope > p.muted .sk-line")).toHaveLength(2); // the UTC note and the count
+    expect(day.querySelectorAll(":scope > p.muted .sk-line")).toHaveLength(2); // the count above the table and the UTC note under it
+    expect([...day.children].map((child) => child.tagName + "." + child.className.split(" ")[0])).toEqual(["DIV.page-card-head", "DIV.rows-range", "P.muted", "DIV.table-wrap", "P.muted"]);
     const table = day.querySelector(":scope > .table-wrap.sk-table")!;
     expect(table.querySelector("thead")).toBeNull();
     expect(table.querySelectorAll("tbody tr")).toHaveLength(7);
     expect(table.querySelectorAll("tbody tr:first-child td")).toHaveLength(2);
+    expect(region.querySelectorAll(".storage-tiles .tile > .tile-label .sk-circle")).toHaveLength(5); // the non-plain tile: a circle for the icon and a line
+    const retention = region.querySelector(".page-grid > .page-card.retention-card")!;
+    expect(retention).toHaveAttribute("aria-hidden", "true");
+    expect(retention.querySelector(":scope > .page-card-head h2 .sk-line")).not.toBeNull();
+    expect(retention.querySelectorAll(".retention-fields > .sk-field")).toHaveLength(5);
     // none of it is in the accessibility tree and nothing can be focused
     expect(screen.queryByRole("heading", { name: "Rows per day" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Retention and capacity" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Rows from day")).not.toBeInTheDocument();
     expect(region.querySelector("input, button, a, select")).toBeNull();
     hold.release();

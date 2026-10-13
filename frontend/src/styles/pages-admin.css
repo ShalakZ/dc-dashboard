@@ -40,21 +40,30 @@
   .settings-page label.check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-base); } /* the sign-in switch: box and text on one line */
   .settings-page .form-card .banner { margin: 0; }
 
-  /* Storage: the summary tiles, the daily row counts with their date range, then the retention form */
-  .storage-tiles { margin-bottom: 14px; }
+  /* Storage: the summary tiles, then Rows per day and Retention and capacity as two cards of one height (.page-grid and .page-card are in
+     app.css; the data bar is .databar-cell there). The caption of a real tile is [icon and title, tip] with the tip pushed to the right; the
+     skeleton's caption (.tile-label itself) keeps its circle and line together at the left. */
+  /* A tile needs about 200px: its longest caption (icon, "Growth per day", tip) is 147px, "4.2 MiB / day" 160px, "1 min 0.6 MiB, 1 h 0.0 MiB" 158px,
+     and a tile that has to wrap them is taller than the skeleton's. Narrower than five of them, the row is four and one rather than wrapped text. */
+  .storage-tiles { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 20px; }
   .storage-tiles .tile .big:not(.none) { font-size: var(--fs-title); } /* five tiles share the row: 0.3 GiB / day must fit on one line */
-  .storage-tiles .tile > .muted:first-child { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .storage-tiles .tile > .muted:first-child:not(.tile-label) { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
   .storage-tiles .tile > .muted:first-child .tip { margin: -4px -6px -4px 0; } /* the 24 px tip button does not make the caption line taller */
-  .storage-page .rows-range { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 14px; margin: 0 0 10px; }
+  .storage-page .page-card p { margin: 0; } /* the card's own gap spaces its lines; a browser margin would add to it */
+  .storage-page .rows-range { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 14px; }
   .storage-page .rows-range input[type="date"] { min-height: 34px; }
-  .storage-page .rows-day p { margin: 0 0 10px; }
-  .storage-page .rows-day .table-wrap { max-width: 360px; margin-bottom: 22px; }
-  .storage-page .form-card.wide { max-width: 820px; }
-  .retention-form { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); align-items: end; } /* inputs line up even when a label wraps */
-  .retention-form > :is(p, .row) { grid-column: 1 / -1; }
+  /* The table fills its card: the day takes what it needs, the bar the rest. A long range scrolls inside the card (366 days must not stretch
+     both cards); the first row does not move. */
+  .storage-page .rows-day td:first-child { width: 1%; white-space: nowrap; }
+  .storage-page .rows-day .day-table { max-height: 24rem; overflow-y: auto; } /* the real table only: the skeleton has 7 rows */
+  /* The form is the card's column (it takes the card's height) and its foot, the messages, the buttons and the summary, sits at the bottom, so
+     the two cards of a row end level. The five fields are two columns even in a card of 430 px; inputs line up when a label wraps. */
+  .storage-page .retention-form { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+  .storage-page .retention-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; align-items: end; }
+  .storage-page .retention-foot { display: grid; gap: 14px; margin-top: auto; }
 
-  /* Audit log (W7j). The page description may run to about 110 characters; Storage, Tariffs, Settings and Diagnostics add themselves to this selector. */
-  .audit-page .page-head .sub { max-width: 110ch; }
+  /* Audit log (W7j). The page description may run to about 110 characters; Tariffs, Settings and Diagnostics add themselves to this selector. */
+  .audit-page .page-head .sub, .storage-page .page-head .sub { max-width: 110ch; }
 
   /* The toolbar: Search (it grows), User, Action and From to To as one joined control; under it the quick filters at the left and "Go to date"
      and Export CSV at the right. The selects have a fixed width, so the rows wrap at the same place before and after the options arrive. */
