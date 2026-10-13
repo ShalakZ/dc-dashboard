@@ -159,40 +159,59 @@ def test_the_result_is_a_frozenset_and_does_not_alias_the_stored_list():
 
 # ---- clean_custom ------------------------------------------------------------------------------------------------------
 
-def test_clean_custom_de_duplicates_and_orders_by_the_catalogue():
-    ok, rejected = clean_custom(["users.view", "assets.view", "users.view", "assets.edit"])
-    assert ok == ["assets.view", "assets.edit", "users.view"]
-    assert rejected == []
+def test_clean_custom_orders_the_accepted_ids_by_the_catalogue():
+    cleaned = clean_custom(["users.view", "assets.view", "assets.edit"])
+    assert cleaned.ok == ["assets.view", "assets.edit", "users.view"]
+    assert (cleaned.unknown, cleaned.forbidden, cleaned.duplicates) == ([], [], [])
 
 
-def test_clean_custom_splits_off_unknown_ids_and_roles_manage():
-    ok, rejected = clean_custom(["assets.view", "nope.nothing", "roles.manage", "audit.view"])
-    assert ok == ["assets.view", "audit.view"]
-    assert rejected == ["nope.nothing", "roles.manage"]
+def test_clean_custom_reports_a_repeated_id_once_and_accepts_it_once():
+    cleaned = clean_custom(["users.view", "assets.view", "users.view", "assets.edit", "users.view"])
+    assert cleaned.ok == ["assets.view", "assets.edit", "users.view"]
+    assert cleaned.duplicates == ["users.view"]
+    assert (cleaned.unknown, cleaned.forbidden) == ([], [])
 
 
-def test_clean_custom_keeps_the_order_the_rejected_ids_were_given_in():
-    assert clean_custom(["zzz", "roles.manage", "aaa"])[1] == ["zzz", "roles.manage", "aaa"]
+def test_clean_custom_keeps_unknown_forbidden_and_repeated_ids_in_three_lists():
+    cleaned = clean_custom(["assets.view", "nope.nothing", "roles.manage", "audit.view", "assets.view", "roles.manage", "x", "nope.nothing"])
+    assert cleaned.ok == ["assets.view", "audit.view"]
+    assert cleaned.unknown == ["nope.nothing", "x"]
+    assert cleaned.forbidden == ["roles.manage"]  # once, although it was given twice
+    assert cleaned.duplicates == ["assets.view"]
+
+
+def test_clean_custom_keeps_the_order_each_rejected_list_was_given_in():
+    cleaned = clean_custom(["zzz", "roles.manage", "aaa", "mmm"])
+    assert cleaned.unknown == ["zzz", "aaa", "mmm"]
+    assert cleaned.forbidden == ["roles.manage"]
 
 
 def test_clean_custom_of_nothing_is_nothing():
-    assert clean_custom([]) == ([], [])
-    assert clean_custom(iter([])) == ([], [])
+    for given in ([], iter([])):
+        assert clean_custom(given) == ([], [], [], [])
 
 
 def test_clean_custom_accepts_any_iterable_once():
-    assert clean_custom(i for i in ["assets.view", "assets.view"]) == (["assets.view"], [])
+    cleaned = clean_custom(i for i in ["assets.view", "assets.view"])
+    assert (cleaned.ok, cleaned.duplicates) == (["assets.view"], ["assets.view"])
 
 
 def test_clean_custom_of_everything_but_roles_manage_is_the_whole_catalogue_less_that_one():
-    ok, rejected = clean_custom(reversed(IDS))
-    assert ok == [i for i in IDS if i != "roles.manage"]
-    assert rejected == ["roles.manage"]
+    cleaned = clean_custom(reversed(IDS))
+    assert cleaned.ok == [i for i in IDS if i != "roles.manage"]
+    assert (cleaned.unknown, cleaned.forbidden, cleaned.duplicates) == ([], ["roles.manage"], [])
+
+
+def test_clean_custom_counts_an_item_that_is_not_text_as_unknown_instead_of_raising():
+    cleaned = clean_custom(["assets.view", 5, None, ["assets.view"], {"a": 1}, "Assets.View", ""])
+    assert cleaned.ok == ["assets.view"]
+    assert cleaned.unknown == ["5", "None", "['assets.view']", "{'a': 1}", "Assets.View", ""]
+    assert (cleaned.forbidden, cleaned.duplicates) == ([], [])
 
 
 def test_what_clean_custom_accepts_is_what_effective_permissions_grants():
-    ok, _ = clean_custom(IDS)
-    assert effective_permissions("x", False, ok) == frozenset(ok)
+    cleaned = clean_custom(IDS)
+    assert effective_permissions("x", False, cleaned.ok) == frozenset(cleaned.ok)
 
 
 # ---- the User model's view of its role ---------------------------------------------------------------------------------

@@ -11,7 +11,7 @@ effective_permissions() ignores anything in it that is not a known id and never 
 """
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 Kind = Literal["see", "change", "risky"]
 
@@ -97,10 +97,36 @@ def effective_permissions(name: str, builtin: bool, stored: object) -> frozenset
     return frozenset(item for item in stored if isinstance(item, str) and item in ALL_IDS) - NOT_FOR_CUSTOM_ROLES
 
 
-def clean_custom(ids: Iterable[str]) -> tuple[list[str], list[str]]:
-    """Split a requested permission list for a custom role into (accepted, rejected). Accepted is de-duplicated and in
-    catalogue order; rejected holds every unknown id and every NOT_FOR_CUSTOM_ROLES id, in the order given."""
-    requested = list(ids)
-    rejected = [item for item in requested if item not in ALL_IDS or item in NOT_FOR_CUSTOM_ROLES]
-    wanted = set(requested) - set(rejected)
-    return [p.id for p in CATALOGUE if p.id in wanted], rejected
+class CleanedIds(NamedTuple):
+    """A requested permission list for a custom role, sorted into what the API must answer to each part of it."""
+
+    ok: list[str]  # known, allowed, de-duplicated, in catalogue order: what may be stored
+    unknown: list[str]  # not in the catalogue (or not text), each once, in the order given
+    forbidden: list[str]  # NOT_FOR_CUSTOM_ROLES ids, each once, in the order given
+    duplicates: list[str]  # allowed ids that were given more than once, each once, in the order given
+
+
+def clean_custom(ids: Iterable[object]) -> CleanedIds:
+    """Sort a requested permission list for a custom role into accepted, unknown, forbidden and repeated ids.
+
+    A list with anything in unknown, forbidden or duplicates is refused by the API; ok is what a clean list would store.
+    An item that is not text counts as unknown (shown as its text), so a raw JSON list can never raise here.
+    """
+    seen: set[str] = set()
+    unknown: list[str] = []
+    forbidden: list[str] = []
+    duplicates: list[str] = []
+    for item in ids:
+        if not isinstance(item, str) or item not in ALL_IDS:
+            shown = item if isinstance(item, str) else str(item)
+            if shown not in unknown:
+                unknown.append(shown)
+        elif item in NOT_FOR_CUSTOM_ROLES:
+            if item not in forbidden:
+                forbidden.append(item)
+        elif item in seen:
+            if item not in duplicates:
+                duplicates.append(item)
+        else:
+            seen.add(item)
+    return CleanedIds([p.id for p in CATALOGUE if p.id in seen], unknown, forbidden, duplicates)

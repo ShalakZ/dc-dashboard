@@ -65,7 +65,11 @@ class User(Base):
         return effective_permissions(role.name, role.builtin, role.permissions)
 
     def can(self, *ids: str) -> bool:
-        """True when the account holds ALL of these permissions. An unknown id, or none at all, is a ValueError."""
+        """True when the account holds ALL of these permissions. An unknown id, or none at all, is a ValueError.
+
+        For ids written in the code. To compare with a computed set (a role's, another account's) which may be empty,
+        compare the sets: `other.permissions <= user.permissions`.
+        """
         return _known(ids) <= self.permissions
 
     def can_any(self, *ids: str) -> bool:
