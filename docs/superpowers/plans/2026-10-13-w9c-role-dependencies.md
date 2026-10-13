@@ -27,12 +27,17 @@
 
 ## Rulings taken while planning
 - **R1 The prompt renders INLINE with `position: fixed`, not as a portal on `document.body`.** Why: `Modal` keeps the focus inside its dialog (`keepFocus` pulls any focus that lands outside back to the first field) and wraps Tab over the dialog's own controls, so a body portal could never keep the focus we move onto its button, and it would sit at the far end of the tab order. Inline after the label it is inside the dialog, directly after its checkbox in Tab order, and `position: fixed` is not clipped by the `.table-wrap` / `.role-editor-body` scrolling boxes (Task 0's bug was `position: absolute`). It still uses Task 0's `placeTip`. Cost if wrong: a future `transform` or `filter` on a dialog ancestor would make `fixed` relative to it; the CSS test and the e2e geometry check pin this.
-- **R2 It follows its checkbox on scroll and resize instead of closing** (the tip closes). Why: a prompt that vanishes when the mouse wheel moves is a lost offer, and the late scroll event after a keyboard focus (the reason `usePopover` has a settle window) cannot hurt a popover that just repositions. Cost: it can float over other content if its checkbox is scrolled out of the box; the next click closes it.
+- **R2 It follows its checkbox on scroll and resize instead of closing** (the tip closes). Why: a prompt that vanishes when the mouse wheel moves is a lost offer, and the late scroll event after a keyboard focus (the reason `usePopover` has a settle window) cannot hurt a popover that just repositions. Cost: it can float over the dialog's heading or the Save row if its checkbox is scrolled out of `.role-editor-body` (plan review M-9); the next click closes it. Parked in the backlog, not fixed.
 - **R3 `role="group"` named by its sentence (`aria-labelledby`), not `role="dialog"`.** Why: the focus moves into it, so a screen reader announces the group name; a second `dialog` inside the modal would break every `getByRole("dialog")` count in the e2e suite. Cost if wrong: a reviewer may prefer `alertdialog`; one attribute.
 - **R4 D3 (the untick offer) is kept.** Same component, same rules, about 25 extra lines in the helper and one more branch in the editor. The decline word for it is "Leave ticked" ("Keep" alone does not say what is kept).
 - **R5 The sentence is the hint's own:** "Change users also needs See users to show anything." (one shared builder, `needSentence`), so the hint and the popover can never disagree. With several needs the popover says "... also needs these to show anything:" and lists them. Cost if wrong: wording tweak in one function.
-- **R6 Leaving counts as "Not now":** a press outside and focus moving outside (Tab past the buttons, clicking a field) decline the offer; Escape and the Not now button also hand the focus back to the checkbox, an outside press/focus-out does not (the user went elsewhere on purpose).
+- **R6 Leaving counts as "Not now":** a press outside and focus moving outside (Tab past the buttons, clicking a field) decline the offer; Escape and the Not now button hand the focus back to the checkbox. A focus that moves outside is left where the user put it. An outside PRESS only refocuses the checkbox when the focus was still inside the card (so it never falls to `<body>`; the browser's own mousedown then moves it to whatever was pressed).
 - **R7 The table is closed under "needs"** (if A needs B and B needs C, A lists C too; true today) and a test pins it, so one level of lookup is exact and "Also tick" can never leave a new gap. Cost if wrong: a future table edit fails the test, which says what to add.
+
+- **R8 The card has an "arming delay": for its first 400 ms it ignores the pointer (CSS `pointer-events: none`, a keyframe `from` frame held with `animation-fill-mode: backwards`), so a click aimed at the next checkbox goes through to it.** Why (plan review I-3, measured in Chromium): the card's buttons sit exactly over the next checkboxes of the same column, and ticking down a column is the normal way to fill the grid; a click 300 ms after the first tick would otherwise hit "Also tick N permissions" or "Also untick N permissions". With the delay the click lands on the checkbox the user aimed at, which declines the offer (R6) and ticks that box. No JS timer, so the jsdom tests are unaffected; the keyboard is unaffected. Cost if wrong: a deliberate click on a button within 400 ms goes to the box beneath (the card closes, nothing is lost); under reduced motion the app's global rule may remove the delay (then no protection, still correct).
+- **R9 A press on the card's own text or padding keeps the card open and the focus where it is** (`onMouseDown` on the card calls `preventDefault()` unless the target is a button). Why (review I-2): without it Chromium moves the focus to the nearest focusable ancestor, the Modal's `.dialog` (`tabIndex=-1`), which is "outside the card" and declines the offer. It also stops text selection in the sentence; harmless.
+- **R10 A new offer remounts the card** (`key` = a counter bumped by every toggle that sets an offer). Why (review I-1): two offers in a row on the same checkbox (a keyboard tick, then a keyboard untick) would otherwise reuse the old card: no refocus, no re-measure, new words under an old position.
+- **R11 `aria-describedby` points at the list** when there is one (review M-7), so a screen reader that lands on "Also tick 3 permissions" hears the three names.
 
 ## File map
 - Task 0: the six files of commit `34c4d61` (`components/InfoTip.tsx` + test, `lib/placeTip.ts` + test, `app.css` + `app.css.test.ts`).
@@ -57,7 +62,7 @@
 **Files:** Modify `frontend/src/lib/roleEditor.ts`; Test `frontend/src/lib/roleEditor.test.ts`.
 
 **Interfaces:**
-- Consumes: `PERMISSIONS`, `PermissionId`, `isPermissionId` from `./permissions`; `joinWords` and `PERMISSION_NEEDS` already in the file; `PAGE_NEED` from `../components/navItems` (tests only).
+- Consumes: `PERMISSIONS`, `PermissionId`, `isPermissionId` from `./permissions`; `joinWords` and `PERMISSION_NEEDS` already in the file; `PAGE_NEED` from `../components/navItems` (tests only). The test file additionally imports `PERMISSION_LABELS` and `type PermissionId` from `./permissions`, `PAGE_NEED` from `../components/navItems`, and `needSentence`, `offerFor`, `offerWords` from `./roleEditor` (the Opus plan review ran this block verbatim: 35 of 35 green against the real table).
 - Produces (exact):
 ```ts
 export function missingNeeds(id: PermissionId, ticked: ReadonlySet<string>): PermissionId[]            // needs of id not ticked, in the table's order
@@ -222,12 +227,13 @@ Behaviour (each a test):
 1. Renders `<div role="group" aria-labelledby=<sentence id> className="dep-prompt">` with the sentence in a `<p>`, the items in a `<ul>` only when there are some, and two buttons, both `type="button"` (`primary` class on the accept one). **`type="button"` is essential: the card sits inside the editor's `<form>`.** A test wraps it in a `<form onSubmit>` spy and clicks both buttons: no submit.
 2. On mount the accept button gets the focus (`focus({ preventScroll: true })`).
 3. Accept button: `onAccept()` then focus to the anchor. Decline button: `onDecline()` then focus to the anchor.
-4. Escape (a `keydown` listener on `document` in the CAPTURE phase): `event.stopPropagation()`, `onDecline()`, focus to the anchor. A test mounts it inside the real `Modal` (with an `onClose` spy) and shows Escape calls `onDecline` and NOT `onClose`.
-5. `pointerdown` on the document outside the card: `onDecline()`, focus untouched. `pointerdown` inside the card: nothing.
+4. Escape (a `keydown` listener on `document` in the CAPTURE phase): `event.stopPropagation()`, `onDecline()`, focus to the anchor. A test mounts it inside the real `Modal` (with an `onClose` spy) and shows Escape calls `onDecline` and NOT `onClose` (show the prompt through a state toggle AFTER the Modal is up, as the editor does: the Modal's mount effect would otherwise move the focus to its first field after the prompt focused its button).
+5. `pointerdown` on the document outside the card: `onDecline()`; if the focus was inside the card at that moment it is moved to the anchor first (R6), otherwise untouched. `pointerdown` inside the card: nothing. R9: `fireEvent.mouseDown` on the sentence is `defaultPrevented`; on either button it is not.
 6. `focusin` on something outside the card that is not the anchor: `onDecline()`, focus untouched. Focus on the anchor (Shift+Tab back to the checkbox): stays open.
-7. Placement: a `useLayoutEffect` computes `placeTip(rect of anchor.closest("label") ?? anchor, {width,height of the card}, {window.innerWidth, innerHeight})` and sets `style={{ top, left }}` (first render at `0, 0`, measured before paint, like `InfoTip`); it recomputes on `scroll` (window, capture) and `resize`. Test with a mocked `getBoundingClientRect` on the label and the card that the card's style equals `placeTip`'s answer, that a window `scroll` event after the label's rect changed moves it, and that the listeners are removed on unmount.
+7. Placement: a `useLayoutEffect` computes `placeTip(rect of anchor.closest("label") ?? anchor, {width,height of the card}, {window.innerWidth, innerHeight})` and sets `style={{ top, left }}` (first render at `0, 0`, measured before paint, like `InfoTip`); it recomputes on `scroll` (window, capture) and `resize`. Test with `vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { ... })` returning a rectangle by `this.classList.contains("dep-prompt")` / `this.tagName === "LABEL"` (jsdom's window is 1024 by 768) that the card's style equals `placeTip`'s answer, that a window `scroll` event after the label's rect changed moves it, and that the listeners are removed on unmount.
 8. The callbacks are read through a ref (`latest.current`), so the listeners are registered once on mount and a parent that re-renders with new function identities does not re-register or refocus.
 9. The effects register/clean up all listeners; React StrictMode double-mount leaves one set.
+10. R11: with items, the group has `aria-describedby` = the `<ul>`'s id; without items it has none.
 
 Sketch (the implementer may refine, the behaviours above are the contract):
 ```tsx
@@ -235,6 +241,7 @@ export function DependencyPrompt({ anchor, sentence, items, acceptLabel, decline
   const card = useRef<HTMLDivElement>(null);
   const accept = useRef<HTMLButtonElement>(null);
   const titleId = useId();
+  const listId = useId();
   const [place, setPlace] = useState<TipPlacement | null>(null);
   const latest = useRef({ onAccept, onDecline });
   useEffect(() => { latest.current = { onAccept, onDecline }; });
@@ -263,13 +270,14 @@ export function DependencyPrompt({ anchor, sentence, items, acceptLabel, decline
       latest.current.onDecline();
       if (refocus) anchor.current?.focus();
     };
+    const declineByPress = () => decline(inside(document.activeElement)); // the focus must not fall to <body> when the card's own button had it (R6)
     // Capture + stopPropagation: the Modal around us closes on Escape too (a document listener in the bubble phase); one press closes only the top-most thing.
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.stopPropagation();
       decline(true);
     };
-    const onDown = (event: PointerEvent) => { if (!inside(event.target)) decline(false); };
+    const onDown = (event: PointerEvent) => { if (!inside(event.target)) declineByPress(); };
     const onFocusIn = (event: FocusEvent) => { if (!inside(event.target) && event.target !== anchor.current) decline(false); };
     document.addEventListener("keydown", onKey, true);
     document.addEventListener("pointerdown", onDown);
@@ -282,9 +290,17 @@ export function DependencyPrompt({ anchor, sentence, items, acceptLabel, decline
   }, [anchor]);
 
   return (
-    <div ref={card} role="group" aria-labelledby={titleId} className="dep-prompt" style={place ? { top: place.top, left: place.left } : { top: 0, left: 0 }}>
+    <div
+      ref={card}
+      role="group"
+      aria-labelledby={titleId}
+      aria-describedby={items.length > 0 ? listId : undefined}
+      className="dep-prompt"
+      style={place ? { top: place.top, left: place.left } : { top: 0, left: 0 }}
+      onMouseDown={(event) => { if (!(event.target instanceof HTMLButtonElement)) event.preventDefault(); }} // R9: a press on the text must not move the focus to the Modal
+    >
       <p id={titleId}>{sentence}</p>
-      {items.length > 0 && <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>}
+      {items.length > 0 && <ul id={listId}>{items.map((item) => <li key={item}>{item}</li>)}</ul>}
       <div className="dep-prompt-actions">
         <button type="button" ref={accept} className="primary" onClick={() => { latest.current.onAccept(); anchor.current?.focus(); }}>{acceptLabel}</button>
         <button type="button" onClick={() => { latest.current.onDecline(); anchor.current?.focus(); }}>{declineLabel}</button>
@@ -293,9 +309,9 @@ export function DependencyPrompt({ anchor, sentence, items, acceptLabel, decline
   );
 }
 ```
-CSS `role-prompt.css` (own file, `@layer w6`, tokens only, scoped by `.dep-prompt`): `position: fixed; z-index: 5` (inside the dialog's own stacking context; the tip bubble is 1100, toasts 900), `width: max-content; max-width: min(320px, calc(100vw - 16px))`, `display: grid; gap: 8px; padding: 12px 14px`, `border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop)`, `font-size: var(--fs-sm); line-height: 1.45; text-align: left; overflow-wrap: anywhere`, `p { margin: 0 }`, `ul { margin: 0; padding-left: 18px }`, `.dep-prompt-actions { display: flex; flex-wrap: wrap; gap: 8px }`, a fade-in with `transition: opacity var(--motion)` and `@starting-style { .dep-prompt { opacity: 0 } }` (app.css already removes transitions under reduced motion; the test pins that this file adds no `animation`).
+CSS `role-prompt.css` (own file, `@layer w6`, tokens only, scoped by `.dep-prompt`): `position: fixed; z-index: 5` (inside the dialog's own stacking context; the tip bubble is 1100, toasts 900), `width: max-content; max-width: min(320px, calc(100vw - 16px))`, `display: grid; gap: 8px; padding: 12px 14px`, `border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop)`, `font-size: var(--fs-sm); line-height: 1.45; text-align: left; overflow-wrap: anywhere`, `p { margin: 0 }`, `ul { margin: 0; padding-left: 18px }`, `.dep-prompt-actions { display: flex; flex-wrap: wrap; gap: 8px }`, a fade-in with `transition: opacity var(--motion)` and `@starting-style { .dep-prompt { opacity: 0 } }`, and the R8 arming delay: `.dep-prompt { animation: dep-prompt-arm 1ms linear 400ms backwards; } @keyframes dep-prompt-arm { from { pointer-events: none; } }` (the `from` frame is held during the 400 ms delay by `backwards`, then the card is normal; the test pins that this is the ONLY animation in the file and that its keyframes set nothing but `pointer-events`).
 
-- [ ] **Step 1: Failing tests** `DependencyPrompt.test.tsx` for behaviours 1 to 9 (copy the `PointerEvent` polyfill `beforeAll` from `RoleEditor.test.tsx` lines 12 to 21; build a small host that renders a `<label><input type="checkbox"/>…</label>` and the prompt, with `vi.fn()` callbacks) and `role-prompt.css.test.ts` (read the file with `readFileSync` like `feedback-toasts.css.test.ts`): exactly one `.dep-prompt` rule with `position: fixed`; a z-index between 1 and 100; no colour literal (`#hex`, `rgb(`, `hsl(`) anywhere in the file; the file is inside `@layer w6`; contains no `animation`.
+- [ ] **Step 1: Failing tests** `DependencyPrompt.test.tsx` for behaviours 1 to 9 (copy the `PointerEvent` polyfill `beforeAll`/`afterAll` from `RoleEditor.test.tsx` lines 14 to 22; build a small host that renders a `<label><input type="checkbox"/>…</label>` and the prompt, with `vi.fn()` callbacks) and `role-prompt.css.test.ts` (read the file with `readFileSync` like `feedback-toasts.css.test.ts`): exactly one top-level `.dep-prompt` rule (filter with `r.at.length === 1`: `parseRules` also returns the one inside `@starting-style`, as `feedback-toasts.css.test.ts:61` does) with `position: fixed`; a z-index between 1 and 100; no colour literal (`#hex`, `rgb(`, `hsl(`) anywhere in the file; the file is inside `@layer w6`; the R8 keyframes as described. Add `role-prompt.css` to the per-file guard list in `app.css.test.ts` (the `it.each([... "feedback-confirm.css"])` list: one `@layer w6` block, nothing outside, no raw colour). **I-4, the ancestors guard:** a test in `role-prompt.css.test.ts` parses `app.css`, `themes.css` and every `styles/*.css`; for every rule whose selector names `.dialog-backdrop`, `.dialog`, `.role-editor`, `.role-editor-body`, `.table-wrap`, `.role-grid`, `.role-perm`, `.role-sensitive` or `.role-summary`, the body must not match `/(^|[;\s])(transform|filter|backdrop-filter|contain|container-type|container|content-visibility|will-change|perspective|clip-path|mask)\s*:/` (a fixed card's containing block would silently become that ancestor). `.table-wrap.dense { container-type: inline-size }` (`styles/pages-sources.css:14`) is exempt by its exact selector, with a comment, and a second test asserts that `RoleEditor.tsx` renders `className="table-wrap"` without `dense`.
 - [ ] **Step 2: Run** both, see them fail.
 - [ ] **Step 3: Implement** the component, the CSS and the import.
 - [ ] **Step 4: Run** `npx vitest run src/components/DependencyPrompt.test.tsx src/styles/role-prompt.css.test.ts src/components/Modal.test.tsx`; `npm run typecheck`.
@@ -311,6 +327,7 @@ CSS `role-prompt.css` (own file, `@layer w6`, tokens only, scoped by `.dep-promp
 Design:
 - State `const [offer, setOffer] = useState<DependencyOffer | null>(null)`.
 - `toggle(id)`: `const next = new Set(ticked); if (!next.delete(id)) next.add(id); setTicked(next); setOffer(offerFor(id, ticked));` (the render's `ticked` is the "before"; clicks are discrete events, React re-renders between them). A toggle always replaces the offer (a new tick or untick supersedes an open prompt, and unticking the very checkbox that has a tick-offer closes it).
+- R10: `const [serial, setSerial] = useState(0)`; `toggle` also does `setSerial((n) => n + 1)`, and the card is rendered with `key={serial}` (pass it from `EditorForm` to `Item` as a prop used only as the card's key).
 - `chooseStart` also does `setOffer(null)`. Nothing else sets an offer: not the initial state, not Duplicate (a new editor mounts), not loading a role.
 - `accept`: `setTicked((prev) => { const next = new Set(prev); for (const id of offer.others) { if (offer.kind === "tick") next.add(id); else next.delete(id); } return next; }); setOffer(null);`
 - `decline`: `setOffer(null)`.
@@ -329,6 +346,7 @@ Design:
   - at most one group after five quick ticks of permissions that each have unmet needs ("Change assets", "Change dashboards", "Change tariffs", "Change sources", "Change storage settings"): `screen.queryAllByRole("group", { name: /also needs/ })` has length at most 1 after each click.
   - untick: with "See users" and "Change users" ticked, unticking "See users" opens "Change users needs See users to show anything. Also untick Change users?" with "Also untick Change users" and "Leave ticked"; accept unticks both; "Leave ticked" leaves "Change users" ticked and the hint line visible; unticking something nobody needs opens nothing.
   - nothing prompts on: "Start from" Operator/Viewer; opening an edit of a custom role whose ticks break a dependency (no group, but the hint line); a built-in role (no checkbox can be clicked); and an open prompt is gone after "Start from".
+  - R10: tick "Change tariffs", Not now, click "See tariffs" (a tick offer, no key change needed), Shift+Tab to "See tariffs" and press Space: the untick card "Change tariffs needs See tariffs to show anything. Also untick Change tariffs?" is a fresh card and its "Also untick Change tariffs" button has the focus.
   - the existing keyboard tests pass unchanged; add: focus "Change users", Space, the group's primary has the focus, Enter, both ticked and focus back on "Change users"; and Tab from "Change users" with the prompt open lands on the primary button first (DOM order).
   - the existing "hints" tests still pass.
 - [ ] **Step 2: Run** `npx vitest run src/components/RoleEditor.test.tsx`; new ones fail, old ones pass or show only the expected prompt-induced changes (fix a test only where the prompt legitimately changes what it asserts, and say so in the report).
@@ -342,12 +360,13 @@ Design:
 
 - [ ] **Step 1 (audit):** `grep -n "getByLabel(\|getByRole(" frontend/e2e/*.ts` for values that are a substring of "Also tick", "Not now", "Leave ticked", "also needs", the sentences of Task 1 or any permission label while a prompt is open; check that the existing `w9b.spec.ts` ticks (lines ~273, 319, 413, 509) each have their needs ticked first or are no-need permissions, and write the result in the report. Fix any lookup that could now match two elements.
 - [ ] **Step 2:** `w9c.spec.ts` using the helpers of `w9b.spec.ts` (`asUser`, `openRoles`, `editor`, `tick`, `ADMIN`; copy the pieces, do not import across specs unless `w9b` already exports them) with these steps, each asserting what a person sees:
-  1. New role (unique name): tick "Change users": the group "Change users also needs See users to show anything." is visible, its box is BELOW the checkbox (box.top >= checkbox bottom), inside the window, does not overlap the checkbox, and the grid's `.table-wrap` has `scrollWidth <= clientWidth`. Click "Also tick See users": both ticked, the group is gone, the focus is on "Change users". Save posts exactly `["users.edit","users.view"]`.
+  1. New role (unique name): tick "Change users": the group "Change users also needs See users to show anything." is visible, its box is inside the window and does not overlap the checkbox's label (for this checkbox at its known position it is below it; near the bottom of the window `placeTip` flips the card above, so never assert "below" in general), and the grid's `.table-wrap` has `scrollWidth <= clientWidth`. Click "Also tick See users": both ticked, the group is gone, the focus is on "Change users". Save posts exactly `["users.edit","users.view"]`.
   2. Another new role: tick "Change tariffs", press "Not now": only "Change tariffs" ticked, the hint line is shown; Save posts exactly `["tariffs.edit"]`.
   3. Keyboard: focus "Change users", Space, the primary button is focused, Enter, both ticked and "Change users" focused. Then Space on another needy checkbox, Escape: the group is gone, the dialog is still visible, the checkbox is focused; Escape again closes the dialog.
   4. Untick offer: with "See users" and "Change users" ticked, untick "See users": the group "Change users needs See users to show anything. Also untick Change users?" shows; "Leave ticked" keeps "Change users" ticked.
   5. The `?` bubble of a permission in the Change column (right edge of the grid): open it (click); its box is inside the viewport (left >= 0, right <= viewport width) and `.table-wrap` has no sideways scroll.
-  6. At 1024 and 1440 wide viewports: the same tick in the left (See), middle and right (Change) column; the card stays inside the window; screenshot each into the directory in `process.env.W9C_SHOTS` when set.
+  6. R8/R9, quick follow-up and a press on the text: tick "Change dashboards" (with "See dashboards" ticked) and, as soon as the group shows, click "Change sources" (Playwright waits until the card is armed or the box is hittable; use `page.mouse.click` at the old centre of "Change sources" taken BEFORE the first tick, within 300 ms): "Change sources" is ticked, the first group is gone, and at most one group is open (the one for "Change sources"). Then, with a group open, click the sentence text: the group stays open and the focus is unchanged.
+  7. At 1024 and 1440 wide viewports: the same tick in the left (See), middle and right (Change) column; the card stays inside the window; screenshot each into the directory in `process.env.W9C_SHOTS` when set.
   Clean up every role the spec made (delete through the API at the end, as `w9b.spec.ts` does). Always answer or dismiss a prompt before touching what it covers (Playwright would wait for the covered checkbox forever).
 - [ ] **Step 3:** the e2e type-check prints nothing.
 - [ ] **Step 4:** the docs edits above; tick the boxes of Tasks 0 to 4 and write the Execution log skeleton.
