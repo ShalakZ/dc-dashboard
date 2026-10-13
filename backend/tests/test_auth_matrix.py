@@ -142,6 +142,8 @@ def test_the_permission_table_agrees_with_the_frozen_matrix_for_the_built_in_rol
 def test_the_named_changes_are_only_what_the_table_says_the_operator_gets_today():
     frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
     with_the_named_changes(frozen)  # each change starts from the fixture's own answer
+    # The wave changed exactly ONE cell on purpose; a second one must be a deliberate edit of this line, not a quiet addition.
+    assert CHANGED_AFTER_FREEZE == {"GET /api/settings/billing": {"operator": ("403", "pass")}}
     for key, by_role in CHANGED_AFTER_FREEZE.items():
         assert set(by_role) == {"operator"}, f"{key}: W9b changed the Operator's cell and no other"
         mode, ids = ROUTE_PERMISSIONS[key]
