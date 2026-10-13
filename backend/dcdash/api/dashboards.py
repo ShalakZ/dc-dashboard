@@ -20,7 +20,7 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import current_user, get_db, require_permission
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Dashboard, User, Widget
 from dcdash.core.settings_store import DEFAULT_DASHBOARD_KEY, get_setting, set_setting
@@ -28,9 +28,6 @@ from dcdash.core.timeutil import RANGE_PRESETS
 from dcdash.core.widgets import validate_config
 
 router = APIRouter(prefix="/api", tags=["dashboards"])
-Viewer = Depends(require_role("viewer"))
-Operator = Depends(require_role("operator"))
-Admin = Depends(require_role("admin"))
 
 MAX_WIDGETS = 24
 MAX_DASHBOARDS = 50
@@ -171,7 +168,9 @@ def checked_configs(widgets: Sequence[WidgetIn]) -> list[dict[str, Any]]:
     return configs
 
 
-@router.get("/dashboards", response_model=list[DashboardListItem], dependencies=[Viewer])
+@router.get(
+    "/dashboards", response_model=list[DashboardListItem], dependencies=[Depends(require_permission("dashboards.view"))]
+)
 async def list_dashboards(db: AsyncSession = Depends(get_db)) -> list[DashboardListItem]:
     rows = await db.execute(
         select(Dashboard, func.count(Widget.id))
@@ -187,9 +186,11 @@ async def list_dashboards(db: AsyncSession = Depends(get_db)) -> list[DashboardL
     ]
 
 
-@router.post("/dashboards", response_model=DashboardOut, status_code=201)
+@router.post(
+    "/dashboards", response_model=DashboardOut, status_code=201, dependencies=[Depends(require_permission("dashboards.edit"))]
+)
 async def create_dashboard(
-    body: DashboardIn, user: User = Operator, db: AsyncSession = Depends(get_db)
+    body: DashboardIn, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> DashboardOut:
     # Held until the commit below, so two simultaneous creates cannot both count 49 and both insert.
     await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": DASHBOARD_CAP_LOCK})
@@ -230,15 +231,19 @@ def _default_side(dashboard: Dashboard | None) -> dict[str, Any]:
 
 # These two must stay above "/dashboards/{dashboard_id}": declared after it, "default" would be read as the int path
 # parameter and answered with 422.
-@router.get("/dashboards/default", response_model=DefaultDashboardOut, dependencies=[Viewer])
+@router.get(
+    "/dashboards/default", response_model=DefaultDashboardOut, dependencies=[Depends(require_permission("dashboards.view"))]
+)
 async def get_default_dashboard(db: AsyncSession = Depends(get_db)) -> DefaultDashboardOut:
     dashboard = await default_dashboard(db)
     return DefaultDashboardOut(dashboard_id=dashboard.id if dashboard else None)
 
 
-@router.put("/dashboards/default", response_model=DefaultDashboardOut)
+@router.put(
+    "/dashboards/default", response_model=DefaultDashboardOut, dependencies=[Depends(require_permission("dashboards.default"))]
+)
 async def put_default_dashboard(
-    body: DefaultDashboardIn, admin: User = Admin, db: AsyncSession = Depends(get_db)
+    body: DefaultDashboardIn, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> DefaultDashboardOut:
     # One change at a time (the setting's row may not exist yet, so a row lock would not do); released at the commit.
     await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": DEFAULT_LOCK})
@@ -246,12 +251,14 @@ async def put_default_dashboard(
     chosen = await load_dashboard(db, body.dashboard_id, lock=True) if body.dashboard_id is not None else None
     before = await default_dashboard(db)
     await set_setting(db, DEFAULT_DASHBOARD_KEY, {"dashboard_id": body.dashboard_id})
-    await audit_change(db, admin.id, "dashboard.default_changed", {}, _default_side(before), _default_side(chosen))
+    await audit_change(db, user.id, "dashboard.default_changed", {}, _default_side(before), _default_side(chosen))
     await db.commit()
     return DefaultDashboardOut(dashboard_id=body.dashboard_id)
 
 
-@router.get("/dashboards/{dashboard_id}", response_model=DashboardOut, dependencies=[Viewer])
+@router.get(
+    "/dashboards/{dashboard_id}", response_model=DashboardOut, dependencies=[Depends(require_permission("dashboards.view"))]
+)
 async def get_dashboard(dashboard_id: int, db: AsyncSession = Depends(get_db)) -> DashboardOut:
     dashboard = await load_dashboard(db, dashboard_id)
     widgets = (await db.scalars(select(Widget).where(Widget.dashboard_id == dashboard.id))).all()
@@ -269,9 +276,11 @@ def widgets_fingerprint(widgets) -> str:
     return hashlib.sha256("\n".join(canon).encode()).hexdigest()[:12]
 
 
-@router.put("/dashboards/{dashboard_id}", response_model=DashboardOut)
+@router.put(
+    "/dashboards/{dashboard_id}", response_model=DashboardOut, dependencies=[Depends(require_permission("dashboards.edit"))]
+)
 async def save_dashboard(
-    dashboard_id: int, body: DashboardSave, user: User = Operator, db: AsyncSession = Depends(get_db)
+    dashboard_id: int, body: DashboardSave, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> DashboardOut:
     configs = checked_configs(body.widgets)  # every widget 422 happens before the row is locked or touched
     dashboard = await load_dashboard(db, dashboard_id, lock=True)
@@ -311,8 +320,10 @@ async def save_dashboard(
     return dashboard_out(dashboard, widgets)
 
 
-@router.delete("/dashboards/{dashboard_id}", status_code=204)
-async def delete_dashboard(dashboard_id: int, user: User = Operator, db: AsyncSession = Depends(get_db)) -> None:
+@router.delete("/dashboards/{dashboard_id}", status_code=204, dependencies=[Depends(require_permission("dashboards.edit"))])
+async def delete_dashboard(
+    dashboard_id: int, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
+) -> None:
     dashboard = await load_dashboard(db, dashboard_id, lock=True)
     # Clear the default if it is this dashboard, in ONE statement that tests and writes together: a PUT that sets
     # another default and is still uncommitted makes this wait, and the condition is checked again once that commit

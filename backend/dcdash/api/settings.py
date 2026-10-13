@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.auth import limiter
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import current_user, get_db, require_permission
 from dcdash.core.audit import audit_change
 from dcdash.core.config import get_settings
 from dcdash.core.models import User
@@ -24,7 +24,7 @@ from dcdash.core.timeutil import validate_whole_hour_zone
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["settings"], dependencies=[Depends(require_role("admin"))])
+router = APIRouter(prefix="/api", tags=["settings"])
 
 SIGN_IN_LOCK = 7_309_001  # advisory-lock key: one change to the sign-in policy at a time (the row may not exist yet)
 
@@ -91,41 +91,41 @@ async def seed_general(db: AsyncSession) -> None:
         await db.commit()
 
 
-@router.get("/settings/general", response_model=GeneralSettings)
+@router.get("/settings/general", response_model=GeneralSettings, dependencies=[Depends(require_permission("settings.view"))])
 async def get_general(db: AsyncSession = Depends(get_db)) -> GeneralSettings:
     return GeneralSettings(**await _general(db))
 
 
-@router.put("/settings/general", response_model=GeneralSettings)
+@router.put("/settings/general", response_model=GeneralSettings, dependencies=[Depends(require_permission("settings.edit"))])
 async def put_general(
     body: GeneralSettingsIn,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_role("admin")),
+    user: User = Depends(current_user),
 ) -> GeneralSettingsIn:
     before = await current_timezone(db)
     await set_setting(db, GENERAL_KEY, body.model_dump())
     await audit_change(
-        db, admin.id, "settings.timezone_changed", {}, {"timezone": before}, {"timezone": body.timezone}
+        db, user.id, "settings.timezone_changed", {}, {"timezone": before}, {"timezone": body.timezone}
     )
     await db.commit()
     return body
 
 
-@router.get("/settings/billing", response_model=BillingSettings)
+@router.get("/settings/billing", response_model=BillingSettings, dependencies=[Depends(require_permission("tariffs.edit"))])
 async def get_billing(db: AsyncSession = Depends(get_db)) -> BillingSettings:
     return BillingSettings(currency=await get_currency(db))
 
 
-@router.put("/settings/billing", response_model=BillingSettings)
+@router.put("/settings/billing", response_model=BillingSettings, dependencies=[Depends(require_permission("tariffs.edit"))])
 async def put_billing(
     body: BillingSettings,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_role("admin")),
+    user: User = Depends(current_user),
 ) -> BillingSettings:
     before = await get_currency(db)
     await set_setting(db, BILLING_KEY, {"currency": body.currency})
     await audit_change(
-        db, admin.id, "billing.currency_changed", {}, {"currency": before}, {"currency": body.currency}
+        db, user.id, "billing.currency_changed", {}, {"currency": before}, {"currency": body.currency}
     )
     await db.commit()
     return body
@@ -162,17 +162,17 @@ def _sign_in_out(policy: SignInPolicy) -> SignInPolicyOut:
     )
 
 
-@router.get("/settings/sign-in", response_model=SignInPolicyOut)
+@router.get("/settings/sign-in", response_model=SignInPolicyOut, dependencies=[Depends(require_permission("settings.view"))])
 async def get_sign_in(db: AsyncSession = Depends(get_db)) -> SignInPolicyOut:
     return _sign_in_out(await get_sign_in_policy(db))
 
 
-@router.put("/settings/sign-in", response_model=SignInPolicyOut)
+@router.put("/settings/sign-in", response_model=SignInPolicyOut, dependencies=[Depends(require_permission("settings.edit"))])
 async def put_sign_in(
     body: SignInPolicyIn,
     confirm: bool = False,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_role("admin")),
+    user: User = Depends(current_user),
 ) -> SignInPolicyOut | JSONResponse:
     # Read, check and write as one step: two admins racing at READ COMMITTED could otherwise both read an old OFF and
     # the later write would switch protection off after somebody switched it on, with no confirmation. A row lock would
@@ -194,7 +194,7 @@ async def put_sign_in(
     # Switching off ends every current block: the audit row says how many, counted before configure() drops them.
     subject = {"blocks_ended": len(limiter.blocked_keys())} if before.enabled and not after.enabled else {}
     await set_setting(db, SIGN_IN_KEY, asdict(after))
-    await audit_change(db, admin.id, "settings.sign_in_changed", subject, asdict(before), asdict(after))
+    await audit_change(db, user.id, "settings.sign_in_changed", subject, asdict(before), asdict(after))
     await db.commit()
     limiter.configure(after.max_failures, after.block_minutes * 60, after.enabled)  # this process applies it at once
     return _sign_in_out(after)

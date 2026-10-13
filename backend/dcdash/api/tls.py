@@ -1,4 +1,4 @@
-"""GET /api/tls/status: the HTTPS certificate's expiry as the collector last published it. Admin only, read-only."""
+"""GET /api/tls/status: the HTTPS certificate's expiry as the collector last published it. Needs settings.view, read-only."""
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -7,11 +7,11 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import get_db, require_permission
 from dcdash.core.certificate import TLS_KEY, state_for
 from dcdash.core.settings_store import get_setting
 
-router = APIRouter(prefix="/api", tags=["tls"], dependencies=[Depends(require_role("admin"))])
+router = APIRouter(prefix="/api", tags=["tls"], dependencies=[Depends(require_permission("settings.view"))])
 
 # The collector checks every hour; three missed checks and the stored answer is no longer trusted.
 STALE_AFTER = timedelta(hours=3)

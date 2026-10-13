@@ -2,12 +2,13 @@ import { screen, within } from "@testing-library/react";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { AuditEntryPage } from "./AuditEntryPage";
 
 const detail = { tariff_id: 3, asset_id: 7, before: { rate_per_kwh: 0.1 }, after: { rate_per_kwh: 0.12 } };
 const stored = { id: 9, user_id: 1, actor_id: 1, username: "admin", action: "tariff.updated", detail, ts: "2026-10-07T10:00:00Z" };
 const admin: Routes = {
-  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "u", role: "admin" } },
+  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin") },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: null } },
 };
 const open = (id: string, routes: Routes = {}) => {

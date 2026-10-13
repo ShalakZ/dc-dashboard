@@ -11,7 +11,8 @@ import pytest
 
 from dcdash.api import stream as stream_module
 from dcdash.api.stream import Broadcaster, event_stream
-from helpers import http_server, login_as
+from dcdash.core.db import get_engine
+from helpers import http_server, login_as, make_role
 
 INTERVAL = 0.05  # the revalidation interval the endpoint tests run at, instead of the real 60 seconds
 END_WITHIN = 2.0  # how long a stream gets to end once its session is gone (40 intervals, far below a keepalive)
@@ -24,8 +25,8 @@ def fast_revalidation(monkeypatch):
 
 
 @contextlib.asynccontextmanager
-async def busy_stream(app, db, before_connect=None):
-    """Sign in, open /api/stream on a real server while a message arrives every few ms; yields the line iterator.
+async def busy_stream(app, db, before_connect=None, role="admin"):
+    """Sign in as `role`, open /api/stream on a real server while a message arrives every few ms; yields the line iterator.
 
     A real server and not ASGITransport, which buffers a whole response and so cannot show a stream that is open.
     """
@@ -38,7 +39,7 @@ async def busy_stream(app, db, before_connect=None):
 
     async with http_server(app) as port:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
-            await login_as(client, db)
+            await login_as(client, db, role=role)
             if before_connect is not None:
                 await before_connect()
             publisher = asyncio.create_task(publish())
@@ -129,7 +130,41 @@ async def test_a_healthy_busy_stream_keeps_sending_across_many_intervals(app, db
         else:
             pytest.fail("the stream ended while its session was still valid")
     assert frames > 20
-    assert checks >= 5  # one at connect, then the stream re-validated again and again and stayed open
+    assert checks >= 5  # the stream re-validated again and again (the connect-time check is the route's gate, not counted) and stayed open
+
+
+async def test_an_open_stream_holds_no_database_connection(app, db):
+    # The route's gate and its re-checks each use a short session of their own; a session held by a dependency would stay
+    # open (a pooled connection, idle in transaction) for as long as the browser stays connected.
+    async with busy_stream(app, db) as lines:
+        await asyncio.wait_for(read_data_frames(lines, 5), 5)
+        assert get_engine().pool.checkedout() == 0
+        assert await db.fetchval("SELECT count(*) FROM pg_stat_activity WHERE state = 'idle in transaction'") == 0
+
+
+async def test_a_busy_stream_ends_when_its_role_loses_the_permission(app, db, fast_revalidation):
+    role_id = await make_role(db, "watcher", ["assets.view"])
+    async with busy_stream(app, db, role="watcher") as lines:
+        await asyncio.wait_for(read_data_frames(lines, 3), 5)
+        await db.execute("UPDATE roles SET permissions = $1 WHERE id = $2", ["billing.view"], role_id)
+        assert await ends_within(lines, END_WITHIN), "the stream kept sending after its role lost the permission"
+    assert app.state.broadcaster.subscriber_count == 0
+
+
+async def test_a_busy_stream_keeps_going_when_the_role_swaps_one_stream_permission_for_the_other(app, db, fast_revalidation):
+    role_id = await make_role(db, "watcher", ["assets.view"])
+    async with busy_stream(app, db, role="watcher") as lines:
+        await asyncio.wait_for(read_data_frames(lines, 3), 5)
+        await db.execute("UPDATE roles SET permissions = $1 WHERE id = $2", ["dashboards.view"], role_id)
+        assert not await ends_within(lines, 20 * INTERVAL), "the stream ended though the role still holds dashboards.view"
+
+
+async def test_a_busy_stream_ends_when_its_role_is_changed_to_one_without_the_permission(app, db, fast_revalidation):
+    await make_role(db, "other", ["billing.view"])
+    async with busy_stream(app, db, role="operator") as lines:
+        await asyncio.wait_for(read_data_frames(lines, 3), 5)
+        await db.execute("UPDATE users SET role_id = (SELECT id FROM roles WHERE name = 'other')")
+        assert await ends_within(lines, END_WITHIN), "the stream kept sending after the account moved to a role without it"
 
 
 async def test_a_busy_stream_is_revalidated_on_the_interval_not_on_every_message():

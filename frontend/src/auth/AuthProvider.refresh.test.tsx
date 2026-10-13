@@ -2,19 +2,24 @@ import type { QueryClient } from "@tanstack/react-query";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "../api/client";
-import type { Role } from "../api/types";
+import type { PermissionId } from "../lib/permissions";
 import { RoleChangedNotice } from "../components/RoleChangedNotice";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { useAuth } from "./AuthProvider";
 import { useQueryClient } from "@tanstack/react-query";
 
 /** What the fake server answers; tests change it between events. */
 const server = {
   me: "ok" as "ok" | 401 | "network",
-  role: "operator" as Role,
+  role: "operator",
+  /** What /api/me says the role holds; null = the built-in set of `role`. */
+  permissions: null as PermissionId[] | null,
+  /** Set: /api/me answers this text instead of a user. */
+  meText: null as string | null,
   loginStatus: 200,
-  loginRole: "viewer" as Role,
+  loginRole: "viewer",
   assetsStatus: 403,
 };
 
@@ -23,26 +28,27 @@ const routes = () => ({
   "GET /api/me": () => {
     if (server.me === "network") throw new TypeError("Failed to fetch");
     if (server.me === 401) return { status: 401, body: { detail: "not authenticated" } };
-    return { body: { id: 1, username: "u", role: server.role } };
+    if (server.meText !== null) return { body: server.meText };
+    return { body: userFor(server.role, server.permissions ? { permissions: server.permissions } : {}) };
   },
   "POST /api/login": () =>
     server.loginStatus === 200
-      ? { body: { id: 2, username: "v", role: server.loginRole } }
+      ? { body: userFor(server.loginRole, { id: 2, username: "v" }) }
       : { status: server.loginStatus, body: { detail: "nope" } },
   "POST /api/logout": { status: 204 },
   "GET /api/assets": () => ({ status: server.assetsStatus, body: { detail: "insufficient role" } }),
 });
 
 interface Capture {
-  /** Every distinct roleChange object the page has been handed (by identity). */
+  /** Every distinct accessChange object the page has been handed (by identity). */
   seen: Set<unknown>;
   client?: QueryClient;
 }
 
 function Harness({ capture }: { capture: Capture }) {
-  const { user, roleChange, login, logout } = useAuth();
+  const { user, accessChange, login, logout } = useAuth();
   capture.client = useQueryClient();
-  if (roleChange) capture.seen.add(roleChange);
+  if (accessChange) capture.seen.add(accessChange);
   return (
     <>
       <p>{user ? `${user.username} (${user.role})` : "signed out"}</p>
@@ -70,7 +76,7 @@ async function open(): Promise<Capture> {
 }
 
 beforeEach(() => {
-  Object.assign(server, { me: "ok", role: "operator", loginStatus: 200, loginRole: "viewer", assetsStatus: 403 });
+  Object.assign(server, { me: "ok", role: "operator", permissions: null, meText: null, loginStatus: 200, loginRole: "viewer", assetsStatus: 403 });
   vi.useFakeTimers({ toFake: ["Date"] }); // only the clock: waitFor and fetch keep running on real timers
   vi.setSystemTime(new Date("2026-10-10T12:00:00Z"));
 });
@@ -133,7 +139,7 @@ describe("AuthProvider refresh on focus", () => {
     server.role = "viewer";
     await focus();
     const banner = await screen.findByRole("status");
-    expect(banner).toHaveTextContent("Your role changed from operator to viewer. Reload the page to continue.");
+    expect(banner).toHaveTextContent("Your role changed from Operator to Viewer. Reload the page to continue.");
     expect(screen.getByText("u (operator)")).toBeInTheDocument(); // nothing under an open editor moved
     expect(capture.seen.size).toBe(1);
   });
@@ -155,12 +161,55 @@ describe("AuthProvider refresh on focus", () => {
     await open();
     server.role = "viewer";
     await focus();
-    await screen.findByText(/changed from operator to viewer/);
+    await screen.findByText(/changed from Operator to Viewer/);
     later(11_000);
     server.role = "admin";
     await focus();
-    expect(await screen.findByText(/changed from operator to admin/)).toBeInTheDocument();
+    expect(await screen.findByText(/changed from Operator to Administrator/)).toBeInTheDocument();
     expect(screen.getAllByRole("status")).toHaveLength(1);
+  });
+
+  it("words the built-in roles as the sidebar does (Administrator, Operator, Viewer) and a role an administrator made by its own name", async () => {
+    await open();
+    server.role = "Night shift";
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from Operator to Night shift. Reload the page to continue.");
+  });
+
+  it("follows the latest answer: permissions changed first, then the role itself changed, and the notice names the roles", async () => {
+    await open();
+    server.permissions = ["assets.view"];
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your access changed. Reload to see what you can use now.");
+    later(11_000);
+    server.permissions = null;
+    server.role = "Nothing";
+    await focus();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Your role changed from Operator to Nothing. Reload the page to continue."));
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+  });
+
+  it("follows the latest answer: a role change first, then another role, and the notice names the last one", async () => {
+    await open();
+    server.role = "viewer";
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from Operator to Viewer");
+    later(11_000);
+    server.role = "Nothing";
+    await focus();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Your role changed from Operator to Nothing. Reload the page to continue."));
+  });
+
+  it("follows the latest answer: a role change first, then the page's own role with other permissions, and the notice is about the permissions", async () => {
+    await open();
+    server.role = "viewer";
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from Operator to Viewer");
+    later(11_000);
+    server.role = "operator";
+    server.permissions = ["assets.view"];
+    await focus();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Your access changed. Reload to see what you can use now."));
   });
 
   it("takes the banner away when the role is back to the one the page loaded with", async () => {
@@ -172,6 +221,59 @@ describe("AuthProvider refresh on focus", () => {
     server.role = "operator";
     await focus();
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+  });
+
+  it("announces a changed set of permissions on the same role, in words that do not name a role", async () => {
+    const capture = await open();
+    server.permissions = ["assets.view", "dashboards.view"];
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your access changed. Reload to see what you can use now.");
+    expect(screen.getByText("u (operator)")).toBeInTheDocument();
+    expect(capture.seen.size).toBe(1);
+  });
+
+  it("does not announce the same permissions listed in another order", async () => {
+    await open();
+    server.permissions = [...userFor("operator").permissions].reverse();
+    await focus();
+    await waitFor(() => expect(meCalls()).toBe(2));
+    await settle();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("announces a role change in its own words even when the permissions changed with it", async () => {
+    await open();
+    server.role = "viewer"; // viewer's set differs from operator's too
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from Operator to Viewer");
+  });
+
+  it("announces a permission that was added as well as one that was removed", async () => {
+    await open();
+    server.permissions = [...userFor("operator").permissions, "audit.view"];
+    await focus();
+    expect(await screen.findByRole("status")).toHaveTextContent("Your access changed");
+  });
+
+  it("takes the access banner away when the permissions are back to the set the page loaded with", async () => {
+    await open();
+    server.permissions = ["assets.view"];
+    await focus();
+    await screen.findByRole("status");
+    later(11_000);
+    server.permissions = null;
+    await focus();
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+  });
+
+  it("ignores an answer that is not a user: still signed in, no banner", async () => {
+    await open();
+    server.meText = "<!doctype html><html><body>Sign in to the network</body></html>";
+    await focus();
+    await waitFor(() => expect(meCalls()).toBe(2));
+    await settle();
+    expect(screen.getByText("u (operator)")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("signs out, with no banner, when /api/me answers 401 during a refresh", async () => {
@@ -257,7 +359,7 @@ describe("AuthProvider refresh after a 403", () => {
     await open();
     server.role = "viewer";
     await userEvent.setup({ advanceTimers: later }).click(screen.getByRole("button", { name: "load assets" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from operator to viewer");
+    expect(await screen.findByRole("status")).toHaveTextContent("Your role changed from Operator to Viewer");
   });
 
   it("does not refetch for a 403 from /api/login (a wrong-credentials style answer)", async () => {
@@ -323,7 +425,7 @@ describe("AuthProvider refresh after a 403 inside the 10 second window", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     await advance(5_000); // t = 10 s
     expect(meCalls()).toBe(3);
-    expect(screen.getByRole("status")).toHaveTextContent("Your role changed from operator to viewer");
+    expect(screen.getByRole("status")).toHaveTextContent("Your role changed from Operator to Viewer");
   });
 
   it("gives a burst of five 403s inside the window exactly one trailing check", async () => {

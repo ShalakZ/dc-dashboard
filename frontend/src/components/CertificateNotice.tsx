@@ -13,7 +13,7 @@ const WarnIcon = () => (
 );
 
 /**
- * The HTTPS certificate warning in the app shell. Admins only (the status endpoint is admin-only), and only for the states that need
+ * The HTTPS certificate warning in the app shell. For whoever may see Settings (the status endpoint needs settings.view), and only for the states that need
  * action: expiring, expired and unreadable. Nothing for ok, for "not checked lately" (the collector may simply be down, and the
  * Sources page says so) or when HTTPS is not configured. A failed fetch shows nothing: the notice is an extra, not a gate.
  */

@@ -1,4 +1,5 @@
 import math
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -14,7 +15,8 @@ from dcdash.api.security import (
 from dcdash.api.security_events import client_address, sign_in_events
 from dcdash.core.audit import audit
 from dcdash.core.config import get_settings
-from dcdash.core.models import User, UserSession
+from dcdash.core.models import Role, User, UserSession
+from dcdash.core.permissions import BUILTIN_IDS
 from dcdash.core.preferences import normalize
 from dcdash.core.sign_in_policy import SignInPolicy, get_sign_in_policy
 
@@ -82,7 +84,13 @@ class UserOut(BaseModel):
     id: int
     username: str
     role: str
+    permissions: list[str]  # what the account may do, sorted so that an answer reads the same every time
     preferences: Preferences
+
+    @field_validator("permissions", mode="before")
+    @classmethod
+    def _sorted(cls, held: Iterable[str]) -> list[str]:
+        return sorted(held)  # the account's frozenset; a list is sorted the same
 
     @field_validator("preferences", mode="before")
     @classmethod
@@ -121,7 +129,10 @@ async def setup(
     await db.execute(text("LOCK TABLE users IN EXCLUSIVE MODE"))
     if await db.scalar(select(func.count()).select_from(User)):
         raise HTTPException(409, "setup has already been completed")
-    user = User(username=body.username, password_hash=hash_password(body.password), role="admin")
+    admin_role = await db.get(Role, BUILTIN_IDS["admin"])
+    if admin_role is None:
+        raise RuntimeError("the built-in admin role is missing; run the database migrations")
+    user = User(username=body.username, password_hash=hash_password(body.password), role_row=admin_role)
     db.add(user)
     await db.flush()
     await audit(db, user.id, "setup.completed", {"username": user.username, "role": "admin"})
@@ -226,7 +237,7 @@ async def set_my_preferences(
         await db.execute(
             select(User)
             .where(User.id == user.id, User.active.is_(True))
-            .with_for_update()
+            .with_for_update(of=User)  # not the roles row the user query joins: it is shared by every account of that role
             .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()

@@ -1,11 +1,11 @@
-"""Storage settings and statistics endpoints (admin)."""
+"""Storage settings and statistics endpoints (storage.view reads, storage.edit writes)."""
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import current_user, get_db, require_permission
 from dcdash.core.audit import audit_change
 from dcdash.core.models import User
 from dcdash.core.storage import (
@@ -25,15 +25,15 @@ from dcdash.core.storage import (
     storage_stats,
 )
 
-router = APIRouter(prefix="/api", tags=["storage"], dependencies=[Depends(require_role("admin"))])
+router = APIRouter(prefix="/api", tags=["storage"])
 
 
-@router.get("/storage", response_model=StorageStats)
+@router.get("/storage", response_model=StorageStats, dependencies=[Depends(require_permission("storage.view"))])
 async def get_storage(db: AsyncSession = Depends(get_db)) -> StorageStats:
     return await storage_stats(db)
 
 
-@router.get("/storage/rows-per-day", response_model=RowsPerDay)
+@router.get("/storage/rows-per-day", response_model=RowsPerDay, dependencies=[Depends(require_permission("storage.view"))])
 async def get_rows_per_day(start: date, end: date, db: AsyncSession = Depends(get_db)) -> RowsPerDay:
     try:
         return await rows_per_day_range(db, start, end)
@@ -41,7 +41,7 @@ async def get_rows_per_day(start: date, end: date, db: AsyncSession = Depends(ge
         raise HTTPException(422, str(exc)) from None
 
 
-@router.get("/settings/storage", response_model=StorageSettingsOut)
+@router.get("/settings/storage", response_model=StorageSettingsOut, dependencies=[Depends(require_permission("storage.view"))])
 async def get_storage_settings(db: AsyncSession = Depends(get_db)) -> StorageSettingsOut:
     stored = await load_storage_settings(db)
     return StorageSettingsOut(
@@ -49,12 +49,12 @@ async def get_storage_settings(db: AsyncSession = Depends(get_db)) -> StorageSet
     )
 
 
-@router.put("/settings/storage", response_model=StorageSettings)
+@router.put("/settings/storage", response_model=StorageSettings, dependencies=[Depends(require_permission("storage.edit"))])
 async def put_storage_settings(
     body: StorageSettings,
     confirm: bool = False,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_role("admin")),
+    user: User = Depends(current_user),
 ) -> StorageSettings | JSONResponse:
     before = await load_storage_settings(db)
     impact = await retention_impact(db, before, body)
@@ -72,22 +72,22 @@ async def put_storage_settings(
         }
     await save_storage_settings(db, body)
     # Always written, also for unchanged values: a save re-applies the compression and retention policies.
-    await audit_change(db, admin.id, "storage.changed", subject, before.model_dump(), body.model_dump(), always=True)
+    await audit_change(db, user.id, "storage.changed", subject, before.model_dump(), body.model_dump(), always=True)
     await db.commit()
     return body
 
 
-@router.put("/settings/storage/default", response_model=StorageSettings)
+@router.put("/settings/storage/default", response_model=StorageSettings, dependencies=[Depends(require_permission("storage.edit"))])
 async def put_storage_default(
     body: StorageSettings,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_role("admin")),
+    user: User = Depends(current_user),
 ) -> StorageSettings:
     """Remember these values as this site's own default (what "Reset to default" loads). Applies nothing."""
     before = await load_site_default(db)
     await save_site_default(db, body)
     await audit_change(
-        db, admin.id, "storage.default_set", {}, before.model_dump() if before else {}, body.model_dump()
+        db, user.id, "storage.default_set", {}, before.model_dump() if before else {}, body.model_dump()
     )
     await db.commit()
     return body

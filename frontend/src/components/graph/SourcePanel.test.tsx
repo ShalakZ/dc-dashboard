@@ -4,6 +4,7 @@ import { useGraph } from "../../api/queries";
 import type { GraphSource } from "../../api/types";
 import { mockFetch } from "../../test/fetchMock";
 import { renderWithProviders } from "../../test/render";
+import { userFor } from "../../test/users";
 import { SourcePanel } from "./SourcePanel";
 
 const source = (over: Partial<GraphSource> = {}): GraphSource => ({
@@ -13,7 +14,7 @@ const source = (over: Partial<GraphSource> = {}): GraphSource => ({
 });
 const base = {
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role: "admin" } },
+  "GET /api/me": { body: userFor("admin") },
 };
 const job = { id: 9, kind: "browse_source", status: "done", result: { count: 60 }, created_at: "t", finished_at: "t" };
 const graph = { sources: [], unidentified: [], assets: [], layout: {} };

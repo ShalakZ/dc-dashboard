@@ -3,7 +3,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, notify, require_role
+from dcdash.api.deps import get_db, notify, require_any_permission
 from dcdash.core.audit import scrub_strings
 from dcdash.core.models import Job, User
 from dcdash.core.pg import JOBS_CHANNEL
@@ -20,7 +20,11 @@ async def enqueue(db: AsyncSession, kind: str, params: dict[str, Any], user: Use
     return job.id
 
 
-@router.get("/jobs/{job_id}", dependencies=[Depends(require_role("operator"))])
+# Every kind of job the API starts needs one of these permissions, so whoever started one may follow it.
+@router.get(
+    "/jobs/{job_id}",
+    dependencies=[Depends(require_any_permission("sources.test", "diagnostics.run", "discovery.scan", "sources.edit"))],
+)
 async def get_job(job_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     job = await db.get(Job, job_id)
     if job is None:

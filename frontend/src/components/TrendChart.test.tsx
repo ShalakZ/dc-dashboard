@@ -6,6 +6,7 @@ import { CHART_HEIGHT } from "../lib/chartBox";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { seriesToOption, TrendChart } from "./TrendChart";
 
 // The mock records every option the chart is given; JSON.stringify in the DOM would drop the formatter functions.
@@ -168,7 +169,7 @@ describe("TrendChart", () => {
   it("requests the series for the chosen range", async () => {
     const calls = mockFetch({
       ...siteRoute,
-      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("viewer", { username: "v" }) },
       "GET /api/assets/4/series": { body: series },
     });
     renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
@@ -184,7 +185,7 @@ describe("TrendChart", () => {
     mockFetch({
       ...siteRoute,
       "GET /api/setup": { body: { needed: false } },
-      "GET /api/me": { body: { id: 1, username: "v", role: "viewer", preferences: { mode: "light", theme: "navy-gold" } } },
+      "GET /api/me": { body: userFor("viewer", { username: "v", preferences: { mode: "light", theme: "navy-gold" } }) },
       "PUT /api/me/preferences": { body: { mode: "dark", theme: "navy-gold" } },
       "GET /api/assets/4/series": { body: series },
     });
@@ -203,7 +204,7 @@ describe("TrendChart", () => {
   it("is a region named Trend, so a page (and a test) can find it by its name", async () => {
     mockFetch({
       ...siteRoute,
-      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("viewer", { username: "v" }) },
       "GET /api/assets/4/series": { body: series },
     });
     renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
@@ -214,7 +215,7 @@ describe("TrendChart", () => {
   it("is one framed region: the controls sit in a bar inside it, the range picker is a segmented group, and no section is nested in the region", async () => {
     mockFetch({
       ...siteRoute,
-      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("viewer", { username: "v" }) },
       "GET /api/assets/4/series": { body: series },
     });
     renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
@@ -231,7 +232,7 @@ describe("TrendChart", () => {
   it("labels the storage tier the series came from", async () => {
     mockFetch({
       ...siteRoute,
-      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("viewer", { username: "v" }) },
       "GET /api/assets/4/series": { body: { ...series, tier: "1h" } },
     });
     renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
@@ -242,7 +243,7 @@ describe("TrendChart", () => {
   it("offers a mapping picker when a metric has several mappings and requests the chosen one", async () => {
     const calls = mockFetch({
       ...siteRoute,
-      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("viewer", { username: "v" }) },
       "GET /api/assets/4/series": { body: series },
     });
     const two = [...metrics, { ...metrics[0], mapping_id: 7, point_id: 8 }];
@@ -317,7 +318,7 @@ describe("TrendChart site timezone", () => {
     return release;
   }
   const routes = {
-    "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+    "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("viewer", { username: "v" }) },
     "GET /api/assets/4/series": { body: series },
   };
 
@@ -350,7 +351,7 @@ describe("TrendChart site timezone", () => {
   it("draws the axis in the zone GET /api/site reports", async () => {
     mockFetch({
       ...siteRoute,
-      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+      "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("viewer", { username: "v" }) },
       "GET /api/assets/4/series": { body: series },
     });
     renderWithProviders(<TrendChart assetId={4} metrics={metrics} />);
@@ -364,7 +365,7 @@ describe("TrendChart site timezone", () => {
 describe("TrendChart says when it was updated and pauses under a mouse", () => {
   const routes = {
     ...siteRoute,
-    "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+    "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("viewer", { username: "v" }) },
     "GET /api/assets/4/series": { body: series },
   };
   const PAUSED = "(paused while you point at the chart)";
@@ -468,7 +469,7 @@ describe("TrendChart while the series loads", () => {
   const LABEL = "Loading the chart";
   const routes = {
     ...siteRoute,
-    "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+    "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("viewer", { username: "v" }) },
     "GET /api/assets/4/series": { body: series },
   };
   const holdSeries = () => holdFetch((method, path) => method === "GET" && path === "/api/assets/4/series");

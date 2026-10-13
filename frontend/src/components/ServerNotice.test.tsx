@@ -5,12 +5,13 @@ import { api } from "../api/client";
 import { noteReach, resetServerReach } from "../lib/serverReach";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { ServerNotice } from "./ServerNotice";
 
 let probe: { status: number };
 const routes = () => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role: "admin" } },
+  "GET /api/me": { body: userFor("admin") },
   "GET /api/probe": () => ({ status: probe.status, body: probe.status === 200 ? { n: 1 } : { detail: "Bad Gateway" } }),
 });
 

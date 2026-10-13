@@ -324,7 +324,7 @@ simulator protocols.
 
 ## Dashboards and billing
 
-Roles are enforced by the API; the screens only hide what you cannot use.
+Roles are enforced by the API; the screens only hide what you cannot use. The table is the three built-in roles; see "Roles and permissions" for what each permission allows and for making a role of your own.
 
 | | Viewer | Operator | Admin |
 |---|---|---|---|
@@ -426,6 +426,109 @@ one inside the same hour may understate that hour. Energy estimated from power i
 measurement. The currency is one per site, there are no time-of-use tariffs, and custom metrics cannot be
 used in widgets.
 
+## Roles and permissions
+
+Every action in the API needs a named permission, and an account holds one role: a role is a set of permissions. The screens only hide
+what the server would refuse. There are 28 permissions, in groups by area. A **See** permission opens a page, a **Change** permission
+edits what is on it, and a few risky actions are separate on purpose (deleting assets, exporting billing or the audit log, running
+scans, accepting scan results, choosing the default dashboard, managing roles).
+
+**Built-in roles.** Viewer, Operator and Admin exist from the start. They cannot be edited or deleted (the API answers 409), and they
+behave exactly as they did before roles were made of permissions:
+
+- **Viewer**: `assets.view`, `dashboards.view`, `billing.view`, `billing.export`.
+- **Operator**: everything a Viewer has, plus `dashboards.edit`, `tariffs.view`, `sources.view`, `sources.test`, `discovery.view` and
+  `diagnostics.run`.
+- **Admin**: every permission in the catalogue, now and when a later release adds one (it is computed from the catalogue, not stored).
+
+**The 28 permissions** (`backend/dcdash/core/permissions.py` is the one list; the Roles page of the next wave will draw from it):
+
+| Area | Permission | What it allows |
+|---|---|---|
+| Assets Tree | `assets.view` | Open the Assets Tree, an asset's details and charts, and the fleet summary. |
+| | `assets.edit` | Add and edit assets, and map points to them. |
+| | `assets.delete` | Delete an asset (its mappings go with it). |
+| Dashboards | `dashboards.view` | Open dashboards and their widgets, receive live values, and read the values of any point through a widget. |
+| | `dashboards.edit` | Create, edit and delete dashboards and their widgets. |
+| | `dashboards.default` | Choose the dashboard everybody lands on. |
+| Billing and tariffs | `billing.view` | Open the Billing page: energy and cost per asset and month. |
+| | `billing.export` | Download the billing table as a CSV file. |
+| | `tariffs.view` | Read the tariff list through the API. No page opens on it alone (see "easy to miss" below). |
+| | `tariffs.edit` | Open the Tariffs page (with `assets.view`) and set the currency, the site rate and per-asset rates. |
+| Sources and discovery | `sources.view` | Open the Sources page, a source's points and the collector status. |
+| | `sources.edit` | Add, edit and delete data sources and browse their points. |
+| | `sources.test` | Make the server try to reach a source (Test and Test all). |
+| | `discovery.view` | Open the Scans and Discovery pages. |
+| | `discovery.edit` | Add, edit and delete scan scopes; save the graph layout. |
+| | `discovery.scan` | Start a scan of a scope (it probes a network). |
+| | `discovery.accept` | Turn scan results into sources, assets and mappings. |
+| Storage and settings | `storage.view` | Open the Storage page. |
+| | `storage.edit` | Change retention, compression and disk limits. |
+| | `settings.view` | Open the Settings page. |
+| | `settings.edit` | Change general settings and the sign-in protection switch. |
+| Audit log | `audit.view` | Open the audit log and its entries. |
+| | `audit.export` | Download the audit log as CSV. |
+| Users | `users.view` | Open the Users page. |
+| | `users.edit` | Create, edit, deactivate and delete accounts; reset passwords; lift sign-in blocks. |
+| Roles | `roles.manage` | Create, edit and delete roles. Only the built-in Admin role holds it. |
+| Diagnostics | `diagnostics.view` | Open the Diagnostics page (with `sources.view`) and build a report, which includes settings, retention, the audit tail and each source's security settings. |
+| | `diagnostics.run` | Run the step-by-step connection check of a source. |
+
+A few things that are easy to miss:
+
+- **The sign-in protection switch** (Settings, section Sign-in protection) is part of `settings.edit`, with the two numbers beside it.
+  Whoever holds `settings.edit` can switch the protection off.
+- **A custom role can never manage roles.** `roles.manage` is held by the built-in Admin role only: the API refuses a role that lists it
+  (422), and a stored list that happens to name it grants nothing.
+- **Nobody can pass on more than they hold** (the subset rule). You can save a role, or give an account a role, only if you hold every
+  permission that role grants. And you can change an account (reset its password, deactivate or reactivate it, change its role, unblock
+  it, delete it) only if you hold every permission its role grants. That second half is why `users.edit` cannot be used to become
+  Admin: resetting an Admin's password, or giving anyone the Admin role, needs `roles.manage`, which no custom role has. Changing your
+  own role is refused (409), and so is deactivating or deleting yourself; the last active Admin can never be removed.
+- **Two pages need more than their own permission.** The Diagnostics page needs `diagnostics.view` and `sources.view`, and the
+  Tariffs page needs `tariffs.edit` and `assets.view` (it lists the assets its rates belong to). `tariffs.view` alone is for the API
+  until the Roles page arrives: it opens no page, so a role that holds only that sees no Tariffs link. A role with only
+  `diagnostics.view` gets "No access" on the Diagnostics page.
+- **A role that accounts hold cannot be deleted** (409, with the number of accounts). Duplicating Admin gives a role with every
+  permission except `roles.manage`.
+- **There is no per-site or per-asset scoping yet.** A permission applies to the whole site: `assets.view` shows every asset.
+- **A change takes effect on the person's next request**, with no cache in between. A page that person already has open keeps what it
+  loaded, notices on its next focus (or the first request that is refused) and shows "Your access changed. Reload to see what you can
+  use now." (or "Your role changed from X to Y. Reload the page to continue." when the role itself was changed).
+- **Two small changes for the API's callers.** A role name in `POST /api/users` or `PATCH /api/users/{id}` is matched ignoring case, so
+  `"Operator"` and `"ADMIN"` are accepted (they used to be refused with a 422), and an unknown name answers 422 with
+  `{"detail": "unknown role"}` (it used to be a list of validation errors). Authorization is checked before the request body is
+  validated; the one exception is a body that is not valid JSON at all, which gets its 422 first, signed in or not.
+- **A page the role lacks** shows the heading "No access" and "Your role does not include this page." (this replaces the old "Admins
+  only" and "Operators only"). A role that holds no permission at all can sign in, change its own password and read the site name, the
+  version and the status chip, and lands on "Your role has no pages yet." (the top bar and the page, with no sidebar). An action the
+  role lacks is refused, and where the page shows the reason it reads "Your role does not allow this."
+- **Where an account lands** after signing in: the default dashboard if there is one and the role may see dashboards, else the Assets
+  Tree, else the first page its sidebar offers.
+- **Everything is audited.** `role.created`, `role.updated` and `role.deleted` are in the Audit log with the permissions added and removed,
+  and a change of an account's role lists the permissions it adds and removes.
+
+**Making a role today.** The Roles page comes with the next wave (W9b), so a role is made through the API, signed in as an
+administrator. `GET /api/permissions` lists the ids; `POST /api/roles` creates a role (201, with its id and the sorted permissions);
+`PATCH /api/roles/{id}` changes its name, description or permissions; `DELETE /api/roles/{id}` removes it; `POST /api/roles/{id}/duplicate`
+makes an editable copy of any role (an optional `{"name": "..."}` names it). A role name is 1 to 64 characters, unique ignoring case, and
+may not be a built-in name. An example body for a role that reads energy and cost and nothing else:
+
+    {"name": "Executive", "description": "Reads energy and cost", "permissions": ["assets.view", "dashboards.view", "billing.view", "billing.export"]}
+
+From the browser's developer console on any page of the site, signed in as an administrator, this sends it with your session:
+
+    await fetch("/api/roles", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Executive", description: "Reads energy and cost",
+        permissions: ["assets.view", "dashboards.view", "billing.view", "billing.export"] }) }).then((r) => r.json())
+
+Give the role to an account by its **name**, matched ignoring case: `POST /api/users` or `PATCH /api/users/{id}` with `"role": "Executive"`.
+The Users page lists the role of every account (an account with a custom role keeps it when you edit its other fields). Its Create
+user form and role choice offer the roles the server says you may hand out (the built-in names first, then the others by name), and a
+row whose role grants something you lack is shown read-only, with no role choice, menu or trash can. A person who may not hand out a role
+never sees it offered once the page has the server's list of roles (while that list is loading, or could not be read, the three built-in
+names are shown and the server still refuses what is not allowed).
+
 ## Develop
 
 ```bash
@@ -460,7 +563,7 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Eighteen specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Twenty specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
 
 - `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
@@ -547,6 +650,16 @@ Eighteen specs run in one `playwright test` run against the dev-profile stack on
   side by side at 1440 and stacked at 1024; Tariffs' description wider than 800 px; the Audit toolbar in at most two rows with every accessible
   name still found, the table still a table with a header row and a Details button that opens a detail row; the version line never saying
   "built unknown"; and the loading skeleton of each page landing within 2 px of the loaded page at 1024 (Settings at 1440 too).
+- `w9a.spec.ts` (its own project, after `w7j`, at 1600×1000) checks roles and permissions: a viewer, an operator and an administrator each see
+  exactly their sidebar and get `No access` on a page they lack (and `/api/me` lists their permissions); the API, with each role's own session,
+  refuses every route above the role (a Viewer, an Operator, an account whose role holds nothing, a role with only `assets.view` and
+  `dashboards.view`) with the one 403 text, refuses the live stream to a role with no permission (403) and to nobody signed in (401), and
+  keeps setup closed (409); a role made through the API with only `assets.view` sees only the Assets Tree and lands on it, a role with no permission lands on "Your role has no pages yet.", and a
+  permission taken from a role is refused at once while the open page of that account says "Your access changed" on its next focus check and
+  the Audit log words the change; a role that may change users (every permission but `roles.manage`) cannot make an Admin, give itself Admin
+  or reset, deactivate, demote, unblock or delete one; an Admin cannot demote, deactivate or delete itself (409), the built-in roles
+  cannot be changed or deleted, `roles.manage` cannot be put in a custom role, and a role an account holds cannot be deleted (409). It
+  makes its accounts and roles (every name starts with `w9a-`) and removes them again, users first.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1323,6 +1436,34 @@ a pump and a sensor for kinds that say so. The pages go to one column below 1280
 3. **Verify.** `docker compose exec api alembic current` still prints `0008 (head)`; `scripts/check_web.sh http://localhost` prints
    nine `ok` lines; the Audit log, Storage, Tariffs, Settings and Diagnostics pages open. A stale page after the update reloads once by itself.
 4. **Going back.** Check out `eba2d92` and rebuild as in step 2. There is no database step.
+
+### Upgrading to W9a (migration 0009)
+
+Schema `0008` to `0009`. Downgrade: **lossless** for every account that holds Viewer, Operator or Admin (it only loses the custom roles
+described below, and an account that held one comes back as a Viewer), so option a is open. The code to go back to is `774cb6e`
+(`main` before W9a).
+
+W9a (roles and permissions, part 1) adds migration `0009`: a new table, `roles`, and a new column `users.role_id` that replaces
+`users.role`. The table is seeded with the three built-in roles (ids 1, 2 and 3: `viewer`, `operator`, `admin`); every account keeps its
+id, name, password, sessions, preferences and audit trail and is given the built-in role of the name it had (a value that could not
+exist, which the old check did not allow, would become Viewer: least privilege). It runs in a moment and needs no pre-check. What you
+will notice: **nothing changes for Viewer, Operator and Admin** except the screen a person sees when they open a page their role lacks, which
+now reads "No access" and "Your role does not include this page." (it said "Admins only" or "Operators only"). Behind it every API route needs a named permission (see "Roles and permissions"), `/api/me`,
+sign-in and setup answer with the account's `permissions` next to its `role` (still the role's name, so a script that reads `role` keeps
+working), and `/api/permissions` and `/api/roles` are new. Custom roles are made through the API until the Roles page arrives
+(W9b). The `api` container applies the migration the first time it starts from the new image.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0008`).
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+3. **Verify.** `docker compose exec api alembic current` prints `0009 (head)`; sign in as an administrator, an operator and a viewer
+   (if you have one of each) and see that each gets the pages it had before.
+4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0008` and `<old commit>` = `774cb6e`. The `0009`
+   downgrade puts `users.role` back (as the last column of `users`, filled by role id: 1 `viewer`, 2 `operator`, 3 `admin`, any other
+   role `viewer`), then drops `users.role_id` and `roles`. The custom roles are lost, and the accounts that held one come back as Viewers:
+   **write down which accounts hold a custom role before you go back**. `upgrade` seeds the three built-in roles again and gives every
+   account the role of its name. A restart of the W9a `api` would run `alembic upgrade head` and apply `0009` again, so the W9a `api`
+   must not be running once the schema is back at `0008`.
 
 ## Add a connector
 

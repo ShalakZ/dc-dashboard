@@ -4,7 +4,7 @@ import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { ApiError, api } from "./client";
 import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
-  FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
+  FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
@@ -18,6 +18,7 @@ export const keys = {
   connectors: ["connectors"] as const,
   points: (sourceId: number) => ["sources", sourceId, "points"] as const,
   users: ["users"] as const,
+  roles: ["roles"] as const,
   general: ["settings", "general"] as const,
   signInPolicy: ["settings", "sign-in"] as const,
   storage: ["storage"] as const,
@@ -53,7 +54,8 @@ export const keys = {
 /** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today), `fleet` the Assets Tree landing page's figures. */
 const COST_DEPENDENT = [keys.billing, keys.widgetData, keys.assets, keys.fleet] as const;
 
-export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets") });
+/** `enabled` is false for a role that may not see assets (the quick find in the top bar asks for the list on every page). */
+export const useAssets = (enabled = true) => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets"), enabled });
 
 /**
  * The Assets Tree landing page: live power, today's energy and cost over the whole site, and the readings that need attention.
@@ -89,11 +91,11 @@ export const useCollectorStatus = () =>
 export const useStatus = () =>
   useQuery({ queryKey: keys.status, queryFn: () => api.get<LiveStatus>("/api/status"), refetchInterval: 10_000 });
 
-/** Operators and admins only (the Sources page). A fetch error shows nothing: the warning is an extra, not a gate. */
+/** Needs sources.view (the Sources page). A fetch error shows nothing: the warning is an extra, not a gate. */
 export const useSecretKeyStatus = () =>
   useQuery({ queryKey: keys.secretKey, queryFn: () => api.get<SecretKeyStatus>("/api/secret-key/status"), refetchInterval: 60_000 });
 
-/** Admins only (the app shell's notice and the Settings page). The collector checks the certificate hourly, so ten minutes is plenty. */
+/** Needs settings.view (the app shell's notice and the Settings page). The collector checks the certificate hourly, so ten minutes is plenty. */
 export const useTlsStatus = () =>
   useQuery({ queryKey: keys.tlsStatus, queryFn: () => api.get<TlsStatus>("/api/tls/status"), refetchInterval: 600_000 });
 
@@ -115,10 +117,13 @@ export function useInvalidate() {
 
 export const useUsers = () => useQuery({ queryKey: keys.users, queryFn: () => api.get<UserRow[]>("/api/users") });
 
+/** The roles and which of them the caller may hand out (`assignable`). Open to users.view and users.edit; the Users page is its reader until the Roles page arrives. */
+export const useRoles = (enabled = true) => useQuery({ queryKey: keys.roles, queryFn: () => api.get<RoleRow[]>("/api/roles"), enabled });
+
 export function useCreateUser() {
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: (body: { username: string; password: string; role: Role }) => api.post<UserRow>("/api/users", body),
+    mutationFn: (body: { username: string; password: string; role: string }) => api.post<UserRow>("/api/users", body),
     onSuccess: () => invalidate(keys.users, keys.auditAll),
   });
 }
@@ -126,7 +131,7 @@ export function useCreateUser() {
 export function usePatchUser() {
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: ({ id, body }: { id: number; body: { role?: Role; active?: boolean; password?: string } }) =>
+    mutationFn: ({ id, body }: { id: number; body: { role?: string; active?: boolean; password?: string } }) =>
       api.patch<UserRow>(`/api/users/${id}`, body),
     onSuccess: () => invalidate(keys.users, keys.auditAll),
   });
@@ -221,7 +226,7 @@ export function useSetStorageDefault() {
 
 export const useScopes = () => useQuery({ queryKey: keys.scopes, queryFn: () => api.get<Scope[]>("/api/scopes") });
 
-/** Admin-only on the server: callers enable it only for admins, and only while the new-scope form is open. */
+/** Needs discovery.edit on the server: callers enable it only for someone who holds it, and only while the new-scope form is open. */
 export const useScopeSuggestions = (enabled: boolean) =>
   useQuery({
     queryKey: keys.suggestions,
@@ -338,10 +343,12 @@ export const useDashboards = () =>
  * The dashboard people land on (null = none). The server answers null for a stale or unusable value too.
  * The sidebar keeps this query alive for the whole session, so it looks again by itself (when the tab becomes visible again, once stale, and every minute):
  * another admin may delete the dashboard or pick a new default while a control-room screen stays open.
+ * `enabled` is false for a role that may not see dashboards: the query then never leaves `isPending`, so a caller that waits for it must check `enabled` too.
  */
-export const useDefaultDashboard = () =>
+export const useDefaultDashboard = (enabled = true) =>
   useQuery({
     queryKey: keys.defaultDashboard,
+    enabled,
     queryFn: () => api.get<DefaultDashboard>("/api/dashboards/default"),
     staleTime: 30_000,
     refetchOnWindowFocus: true, // the app turns this off for every query (main.tsx); react-query fires it when the tab becomes visible again

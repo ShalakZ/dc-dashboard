@@ -203,6 +203,17 @@ describe("AuditFilterBar quick filters", () => {
   });
 });
 
+describe("AuditFilterBar without an export", () => {
+  it("draws no Export CSV button when it is given no onExport", () => {
+    render(
+      <AuditFilterBar filters={NO_FILTERS} onChange={vi.fn()} today={TODAY} options={OPTIONS} onJump={vi.fn()} jumping={false}
+        exporting={false} error={null} notice={null} />,
+    );
+    expect(screen.queryByRole("button", { name: "Export CSV" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Go" })).toBeInTheDocument();
+  });
+});
+
 describe("AuditFilterBar Clear filters, Go to date, Export CSV and messages", () => {
   it("shows Clear filters only when something is filtered, and clears everything including the search box", async () => {
     const { onChange } = setup();

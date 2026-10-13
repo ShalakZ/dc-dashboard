@@ -1,5 +1,6 @@
 import type { AuditEntry } from "../api/types";
 import { assetIconLabel } from "./assetIcons";
+import { PERMISSION_LABELS, type PermissionId } from "./permissions";
 
 /** One field whose value changed; the texts are already formatted ("—" = absent or null). */
 export interface AuditChange { field: string; before: string; after: string }
@@ -101,12 +102,23 @@ function fieldList(changes: AuditChange[]): string {
 
 const withFields = (sentence: string, fields: string) => (fields ? `${sentence}: ${fields}` : sentence);
 
-/** "asset Panel A", else "asset #7", else "asset". */
-function thing(noun: string, d: Detail, idKey: string): string {
+/** "asset Panel A", else "asset #7", else "asset". `fit` shapes the name for the sentence. */
+function thing(noun: string, d: Detail, idKey: string, fit: (name: string) => string = (name) => name): string {
   const name = text(d.name) ?? text(d.username);
   const id = idOf(d[idKey]);
-  return name ? `${noun} ${name}` : id !== null ? `${noun} #${id}` : noun;
+  return name ? `${noun} ${fit(name)}` : id !== null ? `${noun} #${id}` : noun;
 }
+
+const MAX_NAME_LENGTH = 80;
+
+/** A name cut at 80 characters with an ellipsis (the server caps a role name at 64, but an entry is stored data). Counts characters, so no emoji is split. */
+function shortName(name: string): string {
+  const characters = [...name];
+  return characters.length > MAX_NAME_LENGTH ? `${characters.slice(0, MAX_NAME_LENGTH).join("")}…` : name;
+}
+
+/** "role Executive", else "role #4", else "role", with the name cut. */
+const roleThing = (d: Detail) => thing("role", d, "role_id", shortName);
 
 const page = (to: string, label: string) => (): AuditLink => ({ to, label });
 const assetLink = (id: number, name?: string | null): AuditLink => ({
@@ -145,6 +157,31 @@ function reasonSuffix(d: Detail): string {
   return reason ? ` (${reason.replace(/_/g, " ")})` : "";
 }
 
+/** A permission id as people read it: its label, else the id itself (one this build does not know, or not text). */
+function permissionLabel(id: unknown): string {
+  const raw = typeof id === "string" ? id : formatValue(id);
+  return has(PERMISSION_LABELS, raw) ? PERMISSION_LABELS[raw as PermissionId] : raw;
+}
+
+/** The labels of a stored permission list; empty when the value is not a list. */
+const permissionLabels = (value: unknown): string[] => (Array.isArray(value) ? value.map(permissionLabel) : []);
+
+const MAX_NAMED_PERMISSIONS = 6;
+
+/** "See billing, Change tariffs and 3 more": the long tail is counted. */
+function labelList(labels: string[]): string {
+  if (labels.length <= MAX_NAMED_PERMISSIONS) return labels.join(", ");
+  return `${labels.slice(0, MAX_NAMED_PERMISSIONS).join(", ")} and ${labels.length - MAX_NAMED_PERMISSIONS} more`;
+}
+
+/** " (adds See billing; removes Export billing as CSV)" from the permissions a change of role gave and took away; "" when the entry has none. */
+function roleDifference(d: Detail): string {
+  const added = permissionLabels(d.added);
+  const removed = permissionLabels(d.removed);
+  const parts = [added.length > 0 ? `adds ${labelList(added)}` : "", removed.length > 0 ? `removes ${labelList(removed)}` : ""].filter(Boolean);
+  return parts.length > 0 ? ` (${parts.join("; ")})` : "";
+}
+
 /** What a user.updated entry did to the account, as one sentence; null when it changed none of role, active and password. */
 function userUpdate({ d, sides }: Context): string | null {
   if (!sides) return null;
@@ -155,7 +192,7 @@ function userUpdate({ d, sides }: Context): string | null {
   if (changedKey("role")) {
     const from = text(get(sides.before, "role"));
     const to = formatValue(get(sides.after, "role"));
-    parts.push(`Changed the role of ${name ?? "a user"}${from ? ` from ${from}` : ""} to ${to}`);
+    parts.push(`Changed the role of ${name ?? "a user"}${from ? ` from ${from}` : ""} to ${to}${roleDifference(d)}`);
   }
   if (changedKey("active")) {
     const now = get(sides.after, "active");
@@ -167,6 +204,38 @@ function userUpdate({ d, sides }: Context): string | null {
     parts.push(`Reset the password of ${name ?? "a user"}`);
   }
   return parts.length > 0 ? parts.join("; ") : null;
+}
+
+/** The permissions a role edit gave and took away: the entry's own lists, else worked out from the permissions before and after. */
+function permissionsChanged({ d, sides }: Context): { added: unknown[]; removed: unknown[] } {
+  if (Array.isArray(d.added) || Array.isArray(d.removed)) {
+    return { added: Array.isArray(d.added) ? d.added : [], removed: Array.isArray(d.removed) ? d.removed : [] };
+  }
+  const before = sides ? get(sides.before, "permissions") : undefined;
+  const after = sides ? get(sides.after, "permissions") : undefined;
+  if (!Array.isArray(before) || !Array.isArray(after)) return { added: [], removed: [] };
+  const was = new Set(before.map(stable));
+  const now = new Set(after.map(stable));
+  return { added: after.filter((id) => !was.has(stable(id))), removed: before.filter((id) => !now.has(stable(id))) };
+}
+
+/** What a role.updated entry did to the role, as one sentence; null when it changed none of name, description and permissions. */
+function roleUpdate(c: Context): string | null {
+  const { d, sides } = c;
+  const parts: string[] = [];
+  const name = text(d.name);
+  const changedKey = (key: string) => sides !== null && has(sides.after, key) && stable(get(sides.before, key)) !== stable(get(sides.after, key));
+  if (sides && changedKey("name")) {
+    const from = text(get(sides.before, "name"));
+    parts.push(from ? `renamed from ${shortName(from)}` : "renamed");
+  }
+  const changes = permissionsChanged(c);
+  const added = permissionLabels(changes.added);
+  const removed = permissionLabels(changes.removed);
+  if (added.length > 0) parts.push(`added ${labelList(added)}`);
+  if (removed.length > 0) parts.push(`removed ${labelList(removed)}`);
+  if (changedKey("description")) parts.push("changed the description");
+  return parts.length > 0 ? `Changed ${name ? `role ${shortName(name)}` : roleThing(d)}: ${parts.join("; ")}` : null;
 }
 
 const sourcesPage = page("/sources", "Open Sources");
@@ -282,6 +351,19 @@ const RULES: Record<string, Rule> = {
 
   "password.change_failed": { summary: () => "Failed password change (wrong current password)" },
   "password.changed": { summary: () => "Changed own password" },
+
+  "role.created": {
+    summary: ({ d }) => {
+      const copied = text(d.copied_from);
+      const labels = permissionLabels(d.permissions);
+      const granted = Array.isArray(d.permissions) ? `: ${labels.length > 0 ? labelList(labels) : "no permissions"}` : "";
+      return `Created ${roleThing(d)}${copied ? ` as a copy of ${shortName(copied)}` : ""}${granted}`;
+    },
+  },
+  "role.deleted": { summary: ({ d }) => `Deleted ${roleThing(d)}` },
+  "role.updated": {
+    summary: (c) => roleUpdate(c) ?? withFields(`Changed ${roleThing(c.d)}`, c.fields),
+  },
 
   "scan.finished": {
     summary: ({ d }) => {

@@ -1,6 +1,7 @@
 import { useId, useRef, useState, type FormEvent } from "react";
 import { useBuildReport, useSources } from "../api/queries";
 import type { ReportDetail, ReportReply } from "../api/types";
+import { useAuth } from "../auth/AuthProvider";
 import { ConnectionCheck } from "../components/ConnectionCheck";
 import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
@@ -79,6 +80,7 @@ function ReportResult({ report }: { report: ReportReply }) {
 }
 
 export function DiagnosticsPage() {
+  const { can } = useAuth();
   const sources = useSources();
   const build = useBuildReport();
   const [detail, setDetail] = useState<ReportDetail>("summary");
@@ -123,9 +125,11 @@ export function DiagnosticsPage() {
           </form>
           {build.data ? <ReportResult report={build.data} /> : !build.isPending && <p className="muted">Nothing built yet. Choose the detail and press Build report.</p>}
         </PageCard>
-        <PageCard icon="sources" title="Connection check" className="span-all" purpose="Runs the steps one after the other and shows where a connection stops. It only reads from the source.">
-          <ConnectionCheck />
-        </PageCard>
+        {can("diagnostics.run") && (
+          <PageCard icon="sources" title="Connection check" className="span-all" purpose="Runs the steps one after the other and shows where a connection stops. It only reads from the source.">
+            <ConnectionCheck />
+          </PageCard>
+        )}
       </div>
     </section>
   );

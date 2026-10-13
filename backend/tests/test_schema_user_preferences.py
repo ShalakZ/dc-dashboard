@@ -12,6 +12,14 @@ async def column(db) -> asyncpg.Record | None:
 
 
 async def make_user(db, username: str = "a") -> int:
+    """An admin account as the schema at head stores it (a role_id)."""
+    return await db.fetchval(
+        "INSERT INTO users (username, password_hash, role_id) VALUES ($1, 'x', 3) RETURNING id", username
+    )
+
+
+async def make_user_old(db, username: str = "a") -> int:
+    """An admin account as 0007 stores it (a role column). Only for a database that is below 0009."""
     return await db.fetchval(
         "INSERT INTO users (username, password_hash, role) VALUES ($1, 'x', 'admin') RETURNING id", username
     )
@@ -31,7 +39,7 @@ async def test_anything_but_a_json_object_is_refused(db, literal):
     with pytest.raises(asyncpg.CheckViolationError):
         await db.execute(f"UPDATE users SET preferences = {literal}::jsonb WHERE id = $1", uid)
     with pytest.raises(asyncpg.CheckViolationError):
-        await db.execute(f"INSERT INTO users (username, password_hash, role, preferences) VALUES ('b', 'x', 'viewer', {literal}::jsonb)")
+        await db.execute(f"INSERT INTO users (username, password_hash, role_id, preferences) VALUES ('b', 'x', 1, {literal}::jsonb)")
 
 
 async def test_an_sql_null_is_refused_and_an_object_with_any_keys_is_kept_as_stored(db):
@@ -87,7 +95,7 @@ async def test_upgrade_gives_an_existing_account_empty_preferences_and_downgrade
     try:
         down = run_alembic("downgrade", "0006")
         assert down.returncode == 0, down.stderr
-        uid = await make_user(db, "older")  # an account made before the column existed
+        uid = await make_user_old(db, "older")  # an account made before the column existed
         await db.execute("INSERT INTO audit_log (user_id, action) VALUES ($1, 'kept')", uid)
         users_before = [tuple(r) for r in await db.fetch(USERS)]
 

@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, isUnreachable, setForbiddenHandler, setUnauthorizedHandler } from "../api/client";
-import { ROLE_LEVEL, type Role, type User } from "../api/types";
+import type { User } from "../api/types";
+import type { PermissionId } from "../lib/permissions";
 
 export const RETURN_KEY = "dcdash.returnTo";
 
@@ -11,17 +12,27 @@ const ROLE_CHECK_GAP_MS = 10_000;
 /** The gaps between the first sign-in check's attempts while the server cannot be reached: 3 s, 6 s, 10 s, then 15 s each time. */
 const RETRY_GAPS_MS = [3_000, 6_000, 10_000, 15_000];
 
-/** The shape of what /api/me answers for a signed-in user, as far as the app relies on it: a name and one of the three roles. */
-const isUser = (value: unknown): value is User =>
-  typeof value === "object" && value !== null
-  && typeof (value as { username?: unknown }).username === "string"
-  && typeof (value as { role?: unknown }).role === "string"
-  && Object.hasOwn(ROLE_LEVEL, (value as { role: string }).role);
+/** The shape of what /api/me answers for a signed-in user, as far as the app relies on it: a name, a role name (any text) and the list of permissions. */
+const isUser = (value: unknown): value is User => {
+  if (typeof value !== "object" || value === null) return false;
+  const { username, role, permissions } = value as { username?: unknown; role?: unknown; permissions?: unknown };
+  return typeof username === "string" && typeof role === "string"
+    && Array.isArray(permissions) && permissions.every((id) => typeof id === "string");
+};
+
+/** The same permissions, in whatever order. */
+const sameSet = (a: readonly string[], b: readonly string[]) => {
+  const held = new Set(b);
+  return new Set(a).size === held.size && a.every((id) => held.has(id));
+};
 
 interface AuthState {
   user: User | null;
-  /** Set when the server says the signed-in user now has another role than the page loaded with. `user` itself is left alone. */
-  roleChange: { from: Role; to: Role } | null;
+  /**
+   * Set when the server says the signed-in user now has another role, or the same role with another set of permissions, than the page loaded
+   * with (`from` and `to` are the role names, equal in the second case). `user` itself is left alone.
+   */
+  accessChange: { from: string; to: string } | null;
   setupNeeded: boolean;
   /** True while the first sign-in check gets no answer (no network, or the proxy answers 502, 503 or 504). It tries again by itself; until it is answered nobody is signed in and nothing redirects. */
   unreachable: boolean;
@@ -35,7 +46,10 @@ interface AuthState {
   login(username: string, password: string): Promise<void>;
   setup(username: string, password: string): Promise<void>;
   logout(): Promise<void>;
-  hasRole(min: Role): boolean;
+  /** True when the signed-in user holds the permission. False while nobody is signed in. */
+  can(id: PermissionId): boolean;
+  /** True when the signed-in user holds at least one of the permissions. */
+  canAny(...ids: PermissionId[]): boolean;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -46,9 +60,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [unreachable, setUnreachable] = useState(false);
   const [signedOutOnPurpose, setSignedOutOnPurpose] = useState(false);
-  const [roleChange, setRoleChange] = useState<AuthState["roleChange"]>(null);
+  const [accessChange, setAccessChange] = useState<AuthState["accessChange"]>(null);
   const queryClient = useQueryClient();
-  // The latest signed-in user, for callbacks that must not depend on it. The role the page "loaded with" is this user's role.
+  // The latest signed-in user, for callbacks that must not depend on it. The access the page "loaded with" is this user's role and permissions.
   const userRef = useRef<User | null>(null);
   const lastRoleCheck = useRef<number | null>(null);
   /** The one check that waits for the end of the 10 second window; further requests inside the window reuse it. */
@@ -66,7 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     userRef.current = next; // at once, so a focus event right after sign-in already finds the user
     cancelTrailingCheck();
     setUser(next);
-    setRoleChange(null);
+    setAccessChange(null);
   }, [cancelTrailingCheck]);
 
   const endSession = useCallback(() => {
@@ -74,17 +88,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryClient.clear();
   }, [replaceUser, queryClient]);
 
-  /** Ask the server who we are now, to notice a role changed under an open page. Never throws; does nothing while signed out. */
+  /** Ask the server who we are now, to notice a role, or what it allows, changed under an open page. Never throws; does nothing while signed out. */
   const askRole = useCallback(async () => {
     const loadedWith = userRef.current;
     if (!loadedWith) return;
     lastRoleCheck.current = Date.now();
     try {
-      const fresh = await api.get<User>("/api/me");
+      const fresh = await api.get<unknown>("/api/me");
       if (userRef.current !== loadedWith) return; // signed out, or in as someone else, while the request was out
-      setRoleChange((current) => {
-        if (fresh.role === loadedWith.role) return null;
-        return current?.to === fresh.role ? current : { from: loadedWith.role, to: fresh.role };
+      if (!isUser(fresh)) return; // an answer that is not a user says nothing about access
+      setAccessChange((current) => {
+        if (fresh.role === loadedWith.role && sameSet(fresh.permissions, loadedWith.permissions)) return null;
+        return current?.from === loadedWith.role && current.to === fresh.role ? current : { from: loadedWith.role, to: fresh.role };
       });
     } catch (error) {
       // /api/me is an auth path, so the unauthorized handler never sees its 401: the account was deactivated or the session expired.
@@ -235,12 +250,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     endSession();
   }, [endSession]);
 
+  // A server that sent no list (it always does) leaves the user with no permissions rather than throwing.
+  const held = useMemo(() => new Set<string>(Array.isArray(user?.permissions) ? user.permissions : []), [user]);
+  const can = useCallback((id: PermissionId) => held.has(id), [held]);
+  const canAny = useCallback((...ids: PermissionId[]) => ids.some((id) => held.has(id)), [held]);
+
   const value = useMemo<AuthState>(
     () => ({
-      user, roleChange, setupNeeded, unreachable, retryNow, signedOutOnPurpose, clearSignOutMark, loading, login, setup, logout,
-      hasRole: (min) => user !== null && ROLE_LEVEL[user.role] >= ROLE_LEVEL[min],
+      user, accessChange, setupNeeded, unreachable, retryNow, signedOutOnPurpose, clearSignOutMark, loading, login, setup, logout, can, canAny,
     }),
-    [user, roleChange, setupNeeded, unreachable, retryNow, signedOutOnPurpose, clearSignOutMark, loading, login, setup, logout],
+    [user, accessChange, setupNeeded, unreachable, retryNow, signedOutOnPurpose, clearSignOutMark, loading, login, setup, logout, can, canAny],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

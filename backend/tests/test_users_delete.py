@@ -57,7 +57,7 @@ def commits_meet(monkeypatch: pytest.MonkeyPatch, wait: float = 0.5):
 
 
 async def active_admins(db) -> int:
-    return await db.fetchval("SELECT count(*) FROM users WHERE role = 'admin' AND active")
+    return await db.fetchval("SELECT count(*) FROM users WHERE role_id = 3 AND active")
 
 
 @contextlib.contextmanager
@@ -188,16 +188,16 @@ async def test_a_change_that_removes_no_administrator_needs_no_other_one(db):
         assert target.id == only
 
 
-async def test_the_guard_signs_out_an_acting_admin_who_is_no_longer_one(db):
+async def test_the_guard_refuses_an_acting_admin_who_is_no_longer_one(db):
     acting_id = await make_user(db, "acting", "admin")
     target = await make_user(db, "target", "viewer")
     async with get_sessionmaker()() as session:
         acting = await session.get(User, acting_id)
-        await db.execute("UPDATE users SET role = 'viewer' WHERE id = $1", acting_id)  # changed behind the loaded copy
+        await db.execute("UPDATE users SET role_id = 1 WHERE id = $1", acting_id)  # changed behind the loaded copy
         try:
             await users_module.lock_admin_changes(session, acting, target, removes_admin=True)
         except HTTPException as refusal:
-            assert refusal.status_code == 401
+            assert (refusal.status_code, refusal.detail) == (403, "insufficient permission")  # still signed in, no longer allowed
         else:
             raise AssertionError("an acting admin who was demoted was still allowed")
 
@@ -280,7 +280,7 @@ async def test_deleting_one_account_leaves_another_accounts_block_alone(client, 
 
 
 # Two admins act on each other in the same instant. One lock serialises them: the winner commits, the loser then finds
-# itself changed or gone (401), and one active admin is always left.
+# itself gone or deactivated (401) or demoted (403), and one active admin is always left.
 
 
 def outcome(responses) -> list[int]:
@@ -306,14 +306,14 @@ async def test_two_admins_cannot_demote_each_other_at_once(app, db, monkeypatch)
                 b.patch(f"/api/users/{a_id}", json={"role": "viewer"}),
             )
     assert await active_admins(db) == 1, "no active administrator is left"
-    assert outcome(responses) == [200, 401]
+    assert outcome(responses) == [200, 403]  # the loser is still signed in, but demoted: refused, not signed out
 
 
 async def test_two_admins_cannot_delete_each_other_at_once(app, db, monkeypatch):
     async with two_admins(app, db) as (a, b, a_id, b_id):
         with commits_meet(monkeypatch):
             responses = await asyncio.gather(a.delete(f"/api/users/{b_id}"), b.delete(f"/api/users/{a_id}"))
-    assert await db.fetchval("SELECT count(*) FROM users WHERE role = 'admin'") == 1, "no administrator is left"
+    assert await db.fetchval("SELECT count(*) FROM users WHERE role_id = 3") == 1, "no administrator is left"
     assert outcome(responses) == [204, 401]
 
 
@@ -323,7 +323,8 @@ async def test_a_delete_racing_a_demotion_leaves_an_admin(app, db, monkeypatch):
             responses = await asyncio.gather(
                 a.delete(f"/api/users/{b_id}"), b.patch(f"/api/users/{a_id}", json={"role": "viewer"})
             )
-    assert sorted(r.status_code for r in responses) in ([200, 401], [204, 401])
+    # the delete first: the demoting admin is gone (401); the demotion first: the deleting admin is demoted (403)
+    assert sorted(r.status_code for r in responses) in ([200, 403], [204, 401])
     assert await active_admins(db) == 1
 
 
@@ -374,7 +375,9 @@ async def test_every_kind_of_patch_waits_for_the_admin_lock(client, db, body, ro
         pass
     response = await asyncio.wait_for(patching, 10)
     assert response.status_code == 200, response.text
-    row = await db.fetchrow("SELECT role, active FROM users WHERE id = $1", victim)
+    row = await db.fetchrow(
+        "SELECT r.name AS role, u.active FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1", victim
+    )
     for field in ("role", "active"):
         if field in body:
             assert row[field] == body[field]
@@ -463,7 +466,7 @@ async def test_a_vanished_acting_admin_gets_401_even_when_the_target_does_not_ex
 
 def record_hash_and_lock_order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     order: list[str] = []
-    real_hash, real_lock = users_module.hash_password, users_module.lock_admin_changes
+    real_hash, real_lock = users_module.hash_password, users_module.lock_account_changes
 
     def hashing(password):
         order.append("hash")
@@ -474,7 +477,7 @@ def record_hash_and_lock_order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         return await real_lock(*args, **kwargs)
 
     monkeypatch.setattr(users_module, "hash_password", hashing)
-    monkeypatch.setattr(users_module, "lock_admin_changes", locking)
+    monkeypatch.setattr(users_module, "lock_account_changes", locking)  # the lock step of every account change
     return order
 
 

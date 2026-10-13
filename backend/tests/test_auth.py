@@ -3,7 +3,8 @@ from sqlalchemy.exc import OperationalError
 
 from dcdash.api.deps import get_db
 from dcdash.api import auth as auth_module
-from helpers import login_as, make_user
+from dcdash.core.permissions import ALL_IDS, BUILTIN
+from helpers import login_as, make_role, make_user
 
 ADMIN = {"username": "admin", "password": "correct-horse"}
 
@@ -258,3 +259,56 @@ def test_clear_on_the_shared_limiter_restores_the_constructor_numbers():
         assert limiter.blocked("k") and 299 < limiter.retry_after("k") <= 300
     finally:
         limiter.clear()
+
+
+# ---- the permissions an answer carries ----------------------------------------------------------------------------------
+
+async def test_setup_and_login_and_me_list_the_admin_s_permissions_sorted(client):
+    created = await client.post("/api/setup", json=ADMIN)
+    assert created.json()["role"] == "admin"
+    assert created.json()["permissions"] == sorted(ALL_IDS) and len(ALL_IDS) == 28
+    assert (await client.get("/api/me")).json()["permissions"] == sorted(ALL_IDS)
+    await client.post("/api/logout")
+    assert (await client.post("/api/login", json=ADMIN)).json()["permissions"] == sorted(ALL_IDS)
+
+
+@pytest.mark.parametrize("role", ["viewer", "operator", "admin"])
+async def test_each_built_in_role_lists_exactly_its_set(client, db, role):
+    await make_user(db, "ann", role)
+    login = await client.post("/api/login", json={"username": "ann", "password": "correct-horse"})
+    assert login.json()["role"] == role
+    assert login.json()["permissions"] == sorted(BUILTIN[role])
+    me = (await client.get("/api/me")).json()
+    assert me["role"] == role and me["permissions"] == sorted(BUILTIN[role])
+
+
+async def test_a_custom_role_user_lists_only_what_its_role_really_grants(client, db):
+    # roles.manage, an unknown id and a non-string in the stored list are ignored, and the list answers sorted.
+    await make_role(db, "night shift", ["users.view", "assets.view", "roles.manage", "bogus.thing", 7, "assets.view"])
+    await make_user(db, "nora", "night shift")
+    login = await client.post("/api/login", json={"username": "nora", "password": "correct-horse"})
+    assert login.json()["role"] == "night shift"
+    assert login.json()["permissions"] == ["assets.view", "users.view"]
+    assert (await client.get("/api/me")).json()["permissions"] == ["assets.view", "users.view"]
+
+
+async def test_a_role_with_no_permissions_lists_none(client, db):
+    await make_role(db, "nothing")
+    await make_user(db, "nina", "nothing")
+    assert (await client.post("/api/login", json={"username": "nina", "password": "correct-horse"})).json()["permissions"] == []
+
+
+async def test_a_permission_removed_from_the_role_is_gone_from_the_next_answer(client, db):
+    role = await make_role(db, "night shift", ["assets.view", "audit.view"])
+    await make_user(db, "nora", "night shift")
+    await client.post("/api/login", json={"username": "nora", "password": "correct-horse"})
+    assert (await client.get("/api/me")).json()["permissions"] == ["assets.view", "audit.view"]
+    await db.execute("UPDATE roles SET permissions = '[\"assets.view\"]'::jsonb WHERE id = $1", role)
+    assert (await client.get("/api/me")).json()["permissions"] == ["assets.view"]
+
+
+async def test_a_built_in_role_ignores_what_its_stored_mirror_says(client, db):
+    await db.execute("UPDATE roles SET permissions = '[\"users.edit\", \"roles.manage\"]'::jsonb WHERE name = 'viewer'")
+    await make_user(db, "vee", "viewer")
+    await client.post("/api/login", json={"username": "vee", "password": "correct-horse"})
+    assert (await client.get("/api/me")).json()["permissions"] == sorted(BUILTIN["viewer"])

@@ -31,7 +31,7 @@ export function AssetPage() {
 }
 
 function AssetView({ id }: { id: number }) {
-  const workspace = useAssetsContext(); // null when the page is mounted alone: then it has no admin buttons
+  const workspace = useAssetsContext(); // null when the page is mounted alone: then it has no edit or delete buttons
   const { data, error, isLoading, errorUpdateCount } = useSummary(id);
   const { data: assets, isLoading: assetsLoading } = useAssets();
   // The chart's chunk starts loading with the page, so by the time the summary is in, its fallback is rarely needed.

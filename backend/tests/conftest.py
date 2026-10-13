@@ -11,7 +11,7 @@ from testcontainers.postgres import PostgresContainer
 
 os.environ.setdefault("DCDASH_SECRET_KEY", Fernet.generate_key().decode())
 
-from helpers import refresh_rollup  # noqa: E402  (imports dcdash, which needs the key above)
+from helpers import refresh_rollup, restore_builtin_roles  # noqa: E402  (imports dcdash, which needs the key above)
 
 BACKEND = Path(__file__).resolve().parents[1]
 TABLES = (
@@ -79,6 +79,7 @@ async def pool(database_url):
 @pytest.fixture
 async def db(pool):
     await pool.execute(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE")
+    await restore_builtin_roles(pool)  # roles are not truncated: migration 0009 seeds the three built-in rows once
     # TRUNCATE leaves already-materialized rollup rows behind; a full refresh over an empty
     # source drops them. refresh_continuous_aggregate must run outside a transaction, which
     # asyncpg's autocommitting pool.execute satisfies.

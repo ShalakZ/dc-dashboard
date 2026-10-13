@@ -87,8 +87,5 @@ async def test_existing_assets_read_null_and_the_downgrade_loses_only_the_choice
         run_alembic("upgrade", "head")
 
 
-def test_the_migration_follows_0007_and_is_the_only_head():
-    assert "0007 -> 0008" in run_alembic("history", "-r", "0007:0008").stdout
-    heads = run_alembic("heads")
-    assert heads.returncode == 0, heads.stderr
-    assert [line.split()[0] for line in heads.stdout.splitlines() if line.strip()] == ["0008"]
+def test_the_migration_follows_0007():
+    assert "0007 -> 0008" in run_alembic("history", "-r", "0007:0008").stdout  # the one head is pinned by the newest migration's test

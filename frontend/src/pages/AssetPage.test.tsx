@@ -9,6 +9,7 @@ import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { iconHtml } from "../test/iconHtml";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { AssetPage } from "./AssetPage";
 
 class FakeEventSource {
@@ -45,7 +46,7 @@ const family = [
 ];
 const routes = (energy: unknown, cost?: unknown) => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+  "GET /api/me": { body: userFor("viewer", { username: "v" }) },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
   "GET /api/assets": { body: family },
   "GET /api/assets/4/summary": { body: summary(energy, cost) },

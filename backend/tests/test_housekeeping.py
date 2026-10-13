@@ -15,7 +15,7 @@ async def add_events(db, count: int, age: timedelta = timedelta(0), source_id: i
 
 async def test_housekeep_deletes_expired_sessions_and_old_jobs(db, pool):
     uid = await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('u', $1, 'viewer') RETURNING id",
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('u', $1, 1) RETURNING id",
         hash_password("correct-horse"),
     )
     now = datetime.now(timezone.utc)

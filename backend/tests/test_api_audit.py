@@ -24,7 +24,7 @@ async def test_audit_is_admin_only_and_newest_first_with_paging_and_usernames(cl
 async def test_audit_keeps_the_actor_name_after_the_user_is_deleted(client, db):
     await login_as(client, db, "admin")
     gone = await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('gone', 'x', 'viewer') RETURNING id"
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('gone', 'x', 1) RETURNING id"
     )
     await audit_pool(db, gone, "x.did")
     await db.execute("DELETE FROM users WHERE id = $1", gone)
@@ -36,10 +36,10 @@ async def test_audit_keeps_the_actor_name_after_the_user_is_deleted(client, db):
 async def test_options_marks_actors_whose_account_is_gone_and_tells_namesakes_apart(client, db):
     await login_as(client, db, "admin")
     kept = await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('kept', 'x', 'viewer') RETURNING id"
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('kept', 'x', 1) RETURNING id"
     )
     old_bob = await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('bob', 'x', 'viewer') RETURNING id"
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('bob', 'x', 1) RETURNING id"
     )
     await audit_pool(db, kept, "x.did")
     await audit_pool(db, old_bob, "x.did")
@@ -50,7 +50,7 @@ async def test_options_marks_actors_whose_account_is_gone_and_tells_namesakes_ap
     assert {u["id"]: u["name"] for u in users} == {kept: "kept", old_bob: "bob (deleted)", 4000: "ghost (deleted)"}
 
     new_bob = await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('bob', 'x', 'operator') RETURNING id"
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('bob', 'x', 2) RETURNING id"
     )
     await audit_pool(db, new_bob, "x.did")
     users = (await client.get("/api/audit/options")).json()["users"]
@@ -67,13 +67,13 @@ async def test_options_never_gives_two_actors_the_same_label(client, db):
     """A deleted `bob` and a live account whose name is literally `bob (deleted)` would both read `bob (deleted)`."""
     await login_as(client, db, "admin")
     old_bob = await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('bob', 'x', 'viewer') RETURNING id"
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('bob', 'x', 1) RETURNING id"
     )
     lookalike = await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('bob (deleted)', 'x', 'viewer') RETURNING id"
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('bob (deleted)', 'x', 1) RETURNING id"
     )
     kept = await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('kept', 'x', 'viewer') RETURNING id"
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('kept', 'x', 1) RETURNING id"
     )
     for actor in (old_bob, lookalike, kept):
         await audit_pool(db, actor, "x.did")

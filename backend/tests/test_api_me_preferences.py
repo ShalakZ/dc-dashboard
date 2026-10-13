@@ -10,6 +10,7 @@ from helpers import login_as, make_user
 from dcdash.api import auth as auth_module
 from dcdash.api import deps as deps_module
 from dcdash.core import preferences as preferences_module
+from dcdash.core.permissions import BUILTIN
 from dcdash.core.preferences import DEFAULTS, MODES, THEMES, normalize
 
 DEFAULT_LOOK = {"mode": "light", "theme": "navy-gold"}
@@ -89,7 +90,10 @@ async def test_a_new_account_reads_the_defaults_from_me_and_from_login(client, d
     login = await client.post("/api/login", json={"username": "ann", "password": "correct-horse"})
     assert login.status_code == 200 and login.json()["preferences"] == DEFAULT_LOOK
     me = await client.get("/api/me")
-    assert me.json() == {"id": await user_id(db, "ann"), "username": "ann", "role": "viewer", "preferences": DEFAULT_LOOK}
+    assert me.json() == {
+        "id": await user_id(db, "ann"), "username": "ann", "role": "viewer", "permissions": sorted(BUILTIN["viewer"]),
+        "preferences": DEFAULT_LOOK,
+    }
 
 
 async def test_setup_answers_the_defaults_too(client, db):
@@ -129,6 +133,16 @@ async def test_every_signed_in_role_can_set_its_own(client, db, role):
     assert response.status_code == 200, response.text
     assert response.json() == {"mode": "dark", "theme": "graphite"}
     assert await stored(db, role) == {"mode": "dark", "theme": "graphite"}
+
+
+async def test_saving_a_choice_locks_the_account_and_not_the_role_every_account_of_it_shares(client, db):
+    # The user query joins the role row; a bare FOR UPDATE would lock that row too, so one person saving a theme would make
+    # everybody with the same role (and an edit of the role) wait.
+    await login_as(client, db, "viewer")
+    async with db.acquire() as other, other.transaction():
+        await other.execute("SELECT 1 FROM roles WHERE id = 1 FOR UPDATE")  # someone else holds the viewer role row
+        response = await asyncio.wait_for(client.put(URL, json={"mode": "dark"}), 5)
+    assert response.status_code == 200, response.text
 
 
 async def test_a_deactivated_account_is_refused(client, db):

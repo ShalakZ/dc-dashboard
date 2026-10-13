@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { LoginPage } from "./LoginPage";
 
 const base = { "GET /api/setup": { body: { needed: false } }, "GET /api/me": { status: 401, body: { detail: "x" } } };
@@ -14,7 +15,7 @@ function Where() {
 describe("LoginPage", () => {
   it("posts credentials and navigates to the stored return path", async () => {
     sessionStorage.setItem("dcdash.returnTo", "/assets/4");
-    const calls = mockFetch({ ...base, "POST /api/login": { body: { id: 1, username: "admin", role: "admin" } } });
+    const calls = mockFetch({ ...base, "POST /api/login": { body: userFor("admin", { username: "admin" }) } });
     renderWithProviders(<LoginPage />, { route: "/login", path: "/login" });
     await userEvent.type(await screen.findByLabelText("Username"), "admin");
     await userEvent.type(screen.getByLabelText("Password"), "secret-123");
@@ -25,7 +26,7 @@ describe("LoginPage", () => {
 
   // path "*" on a neighbouring address keeps LoginPage mounted while the location changes, so the probe can read where it went.
   async function signIn() {
-    mockFetch({ ...base, "POST /api/login": { body: { id: 1, username: "admin", role: "admin" } } });
+    mockFetch({ ...base, "POST /api/login": { body: userFor("admin", { username: "admin" }) } });
     renderWithProviders(<><LoginPage /><Where /></>, { route: "/signin", path: "*" });
     await userEvent.type(await screen.findByLabelText("Username"), "admin");
     await userEvent.type(screen.getByLabelText("Password"), "secret-123");

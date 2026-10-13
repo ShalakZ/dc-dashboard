@@ -2,7 +2,10 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
+import type { PermissionId } from "../lib/permissions";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
+import { userFor } from "../test/users";
 import { SourcePointsPage } from "./SourcePointsPage";
 
 const points = [
@@ -16,7 +19,7 @@ async function choose(row: HTMLElement, item: string) {
   await userEvent.click(await screen.findByRole("menuitem", { name: item }));
 }
 const routes = {
-  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "a", role: "admin" } },
+  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin", { username: "a" }) },
   "GET /api/assets": { body: [{ id: 4, parent_id: null, name: "Panel 1", kind: "panel", sort_order: 0 }] },
   "GET /api/sources": { body: [{ id: 2, name: "sim", connector_type: "simulator", config: {}, enabled: true, status: "online", last_seen: null, last_error: null, has_secret: false }] },
   "GET /api/sources/2/points": { body: points },
@@ -47,7 +50,7 @@ describe("SourcePointsPage", () => {
     const calls = mockFetch(routes);
     renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
     const row = (await screen.findByText("panel1/energy")).closest("tr")!;
-    expect(within(row).getByText(/Panel 1 · energy_kwh/)).toBeInTheDocument();
+    expect(await within(row).findByText(/Panel 1 · energy_kwh/)).toBeInTheDocument(); // the asset names wait for the account (assets.view)
     await choose(row, "Unmap");
     expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/mappings/2")).toBe(true);
   });
@@ -501,5 +504,48 @@ describe("SourcePointsPage while the points load (W7f)", () => {
     page();
     expect(await screen.findByRole("alert")).toHaveTextContent("the source is gone");
     expect(document.querySelector(".sk-region")).toBeNull();
+  });
+});
+
+describe("SourcePointsPage controls follow the permissions of the role (a custom role)", () => {
+  /** A role called "custom" that holds `permissions` (the page itself needs sources.edit); the table and the account are in when this returns. */
+  const show = async (permissions: PermissionId[]) => {
+    const calls = mockFetch({ ...routes, "GET /api/me": { body: userFor("custom", { permissions: ["sources.edit", "sources.view", ...permissions] }) } });
+    renderWithProviders(<><SourcePointsPage /><SignedIn /></>, { route: "/sources/2/points", path: "/sources/:id/points" });
+    await screen.findByText("panel1/energy");
+    await accountKnown();
+    return calls;
+  };
+
+  it("sources.edit alone: Browse points, and no Map, Edit or Unmap menu on any row", async () => {
+    const calls = await show([]);
+    expect(screen.getByRole("button", { name: "Browse points" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/assets")).toBe(false); // without assets.view the asset list is not asked for
+    expect(screen.getByText(/#4 · energy_kwh/)).toBeInTheDocument(); // and the mapped row names the asset by its id
+  });
+
+  it("assets.edit without assets.view: still no menu (the form picks the asset from the list that role cannot read)", async () => {
+    await show(["assets.edit"]);
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+  });
+
+  it("assets.view without assets.edit: asset names, and no menu", async () => {
+    await show(["assets.view"]);
+    expect(await screen.findByText(/Panel 1 · energy_kwh/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+  });
+
+  it("assets.edit and assets.view: Map on an unmapped point, Edit and Unmap on a mapped one", async () => {
+    const calls = await show(["assets.edit", "assets.view"]);
+    const unmapped = (await screen.findByText("panel1/power")).closest("tr")!;
+    await userEvent.click(within(unmapped).getByRole("button", { name: /^Actions for / }));
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Map"]);
+    await userEvent.keyboard("{Escape}");
+    const mapped = screen.getByText("panel1/energy").closest("tr")!;
+    await userEvent.click(within(mapped).getByRole("button", { name: /^Actions for / }));
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Edit", "Unmap"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Unmap" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/mappings/2")).toBe(true));
   });
 });

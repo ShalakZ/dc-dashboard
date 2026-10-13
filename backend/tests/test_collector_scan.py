@@ -89,7 +89,7 @@ async def test_finding_details_use_the_documented_strings(db, simulator_network)
 
 async def test_scan_writes_a_finished_audit_row_for_the_starting_user(db, simulator_network):
     user = await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('a', 'x', 'admin') RETURNING id"
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('a', 'x', 3) RETURNING id"
     )
     scan = await make_scan(db, ["127.0.0.1"], [simulator_network["modbus"]], user)
     await run_scan(db, scan)
@@ -287,7 +287,7 @@ async def test_a_scope_that_finds_nothing_completes(db):
 async def test_a_scan_finishes_done_when_its_starting_user_is_deleted_mid_run(db, monkeypatch):
     """run_scan reads started_by once at its start; deleting that account later must not turn the scan into a failure."""
     user = await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('a', 'x', 'admin') RETURNING id"
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('a', 'x', 3) RETURNING id"
     )
     scan = await make_scan(db, ["127.0.0.1"], [free_port()], user)
     real = scan_module._record_findings

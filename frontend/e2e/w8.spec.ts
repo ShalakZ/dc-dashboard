@@ -179,7 +179,7 @@ test.describe("W8: field diagnostics", () => {
     await expect(navLink(page, "Diagnostics")).toHaveCount(0);
 
     await page.goto("/diagnostics");
-    await expect(page.getByRole("heading", { name: "Admins only" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "No access" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Build report" })).toHaveCount(0);
     expect((await page.request.get("/api/diagnostics/report")).status()).toBe(403);
 

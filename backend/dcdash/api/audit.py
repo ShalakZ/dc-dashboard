@@ -11,13 +11,13 @@ from sqlalchemy import ColumnElement, Select, Text, cast, exists, func, or_, sel
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import get_db, require_permission
 from dcdash.api.settings import current_timezone
 from dcdash.core.csvout import write_csv
 from dcdash.core.models import AuditLog, User
 from dcdash.core.timeutil import local_midnight
 
-router = APIRouter(prefix="/api", tags=["audit"], dependencies=[Depends(require_role("admin"))])
+router = APIRouter(prefix="/api", tags=["audit"])
 
 # An exact action, or one `*` at the start and/or end (`*.deleted`, `login.*`).
 ACTION = Annotated[str, StringConstraints(pattern=r"^\*?[a-z0-9_.]+\*?$", max_length=60)]
@@ -108,7 +108,7 @@ def _item(entry: AuditLog, username: str | None) -> dict[str, Any]:
     }
 
 
-@router.get("/audit")
+@router.get("/audit", dependencies=[Depends(require_permission("audit.view"))])
 async def list_audit(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0, le=2_147_483_647),  # the database takes a 32-bit offset
@@ -121,7 +121,7 @@ async def list_audit(
     return {"total": total, "offset": offset, "limit": limit, "items": [_item(e, username) for e, username in rows]}
 
 
-@router.get("/audit.csv")
+@router.get("/audit.csv", dependencies=[Depends(require_permission("audit.export"))])
 async def audit_csv(f: AuditFilter = Depends(audit_filter), db: AsyncSession = Depends(get_db)) -> Response:
     """The filtered log as it is stored (not the friendly text), newest first; too many rows is a 422, never a short file."""
     tz = await current_timezone(db)
@@ -153,7 +153,7 @@ async def audit_csv(f: AuditFilter = Depends(audit_filter), db: AsyncSession = D
     )
 
 
-@router.get("/audit/options")
+@router.get("/audit/options", dependencies=[Depends(require_permission("audit.view"))])
 async def audit_options(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     actions = (await db.scalars(select(AuditLog.action).distinct().order_by(AuditLog.action))).all()
     newest = (
@@ -181,7 +181,7 @@ async def audit_options(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     return {"actions": list(actions), "users": users, "unattributed": bool(unattributed)}
 
 
-@router.get("/audit/position")
+@router.get("/audit/position", dependencies=[Depends(require_permission("audit.view"))])
 async def audit_position(
     day: Annotated[date, Query(alias="date")],
     f: AuditFilter = Depends(audit_filter),
@@ -205,7 +205,7 @@ async def audit_position(
     return {"offset": newer, "total": total, "on_day": anchor.ts >= local_midnight(day, tz)}
 
 
-@router.get("/audit/{entry_id:int}")
+@router.get("/audit/{entry_id:int}", dependencies=[Depends(require_permission("audit.view"))])
 async def get_audit_entry(
     entry_id: Annotated[int, Path(ge=1, le=2_147_483_647)], db: AsyncSession = Depends(get_db)
 ) -> dict[str, Any]:

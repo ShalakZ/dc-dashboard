@@ -11,7 +11,7 @@ from sqlalchemy import distinct, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, notify, require_role
+from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
 from dcdash.core.audit import (
@@ -22,8 +22,6 @@ from dcdash.core.models import Mapping, Point, Source, User
 from dcdash.core.pg import CONFIG_CHANNEL
 
 router = APIRouter(prefix="/api", tags=["sources"])
-Admin = Depends(require_role("admin"))
-Operator = Depends(require_role("operator"))
 
 CHECK_LOCK = 7_308_001  # advisory-lock namespace (first int); the source id is the second: one check start per source at a time
 CHECK_COOLDOWN_SECONDS = 5
@@ -160,7 +158,7 @@ def _values(source: Source) -> dict[str, Any]:
     }
 
 
-@router.get("/connectors", dependencies=[Admin])
+@router.get("/connectors", dependencies=[Depends(require_permission("sources.edit"))])
 async def list_connectors() -> list[dict[str, Any]]:
     return [
         {"type": name, "config_schema": cls.config_schema.model_json_schema()}
@@ -168,7 +166,9 @@ async def list_connectors() -> list[dict[str, Any]]:
     ]
 
 
-@router.get("/sources", response_model=list[SourceListOut], dependencies=[Operator])
+@router.get(
+    "/sources", response_model=list[SourceListOut], dependencies=[Depends(require_permission("sources.view"))]
+)
 async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut]:
     # Discovered sources stay out of the list until at least one of their points is mapped.
     query = select(Source).where(or_(Source.origin == "manual", _has_mapped_point())).order_by(Source.name)
@@ -197,8 +197,10 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> list[SourceListOut
     ]
 
 
-@router.post("/sources", response_model=SourceOut, status_code=201, dependencies=[Admin])
-async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db), admin: User = Admin) -> SourceOut:
+@router.post(
+    "/sources", response_model=SourceOut, status_code=201, dependencies=[Depends(require_permission("sources.edit"))]
+)
+async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)) -> SourceOut:
     reject_hidden_marker(body.config, {})
     source = Source(
         name=body.name,
@@ -210,16 +212,18 @@ async def create_source(body: SourceIn, db: AsyncSession = Depends(get_db), admi
     db.add(source)
     await _flush(db, body.name)
     await audit(
-        db, admin.id, "source.created",
+        db, user.id, "source.created",
         {"source_id": source.id, "connector_type": source.connector_type, **_values(source)},
     )
     await _publish(db)
     return SourceOut.of(source)
 
 
-@router.patch("/sources/{source_id}", response_model=SourceOut, dependencies=[Admin])
+@router.patch(
+    "/sources/{source_id}", response_model=SourceOut, dependencies=[Depends(require_permission("sources.edit"))]
+)
 async def update_source(
-    source_id: int, body: SourcePatch, db: AsyncSession = Depends(get_db), admin: User = Admin
+    source_id: int, body: SourcePatch, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> SourceOut:
     source = await get_source(db, source_id)
     before = _values(source)
@@ -244,17 +248,19 @@ async def update_source(
         # What safe_config hides (URL credentials, a masked key) changed, whatever else changed with it: record that,
         # never the values (hidden_parts is only compared here).
         before["config_credentials"], after["config_credentials"] = "unchanged", "changed"
-    await audit_change(db, admin.id, "source.updated", {"source_id": source.id, "name": source.name}, before, after)
+    await audit_change(db, user.id, "source.updated", {"source_id": source.id, "name": source.name}, before, after)
     await _publish(db)
     return SourceOut.of(source)
 
 
-@router.delete("/sources/{source_id}", status_code=204, response_model=None)
+@router.delete(
+    "/sources/{source_id}", status_code=204, response_model=None, dependencies=[Depends(require_permission("sources.edit"))]
+)
 async def delete_source(
     source_id: int,
     confirm: bool = False,
     db: AsyncSession = Depends(get_db),
-    admin: User = Admin,
+    user: User = Depends(current_user),
 ) -> JSONResponse | None:
     source = await get_source(db, source_id)
     mapped_points, mappings = (
@@ -281,16 +287,16 @@ async def delete_source(
         )
     await db.delete(source)
     await audit(
-        db, admin.id, "source.deleted",
+        db, user.id, "source.deleted",
         {"source_id": source_id, "name": source.name, "points": mapped_points, "mappings": mappings},
     )
     await notify(db, CONFIG_CHANNEL)
     await db.commit()
 
 
-@router.post("/sources/test-all", status_code=202)
+@router.post("/sources/test-all", status_code=202, dependencies=[Depends(require_permission("sources.test"))])
 async def test_all_sources(
-    user: User = Operator, db: AsyncSession = Depends(get_db)
+    user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> dict[str, list[int]]:
     ids = (await db.scalars(select(Source.id).where(Source.enabled).order_by(Source.id))).all()
     job_ids = [await enqueue(db, "test_source", {"source_id": i}, user) for i in ids]
@@ -299,9 +305,11 @@ async def test_all_sources(
     return {"job_ids": job_ids}
 
 
-@router.post("/sources/{source_id}/test", status_code=202)
+@router.post(
+    "/sources/{source_id}/test", status_code=202, dependencies=[Depends(require_permission("sources.test"))]
+)
 async def test_source(
-    source_id: int, user: User = Operator, db: AsyncSession = Depends(get_db)
+    source_id: int, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> dict[str, int]:
     source = await get_source(db, source_id)
     job_id = await enqueue(db, "test_source", {"source_id": source_id}, user)
@@ -310,9 +318,12 @@ async def test_source(
     return {"job_id": job_id}
 
 
-@router.post("/sources/{source_id}/check", status_code=202, response_model=None)
+@router.post(
+    "/sources/{source_id}/check", status_code=202, response_model=None,
+    dependencies=[Depends(require_permission("diagnostics.run"))],
+)
 async def check_source(
-    source_id: int, user: User = Operator, db: AsyncSession = Depends(get_db)
+    source_id: int, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> dict[str, int] | JSONResponse:
     """Queue a step-by-step connection check. One per source at a time (409 while one is queued or running) and not again
     within CHECK_COOLDOWN_SECONDS of the last one (429): the device it probes may be fragile. The guards and the insert run
@@ -351,9 +362,11 @@ async def check_source(
     return {"job_id": job_id}
 
 
-@router.post("/sources/{source_id}/browse", status_code=202)
+@router.post(
+    "/sources/{source_id}/browse", status_code=202, dependencies=[Depends(require_permission("sources.edit"))]
+)
 async def browse_source(
-    source_id: int, user: User = Admin, db: AsyncSession = Depends(get_db)
+    source_id: int, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> dict[str, int]:
     source = await get_source(db, source_id)
     job_id = await enqueue(db, "browse_source", {"source_id": source_id}, user)
@@ -362,7 +375,7 @@ async def browse_source(
     return {"job_id": job_id}
 
 
-@router.get("/sources/{source_id}/points", dependencies=[Operator])
+@router.get("/sources/{source_id}/points", dependencies=[Depends(require_permission("sources.view"))])
 async def list_points(source_id: int, db: AsyncSession = Depends(get_db)) -> list[dict[str, Any]]:
     await get_source(db, source_id)
     rows = await db.execute(

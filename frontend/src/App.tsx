@@ -1,8 +1,11 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router";
 import { useDefaultDashboard } from "./api/queries";
-import { RequireAuth, RequireRole } from "./auth/RequireAuth";
+import { useAuth } from "./auth/AuthProvider";
+import { RequireAuth, RequirePermission } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
+import { PAGE_NEED, visibleGroups } from "./components/navItems";
+import { NoPages } from "./components/NoPages";
 import { Pending } from "./components/Pending";
 import { PageSkeleton } from "./components/Skeleton";
 import { AssetPage } from "./pages/AssetPage";
@@ -30,11 +33,20 @@ const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ 
 const DiscoveryPage = lazy(() => import("./pages/DiscoveryPage").then((m) => ({ default: m.DiscoveryPage })));
 const loading = <><Pending /><PageSkeleton label="Loading the page" /></>; // Pending: the loading bar waits for it too (a skeleton alone is no load)
 
-/** `/`: the default dashboard when one is set, else Assets Tree. Waits for the answer, so Assets Tree is not shown first; an error falls back to Assets Tree. */
+/**
+ * `/`: the default dashboard when one is set (and the role may see dashboards), else Assets Tree, else the first page of the sidebar the
+ * role may open, else a screen that says the role has no pages yet. Waits for the answer, so Assets Tree is not shown first; an error
+ * falls back to the same places. A role that may not see dashboards never asks, and so never waits.
+ */
 function HomeRedirect() {
-  const { data, isPending } = useDefaultDashboard();
-  if (isPending) return loading;
-  return <Navigate to={data?.dashboard_id ? `/dashboards/${data.dashboard_id}` : "/assets"} replace />;
+  const { can } = useAuth();
+  const seesDashboards = can("dashboards.view");
+  const { data, isPending } = useDefaultDashboard(seesDashboards); // a query that is not enabled stays pending for good
+  if (seesDashboards && isPending) return loading;
+  if (seesDashboards && data?.dashboard_id) return <Navigate to={`/dashboards/${data.dashboard_id}`} replace />;
+  if (can("assets.view")) return <Navigate to="/assets" replace />;
+  const first = visibleGroups(can)[0]?.items[0];
+  return first ? <Navigate to={first.to} replace /> : <NoPages />;
 }
 
 export function App() {
@@ -44,24 +56,24 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
         <Route path="/" element={<HomeRedirect />} />
-        <Route path="/assets" element={<AssetsPage />}>
+        <Route path="/assets" element={<RequirePermission need={PAGE_NEED.assets}><AssetsPage /></RequirePermission>}>
           <Route index element={<AssetsSummary />} />
           <Route path=":id" element={<AssetPage />} />
         </Route>
-        <Route path="/dashboards" element={<Suspense fallback={loading}><DashboardsPage /></Suspense>} />
-        <Route path="/dashboards/:id" element={<Suspense fallback={loading}><DashboardPage /></Suspense>} />
-        <Route path="/billing" element={<BillingPage />} />
-        <Route path="/sources" element={<RequireRole min="operator"><SourcesPage /></RequireRole>} />
-        <Route path="/sources/:id/points" element={<RequireRole min="admin"><SourcePointsPage /></RequireRole>} />
-        <Route path="/scans" element={<RequireRole min="operator"><ScansPage /></RequireRole>} />
-        <Route path="/discovery" element={<RequireRole min="operator"><Suspense fallback={loading}><DiscoveryPage /></Suspense></RequireRole>} />
-        <Route path="/users" element={<RequireRole min="admin"><UsersPage /></RequireRole>} />
-        <Route path="/settings" element={<RequireRole min="admin"><SettingsPage /></RequireRole>} />
-        <Route path="/tariffs" element={<RequireRole min="admin"><TariffsPage /></RequireRole>} />
-        <Route path="/storage" element={<RequireRole min="admin"><StoragePage /></RequireRole>} />
-        <Route path="/audit" element={<RequireRole min="admin"><AuditPage /></RequireRole>} />
-        <Route path="/audit/:id" element={<RequireRole min="admin"><AuditEntryPage /></RequireRole>} />
-        <Route path="/diagnostics" element={<RequireRole min="admin"><DiagnosticsPage /></RequireRole>} />
+        <Route path="/dashboards" element={<RequirePermission need={PAGE_NEED.dashboards}><Suspense fallback={loading}><DashboardsPage /></Suspense></RequirePermission>} />
+        <Route path="/dashboards/:id" element={<RequirePermission need={PAGE_NEED.dashboards}><Suspense fallback={loading}><DashboardPage /></Suspense></RequirePermission>} />
+        <Route path="/billing" element={<RequirePermission need={PAGE_NEED.billing}><BillingPage /></RequirePermission>} />
+        <Route path="/sources" element={<RequirePermission need={PAGE_NEED.sources}><SourcesPage /></RequirePermission>} />
+        <Route path="/sources/:id/points" element={<RequirePermission need={PAGE_NEED.sourcePoints}><SourcePointsPage /></RequirePermission>} />
+        <Route path="/scans" element={<RequirePermission need={PAGE_NEED.scans}><ScansPage /></RequirePermission>} />
+        <Route path="/discovery" element={<RequirePermission need={PAGE_NEED.discovery}><Suspense fallback={loading}><DiscoveryPage /></Suspense></RequirePermission>} />
+        <Route path="/users" element={<RequirePermission need={PAGE_NEED.users}><UsersPage /></RequirePermission>} />
+        <Route path="/settings" element={<RequirePermission need={PAGE_NEED.settings}><SettingsPage /></RequirePermission>} />
+        <Route path="/tariffs" element={<RequirePermission need={PAGE_NEED.tariffs}><TariffsPage /></RequirePermission>} />
+        <Route path="/storage" element={<RequirePermission need={PAGE_NEED.storage}><StoragePage /></RequirePermission>} />
+        <Route path="/audit" element={<RequirePermission need={PAGE_NEED.audit}><AuditPage /></RequirePermission>} />
+        <Route path="/audit/:id" element={<RequirePermission need={PAGE_NEED.audit}><AuditEntryPage /></RequirePermission>} />
+        <Route path="/diagnostics" element={<RequirePermission need={PAGE_NEED.diagnostics}><DiagnosticsPage /></RequirePermission>} />
         <Route path="/password" element={<PasswordPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

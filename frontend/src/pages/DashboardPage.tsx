@@ -22,7 +22,7 @@ export function DashboardPage() {
 }
 
 function DashboardScreen({ id }: { id: number }) {
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const query = useDashboard(id);
@@ -32,7 +32,7 @@ function DashboardScreen({ id }: { id: number }) {
   // The copy the server returned from our last save (or from Reload); the cache may briefly still hold an older one.
   const [saved, setSaved] = useState<Dashboard | null>(null);
   const [epoch, setEpoch] = useState(0);
-  const canEdit = hasRole("operator");
+  const canEdit = can("dashboards.edit");
   const dashboard = newest(saved, query.data);
   const queryClient = useQueryClient();
   const loadError = query.error;

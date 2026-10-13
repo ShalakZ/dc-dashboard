@@ -1,12 +1,14 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Role } from "../api/types";
 import { defaultSize, nextPosition, toDrafts } from "../lib/layout";
 import { assetList, authed, config, dashboard, widget, widgetDataRoute } from "../test/dashboardFixtures";
 import { FakeEventSource } from "../test/fakeEventSource";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { model, point, source } from "../test/graphFixtures";
 import { renderWithDataRouter } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
+import { userFor } from "../test/users";
+import type { PermissionId } from "../lib/permissions";
 import { DashboardPage } from "./DashboardPage";
 
 vi.mock("echarts-for-react", () => ({ default: (props: { option: unknown }) => <pre data-testid="chart">{JSON.stringify(props.option)}</pre> }));
@@ -52,7 +54,7 @@ const graph = model({
 const putBody = (calls: Call[]) => calls.find((c) => c.method === "PUT")?.body;
 const puts = (calls: Call[]) => calls.filter((c) => c.method === "PUT");
 
-function open(role: Role, entry: string | { pathname: string; state?: unknown } = "/dashboards/3", over: Routes = {}) {
+function open(role: string, entry: string | { pathname: string; state?: unknown } = "/dashboards/3", over: Routes = {}) {
   const calls = mockFetch({
     ...authed(role),
     "GET /api/dashboards/3": { body: base },
@@ -66,7 +68,7 @@ function open(role: Role, entry: string | { pathname: string; state?: unknown } 
     },
     ...over,
   });
-  const view = renderWithDataRouter(<DashboardPage />, { route: entry, path: "/dashboards/:id" });
+  const view = renderWithDataRouter(<><DashboardPage /><SignedIn /></>, { route: entry, path: "/dashboards/:id" });
   return { calls, ...view };
 }
 const add = () => screen.getByRole("button", { name: "Add widget" });
@@ -88,6 +90,33 @@ describe("who can edit", () => {
     expect(await screen.findByRole("heading", { name: "Hall A" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Dashboard name")).not.toBeInTheDocument();
+  });
+
+  /** A role called "custom" that holds `permissions`. */
+  const custom = (permissions: PermissionId[]): Routes => ({ "GET /api/me": { body: userFor("custom", { permissions }) } });
+
+  it("never shows edit mode to a role with dashboards.view alone, even when asked for through the router state", async () => {
+    open("custom", { pathname: "/dashboards/3", state: { edit: true } }, custom(["dashboards.view"]));
+    expect(await screen.findByRole("heading", { name: "Hall A" })).toBeInTheDocument();
+    await accountKnown();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Dashboard name")).not.toBeInTheDocument();
+  });
+
+  it("shows the Edit button to a role with dashboards.edit, and its Save sends the dashboard", async () => {
+    const { calls } = open("custom", "/dashboards/3", custom(["dashboards.view", "dashboards.edit", "assets.view"]));
+    await startEditing();
+    await userEvent.clear(screen.getByLabelText("Dashboard name"));
+    await userEvent.type(screen.getByLabelText("Dashboard name"), "Hall Z");
+    await userEvent.click(saveButton());
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+  });
+
+  it("dashboards.default alone is not the right to edit: no Edit button", async () => {
+    open("custom", "/dashboards/3", custom(["dashboards.view", "dashboards.default"]));
+    expect(await screen.findByRole("heading", { name: "Hall A" })).toBeInTheDocument();
+    await accountKnown();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   });
 
   it("lets an operator enter edit mode and cancel back to the view without being asked when nothing changed", async () => {

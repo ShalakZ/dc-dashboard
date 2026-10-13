@@ -1,4 +1,4 @@
-"""Tariffs (spec 10.2): admins write, operators read. A tariff change only touches the database; it
+"""Tariffs (spec 10.2): tariffs.edit writes, tariffs.view reads. A tariff change only touches the database; it
 sends no CONFIG_CHANNEL notification because the collector does not use tariffs."""
 import math
 from datetime import date, datetime
@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import current_user, get_db, require_permission
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Asset, Tariff, User
 from dcdash.core.tree import AssetTree
@@ -153,7 +153,7 @@ async def _flush(db: AsyncSession) -> None:
         raise HTTPException(409, DUPLICATE) from None
 
 
-@router.get("/tariffs", response_model=list[TariffOut], dependencies=[Depends(require_role("operator"))])
+@router.get("/tariffs", response_model=list[TariffOut], dependencies=[Depends(require_permission("tariffs.view"))])
 async def list_tariffs(db: AsyncSession = Depends(get_db)) -> list[TariffOut]:
     rows = await db.execute(
         select(Tariff, Asset.name)
@@ -167,11 +167,13 @@ async def list_tariffs(db: AsyncSession = Depends(get_db)) -> list[TariffOut]:
     ]
 
 
-@router.post("/tariffs", response_model=TariffOut, status_code=201)
+@router.post(
+    "/tariffs", response_model=TariffOut, status_code=201, dependencies=[Depends(require_permission("tariffs.edit"))]
+)
 async def create_tariff(
     body: TariffIn,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_role("admin")),
+    user: User = Depends(current_user),
 ) -> TariffOut:
     if body.asset_id is not None and await db.get(Asset, body.asset_id) is None:
         raise HTTPException(404, "asset not found")
@@ -181,23 +183,25 @@ async def create_tariff(
         asset_id=body.asset_id,
         rate_per_kwh=body.rate_per_kwh,
         effective_from=body.effective_from,
-        created_by=admin.id,
+        created_by=user.id,
     )
     db.add(tariff)
     await _flush(db)
     asset_name, asset_path = await _asset_name_and_path(db, body.asset_id)
-    await audit(db, admin.id, "tariff.created", _detail(tariff))
+    await audit(db, user.id, "tariff.created", _detail(tariff))
     await db.commit()
     await db.refresh(tariff)
     return _out(tariff, asset_name, asset_path)
 
 
-@router.patch("/tariffs/{tariff_id}", response_model=TariffOut)
+@router.patch(
+    "/tariffs/{tariff_id}", response_model=TariffOut, dependencies=[Depends(require_permission("tariffs.edit"))]
+)
 async def update_tariff(
     tariff_id: int,
     body: TariffPatch,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_role("admin")),
+    user: User = Depends(current_user),
 ) -> TariffOut:
     tariff = await _get(db, tariff_id)
     changes = body.model_dump(exclude_unset=True)
@@ -208,20 +212,20 @@ async def update_tariff(
         setattr(tariff, field, value)
     await _flush(db)
     await audit_change(
-        db, admin.id, "tariff.updated", {"tariff_id": tariff.id, "asset_id": tariff.asset_id}, before, _values(tariff)
+        db, user.id, "tariff.updated", {"tariff_id": tariff.id, "asset_id": tariff.asset_id}, before, _values(tariff)
     )
     await db.commit()
     return _out(tariff, *await _asset_name_and_path(db, tariff.asset_id))
 
 
-@router.delete("/tariffs/{tariff_id}", status_code=204)
+@router.delete("/tariffs/{tariff_id}", status_code=204, dependencies=[Depends(require_permission("tariffs.edit"))])
 async def delete_tariff(
     tariff_id: int,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_role("admin")),
+    user: User = Depends(current_user),
 ) -> None:
     tariff = await _get(db, tariff_id)
     detail = _detail(tariff)
     await db.delete(tariff)
-    await audit(db, admin.id, "tariff.deleted", detail)
+    await audit(db, user.id, "tariff.deleted", detail)
     await db.commit()

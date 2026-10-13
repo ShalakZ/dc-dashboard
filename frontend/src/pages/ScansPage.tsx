@@ -24,15 +24,17 @@ const ScansIcon = () => (
 );
 
 export function ScansPage() {
-  const { hasRole } = useAuth();
-  const isAdmin = hasRole("admin");
+  const { can } = useAuth();
+  const canEdit = can("discovery.edit"); // New scope, Edit, Delete and the suggestions
+  const canScan = can("discovery.scan"); // the Scan item: the preview it starts from opens to either permission
+  const hasActions = canEdit || canScan;
   const { data: scopes = [], error: scopesError, isLoading } = useScopes();
   const { data: scans = [], error: scansError, isLoading: scansLoading } = useScans();
   const site = useSite();
   const invalidate = useInvalidate();
   const { run, busy, error: actionError } = useAction();
   const [form, setForm] = useState<FormState>(null);
-  const suggestions = useScopeSuggestions(isAdmin && form === "new");
+  const suggestions = useScopeSuggestions(canEdit && form === "new");
   const [pending, setPending] = useState<{ scope: Scope; preview: ScopePreview } | null>(null);
   const [activeScan, setActiveScan] = useState<number | null>(null);
 
@@ -70,11 +72,11 @@ export function ScansPage() {
   });
 
   if (isLoading) {
-    // The gap stands where the admin's New scope button will be; the other roles' header has no actions slot (it would be 6.5px taller than the real one).
+    // The gap stands where the New scope button will be; a role without it has no actions slot (it would be 6.5px taller than the real one).
     return (
       <>
-        <PageHeader title="Scans" actions={isAdmin ? <ActionsSpace /> : undefined} />
-        <TableSkeleton columns={isAdmin ? 4 : 3} rows={3} label="Loading scopes" />
+        <PageHeader title="Scans" actions={canEdit ? <ActionsSpace /> : undefined} />
+        <TableSkeleton columns={hasActions ? 4 : 3} rows={3} label="Loading scopes" />
       </>
     );
   }
@@ -83,7 +85,7 @@ export function ScansPage() {
     <>
       <PageHeader
         title="Scans"
-        actions={isAdmin && form === null ? (
+        actions={canEdit && form === null ? (
           // One primary per page: while a scan waits for its confirmation, that button is the one.
           <button className={pending ? undefined : "primary"} onClick={() => setForm("new")}>New scope</button>
         ) : undefined}
@@ -115,24 +117,24 @@ export function ScansPage() {
         <div className="empty">
           <div className="empty-icon"><ScansIcon /></div>
           <p className="muted">
-            {isAdmin ? "No scopes yet. Use New scope to define what to scan." : "No scopes have been defined yet."}
+            {canEdit ? "No scopes yet. Use New scope to define what to scan." : "No scopes have been defined yet."}
           </p>
         </div>
       ) : (
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Targets</th><th>Ports</th>{isAdmin && <th className="row-actions"></th>}</tr></thead>
+            <thead><tr><th>Name</th><th>Targets</th><th>Ports</th>{hasActions && <th className="row-actions"></th>}</tr></thead>
             <tbody>
               {scopes.map((s) => (
                 <tr key={s.id}>
                   <td><span className="cell-name" title={s.name}>{s.name}</span></td><td className="wrap-any">{s.targets.join(", ")}</td><td className="wrap-any">{s.ports.join(", ")}</td>
-                  {isAdmin && (
+                  {hasActions && (
                     <td className="row-actions">
                       <RowActions label={`Actions for ${s.name}`} items={[
-                        { label: "Scan", onSelect: () => requestPreview(s), disabled: busy },
-                        { label: "Edit", onSelect: () => edit(s) },
+                        ...(canScan ? [{ label: "Scan", onSelect: () => requestPreview(s), disabled: busy }] : []),
+                        ...(canEdit ? [{ label: "Edit", onSelect: () => edit(s) }] : []),
                       ]} />
-                      <TrashButton label={`Delete ${s.name}`} onClick={() => remove(s)} disabled={busy} />
+                      {canEdit && <TrashButton label={`Delete ${s.name}`} onClick={() => remove(s)} disabled={busy} />}
                     </td>
                   )}
                 </tr>

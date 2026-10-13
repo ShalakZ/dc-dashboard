@@ -359,7 +359,7 @@ async def test_a_worker_survives_an_unexpected_error_in_the_runner(db, monkeypat
 
 async def add_user(db) -> int:
     return await db.fetchval(
-        "INSERT INTO users (username, password_hash, role) VALUES ('a', 'x', 'admin') RETURNING id"
+        "INSERT INTO users (username, password_hash, role_id) VALUES ('a', 'x', 3) RETURNING id"
     )
 
 

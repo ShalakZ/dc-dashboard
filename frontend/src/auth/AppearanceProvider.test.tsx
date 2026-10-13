@@ -3,8 +3,10 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { MemoryRouter } from "react-router";
+import type { User } from "../api/types";
 import { MIRROR_KEY, type Appearance } from "../lib/appearance";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { AppearanceProvider, useAppearance } from "./AppearanceProvider";
 import { AuthProvider, useAuth } from "./AuthProvider";
 
@@ -17,10 +19,10 @@ type Reply = { status?: number; body?: unknown };
 type Held = { body: Record<string, string>; reply(reply: Reply): void };
 
 /** A server whose GET /api/me answers `server.me` (null = 401) and whose preference saves wait until the test answers them. */
-function startServer(me: { id: number; username: string; role: string; preferences: Appearance } | null) {
+function startServer(me: User | null) {
   const server = {
     me,
-    loginAs: null as { id: number; username: string; role: string; preferences: Appearance } | null,
+    loginAs: null as User | null,
     puts: [] as Held[],
     meCalls: 0,
   };
@@ -48,7 +50,7 @@ function startServer(me: { id: number; username: string; role: string; preferenc
   return server;
 }
 
-const user = (name: string, preferences: Appearance) => ({ id: name === "ann" ? 1 : 2, username: name, role: "admin", preferences });
+const user = (name: string, preferences: Appearance) => userFor("admin", { id: name === "ann" ? 1 : 2, username: name, preferences });
 
 function Probe() {
   const { mode, theme, dark, setMode, setTheme, error } = useAppearance();
@@ -148,7 +150,7 @@ describe("what the provider shows and remembers", () => {
   });
 
   it("reads an account without preferences as the defaults", async () => {
-    const bare = { id: 1, username: "ann", role: "admin" };
+    const bare = { ...userFor("admin", { username: "ann" }), preferences: undefined };
     startServer(bare as never);
     await mount();
     expect(state()).toBe("light/navy-gold/light");

@@ -7,6 +7,9 @@ import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
+import { userFor } from "../test/users";
+import type { PermissionId } from "../lib/permissions";
 import { BillingPage } from "./BillingPage";
 
 vi.mock("../lib/download", () => ({ downloadCsv: vi.fn() }));
@@ -42,7 +45,7 @@ const costs: BillingCosts = {
 let requested: (string | null)[];
 const routes = (role: string, reply: { status?: number; body?: unknown }, zone: string, months: { status?: number; body?: unknown }): Routes => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/me": { body: userFor(role) },
   "GET /api/site": { body: { timezone: zone, currency: "QAR" } },
   "GET /api/billing/costs": ({ url }) => {
     requested.push(new URL(url, "http://x").searchParams.get("month"));
@@ -114,6 +117,7 @@ describe("BillingPage", () => {
 
     it("keeps a 34px gap in the header's actions slot and the month bar's place while the site is unknown, and the real ones take their place", async () => {
       const held = open("viewer", { body: costs }, "Asia/Qatar", { body: { first_month: null } }, (_method, path) => path === "/api/site");
+      await waitFor(() => expect(document.querySelector("header.page-head > .actions")).not.toBeNull()); // (the permissions arrive with /api/me, a moment after the first render; in the app the page mounts after them)
       const actions = document.querySelector("header.page-head > .actions")!;
       expect(actions).not.toBeNull();
       const gap = actions.firstElementChild as HTMLElement;
@@ -494,5 +498,45 @@ describe("BillingPage", () => {
       expect(monthSelect()).toBe(before);
       expect(monthSelect()).toHaveFocus();
     });
+  });
+});
+
+describe("BillingPage controls follow the permissions of the role (a custom role)", () => {
+  /** A role called "custom" that holds billing.view and `permissions`; the costs are on screen and the account is known when this returns. */
+  const show = async (permissions: PermissionId[], reply: { status?: number; body?: unknown } = { body: costs }) => {
+    mockFetch({
+      ...routes("custom", reply, "Asia/Qatar", { body: { first_month: null } }),
+      "GET /api/me": { body: userFor("custom", { permissions: ["billing.view", ...permissions] }) },
+    });
+    renderWithProviders(<><BillingPage /><SignedIn /></>, { route: "/billing", path: "/billing" });
+    await screen.findByRole("rowheader", { name: "Annex" });
+    await accountKnown();
+  };
+
+  it("billing.view alone: the table, the month bar, no Download CSV and no gap where it was, and no link to Tariffs", async () => {
+    await show([]);
+    expect(screen.queryByRole("button", { name: "Download CSV" })).not.toBeInTheDocument();
+    expect(document.querySelector("header.page-head > .actions")).toBeNull();
+    expect(screen.getByRole("button", { name: "Previous month" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Tariffs/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Ask an administrator to set one.");
+  });
+
+  it("billing.export: Download CSV downloads the month on screen", async () => {
+    await show(["billing.export"]);
+    await userEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+    expect(downloadCsv).toHaveBeenCalledWith("/api/billing/costs.csv?month=2026-10");
+  });
+
+  it("tariffs.edit alone is not enough for the link: the Tariffs page also needs the assets, so the note says to ask", async () => {
+    await show(["tariffs.edit"]);
+    expect(screen.queryByRole("link", { name: /Tariffs/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Ask an administrator to set one.");
+  });
+
+  it("tariffs.edit and assets.view: the link to the Tariffs page, the page the person may open", async () => {
+    await show(["tariffs.edit", "assets.view"]);
+    expect(screen.getByRole("link", { name: /Set a rate on the Tariffs page/ })).toHaveAttribute("href", "/tariffs");
+    expect(screen.queryByRole("button", { name: "Download CSV" })).not.toBeInTheDocument(); // billing.export is separate
   });
 });

@@ -346,7 +346,7 @@ test("phase 3 journey: currency and tariff, billing, cost tile, an operator's da
     await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();
 
     await page.goto("/tariffs");
-    await expect(page.getByRole("heading", { name: "Admins only" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "No access" })).toBeVisible();
 
     // The API refuses what the UI hides.
     expect((await page.request.get("/api/tariffs")).status()).toBe(403);

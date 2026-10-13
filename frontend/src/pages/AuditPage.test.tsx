@@ -4,7 +4,10 @@ import { ApiError } from "../api/client";
 import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
+import type { PermissionId } from "../lib/permissions";
 import { renderWithDataRouter } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
+import { userFor } from "../test/users";
 import { AuditPage } from "./AuditPage";
 
 vi.mock("../lib/download", () => ({ downloadCsv: vi.fn() }));
@@ -15,7 +18,7 @@ const entry = (id: number, action: string, detail: Record<string, unknown> = { s
 const list = (total: number, items: ReturnType<typeof entry>[], offset = 0) => ({ body: { total, offset, limit: 50, items } });
 
 const admin: Routes = {
-  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: { id: 1, username: "u", role: "admin" } },
+  "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin") },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: null } },
   "GET /api/audit/options": {
     body: { actions: ["asset.created", "scan.finished"], users: [{ id: 1, name: "admin" }], unattributed: true },
@@ -558,5 +561,33 @@ describe("AuditPage while the log loads (W7f)", () => {
     renderWithDataRouter(<AuditPage />, { route: "/audit", path: "/audit" });
     expect(await screen.findByRole("alert")).toHaveTextContent("the log is down");
     expect(document.querySelector(".sk-region")).toBeNull();
+  });
+});
+
+describe("AuditPage Export CSV follows the permission of the role (a custom role)", () => {
+  /** A role called "custom" that holds `permissions`; the log is up and the account is known when this returns. */
+  const show = async (permissions: PermissionId[]) => {
+    mockFetch({ ...admin, "GET /api/me": { body: userFor("custom", { permissions }) }, "GET /api/audit": twoRows });
+    renderWithDataRouter(<><AuditPage /><SignedIn /></>, { route: "/audit", path: "/audit" });
+    await screen.findByText("Scan #51 finished (done)");
+    await accountKnown();
+  };
+
+  it("audit.view alone: the log, the filters and Go to date, and no Export CSV", async () => {
+    await show(["audit.view"]);
+    expect(screen.getByRole("button", { name: "Go" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Today" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Export CSV" })).not.toBeInTheDocument();
+  });
+
+  it("audit.view and audit.export: Export CSV downloads the log", async () => {
+    await show(["audit.view", "audit.export"]);
+    await userEvent.click(screen.getByRole("button", { name: "Export CSV" }));
+    expect(downloadCsv).toHaveBeenCalledWith("/api/audit.csv?");
+  });
+
+  it("the Administrator role is unchanged: Export CSV is there", async () => {
+    setup("/audit");
+    expect(await screen.findByRole("button", { name: "Export CSV" })).toBeInTheDocument();
   });
 });

@@ -207,9 +207,9 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
   nodes: TreeNode[];
   /** The asset in the URL (null: none). A node is a link to its page, so there is no select callback. */
   selectedId: number | null;
-  /** Present for an admin: a + on every node. */
+  /** Present for someone who may change assets: a + on every node. */
   onAddChild?: (id: number) => void;
-  /** Present for an admin: a + in the header that adds a top-level asset. */
+  /** Present for someone who may change assets: a + in the header that adds a top-level asset. */
   onAddTop?: () => void;
   /** Disables the + buttons (the page is busy with something that must not get a dialog next to it). */
   disabled?: boolean;

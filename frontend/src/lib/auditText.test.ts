@@ -11,7 +11,7 @@ const ALL_ACTIONS = [
   "asset.created", "asset.updated", "asset.deleted", "billing.currency_changed",
   "dashboard.created", "dashboard.updated", "dashboard.deleted", "dashboard.default_changed", "diagnostics.report", "discovery.accepted",
   "login.failed", "login.locked", "login.succeeded", "login.unblocked", "mapping.created", "mapping.updated", "mapping.deleted",
-  "password.change_failed", "password.changed", "scan.finished", "scan.started",
+  "password.change_failed", "password.changed", "role.created", "role.updated", "role.deleted", "scan.finished", "scan.started",
   "scope.created", "scope.updated", "scope.deleted", "settings.sign_in_changed", "settings.timezone_changed", "setup.completed",
   "source.browsed", "source.checked", "source.created", "source.deleted", "source.test_all", "source.tested", "source.updated",
   "storage.changed", "storage.default_set", "tariff.created", "tariff.updated", "tariff.deleted",
@@ -245,7 +245,15 @@ describe("describeAudit: user.updated reads as what was done to the account", ()
     expect(update({}, { active: false }).summary).toBe("Deactivated user bob");
   });
 
-  it("says a role change with both roles", () => {
+  it("says a role change with both roles, and what the new role adds and removes when the entry carries it", () => {
+    const given = { added: ["audit.view", "future.thing"], removed: ["billing.view"] };
+    expect(update({ role: "viewer" }, { role: "Staff" }, given).summary).toBe(
+      "Changed the role of bob from viewer to Staff (adds See the audit log, future.thing; removes See billing)",
+    );
+    expect(update({ role: "viewer" }, { role: "Staff" }, { added: [], removed: ["billing.view"] }).summary).toBe(
+      "Changed the role of bob from viewer to Staff (removes See billing)",
+    );
+    expect(update({ role: "viewer" }, { role: "Staff" }, { added: [], removed: [] }).summary).toBe("Changed the role of bob from viewer to Staff");
     expect(update({ role: "viewer" }, { role: "admin" }).summary).toBe("Changed the role of bob from viewer to admin");
     expect(update({}, { role: "admin" }).summary).toBe("Changed the role of bob to admin");
   });
@@ -288,6 +296,171 @@ describe("describeAudit: user.updated reads as what was done to the account", ()
 
   it("does not claim a change that the stored sides do not show", () => {
     expect(update({ active: false, role: "viewer" }, { active: false, role: "viewer" }).summary).toBe("Changed user bob");
+  });
+});
+
+describe("describeAudit: roles", () => {
+  const updated = (extra: Record<string, unknown>) =>
+    describeAudit(entry("role.updated", { role_id: 4, name: "Executive", ...extra }));
+
+  it("names the permissions a new role was given by their labels, in the order stored", () => {
+    const view = describeAudit(
+      entry("role.created", {
+        role_id: 4, name: "Executive", description: "Board members", permissions: ["assets.view", "billing.view", "billing.export"],
+      }),
+    );
+    expect(view.summary).toBe("Created role Executive: See the Assets Tree, See billing, Export billing as CSV");
+    expect(view.link).toBeNull();
+    expect(view.facts.map((fact) => fact.label)).toEqual(["Role id", "Name", "Description", "Permissions"]);
+  });
+
+  it("says so when a new role has no permissions, and names the role it was copied from", () => {
+    expect(describeAudit(entry("role.created", { role_id: 5, name: "Nobody", description: "", permissions: [] })).summary).toBe(
+      "Created role Nobody: no permissions",
+    );
+    expect(
+      describeAudit(
+        entry("role.created", { role_id: 6, name: "Copy of operator", permissions: ["assets.view"], copied_from: "operator" }),
+      ).summary,
+    ).toBe("Created role Copy of operator as a copy of operator: See the Assets Tree");
+  });
+
+  it("shows an id this build has no label for as the id, and never reads the prototype", () => {
+    const view = describeAudit(
+      entry("role.created", { role_id: 4, name: "Odd", permissions: ["assets.view", "future.thing", "constructor", "__proto__", 7, null] }),
+    );
+    expect(view.summary).toBe("Created role Odd: See the Assets Tree, future.thing, constructor, __proto__, 7, —");
+  });
+
+  it("counts the long tail of a long permission list", () => {
+    const all = ["assets.view", "assets.edit", "assets.delete", "dashboards.view", "dashboards.edit", "dashboards.default", "billing.view", "billing.export"];
+    expect(describeAudit(entry("role.created", { role_id: 4, name: "Wide", permissions: all })).summary).toBe(
+      "Created role Wide: See the Assets Tree, Change assets, Delete assets, See dashboards, Change dashboards, " +
+        "Choose the default dashboard and 2 more",
+    );
+  });
+
+  it("says which permissions an edit added and removed, by label", () => {
+    const view = updated({
+      added: ["billing.export", "tariffs.view"], removed: ["dashboards.view"],
+      before: { permissions: ["assets.view", "dashboards.view"] }, after: { permissions: ["assets.view", "billing.export", "tariffs.view"] },
+    });
+    expect(view.summary).toBe("Changed role Executive: added Export billing as CSV, See tariffs; removed See dashboards");
+    expect(view.changes.map((change) => change.field)).toEqual(["Permissions"]);
+    expect(view.link).toBeNull();
+  });
+
+  it("says a rename and a new description, and joins everything in the order name, added, removed, description", () => {
+    expect(updated({ before: { name: "Execs" }, after: { name: "Executive" } }).summary).toBe("Changed role Executive: renamed from Execs");
+    expect(updated({ before: { description: "a" }, after: { description: "b" } }).summary).toBe("Changed role Executive: changed the description");
+    expect(
+      updated({
+        added: ["audit.view"], removed: ["audit.export"],
+        before: { name: "Execs", description: "", permissions: [] }, after: { name: "Executive", description: "x", permissions: [] },
+      }).summary,
+    ).toBe("Changed role Executive: renamed from Execs; added See the audit log; removed Export the audit log; changed the description");
+  });
+
+  it("shows an unknown id in an edit as the id", () => {
+    expect(updated({ added: ["future.thing"], removed: ["audit.view"] }).summary).toBe(
+      "Changed role Executive: added future.thing; removed See the audit log",
+    );
+  });
+
+  it("falls back to the generic sentence when the entry shows none of the three changes", () => {
+    expect(updated({ before: { nickname: "a" }, after: { nickname: "b" } }).summary).toBe("Changed role Executive: nickname");
+    expect(updated({ before: { name: "same" }, after: { name: "same" } }).summary).toBe("Changed role Executive");
+    expect(describeAudit(entry("role.updated", { role_id: 4 })).summary).toBe("Changed role #4");
+    expect(describeAudit(entry("role.updated", {})).summary).toBe("Changed role");
+  });
+
+  it("says a deletion by name, else by id, without a link", () => {
+    const view = describeAudit(entry("role.deleted", { role_id: 4, name: "Executive", permissions: ["assets.view"] }));
+    expect(view.summary).toBe("Deleted role Executive");
+    expect(view.link).toBeNull();
+    expect(describeAudit(entry("role.deleted", { role_id: 4 })).summary).toBe("Deleted role #4");
+  });
+
+  it("works out what an edit added and removed from the permissions before and after when the entry has no lists", () => {
+    const view = updated({
+      before: { permissions: ["assets.view", "dashboards.view"] }, after: { permissions: ["assets.view", "billing.export", "tariffs.view"] },
+    });
+    expect(view.summary).toBe("Changed role Executive: added Export billing as CSV, See tariffs; removed See dashboards");
+    expect(updated({ before: { permissions: ["assets.view"] }, after: { permissions: [] } }).summary).toBe(
+      "Changed role Executive: removed See the Assets Tree",
+    );
+    expect(updated({ before: { permissions: [] }, after: { permissions: ["future.thing"] } }).summary).toBe(
+      "Changed role Executive: added future.thing",
+    );
+  });
+
+  it("prefers the lists the server wrote, and does not guess from sides that are not lists", () => {
+    expect(
+      updated({ added: ["audit.view"], removed: [], before: { permissions: ["assets.view"] }, after: { permissions: ["billing.view"] } }).summary,
+    ).toBe("Changed role Executive: added See the audit log");
+    expect(updated({ before: { permissions: "assets.view" }, after: { permissions: 7 } }).summary).toBe("Changed role Executive: permissions");
+    expect(updated({ before: { permissions: ["assets.view", "billing.view"] }, after: { permissions: ["billing.view", "assets.view"] } }).summary).toBe(
+      "Changed role Executive: permissions",
+    );
+  });
+
+  describe("a name in a role sentence is cut at 80 characters", () => {
+    const exact = "n".repeat(80);
+    const long = "n".repeat(5000);
+    const cut = `${exact}…`;
+
+    it("cuts the name of a new role, of the role it was copied from, of an edit and of a deletion", () => {
+      expect(describeAudit(entry("role.created", { role_id: 4, name: long, permissions: ["assets.view"], copied_from: long })).summary).toBe(
+        `Created role ${cut} as a copy of ${cut}: See the Assets Tree`,
+      );
+      expect(updated({ name: long, before: { name: long }, after: { name: "Short" } }).summary).toBe(`Changed role ${cut}: renamed from ${cut}`);
+      expect(describeAudit(entry("role.deleted", { role_id: 4, name: long })).summary).toBe(`Deleted role ${cut}`);
+    });
+
+    it("leaves a name of 80 characters whole and cuts one of 81", () => {
+      expect(describeAudit(entry("role.deleted", { role_id: 4, name: exact })).summary).toBe(`Deleted role ${exact}`);
+      expect(describeAudit(entry("role.deleted", { role_id: 4, name: `${exact}x` })).summary).toBe(`Deleted role ${cut}`);
+    });
+
+    it("counts characters, not UTF-16 units, so a cut never splits an emoji", () => {
+      const view = describeAudit(entry("role.deleted", { role_id: 4, name: "😀".repeat(81) }));
+      expect(view.summary).toBe(`Deleted role ${"😀".repeat(80)}…`);
+    });
+
+    it("does not touch the names in other entries", () => {
+      expect(describeAudit(entry("asset.deleted", { asset_id: 1, name: long })).summary).toBe(`Deleted asset ${long}`);
+    });
+  });
+
+  it("never throws on a role entry with the wrong shapes", () => {
+    for (const action of ["role.created", "role.updated", "role.deleted"]) {
+      for (const detail of [{ permissions: "assets.view" }, { permissions: {} }, { added: 5, removed: "x" }, { name: 7 }, { copied_from: {} }]) {
+        expect(typeof describeAudit(entry(action, detail)).summary).toBe("string");
+      }
+    }
+  });
+});
+
+describe("describeAudit: custom role names read well in account entries", () => {
+  const update = (before: Record<string, unknown>, after: Record<string, unknown>) =>
+    describeAudit(entry("user.updated", { user_id: 9, username: "bob", before, after })).summary;
+
+  it("reads a change between custom roles with spaces, capitals and other scripts", () => {
+    expect(update({ role: "Night shift" }, { role: "Executive team" })).toBe("Changed the role of bob from Night shift to Executive team");
+    expect(update({ role: "viewer" }, { role: "Équipe de nuit" })).toBe("Changed the role of bob from viewer to Équipe de nuit");
+    expect(update({ role: "Night shift" }, { role: "admin" })).toBe("Changed the role of bob from Night shift to admin");
+  });
+
+  it("reads a role name of the longest length and one that looks like part of the sentence", () => {
+    const long = "x".repeat(64);
+    expect(update({ role: long }, { role: "viewer" })).toBe(`Changed the role of bob from ${long} to viewer`);
+    expect(update({ role: "from" }, { role: "to" })).toBe("Changed the role of bob from from to to");
+  });
+
+  it("names the custom role of a new account", () => {
+    expect(describeAudit(entry("user.created", { user_id: 3, username: "carol", role: "Night shift", active: true })).summary).toBe(
+      "Created user carol (Night shift)",
+    );
   });
 });
 
@@ -572,7 +745,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(42);
+    expect(ALL_ACTIONS).toHaveLength(45);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }

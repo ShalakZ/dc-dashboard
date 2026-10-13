@@ -1,0 +1,518 @@
+{
+  "DELETE /api/assets/{asset_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "DELETE /api/dashboards/{dashboard_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "DELETE /api/mappings/{mapping_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "DELETE /api/scopes/{scope_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "DELETE /api/sources/{source_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "DELETE /api/tariffs/{tariff_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "DELETE /api/users/{user_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/assets": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/assets/{asset_id}/series": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/assets/{asset_id}/summary": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/audit": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/audit.csv": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/audit/options": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/audit/position": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/audit/{entry_id:int}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/billing/costs": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/billing/costs.csv": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/billing/months": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/collector/status": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "GET /api/connectors": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/dashboards": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/dashboards/default": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/dashboards/{dashboard_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/diagnostics/report": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/discovery/graph": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "GET /api/fleet/summary": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/health": {
+    "admin": "pass",
+    "anon": "pass",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/jobs/{job_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "GET /api/me": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/scans": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "GET /api/scans/{scan_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "GET /api/scopes": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "GET /api/scopes/suggestions": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/scopes/{scope_id}/preview": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/secret-key/status": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "GET /api/settings/billing": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/settings/general": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/settings/sign-in": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/settings/storage": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/setup": {
+    "admin": "pass",
+    "anon": "pass",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/site": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/sources": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "GET /api/sources/{source_id}/points": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "GET /api/status": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/storage": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/storage/rows-per-day": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/stream": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "GET /api/tariffs": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "GET /api/tls/status": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/users": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "GET /api/version": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "PATCH /api/assets/{asset_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PATCH /api/mappings/{mapping_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PATCH /api/scopes/{scope_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PATCH /api/sources/{source_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PATCH /api/tariffs/{tariff_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PATCH /api/users/{user_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/assets": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/dashboards": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "POST /api/discovery/accept": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/login": {
+    "admin": "pass",
+    "anon": "pass",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "POST /api/logout": {
+    "admin": "pass",
+    "anon": "pass",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "POST /api/mappings": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/me/password": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "POST /api/scopes": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/scopes/{scope_id}/scan": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/setup": {
+    "admin": "pass",
+    "anon": "pass",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "POST /api/sources": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/sources/test-all": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "POST /api/sources/{source_id}/browse": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/sources/{source_id}/check": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "POST /api/sources/{source_id}/test": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "POST /api/tariffs": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/users": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/users/{user_id}/unblock": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "POST /api/widget-data": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "POST /api/widget-data/csv": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "PUT /api/dashboards/default": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PUT /api/dashboards/{dashboard_id}": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "403"
+  },
+  "PUT /api/discovery/layout": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PUT /api/me/preferences": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "pass",
+    "viewer": "pass"
+  },
+  "PUT /api/settings/billing": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PUT /api/settings/general": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PUT /api/settings/sign-in": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PUT /api/settings/storage": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  },
+  "PUT /api/settings/storage/default": {
+    "admin": "pass",
+    "anon": "401",
+    "operator": "403",
+    "viewer": "403"
+  }
+}

@@ -5,13 +5,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, notify, require_role
+from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.metrics import Metric, Scale, default_interval
 from dcdash.core.models import Asset, Mapping, Point, User
 from dcdash.core.pg import CONFIG_CHANNEL
 
-router = APIRouter(prefix="/api", tags=["mappings"], dependencies=[Depends(require_role("admin"))])
+router = APIRouter(prefix="/api", tags=["mappings"])
 
 
 class MappingIn(BaseModel):
@@ -75,9 +75,11 @@ async def get_mapping(db: AsyncSession, mapping_id: int) -> Mapping:
     return mapping
 
 
-@router.post("/mappings", response_model=MappingOut, status_code=201)
+@router.post(
+    "/mappings", response_model=MappingOut, status_code=201, dependencies=[Depends(require_permission("assets.edit"))]
+)
 async def create_mapping(
-    body: MappingIn, db: AsyncSession = Depends(get_db), admin: User = Depends(require_role("admin"))
+    body: MappingIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> Mapping:
     await _require(db, Point, body.point_id, "point")
     await _require(db, Asset, body.asset_id, "asset")
@@ -92,18 +94,20 @@ async def create_mapping(
     db.add(mapping)
     await _flush(db)
     await audit(
-        db, admin.id, "mapping.created", {"mapping_id": mapping.id, "point_id": mapping.point_id, **_values(mapping)}
+        db, user.id, "mapping.created", {"mapping_id": mapping.id, "point_id": mapping.point_id, **_values(mapping)}
     )
     await _publish(db)
     return mapping
 
 
-@router.patch("/mappings/{mapping_id}", response_model=MappingOut)
+@router.patch(
+    "/mappings/{mapping_id}", response_model=MappingOut, dependencies=[Depends(require_permission("assets.edit"))]
+)
 async def update_mapping(
     mapping_id: int,
     body: MappingPatch,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_role("admin")),
+    user: User = Depends(current_user),
 ) -> Mapping:
     mapping = await get_mapping(db, mapping_id)
     before = _values(mapping)
@@ -117,21 +121,23 @@ async def update_mapping(
             setattr(mapping, field, value.value if isinstance(value, Metric) else value)
     await _flush(db)
     await audit_change(
-        db, admin.id, "mapping.updated", {"mapping_id": mapping.id, "point_id": mapping.point_id},
+        db, user.id, "mapping.updated", {"mapping_id": mapping.id, "point_id": mapping.point_id},
         before, _values(mapping),
     )
     await _publish(db)
     return mapping
 
 
-@router.delete("/mappings/{mapping_id}", status_code=204)
+@router.delete(
+    "/mappings/{mapping_id}", status_code=204, dependencies=[Depends(require_permission("assets.edit"))]
+)
 async def delete_mapping(
-    mapping_id: int, db: AsyncSession = Depends(get_db), admin: User = Depends(require_role("admin"))
+    mapping_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> None:
     mapping = await get_mapping(db, mapping_id)
     detail = {
         "mapping_id": mapping.id, "point_id": mapping.point_id, "asset_id": mapping.asset_id, "metric": mapping.metric,
     }
     await db.delete(mapping)
-    await audit(db, admin.id, "mapping.deleted", detail)
+    await audit(db, user.id, "mapping.deleted", detail)
     await _publish(db)

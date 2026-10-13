@@ -9,6 +9,7 @@ import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import { iconHtml } from "../test/iconHtml";
 import { renderWithProviders } from "../test/render";
+import type { BuiltinRole } from "../test/users";
 import { type AssetsContext } from "./AssetsPage";
 import { AssetsSummary } from "./AssetsSummary";
 
@@ -30,13 +31,12 @@ const problem = (over: Partial<AttentionItem> = {}): AttentionItem => ({
 const openAdd = vi.fn();
 /** What the workspace layout provides; the page under test is its index child. */
 function Workspace({ admin }: { admin: boolean }) {
-  const context: AssetsContext = { admin, locked: false, openAdd, openEdit: vi.fn(), remove: vi.fn() };
+  const context: AssetsContext = { canEdit: admin, canDelete: admin, locked: false, openAdd, openEdit: vi.fn(), remove: vi.fn() };
   return <Outlet context={context} />;
 }
 
-type Role = "viewer" | "operator" | "admin";
 function stub({ role = "viewer", list = assets, fleet = fleetOf(), fleetReply }: {
-  role?: Role; list?: Asset[]; fleet?: FleetSummary; fleetReply?: { status: number; body: unknown };
+  role?: BuiltinRole; list?: Asset[]; fleet?: FleetSummary; fleetReply?: { status: number; body: unknown };
 } = {}) {
   return mockFetch({
     ...authed(role),
@@ -51,7 +51,7 @@ function FleetRefetcher() {
   refetchFleet = () => void client.invalidateQueries({ queryKey: keys.fleet });
   return null;
 }
-function mount(role: Role) {
+function mount(role: BuiltinRole) {
   renderWithProviders(
     <>
       <Routes>

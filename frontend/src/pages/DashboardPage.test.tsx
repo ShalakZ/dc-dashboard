@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useDefaultDashboard } from "../api/queries";
-import type { Role, WidgetType } from "../api/types";
+import type { WidgetType } from "../api/types";
 import { downloadCsv } from "../lib/download";
 import { progress } from "../lib/progress";
 import { authed, config, dashboard, dataFor, valueRow, valuesData, widget, widgetDataRoute } from "../test/dashboardFixtures";
@@ -56,7 +56,7 @@ const assets = widget(5, "table", { title: "Assets", config: config({ assets: [5
 const widgets = [assets, current, trend, load, energy];
 
 /** `hold` keeps back the requests it matches until `release()` (installed before the page mounts, so none gets through). */
-function open(role: Role = "viewer", over: Routes = {}, hold?: (method: string, path: string) => boolean) {
+function open(role: string = "viewer", over: Routes = {}, hold?: (method: string, path: string) => boolean) {
   const calls = mockFetch({
     ...authed(role),
     "GET /api/dashboards/3": { body: dashboard({ widgets }) },

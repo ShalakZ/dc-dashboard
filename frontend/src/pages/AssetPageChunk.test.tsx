@@ -3,6 +3,7 @@ import { progress } from "../lib/progress";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { AssetPage } from "./AssetPage";
 
 // The chart's chunk, held: the factory runs when the page first imports the module and the module arrives when the gate opens.
@@ -28,7 +29,7 @@ const summary = {
 };
 const routes = {
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "v", role: "viewer" } },
+  "GET /api/me": { body: userFor("viewer", { username: "v" }) },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
   "GET /api/assets": { body: [{ id: 4, parent_id: null, name: "Panel 1", kind: "panel", sort_order: 0 }] },
   "GET /api/assets/4/summary": { body: summary },

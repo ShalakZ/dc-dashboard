@@ -20,7 +20,10 @@ function Icon({ children }: { children: ReactNode }) {
 
 /** What the workspace layout hands to the page in its pane (the fleet summary and the asset page). */
 export interface AssetsContext {
-  admin: boolean;
+  /** assets.edit: Add asset, Edit and the tree's +. */
+  canEdit: boolean;
+  /** assets.delete: the trash. */
+  canDelete: boolean;
   /** A delete is running or awaiting its confirmation, or the asset list has not arrived: no form may open next to it, and none without the parent list. */
   locked: boolean;
   /** The Add asset dialog; null = top level. */
@@ -37,17 +40,20 @@ export function useAssetsContext(): AssetsContext | null {
 }
 
 /**
- * The admin's buttons for a page header, Add asset (the page's one primary) last; nothing for anyone else. `asset` is the asset the
- * page shows: Edit and Delete (the trash, named for the asset) exist only then, and Add asset adds under it. Null on the fleet summary:
- * Add asset adds a top-level asset.
+ * The buttons a person may use in a page header, Add asset (the page's one primary) last; nothing when there is none. `asset` is the asset
+ * the page shows: Edit (assets.edit) and Delete (assets.delete, the trash, named for the asset) exist only then, and Add asset (assets.edit)
+ * adds under it. Null on the fleet summary: Add asset adds a top-level asset.
  */
 export function assetActions(ctx: AssetsContext | null, asset: { id: number; name: string } | null): ReactNode {
-  if (!ctx?.admin) return undefined;
+  if (!ctx) return undefined;
+  const edit = ctx.canEdit;
+  const del = ctx.canDelete && asset !== null;
+  if (!edit && !del) return undefined; // no empty actions slot
   return (
     <>
-      {asset && <button type="button" onClick={ctx.openEdit} disabled={ctx.locked}><Icon><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z" /><path d="m14 7 3 3" /></Icon>Edit</button>}
-      {asset && <TrashButton label={`Delete ${asset.name}`} onClick={ctx.remove} disabled={ctx.locked} />}
-      <button type="button" className="primary" onClick={() => ctx.openAdd(asset?.id ?? null)} disabled={ctx.locked}><Icon><path d="M12 5v14M5 12h14" /></Icon>Add asset</button>
+      {asset && edit && <button type="button" onClick={ctx.openEdit} disabled={ctx.locked}><Icon><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z" /><path d="m14 7 3 3" /></Icon>Edit</button>}
+      {asset && del && <TrashButton label={`Delete ${asset.name}`} onClick={ctx.remove} disabled={ctx.locked} />}
+      {edit && <button type="button" className="primary" onClick={() => ctx.openAdd(asset?.id ?? null)} disabled={ctx.locked}><Icon><path d="M12 5v14M5 12h14" /></Icon>Add asset</button>}
     </>
   );
 }
@@ -58,7 +64,7 @@ export function assetActions(ctx: AssetsContext | null, asset: { id: number; nam
  * The dialogs live here, and the pages open them through the outlet context.
  */
 export function AssetsPage() {
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const { data: assets = [], error, isLoading } = useAssets();
   const invalidate = useInvalidate();
   const navigate = useNavigate();
@@ -100,16 +106,16 @@ export function AssetsPage() {
   });
 
   if (error) return <p className="error" role="alert">{error.message}</p>;
-  const admin = hasRole("admin");
-  const context: AssetsContext = { admin, locked, openAdd, openEdit, remove };
+  const canEdit = can("assets.edit");
+  const context: AssetsContext = { canEdit, canDelete: can("assets.delete"), locked, openAdd, openEdit, remove };
   return (
     <>
       <div className="assets-layout">
         <AssetTree
           nodes={tree}
           selectedId={selectedId}
-          onAddChild={admin ? openAdd : undefined}
-          onAddTop={admin ? () => openAdd(null) : undefined}
+          onAddChild={canEdit ? openAdd : undefined}
+          onAddTop={canEdit ? () => openAdd(null) : undefined}
           disabled={locked}
           loading={isLoading}
         />

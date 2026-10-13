@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import current_user, get_db, require_any_permission, require_permission
 from dcdash.api.jobs import enqueue
 from dcdash.connectors.base import connector_types
 from dcdash.core.audit import audit, audit_change, scrub_url_credentials
@@ -16,8 +16,6 @@ from dcdash.core.models import Scan, ScanFinding, ScanScope, User
 from dcdash.core.settings_store import get_setting
 
 router = APIRouter(prefix="/api", tags=["scans"])
-Admin = Depends(require_role("admin"))
-Operator = Depends(require_role("operator"))
 
 SCAN_START_LOCK = 7_305_001  # arbitrary advisory-lock key serializing "is a scan active?" with "start one"
 SCAN_HISTORY_LIMIT = 20
@@ -88,12 +86,12 @@ def scan_summary(scan: Scan) -> dict[str, Any]:
     }
 
 
-@router.get("/scopes", response_model=list[ScopeOut], dependencies=[Operator])
+@router.get("/scopes", response_model=list[ScopeOut], dependencies=[Depends(require_permission("discovery.view"))])
 async def list_scopes(db: AsyncSession = Depends(get_db)) -> list[ScanScope]:
     return list((await db.scalars(select(ScanScope).order_by(ScanScope.name, ScanScope.id))).all())
 
 
-@router.get("/scopes/suggestions", dependencies=[Admin])
+@router.get("/scopes/suggestions", dependencies=[Depends(require_permission("discovery.edit"))])
 async def scope_suggestions(db: AsyncSession = Depends(get_db)) -> dict[str, list[Any]]:
     published = await get_setting(db, "collector_networks", {"cidrs": []})
     cidrs = published.get("cidrs")
@@ -104,8 +102,10 @@ async def scope_suggestions(db: AsyncSession = Depends(get_db)) -> dict[str, lis
     }
 
 
-@router.post("/scopes", response_model=ScopeOut, status_code=201)
-async def create_scope(body: ScopeIn, user: User = Admin, db: AsyncSession = Depends(get_db)) -> ScanScope:
+@router.post("/scopes", response_model=ScopeOut, status_code=201, dependencies=[Depends(require_permission("discovery.edit"))])
+async def create_scope(
+    body: ScopeIn, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
+) -> ScanScope:
     expansion_of(body.targets, body.ports)
     scope = ScanScope(name=body.name, targets=body.targets, ports=body.ports, created_by=user.id)
     db.add(scope)
@@ -115,9 +115,9 @@ async def create_scope(body: ScopeIn, user: User = Admin, db: AsyncSession = Dep
     return scope
 
 
-@router.patch("/scopes/{scope_id}", response_model=ScopeOut)
+@router.patch("/scopes/{scope_id}", response_model=ScopeOut, dependencies=[Depends(require_permission("discovery.edit"))])
 async def update_scope(
-    scope_id: int, body: ScopePatch, user: User = Admin, db: AsyncSession = Depends(get_db)
+    scope_id: int, body: ScopePatch, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> ScanScope:
     scope = await get_scope(db, scope_id)
     targets = scope.targets if body.targets is None else body.targets
@@ -136,15 +136,19 @@ async def update_scope(
     return scope
 
 
-@router.delete("/scopes/{scope_id}", status_code=204)
-async def delete_scope(scope_id: int, user: User = Admin, db: AsyncSession = Depends(get_db)) -> None:
+@router.delete("/scopes/{scope_id}", status_code=204, dependencies=[Depends(require_permission("discovery.edit"))])
+async def delete_scope(scope_id: int, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)) -> None:
     scope = await get_scope(db, scope_id)
     await audit(db, user.id, "scope.deleted", {"scope_id": scope.id, "name": scope.name})
     await db.delete(scope)
     await db.commit()
 
 
-@router.get("/scopes/{scope_id}/preview", dependencies=[Admin])
+# A scan is confirmed against its preview (hosts, ports and the digest the scan request must repeat), so whoever may start
+# scans may read it, whether or not they may edit scopes.
+@router.get(
+    "/scopes/{scope_id}/preview", dependencies=[Depends(require_any_permission("discovery.edit", "discovery.scan"))]
+)
 async def preview_scope(scope_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     scope = await get_scope(db, scope_id)
     expansion = expansion_of(scope.targets, scope.ports)
@@ -154,9 +158,9 @@ async def preview_scope(scope_id: int, db: AsyncSession = Depends(get_db)) -> di
     }
 
 
-@router.post("/scopes/{scope_id}/scan", status_code=202)
+@router.post("/scopes/{scope_id}/scan", status_code=202, dependencies=[Depends(require_permission("discovery.scan"))])
 async def start_scan(
-    scope_id: int, body: ScanStart, user: User = Admin, db: AsyncSession = Depends(get_db)
+    scope_id: int, body: ScanStart, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> dict[str, int]:
     scope = await get_scope(db, scope_id)
     expansion = expansion_of(scope.targets, scope.ports)
@@ -184,13 +188,13 @@ async def start_scan(
     return {"scan_id": scan.id, "job_id": job_id}
 
 
-@router.get("/scans", dependencies=[Operator])
+@router.get("/scans", dependencies=[Depends(require_permission("discovery.view"))])
 async def list_scans(db: AsyncSession = Depends(get_db)) -> list[dict[str, Any]]:
     scans = await db.scalars(select(Scan).order_by(Scan.created_at.desc(), Scan.id.desc()).limit(SCAN_HISTORY_LIMIT))
     return [scan_summary(scan) for scan in scans]
 
 
-@router.get("/scans/{scan_id}", dependencies=[Operator])
+@router.get("/scans/{scan_id}", dependencies=[Depends(require_permission("discovery.view"))])
 async def get_scan(scan_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     scan = await db.get(Scan, scan_id)
     if scan is None:

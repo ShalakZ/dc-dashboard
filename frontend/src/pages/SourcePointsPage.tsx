@@ -3,6 +3,8 @@ import { useParams } from "react-router";
 import { api } from "../api/client";
 import { keys, useAssets, useInvalidate, usePoints, useSources } from "../api/queries";
 import type { PointRow } from "../api/types";
+import { useAuth } from "../auth/AuthProvider";
+import { meets } from "../auth/need";
 import { assetLabels } from "../components/dashboard/AssetPicker";
 import { JobStatus } from "../components/JobStatus";
 import { MappingForm, type MappingBody } from "../components/MappingForm";
@@ -14,6 +16,8 @@ import { useAction } from "../hooks/useAction";
 import { DEFAULT_POINT_VIEW, sortBy, viewPoints, type PointSortKey } from "../lib/points";
 
 const NO_POINTS: PointRow[] = [];
+// Map, Edit and Unmap call /api/mappings (assets.edit), and the form picks the asset from the asset list (assets.view).
+const MAP_NEED = ["assets.edit", "assets.view"] as const;
 const COLUMNS: ReadonlyArray<readonly [PointSortKey, string]> = [
   ["address", "Address"], ["name", "Name"], ["data_type", "Type"], ["unit_hint", "Unit hint"], ["mapped", "Mapped to"],
 ];
@@ -25,9 +29,11 @@ const PointsIcon = () => (
 
 export function SourcePointsPage() {
   const sourceId = Number(useParams().id);
+  const { can } = useAuth();
+  const canMap = meets(MAP_NEED, can);
   const { data, error, isLoading } = usePoints(sourceId);
   const points = data ?? NO_POINTS;
-  const { data: assets = [] } = useAssets();
+  const { data: assets = [] } = useAssets(can("assets.view")); // without it the asset names are the ids
   const { data: sources } = useSources();
   const sourceName = sources?.find((s) => s.id === sourceId)?.name ?? `source ${sourceId}`;
   const invalidate = useInvalidate();
@@ -121,10 +127,10 @@ export function SourcePointsPage() {
                   <td><span className="cell-trunc" title={p.address}>{p.address}</span></td><td>{p.name}</td><td>{p.data_type}</td><td>{p.unit_hint ?? ""}</td>
                   <td>{p.mapping ? `${assetName(p.mapping.asset_id)} · ${p.mapping.metric} · every ${p.mapping.interval_seconds}s · ×${p.mapping.scale}` : <span className="muted st st-off plain">unmapped</span>}</td>
                   <td className="row-actions">
-                    <RowActions label={`Actions for ${p.name}`} items={[
+                    <RowActions label={`Actions for ${p.name}`} items={canMap ? [
                       { label: p.mapping ? "Edit" : "Map", onSelect: () => setEditing(p) },
                       ...(p.mapping ? [{ label: "Unmap", onSelect: () => unmap(p.mapping!.id), tone: "danger" as const }] : []), // no confirm, as before
-                    ]} />
+                    ] : []} />
                   </td>
                 </tr>
               ))}

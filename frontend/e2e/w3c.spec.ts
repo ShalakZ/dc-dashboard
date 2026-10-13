@@ -170,7 +170,7 @@ test("W3c: the audit screen filters, links, exports and pages, and is for admins
     await signIn(page, OPERATOR, OPERATOR.role);
     await expect(page.getByRole("link", { name: "Audit", exact: true })).toHaveCount(0);
     await page.goto("/audit");
-    await expect(page.getByRole("heading", { name: "Admins only" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "No access" })).toBeVisible();
     for (const path of ["/api/audit", "/api/audit/options", "/api/audit.csv"]) {
       expect((await page.request.get(path)).status(), path).toBe(403);
     }

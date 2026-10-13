@@ -5,12 +5,13 @@ import { config, dashboard, widget, widgetDataRoute } from "./test/dashboardFixt
 import { FakeEventSource } from "./test/fakeEventSource";
 import { mockFetch, shellRoutes } from "./test/fetchMock";
 import { renderWithProviders } from "./test/render";
+import { userFor } from "./test/users";
 
 // Answers for whatever the Phase 3 pages (placeholders now, real pages later) ask on load.
 const routes = (role: string) => ({
   ...shellRoutes, // the top bar's chip and clock, and the asset list: asked on every page
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "u", role } },
+  "GET /api/me": { body: userFor(role) },
   "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
   "GET /api/tariffs": { body: [] },
   "GET /api/settings/billing": { body: { currency: "QAR" } },
@@ -33,13 +34,13 @@ const visit = (role: string, route: string) => {
 describe("App routes", () => {
   it.each(["viewer", "operator"])("keeps Tariffs away from a %s", async (role) => {
     const calls = visit(role, "/tariffs");
-    expect(await screen.findByText("Admins only")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/tariffs")).toBe(false);
   });
 
   it.each(["viewer", "operator"])("keeps Diagnostics away from a %s, and asks the report route nothing", async (role) => {
     const calls = visit(role, "/diagnostics");
-    expect(await screen.findByText("Admins only")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/diagnostics/report")).toBe(false);
   });
 
@@ -53,7 +54,7 @@ describe("App routes", () => {
   it("opens Tariffs for an admin", async () => {
     visit("admin", "/tariffs");
     expect(await screen.findByRole("heading", { name: "Tariffs" })).toBeInTheDocument();
-    expect(screen.queryByText("Admins only")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "No access" })).not.toBeInTheDocument();
   });
 
   it("opens Billing and Dashboards for a viewer", async () => {
@@ -76,7 +77,7 @@ describe("App routes", () => {
 
   it("keeps Sources away from a viewer", async () => {
     const calls = visit("viewer", "/sources");
-    expect(await screen.findByText("Operators only")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/sources")).toBe(false);
   });
 
@@ -87,7 +88,7 @@ describe("App routes", () => {
 
   it.each(["viewer", "operator"])("keeps the source points page away from a %s", async (role) => {
     const calls = visit(role, "/sources/4/points");
-    expect(await screen.findByText("Admins only")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/sources/4/points")).toBe(false);
   });
 

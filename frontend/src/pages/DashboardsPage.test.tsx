@@ -1,12 +1,14 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useLocation } from "react-router";
-import type { Role } from "../api/types";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { authed, dashboard } from "../test/dashboardFixtures";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
+import { userFor } from "../test/users";
+import type { PermissionId } from "../lib/permissions";
 import { DashboardsPage } from "./DashboardsPage";
 
 const items = [
@@ -19,10 +21,10 @@ function Probe() {
   return <output data-testid="location">{`${location.pathname}|${JSON.stringify(location.state)}`}</output>;
 }
 /** `hold` keeps back the requests it matches until `release()` (installed before the page mounts, so none gets through). */
-function open(role: Role, over: Routes = {}, hold?: (method: string, path: string) => boolean) {
+function open(role: string, over: Routes = {}, hold?: (method: string, path: string) => boolean) {
   const calls = mockFetch({ ...authed(role), "GET /api/dashboards": { body: items }, "GET /api/dashboards/default": { body: { dashboard_id: null } }, ...over });
   const held = hold ? holdFetch(hold) : { release: () => {} };
-  renderWithProviders(<><DashboardsPage /><Probe /></>, { route: "/dashboards", path: "*" });
+  renderWithProviders(<><DashboardsPage /><Probe /><SignedIn /></>, { route: "/dashboards", path: "*" });
   return Object.assign(calls, { release: held.release });
 }
 
@@ -238,5 +240,66 @@ describe("DashboardsPage", () => {
     open("operator", { "GET /api/dashboards": { body: [] } });
     expect(await screen.findByText("No dashboards yet. Create one to get started.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New dashboard" })).toBeInTheDocument();
+  });
+});
+
+describe("DashboardsPage controls follow the permissions of the role (a custom role)", () => {
+  const withDefault = { "GET /api/dashboards/default": { body: { dashboard_id: 3 } } };
+  /** A role called "custom" that holds dashboards.view and `permissions`; the account is known when this returns. */
+  const show = async (permissions: PermissionId[], over: Routes = {}) => {
+    const calls = open("custom", { "GET /api/me": { body: userFor("custom", { permissions: ["dashboards.view", ...permissions] }) }, ...over });
+    await screen.findByRole("link", { name: "Hall A" });
+    await accountKnown();
+    return calls;
+  };
+
+  it("dashboards.view alone: no New dashboard, no Actions column, no trash, no menu", async () => {
+    await show([], withDefault);
+    expect(screen.queryByRole("button", { name: "New dashboard" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Actions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+  });
+
+  it("dashboards.edit: New dashboard and the trash, but no Make default menu", async () => {
+    await show(["dashboards.edit"], withDefault);
+    expect(screen.getByRole("button", { name: "New dashboard" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete Hall A" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+  });
+
+  it("dashboards.default alone: the Make default menu per row, and nothing that creates or deletes", async () => {
+    const calls = await show(["dashboards.default"], { ...withDefault, "PUT /api/dashboards/default": { body: { dashboard_id: 4 } } });
+    expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New dashboard" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Hall A" }));
+    expect(await screen.findByRole("menuitem", { name: "Clear default" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Hall B" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Make default" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PUT").map((c) => c.body)).toEqual([{ dashboard_id: 4 }]));
+  });
+
+  it("both: the menu and the trash on a row, and New dashboard (an administrator's page)", async () => {
+    await show(["dashboards.edit", "dashboards.default"]);
+    expect(screen.getByRole("button", { name: "New dashboard" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Actions for Hall A" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete Hall A" })).toBeInTheDocument();
+  });
+
+  it("the empty-state hint is for dashboards.edit only", async () => {
+    open("custom", { "GET /api/me": { body: userFor("custom", { permissions: ["dashboards.view", "dashboards.default"] }) }, "GET /api/dashboards": { body: [] } });
+    expect(await screen.findByText("No dashboards yet.")).toBeInTheDocument();
+    await accountKnown();
+    expect(screen.queryByText(/Create one to get started/)).not.toBeInTheDocument();
+  });
+
+  it("the table skeleton has the Actions column for dashboards.default alone", async () => {
+    const page = open("custom", { "GET /api/me": { body: userFor("custom", { permissions: ["dashboards.view", "dashboards.default"] }) } }, (_method, path) => path === "/api/dashboards");
+    await waitFor(() => expect(document.querySelectorAll(".sk-table thead th").length).toBe(4));
+    page.release();
+    await screen.findByRole("link", { name: "Hall A" });
   });
 });

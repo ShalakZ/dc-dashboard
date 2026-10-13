@@ -4,6 +4,7 @@ import { App } from "../App";
 import { mockFetch, shellRoutes, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { userFor } from "../test/users";
 import { TariffsPage } from "./TariffsPage";
 
 const assets = [
@@ -23,7 +24,7 @@ let overrides: Routes;
 
 const routes = (role: string): Routes => ({
   "GET /api/setup": { body: { needed: false } },
-  "GET /api/me": { body: { id: 1, username: "a", role } },
+  "GET /api/me": { body: userFor(role, { username: "a" }) },
   "GET /api/assets": { body: assets },
   "GET /api/settings/billing": () => ({ body: { currency } }),
   "PUT /api/settings/billing": ({ body }) => {
@@ -603,7 +604,7 @@ describe("TariffsPage", () => {
   it("never asks for tariffs or the currency when a non-admin opens the route", async () => {
     const calls = mockFetch({ ...shellRoutes, ...routes("operator") }); // the app shell asks for its chip and clock too
     renderWithProviders(<App />, { route: "/tariffs", path: "*" });
-    expect(await screen.findByText("Admins only")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/tariffs" || c.path === "/api/settings/billing")).toBe(false);
   });
 });

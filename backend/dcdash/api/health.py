@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import current_user, get_db, require_permission
 from dcdash.core.db import get_engine
 from dcdash.core.heartbeat import HEARTBEAT_KEY, STALE_AFTER_SECONDS
 from dcdash.core.secret_key import SecretKeyStatus, secret_key_status
@@ -65,7 +65,9 @@ async def _heartbeat_age(db: AsyncSession) -> float | None:
     return None if age is None else max(0.0, float(age))  # a beat stamped ahead of this clock is "just now", never a negative age
 
 
-@router.get("/collector/status", response_model=CollectorStatus, dependencies=[Depends(require_role("operator"))])
+@router.get(
+    "/collector/status", response_model=CollectorStatus, dependencies=[Depends(require_permission("sources.view"))]
+)
 async def collector_status(db: AsyncSession = Depends(get_db)) -> CollectorStatus:
     age = await _heartbeat_age(db)
     if age is None:
@@ -93,7 +95,7 @@ _FRESH = text(
 )
 
 
-@router.get("/status", response_model=LiveStatus, dependencies=[Depends(require_role("viewer"))])
+@router.get("/status", response_model=LiveStatus, dependencies=[Depends(current_user)])
 async def live_status(db: AsyncSession = Depends(get_db)) -> LiveStatus:
     """What the top bar's chip shows. Freshness only, no names or values, so every signed-in user may read it."""
     beat = await _heartbeat_age(db)
@@ -106,7 +108,9 @@ async def live_status(db: AsyncSession = Depends(get_db)) -> LiveStatus:
     )
 
 
-@router.get("/secret-key/status", response_model=SecretKeyStatus, dependencies=[Depends(require_role("operator"))])
+@router.get(
+    "/secret-key/status", response_model=SecretKeyStatus, dependencies=[Depends(require_permission("sources.view"))]
+)
 async def get_secret_key_status(db: AsyncSession = Depends(get_db)) -> SecretKeyStatus:
     """Whether every stored source secret can be decrypted with the key in .env. Read-only."""
     return await secret_key_status(db)

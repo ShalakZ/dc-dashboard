@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import get_db, require_permission
 from dcdash.api.settings import current_timezone
 from dcdash.core.cost import Cost, cost_by_hour, load_tariffs, no_data, rate_at, summarize
 from dcdash.core.energy import Energy, hourly_energy, total
@@ -20,7 +20,7 @@ from dcdash.core.timeutil import day_bounds, day_start  # noqa: F401  (day_start
 from dcdash.core.tree import AssetTree
 from dcdash.core.widgets import is_stale
 
-router = APIRouter(prefix="/api", tags=["data"], dependencies=[Depends(require_role("viewer"))])
+router = APIRouter(prefix="/api", tags=["data"], dependencies=[Depends(require_permission("assets.view"))])
 
 
 def _now() -> datetime:
