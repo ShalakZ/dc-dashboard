@@ -693,6 +693,18 @@ Twenty-one specs run in one `playwright test` run against the dev-profile stack 
   admin cannot change their own role, a taken name keeps the dialog open; Duplicate of the Operator opens `Copy of operator` with its
   ticks; the Operator's Tariffs has no form; `settings.edit` and `settings.security` each open one card of Settings (the spec puts the
   time zone back); and the editor works from the keyboard. Every name starts with `w9b-`; they are removed again, users first.
+- `w7k.spec.ts` (its own project, after `w9b`, at 1600×1000) checks the W7k feedback. The three Save buttons that save in place (Settings'
+  General and Sign-in protection, Tariffs' Site currency, saved unchanged) go from "Save" to "Saving…" (the request is held) to a green
+  "Saved" on the theme's `--ok` colour and back in about 3 s, with one width in all four phases, light and dark at 1440 px, no toast and no
+  loose "saved" word. A leaf asset's trash opens ONE styled dialog (the browser's own box never opens) that says "Checking what this
+  deletes…" while the preview is held, then `Delete "NAME"?`; Cancel keeps the asset and the focus goes back to the trash button; Delete
+  sends the counts the dialog showed and raises the toast `Asset "NAME" deleted` in the lower right corner, gone within 6 s. A branch asset
+  (a child and a rate) shows the impact sentence with "Delete anyway"; a child added while the dialog is open makes the first confirm
+  answer 409 with the new numbers, and only the second deletes. A source with mapped points shows the sources wording (cancelled, never
+  deleted); a source with no points is deleted with its toast. "Asset created" does not cover the profile menu and can be dismissed, Esc
+  still closes a dialog under a toast, a toast appears and leaves under reduced motion, the menu of the last Sources row is reachable under
+  "Source added" at 1440×900 and 1024×768, the toast keeps its 16 px margins below 720 px, and the dialog works from the keyboard. Every name
+  it makes contains `W7k` and the run suffix; it removes them again.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1520,6 +1532,35 @@ the upgrade (2026-10-13): it has only the three built-in roles and no custom rol
 5. **Going back.** Check out `2276b28` and rebuild as in step 3. There is no database step; the roles you made keep working (the W9a
    code ignores the extra permission). To edit a role that already holds `settings.security` under the W9a code, untick **Change sign-in
    protection** first, or send the permission list without it: the W9a code refuses the id it does not know on `PATCH /api/roles/{id}`.
+
+### Upgrading to W7k (no migration)
+
+Schema stays `0009`; no data is rewritten, so there is nothing to restore. The code to go back to is `53fff56` (`main` before W7k).
+
+W7k (feedback) rebuilds the `api` and `web` images. What you will notice: the four Save buttons that save in place (Settings' time zone
+and sign-in protection, Tariffs' currency, Storage's retention) turn green and read "Saved" for a moment instead of printing "saved" beside
+them; every delete asks in the page's own dialog (the browser's own box is gone), and deleting an asset or a source first asks the server
+what it takes with it ("Checking what this deletes…") and cannot be confirmed before the answer is in; and a small message in the lower
+right corner, which goes away by itself, confirms what has no button of its own to turn green (a create or delete, the default
+dashboard, a saved dashboard, a password change, a CSV or report download).
+
+The API gains two read-only routes and an optional check; a client that uses neither behaves exactly as before:
+
+- `GET /api/assets/{id}/impact` (needs `assets.delete`) answers `{"assets", "mappings", "tariffs"}`: what deleting the asset, everything
+  under it, their mappings and their rates would remove. `GET /api/sources/{id}/impact` (needs `sources.edit`) answers
+  `{"points", "mappings"}` (mapped points and their mappings). Both answer 404 for an unknown id, change nothing and write no audit entry.
+- `DELETE /api/assets/{id}` accepts `expect_assets`, `expect_mappings` and `expect_tariffs`, and `DELETE /api/sources/{id}` accepts
+  `expect_points` and `expect_mappings` (whole numbers, 0 or more): the counts the caller was shown. Each one given is compared on its
+  own, and a real count **greater** than the expected one makes the server answer 409, with the new counts, even with `confirm=true`, and
+  delete nothing; a smaller or equal count deletes as asked. The page always sends the counts its dialog showed, so a child or a rate
+  added while the dialog was open is never deleted unseen: the dialog shows the new numbers and asks again.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has the
+   simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+3. **Verify.** `docker compose exec api alembic current` still prints `0009 (head)`; open an asset's page and press its bin: one dialog
+   opens, says what the delete takes with it, and Cancel changes nothing.
+4. **Going back.** Check out `53fff56` and rebuild as in step 2. There is no database step.
 
 ## Add a connector
 
