@@ -6,15 +6,13 @@ import { APP_TITLE, pageTitle } from "../lib/pageTitle";
 import { initialSidebar, saveSidebar, type SidebarState } from "../lib/sidebarState";
 import { CertificateNotice } from "./CertificateNotice";
 import { Icon, ICONS } from "./Icon";
-import { DASHBOARDS_PATH, GROUPS, type NavItem } from "./navItems";
+import { DASHBOARDS_PATH, visibleGroups, type NavItem } from "./navItems";
 import { ProfileMenu } from "./ProfileMenu";
 import { QuickFind } from "./QuickFind";
 import { RoleChangedNotice } from "./RoleChangedNotice";
 import { ServerNotice } from "./ServerNotice";
 import { SiteClock } from "./SiteClock";
 import { StatusChip } from "./StatusChip";
-
-export { ROLE_LABEL } from "./navItems";
 
 interface Tip { text: string; sub?: string; top: number }
 /** The pointer crosses the gap between a row and its tip inside this time, so the tip can be hovered (WCAG 1.4.13). */
@@ -83,12 +81,12 @@ function useSideTip(active: boolean) {
 }
 
 export function Layout() {
-  const { hasRole } = useAuth();
+  const { can } = useAuth();
   const [sidebar, setSidebar] = useState<SidebarState>(initialSidebar);
   const minimized = sidebar === "minimized";
   const { tip, bind, scrolled, keep, leave } = useSideTip(minimized);
   const shellRef = useRef<HTMLDivElement>(null);
-  const defaultId = useDefaultDashboard().data?.dashboard_id; // pending or failed: undefined, so the Dashboards item opens the list
+  const defaultId = useDefaultDashboard(can("dashboards.view")).data?.dashboard_id; // pending, failed or not asked: undefined, so the Dashboards item opens the list
   const { pathname } = useLocation();
 
   /** Where an item leads: Dashboards goes straight to the default dashboard when there is one. */
@@ -147,7 +145,7 @@ export function Layout() {
           <div className="side" id="sidebar">
             <nav aria-label="Main">
               <div className="nav-groups" onScroll={scrolled}>
-                {GROUPS.filter((group) => !group.min || hasRole(group.min)).map((group) => (
+                {visibleGroups(can).map((group) => (
                   <div className="nav-group" role="group" aria-labelledby={group.id} key={group.id}>
                     <span className="nav-heading" id={group.id}>{group.title}</span>
                     {group.items.map((item) => {
@@ -195,7 +193,7 @@ export function Layout() {
             <div className="shell-notices">
               <RoleChangedNotice />
               <ServerNotice />
-              {hasRole("admin") && <CertificateNotice />}
+              {can("settings.view") && <CertificateNotice />}
             </div>
             <Outlet />
           </main>

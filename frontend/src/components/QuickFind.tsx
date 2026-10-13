@@ -5,7 +5,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { assetIcon } from "../lib/assetIcons";
 import { findHits, type FindHit } from "../lib/quickFind";
 import { Icon } from "./Icon";
-import { GROUPS } from "./navItems";
+import { visibleGroups } from "./navItems";
 
 const INPUT_ID = "quick-find";
 const LIST_ID = "quick-find-list";
@@ -17,8 +17,8 @@ const optionId = (index: number) => `quick-find-opt-${index}`;
  * in the DOM only while it has something to show. The popup is open while the field has the focus and has not been dismissed.
  */
 export function QuickFind() {
-  const { hasRole } = useAuth();
-  const { data: assets } = useAssets(); // a failed request just means no asset hits; the pages still work
+  const { can } = useAuth();
+  const { data: assets } = useAssets(can("assets.view")); // a failed request just means no asset hits; the pages still work
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -27,7 +27,7 @@ export function QuickFind() {
   const input = useRef<HTMLInputElement>(null);
 
   // A viewer never sees Users, Sources, ...: the pages are the sidebar's, gated the same way.
-  const pages = useMemo(() => GROUPS.filter((group) => !group.min || hasRole(group.min)).flatMap((group) => group.items), [hasRole]);
+  const pages = useMemo(() => visibleGroups(can).flatMap((group) => group.items), [can]);
   const hits = useMemo(() => findHits(query, assets ?? [], pages), [query, assets, pages]);
   const popup = open && query.trim() !== "";
   const listed = popup && hits.length > 0; // the listbox exists only now, and so do aria-controls and aria-expanded

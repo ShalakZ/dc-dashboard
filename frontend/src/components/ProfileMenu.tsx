@@ -4,7 +4,7 @@ import { useAppearance } from "../auth/AppearanceProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { THEMES, type Mode, type ThemeId } from "../lib/appearance";
 import { Icon } from "./Icon";
-import { ROLE_LABEL } from "./navItems";
+import { roleLabel } from "./navItems";
 import { SignOutDialog } from "./SignOutDialog";
 
 const MODE_OPTIONS: { id: Mode; label: string }[] = [
@@ -31,7 +31,7 @@ export function ProfileMenu() {
   const focusFirst = useRef(false); // set by ArrowDown; the panel is still hidden, so the focus moves once it has been shown
 
   const name = user?.username ?? "";
-  const role = user ? ROLE_LABEL[user.role] ?? user.role : "";
+  const role = user ? roleLabel(user.role) : "";
   const current = THEMES.find((option) => option.id === theme) ?? THEMES[0];
   const items = () => Array.from(panel.current?.querySelectorAll<HTMLElement>("a[href], button") ?? []);
 
