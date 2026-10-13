@@ -1,12 +1,14 @@
-"""The permission catalogue (dcdash.core.permissions).
+"""The permission catalogue (dcdash.core.permissions) and what User makes of it.
 
 The expected ids, areas, kinds and built-in sets are written out here, from the plan's Appendix A, and not read back from
 the module: a test that derives its expectation from the code under test passes whatever the code says.
 """
 import re
+from pathlib import Path
 
 import pytest
 
+from dcdash.core.models import Role, User
 from dcdash.core.permissions import (
     ALL_IDS, BUILTIN, BUILTIN_IDS, CATALOGUE, NOT_FOR_CUSTOM_ROLES, Permission, clean_custom, effective_permissions,
 )
@@ -191,3 +193,95 @@ def test_clean_custom_of_everything_but_roles_manage_is_the_whole_catalogue_less
 def test_what_clean_custom_accepts_is_what_effective_permissions_grants():
     ok, _ = clean_custom(IDS)
     assert effective_permissions("x", False, ok) == frozenset(ok)
+
+
+# ---- the User model's view of its role ---------------------------------------------------------------------------------
+
+def user_with(name: str, permissions: object = (), builtin: bool = False) -> User:
+    return User(username="u", password_hash="x", role_row=Role(name=name, builtin=builtin, permissions=permissions))
+
+
+def test_a_user_reads_its_role_name_and_permissions_from_its_role():
+    user = user_with("viewer", [], builtin=True)
+    assert user.role == "viewer"
+    assert user.permissions == BUILTIN["viewer"]
+    assert isinstance(user.permissions, frozenset)
+
+
+def test_a_built_in_admin_holds_every_permission():
+    assert user_with("admin", [], builtin=True).permissions == ALL_IDS
+
+
+def test_a_custom_role_user_holds_what_the_role_stores_less_what_is_ignored():
+    user = user_with("night shift", ["assets.view", "roles.manage", "bogus.id", 4])
+    assert user.permissions == {"assets.view"}
+    assert user.role == "night shift"
+
+
+def test_can_means_all_of_them():
+    user = user_with("x", ["assets.view", "assets.edit"])
+    assert user.can("assets.view")
+    assert user.can("assets.view", "assets.edit")
+    assert not user.can("assets.view", "assets.delete")
+    assert not user.can("assets.delete")
+
+
+def test_can_any_means_at_least_one_of_them():
+    user = user_with("x", ["assets.view"])
+    assert user.can_any("assets.view", "assets.delete")
+    assert user.can_any("assets.delete", "assets.view")
+    assert not user.can_any("assets.edit", "assets.delete")
+
+
+def test_a_user_with_no_permissions_can_do_nothing():
+    user = user_with("x", [])
+    assert not any(user.can(i) for i in IDS)
+    assert not user.can_any(*IDS)
+
+
+def test_a_custom_role_user_can_never_manage_roles():
+    user = user_with("x", list(IDS))
+    assert not user.can("roles.manage")
+    assert not user.can_any("roles.manage")
+
+
+def test_asking_can_with_nothing_or_with_an_unknown_id_is_a_programming_error_not_an_answer():
+    user = user_with("x", ["assets.view"])
+    with pytest.raises(ValueError):
+        user.can()
+    with pytest.raises(ValueError):
+        user.can_any()
+    with pytest.raises(ValueError):
+        user.can("assets.veiw")  # a typo must not become a permanent "no" nobody notices
+    with pytest.raises(ValueError):
+        user.can_any("assets.view", "assets.veiw")
+
+
+def test_the_permissions_follow_the_role_with_no_cache():
+    role = Role(name="x", builtin=False, permissions=["assets.view"])
+    user = User(username="u", password_hash="x", role_row=role)
+    assert user.can("assets.view") and not user.can("assets.edit")
+    role.permissions = ["assets.edit"]
+    assert user.can("assets.edit") and not user.can("assets.view")
+
+
+def test_a_user_cannot_be_built_with_a_bare_role_name():
+    with pytest.raises(AttributeError):
+        User(username="u", password_hash="x", role="admin")  # type: ignore[call-arg]
+
+
+# ---- User.role in SQL ----------------------------------------------------------------------------------------------------
+
+def test_no_query_compares_the_role_property_of_the_user_class():
+    # `role` is a property on User now (the role's name). At class level it is the property object, not a column, so
+    # `User.role == "admin"` is a plain False and SQLAlchemy compiles it to WHERE false: a last-admin count of zero, an
+    # empty list, no error. Queries use User.role_id (or join Role).
+    package = Path(__file__).resolve().parents[1] / "dcdash"
+    pattern = re.compile(r"User\.role\b(?!_)")
+    hits = [
+        f"{path.relative_to(package.parent)}:{number}: {line.strip()}"
+        for path in sorted(package.rglob("*.py"))
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if pattern.search(line)
+    ]
+    assert hits == []

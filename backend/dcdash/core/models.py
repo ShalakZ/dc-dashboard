@@ -4,7 +4,9 @@ from typing import Any
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, func, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from dcdash.core.permissions import ALL_IDS, effective_permissions
 
 TZ = DateTime(timezone=True)
 
@@ -13,14 +15,62 @@ class Base(DeclarativeBase):
     pass
 
 
+class Role(Base):
+    __tablename__ = "roles"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]  # unique ignoring case (a database index); the built-in ones are viewer, operator, admin
+    description: Mapped[str] = mapped_column(default="", server_default="")
+    builtin: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
+    # A custom role's ids. Whatever is stored, effective_permissions() decides what it grants; a built-in role's
+    # list is only a mirror (its permissions come from dcdash.core.permissions.BUILTIN).
+    permissions: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+
+
+def _known(ids: tuple[str, ...]) -> frozenset[str]:
+    if not ids:
+        raise ValueError("name at least one permission")
+    unknown = [i for i in ids if i not in ALL_IDS]
+    if unknown:
+        raise ValueError(f"unknown permission {unknown[0]!r}")
+    return frozenset(ids)
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str]
     password_hash: Mapped[str]
-    role: Mapped[str]
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="RESTRICT"))
+    # Loaded with the user (one query, the role's name and permissions are never a second round trip). Build a user with
+    # `role_row=<the Role>`, never with `role_id` alone: reading `.role` or `.permissions` on a user whose role is not
+    # loaded would lazy-load outside the async context. `.role` and `.permissions` have no setter: to change a role, assign
+    # `role_row`.
+    role_row: Mapped[Role] = relationship(lazy="joined", innerjoin=True)
     active: Mapped[bool] = mapped_column(default=True)
     preferences: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
+
+    # In a query use `role_id` (or join Role): on the class `role` is this property, not a column, and a comparison with
+    # it compiles to WHERE false (test_permissions.py greps dcdash/ for it).
+    @property
+    def role(self) -> str:
+        """The name of the account's role (viewer, operator, admin or a custom role's name)."""
+        return self.role_row.name
+
+    @property
+    def permissions(self) -> frozenset[str]:
+        """What the account may do, computed from the role every time it is read (no cache: a change applies next request)."""
+        role = self.role_row
+        return effective_permissions(role.name, role.builtin, role.permissions)
+
+    def can(self, *ids: str) -> bool:
+        """True when the account holds ALL of these permissions. An unknown id, or none at all, is a ValueError."""
+        return _known(ids) <= self.permissions
+
+    def can_any(self, *ids: str) -> bool:
+        """True when the account holds at least ONE of these permissions. An unknown id, or none at all, is a ValueError."""
+        return not _known(ids).isdisjoint(self.permissions)
 
 
 class UserSession(Base):

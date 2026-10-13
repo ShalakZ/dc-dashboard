@@ -10,6 +10,7 @@ from helpers import login_as, make_user
 from dcdash.api import auth as auth_module
 from dcdash.api import deps as deps_module
 from dcdash.core import preferences as preferences_module
+from dcdash.core.permissions import BUILTIN
 from dcdash.core.preferences import DEFAULTS, MODES, THEMES, normalize
 
 DEFAULT_LOOK = {"mode": "light", "theme": "navy-gold"}
@@ -89,7 +90,10 @@ async def test_a_new_account_reads_the_defaults_from_me_and_from_login(client, d
     login = await client.post("/api/login", json={"username": "ann", "password": "correct-horse"})
     assert login.status_code == 200 and login.json()["preferences"] == DEFAULT_LOOK
     me = await client.get("/api/me")
-    assert me.json() == {"id": await user_id(db, "ann"), "username": "ann", "role": "viewer", "preferences": DEFAULT_LOOK}
+    assert me.json() == {
+        "id": await user_id(db, "ann"), "username": "ann", "role": "viewer", "permissions": sorted(BUILTIN["viewer"]),
+        "preferences": DEFAULT_LOOK,
+    }
 
 
 async def test_setup_answers_the_defaults_too(client, db):

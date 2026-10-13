@@ -1,5 +1,3 @@
-from typing import Literal
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select, text
@@ -9,11 +7,10 @@ from dcdash.api.auth import apply_sign_in_policy, limiter
 from dcdash.api.deps import account_vanished_is_401, get_db, require_role
 from dcdash.api.security import hash_password
 from dcdash.core.audit import audit, audit_change
-from dcdash.core.models import User, UserSession
+from dcdash.core.models import Role, User, UserSession
+from dcdash.core.permissions import BUILTIN_IDS
 
 router = APIRouter(prefix="/api", tags=["users"], dependencies=[Depends(require_role("admin"))])
-
-Role = Literal["viewer", "operator", "admin"]
 
 ADMIN_CHANGES_LOCK = 7_300_001  # any constant; one lock serialises every change to a user account (PATCH and DELETE)
 
@@ -37,13 +34,21 @@ class Unblocked(BaseModel):
 class NewUser(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8, max_length=256)
-    role: Role
+    role: str = Field(min_length=1, max_length=64)  # the NAME of a role, matched ignoring case
 
 
 class UserPatch(BaseModel):
-    role: Role | None = None
+    role: str | None = Field(default=None, min_length=1, max_length=64)
     active: bool | None = None
     password: str | None = Field(default=None, min_length=8, max_length=256)
+
+
+async def role_by_name(db: AsyncSession, name: str) -> Role:
+    """The role with this name, matched ignoring case; 422 when there is none."""
+    role = await db.scalar(select(Role).where(func.lower(Role.name) == name.lower()))
+    if role is None:
+        raise HTTPException(422, "unknown role")
+    return role
 
 
 @router.get("/users", response_model=list[UserListRow])
@@ -63,10 +68,11 @@ async def create_user(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role("admin")),
 ) -> User:
+    role = await role_by_name(db, body.role)  # first, as the old Literal was: an unknown role is a 422 before anything else
     exists = await db.scalar(select(User.id).where(User.username == body.username))
     if exists is not None:
         raise HTTPException(409, "username already exists")
-    user = User(username=body.username, password_hash=hash_password(body.password), role=body.role)
+    user = User(username=body.username, password_hash=hash_password(body.password), role_row=role)
     async with account_vanished_is_401(db):  # the audit row needs the acting admin
         db.add(user)
         await db.flush()
@@ -94,14 +100,14 @@ async def lock_admin_changes(db: AsyncSession, acting: User, target_id: int, *, 
     """
     await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ADMIN_CHANGES_LOCK})
     current = await db.get(User, acting.id, populate_existing=True)
-    if current is None or not current.active or current.role != "admin":
+    if current is None or not current.active or current.role_id != BUILTIN_IDS["admin"]:
         raise HTTPException(401, "not authenticated")
     target = await db.get(User, target_id, populate_existing=True)
     if target is None:
         raise HTTPException(404, "user not found")
     if removes_admin:
         others = await db.scalar(
-            select(func.count()).select_from(User).where(User.role == "admin", User.active, User.id != target.id)
+            select(func.count()).select_from(User).where(User.role_id == BUILTIN_IDS["admin"], User.active, User.id != target.id)
         )
         if not others:
             raise HTTPException(409, "cannot remove the last active administrator")
@@ -120,15 +126,17 @@ async def patch_user(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role("admin")),
 ) -> User:
-    removes_admin = body.active is False or body.role not in (None, "admin")
-    if user_id == admin.id and (body.active is False or (body.role is not None and body.role != "admin")):
+    new_role = await role_by_name(db, body.role) if body.role is not None else None  # first, as the old Literal was
+    leaves_admin = new_role is not None and new_role.id != BUILTIN_IDS["admin"]
+    removes_admin = body.active is False or leaves_admin
+    if user_id == admin.id and (body.active is False or leaves_admin):
         raise HTTPException(409, "cannot deactivate or demote yourself")
     new_hash = hash_password(body.password) if body.password is not None else None  # argon2 is slow: not under the lock
     # One path for every change: under the admin lock a DELETE of the same account has either finished (404) or waits.
     user = await lock_admin_changes(db, admin, user_id, removes_admin=removes_admin)
     before = {"role": user.role, "active": user.active, "password": "set"}
-    if body.role is not None:
-        user.role = body.role
+    if new_role is not None:
+        user.role_row = new_role
     if new_hash is not None:
         user.password_hash = new_hash
     if body.active is not None:

@@ -1,6 +1,7 @@
 import json
 
-from helpers import login_as, make_user
+import pytest
+from helpers import login_as, make_role, make_user
 
 from dcdash.api import users as users_module
 
@@ -46,7 +47,9 @@ async def test_admin_cannot_deactivate_or_demote_self(client, db):
     for body in ({"active": False}, {"role": "operator"}):
         response = await client.patch(f"/api/users/{me['id']}", json=body)
         assert response.status_code == 409, response.text
-    row = await db.fetchrow("SELECT role, active FROM users WHERE id = $1", me["id"])
+    row = await db.fetchrow(
+        "SELECT r.name AS role, u.active FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1", me["id"]
+    )
     assert row["role"] == "admin" and row["active"] is True
 
 
@@ -140,7 +143,7 @@ async def test_a_patch_that_demotes_or_deactivates_the_only_other_admin_is_allow
     assert (await client.patch(f"/api/users/{first}", json={"role": "operator"})).status_code == 200
     assert (await client.patch(f"/api/users/{second}", json={"active": False})).status_code == 200
     assert taken == [(first, True), (second, True)]
-    assert await db.fetchval("SELECT count(*) FROM users WHERE role = 'admin' AND active") == 1  # the acting admin
+    assert await db.fetchval("SELECT count(*) FROM users WHERE role_id = 3 AND active") == 1  # the acting admin
 
 
 async def test_a_patch_that_cannot_remove_an_admin_takes_the_lock_but_skips_the_last_admin_check(
@@ -181,3 +184,83 @@ async def test_only_the_list_carries_the_blocked_mark(client, db):
     assert set(patched.json()) == {"id", "username", "role", "active"}
     rows = (await client.get("/api/users")).json()
     assert all(set(row) == {"id", "username", "role", "active", "blocked"} and row["blocked"] is False for row in rows)
+
+
+# ---- a role is named by its name ------------------------------------------------------------------------------------------
+
+async def role_name_of(db, user_id: int) -> str:
+    return await db.fetchval("SELECT r.name FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1", user_id)
+
+
+async def test_a_role_name_is_matched_ignoring_case_and_answered_as_stored(client, db):
+    await login_as(client, db)
+    created = await client.post("/api/users", json={"username": "ops", "password": "longenough", "role": "Operator"})
+    assert created.status_code == 201, created.text
+    assert created.json()["role"] == "operator"
+    assert await role_name_of(db, created.json()["id"]) == "operator"
+    patched = await client.patch(f"/api/users/{created.json()['id']}", json={"role": "VIEWER"})
+    assert patched.status_code == 200 and patched.json()["role"] == "viewer"
+    assert await db.fetchval("SELECT role_id FROM users WHERE id = $1", created.json()["id"]) == 1
+
+
+async def test_a_custom_role_can_be_given_by_name_on_create_and_on_patch(client, db):
+    await login_as(client, db)
+    await make_role(db, "Night shift", ["assets.view"])
+    created = await client.post("/api/users", json={"username": "nora", "password": "longenough", "role": "night SHIFT"})
+    assert created.status_code == 201, created.text
+    assert created.json()["role"] == "Night shift"
+    uid = created.json()["id"]
+    assert (await client.patch(f"/api/users/{uid}", json={"role": "operator"})).json()["role"] == "operator"
+    assert (await client.patch(f"/api/users/{uid}", json={"role": "night shift"})).json()["role"] == "Night shift"
+    listed = {u["username"]: u["role"] for u in (await client.get("/api/users")).json()}
+    assert listed["nora"] == "Night shift"
+
+
+async def test_the_audit_rows_of_a_role_change_carry_role_names(client, db):
+    await login_as(client, db)
+    await make_role(db, "Night shift", ["assets.view"])
+    uid = (await client.post("/api/users", json={"username": "nora", "password": "longenough", "role": "viewer"})).json()["id"]
+    await client.patch(f"/api/users/{uid}", json={"role": "night shift"})
+    created = await db.fetchval("SELECT detail FROM audit_log WHERE action = 'user.created'")
+    assert created["role"] == "viewer"
+    updated = await db.fetchval("SELECT detail FROM audit_log WHERE action = 'user.updated'")
+    assert updated["before"]["role"] == "viewer" and updated["after"]["role"] == "Night shift"
+
+
+@pytest.mark.parametrize("role", ["root", "viewer ", " viewer", "vie wer", "3", "x" * 65, ""])
+async def test_an_unknown_or_malformed_role_is_a_422_on_create_and_patch(client, db, role):
+    await login_as(client, db)
+    uid = await make_user(db, "ann")
+    created = await client.post("/api/users", json={"username": "new", "password": "longenough", "role": role})
+    assert created.status_code == 422, created.text
+    assert (await client.patch(f"/api/users/{uid}", json={"role": role})).status_code == 422
+    assert [u["username"] for u in (await client.get("/api/users")).json()] == ["admin", "ann"]
+    assert await role_name_of(db, uid) == "viewer"
+
+
+async def test_a_role_that_is_not_text_is_a_422(client, db):
+    await login_as(client, db)
+    uid = await make_user(db, "ann")
+    for role in (7, True, ["viewer"], {"name": "viewer"}):
+        assert (await client.post("/api/users", json={"username": "new", "password": "longenough", "role": role})).status_code == 422
+        assert (await client.patch(f"/api/users/{uid}", json={"role": role})).status_code == 422
+
+
+async def test_an_unknown_role_is_refused_before_a_taken_name_or_a_change_to_yourself(client, db):
+    # The old three-value Literal answered 422 before either check; resolving the name keeps that order.
+    await login_as(client, db)
+    me = (await client.get("/api/me")).json()
+    taken = await client.post("/api/users", json={"username": "admin", "password": "longenough", "role": "root"})
+    assert taken.status_code == 422
+    assert (await client.patch(f"/api/users/{me['id']}", json={"role": "root"})).status_code == 422
+    assert (await client.patch(f"/api/users/{me['id']}", json={"role": "viewer"})).status_code == 409
+
+
+async def test_a_role_does_not_change_when_the_patch_does_not_name_one(client, db):
+    await login_as(client, db)
+    await make_role(db, "Night shift", ["assets.view"])
+    uid = (await client.post("/api/users", json={"username": "nora", "password": "longenough", "role": "night shift"})).json()["id"]
+    for body in ({"active": False}, {"password": "another-pass-1"}, {}):
+        patched = await client.patch(f"/api/users/{uid}", json=body)
+        assert patched.status_code == 200 and patched.json()["role"] == "Night shift", body
+    assert await role_name_of(db, uid) == "Night shift"
