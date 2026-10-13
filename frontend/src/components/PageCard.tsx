@@ -14,7 +14,7 @@ export function PageCard({ icon, title, purpose, tip, footer, headingId, classNa
   title: string;
   purpose?: ReactNode;
   tip?: ReactNode;
-  footer?: ReactNode;
+  footer?: ReactNode; // API for the next page: no page passes it today (every Save is inside its own form)
   headingId?: string;
   className?: string;
   children?: ReactNode;

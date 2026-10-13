@@ -462,8 +462,6 @@
   .empty-note > :is(button, a) { flex: none; }
   .page-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px 24px; }
   .page-grid > .span-all { grid-column: 1 / -1; }
-  /* A running paragraph in a card keeps a readable measure; a one- or two-line helper does not use it and takes the card's width. */
-  .hint { margin: 0; font-size: var(--fs-sm); line-height: 1.45; color: var(--text-2); }
   /* A quick filter of the Audit toolbar. Not .chip (the 22px status chip of Users, Sources, Scans and the widgets); the pressed tint is
      the base button[aria-pressed="true"] rule's, so it has no hover rule of its own (a class rule would outrank it). */
   .filter-chip { height: 30px; min-height: 0; padding: 0 10px; font-size: var(--fs-sm); }
@@ -638,9 +636,6 @@
 
   /* Narrow windows: tighter page gutter and tree column. Set on #root, not :root (a second :root rule would make every
      var() ambiguous for the contrast test). */
-  @media (min-width: 800px) {
-    .hint { max-width: 75ch; }
-  }
   @media (min-width: 1280px) {
     .page-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; }
   }

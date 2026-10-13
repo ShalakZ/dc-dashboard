@@ -289,6 +289,11 @@ describe("DiagnosticsPage layout (W7j)", () => {
     expect(helper).toHaveTextContent(/^A report names the machines of your network\. Tick this to replace every host name and address with HOST-1, HOST-2 and so on; the key stays on this page\. Passwords and keys are never in a report\.$/);
     expect(row).toHaveClass("row");
     expect(within(row).getByRole("button", { name: "Build report" })).toBe(build());
+    // the helper line is the checkbox's description (read after its name), though it sits on a line of its own
+    const box = within(mask).getByRole("checkbox", { name: "Hide host names and addresses" });
+    expect(box).toHaveAttribute("aria-describedby", helper.id);
+    expect(helper.id).not.toBe("");
+    expect(box).toHaveAccessibleDescription(/^A report names the machines of your network\./);
   });
 
   it("keeps every helper line as plain text at the card's width: no hint cap, no info tip, the Detail help stays in its group", async () => {
@@ -348,7 +353,8 @@ describe("the Diagnostics styles (W7j)", () => {
     for (const rule of own) {
       expect(rule.body, `"${rule.selector}"`).not.toMatch(/max-width:\s*(?!none\b|100%)[\d.]+(px|ch|rem|em)/);
     }
-    expect(one(".diag-page .report-form")).toMatch(/max-width:\s*none/); // the global `form { max-width: 480px }` sits behind a deleted rule
+    // no rule of its own: `.page-card form` (app.css, tested there) already lifts the global `form { max-width: 480px }` for every card's form
+    expect(rules.filter((r) => r.selector === ".diag-page .report-form")).toHaveLength(0);
   });
 
   it("holds the Detail group to a fixed basis so its two help texts do not move the neighbours", () => {

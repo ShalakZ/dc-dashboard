@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { useBuildReport, useSources } from "../api/queries";
 import type { ReportDetail, ReportReply } from "../api/types";
 import { ConnectionCheck } from "../components/ConnectionCheck";
@@ -83,6 +83,7 @@ export function DiagnosticsPage() {
   const build = useBuildReport();
   const [detail, setDetail] = useState<ReportDetail>("summary");
   const [mask, setMask] = useState(false);
+  const maskHelpId = useId(); // the helper line sits on a line of its own, so the checkbox points at it
   const [source, setSource] = useState<number | null>(null);
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -108,9 +109,9 @@ export function DiagnosticsPage() {
                   {sources.data?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </label>
-              <label className="report-mask"><input type="checkbox" checked={mask} onChange={(e) => setMask(e.target.checked)} />Hide host names and addresses</label>
+              <label className="report-mask"><input type="checkbox" checked={mask} aria-describedby={maskHelpId} onChange={(e) => setMask(e.target.checked)} />Hide host names and addresses</label>
             </div>
-            <p className="muted">
+            <p id={maskHelpId} className="muted">
               A report names the machines of your network. Tick this to replace every host name and address with HOST-1, HOST-2 and so on;
               the key stays on this page. Passwords and keys are never in a report.
             </p>
