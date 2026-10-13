@@ -11,6 +11,13 @@ const ROLE_CHECK_GAP_MS = 10_000;
 /** The gaps between the first sign-in check's attempts while the server cannot be reached: 3 s, 6 s, 10 s, then 15 s each time. */
 const RETRY_GAPS_MS = [3_000, 6_000, 10_000, 15_000];
 
+/** The shape of what /api/me answers for a signed-in user, as far as the app relies on it: a name and one of the three roles. */
+const isUser = (value: unknown): value is User =>
+  typeof value === "object" && value !== null
+  && typeof (value as { username?: unknown }).username === "string"
+  && typeof (value as { role?: unknown }).role === "string"
+  && Object.hasOwn(ROLE_LEVEL, (value as { role: string }).role);
+
 interface AuthState {
   user: User | null;
   /** Set when the server says the signed-in user now has another role than the page loaded with. `user` itself is left alone. */
@@ -124,7 +131,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         let found: User | null = null;
         if (!status.needed) {
           try {
-            found = await api.get<User>("/api/me");
+            const me = await api.get<unknown>("/api/me");
+            // A 200 that is not a user (a captive portal's page, say) must not become one: it ends like any other answer this check cannot use.
+            if (!isUser(me)) throw new Error("/api/me did not answer with a user");
+            found = me;
           } catch (error) {
             if (!(error instanceof ApiError && error.status === 401)) throw error;
           }
@@ -136,8 +146,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUnreachable(false);
       } catch (error) {
         if (!isUnreachable(error)) {
-          setUnreachable(false); // the server answered, with something this check does not handle; what follows is what always followed
-          throw error;
+          // The server answered, with something this check does not handle; what follows is what always followed (nobody signed in, the
+          // visitor lands on /login). Logged and not thrown: nobody awaits this, so a throw could only end as an unhandled rejection.
+          if (!cancelled && !superseded) setUnreachable(false);
+          console.error(error);
+          return;
         }
         if (cancelled || superseded) return;
         setUnreachable(true); // before `loading` ends in the finally, so the first frame after it is the panel and not the sign-in page

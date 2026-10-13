@@ -51,7 +51,7 @@ test.describe("the server cannot be reached (D2)", () => {
 
       await page.unroute("**/api/me");
       await page.getByRole("button", { name: "Retry now", exact: true }).click();
-      await expect(heading1(page, "Sources")).toBeVisible();
+      await expect(heading1(page, "Sources")).toBeVisible({ timeout: 20_000 }); // a scheduled retry already out is answered 502 and the press is ignored; the next retry is 6 s later
       await expect(page).toHaveURL(/\/sources$/);
       await expect(heading1(page, "Can't reach the server")).toHaveCount(0);
     });

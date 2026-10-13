@@ -4,7 +4,7 @@ import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { RequireAuth } from "./RequireAuth";
-import { useAuth } from "./AuthProvider";
+import { RETURN_KEY, useAuth } from "./AuthProvider";
 import { useAssets } from "../api/queries";
 
 function AssetCount() {
@@ -56,8 +56,8 @@ describe("AuthProvider", () => {
 
 /** What the bootstrap (the first /api/setup and /api/me) finds: the fake server's answers, changed between events. */
 const server = {
-  setup: "ok" as "ok" | "needed" | "network" | 502 | 503,
-  me: "ok" as "ok" | 401 | "network" | 502 | 503 | 504,
+  setup: "ok" as "ok" | "needed" | "network" | number,
+  me: "ok" as "ok" | "network" | number,
 };
 
 const bootstrapRoutes = () => ({
@@ -264,5 +264,169 @@ describe("AuthProvider bootstrap", () => {
     await userEvent.click(screen.getByRole("button", { name: "retry" }));
     expect(read().user).toBe("v");
     expect(held).toHaveLength(1);
+  });
+});
+
+describe("AuthProvider bootstrap: the answers that are neither 'unreachable' nor 'signed out'", () => {
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  /** The failures the bootstrap does not handle: the server answered, with something it cannot use. What follows is what always followed: nobody is signed in and the visitor lands on /login. */
+  const failures = [
+    ["/api/setup", 500], ["/api/setup", 403], ["/api/setup", 404], ["/api/setup", 422],
+    ["/api/me", 500], ["/api/me", 403], ["/api/me", 404], ["/api/me", 422],
+  ] as const;
+  const failing = (path: string, status: number) => (path === "/api/setup" ? { setup: status } : { me: status });
+  let logged: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    Object.assign(server, { setup: "ok", me: "ok" });
+    sessionStorage.clear();
+    logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(failures)("%s answering %i at the first load: logged, not thrown; no user, not unreachable, loading over, no retry", async (path, status) => {
+    Object.assign(server, failing(path, status));
+    const held = holdRetryTimers();
+    mockFetch(bootstrapRoutes());
+    renderWithProviders(<Probe />);
+    await waitFor(() => expect(read().loading).toBe(false));
+    expect(read()).toEqual({ loading: false, unreachable: false, setupNeeded: false, user: null });
+    expect(held).toHaveLength(0);
+    expect(logged).toHaveBeenCalledWith(expect.objectContaining({ name: "ApiError", status }));
+  });
+
+  it.each(failures)("%s answering %i on a retry after an outage: no longer unreachable, no user, no further retry", async (path, status) => {
+    server.setup = "network";
+    const held = holdRetryTimers();
+    mockFetch(bootstrapRoutes());
+    renderWithProviders(<Probe />);
+    await waitFor(() => expect(read().unreachable).toBe(true));
+    Object.assign(server, { setup: "ok", me: "ok" }, failing(path, status));
+    await fire(held, 0);
+    await waitFor(() => expect(read().unreachable).toBe(false));
+    expect(read()).toEqual({ loading: false, unreachable: false, setupNeeded: false, user: null });
+    expect(held).toHaveLength(1);
+    expect(logged).toHaveBeenCalledWith(expect.objectContaining({ name: "ApiError", status }));
+  });
+
+  it.each(failures)("%s answering %i: the visitor lands on /login and the page asked for is remembered, as before", async (path, status) => {
+    Object.assign(server, failing(path, status));
+    holdRetryTimers();
+    mockFetch(bootstrapRoutes());
+    renderWithProviders(<RequireAuth><p>app page</p></RequireAuth>);
+    expect(await screen.findByText("login page")).toBeInTheDocument();
+    expect(screen.queryByText("app page")).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(RETURN_KEY)).toBe("/");
+  });
+
+  it.each(failures)("%s answering %i on a retry after an outage: the panel gives way to /login", async (path, status) => {
+    server.setup = "network";
+    const held = holdRetryTimers();
+    mockFetch(bootstrapRoutes());
+    renderWithProviders(<RequireAuth><p>app page</p></RequireAuth>);
+    expect(await screen.findByRole("heading", { level: 1, name: "Can't reach the server" })).toBeInTheDocument();
+    expect(sessionStorage.getItem(RETURN_KEY)).toBeNull(); // nothing is remembered while the panel is up
+    Object.assign(server, { setup: "ok", me: "ok" }, failing(path, status));
+    await fire(held, 0);
+    expect(await screen.findByText("login page")).toBeInTheDocument();
+    expect(screen.queryByText("app page")).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(RETURN_KEY)).toBe("/");
+  });
+
+  describe("a late answer to a check that has been overtaken", () => {
+    const setupRequest = (method: string, path: string) => method === "GET" && path === "/api/setup";
+
+    it.each([
+      ["says a first user is needed", { setup: "needed", me: "ok" }],
+      ["carries another person's session", { setup: "ok", me: "ok" }],
+    ] as const)("changes nothing for the person who signed in meanwhile when it %s", async (_name, late) => {
+      mockFetch(bootstrapRoutes());
+      const gate = holdFetch(setupRequest);
+      renderWithProviders(<Probe />);
+      await userEvent.click(screen.getByRole("button", { name: "sign in" }));
+      await waitFor(() => expect(read().user).toBe("v"));
+      Object.assign(server, late); // what the held request will find when it goes on
+      await act(async () => { gate.release(); });
+      await waitFor(() => expect(read().loading).toBe(false)); // the check has ended
+      expect(read()).toEqual({ loading: false, unreachable: false, setupNeeded: false, user: "v" });
+    });
+
+    it("an unmount while the request is out leaves no retry armed when the answer is a network failure", async () => {
+      server.setup = "network";
+      const held = holdRetryTimers();
+      mockFetch(bootstrapRoutes());
+      let out = false;
+      const gate = holdFetch((method, path) => (out ||= setupRequest(method, path)) && setupRequest(method, path));
+      const { unmount } = renderWithProviders(<Probe />);
+      await waitFor(() => expect(out).toBe(true)); // the first check's request is out and held
+      unmount();
+      await act(async () => { gate.release(); await sleep(20); });
+      expect(held.filter((timer) => !timer.cleared)).toHaveLength(0);
+      expect(held).toHaveLength(0);
+    });
+
+    it("a sign-in while the request is out leaves no retry armed when the answer is a network failure", async () => {
+      server.setup = "network";
+      const held = holdRetryTimers();
+      mockFetch(bootstrapRoutes());
+      const gate = holdFetch(setupRequest);
+      renderWithProviders(<Probe />);
+      await userEvent.click(screen.getByRole("button", { name: "sign in" }));
+      await waitFor(() => expect(read().user).toBe("v"));
+      await act(async () => { gate.release(); });
+      await waitFor(() => expect(read().loading).toBe(false));
+      expect(read()).toEqual({ loading: false, unreachable: false, setupNeeded: false, user: "v" });
+      expect(held).toHaveLength(0);
+    });
+  });
+
+  describe("an /api/me answer that is not a user", () => {
+    /** Answers GET /api/me with exactly this text; everything else is the fake server's. */
+    function meSays(text: string, contentType: string) {
+      mockFetch(bootstrapRoutes());
+      const inner = globalThis.fetch;
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if ((init?.method ?? "GET") === "GET" && url.split("?")[0] === "/api/me") return new Response(text, { status: 200, headers: { "content-type": contentType } });
+        return inner(input, init);
+      }));
+    }
+    const json = "application/json";
+    const answers = [
+      ["an HTML page (a captive portal)", "<!doctype html><html><body>Sign in to the network</body></html>", "text/html"],
+      ["an empty object", "{}", json],
+      ["a name that is not text", JSON.stringify({ id: 1, username: 5, role: "admin" }), json],
+      ["a role that is not one of ours", JSON.stringify({ id: 1, username: "u", role: "root" }), json],
+      ["a role that only every object has (toString)", JSON.stringify({ id: 1, username: "u", role: "toString" }), json],
+      ["null", "null", json],
+    ] as const;
+
+    it.each(answers)("%s signs nobody in: it ends like any other answer the check cannot use", async (_name, text, contentType) => {
+      const held = holdRetryTimers();
+      meSays(text, contentType);
+      renderWithProviders(<Probe />);
+      await waitFor(() => expect(read().loading).toBe(false));
+      expect(read()).toEqual({ loading: false, unreachable: false, setupNeeded: false, user: null });
+      expect(held).toHaveLength(0);
+      expect(logged).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(answers)("%s: the visitor lands on /login, not in the app", async (_name, text, contentType) => {
+      holdRetryTimers();
+      meSays(text, contentType);
+      renderWithProviders(<RequireAuth><p>app page</p></RequireAuth>);
+      expect(await screen.findByText("login page")).toBeInTheDocument();
+      expect(screen.queryByText("app page")).not.toBeInTheDocument();
+    });
+
+    it("a real user is still signed in (the check is on the shape, not on extra fields)", async () => {
+      holdRetryTimers();
+      meSays(JSON.stringify({ id: 3, username: "ann", role: "viewer", preferences: { mode: "dark" } }), json);
+      renderWithProviders(<Probe />);
+      await waitFor(() => expect(read().user).toBe("ann"));
+      expect(logged).not.toHaveBeenCalled();
+    });
   });
 });
