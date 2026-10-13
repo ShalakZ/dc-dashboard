@@ -1,4 +1,9 @@
+import { noteReach } from "../lib/serverReach";
+
 type ValidationItem = { loc?: (string | number)[]; msg: string };
+
+/** Statuses a proxy answers with when the api behind it does not. */
+const NOT_ANSWERING = [502, 503, 504];
 
 export class ApiError extends Error {
   constructor(
@@ -12,6 +17,8 @@ export class ApiError extends Error {
   }
 
   static describe(status: number, detail: unknown): string {
+    // The proxy's own page ("502 Bad Gateway") or whatever the api sent: either way the server is not answering, and that is what the person needs to read.
+    if (NOT_ANSWERING.includes(status)) return `The server is not answering (status ${status}). It may be restarting; try again in a moment.`;
     if (typeof detail === "string") return detail;
     if (Array.isArray(detail)) {
       return (detail as ValidationItem[])
@@ -24,6 +31,9 @@ export class ApiError extends Error {
     return `request failed with status ${status}`;
   }
 }
+
+/** No answer from the server: the request never completed (status 0) or the proxy says the api is not there (502, 503, 504). Never a sign-in problem. */
+export const isUnreachable = (error: unknown): boolean => error instanceof ApiError && (error.status === 0 || NOT_ANSWERING.includes(error.status));
 
 type UnauthorizedHandler = () => void;
 let onUnauthorized: UnauthorizedHandler | null = null;
@@ -61,7 +71,14 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     (init.headers as Record<string, string>)["content-type"] = "application/json";
     init.body = JSON.stringify(body);
   }
-  const response = await fetch(path, init);
+  let response: Response;
+  try {
+    response = await fetch(path, init);
+  } catch {
+    noteReach(false);
+    throw new ApiError(0, "Can't reach the server. Check the network and try again.");
+  }
+  noteReach(!NOT_ANSWERING.includes(response.status));
   if (response.status === 204) return undefined as T;
   const text = await response.text();
   let data: unknown = null;

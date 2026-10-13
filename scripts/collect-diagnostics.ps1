@@ -9,7 +9,8 @@
 # DOCKER CLOCK compares the clock inside the db container with this computer's (a Docker/WSL2 VM that slept drifts; that is not the SCADA).
 # Per service the last 2000 log lines are read and the ROUTINE ones are dropped (2xx/3xx uvicorn access lines, Caddy admin API requests,
 # TimescaleDB refresh and checkpoint chatter; a line with error, warn, fatal, traceback, exception or panic is never dropped), the count
-# of dropped lines is printed, then the last 300 (file) / 30 (screen) remain. -RawLogs keeps every line.
+# of dropped lines is printed, then the last 300 (file) / 30 (screen) remain. -RawLogs keeps every line. Colour codes are removed from the log
+# text first; a block whose last 300 kept lines hold the Timescale image's first-start noise gets one "known benign" line.
 # -Mask replaces addresses, host names (this computer, the targets, the domain, the DNS and gateway hosts, the time source, a host seen in a URL),
 # the user name and the project and output folders by HOST-n, USER-1 and PATH-n in the files AND on the screen; loopback addresses (127.x,
 # ::1, 0.0.0.0), localhost and the compose service names (db, api, web, collector, simulator) stay as they are. The legend (alias = original) is printed on the screen after the "saved:" lines and never written
@@ -51,6 +52,8 @@ $Containers = $false
 $LogServices = 0
 $KeepAlways = 'error|warn|fatal|traceback|exception|panic'   # a log line with one of these words is never routine
 $RoutinePg = '^\S+ \S+ \S+ \[\d+\] LOG:\s+(continuous aggregate refresh|deleted \d+ row\(s\) from materialization table|inserted \d+ row\(s\) into materialization table|checkpoint (starting|complete):)'
+$BootNoise = 'no usable system locales were found|background worker.*trying to connect to template database, exiting'   # the Timescale image's first start
+$BootNote = 'known benign on a first start (Timescale image): "no usable system locales were found", "background worker ... trying to connect to template database, exiting"'
 $TailLines = 2000   # docker compose logs --tail: read this many, drop the routine ones, keep the last 300
 $OldEnc = $null
 try { if ([Console]::IsOutputRedirected) { $OldEnc = [Console]::OutputEncoding; [Console]::OutputEncoding = $Utf8 } } catch { }   # piped output is UTF-8
@@ -388,6 +391,9 @@ function Test-InsideOneDrive([string]$Path) {   # the folder name says OneDrive,
   }
   return $false
 }
+function Remove-Ansi([string]$Line) {   # colour codes: ESC [ 37;1 m, and the same without the ESC byte when it was lost on the way; it needs a digit, so [5m] and cfg[mode] in running text are no code
+  return $Line -creplace '\x1b\[[0-9;]*m', '' -creplace '\[[0-9]{1,3}(?:;[0-9]{1,3})*m(?!\])', ''
+}
 function Test-Routine([string]$Line) {   # a log line nobody needs to read (Decision 1 of the W8c plan); anything that could be a failure is kept
   if ($Line -match $KeepAlways) { return $false }
   $t = $Line -replace '^[A-Za-z0-9][A-Za-z0-9_.-]*\s*\|\s?', ''   # the "api-1  | " docker compose puts in front of every line
@@ -532,11 +538,49 @@ Section "TARGETS (DNS lookup, then TCP connect with a 3 s timeout)" {
 }
 
 Section "LOCAL PORTS" {
+  # Every address comes from .NET (CIM lists a dual-stack socket once, as ::). CIM only says which process id owns "address|port", and it runs as a
+  # job so that a stuck WMI cannot stall the report. Names, never command lines, paths or users.
   $listeners = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
-  foreach ($port in 80, 443, 8000) {
-    $on = @($listeners | Where-Object { $_.Port -eq $port } | ForEach-Object { "$($_.Address)" })
-    Add-Line ("port ${port}: " + $(if ($on.Count -gt 0) { "something is listening on " + ($on -join ", ") } else { "nothing is listening" }))
+  $FixedPorts = 80, 443, 8000   # the ports this product cares about get a line each; the others go into the block below
+  $owners = @{}; $portOwner = @{}; $names = @{}; $job = $null; $why = $null
+  try {
+    $job = Get-NetTCPConnection -State Listen -AsJob
+    if (Wait-Job $job -Timeout 5) {
+      foreach ($c in @(Receive-Job $job -ErrorAction Stop)) {
+        $n = [int]$c.LocalPort; $o = [int]$c.OwningProcess   # ints on both sides: a hashtable key of another type does not match
+        $owners["$($c.LocalAddress)|$n"] = $o
+        if (-not $portOwner.ContainsKey($n)) { $portOwner[$n] = $o } elseif ($portOwner[$n] -ne $o) { $portOwner[$n] = -1 }   # -1: more than one process on this port
+      }
+    } else { Stop-Job $job; $why = "the lookup did not answer in 5 s" }
+  } catch { $why = "the lookup was refused" } finally { if ($job) { Remove-Job $job -Force -ErrorAction SilentlyContinue } }
+  if (-not $why) { $why = "the lookup did not list it" }   # only read for a listener the lookup did not list
+  if ($owners.Count -gt 0) { try { foreach ($p in Get-Process) { $names[[int]$p.Id] = $p.ProcessName } } catch { } }
+  $rows = @{}   # "port|owner" -> one row per owner process (-1: unknown), the addresses it listens on
+  foreach ($l in $listeners) {
+    $port = [int]$l.Port; $addr = "$($l.Address)"
+    $o = $owners["$addr|$port"]
+    if ($null -eq $o) { $o = $owners["::|$port"] }
+    if ($null -eq $o -and $portOwner.ContainsKey($port) -and $portOwner[$port] -ge 0) { $o = $portOwner[$port] }
+    if ($null -eq $o) { $o = -1 }
+    if (-not $rows.ContainsKey("$port|$o")) { $rows["$port|$o"] = [pscustomobject]@{ Port = $port; Owner = $o; Addrs = (New-Object 'System.Collections.Generic.List[string]') } }
+    if (-not $rows["$port|$o"].Addrs.Contains($addr)) { $rows["$port|$o"].Addrs.Add($addr) }
   }
+  foreach ($r in $rows.Values) { $r.Addrs.Sort([StringComparer]::Ordinal) }
+  $name = { param($r) $(if ($names.ContainsKey($r.Owner)) { $names[$r.Owner] } else { "unknown" }) }
+  foreach ($port in $FixedPorts) {
+    $mine = @($rows.Values | Where-Object { $_.Port -eq $port } | Sort-Object @{ Expression = { $_.Owner -lt 0 } }, Owner)
+    if ($mine.Count -eq 0) { Add-Line "port ${port}: nothing is listening"; continue }
+    $on = @($listeners | Where-Object { $_.Port -eq $port } | ForEach-Object { "$($_.Address)" })
+    $who = @($mine | ForEach-Object { if ($_.Owner -ge 0) { "$(& $name $_), pid $($_.Owner)" } else { "owner hidden: $why" } })
+    Add-Line ("port ${port}: something is listening on " + ($on -join ", ") + " (" + $(if ($mine[0].Owner -ge 0) { "owner: " }) + ($who -join "; ") + ")")
+  }
+  $other = @($rows.Values | Where-Object { $FixedPorts -notcontains $_.Port } | Sort-Object Port, @{ Expression = { $_.Owner -lt 0 } }, Owner)
+  if ($other.Count -eq 0) { Add-Line "other listening ports: none"; return }
+  Add-Line "other listening ports (up to 40):"
+  foreach ($r in @($other | Select-Object -First 40)) {
+    Add-Line ("  {0}  {1}  {2}" -f $r.Port, ($r.Addrs -join ", "), $(if ($r.Owner -ge 0) { "$(& $name $r) (pid $($r.Owner))" } else { "owner hidden ($why)" }))
+  }
+  if ($other.Count -gt 40) { Add-Line "  ... and $($other.Count - 40) more" }
 }
 
 Section "TOOLS ON PATH" {
@@ -637,13 +681,14 @@ Section "LOGS" {
   foreach ($svc in $names) {
     $r = Invoke-Docker @("compose", "logs", "--no-color", "--tail", "$TailLines", $svc) ($CommandTimeoutSeconds * 3)
     if (-not $r) { break }
-    $got = @(Get-TextLines $r.Out | Where-Object { $_.Trim() })
+    $got = @(Get-TextLines $r.Out | ForEach-Object { Remove-Ansi $_ } | Where-Object { $_.Trim() })   # codes off first: the filter and the counts see the plain text
     if ($r.ExitCode -ne 0 -and $got.Count -eq 0) { Add-Line "-- ${svc}: docker compose logs failed (exit code $($r.ExitCode)): $($r.Err.Trim())" -Clip 300; continue }
     $kept = $(if ($RawLogs) { $got } else { @(foreach ($l in $got) { if (-not (Test-Routine $l)) { $l } }) })
     $tail = @($kept | Select-Object -Last 300)
     $show = @($tail | Select-Object -Last 30)
     $what = $(if ($RawLogs) { "lines read; unfiltered)" } else { "kept lines; dropped $($got.Count - $kept.Count) routine lines of $($got.Count) read)" })
     Add-Line "-- $svc (last $($show.Count) of $($kept.Count) $what$(if ($got.Count -ge $TailLines) { ' (tail limit reached; older lines not read)' })"
+    if (@($tail | Where-Object { $_ -match $BootNoise }).Count -gt 0) { Add-Line $BootNote -Prefix "  " }
     foreach ($l in $show) { Add-Line $l -Clip 240 -Prefix "  " }
     Add-Line "== $svc ==" -To $LogLines
     foreach ($l in $tail) { Add-Line $l -Clip 1000 -To $LogLines }

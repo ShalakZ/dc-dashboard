@@ -710,6 +710,83 @@ def test_raw_logs_drops_nothing_and_says_unfiltered(raw_run):
     assert "(tail limit reached; older lines not read)" in _block(main, "worker")[0]
 
 
+# ---- W7i 4b: colour codes and the first-boot note ----------------------------------------------------------------------
+
+_ESC = "\x1b"
+_BOOT_NOTE = ('known benign on a first start (Timescale image): "no usable system locales were found", '
+              '"background worker ... trying to connect to template database, exiting"')
+_BOOT_LOCALE = "2026-10-12 09:21:11.001 UTC [1] WARNING:  no usable system locales were found"
+_BOOT_WORKER = '2026-10-12 09:21:12.100 UTC [27] ERROR:  background worker "TimescaleDB Background Worker Scheduler": trying to connect to template database, exiting'
+
+
+def _colour(text: str, esc: bool = True) -> str:
+    """A log line wrapped in colour codes, with the ESC byte or (esc=False) with the byte lost on the way."""
+    e = _ESC if esc else ""
+    return f"{e}[37;1m{text}{e}[0m"
+
+
+_ANSI_LOGS = {
+    "api": [*_prefixed("api", [_colour(_access("GET /api/health", "200 OK", 55000 + i), esc=i % 2 == 0) for i in range(60)]),
+            f"{_ESC}[0m", "[0m",   # nothing is left of these once the codes are gone: not lines read
+            *_prefixed("api", [_colour("ERROR:    boom happened"),
+                               f"INFO:     {_ESC}[32m127.0.0.1{_ESC}[0m - [1;31m\"GET /api/sources HTTP/1.1\" 500 Internal Server Error[0m",
+                               "the [5m] marker and [0m] and [1234m stay, cfg[mode] [main] x[m], a background worker idles"])],
+    "db": _prefixed("db", [_colour(_PG + "checkpoint starting: time"), _colour(_BOOT_LOCALE, esc=False), _colour("database system is ready", esc=False)]),
+    "ts": _prefixed("ts", [_colour(_BOOT_WORKER)]),
+    "web": _prefixed("web", [_colour(_ADMIN, esc=i % 2 == 1) for i in range(20)]
+                     + ["background worker started", "trying to connect to template database, exiting"]),
+}
+
+
+@pytest.fixture(scope="module")
+def ansi_run(scratch):
+    return _fake_run(scratch, logs=_ANSI_LOGS)
+
+
+@needs_powershell
+def test_a_colour_wrapped_routine_line_is_dropped_and_no_escape_byte_reaches_either_file(ansi_run):
+    proc, files = ansi_run
+    assert proc.returncode == 0, proc.stderr
+    main, logs = _main_and_logs(files)
+    assert _ESC not in main and _ESC not in logs and _ESC not in proc.stdout
+    assert _block(main, "api")[0] == "-- api (last 3 of 3 kept lines; dropped 60 routine lines of 63 read)"
+    assert _block(main, "db")[0] == "-- db (last 2 of 2 kept lines; dropped 1 routine lines of 3 read)"
+    assert _block(main, "web")[0] == "-- web (last 2 of 2 kept lines; dropped 20 routine lines of 22 read)"
+    api = _prefixed("api", ["ERROR:    boom happened", 'INFO:     127.0.0.1 - "GET /api/sources HTTP/1.1" 500 Internal Server Error',
+                            "the [5m] marker and [0m] and [1234m stay, cfg[mode] [main] x[m], a background worker idles"])
+    assert [l.strip() for l in _block(main, "api")[1:]] == api
+    assert _logs_block(logs, "api") == api
+    assert _logs_block(logs, "db") == _prefixed("db", [_BOOT_LOCALE, "database system is ready"])
+
+
+@needs_powershell
+def test_the_first_boot_note_stands_right_after_the_header_of_a_block_whose_tail_holds_a_pattern(ansi_run):
+    main, logs = _main_and_logs(ansi_run[1])
+    for svc in ("db", "ts"):   # db holds the locale line, ts the background worker line
+        assert _block(main, svc)[1] == f"  {_BOOT_NOTE}", svc
+    assert main.count("known benign on a first start") == 2, "one per block, and none for api and web (each holds half of a pattern)"
+    assert "known benign" not in logs, "the logs file holds log lines only"
+
+
+@needs_powershell
+def test_raw_logs_strips_the_colour_and_still_notes_the_first_boot_lines(scratch):
+    proc, files = _fake_run(scratch, ["-RawLogs"], logs=_ANSI_LOGS)
+    assert proc.returncode == 0, proc.stderr
+    main, logs = _main_and_logs(files)
+    assert _ESC not in main and _ESC not in logs
+    assert _block(main, "db")[0] == "-- db (last 3 of 3 lines read; unfiltered)"
+    assert main.count("known benign on a first start") == 2
+
+
+@needs_powershell
+def test_a_pattern_older_than_the_last_300_kept_lines_gives_no_note(scratch):
+    newer = [f"2026-10-12 10:00:00 line number {i} of the day" for i in range(300)]
+    inside = _fake_run(scratch, logs={"db": _prefixed("db", [_BOOT_LOCALE, *newer[1:]])})
+    outside = _fake_run(scratch, logs={"db": _prefixed("db", [_BOOT_LOCALE, *newer])})
+    assert _block(_main_and_logs(inside[1])[0], "db")[1] == f"  {_BOOT_NOTE}"   # 299 newer lines and the old one are 300
+    assert "known benign" not in _main_and_logs(outside[1])[0]   # the 300th pushes the old line out of the tail
+
+
 @needs_powershell
 def test_docker_clock_reads_the_vm_between_two_host_readings(filter_run):
     main, _ = _main_and_logs(filter_run[1])
@@ -754,9 +831,9 @@ def _ps_arg(arg: str) -> str:
     return arg if arg.startswith("-") else "'" + arg.replace("'", "''") + "'"   # a quoted '-Mask' would be a value, not the switch
 
 
-def _run_in_powershell(args: list[str], cwd: Path, project: Path, timeout: int = 180, setup: str = "") -> subprocess.CompletedProcess:
+def _run_in_powershell(args: list[str], cwd: Path, project: Path, timeout: int = 180, setup: str = "", script: Path = SCRIPT) -> subprocess.CompletedProcess:
     """Like _run_script, but through -Command so that USERDNSDOMAIN (and whatever `setup` adds) can be set first."""
-    command = f"{DOMAIN_SETUP}; {setup + '; ' if setup else ''}& '{_win(SCRIPT)}' {' '.join(map(_ps_arg, args))} -ProjectDir '{_win(project)}'; exit $LASTEXITCODE"
+    command = f"{DOMAIN_SETUP}; {setup + '; ' if setup else ''}& '{_win(script)}' {' '.join(map(_ps_arg, args))} -ProjectDir '{_win(project)}'; exit $LASTEXITCODE"
     return subprocess.run(
         [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
         capture_output=True, text=True, timeout=timeout, cwd=str(cwd),
@@ -1031,6 +1108,91 @@ def test_a_mistyped_project_folder_is_not_created_and_the_files_land_in_logs_of_
     assert len(saved) == 1 and sorted(p.name for p in cwd.iterdir()) == ["logs"]
 
 
+# ---- W7i 4a: who owns a listening port -----------------------------------------------------------------------------------
+
+# The test opens loopback listeners INSIDE PowerShell (an environment variable or a socket from WSL would not be this process) and prints its
+# pid. It cannot use 80, 443 or 8000: on the dev machine WSL (mirrored networking) and Docker hold them. So it runs a COPY of the script whose
+# fixed ports are 7, 9 and 13 (one of them is opened) and opens one more low port (17, 19 or 37) for the block: a low port sorts first in
+# "other listening ports", which stops at 40 rows (a dev machine has more than that, so an ephemeral port would fall into "... and N more").
+# Only single quotes in the PowerShell text: the command line goes through WSL.
+FIXED_PORTS = "$FixedPorts = 80, 443, 8000"
+OPEN_PORTS = (
+    "$global:keep = @(); "
+    "function Open-Port($ports) { foreach ($p in $ports) { try { $c = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $p); $c.Start(); $global:keep += $c; return $p } catch { } }; return 0 }; "
+    "$fixed = Open-Port @(7, 9, 13); $low = Open-Port @(17, 19, 37); "
+    "Write-Host ('PORTS-TEST pid=' + $PID + ' fixed=' + $fixed + ' low=' + $low)"
+)
+GET_REFUSED = "function Get-NetTCPConnection { throw 'denied' }"
+GET_HANGS = "function Get-NetTCPConnection { param($State, [switch]$AsJob) Start-Job -ScriptBlock { Start-Sleep -Seconds 60 } }"
+
+
+@pytest.fixture(scope="module")
+def ports_runs(scratch):
+    """The patched script three times, one after the other (they use the same ports): with the real lookup, with Get-NetTCPConnection
+    refused and with it hanging. Each: (host pid, the fixed port opened, the block port opened, the LOCAL PORTS lines, the whole stdout)."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert text.count(FIXED_PORTS) == 1, "the fixed ports moved: update FIXED_PORTS"
+    patched = scratch() / "collect-diagnostics.ps1"
+    patched.write_text(text.replace(FIXED_PORTS, "$FixedPorts = 7, 9, 13, 80, 443, 8000"), encoding="utf-8")
+
+    def one(setup: str):
+        out_dir, project = scratch(), scratch("dcdash-diag-project-")
+        proc = _run_in_powershell(["-OutDir", _win(out_dir)], out_dir, project, setup=OPEN_PORTS + "; " + setup, script=patched)
+        assert proc.returncode == 0, proc.stderr
+        found = re.search(r"PORTS-TEST pid=(\d+) fixed=(\d+) low=(\d+)", proc.stdout)
+        assert found, proc.stdout[:500]
+        pid, fixed, low = (int(g) for g in found.groups())
+        if not (fixed and low):
+            pytest.skip("none of the low ports 7, 9, 13 / 17, 19, 37 could be opened on this machine")
+        return pid, fixed, low, _section(proc.stdout, "LOCAL PORTS"), proc.stdout
+
+    return {"real": one("$null = 0"), "refused": one(GET_REFUSED), "hangs": one(GET_HANGS)}
+
+
+@needs_powershell
+def test_a_fixed_port_line_names_the_owner_process_and_its_pid_and_the_other_ports_say_nothing_is_listening(ports_runs):
+    pid, fixed, _, lines, _ = ports_runs["real"]
+    assert f"port {fixed}: something is listening on 127.0.0.1 (owner: powershell, pid {pid})" in lines
+    assert [int(l.split(":")[0].split()[1]) for l in lines if l.startswith("port ")] == [7, 9, 13, 80, 443, 8000], "one line per fixed port, in order"
+
+
+@needs_powershell
+def test_other_listeners_are_listed_by_port_with_their_addresses_and_owner(ports_runs):
+    pid, _, low, lines, _ = ports_runs["real"]
+    assert "other listening ports (up to 40):" in lines
+    assert f"  {low}  127.0.0.1  powershell (pid {pid})" in lines
+    rows = [l for l in lines[lines.index("other listening ports (up to 40):") + 1:] if re.match(r"  \d+  ", l)]
+    ports = [int(l.split()[0]) for l in rows]
+    assert ports == sorted(ports) and len(rows) <= 40 and not {7, 9, 13, 80, 443, 8000} & set(ports)
+    assert all(re.fullmatch(r"  \d+  [0-9a-fA-F:.%, ]+  (owner hidden \(.+\)|[^()]+ \(pid \d+\))", l) for l in rows), rows
+
+
+@needs_powershell
+def test_a_refused_lookup_hides_the_owner_and_the_section_still_lists_the_ports(ports_runs):
+    _, fixed, low, lines, out = ports_runs["refused"]
+    assert "section failed" not in out
+    assert f"port {fixed}: something is listening on 127.0.0.1 (owner hidden: the lookup was refused)" in lines
+    assert f"  {low}  127.0.0.1  owner hidden (the lookup was refused)" in lines
+    assert not any("pid" in l for l in lines), lines
+
+
+@needs_powershell
+def test_a_lookup_that_does_not_answer_in_5_seconds_is_abandoned_and_says_so(ports_runs):
+    _, fixed, low, lines, out = ports_runs["hangs"]
+    assert "section failed" not in out and re.search(r"^== TOOLS ON PATH ==$", out, re.M)
+    assert f"port {fixed}: something is listening on 127.0.0.1 (owner hidden: the lookup did not answer in 5 s)" in lines
+    assert f"  {low}  127.0.0.1  owner hidden (the lookup did not answer in 5 s)" in lines
+
+
+@needs_powershell
+def test_the_ports_section_prints_names_and_ids_only_and_the_section_order_is_unchanged(ports_runs):
+    _, _, _, lines, out = ports_runs["real"]
+    assert all(l.isascii() for l in lines)
+    assert not re.search(r"\.exe|[A-Za-z]:\\|-Command|-File|NoProfile", "\n".join(lines)), "no path, command line or argument"
+    positions = [out.index(f"\n== {name}") for name in SECTIONS]
+    assert positions == sorted(positions)
+
+
 # ---- the script itself --------------------------------------------------------------------------------------------------
 
 def _code() -> str:
@@ -1046,7 +1208,7 @@ def test_script_sticks_to_powershell_51_syntax_and_stays_small():
     assert "Out-File" not in code and not re.search(r">\s*\$", code), "UTF-16 on PowerShell 5.1"
     assert "UTF8Encoding $false" in code and "WriteAllText" in code
     assert text.isascii(), "PowerShell 5.1 reads a script without a BOM as ANSI: use [char]0x2026 and friends"
-    assert len(text.splitlines()) <= 700
+    assert len(text.splitlines()) <= 740   # 700 until W7i 4a: the port owner lookup (job, timeout, name map, grouping) added about 40 lines
 
 
 def test_a_timed_out_command_gets_a_second_try_at_deleting_its_raw_output():

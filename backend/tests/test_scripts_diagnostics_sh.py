@@ -1145,6 +1145,138 @@ def test_the_tail_is_2000_lines_then_the_file_keeps_300_and_the_header_notes_the
     assert len(_block(run.main, "api")) == 30
 
 
+# ---- colour codes and the first-boot note (W7i 4b) --------------------------------------------------------------------------------------
+
+ESC = "\x1b"
+BOOT_NOTE = ('known benign on a first start (Timescale image): "no usable system locales were found", '
+             '"background worker ... trying to connect to template database, exiting"')
+BOOT_LOCALE = "2026-10-12 09:21:11.001 UTC [1] WARNING:  no usable system locales were found"
+BOOT_WORKER = '2026-10-12 09:21:12.100 UTC [27] ERROR:  background worker "TimescaleDB Background Worker Scheduler": trying to connect to template database, exiting'
+
+
+def _colour(text: str, esc: bool = True) -> str:
+    """A log line wrapped in colour codes, with the ESC byte or (esc=False) with the byte lost on the way."""
+    e = ESC if esc else ""
+    return f"{e}[37;1m{text}{e}[0m"
+
+
+def _health(i: int) -> str:
+    return f'INFO:     127.0.0.1:{55000 + i} - "GET /api/health HTTP/1.1" 200 OK'
+
+
+def test_the_filter_strips_colour_codes_in_both_forms_before_it_decides_what_is_routine(awk_path, tmp_path):
+    routine = [
+        f'api-1  | {ESC}[32mINFO{ESC}[0m:     127.0.0.1:55514 - "GET /api/health HTTP/1.1" {ESC}[1;32m200 OK{ESC}[0m',
+        'api-1  | [32mINFO[0m:     127.0.0.1:55514 - "GET /api/health HTTP/1.1" [1;32m200 OK[0m',
+        _colour("web-1  | " + CADDY_ADMIN), _colour("web-1  | " + CADDY_ADMIN, esc=False),
+        f"{ESC}[36mdb-1  |{ESC}[0m 2026-10-12 09:30:00.100 UTC [27] LOG:  checkpoint starting: time",
+        "[0;32mdb-1  |[0m [0;32m2026-10-12 09:30:00.100 UTC [27] LOG:[0m  checkpoint complete: wrote 1 buffers (0.0%); write=0.1 s",
+    ]
+    kept_in = [
+        _colour("api-1  | ERROR:    boom"), _colour("api-1  | ERROR:    boom again", esc=False),
+        f'api-1  | {ESC}[32mINFO{ESC}[0m:     127.0.0.1:55514 - "GET /api/sources HTTP/1.1" {ESC}[31m500 Internal Server Error{ESC}[0m',
+    ]
+    kept_out = ["api-1  | ERROR:    boom", "api-1  | ERROR:    boom again",
+                'api-1  | INFO:     127.0.0.1:55514 - "GET /api/sources HTTP/1.1" 500 Internal Server Error']
+    only_colour = [f"{ESC}[0m", "[0m", f"{ESC}[0m[0m  ", "[37;1m[0;32m"]   # nothing is left of these once the codes are gone: not a line read
+    kept, counts = _filter(awk_path, tmp_path, [*routine[:3], kept_in[0], *only_colour, *routine[3:], *kept_in[1:]])
+    assert kept == kept_out and counts == f"{len(routine) + len(kept_in)} {len(routine)}"
+
+
+def test_the_filter_strips_colour_codes_in_raw_mode_too_and_keeps_every_line(awk_path, tmp_path):
+    lines = [_colour(ROUTINE_LINES[0]), _colour(ROUTINE_LINES[1], esc=False), *ROUTINE_LINES[2:4]]
+    kept, counts = _filter(awk_path, tmp_path, lines, raw=True)
+    assert kept == ROUTINE_LINES[:4] and counts == "4 0"
+
+
+def test_text_that_only_looks_like_a_colour_code_is_kept_as_it_is(awk_path, tmp_path):
+    lines = [
+        "web-1  | the [5m] marker and [0m] and [1;31m] and [m] stay",   # a bracket closed by "]" is ordinary text
+        "web-1  | [1234m is not a code (four digits), nor is [1;m or [;1m or [12;m or [Mm or [5M or [5 m",
+        "web-1  | ids [2m] and [12] and [m and a bare [ stay",   # a lone "[m" has no digit: not a code any more
+        "web-1  | settings[model] and cfg[mode] and [main] and [migrate] and x[m] and [mb stay",
+    ]
+    kept, counts = _filter(awk_path, tmp_path, lines)
+    assert kept == lines and counts == "4 0"
+
+
+def test_a_code_next_to_a_kept_bracket_is_still_stripped(awk_path, tmp_path):
+    lines = [f"web-1  | [5m] then {ESC}[1mbold{ESC}[0m and [0m[0m[37;1mgrey[0m [3m] a[mb [1m,[2m cfg[mode]"]
+    kept, _ = _filter(awk_path, tmp_path, lines)
+    assert kept == ["web-1  | [5m] then bold and grey [3m] a[mb , cfg[mode]"]
+
+
+def test_a_hostile_line_full_of_bracket_markers_is_filtered_in_seconds(awk_path, tmp_path):
+    started = time.monotonic()
+    kept, counts = _filter(awk_path, tmp_path, ["web-1  | " + "[5m]" * 20000 + "[0m end", "web-1  | " + ("x" * 50 + "[") * 5000])
+    assert kept[0] == "web-1  | " + "[5m]" * 20000 + " end" and len(kept) == 2 and counts == "2 0"
+    assert time.monotonic() - started < 10
+
+
+ANSI_FILES = {
+    "services.txt": "api\ndb\nts\nweb\n",
+    "log-api.txt": "".join(f"api-1  | {_colour(_health(i), esc=i % 2 == 0)}\n" for i in range(60))
+                   + f"{ESC}[0m\n[0m\n" + f"api-1  | {_colour('ERROR:    boom happened')}\n"
+                   + "api-1  | the [5m] marker and [0m] stay, cfg[mode] [main] x[m], a background worker idles\n",
+    "log-db.txt": f"db-1  | {_colour('2026-10-12 09:30:00.100 UTC [27] LOG:  checkpoint starting: time')}\n"
+                  f"db-1  | {_colour(BOOT_LOCALE, esc=False)}\ndb-1  | {_colour('database system is ready', esc=False)}\n",
+    "log-ts.txt": f"ts-1  | {_colour(BOOT_WORKER)}\n",
+    "log-web.txt": "".join(f"web-1  | {_colour(CADDY_ADMIN, esc=i % 2 == 1)}\n" for i in range(20))
+                   + "web-1  | background worker started\nweb-1  | trying to connect to template database, exiting\n",
+}
+
+
+@pytest.fixture(scope="module", params=["system awk", "mawk", "gawk"])
+def ansi_run(request, tmp_path_factory):
+    awk = None
+    if request.param != "system awk":
+        awk = shutil.which(request.param)
+        if awk is None:
+            pytest.skip(f"{request.param} is not installed")
+    return _compose_run(tmp_path_factory.mktemp("ansi"), files=ANSI_FILES, awk=awk)
+
+
+def test_a_colour_wrapped_routine_line_is_dropped_and_no_escape_byte_reaches_either_file(ansi_run):
+    run = ansi_run
+    assert run.proc.rc == 0 and _verifies(run.main) and _verifies(run.logs), run.proc.err
+    assert ESC not in run.main and ESC not in run.logs and ESC not in run.stdout
+    logs = _section(run.main, "LOGS")
+    assert "-- api (last 2 of 2 kept lines; dropped 60 routine lines of 62 read)\n" in logs
+    assert "-- db (last 2 of 2 kept lines; dropped 1 routine lines of 3 read)\n" in logs
+    assert "-- web (last 2 of 2 kept lines; dropped 20 routine lines of 22 read)\n" in logs
+    api = ["api-1  | ERROR:    boom happened", "api-1  | the [5m] marker and [0m] stay, cfg[mode] [main] x[m], a background worker idles"]
+    assert [l.strip() for l in _block(run.main, "api")] == api
+    assert [l for l in run.logs.splitlines() if l.startswith("api-1  |")] == api
+    assert [l for l in run.logs.splitlines() if l.startswith("db-1  |")] == ["db-1  | " + BOOT_LOCALE, "db-1  | database system is ready"]
+
+
+def test_the_first_boot_note_stands_right_after_the_header_of_a_block_whose_tail_holds_a_pattern(ansi_run):
+    lines = _section(ansi_run.main, "LOGS").splitlines()
+    for svc in ("db", "ts"):   # db holds the locale line, ts the background worker line
+        head = next(i for i, l in enumerate(lines) if l.startswith(f"-- {svc} ("))
+        assert lines[head + 1] == f"  {BOOT_NOTE}", svc
+    assert ansi_run.main.count("known benign on a first start") == 2, "one per block, and none for api and web (each holds half of a pattern)"
+    assert "known benign" not in ansi_run.logs, "the logs file holds log lines only"
+
+
+def test_a_pattern_older_than_the_last_300_kept_lines_gives_no_note(tmp_path):
+    old = f"db-1  | {BOOT_LOCALE}\n"
+    newer = "".join(f"db-1  | 2026-10-12 10:00:00 line number {i} of the day\n" for i in range(300))
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    inside = _compose_run(tmp_path / "a", files={"services.txt": "db\n", "log-db.txt": old + "".join(newer.splitlines(True)[1:])})
+    outside = _compose_run(tmp_path / "b", files={"services.txt": "db\n", "log-db.txt": old + newer})
+    assert inside.proc.rc == 0 and outside.proc.rc == 0
+    assert f"  {BOOT_NOTE}\n" in _section(inside.main, "LOGS") and "known benign" not in outside.main   # 299 + the old line is 300; 300 pushes it out
+
+
+def test_raw_logs_strips_the_colour_and_still_notes_the_first_boot_lines(tmp_path):
+    run = _compose_run(tmp_path, files=ANSI_FILES, args=("--raw-logs",))
+    assert run.proc.rc == 0 and ESC not in run.main and ESC not in run.logs
+    assert "-- db (last 3 of 3 lines read; unfiltered)\n" in _section(run.main, "LOGS")
+    assert run.main.count("known benign on a first start") == 2
+
+
 # ---- DOCKER CLOCK ------------------------------------------------------------------------------------------------------------------
 
 CLOCK_LINE = re.compile(r"^docker VM minus host = ([+-]\d+) s \(host utc \d\d:\d\d:\d\d, the docker call took \d+ ms\)(.*)$", re.M)
@@ -1195,6 +1327,112 @@ def test_usage_names_the_new_switches_and_mask_is_refused_with_a_pointer_to_powe
     assert "not in the shell twin (use the PowerShell script)" in helped.out
     refused = _run(["--mask"], tmp_path)
     assert refused.rc == 2 and "not in the shell twin" in refused.err
+
+
+# ---- LOCAL PORTS: who owns a listening port (W7i 4a), against a fake ss / netstat first on PATH ----------------------------------------
+
+SS_HEADER = "State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess"
+SS_ROWS = [
+    'LISTEN 0      511           0.0.0.0:80         0.0.0.0:*     users:(("nginx",pid=101,fd=6),("nginx",pid=102,fd=6))',
+    'LISTEN 0      4096                *:443              *:*     users:(("caddy",pid=77,fd=3))',
+    'LISTEN 0      4096           [::]:8000          [::]:*       users:(("python3",pid=4120,fd=7))',
+    'LISTEN 0      4096 [::ffff:127.0.0.1]:3010          *:*     users:(("node",pid=900,fd=19))',
+    "LISTEN 0      4096    127.0.0.53%lo:53         0.0.0.0:*",
+    'LISTEN 0      128         127.0.0.1:631        0.0.0.0:*     users:(("Web Content",pid=55,fd=9))',
+    'LISTEN 0      200         127.0.0.1:5432       0.0.0.0:*     users:(("postgres",pid=300,fd=5))',
+    'LISTEN 0      200             [::1]:5432          [::]:*     users:(("postgres",pid=300,fd=6))',
+]
+SS_EXPECTED = [
+    "port 80: something is listening on 0.0.0.0 (owner: nginx, pid 101; nginx, pid 102)",
+    "port 443: something is listening on * (owner: caddy, pid 77)",
+    "port 8000: something is listening on [::] (owner: python3, pid 4120)",
+    "other listening ports (up to 40):",
+    "  53  127.0.0.53%lo  owner hidden",
+    "  631  127.0.0.1  Web Content (pid 55)",
+    "  3010  [::ffff:127.0.0.1]  node (pid 900)",
+    "  5432  127.0.0.1, [::1]  postgres (pid 300)",
+]
+
+
+def _fake_tools(tmp_path: Path, **tools: str) -> str:
+    """A folder with fake executables (name -> shell body) in front of PATH; returns the folder."""
+    folder = tmp_path / "fake_ports"
+    folder.mkdir()
+    for name, body in tools.items():
+        (folder / name).write_text("#!/bin/sh\n" + body)
+        (folder / name).chmod(0o755)
+    return str(folder)
+
+
+def _ports_section(awk_path: str, tmp_path: Path, **tools: str) -> list[str]:
+    """What section_local_ports emits when these fake tools come first on PATH."""
+    path = _fake_tools(tmp_path, **tools) + os.pathsep + awk_path
+    return _emit(tmp_path, path, "section_local_ports")["main.txt"].decode().splitlines()
+
+
+def _listing(*rows: str) -> str:
+    return "cat <<'LISTING'\n" + "\n".join(rows) + "\nLISTING\n"
+
+
+def test_local_ports_name_the_owner_by_name_and_pid_and_list_the_other_listeners(awk_path, tmp_path):
+    lines = _ports_section(awk_path, tmp_path, ss=_listing(SS_HEADER, *SS_ROWS))
+    assert lines == SS_EXPECTED
+    assert not any("fd=" in line for line in lines), "a file descriptor number is not part of the report"
+
+
+def test_a_port_nobody_listens_on_says_so_and_no_other_listener_says_none(awk_path, tmp_path):
+    lines = _ports_section(awk_path, tmp_path, ss=_listing(SS_HEADER))
+    assert lines == ["port 80: nothing is listening", "port 443: nothing is listening", "port 8000: nothing is listening", "other listening ports: none"]
+
+
+def test_ss_that_refuses_p_falls_back_to_the_plain_listing_and_every_owner_is_hidden(awk_path, tmp_path):
+    plain = [row.split("users:")[0].rstrip() for row in SS_ROWS[:3]]
+    body = 'case "$*" in *p*) echo "ss: unknown option" >&2; exit 1 ;; esac\n' + _listing(SS_HEADER, *plain)
+    lines = _ports_section(awk_path, tmp_path, ss=body)
+    assert lines[:3] == ["port 80: something is listening on 0.0.0.0 (owner hidden)", "port 443: something is listening on * (owner hidden)",
+                         "port 8000: something is listening on [::] (owner hidden)"]
+    assert lines[3:] == ["other listening ports: none"]
+
+
+NETSTAT = [
+    "Active Internet connections (only servers)",
+    "Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name",
+    "tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      101/nginx: master",
+    "tcp6       0      0 :::8000                 :::*                    LISTEN      4120/python3",
+    "tcp        0      0 127.0.0.53:53           0.0.0.0:*               LISTEN      -",
+    "tcp6       0      0 ::1:631                 :::*                    LISTEN      55/Web Content",
+]
+
+
+def test_netstat_is_used_when_ss_is_missing_or_fails_and_its_pid_column_is_read(awk_path, tmp_path):
+    lines = _ports_section(awk_path, tmp_path, ss="exit 127\n", netstat=_listing(*NETSTAT))
+    assert lines == [
+        "port 80: something is listening on 0.0.0.0 (owner: nginx: master, pid 101)",
+        "port 443: nothing is listening",
+        "port 8000: something is listening on :: (owner: python3, pid 4120)",
+        "other listening ports (up to 40):",
+        "  53  127.0.0.53  owner hidden",
+        "  631  ::1  Web Content (pid 55)",
+    ]
+
+
+def test_more_than_40_other_listeners_are_cut_with_a_count_and_the_lowest_ports_come_first(awk_path, tmp_path):
+    rows = [f'LISTEN 0 128 0.0.0.0:{port} 0.0.0.0:* users:(("svc{port}",pid={port + 1},fd=3))' for port in range(2000, 1955, -1)]  # 45, listed downwards
+    lines = _ports_section(awk_path, tmp_path, ss=_listing(SS_HEADER, *rows))
+    block = lines[lines.index("other listening ports (up to 40):") + 1:]
+    assert len(block) == 41 and block[0] == "  1956  0.0.0.0  svc1956 (pid 1957)" and block[39] == "  1995  0.0.0.0  svc1995 (pid 1996)"
+    assert block[40] == "  ... and 5 more"
+
+
+def test_neither_tool_is_a_note_not_a_failure(tmp_path):
+    only = _bin_dir(tmp_path, "no_ports_tools", ["bash", "awk", "sed", "cat", "iconv", "mkdir", "rm", "mktemp", "tr", "head"])
+    work = tmp_path / "work"
+    work.mkdir()
+    driver = tmp_path / "driver.sh"
+    driver.write_text('source "$1"; export LC_ALL=C; AWK=$(type -P awk); ICONV_BIN=$(type -P iconv); WORK=$2\n: > "$WORK/main.txt"\nsection_local_ports\n')
+    proc = subprocess.run([BASH, str(driver), str(SCRIPT), str(work)], capture_output=True, cwd=tmp_path, env={**os.environ, "PATH": str(only)}, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert (work / "main.txt").read_text() == "ss and netstat not found or failed; listening ports unknown"
 
 
 # ---- the API probe: curl, wget or bash alone, against a real local server --------------------------------------------------------------

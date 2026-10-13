@@ -143,7 +143,10 @@ describe("downloadCsv", () => {
   });
 
   it("reports a plain-text error body as its message", async () => {
+    stubFetch(new Response("Internal Server Error", { status: 500 }));
+    await expect(downloadCsv("/x.csv")).rejects.toThrow("Internal Server Error");
+    // a proxy's own page is not shown: an ApiError of 502, 503 or 504 says the server is not answering, whatever its body
     stubFetch(new Response("Bad gateway", { status: 502 }));
-    await expect(downloadCsv("/x.csv")).rejects.toThrow("Bad gateway");
+    await expect(downloadCsv("/x.csv")).rejects.toThrow("The server is not answering (status 502). It may be restarting; try again in a moment.");
   });
 });

@@ -113,7 +113,7 @@ export function AssetsPage() {
           disabled={locked}
           loading={isLoading}
         />
-        <div className="assets-detail">
+        <div className="assets-detail" id="asset-detail" tabIndex={-1}>
           {actionError && <p className="error" role="alert">{actionError}</p>}
           <Outlet context={context} />
         </div>

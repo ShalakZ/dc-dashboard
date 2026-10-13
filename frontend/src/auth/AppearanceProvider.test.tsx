@@ -371,3 +371,138 @@ describe("Match my device", () => {
     expect(media.handlers.size).toBe(0);
   });
 });
+
+describe("another tab of this browser (the storage event)", () => {
+  /** What the browser sends to every OTHER tab when one tab writes the mirror. */
+  const fromOtherTab = (init: StorageEventInit) => act(() => {
+    window.dispatchEvent(new StorageEvent("storage", init));
+  });
+  const wrote = (appearance: unknown) => ({ key: MIRROR_KEY, newValue: JSON.stringify(appearance) });
+
+  it("applies another tab's choice to the page and the dropdowns without a request or a write of its own", async () => {
+    const server = startServer(user("ann", LIGHT_NAVY));
+    await mount();
+    const requests = vi.mocked(fetch).mock.calls.length;
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    await fromOtherTab(wrote({ mode: "dark", theme: "graphite" }));
+    expect(state()).toBe("dark/graphite/dark");
+    expect(look()).toBe("dark/graphite");
+    expect(vi.mocked(fetch).mock.calls.length).toBe(requests);
+    expect(server.puts).toHaveLength(0);
+    expect(setItem).not.toHaveBeenCalled();
+    expect(alertText()).toBeNull();
+  });
+
+  it("treats the adopted look as confirmed: the next choice sends only the key it changes", async () => {
+    const server = startServer(user("ann", LIGHT_NAVY));
+    await mount();
+    await fromOtherTab(wrote({ mode: "dark", theme: "graphite" }));
+    await click("light");
+    expect(server.puts.map((p) => p.body)).toEqual([{ mode: "light" }]);
+    expect(look()).toBe("light/graphite");
+  });
+
+  it("clears the line of an earlier failure, and reads each key on its own (a stranger's theme becomes the default)", async () => {
+    const server = startServer(user("ann", LIGHT_NAVY));
+    await mount();
+    await click("dark");
+    server.puts[0].reply({ status: 500, body: { detail: "boom" } });
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await fromOtherTab(wrote({ mode: "dark", theme: "no-such-theme" }));
+    expect(alertText()).toBeNull();
+    expect(state()).toBe("dark/navy-gold/dark");
+  });
+
+  it("follows the device when the other tab chose Match my device", async () => {
+    const media = stubMatchMedia(true);
+    startServer(user("ann", LIGHT_NAVY));
+    await mount();
+    await fromOtherTab(wrote({ mode: "system", theme: "navy-gold" }));
+    expect(state()).toBe("system/navy-gold/dark");
+    expect(look()).toBe("dark/navy-gold");
+    expect(media.handlers.size).toBe(1);
+  });
+
+  it("also moves a signed-out page (the mirror is its only source)", async () => {
+    startServer(null);
+    await mount();
+    expect(screen.getByTestId("who")).toHaveTextContent("nobody");
+    await fromOtherTab(wrote({ mode: "dark", theme: "desert-gold" }));
+    expect(look()).toBe("dark/desert-gold");
+  });
+
+  it.each([
+    ["another key", { key: "dcdash.sidebar", newValue: JSON.stringify({ mode: "dark", theme: "graphite" }) }],
+    ["no key (another tab ran localStorage.clear())", { key: null, newValue: null }],
+    ["a removed mirror", { key: MIRROR_KEY, newValue: null }],
+    ["text that is not JSON", { key: MIRROR_KEY, newValue: "{dark" }],
+    ["JSON that is not an object", { key: MIRROR_KEY, newValue: "null" }],
+    ["a number", { key: MIRROR_KEY, newValue: "7" }],
+  ])("does nothing for %s", async (_label, init) => {
+    const server = startServer(user("ann", { mode: "dark", theme: "graphite" }));
+    await mount();
+    const requests = vi.mocked(fetch).mock.calls.length;
+    await fromOtherTab(init);
+    expect(state()).toBe("dark/graphite/dark");
+    expect(look()).toBe("dark/graphite");
+    expect(JSON.parse(mirror() ?? "null")).toEqual({ mode: "dark", theme: "graphite" });
+    expect(vi.mocked(fetch).mock.calls.length).toBe(requests);
+    expect(server.puts).toHaveLength(0);
+  });
+
+  it("does not undo a choice whose save is out: the other tab's older view of the key is ignored, and the save is not reverted", async () => {
+    const server = startServer(user("ann", LIGHT_NAVY));
+    await mount();
+    await click("dark"); // the PUT stays out
+    await fromOtherTab(wrote({ mode: "light", theme: "graphite" }));
+    expect(state()).toBe("dark/navy-gold/dark");
+    expect(look()).toBe("dark/navy-gold");
+    server.puts[0].reply({ body: { mode: "dark", theme: "navy-gold" } });
+    await act(async () => {});
+    expect(server.puts).toHaveLength(1); // nothing was queued behind it
+    expect(state()).toBe("dark/navy-gold/dark");
+    expect(JSON.parse(mirror() ?? "null")).toEqual({ mode: "dark", theme: "navy-gold" });
+    await fromOtherTab(wrote({ mode: "light", theme: "graphite" })); // the save has settled: now it is adopted
+    expect(state()).toBe("light/graphite/light");
+  });
+
+  it("does not undo a choice that waits behind the one in flight", async () => {
+    const server = startServer(user("ann", LIGHT_NAVY));
+    await mount();
+    await click("dark");
+    await click("graphite"); // waits
+    await fromOtherTab(wrote({ mode: "light", theme: "maroon-gold" }));
+    expect(state()).toBe("dark/graphite/dark");
+    server.puts[0].reply({ body: { mode: "dark", theme: "navy-gold" } });
+    await waitFor(() => expect(server.puts).toHaveLength(2));
+    expect(server.puts[1].body).toEqual({ theme: "graphite" });
+    expect(look()).toBe("dark/graphite");
+  });
+
+  it("registers once under StrictMode and removes what it added when the provider goes away", async () => {
+    const added = vi.spyOn(window, "addEventListener");
+    const removed = vi.spyOn(window, "removeEventListener");
+    const count = (spy: typeof added, type: string) => spy.mock.calls.filter(([name]) => name === type).length;
+    startServer(user("ann", LIGHT_NAVY));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(
+      <StrictMode>
+        <QueryClientProvider client={client}>
+          <MemoryRouter>
+            <AuthProvider>
+              <AppearanceProvider><Probe /></AppearanceProvider>
+            </AuthProvider>
+          </MemoryRouter>
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+    await ready();
+    await act(async () => {});
+    expect(count(added, "storage") - count(removed, "storage")).toBe(1);
+    view.unmount();
+    expect(count(added, "storage")).toBe(count(removed, "storage"));
+    const before = look();
+    await fromOtherTab(wrote({ mode: "dark", theme: "graphite" }));
+    expect(look()).toBe(before);
+  });
+});

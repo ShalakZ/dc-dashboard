@@ -129,7 +129,7 @@ function SignInProtection() {
             this long. Restarting the api service clears every block; Unblock on the Users page lets one account in sooner.
           </p>
           <div className="row">
-            <button type="submit" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
+            <button type="submit" className="primary" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
             {put.isSuccess && <span className="muted"> saved</span>}
           </div>
           {put.isError && !asking && <p className="error" role="alert">{detailText(put.error)}</p>}

@@ -1,0 +1,39 @@
+import { APP_TITLE, pageTitle } from "./pageTitle";
+
+describe("pageTitle", () => {
+  it.each([
+    ["/assets", "Assets Tree"],
+    ["/dashboards", "Dashboards"],
+    ["/billing", "Billing"],
+    ["/sources", "Sources"],
+    ["/scans", "Scans"],
+    ["/discovery", "Discovery"],
+    ["/users", "Users"],
+    ["/settings", "Settings"],
+    ["/tariffs", "Tariffs"],
+    ["/storage", "Storage"],
+    ["/audit", "Audit log"],
+    ["/diagnostics", "Diagnostics"],
+    ["/password", "Change password"],
+  ])("names %s %s, in front of the application's name", (path, page) => {
+    expect(pageTitle(path)).toBe(`${page} · ${APP_TITLE}`);
+  });
+
+  it("covers everything below a page: an asset, a dashboard, a source's points, an audit entry", () => {
+    expect(pageTitle("/assets/12")).toBe("Assets Tree · DC Dashboard");
+    expect(pageTitle("/dashboards/3")).toBe("Dashboards · DC Dashboard");
+    expect(pageTitle("/sources/4/points")).toBe("Sources · DC Dashboard");
+    expect(pageTitle("/audit/99")).toBe("Audit log · DC Dashboard");
+  });
+
+  it("matches whole path segments: /assetsfoo is not the Assets Tree", () => {
+    expect(pageTitle("/assetsfoo")).toBe("DC Dashboard");
+    expect(pageTitle("/users-old")).toBe("DC Dashboard");
+  });
+
+  it("is the application's name alone for the home route and a path it does not know", () => {
+    expect(pageTitle("/")).toBe("DC Dashboard");
+    expect(pageTitle("/nowhere")).toBe("DC Dashboard");
+    expect(APP_TITLE).toBe("DC Dashboard");
+  });
+});

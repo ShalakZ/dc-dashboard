@@ -82,6 +82,11 @@ describe("report helpers", () => {
       expect(reportErrorText(new TypeError("Failed to fetch"))).toBe("Could not reach the server.");
       expect(reportErrorText(new Error("NetworkError when attempting to fetch resource."))).toBe("Could not reach the server.");
     });
+
+    it("says the same for the client's own error for a request that never completed (status 0), but not for a 502", () => {
+      expect(reportErrorText(new ApiError(0, "Can't reach the server. Check the network and try again."))).toBe("Could not reach the server.");
+      expect(reportErrorText(new ApiError(502, "502 Bad Gateway"))).toMatch(/^The report could not be built \(The server is not answering \(status 502\)/);
+    });
   });
 
   it("joins the parts with one blank line, as format=text does", () => {

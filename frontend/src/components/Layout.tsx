@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FocusEvent, type Pointer
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { useDefaultDashboard } from "../api/queries";
 import { useAuth } from "../auth/AuthProvider";
+import { APP_TITLE, pageTitle } from "../lib/pageTitle";
 import { initialSidebar, saveSidebar, type SidebarState } from "../lib/sidebarState";
 import { CertificateNotice } from "./CertificateNotice";
 import { Icon, ICONS } from "./Icon";
@@ -9,6 +10,7 @@ import { DASHBOARDS_PATH, GROUPS, type NavItem } from "./navItems";
 import { ProfileMenu } from "./ProfileMenu";
 import { QuickFind } from "./QuickFind";
 import { RoleChangedNotice } from "./RoleChangedNotice";
+import { ServerNotice } from "./ServerNotice";
 import { SiteClock } from "./SiteClock";
 import { StatusChip } from "./StatusChip";
 
@@ -93,6 +95,12 @@ export function Layout() {
   const target = (item: NavItem) => (item.to === DASHBOARDS_PATH && typeof defaultId === "number" ? `${DASHBOARDS_PATH}/${defaultId}` : item.to);
   /** NavLink cannot mark an item current on a path other than its own target, so an item with a `match` computes it here. */
   const current = (item: NavItem) => item.match !== undefined && (pathname === item.match || pathname.startsWith(`${item.match}/`));
+
+  // The tab names the page; leaving the signed-in shell (the sign-in page) gives the application's name back.
+  useEffect(() => {
+    document.title = pageTitle(pathname);
+    return () => { document.title = APP_TITLE; };
+  }, [pathname]);
 
   // The width transition starts one frame after the first paint, so a remembered state does not animate in.
   useEffect(() => {
@@ -186,6 +194,7 @@ export function Layout() {
           <main id="main" tabIndex={-1}>
             <div className="shell-notices">
               <RoleChangedNotice />
+              <ServerNotice />
               {hasRole("admin") && <CertificateNotice />}
             </div>
             <Outlet />

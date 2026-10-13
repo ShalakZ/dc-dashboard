@@ -182,11 +182,11 @@ describe("which assets a metric widget may list", () => {
     open(null, MAPPED);
     await userEvent.click(screen.getByRole("checkbox", { name: "LV Panel 1" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "LV Panel 2" }));
-    expect(screen.getByText("2 of 20 selected")).toBeInTheDocument();
+    expect(screen.getByText("2 selected (up to 20)")).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText("Metric"), "voltage_v");
     expect(screen.queryByRole("checkbox", { name: /LV Panel 1/ })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "LV Panel 2" })).toBeChecked();
-    expect(screen.getByText("1 of 20 selected")).toBeInTheDocument();
+    expect(screen.getByText("1 selected (up to 20)")).toBeInTheDocument();
   });
 
   it("says so when no asset has the metric, and cannot be saved", async () => {
@@ -195,7 +195,7 @@ describe("which assets a metric widget may list", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "LV Panel 1" }));
     await userEvent.selectOptions(screen.getByLabelText("Metric"), "frequency_hz");
     expect(screen.getByText("No asset has a mapping for frequency_hz; choose another metric.")).toBeInTheDocument();
-    expect(screen.getByText("0 of 20 selected")).toBeInTheDocument();
+    expect(screen.getByText("0 selected (up to 20)")).toBeInTheDocument();
     expect(screen.getByText("Choose at least one asset.")).toBeInTheDocument();
     expect(save()).toBeDisabled();
   });
@@ -208,7 +208,7 @@ describe("which assets a metric widget may list", () => {
     expect(screen.queryByRole("checkbox", { name: /MV2/ })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("checkbox", { name: "LV Panel 1 (no voltage_v)" }));
     expect(screen.queryByRole("checkbox", { name: /LV Panel 1/ })).not.toBeInTheDocument(); // unchecked: it is no longer offered
-    expect(screen.getByText("1 of 20 selected")).toBeInTheDocument();
+    expect(screen.getByText("1 selected (up to 20)")).toBeInTheDocument();
   });
 
   it("drops them again when the source goes back from energy to a metric they lack", async () => {

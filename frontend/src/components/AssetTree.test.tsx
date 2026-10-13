@@ -785,3 +785,38 @@ describe("AssetTree while the list loads", () => {
     expect(screen.getByRole("searchbox", { name: "Filter assets" })).toBeInTheDocument();
   });
 });
+
+describe("AssetTree skip link", () => {
+  const skip = () => screen.getByRole("link", { name: "Skip the tree" });
+
+  it("is the first tab stop in the column, before the header buttons and the rows", async () => {
+    render(ui());
+    await userEvent.tab();
+    expect(skip()).toHaveFocus();
+    expect(skip().closest(".tree-col")).toBe(screen.getByRole("region", { name: "Asset tree" }));
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Collapse all" })).toHaveFocus();
+  });
+
+  it("moves focus to the asset pane (#asset-detail) on Enter without changing the address", async () => {
+    render(<MemoryRouter><AssetTree nodes={nodes()} selectedId={null} /><div id="asset-detail" tabIndex={-1} /></MemoryRouter>);
+    await userEvent.tab();
+    await userEvent.keyboard("{Enter}");
+    expect(document.getElementById("asset-detail")).toHaveFocus();
+    expect(window.location.hash).toBe("");
+  });
+
+  it("is not offered while the column is minimized (there is no tree to skip)", () => {
+    localStorage.setItem("dcdash.assetTree", "minimized");
+    render(ui());
+    expect(screen.queryByRole("link", { name: "Skip the tree" })).not.toBeInTheDocument();
+  });
+});
+
+describe("AssetTree names", () => {
+  it("sets each name's direction from its own text (dir=auto), so a right-to-left name is cut at its logical end", () => {
+    const arabic = "\u0645\u0631\u0643\u0632 \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a";
+    render(<MemoryRouter><AssetTree nodes={buildTree([a(1, null, "Site"), a(2, 1, arabic)])} selectedId={null} /></MemoryRouter>);
+    for (const name of ["Site", arabic]) expect(link(name)).toHaveAttribute("dir", "auto");
+  });
+});

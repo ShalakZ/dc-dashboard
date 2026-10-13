@@ -236,7 +236,7 @@ test("phase 3 journey: currency and tariff, billing, cost tile, an operator's da
     await dialog.getByLabel("Source", { exact: true }).selectOption({ value: "energy" });
     await dialog.getByLabel("Widget range", { exact: true }).selectOption({ value: "today" });
     for (const name of BAR_ASSETS) await dialog.getByRole("checkbox", { name }).check();
-    await expect(dialog.getByText("3 of 20 selected")).toBeVisible();
+    await expect(dialog.getByText("3 selected (up to 20)")).toBeVisible();
     await expect(dialog.locator(".widget-preview canvas").first()).toBeVisible();
     await dialog.getByRole("button", { name: "Save widget" }).click();
     await expect(dialog).toBeHidden();

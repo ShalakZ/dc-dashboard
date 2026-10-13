@@ -132,11 +132,11 @@ describe("AssetPicker", () => {
 
   it("stops at the cap: the rest are disabled until something is unchecked", async () => {
     render(<Harness assets={many(25)} initial={Array.from({ length: 20 }, (_, i) => i + 1)} />);
-    expect(screen.getByText("20 of 20 selected")).toBeInTheDocument();
+    expect(screen.getByText("20 selected (up to 20)")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Asset 21" })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "Asset 1" })).toBeEnabled();
     await userEvent.click(screen.getByRole("checkbox", { name: "Asset 1" }));
-    expect(screen.getByText("19 of 20 selected")).toBeInTheDocument();
+    expect(screen.getByText("19 selected (up to 20)")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Asset 21" })).toBeEnabled();
   });
 

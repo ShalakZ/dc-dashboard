@@ -460,7 +460,7 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Nine specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Eighteen specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
 
 - `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
@@ -489,10 +489,35 @@ Nine specs run in one `playwright test` run against the dev-profile stack on `ht
 - `w3c.spec.ts` and `w3d.spec.ts` (after it, at 1600×1000) cover the Audit screen (filters, search, a link per entry, CSV export, paging,
   administrators only) and sign-in protection with the Users page (a blocked account, Unblock, Delete, and no screen or API answer showing
   the password stored inside a source's URL).
-- `w7a.spec.ts` (last, at 1600×1000) checks the Assets workspace and the shell: a tree node opens its asset with one click and the tree
+- `w7a.spec.ts` (after `w3d`, at 1600×1000) checks the Assets workspace and the shell: a tree node opens its asset with one click and the tree
   stays, the "Assets Tree" crumb returns to the summary, the tree column resizes by keyboard and keeps its width and its folds across a reload,
   quick find (Ctrl+K) and its Esc keys, the "Live" status chip, Billing and Users at the full width of a 1920 px window, the summary's four
   tiles and "Needs attention", and the profile panel's Sign out with its Cancel.
+- `w8.spec.ts` (after `w7a`, at 1600×1000) checks field diagnostics: an administrator's Diagnostics page builds a summary report (a header,
+  a size and a checksum line per part, the build id) and leaves an audit row without the content; a masked report names no source
+  address in its text, and its address key lists what each alias stands for; Copy puts the exact text of a part on the clipboard and
+  Download saves the same text; the connection check runs on a chosen source and shows its steps; an operator has no Diagnostics page
+  (turned away from it and from the report) but checks a source from its row. It makes one operator and deletes it again.
+- `w7b.spec.ts` (after `w8`, at 1600×1000) checks the shared controls: the Sources row menu from the keyboard, opened by hover and kept open
+  by a click, not clipped or covered at 1600 and 1024 px wide, and the last row of a source's points staying inside the window; the trash
+  button asking first, with Cancel keeping the source; the Storage tips and the rows per day following the chosen days; the sign-in
+  protection switch (switching off asks first, off blocks nobody, on blocks again); and the Tariffs sections with their tip. The only
+  thing it writes is the sign-in policy, which it puts back.
+- `w7c.spec.ts` (after `w7b`, at 1600×1000) checks the default dashboard and the Billing picker: an administrator marks a dashboard as the
+  default from its row menu and the sidebar, `/` and sign-in follow it; an operator and a viewer see the badge and the sidebar link but
+  cannot change it (`403` from the API); and the Year and Month selects beside Previous and Next start at the current month and jump to a
+  month far back. It makes two dashboards, an operator and a viewer, removes them again, and puts the default back to none.
+- `w7d.spec.ts` (after `w7c`, at 1600×1000) checks the Appearance choice: Mode and Theme colour in the profile panel, a choice applying at
+  once, saved on the account and surviving a cleared browser; sign-out keeping the look on the sign-in page while another account on the
+  same browser gets its own; Match my device following the device only while it is chosen; the keyboard walk of the two selects; dark mode
+  (a widget frame stays white, no sideways scroll at 1440 and 1024 px); and `theme-init.js` served as JavaScript and loaded without a
+  Content-Security-Policy violation. It puts the admin's choice back to Light and Navy and gold.
+- `w7e.spec.ts` (after `w7d`, at 1600×1000) checks the theme polish: buttons, links, hover and the selected row taking the theme's colour
+  in all four presets, light and dark; the dropdowns from the keyboard (Esc, arrows then Esc, Enter, the choice kept across a reload); a
+  refused save putting the dropdown and the page back and saying so; the loading bar along the top edge in the theme's marker colour
+  (all four presets, a full line under reduced motion, never on a poll, never blocking a click); a kind icon on every tree row and in
+  the asset header; the dashboard widgets keeping their light blue accent in all eight looks; and no sideways scroll at 1024 px in any
+  look. It makes two assets and a dashboard and removes them again.
 - `w7f.spec.ts` (its own project, after `w7e`, at 1600×1000) holds a page's first data request and checks the loading skeletons: one status
   region per area and none of the content, and the content back with the region gone once the data arrives (an asset page, the summary,
   the Dashboards list, Users); the skeleton against the loaded page to 2 px (the asset page, the Trend frame's height, the summary at 1440
@@ -503,7 +528,7 @@ Nine specs run in one `playwright test` run against the dev-profile stack on `ht
   crumb and the tree heading read "Assets Tree"; the Add asset dialog's Icon field (a collapsed grid, the caption "Automatic (Generic)"
   that follows the Kind, the arrow keys changing the choice and the caption, Server chosen and saved) and the same icon in the tree row,
   the asset page's title and quick find; Edit back to Automatic (the icon follows the kind again); the choice kept across a reload;
-  Esc inside the open grid closing the dialog with nothing saved; Enter on a cell not saving; no horizontal scroll at 1440 and 1024 px
+  Esc inside the open grid closing only the grid (a second Esc closes the dialog) with nothing saved; Enter on a cell not saving; no horizontal scroll at 1440 and 1024 px
   with the dialog open. It creates one asset of its own and deletes it afterwards.
 - `w7h.spec.ts` (its own project, after `w7g`, at 1440 and 1024 px in fresh browser contexts) checks the first-load screen: the HTML the server
   sends already holds the shell and carries the security headers; with `/api/me` held, the navy bar, the sidebar and one "Loading" status
@@ -512,6 +537,11 @@ Nine specs run in one `playwright test` run against the dev-profile stack on `ht
   looks, with the sidebar minimized and at 1024 px; the sign-in and setup pages (any case) show no shell; a signed-out deep link lands on the
   sign-in page without the real shell appearing and returns to the page asked for; a slow start never shows an empty page; reduced motion;
   no Content-Security-Policy violation on any of it.
+- `w7i.spec.ts` (its own project, after `w7h`) checks what W7i added: with the API unreachable (the `/api/me` request answered 502 by the
+  test) a deep link shows "Can't reach the server" at the same address instead of the sign-in page and the page loads once the answer
+  is back; the banner inside the app appears after two failed requests and goes with the first answer; an expired session still goes to
+  the sign-in page; a 200-character asset kind wraps instead of widening the page; and the "Skip the tree" link moves focus to the asset
+  details. `headers.spec.ts` also checks the cache and compression headers of the built site.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1246,6 +1276,28 @@ page itself starts loading (its own grey shapes appear after the usual sixth of 
 3. **Verify.** `docker compose exec api alembic current` still prints `0008 (head)`. In the browser's developer tools set the network
    to "Slow 4G", reload any page and watch the navy bar and the sidebar appear before anything else; on `/login` no frame shows.
 4. **Going back.** Check out `45deb14` and rebuild as in step 2. There is no database step.
+
+### Upgrading to W7i (no migration)
+
+Schema stays at `0008`; nothing in the database or the API changes, so there is nothing to restore. The code to go back to is
+`65d9fab` (`main` before W7i).
+
+W7i (an acceptance sweep and polish) changes the `web` image, the front end and two diagnostic scripts. What you will notice:
+the first load is about four times smaller (the web server now compresses its files, and Discovery's graph library is only fetched
+when that page opens); files with a hash in their name are cached for a year, while `index.html` and `theme-init.js` are checked
+with the server on every visit, so an update shows at once instead of after a hard reload; with the server down the app says
+"Can't reach the server" (with a Retry button) instead of showing the sign-in page, and a page left open recovers by itself; a tab
+left open across an update reloads once when it needs a file the update removed, then shows a plain "could not be loaded" panel if
+that does not help; the browser tab names the page; a very long asset kind wraps; and `scripts\collect-diagnostics.ps1` (and the
+shell twin) now name the program that owns each listening port and note the first-start noise of the database image.
+
+1. **Back up first** (a habit here: nothing in the database changes), as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). Only `web` is rebuilt. `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you.
+3. **Verify.** `docker compose exec api alembic current` still prints `0008 (head)`; `scripts/check_web.sh http://localhost` prints
+   nine `ok` lines. If a browser shows a white page or a broken layout right after the update, press Ctrl+F5 once: before this
+   update the web server sent no caching rule for the page, so a browser may reuse the old copy of `index.html` one more time.
+4. **Going back.** Check out `65d9fab` and rebuild as in step 2. There is no database step.
 
 ## Add a connector
 

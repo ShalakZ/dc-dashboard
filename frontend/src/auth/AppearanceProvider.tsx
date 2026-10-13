@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api } from "../api/client";
 import type { Preferences, User } from "../api/types";
 import {
-  applyAppearance, DEFAULT_APPEARANCE, normalizeAppearance, readMirror, resolveMode, writeMirror,
+  applyAppearance, DEFAULT_APPEARANCE, MIRROR_KEY, normalizeAppearance, readMirror, resolveMode, writeMirror,
   type Appearance, type Mode, type ThemeId,
 } from "../lib/appearance";
 import { useAuth } from "./AuthProvider";
@@ -138,6 +138,27 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     query.addEventListener("change", onChange);
     return () => query.removeEventListener("change", onChange);
   }, [appearance.mode, show]);
+
+  // Another tab of this browser changed the look: the browser tells every OTHER tab when the mirror is written. Adopt it as shown and as
+  // confirmed (that tab's save is what made the server hold it); this tab neither writes the mirror nor sends anything. While a save of
+  // this tab is out or waiting, the mirror carries both keys and the other tab's older view of the key being saved would be sent back by
+  // the next flush(), so the event is ignored: this tab's own answer, and its own mirror write, come next.
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== MIRROR_KEY || event.newValue === null) return;
+      if (inFlight.current || !same(wanted.current, confirmed.current)) return;
+      let parsed: unknown;
+      try { parsed = JSON.parse(event.newValue); } catch { return; }
+      if (parsed === null || typeof parsed !== "object") return;
+      const next = normalizeAppearance(parsed);
+      wanted.current = next;
+      confirmed.current = next;
+      setError(null);
+      show(next);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [show]);
 
   const value = useMemo<AppearanceState>(
     () => ({ mode: appearance.mode, theme: appearance.theme, dark, setMode, setTheme, error }),

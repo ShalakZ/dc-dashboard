@@ -74,6 +74,27 @@ describe("kindIcon: matching", () => {
   });
 });
 
+describe("kindIcon: transfer", () => {
+  // "Transfer" alone is not equipment (a transfer pump, a transfer room); "transfer" + "switch" is one word, the transfer switch.
+  it.each([
+    ["Transfer Switch", "kindCircuit"],
+    ["Automatic Transfer Switch", "kindCircuit"],
+    ["Static Transfer Switch", "kindCircuit"],
+    ["Transfer Switches", "kindCircuit"],
+    ["Static Transfer Switches", "kindCircuit"],
+    ["TransferSwitch", "kindCircuit"],
+    ["transfer-switch", "kindCircuit"],
+    ["ATS Transfer Switch", "kindCircuit"],
+    ["Fuel Transfer Pump", "kindGeneric"],
+    ["Transfer", "kindGeneric"],
+    ["Transfer Room", "kindRoom"],
+    ["Transfer Switchgear", "kindPanel"],
+    ["Switch Transfer", "kindGeneric"],
+  ])("%s is %s", (kind, icon) => {
+    expect(kindIcon(kind)).toBe(icon);
+  });
+});
+
 describe("kindIcon: odd input", () => {
   const odd = ["", "   ", "x", "\u{1F9EF}", "موزع", "a".repeat(500), "UPS ".repeat(125), "ab\uD800cd", "\uDC00", "Panel\u0000"];
 

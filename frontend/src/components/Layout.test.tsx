@@ -3,6 +3,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { keys } from "../api/queries";
 import { RequireRole } from "../auth/RequireAuth";
+import { noteReach, resetServerReach } from "../lib/serverReach";
 import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { Layout } from "./Layout";
@@ -47,6 +48,28 @@ describe("Layout nav", () => {
     expect(within(await openProfile()).getByRole("link", { name: "Password" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Sources" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Layout tab title", () => {
+  afterEach(() => { document.title = "DC Dashboard"; });
+
+  it("names the page in the tab, and goes back to the application's name when the layout goes away", async () => {
+    mockFetch(routes("admin"));
+    const view = renderWithProviders(<Layout />, { route: "/audit/7", path: "/audit/:id" });
+    await profileButton();
+    expect(document.title).toBe("Audit log \u00b7 DC Dashboard");
+    view.unmount();
+    expect(document.title).toBe("DC Dashboard");
+  });
+
+  it("follows the address: another page, another title", async () => {
+    mockFetch(routes("admin"));
+    renderWithProviders(<Layout />, { route: "/billing" }); // the route is "*", so the layout stays mounted when the address changes
+    await profileButton();
+    expect(document.title).toBe("Billing \u00b7 DC Dashboard");
+    await userEvent.click(screen.getByRole("link", { name: "Users" }));
+    expect(document.title).toBe("Users \u00b7 DC Dashboard");
   });
 });
 
@@ -594,5 +617,25 @@ describe("Layout minimized tooltip", () => {
     expect(tip()).not.toHaveAttribute("hidden");
     await userEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
     expect(tip()).toHaveAttribute("hidden");
+  });
+});
+
+describe("Layout server notice", () => {
+  afterEach(() => {
+    act(() => resetServerReach());
+  });
+
+  it("shows the can't-reach-the-server notice among the shell notices while two requests in a row got no answer, and removes it after one that did", async () => {
+    mockFetch(routes("viewer"));
+    const { container } = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await profileButton();
+    await act(() => new Promise<void>((resolve) => setTimeout(resolve, 20))); // the shell's first answers are in
+    expect(screen.queryByText(/Can't reach the server/)).not.toBeInTheDocument();
+    act(() => { noteReach(false); noteReach(false); });
+    const notice = screen.getByText(/Can't reach the server/).closest("[role=status]");
+    expect(notice).toHaveClass("banner-warn");
+    expect(container.querySelector(".shell-notices")).toContainElement(notice as HTMLElement);
+    act(() => noteReach(true));
+    expect(screen.queryByText(/Can't reach the server/)).not.toBeInTheDocument();
   });
 });

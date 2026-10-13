@@ -13,12 +13,17 @@ import "./styles/pages-auth.css";
 import { App } from "./App";
 import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";
+import { RouteError } from "./components/RouteError";
+import { installChunkReload } from "./lib/chunkReload";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 
+// A tab left open across an update reloads once when a lazy chunk it needs is gone (a second failure within 10 s does not loop).
+installChunkReload();
+
 // A data router, because useBlocker (unsaved dashboard edits) only works under one. A single catch-all route keeps
-// App's own <Routes> tree (in App.tsx) exactly as it is.
-const router = createBrowserRouter([{ path: "*", element: <App /> }]);
+// App's own <Routes> tree (in App.tsx) exactly as it is. Its errorElement replaces React Router's developer error page.
+const router = createBrowserRouter([{ path: "*", element: <App />, errorElement: <RouteError /> }]);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

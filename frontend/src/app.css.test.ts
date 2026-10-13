@@ -448,6 +448,65 @@ describe("long asset names wrap, figures do not", () => {
   });
 });
 
+describe("the fleet summary's four tiles are two and two until all four fit in a row (W7i)", () => {
+  // jsdom has no layout: the declarations are pinned, and the layout was looked at in a browser at 1440, 1024 and 800 px.
+  const pages = parseRules(stripComments(readFileSync("src/styles/pages-assets.css", "utf8")));
+  const tiles = pages.filter((r) => r.selector === ".tiles.fleet-tiles");
+  const tile = pages.filter((r) => r.selector === ".tiles.fleet-tiles > .tile");
+  const inside = (list: Rule[], query: string) => list.filter((r) => r.at.some((a) => a === query));
+  const plain = (list: Rule[]) => list.filter((r) => r.at.length === 1 && r.at[0] === "@layer w6");
+
+  it("the row is a wrapping flex row that is a container, so its own width (not the window's) decides", () => {
+    expect(plain(tiles)).toHaveLength(1);
+    expect(plain(tiles)[0].body).toMatch(/display:\s*flex/);
+    expect(plain(tiles)[0].body).toMatch(/flex-wrap:\s*wrap/);
+    expect(plain(tiles)[0].body).toMatch(/container-type:\s*inline-size/);
+  });
+
+  it("a tile takes half the row (two and two); a row that holds four 170 px tiles and their gaps gives each a quarter; a very narrow one a whole row", () => {
+    expect(plain(tile)).toHaveLength(1);
+    expect(plain(tile)[0].body).toMatch(/flex:\s*1 1 calc\(50% - 8px\)/);
+    const wide = inside(tile, "@container (min-width: 728px)");
+    expect(wide).toHaveLength(1);
+    expect(wide[0].body).toMatch(/flex-basis:\s*calc\(25% - 12px\)/);
+    const narrow = inside(tile, "@container (max-width: 355.98px)");
+    expect(narrow).toHaveLength(1);
+    expect(narrow[0].body).toMatch(/flex-basis:\s*100%/);
+  });
+});
+
+describe("a very long asset kind wraps instead of widening the page (W7i)", () => {
+  // A kind is free text up to 200 characters, so it may have no space to break at. jsdom has no layout: the declarations are pinned,
+  // the e2e spec (w7i.spec.ts) measures the page.
+  const pages = parseRules(stripComments(readFileSync("src/styles/pages-assets.css", "utf8")));
+  const one = (list: Rule[], selector: string) => {
+    const found = list.filter((r) => r.selector === selector && !r.at.some((a) => a.startsWith("@media")));
+    expect(found, `exactly one unconditional rule for "${selector}"`).toHaveLength(1);
+    expect(inLayer(found[0]), `"${selector}" is inside @layer w6`).toBe(true);
+    return found[0].body;
+  };
+
+  it("the page header's sub line wraps inside its column (it may be 200 characters without a space) and never runs under the actions", () => {
+    const sub = one(rules, ".page-head .sub");
+    expect(sub).toMatch(/min-width:\s*0/);
+    expect(sub).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it("a kind of the fleet summary may shrink to the row, wraps its name anywhere and lets the count drop below it", () => {
+    const li = one(pages, ".kind-list li");
+    expect(li).toMatch(/min-width:\s*0/);
+    expect(li).toMatch(/flex-wrap:\s*wrap/);
+    const name = one(pages, ".kind-name");
+    expect(name).toMatch(/min-width:\s*0/);
+    expect(name).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it("the glyph keeps its 16 px beside a wrapping name (svg.i is flex: none for the whole app)", () => {
+    expect(one(rules, "svg.i")).toMatch(/flex:\s*none/);
+    expect(one(pages, ".kind-name svg.i")).toMatch(/width:\s*16px/);
+  });
+});
+
 describe("the design tokens (W6)", () => {
   it("live in one :root block, so every var() has one meaning", () => {
     expect(rootRules).toHaveLength(1);

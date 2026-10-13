@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { RETURN_KEY, useAuth } from "../auth/AuthProvider";
+import { upperFirst } from "../lib/upperFirst";
 
 /** The brand above a Login/Setup card; a `p`, not a heading, so the page keeps its single h1. */
 export function AuthBrand() {
@@ -49,7 +50,7 @@ export function LoginPage() {
         <form onSubmit={submit}>
           <label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus /></label>
           <label>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
-          {error && <p className="error" role="alert">{error}</p>}
+          {error && <p className="error" role="alert">{upperFirst(error)}</p>}
           <button type="submit" className="primary" disabled={busy || !username || !password}>Sign in</button>
         </form>
       </div>

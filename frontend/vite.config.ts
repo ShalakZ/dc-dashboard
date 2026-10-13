@@ -12,7 +12,22 @@ export default defineConfig(({ mode }) => ({
       "/api": { target: loadEnv(mode, ".").VITE_API_TARGET ?? "http://localhost:8000", changeOrigin: false },
     },
   },
-  build: { outDir: "dist", sourcemap: false },
+  build: {
+    outDir: "dist",
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        // Vendor code that changes rarely gets its own file, so an app-code release leaves it in the browser cache. Nothing else is named:
+        // a catch-all "vendor" chunk would pull the lazy pages' libraries (xyflow, react-grid-layout) into the first load. echarts is named only so the lazy chunk is recognisable.
+        manualChunks(id) {
+          if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return "react";
+          if (/node_modules\/react-router/.test(id)) return "router";
+          if (/node_modules\/@tanstack\//.test(id)) return "query";
+          if (/node_modules\/(echarts|zrender|tslib|size-sensor)\//.test(id)) return "echarts";
+        },
+      },
+    },
+  },
   test: {
     environment: "jsdom",
     globals: true,

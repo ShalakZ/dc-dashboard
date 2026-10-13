@@ -20,8 +20,8 @@ vi.mock("@xyflow/react", async (importOriginal) => {
     ...actual,
     Handle: () => null,
     useReactFlow: () => ({ getIntersectingNodes: flow.getIntersectingNodes }),
-    ReactFlow: ({ nodes, nodeTypes, colorMode, onNodeClick, onNodeDragStart, onNodeDragStop, onNodesChange }: any) => (
-      <div data-testid="flow" data-color-mode={colorMode}>
+    ReactFlow: ({ nodes, nodeTypes, colorMode, edgesFocusable, onNodeClick, onNodeDragStart, onNodeDragStop, onNodesChange }: any) => (
+      <div data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)}>
         {nodes.map((n: any) => {
           const Node = nodeTypes[n.type];
           const dropped = { ...n, position: { x: 7, y: 8 } };
@@ -98,6 +98,13 @@ describe("DiscoveryPage", () => {
     open();
     await screen.findByText("Plant OPC");
     expect(screen.getByTestId("flow")).toHaveAttribute("data-color-mode", "light");
+  });
+
+  it("keeps the edges out of the tab order (they have no visible focus ring); the nodes stay focusable", async () => {
+    mockFetch(routes("operator"));
+    open();
+    await screen.findByText("Plant OPC");
+    expect(screen.getByTestId("flow")).toHaveAttribute("data-edges-focusable", "false");
   });
 
   it("hands React Flow the dark colour mode when the account chose dark", async () => {

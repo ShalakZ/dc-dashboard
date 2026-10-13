@@ -144,4 +144,65 @@ describe("RequireAuth", () => {
     expect(await screen.findByText("login page")).toBeInTheDocument();
     await waitFor(() => expect(sessionStorage.getItem(RETURN_KEY)).toBeNull());
   });
+
+  describe("when the server cannot be reached", () => {
+    // The first request of the bootstrap fails the way a stopped api does behind Caddy; `answer` is what it says from then on.
+    const answer = { setup: "network" as "network" | 502 | "ok", me: "ok" as "ok" | 401 };
+    const routes = (): Routes => ({
+      "GET /api/setup": () => {
+        if (answer.setup === "network") throw new TypeError("Failed to fetch");
+        if (answer.setup === 502) return { status: 502, body: { detail: "502 Bad Gateway" } };
+        return { body: { needed: false } };
+      },
+      "GET /api/me": () => (answer.me === 401 ? { status: 401, body: { detail: "not authenticated" } } : { body: { id: 1, username: "u", role: "admin" } }),
+    });
+    beforeEach(() => {
+      Object.assign(answer, { setup: "network", me: "ok" });
+    });
+
+    it.each(["network", 502] as const)("shows the panel (%s), not a redirect: the URL stays, nothing is remembered, the page is not rendered", async (kind) => {
+      answer.setup = kind;
+      mockFetch(routes());
+      const { container } = renderWithProviders(<RequireAuth><p>the page</p></RequireAuth>, { route: "/assets/4?tab=chart" });
+
+      expect(await screen.findByRole("heading", { level: 1, name: "Can't reach the server" })).toBeInTheDocument();
+      expect(screen.getByText("The server is not answering. It may be starting or restarting. This page tries again every few seconds.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Retry now" })).toBeInTheDocument();
+      expect(screen.queryByText("the page")).not.toBeInTheDocument();
+      expect(screen.queryByText("login page")).not.toBeInTheDocument();
+      expect(screen.queryByText("setup page")).not.toBeInTheDocument();
+      expect(redirects).toEqual([]); // no <Navigate> was ever rendered
+      expect(sessionStorage.getItem(RETURN_KEY)).toBeNull();
+      expect(container.querySelector(".sk-shell")).not.toBeInTheDocument();
+      expect(container.querySelector("main.auth .auth-card")).toBeInTheDocument(); // the sign-in card's classes
+      expect(pendingMounted.count).toBe(0); // the loading bar is not left running
+    });
+
+    it("Retry now asks again, and the page appears when the server is back, with nothing remembered on the way", async () => {
+      mockFetch(routes());
+      renderWithProviders(<RequireAuth><p>the page</p></RequireAuth>, { route: "/assets" });
+      await userEvent.click(await screen.findByRole("button", { name: "Retry now" }));
+      expect(screen.getByRole("heading", { name: "Can't reach the server" })).toBeInTheDocument(); // still down: still the panel
+
+      answer.setup = "ok";
+      await userEvent.click(await screen.findByRole("button", { name: "Retry now" }));
+      expect(await screen.findByText("the page")).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Can't reach the server" })).not.toBeInTheDocument();
+      expect(redirects).toEqual([]);
+      expect(sessionStorage.getItem(RETURN_KEY)).toBeNull();
+    });
+
+    it("when the server is back and the session is gone, the visitor goes to the sign-in page and the page asked for is remembered then", async () => {
+      mockFetch(routes());
+      renderWithProviders(<RequireAuth><p>the page</p></RequireAuth>, { route: "/assets/4" });
+      await userEvent.click(await screen.findByRole("button", { name: "Retry now" }));
+      expect(sessionStorage.getItem(RETURN_KEY)).toBeNull();
+
+      Object.assign(answer, { setup: "ok", me: 401 });
+      await userEvent.click(await screen.findByRole("button", { name: "Retry now" }));
+      expect(await screen.findByText("login page")).toBeInTheDocument();
+      expect(sessionStorage.getItem(RETURN_KEY)).toBe("/assets/4");
+      expect(redirects).toEqual([{ to: "/login", shell: true, pending: 0 }]);
+    });
+  });
 });

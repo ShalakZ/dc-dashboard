@@ -10,7 +10,8 @@
 # 300 KEPT LINES PER SERVICE go to a second file, dcdash-diag-<stamp>-logs.txt (header DCDASH-DIAG-LOGS v1, same footer rule), which is
 # saved but never printed; the report names its path. The logs are read as `--tail 2000`, then the ROUTINE lines are dropped (access lines
 # with a 2xx/3xx status, Caddy admin API requests, TimescaleDB refresh chatter; a line with error, warn, fatal, traceback, exception or
-# panic is never dropped) and each service block says how many; --raw-logs keeps them. DOCKER CLOCK compares the date inside the db
+# panic is never dropped) and each service block says how many; --raw-logs keeps them. Colour codes are removed from the log text first;
+# a block whose last 300 kept lines hold the Timescale image's first-start noise gets one "known benign" line. DOCKER CLOCK compares the date inside the db
 # container with this machine's (Docker/WSL2 clock drift is a local cause). --mask exists only in the PowerShell script. Read-only,
 # needs no internet and none of the application; POSIX tools only (awk, sed, df, date, getent), no Python, no jq. The files are UTF-8
 # with LF line breaks, saved for their owner only (umask 077). The last line of each is `END OF DIAGNOSTICS <12 hex>`: the first 12 hex
@@ -27,6 +28,7 @@ set -u
 
 VERSION=1
 CAP_BYTES=65536   # a raw line is cut here BEFORE scrubbing (far above any clip, so nothing near the cut is shown)
+BOOT_NOTE='known benign on a first start (Timescale image): "no usable system locales were found", "background worker ... trying to connect to template database, exiting"'
 
 # The scrubber, in awk, mawk-safe: no gensub, no 4-argument split, no IGNORECASE, no length(array), no delete. Run it under LC_ALL=C: every
 # length and position is then a BYTE count; "characters" are counted as bytes that are not UTF-8 continuation bytes (\200-\277).
@@ -211,7 +213,21 @@ AWK_END
 # lines are neither read nor kept. The matching is on the text after the `service-1  | ` prefix that `docker compose logs` adds. A line with
 # error, warn, fatal, traceback, exception or panic (any case) is NEVER routine. Routine: (a) a uvicorn access line with a 2xx/3xx status,
 # (b) a Caddy admin API request, (c) TimescaleDB's continuous aggregate refresh and checkpoint chatter. Everything else stays.
+# Colour codes are removed from every line first (also with -v raw=1), so a colour-wrapped routine line is still recognised and a line that
+# held nothing else is blank: ESC [ digits;digits m, and the same without the ESC byte when it was lost on the way ("[0m", "[37;1m"). The
+# ESC-less form needs a digit and the m and must not be followed by "]", so "[5m]", "cfg[mode]" and "[main]" in running text stay (an ERE has
+# no lookahead: a loop does it). A lone "[m" is not stripped; the reset is written "[0m".
 IFS= read -r -d '' FILTER_PROGRAM <<'AWK_END' || true
+function unansi(s,    out) {
+  if (index(s, "[") == 0) return s
+  gsub(/\033\[[0-9;]*m/, "", s)
+  out = ""
+  while (match(s, /\[[0-9][0-9]?[0-9]?(;[0-9][0-9]?[0-9]?)*m/)) {
+    if (substr(s, RSTART + RLENGTH, 1) == "]") { out = out substr(s, 1, RSTART); s = substr(s, RSTART + 1) }   # ordinary text: go on after its "["
+    else { out = out substr(s, 1, RSTART - 1); s = substr(s, RSTART + RLENGTH) }
+  }
+  return out s
+}
 function routine(t,    low) {
   low = tolower(t)
   if (low ~ /error|warn|fatal|traceback|exception|panic/) return 0
@@ -220,6 +236,7 @@ function routine(t,    low) {
   if (low ~ /^[^ ]+ [^ ]+ [^ ]+ \[[0-9]+\] log:[ \t]+(continuous aggregate refresh|deleted [0-9]+ row[(]s[)] from materialization table|inserted [0-9]+ row[(]s[)] into materialization table|checkpoint (starting|complete):)/) return 1
   return 0
 }
+{ $0 = unansi($0) }
 NF {
   read++
   t = $0; sub(/^[^|]*[|] ?/, "", t)
@@ -227,6 +244,70 @@ NF {
   print
 }
 END { print read + 0, dropped + 0 > counts }
+AWK_END
+
+# The LOCAL PORTS parser, in awk, mawk-safe (no {n}, no asort, no length(array)); run it under LC_ALL=C on `ss -ltnp` or `netstat -ltnp` text
+# (the plain -ltn forms work too: every owner is then hidden). A listener is (port, process id); a row says WHICH process, by name and id only:
+# never the fd= number, never a command line. ss lists a process as users:(("name",pid=N,fd=F),...) (parsed from the whole line: a name may
+# hold a space, a socket shared by workers lists several), netstat as PID/name in its last column. No process shown (not root, another user's
+# process, "-") is "owner hidden". Prints the three fixed port lines, then "other listening ports", rows by port then pid, 40 at most.
+IFS= read -r -d '' PORTS_PROGRAM <<'AWK_END' || true
+function add(port, a, id, name,    k, x) {
+  k = port SUBSEP id
+  if (!(k in ix)) { ix[k] = ++nk; kp[nk] = port; kq[nk] = id; kn[nk] = (name == "" ? "unknown" : name) }
+  x = ix[k]
+  if (!((k, a) in seen)) { seen[k, a] = 1; ka[x] = ka[x] (ka[x] == "" ? "" : ", ") a }
+  if (!((port, a) in pseen)) { pseen[port, a] = 1; pa[port] = pa[port] (pa[port] == "" ? "" : ", ") a }
+}
+function before(x, y) {   # port, then pid; the hidden owner last
+  if (kp[x] != kp[y]) return kp[x] < kp[y]
+  return (kq[x] == "-" ? 1e12 : kq[x] + 0) < (kq[y] == "-" ? 1e12 : kq[y] + 0)
+}
+$1 == "LISTEN" || $1 ~ /^tcp/ {
+  a = $4; p = a; sub(/^.*:/, "", p); sub(/:[^:]*$/, "", a)
+  if (p !~ /^[0-9]+$/) next
+  p = p + 0; n = 0
+  if ($1 == "LISTEN") {
+    rest = $0
+    while (match(rest, /\("[^"]*",pid=[0-9]+/)) {
+      tok = substr(rest, RSTART + 2, RLENGTH - 2); rest = substr(rest, RSTART + RLENGTH)
+      q = index(tok, "\"")
+      add(p, a, substr(tok, q + 6) + 0, substr(tok, 1, q - 1)); n++
+    }
+  } else {
+    s = $7; for (i = 8; i <= NF; i++) s = s " " $i
+    if (match(s, /^[0-9]+\//)) { add(p, a, substr(s, 1, RLENGTH - 1) + 0, substr(s, RLENGTH + 1)); n++ }
+  }
+  if (n == 0) add(p, a, "-", "")
+}
+END {
+  for (i = 1; i <= nk; i++) ord[i] = i
+  for (i = 2; i <= nk; i++) { v = ord[i]; j = i - 1; while (j >= 1 && before(v, ord[j])) { ord[j + 1] = ord[j]; j-- }; ord[j + 1] = v }
+  split("80 443 8000", want, " ")
+  for (w = 1; w <= 3; w++) {
+    port = want[w] + 0; who = ""; known = 0
+    for (i = 1; i <= nk; i++) {
+      x = ord[i]
+      if (kp[x] != port) continue
+      if (kq[x] == "-") o = "owner hidden"; else { o = kn[x] ", pid " kq[x]; known = 1 }
+      who = who (who == "" ? "" : "; ") o
+    }
+    if (!(port in pa)) print "port " port ": nothing is listening"
+    else print "port " port ": something is listening on " pa[port] " (" (known ? "owner: " : "") who ")"
+  }
+  total = 0
+  for (i = 1; i <= nk; i++) { port = kp[ord[i]]; if (port != 80 && port != 443 && port != 8000) total++ }
+  if (total == 0) { print "other listening ports: none"; exit }
+  print "other listening ports (up to 40):"
+  shown = 0
+  for (i = 1; i <= nk && shown < 40; i++) {
+    x = ord[i]; port = kp[x]
+    if (port == 80 || port == 443 || port == 8000) continue
+    shown++
+    print "  " port "  " ka[x] "  " (kq[x] == "-" ? "owner hidden" : kn[x] " (pid " kq[x] ")")
+  }
+  if (total > shown) print "  ... and " (total - shown) " more"
+}
 AWK_END
 
 usage() {
@@ -587,18 +668,14 @@ section_targets() {
 }
 
 section_local_ports() {
-  local tool listing="" port on found=0
-  for tool in "ss -ltn" "netstat -ltn"; do
+  local tool listing="" found=0
+  for tool in "ss -ltnp" "ss -ltn" "netstat -ltnp" "netstat -ltn"; do   # -p names the owner; a tool that refuses it still gives the ports
     type -P "${tool%% *}" > /dev/null || continue
     # shellcheck disable=SC2086
     if listing=$(run_limited 10 $tool 2>/dev/null); then found=1; break; fi
   done
   if [ $found = 0 ]; then emit "ss and netstat not found or failed; listening ports unknown"; return; fi
-  for port in 80 443 8000; do
-    on=$(printf '%s\n' "$listing" | "$AWK" -v want="$port" '($1 == "LISTEN" || $1 ~ /^tcp/) { a = $4; p = a; sub(/^.*:/, "", p); sub(/:[^:]*$/, "", a)
-      if (p == want && !(a in s)) { s[a] = 1; out = out (out == "" ? "" : ", ") a } } END { print out }')
-    emit "port ${port}: $([ -n "$on" ] && echo "something is listening on $on" || echo "nothing is listening")"
-  done
+  emit "$(printf '%s\n' "$listing" | "$AWK" "$PORTS_PROGRAM")"
 }
 
 section_tools() {
@@ -722,6 +799,9 @@ section_logs() {
     if [ "${RAW_LOGS:-0}" = 1 ]; then emit "-- $svc (last $shown of $kept lines read; unfiltered)$note"
     else emit "-- $svc (last $shown of $kept kept lines; dropped $dropped routine lines of $n read)$note"
     fi
+    if "$AWK" 'BEGIN { rc = 1 } { low = tolower($0); w = index(low, "background worker") }
+      index(low, "no usable system locales were found") || (w && index(low, "trying to connect to template database, exiting") > w) { rc = 0 }
+      END { exit rc }' "$WORK/svc.tail"; then emit "  $BOOT_NOTE"; fi
     tail -n 30 "$WORK/svc.tail" | sed 's/^/  /' | emit_lines 242
     [ -s "$WORK/logs.txt" ] || logs_header
     emit "== $svc ==" 0 logs

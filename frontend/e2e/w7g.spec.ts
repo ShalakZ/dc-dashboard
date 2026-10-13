@@ -241,7 +241,7 @@ test.describe.serial("W7g: asset icons and the Assets Tree name", () => {
     expect(asset!.icon, "Automatic is stored as no choice").toBeNull();
   });
 
-  test("Esc inside the open grid closes the dialog with nothing saved; Enter on a cell and Change icon do not save either", async ({ page }) => {
+  test("Esc inside the open grid closes the grid, a second Esc the dialog, with nothing saved; Enter on a cell and Change icon do not save either", async ({ page }) => {
     test.setTimeout(90_000);
     await signIn(page);
     const posts: string[] = [];
@@ -267,8 +267,14 @@ test.describe.serial("W7g: asset icons and the Assets Tree name", () => {
     await expect(form.radio("Site"), "the choice is still there").toBeChecked();
     await expect(form.radio("Site")).toBeFocused();
 
+    // W7i (E1): the first Esc closes only the grid, so one stray key does not throw the typed name away; a second Esc closes the dialog.
     await page.keyboard.press("Escape");
-    await expect(form.dialog, "Esc closes the dialog, not only the grid").toBeHidden();
+    await expect(form.grid, "the first Esc closes the grid").toBeHidden();
+    await expect(form.dialog, "and leaves the dialog open").toBeVisible();
+    await expect(form.name, "with the typed name").toHaveValue(UNSAVED);
+    await expect(form.change, "focus is back on Change icon").toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(form.dialog, "a second Esc closes the dialog").toBeHidden();
     await settled(page);
     expect(posts, "closing saves nothing").toHaveLength(0);
     expect((await assetsOf(page.request)).filter((a) => a.name === UNSAVED), "no asset was made").toHaveLength(0);

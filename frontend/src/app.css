@@ -320,6 +320,7 @@
      meets the sidebar; it is sticky, as tall as the window below the top bar, and the detail area beside it restores the page gutter. */
   .assets-layout { display: flex; align-items: flex-start; min-height: calc(100vh - var(--bar-h)); }
   .assets-detail { flex: 1; min-width: 0; padding: 0 var(--gutter) 48px; }
+  .assets-detail:focus { outline: none; } /* focused by "Skip the tree" (as main is by "Skip to content"): a ring round the whole pane would only be noise */
   .tree-col { --w: var(--tree-user-w, var(--tree-w)); position: sticky; top: var(--bar-h); align-self: flex-start; width: var(--w); max-width: max(220px, min(50%, calc(100% - 560px))); height: calc(100vh - var(--bar-h)); flex: none; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border-strong); background: var(--bg); } /* --tree-user-w is the width the user chose (inline, from the handle); the max-width is for a window or sidebar that changed after that (a % is of .assets-layout, the room right of the sidebar), as treeMax() and PANE_MIN in lib/treeWidth.ts */
   .shell.ready .tree-col { transition: width var(--motion); } /* from the second frame on, so a remembered state does not animate in */
   .shell.ready .tree-col.is-resizing { transition: none; user-select: none; } /* one class more than the rule above, which it must outrank: while dragging, the column follows the pointer */
@@ -383,7 +384,7 @@
   .page-tile { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius); background: var(--accent-tint); color: var(--accent); }
   .page-tile svg.i { width: 22px; height: 22px; }
   .page-head:has(.page-title) > .sub { padding-left: 52px; } /* under the title, not under the tile */
-  .page-head .sub { margin-top: 2px; font-size: var(--fs-sm); color: var(--text-2); }
+  .page-head .sub { min-width: 0; margin-top: 2px; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--text-2); } /* a long unbroken word wraps in the column instead of running under the actions */
   .page-head > .actions { grid-column: 2; grid-row: 1 / span 3; align-self: end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   /* A titled block under the page header (Users, Settings, Storage, Audit entry, Scans): one rule, so no page file can restyle another's */
   .section-title { margin: 28px 0 12px; font-size: var(--fs-lg); font-weight: 600; }
@@ -420,11 +421,13 @@
   .banner svg.i { margin-top: 1px; }
   .banner strong { font-weight: 600; }
   .banner .b-act { margin: -5px 0 -5px auto; min-height: 28px; white-space: nowrap; } /* a button as tall as one text line, so the text and the button centre on each other */
+  .banner .b-link { flex: none; color: inherit; font-weight: 600; text-decoration: underline; white-space: nowrap; } /* a link in a banner: the banner's own ink, like the one on the Billing page */
   .banner-warn { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
   .banner-warn svg.i { color: var(--warn-icon); }
   .banner > span { flex: 1 1 auto; min-width: 0; }
   .banner-bad { border-color: var(--crit); background: var(--crit-tint); color: var(--crit); } /* an expired certificate: tint, border and ink are all the critical token */
   .banner-info { border-color: var(--info-line); background: var(--info-tint); color: var(--info-ink); }
+  .route-error { max-width: 640px; margin: 15vh auto 0; } /* RouteError: the shell went with the failed page, so the one banner sits high and centred on the plain page */
   .notice { display: flex; gap: 12px; align-items: flex-start; margin-top: 16px; padding: 12px 16px; border: 1px solid var(--border); border-left: 3px solid var(--text-disabled); border-radius: var(--radius); font-size: var(--fs-sm); color: var(--text); }
   .notice svg.i { margin-top: 1px; color: var(--text-2); }
 

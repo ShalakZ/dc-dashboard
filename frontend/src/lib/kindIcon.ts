@@ -11,7 +11,7 @@ const TABLE: ReadonlyArray<readonly [KindIcon, ReadonlySet<string>]> = [
   ["kindGenerator", new Set(["generator", "genset", "gen"])],
   ["kindTransformer", new Set(["transformer", "trafo", "xfmr", "substation"])],
   ["kindChiller", new Set(["chiller", "crac", "crah", "cooling", "cooler", "ahu", "fan"])],
-  ["kindCircuit", new Set(["circuit", "breaker", "feeder", "ats", "sts", "busway", "busbar", "mcb", "mccb", "transfer"])],
+  ["kindCircuit", new Set(["circuit", "breaker", "feeder", "ats", "sts", "busway", "busbar", "mcb", "mccb", "transferswitch"])],
   ["kindPanel", new Set(["panel", "panelboard", "switchboard", "switchgear", "mdb"])],
   ["kindMeter", new Set(["meter", "submeter", "metering", "sensor"])],
   ["kindRack", new Set(["rack", "cabinet", "enclosure"])],
@@ -25,7 +25,7 @@ const TABLE: ReadonlyArray<readonly [KindIcon, ReadonlySet<string>]> = [
 // A kind is a short label; the clamp keeps the boundary regexes linear on absurd input.
 const MAX_KIND_CHARS = 200;
 
-/** The words of a kind: split at camelCase and digit boundaries ("LVPanel", "DC1"), lower-cased, "data" + "centre" joined, "distribution" + "unit" made one "pdu". */
+/** The words of a kind: split at camelCase and digit boundaries ("LVPanel", "DC1"), lower-cased, "data" + "centre" joined, "transfer" + "switch" joined, "distribution" + "unit" made one "pdu". */
 function words(kind: string): string[] {
   const spaced = kind
     .slice(0, MAX_KIND_CHARS)
@@ -40,6 +40,8 @@ function words(kind: string): string[] {
     const last = joined[joined.length - 1];
     if (last === "data" && /^cent(?:er|re)s?$/.test(token)) joined[joined.length - 1] = `data${token}`;
     else if (last === "distribution" && /^units?$/.test(token)) joined[joined.length - 1] = "pdu";
+    // One word before the plural strip below, which would turn "switches" into "switche": a bare "transfer" is not a circuit.
+    else if (last === "transfer" && /^switch(?:es)?$/.test(token)) joined[joined.length - 1] = "transferswitch";
     else joined.push(token);
   }
   return joined;

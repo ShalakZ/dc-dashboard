@@ -11,7 +11,9 @@ export function writeStored(key: string, value: string): void {
 }
 /** A narrow window starts minimized, otherwise the remembered state, otherwise expanded. No resize listener: the user can always expand. */
 export function initialSidebar(): SidebarState {
-  if (typeof window.matchMedia === "function" && window.matchMedia(NARROW_QUERY).matches) return "minimized";
+  try {
+    if (typeof window.matchMedia === "function" && window.matchMedia(NARROW_QUERY).matches) return "minimized";
+  } catch { /* a matchMedia that fails is like none: the remembered choice decides, as in public/theme-init.js */ }
   return readStored(SIDEBAR_KEY) === "minimized" ? "minimized" : "expanded";
 }
 export function saveSidebar(state: SidebarState): void { writeStored(SIDEBAR_KEY, state); }

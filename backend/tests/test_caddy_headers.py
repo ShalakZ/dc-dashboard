@@ -7,6 +7,10 @@ is Report-Only and keeps `script-src 'self'` strict, that both Caddyfiles import
 Dockerfile copies the snippet to the path the Caddyfiles import. frontend/e2e/headers.spec.ts and scripts/check_tls.sh check the real responses.
 Also here: both files open with one global options block that keeps the admin API requests (the web healthcheck polls them every few
 seconds) out of Caddy's default (runtime) log, where the admin API writes them (not an access log).
+And the static-file handles (W7i): hashed files under /assets/ are compressed and cached for a year, everything else (index.html, the
+un-hashed theme-init.js, the SPA routes) is compressed and revalidated, the API route is never compressed (the SSE stream must not be
+buffered) and every error answer is `no-store` (a stale chunk's 404 must never carry the year of cache the handle before it set).
+frontend/e2e/headers.spec.ts and scripts/check_web.sh check the real responses.
 """
 import re
 import shlex
@@ -95,6 +99,33 @@ def global_blocks(text: str) -> list[list[str]]:
         if depth == 0 and body is not None:
             found.append(body)
             body = None
+    assert depth == 0, "unbalanced braces"
+    return found
+
+
+def child_blocks(text: str, address: str) -> list[tuple[str, list[str]]]:
+    """(the opening line without its brace, every line inside it, nested ones included) for each block written directly inside
+    the site block `address`, in file order. `handle_errors { ... }` counts like any other."""
+    found: list[tuple[str, list[str]]] = []
+    depth = 0
+    in_site = False
+    current: tuple[str, list[str]] | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if depth == 0 and line.endswith("{") and line != "{":
+            in_site = line[:-1].strip() == address
+        elif in_site and depth == 1 and line.endswith("{"):
+            current = (line[:-1].strip(), [])
+        elif current is not None and depth >= 2 and not (depth == 2 and line == "}"):
+            current[1].append(line)
+        depth += line.count("{") - line.count("}")
+        if depth == 1 and current is not None:
+            found.append(current)
+            current = None
+        if depth == 0:
+            in_site = False
     assert depth == 0, "unbalanced braces"
     return found
 
@@ -223,6 +254,85 @@ def test_the_web_healthcheck_still_polls_the_admin_api_which_is_why_it_is_exclud
     compose = (ROOT / "compose.yaml").read_text()
     web = compose[compose.index("\n  web:"):]
     assert "http://127.0.0.1:2019/config/" in web
+
+
+# ---- the static files: compression and cache headers (W7i) ------------------------------------------------------------
+
+# Where each Caddyfile serves /srv (the TLS file's :80 block only redirects), and what the two static handles must contain.
+STATIC_SITE = {"Caddyfile": ":80", "Caddyfile.tls": ":443"}
+HASHED_MATCHER = r"@hashed path_regexp hashed ^/assets/[^/]+\.(js|css|woff2?|svg|png|jpe?g|webp|ico)$"
+HASHED_HANDLE = [
+    "root * /srv",
+    'header Cache-Control "public, max-age=31536000, immutable"',
+    "encode zstd gzip",
+    "file_server",  # no try_files: a hashed file that is gone is a real 404, never index.html with a year of cache
+]
+SHELL_HANDLE = [
+    "root * /srv",
+    'header Cache-Control "no-cache"',
+    "encode zstd gzip",
+    "try_files {path} /index.html",
+    "file_server",
+]
+
+
+def site_text(name: str) -> str:
+    return (ROOT / "deploy" / name).read_text()
+
+
+@pytest.mark.parametrize("name", list(STATIC_SITE))
+def test_the_static_files_have_a_hashed_handle_and_a_revalidating_shell_handle_in_this_order(name):
+    site = STATIC_SITE[name]
+    text = site_text(name)
+    directives = dict(blocks(text))[site]
+    assert HASHED_MATCHER in directives, f"{name}: the {site} block lacks the @hashed matcher"
+    handles = [(opening, body) for opening, body in child_blocks(text, site) if opening == "handle" or opening.startswith("handle ")]
+    assert [opening for opening, _ in handles] == ["handle /api/*", "handle @hashed", "handle"]
+    assert handles[1][1] == HASHED_HANDLE
+    assert handles[2][1] == SHELL_HANDLE
+
+
+def test_both_caddyfiles_serve_the_static_files_the_same_way():
+    parts = []
+    for name, site in STATIC_SITE.items():
+        text = site_text(name)
+        matcher = [line for line in dict(blocks(text))[site] if line.startswith("@hashed ")]
+        handles = [body for opening, body in child_blocks(text, site) if opening in ("handle @hashed", "handle")]
+        parts.append((matcher, handles))
+    assert parts[0] == parts[1]
+    assert len(parts[0][0]) == 1 and len(parts[0][1]) == 2
+
+
+def test_the_hashed_matcher_keys_on_the_extension_so_the_spa_routes_under_assets_still_get_the_shell():
+    # /assets is the Assets Tree page and /assets/<id> an asset's page: same prefix as the hashed files, but no extension
+    pattern = HASHED_MATCHER.split()[-1]
+    for path in ("/assets/index-DXBCBP4n.js", "/assets/index-BufBEXK1.css", "/assets/font-1.woff2", "/assets/logo.svg", "/assets/nope.js"):
+        assert re.search(pattern, path), path
+    for path in ("/assets", "/assets/", "/assets/4", "/assets/4/edit", "/", "/theme-init.js", "/favicon.ico", "/assets/a/b.js", "/api/assets/1.js"):
+        assert not re.search(pattern, path), path
+
+
+@pytest.mark.parametrize("name", list(STATIC_SITE))
+def test_encode_never_touches_the_api_route(name):
+    # /api/stream is a Server-Sent Events stream (`flush_interval -1`): an encoder in front of it would buffer it
+    text = site_text(name)
+    api = [body for opening, body in child_blocks(text, STATIC_SITE[name]) if opening == "handle /api/*"]
+    assert len(api) == 1, f"{name}: one API route"
+    assert not any(line.split()[0] == "encode" for line in api[0] if line.split()), api[0]
+    assert "flush_interval -1" in api[0]
+    # nor at the site level, where it would wrap every route, the API included
+    assert not any(line.split()[0] == "encode" for _, directives in blocks(text) for line in directives)
+
+
+@pytest.mark.parametrize("name", list(CADDYFILES))
+def test_every_error_answer_is_never_cached(name):
+    # `header` inside a `handle` runs before file_server, on the same response writer: without this, the 404 of a stale hashed chunk
+    # would go out with the `immutable` the handle set. It also keeps a cache from storing the 502 page of a restarting api.
+    for address, body in handle_errors_bodies(site_text(name)):
+        assert body is not None, f"{name}: the {address} block has no handle_errors"
+        assert 'header Cache-Control "no-store"' in body, f"{name}: the {address} handle_errors does not send Cache-Control: no-store"
+        order = [text.split()[0] for text in body]
+        assert order.index("header") < order.index("respond"), f"{name}: the {address} handle_errors sets the header after it answers"
 
 
 # ---- the image --------------------------------------------------------------------------------------------------------
