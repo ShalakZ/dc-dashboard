@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import type { AuditEntry } from "../api/types";
 import { copyText } from "../lib/diagnostics";
@@ -35,6 +35,12 @@ function EntryView({ entry, timezone, now }: { entry: AuditEntry; timezone: stri
   const time = formatSiteDateTime(entry.ts, timezone);
   const ago = relativeTime(entry.ts, now, timezone);
   const number = `#${entry.id}`;
+  // The live line is empty until the drawer has moved to another entry: the first one is read out as the dialog itself is (the sentence
+  // sits in the "What happened" row too, and a screen reader in browse mode would hear it twice). From the first step on it says every entry
+  // shown, also a return to the first one.
+  const [firstId] = useState(entry.id);
+  const [stepped, setStepped] = useState(false);
+  if (!stepped && entry.id !== firstId) setStepped(true);
 
   async function copy() {
     const ok = await copyText(number, area.current);
@@ -46,8 +52,8 @@ function EntryView({ entry, timezone, now }: { entry: AuditEntry; timezone: stri
 
   return (
     <div className="audit-entry">
-      {/* Said once when the entry changes (Previous, Next), with its number so the step is heard as a step; the dialog itself is announced when it opens. */}
-      <p className="sr-only" aria-live="polite" aria-atomic="true">{`Entry ${number}: ${summary}`}</p>
+      {/* Said when the entry changes (Previous, Next), with its number so the step is heard as a step; the dialog itself is announced when it opens. */}
+      <p className="sr-only" aria-live="polite" aria-atomic="true">{stepped ? `Entry ${number}: ${summary}` : ""}</p>
       <dl className="kv">
         <div>
           <dt>What happened</dt>

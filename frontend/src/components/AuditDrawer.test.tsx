@@ -100,17 +100,34 @@ describe("AuditDrawer: an entry", () => {
     expect(facts(dialog())["What happened"].querySelector(".what")).toHaveTextContent("Changed the tariff for asset Panel A: rate per kwh");
   });
 
-  it("says the sentence in a polite live line with the entry's number, and changes that same line in place when the entry changes (Previous, Next)", () => {
+  it("has a polite live line that is empty when the entry first shows (the sentence is on the page already, and would be read twice)", () => {
+    const { dialog } = show(drawer());
+    const line = dialog().querySelector<HTMLElement>('[aria-live="polite"]')!;
+    expect(line).toBeEmptyDOMElement();
+    expect(line).toHaveClass("sr-only");
+    expect(line).toHaveAttribute("aria-atomic", "true");
+    expect(dialog().textContent!.split(SENTENCE)).toHaveLength(2); // the sentence is in the dialog once
+  });
+
+  it("says the sentence with the entry's number once the entry changes (Previous, Next), in that same line, and also when it comes back to the first", () => {
     const { dialog, rerender, toasts } = show(drawer());
     const live = () => dialog().querySelector<HTMLElement>('[aria-live="polite"]')!;
     const [panel, line] = [dialog(), live()];
-    expect(line).toHaveTextContent(`Entry #51: ${SENTENCE}`);
-    expect(line).toHaveClass("sr-only");
-    rerender(<MemoryRouter>{toasts.wrap(drawer({ entry: stored({ id: 50, action: "scan.started", detail: { scan_id: 50 }, refs: {} }) }))}</MemoryRouter>);
+    const other = stored({ id: 50, action: "scan.started", detail: { scan_id: 50 }, refs: {} });
+    rerender(<MemoryRouter>{toasts.wrap(drawer({ entry: other }))}</MemoryRouter>);
     // the same nodes, not a new drawer: a live region announces a CHANGE of its text, and a freshly inserted one often says nothing
     expect(dialog()).toBe(panel);
     expect(live()).toBe(line);
     expect(line).toHaveTextContent("Entry #50: Started scan #50");
+    rerender(<MemoryRouter>{toasts.wrap(drawer())}</MemoryRouter>);
+    expect(live()).toBe(line);
+    expect(line).toHaveTextContent(`Entry #51: ${SENTENCE}`);
+  });
+
+  it("stays empty while the same entry is shown again (a re-render with a fresh copy of it is not a step)", () => {
+    const { dialog, rerender, toasts } = show(drawer());
+    rerender(<MemoryRouter>{toasts.wrap(drawer({ entry: stored() }))}</MemoryRouter>);
+    expect(dialog().querySelector('[aria-live="polite"]')).toBeEmptyDOMElement();
   });
 });
 
