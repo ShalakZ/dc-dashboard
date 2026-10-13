@@ -12,9 +12,11 @@ const TABLE: ReadonlyArray<readonly [KindIcon, ReadonlySet<string>]> = [
   ["kindGenerator", new Set(["generator", "genset", "gen"])],
   ["kindTransformer", new Set(["transformer", "trafo", "xfmr", "substation"])],
   ["kindChiller", new Set(["chiller"])],
-  ["kindCrac", new Set(["crac", "crah", "cooling", "cooler", "ahu"])],
+  ["kindCrac", new Set(["crac", "crah", "ahu"])],
   ["kindFan", new Set(["fan"])],
   ["kindPump", new Set(["pump"])],
+  // the weak words come after the fan and the pump: "Cooling Pump" is a pump, "Cooling Tower" still the cooling unit
+  ["kindCrac", new Set(["cooling", "cooler"])],
   ["kindCircuit", new Set(["circuit", "breaker", "feeder", "ats", "sts", "busway", "busbar", "mcb", "mccb", "transferswitch"])],
   ["kindPanel", new Set(["panel", "panelboard", "switchboard", "switchgear", "mdb"])],
   ["kindMeter", new Set(["meter", "submeter", "metering"])],
