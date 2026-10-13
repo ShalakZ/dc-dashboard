@@ -11,7 +11,6 @@ import { PageSkeleton } from "./components/Skeleton";
 import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { AssetsSummary } from "./pages/AssetsSummary";
-import { AuditEntryPage } from "./pages/AuditEntryPage";
 import { AuditPage } from "./pages/AuditPage";
 import { BillingPage } from "./pages/BillingPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
@@ -71,8 +70,7 @@ export function App() {
         <Route path="/settings" element={<RequirePermission need={PAGE_NEED.settings}><SettingsPage /></RequirePermission>} />
         <Route path="/tariffs" element={<RequirePermission need={PAGE_NEED.tariffs}><TariffsPage /></RequirePermission>} />
         <Route path="/storage" element={<RequirePermission need={PAGE_NEED.storage}><StoragePage /></RequirePermission>} />
-        <Route path="/audit" element={<RequirePermission need={PAGE_NEED.audit}><AuditPage /></RequirePermission>} />
-        <Route path="/audit/:id" element={<RequirePermission need={PAGE_NEED.audit}><AuditEntryPage /></RequirePermission>} />
+        <Route path="/audit/:id?" element={<RequirePermission need={PAGE_NEED.audit}><AuditPage /></RequirePermission>} />
         <Route path="/diagnostics" element={<RequirePermission need={PAGE_NEED.diagnostics}><DiagnosticsPage /></RequirePermission>} />
         <Route path="/password" element={<PasswordPage />} />
         <Route path="*" element={<NotFoundPage />} />

@@ -501,7 +501,6 @@ describe("describeAudit: creations, deletions and events", () => {
         describeAudit(entry("asset.created", { asset_id: 8, name: "Rack 1", parent_id: null, kind: "Rack", sort_order: 0, icon }));
       for (const icon of ["server", null, "zzz"]) {
         expect(created(icon).summary).toBe("Created asset Rack 1");
-        expect(created(icon).facts).toEqual([]);
         expect(created(icon).changes).toEqual([]);
       }
     });
@@ -644,7 +643,6 @@ describe("describeAudit: old, odd and unknown rows", () => {
     expect(view.summary).toBe("Changed the tariff for an asset");
     expect(view.changes).toEqual([]);
     expect(view.unchanged).toBe(0);
-    expect(view.facts).toEqual([]);
   });
 
   it("falls back to the humanised action for an action it does not know", () => {
@@ -695,7 +693,6 @@ describe("describeAudit: old, odd and unknown rows", () => {
         const view = describeAudit(entry(action, detail));
         expect(typeof view.summary).toBe("string");
         expect(Array.isArray(view.changes)).toBe(true);
-        expect(Array.isArray(view.facts)).toBe(true);
         expect(typeof view.unchanged).toBe("number");
         expect(view.link === null || (typeof view.link.to === "string" && typeof view.link.label === "string")).toBe(true);
       }
@@ -975,10 +972,10 @@ describe("describeAudit: names instead of ids (refs)", () => {
     });
   });
 
-  it("no longer returns a list of stored fields", () => {
-    expect(withRefs("tariff.created", tariff).facts).toEqual([]);
-    expect(describeAudit(entry("foo.bar", { a: 1 })).facts).toEqual([]);
-    expect(describeAudit(null as unknown as AuditEntry).facts).toEqual([]);
+  it("answers a summary, the changes, the unchanged count and a link, and no list of stored fields (the drawer's JSON block shows those)", () => {
+    for (const view of [withRefs("tariff.created", tariff), describeAudit(entry("foo.bar", { a: 1 })), describeAudit(null as unknown as AuditEntry)]) {
+      expect(Object.keys(view).sort()).toEqual(["changes", "link", "summary", "unchanged"]);
+    }
   });
 });
 

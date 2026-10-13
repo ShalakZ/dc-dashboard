@@ -1,18 +1,19 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router";
-import { auditPosition, useAudit, useAuditOptions, useSite } from "../api/queries";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { auditPosition, useAudit, useAuditEntry, useAuditOptions, useSite } from "../api/queries";
+import { ApiError } from "../api/client";
 import type { AuditEntry } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
-import { AuditEntryDetail } from "../components/AuditEntryDetail";
+import { KindTile, UserLabel } from "../components/AuditCells";
+import { AuditDrawer, type AuditDrawerStatus } from "../components/AuditDrawer";
 import { AuditFilterBar } from "../components/AuditFilterBar";
 import { AuditPager } from "../components/AuditPager";
 import { EmptyNote } from "../components/EmptyNote";
-import { Icon, type IconName } from "../components/Icon";
+import { Icon } from "../components/Icon";
 import { PageHeader } from "../components/PageHeader";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { apiQuery, isFiltered, readUrl, writeUrl, type AuditFilters, type AuditUrlState } from "../lib/auditFilters";
-import { auditKind, type AuditKind } from "../lib/auditKind";
 import { describeAudit } from "../lib/auditText";
 import { downloadCsv } from "../lib/download";
 import { relativeTime } from "../lib/relativeTime";
@@ -20,10 +21,28 @@ import { formatSiteDateTime, siteDay } from "../lib/siteTime";
 
 const messageOf = (error: unknown, fallback: string) => (error instanceof Error ? error.message : fallback);
 
-// The icon of each kind of event (lib/auditKind.ts); it is decoration, the sentence says the same.
-const KIND_ICON: Record<AuditKind, IconName> = {
-  signin: "evSignIn", problem: "evProblem", create: "evCreate", change: "evChange", delete: "evDelete", settings: "evSettings", other: "evOther",
-};
+const MAX_ID = 2_147_483_647; // the largest id the API holds
+
+/** The entry id of the address, or null for anything the API cannot hold (the drawer then says so without asking). */
+function entryId(raw: string): number | null {
+  const number = /^\d+$/.test(raw) ? Number(raw) : null;
+  return number !== null && number >= 1 && number <= MAX_ID ? number : null;
+}
+
+/** What a row sends along when it opens the drawer: the list is where Close goes back to, and `search` is the query it had. */
+interface FromList { fromList: true; search: string }
+const isFromList = (state: unknown): state is FromList =>
+  typeof state === "object" && state !== null && (state as FromList).fromList === true && typeof (state as FromList).search === "string";
+
+/**
+ * A click on a row opens its entry, except one on a link or a button (those do their own thing) and one that ends a text selection
+ * (selecting a sentence to copy it must not throw a drawer over the page).
+ */
+function rowClick(e: MouseEvent<HTMLElement>, open: () => void) {
+  if (e.target instanceof Element && e.target.closest("a, button")) return;
+  if (window.getSelection()?.toString()) return;
+  open();
+}
 
 // Column widths in px, null for the rest: the friendly table gives "What happened" the room (and puts the Details chevron first, where a
 // short sentence's empty end does not separate it from its entry), the raw one the detail. They sum to less than the narrowest table; the
@@ -31,74 +50,82 @@ const KIND_ICON: Record<AuditKind, IconName> = {
 const FRIENDLY_COLS = [36, 200, 160, null] as const;
 const RAW_COLS = [200, 160, 220, null] as const;
 
-/** The time of an entry, linked to its page (the link's name says which entry it opens), and under it how long ago, outside the link. */
-function TimeCell({ id, ts, timezone, now }: { id: number; ts: string; timezone: string; now: Date }) {
+/**
+ * The time of an entry, linked to it (the link's name says which entry; a real link, so a middle click opens the deep link in a tab), and
+ * under it how long ago, outside the link. A plain click is the drawer: the same list query rides along, and so does where Close goes back to.
+ */
+function TimeCell({ id, ts, timezone, now, search }: { id: number; ts: string; timezone: string; now: Date; search: string }) {
   const time = formatSiteDateTime(ts, timezone);
   const ago = relativeTime(ts, now, timezone);
+  const state: FromList = { fromList: true, search };
   return (
     <td className="cell-time">
-      <Link to={`/audit/${id}`} aria-label={`Entry #${id}, ${time}`}>{time}</Link>
+      <Link to={{ pathname: `/audit/${id}`, search }} state={state} aria-label={`Entry #${id}, ${time}`}>{time}</Link>
       {ago && <span className="ago">{ago}</span>}
     </td>
   );
 }
 
-/** Who did it: an initial disc (decoration) and the name, in the cell itself so a long name is cut with an ellipsis; no user is a dash. */
+/** Who did it, in the cell itself so a long name is cut with an ellipsis. */
 function UserCell({ name }: { name: string | null }) {
-  const initial = name ? (Array.from(name.trim())[0] ?? "").toUpperCase() : "";
   return (
     <td className="cell-user" title={name ?? undefined}>
-      {name ? <><span className="user-disc" aria-hidden="true">{initial}</span>{name}</> : "—"}
+      <UserLabel name={name} />
     </td>
   );
 }
 
-/** One friendly row: the event's icon, the sentence and the link to the thing, with the full account one click away in a row under it (drawn only when opened). */
-function FriendlyRow({ entry, timezone, now }: { entry: AuditEntry; timezone: string; now: Date }) {
-  const [open, setOpen] = useState(false);
-  const detailId = useId();
+interface RowProps { entry: AuditEntry; timezone: string; now: Date; search: string; isOpen: boolean; open: (id: number) => void }
+
+/** One friendly row: the event's icon, the sentence and the link to the thing; the full account opens in the drawer (chevron, time or the row). */
+function FriendlyRow({ entry, timezone, now, search, isOpen, open }: RowProps) {
   const { summary, link } = describeAudit(entry);
-  const kind = auditKind(entry.action);
   return (
-    <>
-      <tr>
-        <td className="cell-more">
-          <button
-            type="button"
-            className="icon-btn details-btn"
-            aria-label={`Details of entry #${entry.id}`}
-            title="Details"
-            aria-expanded={open}
-            aria-controls={open ? detailId : undefined}
-            onClick={() => setOpen(!open)}
-          >
-            <Icon name="chevron" />
-          </button>
-        </td>
-        <TimeCell id={entry.id} ts={entry.ts} timezone={timezone} now={now} />
-        <UserCell name={entry.username} />
-        <td className="cell-what">
-          <div className="what-line">
-            <span className="ev-tile" data-kind={kind} aria-hidden="true"><Icon name={KIND_ICON[kind]} /></span>
-            <div className="what-text">
-              <span className="what">{summary}</span>
-              {link && <>{" "}<Link className="what-link" to={link.to}>{link.label}</Link></>}
-            </div>
+    <tr data-entry-id={entry.id} data-open={isOpen || undefined} onClick={(e) => rowClick(e, () => open(entry.id))}>
+      <td className="cell-more">
+        <button
+          type="button"
+          className="icon-btn details-btn"
+          aria-label={`Details of entry #${entry.id}`}
+          title="Details"
+          aria-haspopup="dialog"
+          onClick={() => open(entry.id)}
+        >
+          <Icon name="chevron" />
+        </button>
+      </td>
+      <TimeCell id={entry.id} ts={entry.ts} timezone={timezone} now={now} search={search} />
+      <UserCell name={entry.username} />
+      <td className="cell-what">
+        <div className="what-line">
+          <KindTile action={entry.action} />
+          <div className="what-text">
+            <span className="what">{summary}</span>
+            {link && <>{" "}<Link className="what-link" to={link.to}>{link.label}</Link></>}
           </div>
-        </td>
-      </tr>
-      {open && (
-        <tr id={detailId} className="detail-row">
-          <td colSpan={4}><AuditEntryDetail entry={entry} view="friendly" /></td>
-        </tr>
-      )}
-    </>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+/** One raw row: the time, the user, the action code and the stored JSON; it opens the drawer from the row or the time link. */
+function RawRow({ entry, timezone, now, search, isOpen, open }: RowProps) {
+  return (
+    <tr data-entry-id={entry.id} data-open={isOpen || undefined} onClick={(e) => rowClick(e, () => open(entry.id))}>
+      <TimeCell id={entry.id} ts={entry.ts} timezone={timezone} now={now} search={search} />
+      <UserCell name={entry.username} />
+      <td className="cell-action">{entry.action}</td>
+      <td className="cell-detail"><code>{JSON.stringify(entry.detail)}</code></td>
+    </tr>
   );
 }
 
 export function AuditPage() {
   const { can } = useAuth();
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const state = useMemo(() => readUrl(params), [params]);
   const { filters, offset, size, view } = state;
   const current = writeUrl(state).toString();
@@ -111,6 +138,19 @@ export function AuditPage() {
   const options = useAuditOptions();
   const toast = useToast();
   const { data, error, isLoading, isPlaceholderData } = useAudit(filters, size, offset);
+
+  // The open entry is part of the address (/audit/12?...), so a link opens it and Back closes it. The page stays mounted either way: filters,
+  // page and scroll are exactly where they were. undefined = no drawer, null = an id the API cannot hold.
+  const idParam = useParams().id;
+  const wanted = idParam === undefined ? undefined : entryId(idParam);
+  // A row of the loaded page is the whole entry (refs included); one that is not on it (a deep link) is fetched, once the list has answered.
+  const onPage = typeof wanted === "number" ? data?.items.find((e) => e.id === wanted) : undefined;
+  const answered = !isLoading && !isPlaceholderData;
+  const fetched = useAuditEntry(typeof wanted === "number" && !onPage && answered ? wanted : null);
+  const opened = onPage ?? (fetched.data?.id === wanted ? fetched.data : undefined);
+  const drawerStatus: AuditDrawerStatus = wanted === null || (!opened && fetched.error) ? "error" : opened && ready ? "ready" : "loading";
+  const drawerMessage =
+    wanted === null || (fetched.error instanceof ApiError && fetched.error.status === 404) ? "Audit entry not found." : fetched.error?.message;
 
   const [jumping, setJumping] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -130,6 +170,32 @@ export function AuditPage() {
   function go(next: AuditUrlState, replace = false) {
     setParams(writeUrl(next), { replace });
   }
+
+  /** Opens an entry over the list: a new history entry, so Back closes it; the query stays what it is. */
+  function open(id: number) {
+    const from: FromList = { fromList: true, search: location.search };
+    navigate({ pathname: `/audit/${id}`, search: location.search }, { state: from });
+  }
+
+  // A second Escape (a key held down) before the first close has landed must not go back twice.
+  const closing = useRef(false);
+  useEffect(() => { closing.current = false; }, [location.key]);
+  /** Back to the list as it was: one step back when the drawer was opened from it, else (a deep link) to the list with the same query. */
+  function close() {
+    if (closing.current) return;
+    closing.current = true;
+    if (isFromList(location.state) && location.state.search === location.search) navigate(-1);
+    else navigate({ pathname: "/audit", search: location.search }, { replace: true });
+  }
+
+  // The drawer is gone when this is asked, so the entry that was open is remembered. Its chevron (the time link in the raw view) takes focus;
+  // an entry that is not on the page (a deep link) has none, and the drawer falls back to the page.
+  const lastOpen = useRef<number | null>(null);
+  useEffect(() => { if (typeof wanted === "number") lastOpen.current = wanted; }, [wanted]);
+  const returnFocus = () => {
+    const row = `tr[data-entry-id="${lastOpen.current}"]`;
+    return lastOpen.current === null ? null : document.querySelector<HTMLElement>(`${row} .details-btn, ${row} .cell-time a`);
+  };
 
   function changeFilters(next: AuditFilters) {
     setProblem(null);
@@ -230,14 +296,9 @@ export function AuditPage() {
               <tbody>
                 {rows.map((e) =>
                   raw ? (
-                    <tr key={e.id}>
-                      <TimeCell id={e.id} ts={e.ts} timezone={timezone} now={now} />
-                      <UserCell name={e.username} />
-                      <td className="cell-action">{e.action}</td>
-                      <td className="cell-detail"><code>{JSON.stringify(e.detail)}</code></td>
-                    </tr>
+                    <RawRow key={e.id} entry={e} timezone={timezone} now={now} search={location.search} isOpen={e.id === wanted} open={open} />
                   ) : (
-                    <FriendlyRow key={e.id} entry={e} timezone={timezone} now={now} />
+                    <FriendlyRow key={e.id} entry={e} timezone={timezone} now={now} search={location.search} isOpen={e.id === wanted} open={open} />
                   ),
                 )}
               </tbody>
@@ -252,6 +313,18 @@ export function AuditPage() {
           size={size}
           onOffset={(next) => go({ ...state, offset: next })}
           onSize={(next) => go({ ...state, size: next, offset: 0 })}
+        />
+      )}
+      {/* Outside the table: the drawer is a portal, and its React events would otherwise reach the row's click handler. */}
+      {wanted !== undefined && (
+        <AuditDrawer
+          entry={opened}
+          status={drawerStatus}
+          message={drawerMessage}
+          timezone={timezone}
+          now={now}
+          onClose={close}
+          returnFocus={returnFocus}
         />
       )}
     </div>

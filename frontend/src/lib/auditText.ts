@@ -12,8 +12,6 @@ export interface AuditView {
   changes: AuditChange[];
   /** Fields on both sides with equal values (a storage save lists every field). */
   unchanged: number;
-  /** Always empty: the drawer's JSON block replaced the list of stored fields (Task 4 removes the member with the old detail views). */
-  facts: { label: string; value: string }[];
   link: { to: string; label: string } | null;
 }
 
@@ -567,7 +565,6 @@ function build(entry: AuditEntry): AuditView {
     summary: rule ? rule.summary(context) : humanise(action),
     changes,
     unchanged,
-    facts: [],
     link: rule?.link ? rule.link(context) : null,
   };
 }
@@ -578,6 +575,6 @@ export function describeAudit(entry: AuditEntry): AuditView {
     return build(entry);
   } catch {
     const action = typeof entry?.action === "string" ? entry.action : "";
-    return { summary: humanise(action), changes: [], unchanged: 0, facts: [], link: null };
+    return { summary: humanise(action), changes: [], unchanged: 0, link: null };
   }
 }

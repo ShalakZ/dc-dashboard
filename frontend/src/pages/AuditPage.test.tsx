@@ -43,7 +43,8 @@ function setup(route: string, auditReply: Routes[string] = twoRows, routes: Rout
     },
     ...routes,
   });
-  const view = renderWithDataRouter(<AuditPage />, { route, path: "/audit", toasts });
+  // <main id="main"> is the Layout's: the drawer sends focus there when the entry it was opened for has no row to go back to
+  const view = renderWithDataRouter(<main id="main" tabIndex={-1}><AuditPage /></main>, { route, path: "/audit/:id?", toasts });
   return { ...view, urls, calls, search: () => view.router.state.location.search };
 }
 
@@ -124,31 +125,18 @@ describe("AuditPage", () => {
     expect(screen.queryByText(/#\d/)).not.toBeInTheDocument(); // no id in any visible text
   });
 
-  it("links an entry to the thing it is about and opens its details in a row under it from a Details button", async () => {
+  it("links an entry to the thing it is about, and its Details button opens a drawer (no row opens under it any more)", async () => {
     setup("/audit", list(1, [entry(9, "asset.created", { asset_id: 7, name: "Panel A" })]));
     expect(await screen.findByText("Created asset Panel A")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open asset Panel A" })).toHaveAttribute("href", "/assets/7");
     const details = screen.getByRole("button", { name: "Details of entry #9" });
-    expect(details).toHaveAttribute("aria-expanded", "false");
-    expect(details).not.toHaveAttribute("aria-controls"); // nothing to control while the row is not drawn
-    expect(document.querySelector(".detail-summary")).toBeNull(); // closed: nothing drawn yet
-    const body = document.querySelector(".audit-table tbody")!;
-    expect(body.querySelectorAll("tr")).toHaveLength(1);
-    await userEvent.click(details);
-    await waitFor(() => expect(document.querySelector(".detail-summary")).not.toBeNull());
-    expect(details).toHaveAttribute("aria-expanded", "true");
-    const opened = body.querySelectorAll("tr");
-    expect(opened).toHaveLength(2);
-    expect(opened[1]).toHaveAttribute("id", details.getAttribute("aria-controls")); // the row under the entry
-    expect(opened[1].querySelector("td")).toHaveAttribute("colspan", "4");
-    // The sentence is in the row and again in the detail under it; no list of stored fields (the ids) is drawn.
-    expect(opened[1].querySelector(".detail-summary")).toHaveTextContent("Created asset Panel A");
-    expect(within(opened[1] as HTMLElement).queryByText("Asset id")).not.toBeInTheDocument();
-    await userEvent.click(details);
-    expect(document.querySelector(".detail-summary")).toBeNull();
-    expect(body.querySelectorAll("tr")).toHaveLength(1);
-    expect(details).toHaveAttribute("aria-expanded", "false");
+    expect(details).toHaveAttribute("aria-haspopup", "dialog");
+    expect(details).not.toHaveAttribute("aria-expanded");
     expect(details).not.toHaveAttribute("aria-controls");
+    await userEvent.click(details);
+    expect(await screen.findByRole("dialog", { name: "Audit entry" })).toBeInTheDocument();
+    expect(document.querySelector(".detail-row")).toBeNull();
+    expect(document.querySelectorAll(".audit-table tbody tr")).toHaveLength(1);
   });
 
   it("gives every entry its own Details button, named by the entry", async () => {
@@ -269,7 +257,7 @@ describe("AuditPage", () => {
   it("names the time link of a raw row by its entry too", async () => {
     setup("/audit?view=raw");
     const link = await screen.findByRole("link", { name: "Entry #51, 2026-10-07 13:00:00" });
-    expect(link).toHaveAttribute("href", "/audit/51");
+    expect(link).toHaveAttribute("href", "/audit/51?view=raw"); // the list's query rides along, so the drawer opens over the same list
     expect(link).toHaveTextContent("2026-10-07 13:00:00");
   });
 
@@ -611,5 +599,268 @@ describe("AuditPage Export CSV follows the permission of the role (a custom role
   it("the Administrator role is unchanged: Export CSV is there", async () => {
     setup("/audit");
     expect(await screen.findByRole("button", { name: "Export CSV" })).toBeInTheDocument();
+  });
+});
+
+describe("AuditPage: an entry opens in the drawer (W7l)", () => {
+  const tariff = { tariff_id: 3, asset_id: 7, rate_per_kwh: 0.16, effective_from: "2026-10-13" };
+  const SENTENCE = "Created tariff 0.16 per kWh from 2026-10-13 for asset Panel A";
+  const page = list(51, [
+    { ...entry(51, "tariff.created", tariff), refs: { asset: { "7": "Panel A" } } },
+    entry(50, "scan.started", { scan_id: 50 }),
+    entry(49, "asset.created", { asset_id: 7, name: "Panel A" }),
+  ]);
+  const found = (id: number) => ({ ...entry(id, "scan.finished", { scan_id: id, status: "done" }), refs: {} });
+  const dialog = () => screen.findByRole("dialog", { name: "Audit entry" });
+  const noDialog = () => expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  const rowOf = (id: number) => document.querySelector<HTMLElement>(`tr[data-entry-id="${id}"]`)!;
+  const chevron = (id: number) => screen.getByRole("button", { name: `Details of entry #${id}` });
+  const where = (view: { router: { state: { location: { pathname: string; search: string } } } }) => {
+    const { pathname, search } = view.router.state.location;
+    return pathname + search;
+  };
+  /** A page of the log; the entry route answers `entries` (an id missing from it is a 404). */
+  const mount = (route: string, entries: Record<number, ReturnType<typeof found>> = {}, toasts?: ToastApi) =>
+    setup(route, page, {
+      ...Object.fromEntries(Object.entries(entries).map(([id, e]) => [`GET /api/audit/${id}`, { body: e }])),
+    }, toasts);
+
+  describe("opening", () => {
+    it("opens from the Details button, from the time link and from a click on the row, each as one new history entry that keeps the list's query", async () => {
+      const view = mount("/audit?q=Panel");
+      await screen.findByText(SENTENCE);
+      expect(view.router.state.historyAction).toBe("POP");
+
+      await userEvent.click(chevron(51));
+      const first = await dialog();
+      expect(within(first).getByText(SENTENCE)).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/51?q=Panel");
+      expect(view.router.state.historyAction).toBe("PUSH");
+      expect(view.router.state.location.state).toEqual({ fromList: true, search: "?q=Panel" });
+
+      await userEvent.click(within(first).getByRole("button", { name: "Close" }));
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit?q=Panel");
+
+      const time = screen.getByRole("link", { name: /^Entry #50,/ });
+      expect(time).toHaveAttribute("href", "/audit/50?q=Panel"); // a real link: a middle click opens the deep link
+      await userEvent.click(time);
+      expect(await dialog()).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/50?q=Panel");
+      expect(view.router.state.historyAction).toBe("PUSH");
+      expect(view.router.state.location.state).toEqual({ fromList: true, search: "?q=Panel" });
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+
+      await userEvent.click(rowOf(49).querySelector(".cell-user")!);
+      expect(await dialog()).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/49?q=Panel");
+      expect(view.router.state.historyAction).toBe("PUSH");
+    });
+
+    it("opens from a click on a raw row and from its time link, and shows the same drawer", async () => {
+      const view = mount("/audit?view=raw");
+      await screen.findByText("tariff.created");
+      await userEvent.click(rowOf(50).querySelector(".cell-action")!);
+      const open = await dialog();
+      expect(where(view)).toBe("/audit/50?view=raw");
+      expect(within(open).getByText("Started scan #50")).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      await userEvent.click(screen.getByRole("link", { name: /^Entry #49,/ }));
+      expect(await within(await dialog()).findByText("Created asset Panel A")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/49?view=raw");
+    });
+
+    it("pushes once for the Details button (its click is not also the row's)", async () => {
+      const view = mount("/audit");
+      await screen.findByText(SENTENCE);
+      const navigate = vi.spyOn(view.router, "navigate");
+      await userEvent.click(chevron(50));
+      await dialog();
+      expect(navigate).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not open for a click on a link in the row (it does its own thing)", async () => {
+      const view = mount("/audit");
+      const link = await screen.findByRole("link", { name: "Open asset Panel A" });
+      link.addEventListener("click", (e) => e.preventDefault()); // the link would leave for /assets/7; this test is about the row
+      await userEvent.click(link);
+      noDialog();
+      expect(where(view)).toBe("/audit");
+    });
+
+    it("does not open for a click that ends a text selection, and opens again once nothing is selected", async () => {
+      const view = mount("/audit");
+      await screen.findByText(SENTENCE);
+      const cell = rowOf(50).querySelector<HTMLElement>(".cell-what")!;
+      window.getSelection()!.selectAllChildren(cell.querySelector(".what")!);
+      expect(window.getSelection()!.toString()).toBe("Started scan #50");
+      fireEvent.click(cell);
+      noDialog();
+      expect(where(view)).toBe("/audit");
+      window.getSelection()!.removeAllRanges();
+      fireEvent.click(cell);
+      expect(await dialog()).toBeInTheDocument();
+    });
+
+    it("marks the open row (and only that one) and drops the mark on close", async () => {
+      mount("/audit");
+      await screen.findByText(SENTENCE);
+      expect(document.querySelector("tr[data-open]")).toBeNull();
+      await userEvent.click(chevron(50));
+      await dialog();
+      expect([...document.querySelectorAll("tr[data-open]")].map((r) => r.getAttribute("data-entry-id"))).toEqual(["50"]);
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      expect(document.querySelector("tr[data-open]")).toBeNull();
+    });
+  });
+
+  describe("the address", () => {
+    it("a deep link to an entry of the loaded page opens the drawer over the list and asks for no second copy of it", async () => {
+      const view = mount("/audit/50?q=Panel");
+      const open = await dialog();
+      expect(await within(open).findByText("Started scan #50")).toBeInTheDocument();
+      expect(rowOf(51)).toBeInTheDocument(); // the list is behind it
+      expect(rowOf(50)).toHaveAttribute("data-open");
+      expect(where(view)).toBe("/audit/50?q=Panel");
+      expect(view.calls.some((c) => c.path === "/api/audit/50")).toBe(false);
+    });
+
+    it("a deep link to an entry that is not on the page fetches it once the list has answered, and shows it", async () => {
+      const view = mount("/audit/7", { 7: found(7) });
+      const open = await dialog();
+      expect(await within(open).findByText("Scan #7 finished (done)")).toBeInTheDocument();
+      expect(view.calls.filter((c) => c.path === "/api/audit/7")).toHaveLength(1);
+      const order = view.calls.map((c) => c.path);
+      expect(order.indexOf("/api/audit")).toBeLessThan(order.indexOf("/api/audit/7"));
+      expect(document.querySelector("tr[data-open]")).toBeNull(); // it is not a row of this page
+    });
+
+    it("shows a skeleton in the drawer while that entry loads", async () => {
+      mockFetch({ ...admin, "GET /api/audit": page, "GET /api/audit/7": { body: found(7) } });
+      const held = holdFetch((_method, path) => path === "/api/audit/7");
+      renderWithDataRouter(<AuditPage />, { route: "/audit/7", path: "/audit/:id?" });
+      const open = await dialog();
+      expect(await within(open).findByText("Loading the entry")).toBeInTheDocument();
+      expect(within(open).queryByText("What happened")).not.toBeInTheDocument();
+      held.release();
+      expect(await within(open).findByText("Scan #7 finished (done)")).toBeInTheDocument();
+      expect(within(open).queryByText("Loading the entry")).not.toBeInTheDocument();
+    });
+
+    it.each(["abc", "99999999999", "0", "1.5"])("says not found for the id %s inside the drawer, without asking the API", async (id) => {
+      const view = mount(`/audit/${id}`);
+      const open = await dialog();
+      expect(await within(open).findByRole("alert")).toHaveTextContent("Audit entry not found.");
+      expect(view.calls.some((c) => c.path.startsWith("/api/audit/") && c.path !== "/api/audit/options")).toBe(false);
+    });
+
+    it("says not found for an entry the API does not hold, and shows its message for any other failure", async () => {
+      mockFetch({
+        ...admin, "GET /api/audit": page,
+        "GET /api/audit/404": { status: 404, body: { detail: "audit entry not found" } },
+        "GET /api/audit/500": { status: 500, body: { detail: "database is down" } },
+      });
+      const gone = renderWithDataRouter(<AuditPage />, { route: "/audit/404", path: "/audit/:id?" });
+      expect(await within(await dialog()).findByRole("alert")).toHaveTextContent("Audit entry not found.");
+      gone.unmount();
+      renderWithDataRouter(<AuditPage />, { route: "/audit/500", path: "/audit/:id?" });
+      expect(await within(await dialog()).findByRole("alert")).toHaveTextContent("database is down");
+    });
+  });
+
+  describe("closing", () => {
+    it.each([
+      ["Escape", async () => { await userEvent.keyboard("{Escape}"); }],
+      ["the Close button", async () => { await userEvent.click(screen.getByRole("button", { name: "Close" })); }],
+      ["a click on the backdrop", async () => { await userEvent.click(document.querySelector(".drawer-backdrop")!); }],
+    ])("%s goes back to the list it was opened from: same query, the page not reloaded", async (_name, close) => {
+      const view = mount("/audit?q=Panel&view=raw");
+      await screen.findByText("tariff.created");
+      const lists = () => view.calls.filter((c) => c.path === "/api/audit").length;
+      const before = lists();
+      await userEvent.click(rowOf(50).querySelector(".cell-action")!);
+      await dialog();
+      await close();
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit?q=Panel&view=raw");
+      expect(view.router.state.historyAction).toBe("POP"); // one step back, not a new entry
+      expect(lists()).toBe(before);
+      expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("from a deep link it goes to the list with the same query (replacing the entry, there is nothing to go back to)", async () => {
+      const view = mount("/audit/50?q=Panel");
+      await dialog();
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit?q=Panel");
+      expect(view.router.state.historyAction).toBe("REPLACE");
+    });
+
+    it("the browser's Back button closes it", async () => {
+      const view = mount("/audit?q=Panel");
+      await screen.findByText(SENTENCE);
+      await userEvent.click(chevron(51));
+      await dialog();
+      await act(async () => { await view.router.navigate(-1); });
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit?q=Panel");
+    });
+
+    it("a key held down (a second Escape before the first close lands) goes back once", async () => {
+      const view = mount("/audit");
+      await screen.findByText(SENTENCE);
+      await userEvent.click(chevron(51));
+      await dialog();
+      const navigate = vi.spyOn(view.router, "navigate");
+      const escape = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await act(async () => { escape(); escape(); }); // both land before React has taken the drawer away
+      await waitFor(noDialog);
+      expect(navigate).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith(-1);
+    });
+
+    it("can be opened and closed again", async () => {
+      const view = mount("/audit");
+      await screen.findByText(SENTENCE);
+      for (const id of [51, 50, 51]) {
+        await userEvent.click(chevron(id));
+        await dialog();
+        await userEvent.keyboard("{Escape}");
+        await waitFor(noDialog);
+        expect(where(view)).toBe("/audit");
+      }
+    });
+  });
+
+  describe("focus on close", () => {
+    it("goes to the Details button of the row that was open", async () => {
+      mount("/audit");
+      await screen.findByText(SENTENCE);
+      await userEvent.click(rowOf(50).querySelector(".cell-user")!); // a click on the row: nothing in it had focus
+      await dialog();
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(chevron(50)).toHaveFocus());
+    });
+
+    it("goes to the time link of the open row in the raw view, which has no Details button", async () => {
+      mount("/audit?view=raw");
+      await screen.findByText("tariff.created");
+      await userEvent.click(rowOf(50).querySelector(".cell-action")!);
+      await dialog();
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(within(rowOf(50)).getByRole("link")).toHaveFocus());
+    });
+
+    it("goes to the page when the entry has no row on it (a deep link to another page)", async () => {
+      mount("/audit/7", { 7: found(7) });
+      await within(await dialog()).findByText("Scan #7 finished (done)");
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      await waitFor(() => expect(document.getElementById("main")).toHaveFocus());
+    });
   });
 });

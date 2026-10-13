@@ -1,0 +1,124 @@
+import { useMemo, useRef, type ReactNode } from "react";
+import { Link } from "react-router";
+import type { AuditEntry } from "../api/types";
+import { copyText } from "../lib/diagnostics";
+import { describeAudit } from "../lib/auditText";
+import { relativeTime } from "../lib/relativeTime";
+import { formatSiteDateTime } from "../lib/siteTime";
+import { KindTile, UserLabel } from "./AuditCells";
+import { Drawer } from "./Drawer";
+import { Skeleton, SkeletonRegion } from "./Skeleton";
+import { useToast } from "./Toasts";
+
+export type AuditDrawerStatus = "loading" | "ready" | "error";
+
+/** What the drawer is waiting for while the entry is fetched: the five lines it will have, and the block of JSON under them. */
+function EntrySkeleton() {
+  return (
+    <SkeletonRegion label="Loading the entry">
+      <dl className="kv" aria-hidden="true">
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i}><dt><Skeleton width="9ch" /></dt><dd><Skeleton width={i % 2 === 0 ? "26ch" : "16ch"} /></dd></div>
+        ))}
+      </dl>
+      <Skeleton variant="block" height={120} />
+    </SkeletonRegion>
+  );
+}
+
+/** One entry of the log, opened from its row: what happened, when, who, the stored JSON. Previous and Next go in `footer`. */
+function EntryView({ entry, timezone, now }: { entry: AuditEntry; timezone: string; now: Date }) {
+  const toast = useToast();
+  const { summary, changes, unchanged, link } = useMemo(() => describeAudit(entry), [entry]);
+  const area = useRef<HTMLTextAreaElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const time = formatSiteDateTime(entry.ts, timezone);
+  const ago = relativeTime(entry.ts, now, timezone);
+  const number = `#${entry.id}`;
+
+  async function copy() {
+    const ok = await copyText(number, area.current);
+    // Without the clipboard API (plain http on the LAN) the hidden field is selected and focused to copy from it: focus goes back to the button.
+    if (document.activeElement === area.current) button.current?.focus();
+    if (ok) toast.info("Entry number copied");
+    else toast.error("Could not copy the entry number");
+  }
+
+  return (
+    <div className="audit-entry">
+      {/* Said once when the entry changes (Previous, Next), with its number so the step is heard as a step; the dialog itself is announced when it opens. */}
+      <p className="sr-only" aria-live="polite" aria-atomic="true">{`Entry ${number}: ${summary}`}</p>
+      <dl className="kv">
+        <div>
+          <dt>What happened</dt>
+          <dd>
+            <span className="what">{summary}</span>
+            {link && <>{" "}<Link className="what-link" to={link.to}>{link.label}</Link></>}
+          </dd>
+        </div>
+        <div><dt>When</dt><dd>{time} <span className="muted">{timezone}{ago ? ` · ${ago}` : ""}</span></dd></div>
+        <div><dt>Who</dt><dd><UserLabel name={entry.username} /></dd></div>
+        <div><dt>Action</dt><dd><KindTile action={entry.action} /><code>{entry.action}</code></dd></div>
+        <div>
+          <dt>Entry</dt>
+          <dd>
+            {number}
+            <button ref={button} type="button" className="copy-btn" aria-label="Copy entry number" onClick={() => void copy()}>Copy</button>
+          </dd>
+        </div>
+      </dl>
+      {/* The field copyText copies from when the clipboard API is missing: inside the panel (so inside the focus trap), out of sight and out of the Tab order. */}
+      <textarea ref={area} className="copy-field" readOnly tabIndex={-1} aria-hidden="true" value={number} />
+      {changes.length > 0 && (
+        <>
+          <h3 className="section-title">What changed</h3>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead>
+              <tbody>
+                {changes.map((change, i) => (
+                  <tr key={`${change.field}-${i}`}>
+                    <td>{change.field}</td>
+                    <td>{change.before}</td>
+                    <td>{change.after}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {unchanged > 0 && <p className="muted">{`${unchanged} unchanged ${unchanged === 1 ? "value" : "values"} not shown`}</p>}
+        </>
+      )}
+      <h3 className="section-title">Details</h3>
+      {/* The stored JSON, ids and all: the friendly text above never shows one. */}
+      <pre className="entry-json">{JSON.stringify(entry.detail, null, 2)}</pre>
+    </div>
+  );
+}
+
+/**
+ * The right-hand drawer an audit entry opens in. The page decides which entry (a row of the loaded page, or one fetched by its id) and
+ * what the drawer waits for; `message` is the line shown when it cannot show the entry. `footer` (Previous and Next) and `returnFocus` go to the Drawer.
+ */
+export function AuditDrawer({ entry, status, message, timezone, now, onClose, footer, returnFocus }: {
+  entry: AuditEntry | undefined;
+  status: AuditDrawerStatus;
+  message?: string;
+  timezone: string;
+  now: Date;
+  onClose: () => void;
+  footer?: ReactNode;
+  returnFocus?: () => HTMLElement | null;
+}) {
+  return (
+    <Drawer title="Audit entry" onClose={onClose} footer={footer} returnFocus={returnFocus}>
+      {status === "ready" && entry ? (
+        <EntryView entry={entry} timezone={timezone} now={now} />
+      ) : status === "error" ? (
+        <p className="error" role="alert">{message ?? "Could not load the entry."}</p>
+      ) : (
+        <EntrySkeleton />
+      )}
+    </Drawer>
+  );
+}

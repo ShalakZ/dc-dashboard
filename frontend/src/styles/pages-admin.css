@@ -157,35 +157,29 @@
   .audit-table .ago { display: block; color: var(--text-2); font-size: var(--fs-xs); }
   .audit-table td.cell-action, .audit-table td.cell-detail { overflow-wrap: anywhere; }
   .audit-table code { font-size: var(--fs-xs); overflow-wrap: anywhere; }
-  .audit-table .user-disc { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 8px; border-radius: 50%; background: var(--accent-tint); color: var(--accent-ink); font-size: var(--fs-xs); font-weight: 600; vertical-align: middle; }
+  :is(.audit-table, .audit-entry) .user-disc { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 8px; border-radius: 50%; background: var(--accent-tint); color: var(--accent-ink); font-size: var(--fs-xs); font-weight: 600; vertical-align: middle; }
   .audit-table .what-line { display: flex; align-items: center; gap: 10px; }
-  .audit-table .ev-tile { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent); }
-  .audit-table .ev-tile svg.i { width: 16px; height: 16px; }
-  .audit-table .ev-tile:is([data-kind="signin"], [data-kind="create"]) { background: var(--ok-tint); color: var(--ok); }
-  .audit-table .ev-tile:is([data-kind="delete"], [data-kind="problem"]) { background: var(--crit-tint); color: var(--crit); }
-  .audit-table .ev-tile[data-kind="other"] { background: var(--surface); color: var(--text-2); }
+  :is(.audit-table, .audit-entry) .ev-tile { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent); }
+  :is(.audit-table, .audit-entry) .ev-tile svg.i { width: 16px; height: 16px; }
+  :is(.audit-table, .audit-entry) .ev-tile:is([data-kind="signin"], [data-kind="create"]) { background: var(--ok-tint); color: var(--ok); }
+  :is(.audit-table, .audit-entry) .ev-tile:is([data-kind="delete"], [data-kind="problem"]) { background: var(--crit-tint); color: var(--crit); }
+  :is(.audit-table, .audit-entry) .ev-tile[data-kind="other"] { background: var(--surface); color: var(--text-2); }
   .audit-table .what-text { min-width: 0; overflow-wrap: anywhere; }
   .audit-table .what-link { margin-left: 6px; } /* with the space in the text (a copy or a screen reader's line reads two words) the gap is about 10px */
   .audit-table td.cell-more { padding-inline: 4px; text-align: center; } /* the 36px first column: the 28px button and 4px each side */
-  .details-btn svg.i { transition: transform var(--motion); }
-  .details-btn[aria-expanded="true"] svg.i { transform: rotate(90deg); }
-  /* An opened entry: one row under it holding the account; the panel is the surface colour with white boxes in it */
-  .audit-table tr.detail-row > td { padding-block: 14px; overflow-wrap: anywhere; vertical-align: top; background: var(--surface); }
-  .detail-row .detail-summary { display: none; } /* the row above already says it */
+  /* A row opens its entry in the drawer: a click anywhere on it (not on a link or a button), the open one is tinted */
+  .audit-table tbody tr[data-entry-id] { cursor: pointer; }
+  .audit-table tbody tr[data-open] > td { background: var(--accent-tint); }
 
-  /* One entry's detail (also inside an opened Audit row) */
-  .audit-detail p { margin: 0 0 10px; }
-  .audit-detail .table-wrap { margin-bottom: 10px; background: var(--bg); }
-  .audit-detail .kv { margin-bottom: 10px; background: var(--bg); }
-  .audit-detail > :last-child { margin-bottom: 0; }
-
-  /* Audit entry page */
-  .audit-entry-page :is(.kv, .audit-detail, pre) { max-width: 760px; }
-  .audit-entry-page .actions a, .audit-entry-page .back-line a { display: inline-flex; align-items: center; gap: 2px; text-decoration: none; }
-  .audit-entry-page .actions a:hover, .audit-entry-page .back-line a:hover { text-decoration: underline; }
-  .audit-entry-page .actions svg.i, .audit-entry-page .back-line svg.i { width: 16px; height: 16px; margin-left: -4px; }
-  .back-line { margin: 22px 0 14px; font-size: var(--fs-sm); }
-  .audit-entry-page pre { margin: 0 0 22px; padding: 14px 16px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: var(--fs-sm); line-height: 1.5; }
+  /* One entry in the drawer (components/AuditDrawer.tsx): the facts in the shared .kv box, the changes table, the stored JSON */
+  .audit-entry .ev-tile { display: inline-grid; margin-right: 8px; vertical-align: middle; } /* in a line of text here, not in the row's flex line */
+  .audit-entry .copy-btn { min-height: 28px; margin-left: 10px; padding: 0 10px; }
+  .audit-entry td { overflow-wrap: anywhere; }
+  .audit-entry .section-title { margin-top: 24px; }
+  .audit-entry .entry-json { margin: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* The field the Copy button copies from when the browser has no clipboard API (plain http): in the panel, in the viewport (focusing it must
+     not scroll the body), invisible and out of the way of clicks. */
+  .audit-entry .copy-field { position: fixed; top: 0; left: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; pointer-events: none; resize: none; }
 
   /* Connection check (the Diagnostics page and the Sources row's dialog): the controls, then one block per step, each led by its state shape */
   /* A block, not a grid: the live region below is empty until the first step, and an empty block's margin collapses into its neighbour's. */
