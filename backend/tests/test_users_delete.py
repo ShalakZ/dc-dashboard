@@ -188,7 +188,7 @@ async def test_a_change_that_removes_no_administrator_needs_no_other_one(db):
         assert target.id == only
 
 
-async def test_the_guard_signs_out_an_acting_admin_who_is_no_longer_one(db):
+async def test_the_guard_refuses_an_acting_admin_who_is_no_longer_one(db):
     acting_id = await make_user(db, "acting", "admin")
     target = await make_user(db, "target", "viewer")
     async with get_sessionmaker()() as session:
@@ -197,7 +197,7 @@ async def test_the_guard_signs_out_an_acting_admin_who_is_no_longer_one(db):
         try:
             await users_module.lock_admin_changes(session, acting, target, removes_admin=True)
         except HTTPException as refusal:
-            assert refusal.status_code == 401
+            assert (refusal.status_code, refusal.detail) == (403, "insufficient permission")  # still signed in, no longer allowed
         else:
             raise AssertionError("an acting admin who was demoted was still allowed")
 
@@ -280,7 +280,7 @@ async def test_deleting_one_account_leaves_another_accounts_block_alone(client, 
 
 
 # Two admins act on each other in the same instant. One lock serialises them: the winner commits, the loser then finds
-# itself changed or gone (401), and one active admin is always left.
+# itself gone or deactivated (401) or demoted (403), and one active admin is always left.
 
 
 def outcome(responses) -> list[int]:
@@ -306,7 +306,7 @@ async def test_two_admins_cannot_demote_each_other_at_once(app, db, monkeypatch)
                 b.patch(f"/api/users/{a_id}", json={"role": "viewer"}),
             )
     assert await active_admins(db) == 1, "no active administrator is left"
-    assert outcome(responses) == [200, 401]
+    assert outcome(responses) == [200, 403]  # the loser is still signed in, but demoted: refused, not signed out
 
 
 async def test_two_admins_cannot_delete_each_other_at_once(app, db, monkeypatch):
@@ -323,7 +323,8 @@ async def test_a_delete_racing_a_demotion_leaves_an_admin(app, db, monkeypatch):
             responses = await asyncio.gather(
                 a.delete(f"/api/users/{b_id}"), b.patch(f"/api/users/{a_id}", json={"role": "viewer"})
             )
-    assert sorted(r.status_code for r in responses) in ([200, 401], [204, 401])
+    # the delete first: the demoting admin is gone (401); the demotion first: the deleting admin is demoted (403)
+    assert sorted(r.status_code for r in responses) in ([200, 403], [204, 401])
     assert await active_admins(db) == 1
 
 
