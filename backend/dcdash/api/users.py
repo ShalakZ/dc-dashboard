@@ -218,11 +218,11 @@ async def patch_user(
     # One path for every change: under the admin lock a DELETE of the same account has either finished (404) or waits.
     current = await lock_account_changes(db, actor)
     new_role = await role_by_name(db, body.role) if body.role is not None else None  # first, as the old Literal was
+    if user_id == current.id:  # before the assign rule, as the early check above is: a change to yourself is always a 409
+        refuse_change_to_yourself(current, body, new_role)
     if new_role is not None:
         assert_can_assign(current, new_role)
     leaves_admin = new_role is not None and new_role.id != BUILTIN_IDS["admin"]
-    if user_id == current.id:
-        refuse_change_to_yourself(current, body, new_role)
     user = await load_target(db, current, user_id, removes_admin=body.active is False or leaves_admin)
     before = {"role": user.role, "active": user.active, "password": "set"}
     if new_role is not None:
