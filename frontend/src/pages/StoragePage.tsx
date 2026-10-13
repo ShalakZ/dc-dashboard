@@ -4,7 +4,7 @@ import { Icon, type IconName } from "../components/Icon";
 import { InfoTip } from "../components/InfoTip";
 import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
-import { PageCardSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
+import { PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton } from "../components/Skeleton";
 import { useRowsPerDay, useSaveStorageSettings, useSetStorageDefault, useStorage, useStorageSettings } from "../api/queries";
 import type { RowsPerDayRange, StorageSettings, StorageStats } from "../api/types";
 import { storageLoss } from "../lib/impact";
@@ -47,6 +47,14 @@ export function validate(s: StorageSettings): string | null {
   if (s.warn_threshold_pct < 50 || s.warn_threshold_pct > 99) return "the warning threshold must be between 50 and 99 percent";
   return null;
 }
+
+/** The note under the day table; the loading frame draws the same words as grey pills too. */
+export const UTC_NOTE = "Days are UTC days, midnight to midnight UTC, not days in the site's time zone.";
+/** The retention card's first paragraph; the loading frame draws the same words as grey pills, so it breaks into the same lines. */
+export const DISK_NOTE = "Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.";
+// What the summary paragraph under the buttons says, with typical numbers: while loading only the length of each word is used.
+const SUMMARY_SAMPLE = "This site's default: raw 30 days, compress after 7 days, 1-minute rollups 365 days, capacity 500 GB, warn at 85 %. "
+  + "Factory: raw 30 days, compress after 7 days, 1-minute rollups 365 days, capacity 500 GB, warn at 85 %. The two Resets only fill in the form; nothing changes until you press Save.";
 
 const summary = (d: StorageSettings) =>
   `raw ${d.raw_retention_days} days, compress after ${d.compress_after_days} days, 1-minute rollups ${d.rollup_1m_retention_days} days, capacity ${d.disk_capacity_gb} GB, warn at ${d.warn_threshold_pct} %`;
@@ -132,7 +140,7 @@ function RowsPerDay({ initial }: { initial: StorageStats["rows_per_day"] }) {
       {problem && <p className="error" role="alert">{problem}</p>}
       {body}
       {/* Under the table, not above it: how many lines the sentence takes depends on the card's width and the font, and above the table that would move the table and the skeleton's twin off each other */}
-      <p className="muted">Days are UTC days, midnight to midnight UTC, not days in the site's time zone.</p>
+      <p className="muted">{UTC_NOTE}</p>
     </PageCard>
   );
 }
@@ -189,8 +197,8 @@ export function StoragePage() {
   if (stats.isPending || settings.isPending || !form) {
     // The page in its order: the five real tiles (an icon circle and a line each, three with their note line), then the two cards in the page
     // grid as the loaded page draws them. Rows per day: the range fields and the count, then the seven day rows with no header, as the real table
-    // has none, then the UTC note under it. Retention and capacity: the disk note, the field grid, the buttons and the summary, whose own height is a
-    // guess (the real lines wrap with the width). All lines are placeholders: a region holds no words but its label. Banners are data and are not drawn.
+    // has none, then the UTC note under it. Retention and capacity: the disk note, the field grid, the buttons and the summary, whose paragraphs are word pills of
+    // the real sentences (the real lines wrap with the width). All lines are placeholders: a region holds no words but its label. Banners are data and are not drawn.
     return (
       <section className="admin-page storage-page">
         <PageHeader title="Storage" sub="How much space the readings take, and how long they are kept." />
@@ -206,10 +214,10 @@ export function StoragePage() {
               </div>
               <p className="muted"><Skeleton width="16ch" /></p>
               <TableSkeleton columns={2} rows={7} headless />
-              <p className="muted"><Skeleton width="60%" /></p>
+              <ParagraphSkeleton text={UTC_NOTE} className="muted" />
             </PageCardSkeleton>
             <PageCardSkeleton className="retention-card">
-              <p className="muted"><Skeleton width="100%" /><br /><Skeleton width="60%" /></p>
+              <ParagraphSkeleton text={DISK_NOTE} className="muted" />
               <div className="retention-form">
                 <div className="retention-fields">
                   {FIELDS.map(([key], i) => (
@@ -218,9 +226,9 @@ export function StoragePage() {
                 </div>
                 <div className="retention-foot">
                   <div className="row">
-                    {[62, 120, 124, 176].map((width) => <Skeleton key={width} variant="block" width={width} height={38} />)}
+                    {[62, 120, 124, 176].map((width) => <Skeleton key={width} variant="block" width={width} height={34} />)}
                   </div>
-                  <p className="muted"><Skeleton width="100%" /><br /><Skeleton width="100%" /><br /><Skeleton width="45%" /></p>
+                  <ParagraphSkeleton text={SUMMARY_SAMPLE} className="muted" />
                 </div>
               </div>
             </PageCardSkeleton>
@@ -292,9 +300,7 @@ export function StoragePage() {
       <div className="page-grid">
         <RowsPerDay initial={s.rows_per_day} />
         <PageCard className="retention-card" icon="database" title="Retention and capacity">
-          <p className="muted">
-            Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.
-          </p>
+          <p className="muted">{DISK_NOTE}</p>
           <form className="retention-form" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(false); }}>
             <div className="retention-fields">
               {FIELDS.map(([key, label]) => (

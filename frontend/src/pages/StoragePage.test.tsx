@@ -6,7 +6,7 @@ import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
-import { checkRange, FIELDS, sizeText, StoragePage, validate } from "./StoragePage";
+import { checkRange, DISK_NOTE, FIELDS, sizeText, StoragePage, UTC_NOTE, validate } from "./StoragePage";
 
 const base = {
   "GET /api/setup": { body: { needed: false } },
@@ -677,8 +677,9 @@ describe("StoragePage while it loads (W7f)", () => {
     expect(day.querySelector(":scope > .page-card-head h2 .sk-line")).not.toBeNull();
     expect(day.querySelectorAll(".rows-range .sk-field")).toHaveLength(2);
     expect(day.querySelectorAll(".rows-range > .sk-block")).toHaveLength(1); // the Last 7 days button
-    expect(day.querySelectorAll(":scope > p.muted .sk-line")).toHaveLength(2); // the count above the table and the UTC note under it
-    expect([...day.children].map((child) => child.tagName + "." + child.className.split(" ")[0])).toEqual(["DIV.page-card-head", "DIV.rows-range", "P.muted", "DIV.table-wrap", "P.muted"]);
+    expect(day.querySelectorAll(":scope > p.muted:not(.sk-words) .sk-line")).toHaveLength(1); // the count above the table
+    expect(day.querySelectorAll(":scope > p.sk-words.muted .sk-line")).toHaveLength(UTC_NOTE.split(/\s+/).length); // the UTC note under it: its words, so it wraps as the sentence does
+    expect([...day.children].map((child) => child.tagName + "." + child.className.split(" ")[0])).toEqual(["DIV.page-card-head", "DIV.rows-range", "P.muted", "DIV.table-wrap", "P.sk-words"]);
     const table = day.querySelector(":scope > .table-wrap.sk-table")!;
     expect(table.querySelector("thead")).toBeNull();
     expect(table.querySelectorAll("tbody tr")).toHaveLength(7);
@@ -688,6 +689,12 @@ describe("StoragePage while it loads (W7f)", () => {
     expect(retention).toHaveAttribute("aria-hidden", "true");
     expect(retention.querySelector(":scope > .page-card-head h2 .sk-line")).not.toBeNull();
     expect(retention.querySelectorAll(".retention-fields > .sk-field")).toHaveLength(5);
+    // the two paragraphs are word pills of the real sentences (they wrap into the lines the text will, at every width), the buttons are the real 34px
+    const paragraphs = retention.querySelectorAll("p.sk-words.muted");
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0].querySelectorAll(".sk-line")).toHaveLength(DISK_NOTE.split(/\s+/).length);
+    expect(paragraphs[1].querySelectorAll(".sk-line").length).toBeGreaterThan(30);
+    expect([...retention.querySelectorAll(".retention-foot .row > .sk-block")].map((b) => (b as HTMLElement).style.height)).toEqual(["34px", "34px", "34px", "34px"]);
     // none of it is in the accessibility tree and nothing can be focused
     expect(screen.queryByRole("heading", { name: "Rows per day" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Retention and capacity" })).not.toBeInTheDocument();
