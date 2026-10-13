@@ -10,6 +10,7 @@ const EXPECTED: Record<string, AuditKind> = {
   "login.failed": "problem", "login.locked": "problem", "login.succeeded": "signin", "login.unblocked": "change",
   "mapping.created": "create", "mapping.updated": "change", "mapping.deleted": "delete",
   "password.change_failed": "problem", "password.changed": "change",
+  "role.created": "create", "role.updated": "change", "role.deleted": "delete",
   "scan.finished": "other", "scan.started": "other",
   "scope.created": "create", "scope.updated": "change", "scope.deleted": "delete",
   "settings.sign_in_changed": "settings", "settings.timezone_changed": "settings", "setup.completed": "signin",
@@ -21,11 +22,11 @@ const EXPECTED: Record<string, AuditKind> = {
 };
 
 describe("auditKind", () => {
-  it("names the kind of every one of the 42 actions in the audit text table", () => {
+  it("names the kind of every one of the 45 actions in the audit text table", () => {
     const source = readFileSync("src/lib/auditText.ts", "utf8"); // vitest runs from the frontend directory
     const table = source.slice(source.indexOf("const RULES"), source.indexOf("function factLabel"));
     const actions = [...table.matchAll(/^ {2}"([a-z_.]+)":/gm)].map((m) => m[1]);
-    expect(actions).toHaveLength(42);
+    expect(actions).toHaveLength(45);
     expect([...actions].sort()).toEqual(Object.keys(EXPECTED).sort());
     for (const action of actions) expect(auditKind(action), action).toBe(EXPECTED[action]);
   });
