@@ -14,11 +14,12 @@ const TABLE: ReadonlyArray<readonly [KindIcon, ReadonlySet<string>]> = [
   ["kindChiller", new Set(["chiller"])],
   ["kindCrac", new Set(["crac", "crah", "ahu"])],
   ["kindFan", new Set(["fan"])],
-  ["kindPump", new Set(["pump"])],
-  // the weak words come after the fan and the pump: "Cooling Pump" is a pump, "Cooling Tower" still the cooling unit
-  ["kindCrac", new Set(["cooling", "cooler"])],
   ["kindCircuit", new Set(["circuit", "breaker", "feeder", "ats", "sts", "busway", "busbar", "mcb", "mccb", "transferswitch"])],
   ["kindPanel", new Set(["panel", "panelboard", "switchboard", "switchgear", "mdb"])],
+  // the pump and the weak cooling words come after the panels ("Pump Control Panel" is a panel) and, in this order, still before the places:
+  // "Cooling Pump" is a pump, "Cooling Tower" the cooling unit, "Pump Room" a pump
+  ["kindPump", new Set(["pump"])],
+  ["kindCrac", new Set(["cooling", "cooler"])],
   ["kindMeter", new Set(["meter", "submeter", "metering"])],
   ["kindSensor", new Set(["sensor"])],
   ["kindRack", new Set(["rack", "cabinet", "enclosure"])],

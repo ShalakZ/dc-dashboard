@@ -129,6 +129,11 @@ describe("kindIcon: battery, cooling unit, fan, pump and sensor have their own i
     ["Chiller Pump", "kindChiller"],
     ["Fan Coil Unit", "kindFan"],
     ["Fuel Transfer Pump", "kindPump"],
+    // a panel that serves a pump (or a cooling loop) is a panel; a pump room is a pump, as a UPS room is a UPS
+    ["Pump Panel", "kindPanel"],
+    ["Pump Control Panel", "kindPanel"],
+    ["Cooling Panel", "kindPanel"],
+    ["Pump Room", "kindPump"],
     ["Transfer Switch", "kindCircuit"],
     ["Rack Temperature Sensor", "kindSensor"],
     ["Power Meter", "kindMeter"],
