@@ -892,6 +892,11 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
   const chevron = (id: number) => screen.getByRole("button", { name: `Details of entry #${id}` });
   const previous = () => screen.getByRole("button", { name: /^Previous entry/ });
   const next = () => screen.getByRole("button", { name: /^Next entry/ });
+  /** A button that waits for a page being read: not `disabled` (that would drop its focus), `aria-disabled`. */
+  const waits = (button: HTMLElement) => {
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).not.toBeDisabled();
+  };
   const liveOf = (open: HTMLElement) => open.querySelector<HTMLElement>('[aria-live="polite"]')!;
   const where = (view: { router: { state: { location: { pathname: string; search: string } } } }) => {
     const { pathname, search } = view.router.state.location;
@@ -906,10 +911,9 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
     });
     return { held, release };
   }
-  /** What a browser does when the focused button turns off: focus falls to the body. (jsdom keeps it on the disabled button and cannot blur one.) */
+  /** Focus lost to the body some other way while a page is read (a toast it was in was dismissed, say): the restore must still find the button. */
   function dropFocus() {
-    const button = document.activeElement as HTMLButtonElement;
-    act(() => { button.disabled = false; button.blur(); button.disabled = true; });
+    act(() => { (document.activeElement as HTMLElement).blur(); });
   }
   const settle = (ms = 30) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
   /** Open the drawer on entry `id` of the page and wait for it. */
@@ -1036,8 +1040,8 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       const navigate = vi.spyOn(view.router, "navigate");
 
       await userEvent.click(previous());
-      await waitFor(() => expect(previous()).toBeDisabled());
-      expect(next()).toBeDisabled(); // both, while it runs
+      await waitFor(() => waits(previous()));
+      waits(next()); // both, while it runs
       expect(held.count).toBe(1);
       expect(where(view)).toBe("/audit/150?offset=50&view=raw"); // nothing moved yet
       expect(within(open).getByText("Started scan #150")).toBeInTheDocument();
@@ -1176,7 +1180,7 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       world.failing.delete(0);
       const { release } = holdOffset("offset=0");
       await userEvent.click(previous());
-      await waitFor(() => expect(previous()).toBeDisabled());
+      await waitFor(() => waits(previous()));
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
       await act(async () => { release(); });
       await within(screen.getByRole("dialog")).findByText("Started scan #151");
@@ -1215,7 +1219,7 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       await openAt(150);
       const { held, release } = holdOffset("offset=0");
       await userEvent.click(previous());
-      await waitFor(() => expect(next()).toBeDisabled());
+      await waitFor(() => waits(next()));
       const navigate = vi.spyOn(view.router, "navigate");
       await userEvent.click(next());
       await userEvent.click(previous());
@@ -1230,7 +1234,7 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       await openAt(150);
       const { release } = holdOffset("offset=0");
       await userEvent.click(previous());
-      await waitFor(() => expect(previous()).toBeDisabled());
+      await waitFor(() => waits(previous()));
       await userEvent.keyboard("{Escape}");
       await waitFor(noDialog);
       expect(where(view)).toBe("/audit?offset=50");
@@ -1247,7 +1251,7 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       await openAt(150);
       const { release } = holdOffset("offset=0");
       await userEvent.click(previous());
-      await waitFor(() => expect(previous()).toBeDisabled());
+      await waitFor(() => waits(previous()));
       await act(async () => { await view.router.navigate("/audit/120?offset=50", { replace: true }); });
       const navigate = vi.spyOn(view.router, "navigate");
       await act(async () => { release(); });
@@ -1261,7 +1265,7 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       await openAt(150);
       const { release } = holdOffset("offset=0");
       await userEvent.click(previous());
-      await waitFor(() => expect(previous()).toBeDisabled());
+      await waitFor(() => waits(previous()));
       const navigate = vi.spyOn(view.router, "navigate");
       view.unmount();
       await act(async () => { release(); });
@@ -1343,12 +1347,57 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
     });
 
-    it("goes back to the pressed button after a page was fetched, though the browser dropped focus to the body while it was off", async () => {
+    it("keeps focus on the pressed button while the neighbouring page is read (aria-disabled, not disabled), and a click on either button does nothing", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { held, release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      waits(next());
+      // the point of the change: a native `disabled` here would have dropped focus to the body for the whole read
+      expect(previous()).toHaveFocus();
+      expect(document.body).not.toHaveFocus();
+      expect(previous()).toHaveAccessibleName("Previous entry: reading another page of the log");
+      expect(previous()).toHaveAttribute("title", "Previous entry: reading another page of the log");
+      expect(next()).toHaveAccessibleName("Next entry: reading another page of the log");
+      const navigate = vi.spyOn(view.router, "navigate");
+      await userEvent.click(previous());
+      await userEvent.keyboard("{Enter}"); // Enter on the focused, waiting button
+      expect(navigate).not.toHaveBeenCalled();
+      expect(held.count).toBe(1);
+      expect(previous()).toHaveFocus();
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      await waitFor(() => expect(previous()).toHaveFocus());
+      expect(previous()).not.toHaveAttribute("aria-disabled");
+      expect(previous()).toHaveAccessibleName("Previous entry");
+      expect(next()).toHaveAccessibleName("Next entry");
+    });
+
+    it("a click on the other button while a page is read does nothing either, and the focus it took is left where the user put it", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { held, release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      const navigate = vi.spyOn(view.router, "navigate");
+      await userEvent.click(next());
+      expect(navigate).not.toHaveBeenCalled();
+      expect(held.count).toBe(1);
+      expect(next()).toHaveFocus(); // a click puts focus on what is clicked, waiting or not; it is never the body
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      expect(where(view)).toBe("/audit/151");
+      await waitFor(() => expect(next()).not.toHaveAttribute("aria-disabled"));
+      expect(next()).toHaveFocus(); // the pressed button is not given focus back from under the user
+    });
+
+    it("goes back to the pressed button after a page was fetched, if focus fell to the body some other way meanwhile", async () => {
       setup("/audit?offset=50", log().reply);
       await openAt(150);
       const { release } = holdOffset("offset=0");
       await userEvent.click(previous());
-      await waitFor(() => expect(previous()).toBeDisabled());
+      await waitFor(() => waits(previous()));
       dropFocus();
       expect(document.body).toHaveFocus();
       await act(async () => { release(); });
@@ -1362,7 +1411,7 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       await openAt(101);
       const { release } = holdOffset("offset=100");
       await userEvent.click(next());
-      await waitFor(() => expect(next()).toBeDisabled());
+      await waitFor(() => waits(next()));
       dropFocus();
       await act(async () => { release(); });
       await within(screen.getByRole("dialog")).findByText("Started scan #100");
@@ -1375,7 +1424,7 @@ describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
       const open = await openAt(150);
       const { release } = holdOffset("offset=0");
       await userEvent.click(previous());
-      await waitFor(() => expect(previous()).toBeDisabled());
+      await waitFor(() => waits(previous()));
       const copy = within(open).getByRole("button", { name: "Copy entry number" });
       act(() => { copy.focus(); });
       await act(async () => { release(); });

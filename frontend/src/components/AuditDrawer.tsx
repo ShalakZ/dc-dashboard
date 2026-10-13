@@ -98,15 +98,19 @@ function EntryView({ entry, timezone, now }: { entry: AuditEntry; timezone: stri
 
 export type StepDirection = "previous" | "next";
 const STEP_NAME: Record<StepDirection, string> = { previous: "Previous entry", next: "Next entry" };
+/** Why both buttons wait while the page beside the one on show is read: a plain sentence, in the name after the colon like the other reasons. */
+const READING = "reading another page of the log";
 
 /**
  * Previous (the entry above, newer) and Next (the one below, older) in the drawer's footer. `previous` / `next` are why that button is off
  * (null = it works): the reason goes into its name and title, so a screen reader hears it as well. `busy` is a neighbouring page being read:
- * both are off, with nothing to explain. `error` is one line about a step that failed.
+ * both buttons wait. `error` is one line about a step that failed.
  *
- * Focus. A button that turns off loses focus in a browser (it falls to the body), and a page fetch turns both off for a moment. So the
- * button that was pressed is remembered, and once the step has landed (a different entry is shown, or it failed) focus goes back to it, or to the
- * panel when it is off for good now (an end of the log), unless it went somewhere else meanwhile. Never to the body.
+ * Focus. A button that turns off (native `disabled`) loses focus in a browser: it falls to the body. For the two cases that are off for good
+ * (an end of the log, an entry off the page) that is dealt with after the fact: the button that was pressed is remembered, and once the step
+ * has landed (a different entry is shown, or it failed) focus goes to the panel instead of the body. A page read can take seconds, so there
+ * the buttons are not `disabled` at all but `aria-disabled` with a click guard (and a name that says why): focus never leaves the pressed one,
+ * and goes back to it, or to the panel when it is off for good now, unless it went somewhere else meanwhile. Never to the body.
  */
 export function EntrySteps({ previous, next, busy, error, entryId, onStep }: {
   previous: string | null;
@@ -138,16 +142,19 @@ export function EntrySteps({ previous, next, busy, error, entryId, onStep }: {
       {error && <p className="entry-steps-note error" role="alert">{error}</p>}
       <div className="entry-steps">
         {(["previous", "next"] as const).map((direction) => {
-          const label = reasons[direction] ? `${STEP_NAME[direction]}: ${reasons[direction]}` : STEP_NAME[direction];
+          const reason = reasons[direction] ?? (busy ? READING : null);
+          const label = reason ? `${STEP_NAME[direction]}: ${reason}` : STEP_NAME[direction];
           return (
             <button
               key={direction}
               ref={buttons[direction]}
               type="button"
-              disabled={busy || reasons[direction] !== null}
+              disabled={reasons[direction] !== null}
+              aria-disabled={busy && reasons[direction] === null ? "true" : undefined}
               aria-label={label}
-              title={reasons[direction] ? label : undefined}
+              title={reason ? label : undefined}
               onClick={() => {
+                if (busy) return; // inert while a page is read, on either button (the page's step() ignores a second start as well)
                 pressed.current = { direction, from: entryId };
                 onStep(direction);
               }}

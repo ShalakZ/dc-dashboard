@@ -184,6 +184,10 @@
   /* Previous and Next in the drawer's footer (components/AuditDrawer.tsx EntrySteps): the buttons stay at the right edge whether or not a
      line about a failed step sits to their left; the line is cut at two lines, the title says the rest. */
   .entry-steps { display: flex; gap: 8px; margin-left: auto; }
+  /* While a neighbouring page is read the buttons wait with aria-disabled, not disabled (a disabled button drops the focus it has): they must
+     still look and act off. The same two looks as button:disabled; the hover wash of the base rule is taken back by naming the base colour. */
+  .entry-steps button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+  .entry-steps button[aria-disabled="true"]:hover { background: var(--bg); }
   .entry-steps-note { margin: 0; min-width: 0; font-size: var(--fs-sm); line-height: 1.3; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 
   /* Connection check (the Diagnostics page and the Sources row's dialog): the controls, then one block per step, each led by its state shape */
