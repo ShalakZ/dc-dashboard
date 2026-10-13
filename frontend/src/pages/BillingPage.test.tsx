@@ -8,6 +8,8 @@ import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
+import { spyToasts } from "../test/toasts";
+import type { ToastApi } from "../components/Toasts";
 import { BUILTIN_PERMISSIONS, userFor } from "../test/users";
 import type { PermissionId } from "../lib/permissions";
 import { BillingPage } from "./BillingPage";
@@ -60,6 +62,7 @@ const open = (
   zone = "Asia/Qatar",
   months: { status?: number; body?: unknown } | "pending" = { body: { first_month: null } },
   hold?: (method: string, path: string) => boolean, // requests kept back until release() (installed before the page mounts)
+  toasts?: ToastApi,
 ) => {
   mockFetch(routes(role, reply, zone, months === "pending" ? {} : months));
   if (months === "pending") {
@@ -68,7 +71,7 @@ const open = (
       String(input).includes("/api/billing/months") ? new Promise<Response>(() => {}) : answered(input, init));
   }
   const held = hold ? holdFetch(hold) : { release: () => {} };
-  renderWithProviders(<BillingPage />, { route: "/billing", path: "/billing" });
+  renderWithProviders(<BillingPage />, { route: "/billing", path: "/billing", toasts });
   return held;
 };
 const yearSelect = () => screen.getByRole("combobox", { name: "Year" });
@@ -341,17 +344,21 @@ describe("BillingPage", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("downloads the month on screen as CSV", async () => {
-    open();
+  it("downloads the month on screen as CSV and says so with one toast, after the file came back", async () => {
+    const toasts = spyToasts();
+    open("viewer", { body: costs }, "Asia/Qatar", { body: { first_month: null } }, undefined, toasts.api);
     await userEvent.click(await screen.findByRole("button", { name: "Download CSV" }));
     expect(downloadCsv).toHaveBeenCalledWith("/api/billing/costs.csv?month=2026-10");
+    await waitFor(() => expect(toasts.calls).toEqual([{ kind: "info", text: "CSV downloaded" }]));
   });
 
   it("shows why the export failed", async () => {
     vi.mocked(downloadCsv).mockRejectedValueOnce(new ApiError(409, "site timezone must have whole-hour UTC offsets"));
-    open();
+    const toasts = spyToasts();
+    open("viewer", { body: costs }, "Asia/Qatar", { body: { first_month: null } }, undefined, toasts.api);
     await userEvent.click(await screen.findByRole("button", { name: "Download CSV" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("site timezone must have whole-hour UTC offsets");
+    expect(toasts.calls).toEqual([]); // a failed export keeps its inline line and raises no toast
   });
 
   it("shows the server's explanation when billing is refused", async () => {

@@ -67,6 +67,5 @@
   .tariffs-page .inline-form input[type="number"] { width: 130px; }
   .tariffs-page .inline-form .currency-field input { width: 110px; }
   .tariffs-page .inline-form button:not(.icon-btn) { min-height: 38px; } /* not the ? tips: they stay 24px and keep their place on the label line */
-  .tariffs-page .inline-form .saved { align-self: center; padding-bottom: 8px; }
   .tariffs-page .inline-form p.error { flex: 0 0 100%; margin: 0; font-size: var(--fs-sm); font-weight: 600; }
 }

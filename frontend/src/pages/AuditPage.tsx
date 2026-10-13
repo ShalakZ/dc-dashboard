@@ -10,6 +10,7 @@ import { EmptyNote } from "../components/EmptyNote";
 import { Icon, type IconName } from "../components/Icon";
 import { PageHeader } from "../components/PageHeader";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
+import { useToast } from "../components/Toasts";
 import { apiQuery, isFiltered, readUrl, writeUrl, type AuditFilters, type AuditUrlState } from "../lib/auditFilters";
 import { auditKind, type AuditKind } from "../lib/auditKind";
 import { describeAudit } from "../lib/auditText";
@@ -108,6 +109,7 @@ export function AuditPage() {
   const now = new Date(); // once per render: every row's "how long ago" is counted from the same moment
   const today = siteDay(now, timezone);
   const options = useAuditOptions();
+  const toast = useToast();
   const { data, error, isLoading, isPlaceholderData } = useAudit(filters, size, offset);
 
   const [jumping, setJumping] = useState(false);
@@ -159,6 +161,7 @@ export function AuditPage() {
     setExporting(true);
     try {
       await downloadCsv(`/api/audit.csv?${apiQuery(filters)}`);
+      toast.info("CSV downloaded"); // the whole file came back before the browser saved it; a failure keeps its inline line
     } catch (e) {
       setProblem(messageOf(e, "export failed"));
     } finally {

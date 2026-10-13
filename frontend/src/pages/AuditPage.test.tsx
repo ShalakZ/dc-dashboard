@@ -7,7 +7,9 @@ import { holdFetch } from "../test/holdFetch";
 import type { PermissionId } from "../lib/permissions";
 import { renderWithDataRouter } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
+import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
+import type { ToastApi } from "../components/Toasts";
 import { AuditPage } from "./AuditPage";
 
 vi.mock("../lib/download", () => ({ downloadCsv: vi.fn() }));
@@ -28,7 +30,7 @@ const admin: Routes = {
 const twoRows = list(51, [entry(51, "scan.finished", { scan_id: 51, status: "done" }), entry(50, "scan.started", { scan_id: 50 })]);
 
 /** Every /api/audit request's URL is recorded; `routes` may override or add routes. */
-function setup(route: string, auditReply: Routes[string] = twoRows, routes: Routes = {}) {
+function setup(route: string, auditReply: Routes[string] = twoRows, routes: Routes = {}, toasts?: ToastApi) {
   const urls: string[] = [];
   const calls = mockFetch({
     ...admin,
@@ -38,7 +40,7 @@ function setup(route: string, auditReply: Routes[string] = twoRows, routes: Rout
     },
     ...routes,
   });
-  const view = renderWithDataRouter(<AuditPage />, { route, path: "/audit" });
+  const view = renderWithDataRouter(<AuditPage />, { route, path: "/audit", toasts });
   return { ...view, urls, calls, search: () => view.router.state.location.search };
 }
 
@@ -453,10 +455,12 @@ describe("AuditPage", () => {
   });
 
   describe("Export CSV", () => {
-    it("downloads the filtered log", async () => {
-      setup("/audit?action=asset.created&q=panel+a");
+    it("downloads the filtered log and says so with one toast, after the file came back", async () => {
+      const toasts = spyToasts();
+      setup("/audit?action=asset.created&q=panel+a", twoRows, {}, toasts.api);
       await userEvent.click(await screen.findByRole("button", { name: "Export CSV" }));
       expect(downloadCsv).toHaveBeenCalledWith("/api/audit.csv?action=asset.created&q=panel+a");
+      await waitFor(() => expect(toasts.calls).toEqual([{ kind: "info", text: "CSV downloaded" }]));
     });
 
     it("downloads the whole log when nothing is filtered", async () => {
@@ -467,10 +471,12 @@ describe("AuditPage", () => {
 
     it("shows the API's message when the export is refused", async () => {
       vi.mocked(downloadCsv).mockRejectedValueOnce(new ApiError(422, "more than 20000 entries; narrow the date range"));
-      setup("/audit");
+      const toasts = spyToasts();
+      setup("/audit", twoRows, {}, toasts.api);
       await userEvent.click(await screen.findByRole("button", { name: "Export CSV" }));
       expect(await screen.findByRole("alert")).toHaveTextContent("narrow the date range");
       await waitFor(() => expect(screen.getByRole("button", { name: "Export CSV" })).toBeEnabled());
+      expect(toasts.calls).toEqual([]); // a failed export keeps its inline line and raises no toast
     });
   });
 

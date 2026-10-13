@@ -4,7 +4,9 @@ import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
+import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
+import type { ToastApi } from "../components/Toasts";
 import type { PermissionId } from "../lib/permissions";
 import { ScansPage } from "./ScansPage";
 
@@ -26,7 +28,7 @@ const base = (role: string) => ({
   "GET /api/scans": { body: [{ ...done, findings: undefined }] },
   "GET /api/scopes/suggestions": { body: { targets: ["172.18.0.0/24"], ports: [502, 4840, 9000] } },
 });
-const open = () => renderWithProviders(<ScansPage />, { route: "/scans", path: "/scans" });
+const open = (toasts?: ToastApi) => renderWithProviders(<ScansPage />, { route: "/scans", path: "/scans", toasts });
 /** The three-dot menu of the scope row (named `Actions for lab`); its items are in the DOM only while it is open. */
 const menuButton = async () => screen.findByRole("button", { name: "Actions for lab" });
 async function pick(item: string) {
@@ -66,7 +68,8 @@ describe("ScansPage", () => {
 
   it("creates a scope from a prefilled form and sends parsed targets and ports", async () => {
     const calls = mockFetch({ ...base("admin"), "POST /api/scopes": { status: 201, body: scope } });
-    open();
+    const toasts = spyToasts();
+    open(toasts.api);
     await userEvent.click(await screen.findByRole("button", { name: "New scope" }));
     expect(await screen.findByLabelText("Targets")).toHaveValue("172.18.0.0/24");
     expect(screen.getByLabelText("Ports")).toHaveValue("502, 4840, 9000");
@@ -74,6 +77,18 @@ describe("ScansPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     const post = calls.find((c) => c.method === "POST" && c.path === "/api/scopes");
     expect(post?.body).toEqual({ name: "lab", targets: ["172.18.0.0/24"], ports: [502, 4840, 9000] });
+    await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "Scan scope created" }]));
+  });
+
+  it("raises no toast when the new scope is refused: the error line is the feedback", async () => {
+    mockFetch({ ...base("admin"), "POST /api/scopes": { status: 409, body: { detail: "a scope with that name already exists" } } });
+    const toasts = spyToasts();
+    open(toasts.api);
+    await userEvent.click(await screen.findByRole("button", { name: "New scope" }));
+    await userEvent.type(await screen.findByLabelText("Name"), "lab");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(toasts.calls).toEqual([]);
   });
 
   it("shows a port error without calling the API", async () => {
@@ -147,14 +162,15 @@ describe("ScansPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("a scan is already in progress");
   });
 
-  it("edits a scope with a PATCH and deletes it after confirmation", async () => {
+  it("edits a scope with a PATCH and deletes it after confirmation in the styled dialog", async () => {
     const calls = mockFetch({
       ...base("admin"),
       "PATCH /api/scopes/3": { body: scope },
       "DELETE /api/scopes/3": { status: 204 },
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-    open();
+    const browserBox = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const toasts = spyToasts();
+    open(toasts.api);
     await pick("Edit");
     expect(screen.getByLabelText("Name")).toHaveValue("lab");
     expect(screen.getByLabelText("Targets")).toHaveValue("simulator");
@@ -164,22 +180,67 @@ describe("ScansPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ name: "lab", targets: ["simulator"], ports: [4840] });
+    expect(toasts.calls).toEqual([]); // an edit closes its form: no toast
     await userEvent.click(screen.getByRole("button", { name: "Delete lab" }));
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false); // asked first
+    const dialog = await screen.findByRole("dialog", { name: 'Delete scope "lab"?' });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/scopes/3")).toBe(true));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(toasts.calls).toEqual([{ kind: "success", text: 'Scan scope "lab" deleted' }]);
+    expect(browserBox).not.toHaveBeenCalled();
   });
 
-  it("gives an admin a menu with Scan and Edit and a trash button for Delete, which still asks first", async () => {
+  it("gives an admin a menu with Scan and Edit and a trash button for Delete, which asks first in one styled dialog; Cancel and Escape delete nothing", async () => {
     const calls = mockFetch({ ...base("admin"), "DELETE /api/scopes/3": { status: 204 } });
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    open();
+    const browserBox = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const toasts = spyToasts();
+    open(toasts.api);
     await userEvent.click(await menuButton());
     expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Scan", "Edit"]);
     await userEvent.keyboard("{Escape}");
     expect((await menuButton()).closest("td")).toHaveClass("row-actions");
     await userEvent.click(screen.getByRole("button", { name: "Delete lab" }));
-    expect(confirm).toHaveBeenCalledWith('Delete scope "lab"?');
+    const dialog = await screen.findByRole("dialog", { name: 'Delete scope "lab"?' });
+    expect(dialog).toHaveTextContent("This can't be undone.");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Delete lab" }));
+    await screen.findByRole("dialog", { name: 'Delete scope "lab"?' });
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(toasts.calls).toEqual([]);
+    expect(browserBox).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Details" })).toBeInTheDocument(); // the history keeps its own link-like button
+  });
+
+  it("hands focus back to the trash button after Cancel and after Escape (the button is not disabled while the question is open)", async () => {
+    mockFetch({ ...base("admin"), "DELETE /api/scopes/3": { status: 204 } });
+    open();
+    const trash = await screen.findByRole("button", { name: "Delete lab" });
+    await userEvent.click(trash);
+    expect(trash).toBeEnabled(); // the question is not an action in flight: a disabled opener cannot take the focus back
+    await userEvent.click(within(await screen.findByRole("dialog", { name: 'Delete scope "lab"?' })).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete lab" })).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    await screen.findByRole("dialog", { name: 'Delete scope "lab"?' });
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete lab" })).toHaveFocus();
+  });
+
+  it("a delete that the server refuses is shown above the table, and raises no toast", async () => {
+    mockFetch({ ...base("admin"), "DELETE /api/scopes/3": { status: 403, body: { detail: "admin role required" } } });
+    const toasts = spyToasts();
+    open(toasts.api);
+    await userEvent.click(await screen.findByRole("button", { name: "Delete lab" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: 'Delete scope "lab"?' })).getByRole("button", { name: "Delete" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("admin role required");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toasts.calls).toEqual([]);
   });
 
   it("opens the details of a past scan from the history", async () => {
@@ -259,11 +320,11 @@ describe("ScansPage", () => {
         "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } },
         "DELETE /api/scopes/3": { status: 204 },
       });
-      vi.spyOn(window, "confirm").mockReturnValue(true);
       open();
       await pick("Scan");
       expect(await screen.findByText(confirmation)).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: "Delete lab" }));
+      await userEvent.click(within(await screen.findByRole("dialog", { name: 'Delete scope "lab"?' })).getByRole("button", { name: "Delete" }));
       await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/scopes/3")).toBe(true));
       expect(screen.queryByText(confirmation)).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Start scan" })).not.toBeInTheDocument();

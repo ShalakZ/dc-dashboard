@@ -7,7 +7,9 @@ import { mockFetch, type Routes } from "../test/fetchMock";
 import { model, point, source } from "../test/graphFixtures";
 import { renderWithDataRouter } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
+import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
+import type { ToastApi } from "../components/Toasts";
 import type { PermissionId } from "../lib/permissions";
 import { DashboardPage } from "./DashboardPage";
 
@@ -54,7 +56,7 @@ const graph = model({
 const putBody = (calls: Call[]) => calls.find((c) => c.method === "PUT")?.body;
 const puts = (calls: Call[]) => calls.filter((c) => c.method === "PUT");
 
-function open(role: string, entry: string | { pathname: string; state?: unknown } = "/dashboards/3", over: Routes = {}) {
+function open(role: string, entry: string | { pathname: string; state?: unknown } = "/dashboards/3", over: Routes = {}, toasts?: ToastApi) {
   const calls = mockFetch({
     ...authed(role),
     "GET /api/dashboards/3": { body: base },
@@ -68,7 +70,7 @@ function open(role: string, entry: string | { pathname: string; state?: unknown 
     },
     ...over,
   });
-  const view = renderWithDataRouter(<><DashboardPage /><SignedIn /></>, { route: entry, path: "/dashboards/:id" });
+  const view = renderWithDataRouter(<><DashboardPage /><SignedIn /></>, { route: entry, path: "/dashboards/:id", toasts });
   return { calls, ...view };
 }
 const add = () => screen.getByRole("button", { name: "Add widget" });
@@ -133,7 +135,8 @@ describe("who can edit", () => {
   });
 
   it("asks before Cancel throws edits away: Keep editing stays with them, Leave discards them and saves nothing", async () => {
-    const { calls } = open("operator");
+    const toasts = spyToasts();
+    const { calls } = open("operator", "/dashboards/3", {}, toasts.api);
     await startEditing();
     await userEvent.type(screen.getByLabelText("Dashboard name"), " renamed");
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -146,6 +149,7 @@ describe("who can edit", () => {
     expect(await screen.findByRole("heading", { name: "Hall A" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
     expect(puts(calls)).toHaveLength(0);
+    expect(toasts.calls).toEqual([]); // leaving without saving says nothing
   });
 
   it("forgets the router state without a second prompt when the edits are discarded or saved (the blocker ignores a same-page replace)", async () => {
@@ -180,7 +184,8 @@ describe("who can edit", () => {
 
 describe("editing", () => {
   it("adds a widget, saves the exact body, and returns to the view with the server's dashboard", async () => {
-    const { calls } = open("operator");
+    const toasts = spyToasts();
+    const { calls } = open("operator", "/dashboards/3", {}, toasts.api);
     await startEditing();
     await userEvent.click(add());
     await userEvent.type(screen.getByLabelText("Title"), "Hall power");
@@ -203,6 +208,8 @@ describe("editing", () => {
     });
     expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Hall power" })).toBeInTheDocument();
+    // Leaving edit mode is not an obvious "saved" (R16), so one toast says it: after the request, once, and only for a save.
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Dashboard saved" }]);
   });
 
   it("offers a metric widget only the assets mapped to that metric, taken from the discovery graph", async () => {
@@ -380,7 +387,8 @@ describe("saving that fails", () => {
   });
 
   it("shows the server's message, not the reload banner, when the name is taken", async () => {
-    open("operator", "/dashboards/3", { "PUT /api/dashboards/3": { status: 409, body: { detail: "a dashboard with this name already exists" } } });
+    const toasts = spyToasts();
+    open("operator", "/dashboards/3", { "PUT /api/dashboards/3": { status: 409, body: { detail: "a dashboard with this name already exists" } } }, toasts.api);
     await startEditing();
     await userEvent.type(screen.getByLabelText("Dashboard name"), "2");
     await userEvent.click(saveButton());
@@ -388,6 +396,7 @@ describe("saving that fails", () => {
     expect(screen.queryByRole("button", { name: "Reload" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Dashboard name")).toHaveValue("Hall A2");
     expect(saveButton()).toBeEnabled(); // not a conflict: the user can pick another name and save again
+    expect(toasts.calls).toEqual([]); // a refused save keeps its error line and raises no toast
   });
 
   it("keeps the edits and shows the message when the API refuses the dashboard", async () => {

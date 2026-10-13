@@ -10,6 +10,7 @@ import { DashboardViewer } from "../components/dashboard/DashboardViewer";
 import { LiveValuesProvider } from "../components/dashboard/LiveValuesContext";
 import { Pending } from "../components/Pending";
 import { DashboardSkeleton } from "../components/Skeleton";
+import { useToast } from "../components/Toasts";
 import { newest } from "../lib/dashboardEdit";
 
 // The editor brings react-grid-layout with it: it loads only when someone starts editing (spec 10.8).
@@ -35,6 +36,7 @@ function DashboardScreen({ id }: { id: number }) {
   const canEdit = can("dashboards.edit");
   const dashboard = newest(saved, query.data);
   const queryClient = useQueryClient();
+  const toast = useToast();
   const loadError = query.error;
   // A dashboard that is gone may still be what the sidebar's Dashboards link points at: ask again which one is the default.
   useEffect(() => {
@@ -67,7 +69,7 @@ function DashboardScreen({ id }: { id: number }) {
             key={epoch}
             dashboard={dashboard}
             timezone={timezone}
-            onSaved={(next) => { setSaved(next); leaveEdit(); }}
+            onSaved={(next) => { setSaved(next); toast.success("Dashboard saved"); leaveEdit(); }}
             onCancel={leaveEdit}
             onReload={async () => {
               const fresh = await query.refetch();

@@ -10,10 +10,14 @@ import "./styles/pages-sources.css";
 import "./styles/pages-billing.css";
 import "./styles/pages-admin.css";
 import "./styles/pages-auth.css";
+import "./styles/feedback-save.css";
+import "./styles/feedback-toasts.css";
+import "./styles/feedback-confirm.css";
 import { App } from "./App";
 import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";
 import { RouteError } from "./components/RouteError";
+import { ToastProvider } from "./components/Toasts";
 import { installChunkReload } from "./lib/chunkReload";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
@@ -30,7 +34,9 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <AppearanceProvider>
-          <RouterProvider router={router} />
+          <ToastProvider>
+            <RouterProvider router={router} />
+          </ToastProvider>
         </AppearanceProvider>
       </AuthProvider>
     </QueryClientProvider>

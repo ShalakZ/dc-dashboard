@@ -1,13 +1,16 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
+import type { MockInstance } from "vitest";
 import { Route, Routes, useLocation } from "react-router";
 import { useFleetSummary } from "../api/queries";
+import type { ToastApi } from "../components/Toasts";
 import { mockFetch } from "../test/fetchMock";
 import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { FakeEventSource } from "../test/fakeEventSource";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
 import type { PermissionId } from "../lib/permissions";
@@ -55,7 +58,7 @@ function FleetProbe() {
 const cacheCounts = (calls: { path: string }[]) => ({ ...probeFetches(calls), fleet: calls.filter((c) => c.path === "/api/fleet/summary").length });
 
 /** The Assets workspace as App mounts it: the layout with the real index page and the real asset page. `extra` renders outside the routes. */
-function renderWorkspace(route: string, { extra }: { extra?: ReactElement } = {}) {
+function renderWorkspace(route: string, { extra, toasts }: { extra?: ReactElement; toasts?: ToastApi } = {}) {
   return renderWithProviders(
     <>
       <Routes>
@@ -67,7 +70,7 @@ function renderWorkspace(route: string, { extra }: { extra?: ReactElement } = {}
       <Where />
       {extra}
     </>,
-    { route, path: "*" },
+    { route, path: "*", toasts },
   );
 }
 
@@ -202,7 +205,8 @@ describe("AssetsPage", () => {
 
     it("the + opens one dialog titled Add asset with that node as the parent, and Save posts it and closes", async () => {
       const calls = mockFetch({ ...authed("admin"), "POST /api/assets": created });
-      renderWorkspace("/assets");
+      const toasts = spyToasts();
+      renderWorkspace("/assets", { toasts: toasts.api });
       await userEvent.click(await screen.findByRole("button", { name: "Add child of Site" }));
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
       const dialog = screen.getByRole("dialog", { name: "Add asset" });
@@ -211,6 +215,7 @@ describe("AssetsPage", () => {
       await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(posts(calls).map((c) => c.body)).toEqual([{ name: "Room B", parent_id: 1, kind: "generic", sort_order: 0 }]);
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Asset created" }]);
     });
 
     it.each([
@@ -564,13 +569,15 @@ describe("AssetsPage", () => {
       ...authed("admin"),
       "POST /api/assets": { status: 409, body: { detail: 'an asset named "Room A" already exists under "Site"; choose another name' } },
     });
-    renderWorkspace("/assets");
+    const toasts = spyToasts();
+    renderWorkspace("/assets", { toasts: toasts.api });
     await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
     await userEvent.type(screen.getByLabelText("Name"), "Room A");
     await userEvent.selectOptions(screen.getByLabelText("Parent"), "1");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent('an asset named "Room A" already exists under "Site"');
     expect(screen.getByLabelText("Name")).toHaveValue("Room A"); // the form stays open with what was typed
+    expect(toasts.calls).toEqual([]);
   });
 
   describe("saving refreshes the fleet figures too", () => {
@@ -580,7 +587,8 @@ describe("AssetsPage", () => {
         "POST /api/assets": { status: 201, body: { id: 3, parent_id: 1, name: "Room B", kind: "generic", sort_order: 0 } },
         "PATCH /api/assets/2": { body: { ...assets[1], name: "Room A2" } },
       });
-      renderWorkspace("/assets/2", { extra: <FleetProbe /> });
+      const toasts = spyToasts();
+      renderWorkspace("/assets/2", { extra: <FleetProbe />, toasts: toasts.api });
       const fleet = () => cacheCounts(calls).fleet;
       await waitFor(() => expect(fleet()).toBe(1));
       await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
@@ -591,117 +599,202 @@ describe("AssetsPage", () => {
       await userEvent.click(screen.getByRole("button", { name: "Edit" }));
       await userEvent.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(fleet()).toBe(3));
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Asset created" }]); // the edit closes its dialog and says nothing
     });
   });
 
   describe("deleting", () => {
-    const impact = { detail: "needs confirmation", assets: 2, mappings: 3, tariffs: 1 };
-    /** DELETE answers 409 with the counts until the request carries confirm=true. `needsConfirm` false = a plain asset. */
-    function setup(needsConfirm: boolean, confirmed: { status: number; body?: object } = { status: 204 }, probes = false) {
+    const branch = { assets: 2, mappings: 3, tariffs: 1 };
+    const leaf = { assets: 1, mappings: 0, tariffs: 0 };
+    const BRANCH_TEXT = "2 assets, 3 mappings and 1 tariff will be deleted; their past energy and cost figures disappear from Billing and dashboards.";
+    const SEEN_BRANCH = "/api/assets/2?confirm=true&expect_assets=2&expect_mappings=3&expect_tariffs=1";
+    const SEEN_LEAF = "/api/assets/2?confirm=true&expect_assets=1&expect_mappings=0&expect_tariffs=0";
+    /**
+     * The preview answers `impact` (or `preview`, a failure); the confirmed DELETE answers `confirmed` (a 204 takes the asset out of the
+     * list). `hold` keeps the preview request in flight until `held.release()`.
+     */
+    function setup(
+      impact: object,
+      confirmed: { status: number; body?: object } = { status: 204 },
+      { probes = false, hold = false, preview }: { probes?: boolean; hold?: boolean; preview?: { status: number; body: object } } = {},
+    ) {
       const urls: string[] = [];
       let removed = false;
+      const toasts = spyToasts();
       const calls = mockFetch({
         ...authed("admin"),
         ...(probes ? probeRoutes : {}),
         "GET /api/assets": () => ({ body: removed ? [assets[0]] : assets }),
+        "GET /api/assets/2/impact": preview ?? { body: impact },
         "DELETE /api/assets/2": ({ url }) => {
           urls.push(url);
-          if (needsConfirm && !url.includes("confirm=true")) return { status: 409, body: impact };
           if (confirmed.status === 204) removed = true;
           return confirmed;
         },
       });
-      renderWorkspace("/assets/2", { extra: probes ? <><CacheProbes /><FleetProbe /></> : undefined });
-      return { calls, urls };
+      const held = hold ? holdFetch((method, path) => method === "GET" && path === "/api/assets/2/impact") : null;
+      renderWorkspace("/assets/2", { extra: probes ? <><CacheProbes /><FleetProbe /></> : undefined, toasts: toasts.api });
+      return { calls, urls, toasts: toasts.calls, held };
     }
     const deletes = (calls: { method: string }[]) => calls.filter((c) => c.method === "DELETE").length;
     const click = async (name: string) => userEvent.click(await screen.findByRole("button", { name }));
+    const dialogOf = () => screen.findByRole("dialog", { name: 'Delete "Room A"?' });
 
-    beforeEach(() => { vi.spyOn(window, "confirm").mockReturnValue(true); });
+    // The browser's own box is gone: it must never be asked, whatever the test does.
+    let browserBox: MockInstance<Window["confirm"]>;
+    beforeEach(() => { browserBox = vi.spyOn(window, "confirm").mockReturnValue(true); });
+    afterEach(() => { expect(browserBox).not.toHaveBeenCalled(); });
 
-    it("deletes a plain asset as before: one request, no dialog, and the page lands on /assets", async () => {
-      const { calls, urls } = setup(false);
+    it("the trash opens ONE styled dialog, even for a plain asset: plain wording, a plain Delete button, and no request until it is pressed", async () => {
+      const { calls } = setup(leaf);
       await click("Delete Room A");
-      await waitFor(() => expect(screen.queryByRole("button", { name: "Delete Room A" })).not.toBeInTheDocument());
-      expect(urls).toEqual(["/api/assets/2"]);
-      expect(deletes(calls)).toBe(1);
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      expect(where()).toBe("/assets"); // not a dead /assets/2
-      expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument();
-      expect(screen.getByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument();
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByText("This can't be undone.")).toBeInTheDocument();
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      expect(within(dialog).getByRole("button", { name: "Delete" })).toBeEnabled();
+      expect(deletes(calls)).toBe(0);
     });
 
-    it.each([["a plain asset", false], ["an asset with mappings, after Delete anyway", true]])(
+    it("a plain asset: Delete sends the counts it showed, lands the page on /assets, and raises one toast", async () => {
+      const { calls, urls, toasts } = setup(leaf);
+      await click("Delete Room A");
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(urls).toEqual([SEEN_LEAF]);
+      expect(deletes(calls)).toBe(1);
+      await waitFor(() => expect(where()).toBe("/assets")); // not a dead /assets/2
+      expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Assets Tree", level: 1 })).toBeInTheDocument();
+      expect(toasts).toEqual([{ kind: "success", text: 'Asset "Room A" deleted' }]);
+    });
+
+    it.each([["a plain asset", leaf], ["an asset with mappings, after Delete anyway", branch]])(
       "refreshes billing, the dashboards' widget data, the tariff list and the fleet summary too, because they depend on the asset: %s",
-      async (_case, needsConfirm) => {
-        const { calls } = setup(needsConfirm, undefined, true);
+      async (_case, impact) => {
+        const { calls } = setup(impact, undefined, { probes: true });
         await waitFor(() => expect(cacheCounts(calls)).toEqual({ billing: 1, widgetData: 1, tariffs: 1, fleet: 1 }));
         await click("Delete Room A");
-        if (needsConfirm) await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
+        const dialog = await dialogOf();
+        await userEvent.click(await within(dialog).findByRole("button", { name: /^Delete( anyway)?$/ }));
         // The fleet summary is fetched three times: at the start, again when the summary page mounts after the redirect to /assets (its entry is stale), and once more by the invalidation.
         await waitFor(() => expect(cacheCounts(calls)).toEqual({ billing: 2, widgetData: 2, tariffs: 2, fleet: 3 }));
       },
     );
 
-    it("sends nothing when the first confirmation is declined", async () => {
-      vi.spyOn(window, "confirm").mockReturnValue(false);
-      const { calls } = setup(true);
+    it("opens at once with 'Checking what this deletes…' and a confirm button that cannot be pressed; nothing is deleted before the preview arrived", async () => {
+      const { calls, held } = setup(branch, undefined, { hold: true });
       await click("Delete Room A");
-      expect(deletes(calls)).toBe(0);
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      const dialog = await dialogOf();
+      expect(dialog).toHaveTextContent("Checking what this deletes…");
+      const confirm = within(dialog).getByRole("button", { name: "Delete" }); // plain "Delete" until the answer says it takes more than the row
+      expect(confirm).toBeDisabled();
+      await userEvent.click(confirm);
+      expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+      await act(async () => held!.release());
+      expect(await within(dialog).findByText(BRANCH_TEXT)).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Delete anyway" })).toBeEnabled();
     });
 
-    it("shows what will be lost when the API asks for confirmation", async () => {
-      setup(true);
+    it("shows what will be lost when the asset owns more than itself", async () => {
+      setup(branch);
       await click("Delete Room A");
-      const dialog = await screen.findByRole("dialog", { name: 'Delete "Room A"?' });
-      expect(dialog).toHaveTextContent(
-        "2 assets, 3 mappings and 1 tariff will be deleted; their past energy and cost figures disappear from Billing and dashboards.",
-      );
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByText(BRANCH_TEXT)).toBeInTheDocument();
       expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
       expect(within(dialog).getByRole("button", { name: "Delete anyway" })).toBeInTheDocument();
     });
 
-    it("Cancel closes the dialog and deletes nothing", async () => {
-      const { calls, urls } = setup(true);
-      await click("Delete Room A");
-      await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      expect(urls).toEqual(["/api/assets/2"]); // only the first, refused request
-      expect(deletes(calls)).toBe(1);
-      expect(where()).toBe("/assets/2"); // still on the asset, still in the tree
-      expect(screen.getByRole("heading", { name: "Room A", level: 1 })).toBeInTheDocument();
-      expect(within(screen.getByRole("region", { name: "Asset tree" })).getByRole("link", { name: "Room A" })).toHaveAttribute("aria-current", "true");
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    });
+    it.each([["Cancel", async () => userEvent.click(screen.getByRole("button", { name: "Cancel" }))], ["Escape", async () => userEvent.keyboard("{Escape}")]])(
+      "%s closes the dialog and sends no DELETE at all, with no toast",
+      async (_how, leave) => {
+        const { calls, toasts } = setup(branch);
+        await click("Delete Room A");
+        await within(await dialogOf()).findByText(BRANCH_TEXT);
+        await leave();
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(deletes(calls)).toBe(0);
+        expect(toasts).toEqual([]);
+        expect(where()).toBe("/assets/2"); // still on the asset, still in the tree
+        expect(screen.getByRole("heading", { name: "Room A", level: 1 })).toBeInTheDocument();
+        expect(within(screen.getByRole("region", { name: "Asset tree" })).getByRole("link", { name: "Room A" })).toHaveAttribute("aria-current", "true");
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      },
+    );
 
-    it("Delete anyway repeats the request with confirm=true, then closes, refreshes the tree and lands on /assets", async () => {
-      const { urls } = setup(true);
+    it("Delete anyway sends the counts it showed, then closes, refreshes the tree, lands on /assets and raises the toast", async () => {
+      const { urls, toasts } = setup(branch);
       await click("Delete Room A");
-      await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete anyway" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      expect(urls).toEqual(["/api/assets/2", "/api/assets/2?confirm=true"]);
+      expect(urls).toEqual([SEEN_BRANCH]);
       await waitFor(() => expect(screen.queryByRole("link", { name: "Room A" })).not.toBeInTheDocument());
       await waitFor(() => expect(where()).toBe("/assets")); // navigate() renders in a transition, which may land after the list refetch
       expect(await screen.findByRole("heading", { name: "By kind", level: 2 })).toBeInTheDocument();
+      expect(toasts).toEqual([{ kind: "success", text: 'Asset "Room A" deleted' }]);
     });
 
-    it("keeps the dialog open and says why when the confirmed request fails", async () => {
-      setup(true, { status: 403, body: { detail: "admin role required" } });
+    it("keeps the dialog open and says why when the confirmed request fails, with no toast", async () => {
+      const { toasts } = setup(branch, { status: 403, body: { detail: "admin role required" } });
       await click("Delete Room A");
-      await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
-      const dialog = await screen.findByRole("dialog");
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete anyway" }));
+      const dialog = await dialogOf();
       expect(await within(dialog).findByRole("alert")).toHaveTextContent("admin role required");
       expect(where()).toBe("/assets/2"); // a failed delete does not leave the asset
+      expect(toasts).toEqual([]);
     });
 
-    it("shows any other 409 as a plain alert above the page, not as a confirmation", async () => {
-      mockFetch({ ...authed("admin"), "DELETE /api/assets/2": { status: 409, body: { detail: "something else" } } });
-      renderWorkspace("/assets/2");
+    it("shows any other 409 inside the dialog, as it is, and the dialog keeps the numbers it showed", async () => {
+      setup(leaf, { status: 409, body: { detail: "something else" } });
       await click("Delete Room A");
-      expect(await screen.findByRole("alert")).toHaveTextContent("something else");
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete" }));
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("something else");
+      expect(dialog).toHaveTextContent("This can't be undone.");
       expect(where()).toBe("/assets/2");
+    });
+
+    it("a preview that cannot be read is shown in the dialog, and there is nothing to confirm", async () => {
+      const { calls } = setup(branch, undefined, { preview: { status: 404, body: { detail: "Asset 2 not found" } } });
+      await click("Delete Room A");
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not check what this deletes: Asset 2 not found");
+      expect(within(dialog).getByRole("button", { name: "Delete" })).toBeDisabled();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(deletes(calls)).toBe(0);
+    });
+
+    it("an asset added under it while the dialog was open: the server refuses, the dialog shows the new numbers, and only the second confirm deletes", async () => {
+      const urls: string[] = [];
+      const toasts = spyToasts();
+      let removed = false;
+      const grown = { assets: 3, mappings: 3, tariffs: 1 };
+      mockFetch({
+        ...authed("admin"),
+        "GET /api/assets": () => ({ body: removed ? [assets[0]] : assets }),
+        "GET /api/assets/2/impact": { body: leaf },
+        "DELETE /api/assets/2": ({ url }) => {
+          urls.push(url);
+          // The first request still carries the leaf's counts; the second carries what the refusal showed.
+          if (urls.length === 1) return { status: 409, body: { detail: "More than you were shown would be deleted now", ...grown } };
+          removed = true;
+          return { status: 204 };
+        },
+      });
+      renderWorkspace("/assets/2", { toasts: toasts.api });
+      await click("Delete Room A");
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete" }));
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByText(/3 assets, 3 mappings and 1 tariff will be deleted/)).toBeInTheDocument();
+      expect(within(dialog).getByRole("alert")).toHaveTextContent("More was added while this was open. The numbers above are updated; delete again to confirm.");
+      expect(within(dialog).queryByText("This can't be undone.")).not.toBeInTheDocument();
+      expect(urls).toEqual([SEEN_LEAF]); // nothing is deleted yet
+      expect(toasts.calls).toEqual([]);
+      expect(where()).toBe("/assets/2");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Delete anyway" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(urls).toEqual([SEEN_LEAF, "/api/assets/2?confirm=true&expect_assets=3&expect_mappings=3&expect_tariffs=1"]);
+      expect(toasts.calls).toEqual([{ kind: "success", text: 'Asset "Room A" deleted' }]);
     });
   });
 
@@ -744,19 +837,19 @@ describe("AssetsPage", () => {
     });
 
     describe("a delete", () => {
-      const impact = { detail: "needs confirmation", assets: 2, mappings: 3, tariffs: 1 };
-      /** DELETE of asset 2 is held, then answers 409 with the counts. */
+      const impact = { assets: 2, mappings: 3, tariffs: 1 };
+      /** The preview of asset 2 (what its delete takes with it) is held until released; the dialog opens at once, before it. */
       function startDelete() {
-        mockFetch({ ...authed("admin"), "DELETE /api/assets/2": { status: 409, body: impact } });
-        const hold = holdFetch((method, path) => method === "DELETE" && path === "/api/assets/2");
+        mockFetch({ ...authed("admin"), "GET /api/assets/2/impact": { body: impact } });
+        const hold = holdFetch((method, path) => method === "GET" && path === "/api/assets/2/impact");
         renderWorkspace("/assets/2");
         return hold;
       }
-      beforeEach(() => { vi.spyOn(window, "confirm").mockReturnValue(true); });
 
-      it("keeps Add asset, Edit, Delete and every + from opening a second dialog while it runs, and the confirm dialog ends up alone", async () => {
+      it("keeps Add asset, Edit, Delete and every + from opening a second dialog from the moment the trash is pressed, and the confirm dialog stays alone", async () => {
         const hold = startDelete();
         await userEvent.click(await screen.findByRole("button", { name: "Delete Room A" }));
+        expect(screen.getByRole("dialog", { name: 'Delete "Room A"?' })).toHaveTextContent("Checking what this deletes…"); // already there, before the preview
         const add = screen.getByRole("button", { name: "Add asset" });
         expect(add).toBeDisabled();
         expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
@@ -766,17 +859,17 @@ describe("AssetsPage", () => {
         await userEvent.click(add);
         await userEvent.click(screen.getByRole("button", { name: "Edit" }));
         await userEvent.click(screen.getByRole("button", { name: "Add child of Site" }));
-        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-        hold.release();
-        expect(await screen.findByRole("dialog", { name: 'Delete "Room A"?' })).toBeInTheDocument();
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        await act(async () => hold.release());
+        expect(await screen.findByText(/2 assets, 3 mappings and 1 tariff will be deleted/)).toBeInTheDocument();
         expect(screen.getAllByRole("dialog")).toHaveLength(1);
       });
 
-      it("keeps them from opening a dialog next to the confirm dialog", async () => {
+      it("keeps them from opening a dialog next to the loaded confirm dialog, and frees them when it is cancelled", async () => {
         const hold = startDelete();
         await userEvent.click(await screen.findByRole("button", { name: "Delete Room A" }));
-        hold.release();
-        await screen.findByRole("dialog", { name: 'Delete "Room A"?' });
+        await act(async () => hold.release());
+        await screen.findByText(/2 assets, 3 mappings and 1 tariff will be deleted/);
         for (const name of ["Add asset", "Edit", "Add child of Site"]) {
           expect(screen.getByRole("button", { name })).toBeDisabled();
           await userEvent.click(screen.getByRole("button", { name }));
@@ -931,16 +1024,21 @@ describe("AssetsPage buttons follow the permissions of the role (a custom role)"
     expect(screen.getByRole("heading", { name: "Assets Tree", level: 1 }).closest("header")!.querySelector(".actions")).toBeNull();
   });
 
-  it("assets.delete alone really deletes (and asks first)", async () => {
+  it("assets.delete alone really deletes: the trash asks in the styled dialog, which reads the preview (assets.delete guards it too) and then deletes", async () => {
     const calls = mockFetch({
       ...authed("custom"),
       "GET /api/me": { body: userFor("custom", { permissions: ["assets.view", "assets.delete"] }) },
+      "GET /api/assets/2/impact": { body: { assets: 1, mappings: 0, tariffs: 0 } },
       "DELETE /api/assets/2": { status: 204, body: null },
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const browserBox = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderWorkspace("/assets/2");
     await userEvent.click(await screen.findByRole("button", { name: "Delete Room A" }));
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false); // asked first
+    const dialog = await screen.findByRole("dialog", { name: 'Delete "Room A"?' });
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Delete" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/assets/2")).toBe(true));
+    expect(browserBox).not.toHaveBeenCalled();
   });
 
   it("both: the same buttons an admin has", async () => {

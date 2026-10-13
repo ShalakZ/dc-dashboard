@@ -460,7 +460,7 @@ test.describe("W9b: Users & Roles", () => {
 
         await general.getByLabel("Timezone").fill(other);
         await general.getByRole("button", { name: "Save", exact: true }).click();
-        await expect(general.getByText("saved", { exact: true })).toBeVisible();
+        await expect(general.getByRole("button", { name: "Saved", exact: true })).toBeVisible(); // green for 2.5 s
         expect((await json<{ timezone: string }>(page.request, "/api/site")).timezone).toBe(other);
         expect(await notRefused(page.request, [["PUT", "/api/settings/sign-in"]]), "the sign-in limits stay refused").toEqual([]);
       });

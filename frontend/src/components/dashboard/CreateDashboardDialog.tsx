@@ -5,11 +5,13 @@ import type { RangePreset } from "../../api/types";
 import { useAction } from "../../hooks/useAction";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import { RANGE_LABELS, RANGE_PRESETS } from "../../lib/ranges";
+import { useToast } from "../Toasts";
 
 /** Name and default range; on success the new (empty) dashboard opens in edit mode. */
 export function CreateDashboardDialog({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const create = useCreateDashboard();
+  const toast = useToast();
   const { run, busy, error } = useAction();
   const root = useRef<HTMLDivElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
@@ -25,6 +27,7 @@ export function CreateDashboardDialog({ onClose }: { onClose: () => void }) {
     if (trimmed === "" || busy) return;
     void run(async () => {
       const created = await create.mutateAsync({ name: trimmed, range });
+      toast.success("Dashboard created"); // the new page opens in edit mode; nothing there says it was just made
       navigate(`/dashboards/${created.id}`, { state: { edit: true } });
     });
   };

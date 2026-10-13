@@ -15,6 +15,11 @@ const policy = (max_failures = 5, block_minutes = 5, enabled = true) => ({
   defaults: { max_failures: 5, block_minutes: 5 },
 });
 
+/** The sign-in Save button keeps its name in every phase (an aria-label tells it from the timezone's Save), so its green shows as data-phase. */
+const signInButton = (scope: HTMLElement) => within(scope).getByRole("button", { name: "Save sign-in protection" });
+const signInPhase = (scope: HTMLElement, phase: "idle" | "saving" | "saved" | "fading") =>
+  waitFor(() => expect(signInButton(scope)).toHaveAttribute("data-phase", phase));
+
 const base = {
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: userFor("admin", { username: "admin" }) },
@@ -22,7 +27,7 @@ const base = {
 };
 
 describe("SettingsPage", () => {
-  it("loads, saves a timezone and shows the saved marker", async () => {
+  it("loads, saves a timezone and turns its Save button green", async () => {
     let tz = "UTC";
     const calls = mockFetch({
       ...base,
@@ -38,7 +43,7 @@ describe("SettingsPage", () => {
     await userEvent.clear(input);
     await userEvent.type(input, "Europe/Amsterdam");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("saved")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Saved" })).toHaveAttribute("data-phase", "saved");
     expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ timezone: "Europe/Amsterdam" });
   });
 
@@ -97,7 +102,7 @@ describe("SettingsPage sign-in protection", () => {
     expect(screen.getByRole("button", { name: "Save" })).toHaveClass("primary");
   });
 
-  it("saves both numbers, shows saved, and leaves the timezone alone", async () => {
+  it("saves both numbers, turns the button green, and leaves the timezone alone", async () => {
     let stored = policy();
     const calls = mockFetch({
       ...base,
@@ -118,7 +123,7 @@ describe("SettingsPage sign-in protection", () => {
     await userEvent.clear(minutes);
     await userEvent.type(minutes, "15");
     await userEvent.click(within(section()).getByRole("button", { name: "Save sign-in protection" }));
-    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    await signInPhase(section(), "saved");
     expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([
       ["/api/settings/sign-in", { max_failures: 8, block_minutes: 15, enabled: true }],
     ]);
@@ -137,7 +142,7 @@ describe("SettingsPage sign-in protection", () => {
     await userEvent.clear(input);
     await userEvent.type(input, "Asia/Qatar");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("saved")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Saved" })).toHaveAttribute("data-phase", "saved");
     expect(calls.filter((c) => c.method === "PUT").map((c) => c.path)).toEqual(["/api/settings/general"]);
   });
 
@@ -152,7 +157,7 @@ describe("SettingsPage sign-in protection", () => {
     await waitFor(() => expect(failures).toHaveValue(5));
     await userEvent.click(within(section()).getByRole("button", { name: "Save sign-in protection" }));
     expect(await within(section()).findByRole("alert")).toHaveTextContent("block_minutes must be between 1 and 60");
-    expect(within(section()).queryByText("saved")).not.toBeInTheDocument();
+    await signInPhase(section(), "idle");
   });
 
   it("says so, in its own section, when the policy cannot be read; the timezone form still works", async () => {
@@ -243,7 +248,7 @@ describe("SettingsPage sign-in protection switch", () => {
     expect(puts()).toHaveLength(0);
   });
 
-  it("Switch off sends one PUT with confirm=true and enabled:false, closes the dialog and shows saved", async () => {
+  it("Switch off sends one PUT with confirm=true and enabled:false, closes the dialog and turns the button green", async () => {
     const { puts, urls } = open();
     await userEvent.click(await theSwitch());
     await save();
@@ -252,7 +257,7 @@ describe("SettingsPage sign-in protection switch", () => {
     expect(puts().map((c) => c.body)).toEqual([{ max_failures: 5, block_minutes: 5, enabled: false }]);
     expect(urls).toHaveLength(1);
     expect(new URL(urls[0], "http://x").searchParams.get("confirm")).toBe("true");
-    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    await signInPhase(section(), "saved");
     await waitFor(() => expect(screen.getByRole("switch", { name: SWITCH })).not.toBeChecked());
     expect(screen.getByText(WARNING)).toBeInTheDocument();
   });
@@ -286,7 +291,7 @@ describe("SettingsPage sign-in protection switch", () => {
     await userEvent.clear(failures);
     await userEvent.type(failures, "6");
     await save();
-    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    await signInPhase(section(), "saved");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(puts().map((c) => c.body)).toEqual([{ max_failures: 6, block_minutes: 5, enabled: true }]);
     expect(urls.map((u) => new URL(u, "http://x").search)).toEqual([""]);
@@ -299,7 +304,7 @@ describe("SettingsPage sign-in protection switch", () => {
     await userEvent.click(sw);
     expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
     await save();
-    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    await signInPhase(section(), "saved");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(puts().map((c) => c.body)).toEqual([{ max_failures: 5, block_minutes: 5, enabled: true }]);
     expect(new URL(urls[0], "http://x").search).toBe("");
@@ -313,7 +318,7 @@ describe("SettingsPage sign-in protection switch", () => {
     await userEvent.clear(minutes);
     await userEvent.type(minutes, "20");
     await save();
-    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    await signInPhase(section(), "saved");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(puts().map((c) => c.body)).toEqual([{ max_failures: 5, block_minutes: 20, enabled: false }]);
     expect(new URL(urls[0], "http://x").search).toBe("");
@@ -355,14 +360,14 @@ describe("SettingsPage sign-in protection switch", () => {
     expect(calls.filter((c) => c.method === "GET" && c.path === "/api/settings/sign-in")).toHaveLength(2);
   });
 
-  it("clears the saved marker when the switch is touched", async () => {
+  it("drops the green when the switch is touched", async () => {
     open(policy(5, 5, false));
     const sw = await theSwitch();
     await waitFor(() => expect(sw).not.toBeChecked());
     await save();
-    expect(await within(section()).findByText("saved")).toBeInTheDocument();
+    await signInPhase(section(), "saved");
     await userEvent.click(sw);
-    expect(within(section()).queryByText("saved")).not.toBeInTheDocument();
+    await signInPhase(section(), "idle");
   });
 });
 
@@ -542,7 +547,7 @@ describe("SettingsPage cards and the About card (W7j)", () => {
     expect(save).toHaveAttribute("type", "submit");
     await userEvent.clear(input);
     await userEvent.type(input, "Asia/Qatar{Enter}");
-    expect(await screen.findByText("saved")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Saved" })).toHaveAttribute("data-phase", "saved");
     expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([["/api/settings/general", { timezone: "Asia/Qatar" }]]);
   });
 
@@ -555,7 +560,7 @@ describe("SettingsPage cards and the About card (W7j)", () => {
     const failures = screen.getByLabelText("Failed sign-ins before a block");
     await userEvent.clear(failures);
     await userEvent.type(failures, "9{Enter}");
-    expect(await within(form).findByText("saved")).toBeInTheDocument();
+    await signInPhase(form, "saved");
     expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([
       ["/api/settings/sign-in", { max_failures: 9, block_minutes: 5, enabled: true }],
     ]);

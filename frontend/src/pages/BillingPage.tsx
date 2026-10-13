@@ -8,6 +8,7 @@ import { ESTIMATED_TIP, Figure, PARTIAL_TIP } from "../components/Figure";
 import { PAGE_NEED } from "../components/navItems";
 import { PageHeader } from "../components/PageHeader";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
+import { useToast } from "../components/Toasts";
 import {
   clampMonth, depthsByAsset, fmtCost, fmtKwh, fmtRate, MONTH_NAMES, monthLabel, monthsOfYear, shiftMonth, yearsBetween,
 } from "../lib/billing";
@@ -156,6 +157,7 @@ export function BillingPage() {
   const { can } = useAuth();
   const canExport = can("billing.export");
   const site = useSite();
+  const toast = useToast();
   const [picked, setPicked] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -172,6 +174,7 @@ export function BillingPage() {
     setExportError(null);
     try {
       await downloadCsv(`/api/billing/costs.csv?month=${month}`);
+      toast.info("CSV downloaded"); // a failure keeps its inline line
     } catch (error) {
       setExportError(error instanceof Error ? error.message : "export failed");
     } finally {

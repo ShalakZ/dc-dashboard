@@ -1,0 +1,27 @@
+@layer w6 {
+  /* W7k feedback (toasts). Tokens only; every rule is scoped by a class this piece owns. */
+
+  /* The stack is bottom right, above the page and below the dialogs (1000), so a later drawer can sit between (at most 800). It takes no click
+     of its own, only the toasts do, and the toasts are laid out oldest first, so the newest is the lowest one, nearest the corner. */
+  .toast-stack { position: fixed; right: 16px; bottom: 16px; z-index: 900; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; width: min(360px, calc(100vw - 32px)); pointer-events: none; }
+  .toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; padding: 10px 8px 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); font-size: var(--fs-base); line-height: 1.4; transition: opacity var(--motion), transform var(--motion); }
+  /* The slide-and-fade in is the browser's own (@starting-style); where it is not supported the toast simply appears. Reduced motion has no
+     transition at all (app.css), and Toasts.tsx then removes a leaving toast at once. */
+  @starting-style {
+    .toast { opacity: 0; transform: translateY(8px); }
+  }
+  .toast[data-leaving="true"] { opacity: 0; transform: translateY(8px); }
+
+  .toast-icon { flex: none; display: grid; place-items: center; height: 20px; }
+  .toast[data-kind="success"] .toast-icon { color: var(--ok); }
+  .toast[data-kind="info"] .toast-icon { color: var(--info); }
+  .toast[data-kind="error"] .toast-icon { color: var(--crit); }
+  .toast-text { flex: 1; min-width: 0; padding-top: 1px; overflow-wrap: anywhere; } /* a long asset name wraps, it never widens the toast */
+  .toast-count { flex: none; min-width: 20px; padding: 0 6px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; line-height: 20px; text-align: center; }
+  .toast-close { margin-top: -2px; }
+
+  /* A narrow window: the full width between the two margins. */
+  @media (max-width: 719.98px) {
+    .toast-stack { left: 16px; width: auto; }
+  }
+}

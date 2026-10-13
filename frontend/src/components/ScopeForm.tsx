@@ -4,6 +4,7 @@ import { keys, useInvalidate } from "../api/queries";
 import type { Scope, ScopeIn, ScopeSuggestions } from "../api/types";
 import { useAction } from "../hooks/useAction";
 import { parsePorts, parseTargets } from "../lib/scope";
+import { useToast } from "./Toasts";
 
 interface Props {
   initial?: Scope;
@@ -16,6 +17,7 @@ interface Props {
 export function ScopeForm({ initial, suggestions, onSaved, onCancel }: Props) {
   const invalidate = useInvalidate();
   const { run, busy, error } = useAction();
+  const toast = useToast();
   const [name, setName] = useState(initial?.name ?? "");
   const [targets, setTargets] = useState((initial?.targets ?? suggestions?.targets ?? []).join("\n"));
   const [ports, setPorts] = useState((initial?.ports ?? suggestions?.ports ?? []).join(", "));
@@ -25,7 +27,10 @@ export function ScopeForm({ initial, suggestions, onSaved, onCancel }: Props) {
     return run(async () => {
       const body: ScopeIn = { name, targets: parseTargets(targets), ports: parsePorts(ports) };
       if (initial) await api.patch(`/api/scopes/${initial.id}`, body);
-      else await api.post("/api/scopes", body);
+      else {
+        await api.post("/api/scopes", body);
+        toast.success("Scan scope created"); // right after the request; an edit closes the form and needs no word
+      }
       await invalidate(keys.scopes);
       onSaved();
     });

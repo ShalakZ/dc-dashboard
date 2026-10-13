@@ -8,6 +8,7 @@ import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { PageCard } from "../components/PageCard";
 import { PageHeader } from "../components/PageHeader";
 import { READ_ONLY_TEXT, ReadOnlyNote } from "../components/ReadOnlyNote";
+import { SaveButton } from "../components/SaveButton";
 import { FormSkeleton, PageCardSkeleton, ParagraphSkeleton, Skeleton, SkeletonRegion } from "../components/Skeleton";
 import { formatSiteDateTime } from "../lib/siteTime";
 
@@ -40,6 +41,9 @@ const TIMEZONE_HELP = "The site's time zone. It decides where a day and a month 
   + "energy totals, Billing and dashboard ranges) and the times shown in the app. Readings are stored in UTC.";
 const SIGN_IN_HELP = "After this many wrong passwords for one account from one computer, that account is blocked from that computer for "
   + "this long. Restarting the api service clears every block; Unblock on the Users & Roles page lets one account in sooner.";
+
+// The loaded Save button (SaveButton) is this wide in every state (its widest face, the check with "Saved"); the skeleton block matches it.
+const SAVE_WIDTH = 92;
 
 // What the Sign-in protection card says to a role that has `settings.view` but not `settings.security` (W9b): the page-wide line would be
 // wrong here, because the same role may well be able to change General.
@@ -146,8 +150,7 @@ function SignInProtection() {
           <div className="form-foot">
             {canEdit ? (
               <div className="row">
-                <button type="submit" className="primary" aria-label="Save sign-in protection" disabled={put.isPending}>Save</button>
-                {put.isSuccess && <span className="muted"> saved</span>}
+                <SaveButton state={put.status} className="primary" ariaLabel="Save sign-in protection" />
               </div>
             ) : <p className="muted">{SIGN_IN_READ_ONLY_TEXT}</p>}
             {put.isError && !asking && <p className="error" role="alert">{detailText(put.error)}</p>}
@@ -206,7 +209,7 @@ export function SettingsPage() {
               <div className="sk-field"><Skeleton width="9ch" /><Skeleton variant="block" height={38} /></div>
               <ParagraphSkeleton text={TIMEZONE_HELP} className="muted" />
               <div className="form-foot">
-                {canEdit ? <div className="row"><Skeleton variant="block" width={64} height={34} /></div> : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
+                {canEdit ? <div className="row"><Skeleton variant="block" width={SAVE_WIDTH} height={34} /></div> : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
               </div>
             </div>
           </PageCardSkeleton>
@@ -217,7 +220,7 @@ export function SettingsPage() {
               <div className="sk-field"><Skeleton width="18ch" /><Skeleton variant="block" height={38} /></div>
               <ParagraphSkeleton text={SIGN_IN_HELP} className="muted" />
               <div className="form-foot">
-                {canEditSignIn ? <div className="row"><Skeleton variant="block" width={64} height={34} /></div> : <ParagraphSkeleton text={SIGN_IN_READ_ONLY_TEXT} className="muted" />}
+                {canEditSignIn ? <div className="row"><Skeleton variant="block" width={SAVE_WIDTH} height={34} /></div> : <ParagraphSkeleton text={SIGN_IN_READ_ONLY_TEXT} className="muted" />}
               </div>
             </div>
           </PageCardSkeleton>
@@ -260,8 +263,7 @@ export function SettingsPage() {
             <div className="form-foot">
               {canEdit ? (
                 <div className="row">
-                  <button type="submit" className="primary" disabled={put.isPending}>Save</button>
-                  {put.isSuccess && <span className="muted"> saved</span>}
+                  <SaveButton state={put.status} className="primary" />
                 </div>
               ) : <ReadOnlyNote />}
               {put.isError && <p className="error" role="alert">{detailText(put.error)}</p>}

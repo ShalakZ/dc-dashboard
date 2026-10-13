@@ -2,9 +2,11 @@ import { useState } from "react";
 import { ApiError } from "../api/client";
 import { useChangePassword } from "../api/queries";
 import { PageHeader } from "../components/PageHeader";
+import { useToast } from "../components/Toasts";
 
 export function PasswordPage() {
   const change = useChangePassword();
+  const toast = useToast();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [repeat, setRepeat] = useState("");
@@ -27,7 +29,14 @@ export function PasswordPage() {
           setLocalError(null);
           change.mutate(
             { current_password: current, new_password: next },
-            { onSuccess: () => { setCurrent(""); setNext(""); setRepeat(""); } },
+            {
+              onSuccess: () => {
+                setCurrent("");
+                setNext("");
+                setRepeat("");
+                toast.success("Password changed. Other sessions were signed out."); // the one confirmation; errors keep their lines below
+              },
+            },
           );
         }}
       >
@@ -46,12 +55,6 @@ export function PasswordPage() {
         <button type="submit" className="primary" disabled={change.isPending}>Change password</button>
         {localError && <p className="error" role="alert">{localError}</p>}
         {apiError && <p className="error" role="alert">{apiError}</p>}
-        {change.isSuccess && (
-          <p className="form-ok">
-            <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
-            Password changed. Other sessions were signed out.
-          </p>
-        )}
       </form>
     </section>
   );

@@ -8,8 +8,10 @@ import { RowActions } from "../components/RowActions";
 import { ScanProgress } from "../components/ScanProgress";
 import { ScopeForm } from "../components/ScopeForm";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
+import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
+import { useConfirm } from "../hooks/useConfirm";
 import { claimedCount } from "../lib/scanText";
 import { formatSiteDateTime } from "../lib/siteTime";
 
@@ -33,6 +35,8 @@ export function ScansPage() {
   const site = useSite();
   const invalidate = useInvalidate();
   const { run, busy, error: actionError } = useAction();
+  const [ask, confirmDialog] = useConfirm();
+  const toast = useToast();
   const [form, setForm] = useState<FormState>(null);
   const suggestions = useScopeSuggestions(canEdit && form === "new");
   const [pending, setPending] = useState<{ scope: Scope; preview: ScopePreview } | null>(null);
@@ -64,12 +68,16 @@ export function ScansPage() {
     setPending(null);
     setForm(null);
   };
-  const remove = (scope: Scope) => run(async () => {
+  const remove = async (scope: Scope) => {
     setPending(null);
-    if (!window.confirm(`Delete scope "${scope.name}"?`)) return;
-    await api.del(`/api/scopes/${scope.id}`);
-    await invalidate(keys.scopes);
-  });
+    // Asked outside `run`: while the question is open nothing is in flight, so the trash button stays enabled and can take the focus back.
+    if (!(await ask({ title: `Delete scope "${scope.name}"?`, message: "This can't be undone." }))) return;
+    await run(async () => {
+      await api.del(`/api/scopes/${scope.id}`);
+      toast.success(`Scan scope "${scope.name}" deleted`);
+      await invalidate(keys.scopes);
+    });
+  };
 
   if (isLoading) {
     // The gap stands where the New scope button will be; a role without it has no actions slot (it would be 6.5px taller than the real one).
@@ -91,6 +99,7 @@ export function ScansPage() {
         ) : undefined}
       />
       {actionError && <p className="error" role="alert">{actionError}</p>}
+      {confirmDialog}
       {form === "new" && suggestions.isPending && <p className="muted">loading suggestions…</p>}
       {form === "new" && !suggestions.isPending && (
         <div className="scope-card">

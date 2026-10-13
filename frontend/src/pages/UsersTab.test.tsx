@@ -5,6 +5,7 @@ import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
+import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
 import type { PermissionId } from "../lib/permissions";
 import { UsersTab } from "./UsersTab";
@@ -50,13 +51,15 @@ describe("UsersTab", () => {
 
   it("creates a user, changes a role and deactivates", async () => {
     const calls = mockFetch(routes());
-    renderWithProviders(<UsersTab onDeleted={() => {}} />, { route: "/users", path: "/users" });
+    const toasts = spyToasts();
+    renderWithProviders(<UsersTab onDeleted={() => {}} />, { route: "/users", path: "/users", toasts: toasts.api });
     await screen.findByText("ops", { selector: "td" });
     await userEvent.type(screen.getByLabelText("Username"), "view");
     await userEvent.type(screen.getByLabelText("Password"), "longenough");
     await userEvent.selectOptions(screen.getByLabelText("Role"), "viewer");
     await userEvent.click(screen.getByRole("button", { name: "Create user" }));
     expect(await screen.findByText("view", { selector: "td" })).toBeInTheDocument();
+    await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "User created" }]));
     const opsRow = screen.getByText("ops", { selector: "td" }).closest("tr")!;
     await userEvent.selectOptions(within(opsRow).getByRole("combobox"), "viewer");
     await userEvent.click(within(await openMenu(opsRow, "ops")).getByRole("menuitem", { name: "Deactivate" }));
@@ -65,16 +68,20 @@ describe("UsersTab", () => {
     expect(within(await openMenu(opsRow, "ops")).getByRole("menuitem", { name: "Activate" })).toBeInTheDocument();
     const patches = calls.filter((c) => c.method === "PATCH").map((c) => c.body);
     expect(patches).toEqual([{ role: "viewer" }, { active: false }]);
+    // The role change and the deactivation show their result on the row (the select, the chip): no toast for them.
+    expect(toasts.calls).toEqual([{ kind: "success", text: "User created" }]);
   });
 
   it("shows the API error on a duplicate username", async () => {
     mockFetch({ ...routes(), "POST /api/users": { status: 409, body: { detail: "username already exists" } } });
-    renderWithProviders(<UsersTab onDeleted={() => {}} />, { route: "/users", path: "/users" });
+    const toasts = spyToasts();
+    renderWithProviders(<UsersTab onDeleted={() => {}} />, { route: "/users", path: "/users", toasts: toasts.api });
     await screen.findByText("ops", { selector: "td" });
     await userEvent.type(screen.getByLabelText("Username"), "ops");
     await userEvent.type(screen.getByLabelText("Password"), "longenough");
     await userEvent.click(screen.getByRole("button", { name: "Create user" }));
     expect(await screen.findByText("Username already exists.")).toBeInTheDocument();
+    expect(toasts.calls).toEqual([]); // the error line is the feedback
   });
 });
 
@@ -86,6 +93,8 @@ describe("UsersTab delete and unblock", () => {
     { id: 3, username: "locked", role: "viewer", active: true, blocked: true },
   ];
   /** The users route holds a mutable list; `extra` adds or overrides routes. */
+  let toasts = spyToasts();
+  beforeEach(() => { toasts = spyToasts(); });
   function open(extra: Parameters<typeof mockFetch>[0] = {}, onDeleted: () => void = () => {}): { users: Row[]; calls: Calls } {
     const users = rows();
     const calls = mockFetch({
@@ -96,7 +105,7 @@ describe("UsersTab delete and unblock", () => {
       "POST /api/users/3/unblock": () => { users[2].blocked = false; return { body: { cleared: 1 } }; },
       ...extra,
     });
-    renderWithProviders(<UsersTab onDeleted={onDeleted} />, { route: "/users", path: "/users" });
+    renderWithProviders(<UsersTab onDeleted={onDeleted} />, { route: "/users", path: "/users", toasts: toasts.api });
     return { users, calls };
   }
   const rowOf = (name: string) => screen.getByText(name, { selector: "td" }).closest("tr")!;
@@ -132,6 +141,7 @@ describe("UsersTab delete and unblock", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(deletes(calls).map((c) => c.path)).toEqual(["/api/users/2"]);
     expect(screen.getByText("locked", { selector: "td" })).toBeInTheDocument();
+    expect(toasts.calls).toEqual([{ kind: "success", text: 'User "ops" deleted' }]);
   });
 
   it("tells the page once a row is deleted, so it can take the keyboard focus (the row and its button are gone), and not when the delete is refused", async () => {
@@ -159,6 +169,7 @@ describe("UsersTab delete and unblock", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("ops", { selector: "td" })).toBeInTheDocument();
     expect(deletes(calls)).toHaveLength(1);
+    expect(toasts.calls).toEqual([]); // a refused delete shows its reason in the dialog and says nothing else
   });
 
   it("Cancel and Escape close the dialog without a request", async () => {
@@ -173,6 +184,7 @@ describe("UsersTab delete and unblock", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(deletes(calls)).toHaveLength(0);
     expect(screen.getByText("ops", { selector: "td" })).toBeInTheDocument();
+    expect(toasts.calls).toEqual([]);
   });
 
   it("marks a blocked account next to its status and offers Unblock in its menu only", async () => {
@@ -235,6 +247,8 @@ describe("UsersTab reset password", () => {
     { id: 1, username: "admin", role: "admin", active: true },
     { id: 2, username: "ops", role: "operator", active: true },
   ];
+  let toasts = spyToasts();
+  beforeEach(() => { toasts = spyToasts(); });
   function open(extra: Parameters<typeof mockFetch>[0] = {}) {
     const calls = mockFetch({
       "GET /api/setup": { body: { needed: false } },
@@ -243,7 +257,7 @@ describe("UsersTab reset password", () => {
       "PATCH /api/users/2": { body: { id: 2, username: "ops", role: "operator", active: true } },
       ...extra,
     });
-    renderWithProviders(<UsersTab onDeleted={() => {}} />, { route: "/users", path: "/users" });
+    renderWithProviders(<UsersTab onDeleted={() => {}} />, { route: "/users", path: "/users", toasts: toasts.api });
     return calls;
   }
   const opsRow = () => screen.getByText("ops", { selector: "td" }).closest("tr")!;
@@ -271,6 +285,8 @@ describe("UsersTab reset password", () => {
     await waitFor(() => expect(within(opsRow()).queryByLabelText("New password for ops")).not.toBeInTheDocument());
     expect(calls.filter((c) => c.method === "PATCH").map((c) => c.body)).toEqual([{ password: "longenough" }]);
     expect(trigger()).toHaveFocus();
+    // The form closes exactly as Cancel does, so the toast is the only sign that the password was reset.
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Password reset for ops" }]);
   });
 
   it("Cancel closes the form without a request and gives the focus back to the menu button", async () => {
@@ -280,6 +296,7 @@ describe("UsersTab reset password", () => {
     expect(within(opsRow()).queryByLabelText("New password for ops")).not.toBeInTheDocument();
     expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(0);
     expect(trigger()).toHaveFocus();
+    expect(toasts.calls).toEqual([]);
   });
 
   it("Escape does what Cancel does: closes the form without a request and gives the focus back to the menu button", async () => {
@@ -308,6 +325,7 @@ describe("UsersTab reset password", () => {
     await userEvent.type(within(opsRow()).getByLabelText("New password for ops"), "longenough{Enter}");
     expect(await within(opsRow()).findByRole("alert")).toHaveTextContent("Password too weak.");
     expect(within(opsRow()).getByLabelText("New password for ops")).toBeInTheDocument();
+    expect(toasts.calls).toEqual([]);
   });
 });
 

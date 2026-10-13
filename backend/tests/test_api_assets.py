@@ -232,6 +232,187 @@ async def test_a_refused_delete_does_not_wake_the_collector_but_a_confirmed_one_
         assert await asyncio.wait_for(received.get(), timeout=5) == ""
 
 
+COUNT_KEYS = ("assets", "mappings", "tariffs")
+
+
+async def audit_count(db) -> int:
+    return await db.fetchval("SELECT count(*) FROM audit_log")
+
+
+async def test_impact_of_a_leaf_is_one_asset_and_nothing_else(client, db):
+    await login_as(client, db)
+    lone = await add(client, "Lone")
+    response = await client.get(f"/api/assets/{lone['id']}/impact")
+    assert response.status_code == 200
+    assert response.json() == {"assets": 1, "mappings": 0, "tariffs": 0}  # exactly these keys: counts, nothing else
+
+
+async def test_impact_reports_what_the_delete_would_refuse_with(client, db):
+    await login_as(client, db)
+    site = await add(client, "Site")
+    room = await add(client, "Room", site["id"])
+    await add(client, "Rack", site["id"])
+    await make_mapping(db, await make_point(db, await make_source(db), "a"), room["id"])
+    await add_tariff(db, room["id"])
+
+    impact = await client.get(f"/api/assets/{site['id']}/impact")
+    refused = await client.delete(f"/api/assets/{site['id']}")
+    assert impact.status_code == 200 and refused.status_code == 409
+    assert impact.json() == {"assets": 3, "mappings": 1, "tariffs": 1}
+    assert impact.json() == {key: refused.json()[key] for key in COUNT_KEYS}
+
+
+async def test_impact_is_404_for_an_unknown_asset(client, db):
+    await login_as(client, db)
+    assert (await client.get("/api/assets/999/impact")).status_code == 404
+
+
+async def test_impact_asks_for_the_permission_of_the_delete_it_previews(client, db):
+    await login_as(client, db)
+    victim = await add(client, "Victim")
+    await client.post("/api/logout")
+    assert (await client.get(f"/api/assets/{victim['id']}/impact")).status_code == 401
+    for role in ("viewer", "operator"):
+        await login_as(client, db, role)
+        assert (await client.get(f"/api/assets/{victim['id']}/impact")).status_code == 403
+        await client.post("/api/logout")
+    await login_as(client, db)
+    assert (await client.get(f"/api/assets/{victim['id']}/impact")).status_code == 200
+
+
+async def test_impact_changes_nothing_writes_no_audit_row_and_does_not_wake_the_collector(client, db, database_url):
+    await login_as(client, db)
+    site = await add(client, "Site")
+    await add(client, "Room", site["id"])
+    before = await audit_count(db)
+    async with listening(database_url, CONFIG_CHANNEL) as received:
+        assert (await client.get(f"/api/assets/{site['id']}/impact")).status_code == 200
+        await db.execute("SELECT pg_notify($1, 'sentinel')", CONFIG_CHANNEL)
+        assert await asyncio.wait_for(received.get(), timeout=5) == "sentinel"  # nothing came before it
+    assert await audit_count(db) == before
+    assert await db.fetchval("SELECT count(*) FROM assets") == 2
+
+
+async def tree_with_everything(client, db, source_name: str = "sim") -> dict:
+    """A site with a room and a rack below it, two mappings and a tariff: real counts of 3 assets, 2 mappings, 1 tariff."""
+    site = await add(client, "Site")
+    room = await add(client, "Room", site["id"])
+    rack = await add(client, "Rack", room["id"])
+    source = await make_source(db, source_name)
+    await make_mapping(db, await make_point(db, source, "a"), room["id"])
+    await make_mapping(db, await make_point(db, source, "b"), rack["id"])
+    await add_tariff(db, rack["id"])
+    return site
+
+
+async def test_a_delete_that_would_remove_more_than_expected_is_refused_even_when_confirmed(client, db, database_url):
+    await login_as(client, db)
+    site = await tree_with_everything(client, db)
+    before = await audit_count(db)
+    async with listening(database_url, CONFIG_CHANNEL) as received:
+        response = await client.delete(f"/api/assets/{site['id']}?confirm=true&expect_assets=1")
+        assert response.status_code == 409
+        body = response.json()
+        assert {key: body[key] for key in COUNT_KEYS} == {"assets": 3, "mappings": 2, "tariffs": 1}  # the NEW counts
+        assert "More than you were shown" in body["detail"]
+        assert "3 assets, 2 mappings and 1 tariff" in body["detail"]
+        await db.execute("SELECT pg_notify($1, 'sentinel')", CONFIG_CHANNEL)
+        assert await asyncio.wait_for(received.get(), timeout=5) == "sentinel"  # the refusal woke nobody
+    assert await db.fetchval("SELECT count(*) FROM assets") == 3
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 2
+    assert await audit_count(db) == before
+
+
+async def test_each_expect_count_is_checked_on_its_own(client, db):
+    await login_as(client, db)
+    site = await tree_with_everything(client, db)  # 3 assets, 2 mappings, 1 tariff
+    for query in ("expect_assets=2", "expect_mappings=1", "expect_tariffs=0"):
+        response = await client.delete(f"/api/assets/{site['id']}?confirm=true&{query}")
+        assert response.status_code == 409, query
+    # one count that is right does not excuse another that is too small
+    response = await client.delete(f"/api/assets/{site['id']}?confirm=true&expect_assets=3&expect_mappings=2&expect_tariffs=0")
+    assert response.status_code == 409
+    assert await db.fetchval("SELECT count(*) FROM assets") == 3
+
+
+async def test_a_delete_with_equal_or_larger_expected_counts_goes_ahead(client, db):
+    await login_as(client, db)
+    site = await tree_with_everything(client, db)
+    # less than the user saw is safe, so larger expected counts delete as asked
+    assert (await client.delete(f"/api/assets/{site['id']}?confirm=true&expect_assets=5&expect_mappings=9&expect_tariffs=4")).status_code == 204
+    assert await db.fetchval("SELECT count(*) FROM assets") == 0
+
+    other = await tree_with_everything(client, db, "second")
+    assert (await client.delete(f"/api/assets/{other['id']}?confirm=true&expect_assets=3&expect_mappings=2&expect_tariffs=1")).status_code == 204
+    assert await db.fetchval("SELECT count(*) FROM assets") == 0
+
+
+async def test_expect_counts_are_not_needed_and_do_not_replace_the_confirmation(client, db):
+    await login_as(client, db)
+    site = await tree_with_everything(client, db)
+    # matching counts without confirm=true still ask first, exactly as before
+    unconfirmed = await client.delete(f"/api/assets/{site['id']}?expect_assets=3&expect_mappings=2&expect_tariffs=1")
+    assert unconfirmed.status_code == 409 and "Repeat the request with confirm=true" in unconfirmed.json()["detail"]
+    # a leaf with an expectation that holds deletes without confirm, like a leaf without one
+    lone = await add(client, "Lone")
+    assert (await client.delete(f"/api/assets/{lone['id']}?expect_assets=1&expect_mappings=0&expect_tariffs=0")).status_code == 204
+
+
+async def test_a_grown_subtree_is_refused_without_confirm_too_and_says_so(client, db):
+    await login_as(client, db)
+    lone = await add(client, "Lone")
+    await add(client, "Late child", lone["id"])
+    response = await client.delete(f"/api/assets/{lone['id']}?expect_assets=1")
+    assert response.status_code == 409 and response.json()["assets"] == 2
+    assert "More than you were shown" in response.json()["detail"]
+
+
+async def test_a_negative_expect_count_is_a_422(client, db):
+    await login_as(client, db)
+    lone = await add(client, "Lone")
+    for name in ("expect_assets", "expect_mappings", "expect_tariffs"):
+        assert (await client.delete(f"/api/assets/{lone['id']}?confirm=true&{name}=-1")).status_code == 422
+    assert (await client.delete(f"/api/assets/{lone['id']}?confirm=true&expect_assets=lots")).status_code == 422
+    assert await db.fetchval("SELECT count(*) FROM assets") == 1
+
+
+async def test_a_child_added_after_the_preview_is_refused_and_the_new_counts_then_succeed(client, db):
+    await login_as(client, db)
+    site = await add(client, "Site")
+    preview = (await client.get(f"/api/assets/{site['id']}/impact")).json()
+    assert preview == {"assets": 1, "mappings": 0, "tariffs": 0}
+    await add(client, "Added later", site["id"])  # another admin adds a child while the dialog is open
+
+    stale = f"expect_assets={preview['assets']}&expect_mappings={preview['mappings']}&expect_tariffs={preview['tariffs']}"
+    refused = await client.delete(f"/api/assets/{site['id']}?confirm=true&{stale}")
+    assert refused.status_code == 409 and refused.json()["assets"] == 2
+    assert await db.fetchval("SELECT count(*) FROM assets") == 2
+
+    fresh = (await client.get(f"/api/assets/{site['id']}/impact")).json()
+    assert fresh["assets"] == 2
+    again = f"expect_assets={fresh['assets']}&expect_mappings={fresh['mappings']}&expect_tariffs={fresh['tariffs']}"
+    assert (await client.delete(f"/api/assets/{site['id']}?confirm=true&{again}")).status_code == 204
+    assert await db.fetchval("SELECT count(*) FROM assets") == 0
+    assert await asset_deleted_audit(db) == [
+        {"user_id": await db.fetchval("SELECT id FROM users WHERE username = 'admin'"), "asset_id": site["id"],
+         "name": "Site", "assets": 2, "mappings": 0, "tariffs": 0}
+    ]  # the audit detail is what it always was: no expect_* in it
+
+
+async def test_a_mapping_or_tariff_added_after_the_preview_is_refused(client, db):
+    await login_as(client, db)
+    panel = await add(client, "Panel")
+    stale = "expect_assets=1&expect_mappings=0&expect_tariffs=0"
+    await make_mapping(db, await make_point(db, await make_source(db), "a"), panel["id"])
+    mapped = await client.delete(f"/api/assets/{panel['id']}?confirm=true&{stale}")
+    assert mapped.status_code == 409 and mapped.json()["mappings"] == 1
+    await db.execute("DELETE FROM mappings")
+    await add_tariff(db, panel["id"])
+    priced = await client.delete(f"/api/assets/{panel['id']}?confirm=true&{stale}")
+    assert priced.status_code == 409 and priced.json()["tariffs"] == 1
+    assert await db.fetchval("SELECT count(*) FROM assets") == 1
+
+
 async def rows_for(db, pattern: str):
     return await db.fetch("SELECT actor_name, action, detail FROM audit_log WHERE action LIKE $1 ORDER BY id", pattern)
 

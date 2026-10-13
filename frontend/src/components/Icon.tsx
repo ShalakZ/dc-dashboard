@@ -83,6 +83,11 @@ export const ICONS = {
   kindDoor: <><path d="M4.5 21V3.5h15V21" /><path d="M2.5 21h19" /><path d="M8.5 21V8h7v13" /><path d="M12.5 15h.01" /></>,
   kindFire: <><path d="M12 2.5c.5 3.5 5.5 6 5.5 11.2a5.5 5.5 0 0 1-11 0c0-2.3 1-3.8 2.3-5.2.2 1.5.9 2.4 1.8 2.8C10.2 8.3 10.5 5 12 2.5Z" /><path d="M12 20.2c-1.6 0-2.6-1-2.6-2.4 0-1.5 1.4-2.2 2.6-4 1.2 1.8 2.6 2.5 2.6 4 0 1.4-1 2.4-2.6 2.4Z" /></>,
   kindLeak: <><path d="M12 2.5c2.7 3.4 5 6 5 9a5 5 0 0 1-10 0c0-3 2.3-5.6 5-9Z" /><path d="M3 19c1.6-1.6 3-1.6 4.5 0s3 1.6 4.5 0 3-1.6 4.5 0 3 1.6 4.5 0" /></>,
+  // W7k feedback: the saved check, a toast's close cross, and the info and alert signs on the toasts.
+  check: <path d="m5 12.5 4.5 4.5L19 7.5" />,
+  close: <path d="M6 6l12 12M18 6 6 18" />,
+  info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5.5M12 7.8h.01" /></>,
+  alert: <><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.2h.01" /></>,
   kindGeneric: <><path d="M12 3 4 7.5v9l8 4.5 8-4.5v-9L12 3Z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></>,
 } satisfies Record<string, ReactNode>;
 export type IconName = keyof typeof ICONS;

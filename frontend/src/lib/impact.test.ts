@@ -1,5 +1,5 @@
 import { ApiError } from "../api/client";
-import { assetImpact, assetLoss, sourceImpact, sourceLoss, storageLoss } from "./impact";
+import { assetDeletePath, assetImpact, assetLoss, sourceDeletePath, sourceImpact, sourceLoss, storageLoss } from "./impact";
 
 const conflict = (body: unknown) => new ApiError(409, "needs confirmation", body);
 
@@ -49,5 +49,16 @@ describe("storageLoss", () => {
     expect(storageLoss(new ApiError(409, "x", { detail: "x" }))).toBeNull(); // another kind of 409
     expect(storageLoss(new ApiError(422, "x", { detail: "x", deletes_now: true }))).toBeNull();
     expect(storageLoss(new Error("boom"))).toBeNull();
+  });
+});
+
+describe("the delete paths", () => {
+  it("carry confirm=true and the counts the dialog showed, so the server can refuse a delete that grew", () => {
+    expect(assetDeletePath(5, { assets: 3, mappings: 0, tariffs: 1 })).toBe("/api/assets/5?confirm=true&expect_assets=3&expect_mappings=0&expect_tariffs=1");
+    expect(sourceDeletePath(2, { points: 4, mappings: 4 })).toBe("/api/sources/2?confirm=true&expect_points=4&expect_mappings=4");
+  });
+  it("send zeros too (a count of 0 is an expectation, not an absent one)", () => {
+    expect(assetDeletePath(7, { assets: 1, mappings: 0, tariffs: 0 })).toBe("/api/assets/7?confirm=true&expect_assets=1&expect_mappings=0&expect_tariffs=0");
+    expect(sourceDeletePath(7, { points: 0, mappings: 0 })).toBe("/api/sources/7?confirm=true&expect_points=0&expect_mappings=0");
   });
 });

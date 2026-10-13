@@ -201,20 +201,24 @@ test("Source points: the menu of the last row stays inside the window and leaves
   await expect(menu).toBeHidden();
 });
 
-test("Sources: the trash button asks first, and Cancel keeps the source", async ({ page }) => {
+test("Sources: the trash button asks first in the page's own dialog, and Cancel keeps the source", async ({ page }) => {
   const { row, name } = await firstSource(page);
-  const asked: { type: string; message: string }[] = [];
-  // Registered before the click: the click does not return until the dialog has been answered.
-  page.once("dialog", async (dialog) => {
-    asked.push({ type: dialog.type(), message: dialog.message() });
+  // The browser's own box is gone (W7k): a handler registered before the click would see it, and must never be called.
+  const browserBoxes: string[] = [];
+  page.on("dialog", async (dialog) => {
+    browserBoxes.push(dialog.message());
     await dialog.dismiss();
   });
 
   await row.getByRole("button", { name: `Delete ${name}`, exact: true }).click();
 
-  await expect.poll(() => asked.length, { message: "the browser's confirm dialog opened once" }).toBe(1);
-  expect(asked[0].type).toBe("confirm");
-  expect(asked[0].message).toContain(`Delete source "${name}"`);
+  // Scoped by the dialog: a row action called "Delete NAME" would also match the substring "Delete".
+  const asked = page.getByRole("dialog", { name: /Delete/ });
+  await expect(asked).toBeVisible();
+  await expect(asked).toContainText(`Delete source "${name}"`);
+  await asked.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(asked).toBeHidden();
+  expect(browserBoxes, "the browser's own confirm box never opened").toEqual([]);
   await expect(row.getByRole("button", { name: `Delete ${name}`, exact: true })).toBeVisible();
   await expect(row.getByRole("button", { name: `Actions for ${name}`, exact: true })).toBeVisible();
   const sources = await getJson<{ name: string }[]>(page, "/api/sources");

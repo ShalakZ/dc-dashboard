@@ -166,6 +166,142 @@ async def test_deleting_a_source_is_admin_only(client, db):
     assert await db.fetchval("SELECT count(*) FROM sources") == 1
 
 
+async def audit_count(db) -> int:
+    return await db.fetchval("SELECT count(*) FROM audit_log")
+
+
+async def mapped_source(client, db, mapped: int = 2, unmapped: int = 1) -> dict:
+    """A simulator source with `mapped` mapped points (one mapping each) and `unmapped` points nobody mapped."""
+    source = await create_sim(client)
+    asset = await make_asset(db, "Panel")
+    for n in range(mapped):
+        await make_mapping(db, await make_point(db, source["id"], f"m{n}"), asset, metric=f"metric_{n}")
+    for n in range(unmapped):
+        await make_point(db, source["id"], f"u{n}")
+    return source
+
+
+async def test_impact_of_an_unmapped_source_is_zero(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    await make_point(db, source["id"], "unmapped")
+    response = await client.get(f"/api/sources/{source['id']}/impact")
+    assert response.status_code == 200
+    assert response.json() == {"points": 0, "mappings": 0}  # exactly these keys
+
+
+async def test_impact_counts_the_mapped_points_the_delete_would_refuse_with(client, db):
+    await login_as(client, db)
+    source = await mapped_source(client, db, mapped=2, unmapped=3)
+    impact = await client.get(f"/api/sources/{source['id']}/impact")
+    refused = await client.delete(f"/api/sources/{source['id']}")
+    assert impact.json() == {"points": 2, "mappings": 2}  # the three unmapped points are not counted
+    assert refused.status_code == 409
+    assert impact.json() == {key: refused.json()[key] for key in ("points", "mappings")}
+
+
+async def test_impact_is_404_for_an_unknown_source(client, db):
+    await login_as(client, db)
+    assert (await client.get("/api/sources/999/impact")).status_code == 404
+
+
+async def test_impact_asks_for_the_permission_of_the_delete_it_previews(client, db):
+    await login_as(client, db)
+    source = await mapped_source(client, db)
+    await client.post("/api/logout")
+    assert (await client.get(f"/api/sources/{source['id']}/impact")).status_code == 401
+    for role in ("viewer", "operator"):  # the Operator may list sources but may not delete them
+        await login_as(client, db, role)
+        assert (await client.get(f"/api/sources/{source['id']}/impact")).status_code == 403
+        await client.post("/api/logout")
+    await login_as(client, db)
+    assert (await client.get(f"/api/sources/{source['id']}/impact")).status_code == 200
+
+
+async def test_impact_changes_nothing_writes_no_audit_row_and_does_not_wake_the_collector(client, db, database_url):
+    await login_as(client, db)
+    source = await mapped_source(client, db)
+    before = await audit_count(db)
+    async with listening(database_url, CONFIG_CHANNEL) as received:
+        assert (await client.get(f"/api/sources/{source['id']}/impact")).status_code == 200
+        await db.execute("SELECT pg_notify($1, 'sentinel')", CONFIG_CHANNEL)
+        assert await asyncio.wait_for(received.get(), timeout=5) == "sentinel"  # nothing came before it
+    assert await audit_count(db) == before
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+    assert await db.fetchval("SELECT count(*) FROM points") == 3
+
+
+async def test_a_source_delete_that_would_remove_more_than_expected_is_refused_even_when_confirmed(client, db, database_url):
+    await login_as(client, db)
+    source = await mapped_source(client, db, mapped=3, unmapped=0)
+    before = await audit_count(db)
+    async with listening(database_url, CONFIG_CHANNEL) as received:
+        response = await client.delete(f"/api/sources/{source['id']}?confirm=true&expect_points=1&expect_mappings=3")
+        assert response.status_code == 409
+        body = response.json()
+        assert body["points"] == 3 and body["mappings"] == 3  # the NEW counts
+        assert "More than you were shown" in body["detail"] and "3 mapped points" in body["detail"]
+        await db.execute("SELECT pg_notify($1, 'sentinel')", CONFIG_CHANNEL)
+        assert await asyncio.wait_for(received.get(), timeout=5) == "sentinel"  # the refusal woke nobody
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 3
+    assert await audit_count(db) == before
+
+
+async def test_each_source_expect_count_is_checked_on_its_own(client, db):
+    await login_as(client, db)
+    source = await mapped_source(client, db, mapped=2)
+    for query in ("expect_points=1", "expect_mappings=1", "expect_points=2&expect_mappings=1"):
+        assert (await client.delete(f"/api/sources/{source['id']}?confirm=true&{query}")).status_code == 409, query
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+
+
+async def test_a_source_delete_with_equal_or_larger_expected_counts_goes_ahead(client, db):
+    await login_as(client, db)
+    source = await mapped_source(client, db, mapped=2)
+    assert (await client.delete(f"/api/sources/{source['id']}?confirm=true&expect_points=9&expect_mappings=2")).status_code == 204
+    assert await db.fetchval("SELECT count(*) FROM sources") == 0
+    assert await source_deleted_audit(db) == [
+        {"user_id": await db.fetchval("SELECT id FROM users WHERE username = 'admin'"), "source_id": source["id"],
+         "name": "sim", "points": 2, "mappings": 2}
+    ]  # the audit detail is what it always was: no expect_* in it
+
+
+async def test_source_expect_counts_do_not_replace_the_confirmation_and_calls_without_them_are_unchanged(client, db):
+    await login_as(client, db)
+    source = await mapped_source(client, db, mapped=1, unmapped=0)
+    unconfirmed = await client.delete(f"/api/sources/{source['id']}?expect_points=1&expect_mappings=1")
+    assert unconfirmed.status_code == 409 and "Repeat the request with confirm=true" in unconfirmed.json()["detail"]
+    lone = await make_source(db, "lone")
+    assert (await client.delete(f"/api/sources/{lone}?expect_points=0&expect_mappings=0")).status_code == 204
+
+
+async def test_a_negative_source_expect_count_is_a_422(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    for name in ("expect_points", "expect_mappings"):
+        assert (await client.delete(f"/api/sources/{source['id']}?confirm=true&{name}=-1")).status_code == 422
+    assert await db.fetchval("SELECT count(*) FROM sources") == 1
+
+
+async def test_a_point_mapped_after_the_preview_is_refused_and_the_new_counts_then_succeed(client, db):
+    await login_as(client, db)
+    source = await create_sim(client)
+    point = await make_point(db, source["id"], "later")
+    preview = (await client.get(f"/api/sources/{source['id']}/impact")).json()
+    assert preview == {"points": 0, "mappings": 0}
+    await make_mapping(db, point, await make_asset(db, "Panel"))  # another admin maps a point while the dialog is open
+
+    refused = await client.delete(f"/api/sources/{source['id']}?confirm=true&expect_points=0&expect_mappings=0")
+    assert refused.status_code == 409 and refused.json()["points"] == 1 and refused.json()["mappings"] == 1
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 1
+
+    fresh = (await client.get(f"/api/sources/{source['id']}/impact")).json()
+    assert fresh == {"points": 1, "mappings": 1}
+    assert (await client.delete(f"/api/sources/{source['id']}?confirm=true&expect_points=1&expect_mappings=1")).status_code == 204
+    assert await db.fetchval("SELECT count(*) FROM mappings") == 0
+
+
 async def test_a_refused_source_delete_does_not_wake_the_collector(client, db, database_url):
     await login_as(client, db)
     source = await create_sim(client)

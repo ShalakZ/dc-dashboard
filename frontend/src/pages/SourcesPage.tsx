@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { api } from "../api/client";
-import { keys, useCollectorStatus, useInvalidate, useSecretKeyStatus, useSite, useSources } from "../api/queries";
+import { keys, loadSourceImpact, useCollectorStatus, useInvalidate, useSecretKeyStatus, useSite, useSources } from "../api/queries";
 import type { Source, SourceImpact } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { meets } from "../auth/need";
-import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { ConnectionCheck } from "../components/ConnectionCheck";
+import { ImpactDeleteDialog } from "../components/ImpactDeleteDialog";
 import { JobStatus } from "../components/JobStatus";
 import { Modal } from "../components/Modal";
 import { PAGE_NEED } from "../components/navItems";
@@ -13,11 +13,12 @@ import { PageHeader } from "../components/PageHeader";
 import { RowActions, type RowAction } from "../components/RowActions";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { SourceForm } from "../components/SourceForm";
+import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { useNow } from "../hooks/useNow";
 import { ageNow, formatAge, formatSpan, secondsSince } from "../lib/age";
-import { sourceImpact, sourceLoss } from "../lib/impact";
+import { sourceDeletePath, sourceImpact, sourceLoss } from "../lib/impact";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { sourceStatusText } from "../lib/sourceStatus";
 
@@ -49,16 +50,18 @@ export function SourcesPage() {
   const statusUnreadable = collector.dataUpdatedAt > 0 && statusSilentFor > COLLECTOR_STATUS_STALE_SECONDS;
   const site = useSite();
   const invalidate = useInvalidate();
+  const toast = useToast();
   const [jobs, setJobs] = useState<Record<number, number>>({});
   const [showAdd, setShowAdd] = useState(false);
   // The source as it was when Edit was pressed, not a lookup into the list: the list is fetched every 10 s with new objects, which would reset the open form.
   const [editing, setEditing] = useState<Source | null>(null);
-  const [confirming, setConfirming] = useState<{ id: number; name: string; impact: SourceImpact } | null>(null);
+  // The source whose delete confirmation is open. It opens at once (the trash is the only way in) and asks the server what goes with it.
+  const [deleting, setDeleting] = useState<{ id: number; name: string } | null>(null);
   // The source whose step-by-step connection check is open in a dialog.
   const [checking, setChecking] = useState<{ id: number; name: string } | null>(null);
   const { run, busy, error: actionError } = useAction();
-  // While a test or delete runs or a delete confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap).
-  const locked = busy || confirming !== null || checking !== null;
+  // While a test runs or a delete confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap).
+  const locked = busy || deleting !== null || checking !== null;
   const openAdd = () => { if (!locked) setShowAdd(true); };
   const openEdit = (s: Source) => { if (!locked) setEditing(s); };
   const openCheck = (s: Source) => { if (!locked) setChecking({ id: s.id, name: s.name }); };
@@ -73,23 +76,16 @@ export function SourcesPage() {
     const enabled = sources.filter((s) => s.enabled).map((s) => s.id).sort((a, b) => a - b);
     setJobs(Object.fromEntries(enabled.map((id, i) => [id, job_ids[i]])));
   });
-  const removed = async (id: number, confirm: boolean) => {
-    await api.del(`/api/sources/${id}${confirm ? "?confirm=true" : ""}`);
-    setConfirming(null);
+  // `seen`: the counts the dialog showed; the server refuses (and the dialog shows the new numbers) if more would go now.
+  const removed = async (id: number, name: string, seen: SourceImpact) => {
+    await api.del(sourceDeletePath(id, seen));
+    // Right after the request, before the bookkeeping: a failing refresh must not swallow the one confirmation the person gets.
+    toast.success(`Source "${name}" deleted`);
+    setDeleting(null);
     // Its points and mappings go with it, so what the assets, the graph, Billing, the dashboards' widgets and the tariff list show can change too.
     await invalidate(keys.sources, keys.secretKey, keys.billing, keys.widgetData, keys.tariffs, keys.assets, keys.graph);
   };
-  const remove = (id: number, name: string) => run(async () => {
-    if (!window.confirm(`Delete source "${name}", its points and mappings?`)) return;
-    try {
-      await removed(id, false);
-    } catch (e) {
-      // The API refuses to delete mapped points without being told to: ask, then repeat the request with confirm.
-      const impact = sourceImpact(e);
-      if (!impact) throw e;
-      setConfirming({ id, name, impact });
-    }
-  });
+  const remove = (id: number, name: string) => { if (!locked) setDeleting({ id, name }); };
 
   // Each control asks for the permission of the call it makes. A person with none of them gets an empty menu, which renders nothing.
   const canTest = can("sources.test");
@@ -167,12 +163,18 @@ export function SourcesPage() {
           <div className="row"><button type="button" onClick={() => setChecking(null)}>Close</button></div>
         </Modal>
       )}
-      {confirming && (
-        <ConfirmDeleteDialog
-          title={`Delete source "${confirming.name}"?`}
-          message={sourceLoss(confirming.impact)}
-          onConfirm={() => removed(confirming.id, true)}
-          onCancel={() => setConfirming(null)}
+      {deleting && (
+        <ImpactDeleteDialog<SourceImpact>
+          title={`Delete source "${deleting.name}"?`}
+          queryKey={["impact", "source", deleting.id]}
+          load={() => loadSourceImpact(deleting.id)}
+          loss={sourceLoss}
+          isPlain={(impact) => impact.points === 0 && impact.mappings === 0}
+          // The preview counts only MAPPED points; the unmapped ones of a source are deleted with it too, so the plain sentence says so.
+          plainMessage="Its points go with it. This can't be undone."
+          grown={sourceImpact}
+          onConfirm={(seen) => removed(deleting.id, deleting.name, seen)}
+          onCancel={() => setDeleting(null)}
         />
       )}
       {sources.length === 0 ? (

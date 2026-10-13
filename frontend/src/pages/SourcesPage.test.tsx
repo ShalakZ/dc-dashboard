@@ -1,12 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { MockInstance } from "vitest";
 import { api } from "../api/client";
 import { keys, useCollectorStatus } from "../api/queries";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { renderWithProviders } from "../test/render";
+import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
 import type { PermissionId } from "../lib/permissions";
@@ -103,14 +105,6 @@ describe("SourcesPage", () => {
     await waitFor(() => expect(calls.some((c) => c.path === "/api/site")).toBe(true));
     expect(within(row).getByText("—")).toBeInTheDocument();
     expect(row).not.toHaveTextContent(/2026|2:05|14:05/);
-  });
-
-  it("shows an alert when deleting a source is rejected", async () => {
-    mockFetch({ ...routes("admin"), "DELETE /api/sources/2": { status: 403, body: { detail: "admin role required" } } });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-    renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
-    await userEvent.click(await screen.findByRole("button", { name: "Delete sim" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("admin role required");
   });
 
   it("lists status and last error, and tests one source", async () => {
@@ -308,39 +302,41 @@ describe("SourcesPage", () => {
       expect(await within(dialog).findByLabelText("Url")).toHaveValue("http://changed:9000");
     });
 
-    describe("while a delete runs or its confirmation is open", () => {
-      const impact = { detail: "needs confirmation", points: 3, mappings: 3 };
-      /** DELETE of source 2 is held, then answers 409 with the counts. */
+    describe("while a delete confirmation is open", () => {
+      const impact = { points: 3, mappings: 3 };
+      /** The preview of source 2 (what its delete takes with it) is held until released; the dialog opens at once, before it. */
       function startDelete() {
-        mockFetch({ ...routes("admin"), ...withConnectors, "DELETE /api/sources/2": { status: 409, body: impact } });
-        const hold = holdFetch((method, path) => method === "DELETE" && path === "/api/sources/2");
+        mockFetch({ ...routes("admin"), ...withConnectors, "GET /api/sources/2/impact": { body: impact } });
+        const hold = holdFetch((method, path) => method === "GET" && path === "/api/sources/2/impact");
         renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
         return hold;
       }
-      beforeEach(() => { vi.spyOn(window, "confirm").mockReturnValue(true); });
 
-      it("keeps Add source and Edit from opening a second dialog, and the confirm dialog ends up alone", async () => {
+      it("keeps Add source and Edit from opening a second dialog from the moment the trash is pressed, and the confirm dialog stays alone", async () => {
         const hold = startDelete();
         await userEvent.click(await screen.findByRole("button", { name: "Delete sim" }));
+        expect(screen.getByRole("dialog", { name: 'Delete source "sim"?' })).toHaveTextContent("Checking what this deletes…"); // already there, before the preview
         const add = screen.getByRole("button", { name: "Add source" });
-        const edit = await menuItem("Edit");
+        // the dialog's backdrop covers the page, so the menu behind it is reached without moving the focus
+        fireEvent.click(screen.getByRole("button", { name: /^Actions for /, hidden: true }));
+        const edit = screen.getByRole("menuitem", { name: "Edit", hidden: true });
         expect(add).toBeDisabled();
         expect(edit).toBeDisabled();
         expect(screen.getByRole("button", { name: "Delete sim" })).toBeDisabled();
-        expect(screen.getByRole("menuitem", { name: "Test" })).toBeDisabled();
+        expect(screen.getByRole("menuitem", { name: "Test", hidden: true })).toBeDisabled();
         await userEvent.click(add);
         await userEvent.click(edit);
-        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-        hold.release();
-        expect(await screen.findByRole("dialog", { name: 'Delete source "sim"?' })).toBeInTheDocument();
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        await act(async () => hold.release());
+        expect(await screen.findByText(/3 mapped points and 3 mappings will be deleted/)).toBeInTheDocument();
         expect(screen.getAllByRole("dialog")).toHaveLength(1);
       });
 
-      it("keeps them from opening a dialog next to the confirm dialog, and frees them when it is cancelled", async () => {
+      it("keeps them from opening a dialog next to the loaded confirm dialog, and frees them when it is cancelled", async () => {
         const hold = startDelete();
         await userEvent.click(await screen.findByRole("button", { name: "Delete sim" }));
-        hold.release();
-        await screen.findByRole("dialog", { name: 'Delete source "sim"?' });
+        await act(async () => hold.release());
+        await screen.findByText(/3 mapped points and 3 mappings will be deleted/);
         expect(screen.getByRole("button", { name: "Add source" })).toBeDisabled();
         await userEvent.click(screen.getByRole("button", { name: "Add source" }));
         // the dialog's backdrop covers the page, so the menu behind it is reached without moving the focus
@@ -358,7 +354,8 @@ describe("SourcesPage", () => {
 
     it("Add source opens a dialog with the same fields as before; pressing the button again does not close it; Escape does", async () => {
       const calls = mockFetch({ ...routes("admin"), ...withConnectors, "POST /api/sources": { status: 201, body: { id: 3 } } });
-      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+      const toasts = spyToasts();
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources", toasts: toasts.api });
       const add = await screen.findByRole("button", { name: "Add source" });
       await userEvent.click(add);
       const dialog = await screen.findByRole("dialog", { name: "Add source" });
@@ -372,6 +369,7 @@ describe("SourcesPage", () => {
       await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(calls.find((c) => c.method === "POST" && c.path === "/api/sources")?.body).toMatchObject({ name: "new one", connector_type: "simulator" });
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Source added" }]);
       await userEvent.click(add);
       await screen.findByRole("dialog", { name: "Add source" });
       await userEvent.keyboard("{Escape}");
@@ -403,112 +401,202 @@ describe("SourcesPage", () => {
   });
 
   describe("deleting", () => {
-    const impact = { detail: "needs confirmation", points: 3, mappings: 3 };
-    /** DELETE answers 409 with the counts until the request carries confirm=true. `needsConfirm` false = nothing mapped. */
-    function setup(needsConfirm: boolean, confirmed: { status: number; body?: object } = { status: 204 }, probes = false) {
+    const mapped = { points: 3, mappings: 3 };
+    const none = { points: 0, mappings: 0 };
+    const MAPPED_TEXT = "3 mapped points and 3 mappings will be deleted; the past energy and cost figures that depend on them disappear from Billing and dashboards.";
+    const PLAIN_TEXT = "Its points go with it. This can't be undone.";
+    const SEEN_MAPPED = "/api/sources/2?confirm=true&expect_points=3&expect_mappings=3";
+    const SEEN_NONE = "/api/sources/2?confirm=true&expect_points=0&expect_mappings=0";
+    /**
+     * The preview answers `impact` (or `preview`, a failure); the confirmed DELETE answers `confirmed` (a 204 takes the source out of the
+     * list). `hold` keeps the preview request in flight until `held.release()`.
+     */
+    function setup(
+      impact: object,
+      confirmed: { status: number; body?: object } = { status: 204 },
+      { probes = false, hold = false, preview }: { probes?: boolean; hold?: boolean; preview?: { status: number; body: object } } = {},
+    ) {
       const urls: string[] = [];
       let removed = false;
+      const toasts = spyToasts();
       const calls = mockFetch({
         ...routes("admin"),
         ...(probes ? { ...probeRoutes, ...assetGraphRoutes } : {}),
         "GET /api/sources": () => ({ body: removed ? [] : [source] }),
+        "GET /api/sources/2/impact": preview ?? { body: impact },
         "DELETE /api/sources/2": ({ url }) => {
           urls.push(url);
-          if (needsConfirm && !url.includes("confirm=true")) return { status: 409, body: impact };
           if (confirmed.status === 204) removed = true;
           return confirmed;
         },
       });
-      renderWithProviders(<><SourcesPage />{probes && <><CacheProbes /><AssetGraphProbes /></>}</>, { route: "/sources", path: "/sources" });
-      return { calls, urls };
+      const held = hold ? holdFetch((method, path) => method === "GET" && path === "/api/sources/2/impact") : null;
+      renderWithProviders(<><SourcesPage />{probes && <><CacheProbes /><AssetGraphProbes /></>}</>, { route: "/sources", path: "/sources", toasts: toasts.api });
+      return { calls, urls, toasts: toasts.calls, held };
     }
     const deletes = (calls: { method: string }[]) => calls.filter((c) => c.method === "DELETE").length;
     const click = async (name: string) => userEvent.click(await screen.findByRole("button", { name }));
+    const dialogOf = () => screen.findByRole("dialog", { name: 'Delete source "sim"?' });
 
-    beforeEach(() => { vi.spyOn(window, "confirm").mockReturnValue(true); });
+    // The browser's own box is gone: it must never be asked, whatever the test does.
+    let browserBox: MockInstance<Window["confirm"]>;
+    beforeEach(() => { browserBox = vi.spyOn(window, "confirm").mockReturnValue(true); });
+    afterEach(() => { expect(browserBox).not.toHaveBeenCalled(); });
 
-    it("deletes a source with nothing mapped as before: one request, no dialog", async () => {
-      const { calls, urls } = setup(false);
+    it("the trash opens ONE styled dialog, even for a source with nothing mapped: it says its points go too, and has a plain Delete button", async () => {
+      const { calls } = setup(none);
       await click("Delete sim");
-      await waitFor(() => expect(screen.queryByText("sim")).not.toBeInTheDocument());
-      expect(urls).toEqual(["/api/sources/2"]);
-      expect(deletes(calls)).toBe(1);
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByText(PLAIN_TEXT)).toBeInTheDocument();
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      expect(within(dialog).getByRole("button", { name: "Delete" })).toBeEnabled();
+      expect(deletes(calls)).toBe(0); // nothing is sent until the button is pressed
     });
 
-    it.each([["a source with nothing mapped", false], ["a source with mapped points, after Delete anyway", true]])(
+    it("a source with nothing mapped: Delete sends the counts it showed, the row goes, and one toast says so", async () => {
+      const { calls, urls, toasts } = setup(none);
+      await click("Delete sim");
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByText("sim")).not.toBeInTheDocument());
+      expect(urls).toEqual([SEEN_NONE]);
+      expect(deletes(calls)).toBe(1);
+      expect(toasts).toEqual([{ kind: "success", text: 'Source "sim" deleted' }]);
+    });
+
+    it.each([["a source with nothing mapped", none], ["a source with mapped points, after Delete anyway", mapped]])(
       "refreshes billing, the dashboards' widget data and the tariff list too, because they depend on its points: %s",
-      async (_case, needsConfirm) => {
-        const { calls } = setup(needsConfirm, undefined, true);
+      async (_case, impact) => {
+        const { calls } = setup(impact, undefined, { probes: true });
         await waitFor(() => expect(probeFetches(calls)).toEqual({ billing: 1, widgetData: 1, tariffs: 1 }));
         await click("Delete sim");
-        if (needsConfirm) await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
+        await userEvent.click(await within(await dialogOf()).findByRole("button", { name: /^Delete( anyway)?$/ }));
         await waitFor(() => expect(probeFetches(calls)).toEqual({ billing: 2, widgetData: 2, tariffs: 2 }));
       },
     );
 
-    it.each([["a source with nothing mapped", false], ["a source with mapped points, after Delete anyway", true]])(
+    it.each([["a source with nothing mapped", none], ["a source with mapped points, after Delete anyway", mapped]])(
       "refreshes the assets and the graph too, because its points and mappings go with it: %s",
-      async (_case, needsConfirm) => {
-        const { calls } = setup(needsConfirm, undefined, true);
+      async (_case, impact) => {
+        const { calls } = setup(impact, undefined, { probes: true });
         await waitFor(() => expect(assetGraphFetches(calls)).toEqual([1, 1]));
         await click("Delete sim");
-        if (needsConfirm) await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
+        await userEvent.click(await within(await dialogOf()).findByRole("button", { name: /^Delete( anyway)?$/ }));
         await waitFor(() => expect(assetGraphFetches(calls)).toEqual([2, 2]));
       },
     );
 
-    it("sends nothing when the first confirmation is declined", async () => {
-      vi.spyOn(window, "confirm").mockReturnValue(false);
-      const { calls } = setup(true);
+    it("opens at once with 'Checking what this deletes…' and a confirm button that cannot be pressed; nothing is deleted before the preview arrived", async () => {
+      const { calls, held } = setup(mapped, undefined, { hold: true });
       await click("Delete sim");
+      const dialog = await dialogOf();
+      expect(dialog).toHaveTextContent("Checking what this deletes…");
+      const confirm = within(dialog).getByRole("button", { name: "Delete" }); // plain "Delete" until the answer says it takes more than the row
+      expect(confirm).toBeDisabled();
+      await userEvent.click(confirm);
       expect(deletes(calls)).toBe(0);
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      await act(async () => held!.release());
+      expect(await within(dialog).findByText(MAPPED_TEXT)).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Delete anyway" })).toBeEnabled();
     });
 
-    it("shows what will be lost when the API asks for confirmation", async () => {
-      setup(true);
+    it("shows what will be lost when points of it are mapped", async () => {
+      setup(mapped);
       await click("Delete sim");
-      const dialog = await screen.findByRole("dialog", { name: 'Delete source "sim"?' });
-      expect(dialog).toHaveTextContent(
-        "3 mapped points and 3 mappings will be deleted; the past energy and cost figures that depend on them disappear from Billing and dashboards.",
-      );
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByText(MAPPED_TEXT)).toBeInTheDocument();
       expect(within(dialog).getByRole("button", { name: "Delete anyway" })).toBeInTheDocument();
     });
 
-    it("Cancel closes the dialog and deletes nothing", async () => {
-      const { calls } = setup(true);
-      await click("Delete sim");
-      await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      expect(deletes(calls)).toBe(1); // only the first, refused request
-      expect(screen.getByText("sim")).toBeInTheDocument();
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    });
+    it.each([["Cancel", async () => userEvent.click(screen.getByRole("button", { name: "Cancel" }))], ["Escape", async () => userEvent.keyboard("{Escape}")]])(
+      "%s closes the dialog and sends no DELETE at all, with no toast",
+      async (_how, leave) => {
+        const { calls, toasts } = setup(mapped);
+        await click("Delete sim");
+        await within(await dialogOf()).findByText(MAPPED_TEXT);
+        await leave();
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(deletes(calls)).toBe(0);
+        expect(toasts).toEqual([]);
+        expect(screen.getByText("sim")).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      },
+    );
 
-    it("Delete anyway repeats the request with confirm=true, then closes and refreshes the list", async () => {
-      const { urls } = setup(true);
+    it("Delete anyway sends the counts it showed, then closes, refreshes the list and raises the toast", async () => {
+      const { urls, toasts } = setup(mapped);
       await click("Delete sim");
-      await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete anyway" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      expect(urls).toEqual(["/api/sources/2", "/api/sources/2?confirm=true"]);
+      expect(urls).toEqual([SEEN_MAPPED]);
       await waitFor(() => expect(screen.queryByText("sim")).not.toBeInTheDocument());
+      expect(toasts).toEqual([{ kind: "success", text: 'Source "sim" deleted' }]);
     });
 
-    it("keeps the dialog open and says why when the confirmed request fails", async () => {
-      setup(true, { status: 500, body: { detail: "database is down" } });
+    it("keeps the dialog open and says why when the confirmed request fails, with no toast", async () => {
+      const { toasts } = setup(mapped, { status: 500, body: { detail: "database is down" } });
       await click("Delete sim");
-      await userEvent.click(await screen.findByRole("button", { name: "Delete anyway" }));
-      const dialog = await screen.findByRole("dialog");
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete anyway" }));
+      const dialog = await dialogOf();
       expect(await within(dialog).findByRole("alert")).toHaveTextContent("database is down");
+      expect(toasts).toEqual([]);
     });
 
-    it("shows any other 409 as a plain alert, not as a confirmation", async () => {
-      mockFetch({ ...routes("admin"), "DELETE /api/sources/2": { status: 409, body: { detail: "something else" } } });
-      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources" });
+    it("shows a rejected delete (403) inside the dialog, not above the page", async () => {
+      setup(none, { status: 403, body: { detail: "admin role required" } });
       await click("Delete sim");
-      expect(await screen.findByRole("alert")).toHaveTextContent("something else");
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete" }));
+      expect(await within(await dialogOf()).findByRole("alert")).toHaveTextContent("admin role required");
+      expect(screen.getAllByRole("alert")).toHaveLength(1);
+    });
+
+    it("shows any other 409 inside the dialog, as it is, and the dialog keeps the numbers it showed", async () => {
+      setup(mapped, { status: 409, body: { detail: "something else" } });
+      await click("Delete sim");
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete anyway" }));
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("something else");
+      expect(dialog).toHaveTextContent(MAPPED_TEXT);
+    });
+
+    it("a preview that cannot be read is shown in the dialog, and there is nothing to confirm", async () => {
+      const { calls } = setup(mapped, undefined, { preview: { status: 404, body: { detail: "Source 2 not found" } } });
+      await click("Delete sim");
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not check what this deletes: Source 2 not found");
+      expect(within(dialog).getByRole("button", { name: "Delete" })).toBeDisabled();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(deletes(calls)).toBe(0);
+    });
+
+    it("a point mapped while the dialog was open: the server refuses, the dialog shows the new numbers, and only the second confirm deletes", async () => {
+      const urls: string[] = [];
+      const toasts = spyToasts();
+      let removed = false;
+      mockFetch({
+        ...routes("admin"),
+        "GET /api/sources": () => ({ body: removed ? [] : [source] }),
+        "GET /api/sources/2/impact": { body: none },
+        "DELETE /api/sources/2": ({ url }) => {
+          urls.push(url);
+          if (urls.length === 1) return { status: 409, body: { detail: "More than you were shown would be deleted now", ...mapped } };
+          removed = true;
+          return { status: 204 };
+        },
+      });
+      renderWithProviders(<SourcesPage />, { route: "/sources", path: "/sources", toasts: toasts.api });
+      await click("Delete sim");
+      await userEvent.click(await within(await dialogOf()).findByRole("button", { name: "Delete" }));
+      const dialog = await dialogOf();
+      expect(await within(dialog).findByText(MAPPED_TEXT)).toBeInTheDocument();
+      expect(within(dialog).getByRole("alert")).toHaveTextContent("More was added while this was open. The numbers above are updated; delete again to confirm.");
+      expect(urls).toEqual([SEEN_NONE]); // nothing is deleted yet
+      expect(toasts.calls).toEqual([]);
+      await userEvent.click(within(dialog).getByRole("button", { name: "Delete anyway" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(urls).toEqual([SEEN_NONE, SEEN_MAPPED]);
+      expect(toasts.calls).toEqual([{ kind: "success", text: 'Source "sim" deleted' }]);
     });
   });
 

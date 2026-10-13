@@ -4,11 +4,14 @@ import type { ReactNode } from "react";
 import { App } from "../App";
 import { useAuth } from "../auth/AuthProvider";
 import { READ_ONLY_TEXT } from "../components/ReadOnlyNote";
+import type { ToastApi } from "../components/Toasts";
 import type { PermissionId } from "../lib/permissions";
 import { mockFetch, shellRoutes, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { pastSaveWindow, useSaveClock } from "../test/saveWindow";
 import { accountKnown, SignedIn } from "../test/signedIn";
+import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
 import { TariffsPage } from "./TariffsPage";
 
@@ -58,12 +61,14 @@ const routes = (role: string): Routes => ({
 function WhenKnown({ children }: { children: ReactNode }) {
   return useAuth().user ? <>{children}</> : null;
 }
-const mountPage = () => renderWithProviders(<WhenKnown><TariffsPage /><SignedIn /></WhenKnown>, { route: "/tariffs", path: "/tariffs" });
-const open = () => {
+const mountPage = (toasts?: ToastApi) => renderWithProviders(<WhenKnown><TariffsPage /><SignedIn /></WhenKnown>, { route: "/tariffs", path: "/tariffs", toasts });
+const open = (toasts?: ToastApi) => {
   const calls = mockFetch(routes("admin"));
-  mountPage();
+  mountPage(toasts);
   return calls;
 };
+/** The one styled confirmation (the browser's own box is gone), by its title. */
+const confirmation = (title: string) => screen.findByRole("dialog", { name: title });
 const fillRate = async (form: HTMLElement, from: string, rate: string) => {
   fireEvent.change(within(form).getByLabelText("Effective from"), { target: { value: from } });
   await userEvent.type(within(form).getByLabelText("Rate per kWh"), rate);
@@ -76,6 +81,8 @@ const edit = async (row: HTMLElement) => {
   await userEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
 };
 const trash = (row: HTMLElement) => within(row).getByRole("button", { name: /^Delete rate from / });
+
+useSaveClock();
 
 beforeEach(() => {
   // newest first per scope, as the API returns them: site default rates, then overrides
@@ -265,7 +272,7 @@ describe("TariffsPage", () => {
     expect(await screen.findByText(/No currency is set/)).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Currency"), "qar");
     await userEvent.click(within(currencyForm()).getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("saved")).toBeInTheDocument();
+    expect(await within(currencyForm()).findByRole("button", { name: "Saved" })).toHaveAttribute("data-phase", "saved");
     expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ currency: "QAR" });
     await waitFor(() => expect(screen.queryByText(/No currency is set/)).not.toBeInTheDocument());
   });
@@ -311,8 +318,8 @@ describe("TariffsPage", () => {
     expect(screen.getByText(/No currency is set/)).toBeInTheDocument(); // adding a rate does not touch the currency message
   });
 
-  it("rejects a malformed currency without calling the API, and clears it when the field is emptied", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("rejects a malformed currency without calling the API, and clears it (after the styled confirmation) when the field is emptied", async () => {
+    const browserBox = vi.spyOn(window, "confirm").mockReturnValue(true);
     const calls = open();
     const input = await screen.findByLabelText("Currency");
     const save = within(currencyForm()).getByRole("button", { name: "Save" });
@@ -321,49 +328,94 @@ describe("TariffsPage", () => {
     await userEvent.click(save);
     expect(await screen.findByRole("alert")).toHaveTextContent(/three-letter/i);
     expect(calls.some((c) => c.method === "PUT")).toBe(false);
-    expect(window.confirm).not.toHaveBeenCalled(); // nothing to confirm for a value that is refused
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(); // nothing to confirm for a value that is refused
     await userEvent.clear(input);
+    pastSaveWindow();
     await userEvent.click(save);
+    const dialog = await confirmation("Remove the currency?"); // removing an existing currency is a change too
+    expect(dialog).toHaveTextContent("Remove the currency QAR? Costs will show without a unit. This relabels all past figures; no conversion is applied.");
+    expect(calls.some((c) => c.method === "PUT")).toBe(false); // not before the button is pressed
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove currency" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ currency: null }));
-    expect(window.confirm).toHaveBeenCalledTimes(1); // removing an existing currency is a change too
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("Remove the currency QAR"));
+    expect(browserBox).not.toHaveBeenCalled();
   });
 
-  it("asks before changing an existing currency, because it relabels every past figure", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
-    const calls = open();
+  it("asks before changing an existing currency, because it relabels every past figure: one styled dialog, a primary button, and no toast (the Save button is the feedback)", async () => {
+    const browserBox = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const toasts = spyToasts();
+    const calls = open(toasts.api);
     const input = await screen.findByLabelText("Currency");
     const save = within(currencyForm()).getByRole("button", { name: "Save" });
     await userEvent.clear(input);
     await userEvent.type(input, "usd");
     await userEvent.click(save);
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/QAR.*USD/));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("relabels all past figures"));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("no conversion is applied"));
+    const first = await confirmation("Change the currency?");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(first).toHaveTextContent(/QAR.*USD/);
+    expect(first).toHaveTextContent("This relabels all past figures; no conversion is applied.");
+    const confirmButton = within(first).getByRole("button", { name: "Change currency" });
+    expect(confirmButton).toHaveClass("primary");
+    expect(confirmButton).not.toHaveClass("danger");
+    await userEvent.click(within(first).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(calls.some((c) => c.method === "PUT")).toBe(false); // declined: nothing is sent
+    expect(within(currencyForm()).getByRole("button", { name: "Save" })).toHaveAttribute("data-phase", "idle");
+    pastSaveWindow();
     await userEvent.click(save);
+    await userEvent.click(within(await confirmation("Change the currency?")).getByRole("button", { name: "Change currency" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ currency: "USD" }));
-    expect(await screen.findByText("saved")).toBeInTheDocument();
+    expect(await within(currencyForm()).findByRole("button", { name: "Saved" })).toHaveAttribute("data-phase", "saved");
+    expect(toasts.calls).toEqual([]);
+    expect(browserBox).not.toHaveBeenCalled();
+  });
+
+  it("Escape in the currency confirmation sends nothing", async () => {
+    const calls = open();
+    const input = await screen.findByLabelText("Currency");
+    await userEvent.clear(input);
+    await userEvent.type(input, "usd");
+    await userEvent.click(within(currencyForm()).getByRole("button", { name: "Save" }));
+    await confirmation("Change the currency?");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
   });
 
   it("does not ask when the currency is saved unchanged", async () => {
-    const confirm = vi.spyOn(window, "confirm");
     const calls = open();
     await screen.findByLabelText("Currency");
     await userEvent.click(within(currencyForm()).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ currency: "QAR" }));
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("adds a site default rate and shows it", async () => {
-    const calls = open();
+    const toasts = spyToasts();
+    const calls = open(toasts.api);
     const form = await screen.findByRole("form", { name: "Add site default rate" });
     await fillRate(form, "2026-11-01", "0.2");
     await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body)
       .toEqual({ asset_id: null, rate_per_kwh: 0.2, effective_from: "2026-11-01" }));
     expect(await within(screen.getByRole("table", { name: "Site default rates" })).findByText("2026-11-01")).toBeInTheDocument();
+    await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "Rate added" }]));
+  });
+
+  it("raises no toast when a rate is refused, and none when the form is not submitted", async () => {
+    overrides = {
+      "POST /api/tariffs": { status: 409, body: { detail: "a rate for this asset (or the site default) already starts on that date" } },
+    };
+    const toasts = spyToasts();
+    open(toasts.api);
+    const form = await screen.findByRole("form", { name: "Add site default rate" });
+    await fillRate(form, "2026-10-01", "0.2");
+    await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("already starts on that date");
+    const override = screen.getByRole("form", { name: "Add asset override" });
+    await fillRate(override, "2026-11-01", "0.1");
+    await userEvent.click(within(override).getByRole("button", { name: "Add rate" })); // no asset chosen: refused before any request
+    expect(await within(override).findByRole("alert")).toHaveTextContent("Choose an asset.");
+    expect(toasts.calls).toEqual([]);
   });
 
   it("steps both rate inputs by cents, the add forms' and an edit row's", async () => {
@@ -443,9 +495,8 @@ describe("TariffsPage", () => {
       const table = await screen.findByRole("table", { name: "Asset overrides" });
       const body = within(table).getAllByRole("row").slice(1);
       expect(body.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["PDU A (Site / Room 1)", "PDU A (Site / Room 2)"]);
-      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
       await userEvent.click(within(body[1]).getByRole("button", { name: "Delete rate from 2026-10-15 for PDU A (Site / Room 2)" }));
-      expect(confirm).toHaveBeenCalledWith(expect.stringContaining("for PDU A (Site / Room 2)?"));
+      expect(await confirmation("Delete this rate?")).toHaveTextContent("for PDU A (Site / Room 2)?");
     });
   });
 
@@ -455,9 +506,8 @@ describe("TariffsPage", () => {
     const table = await screen.findByRole("table", { name: "Asset overrides" });
     const cells = within(within(table).getAllByRole("row")[1]).getAllByRole("cell");
     expect(cells[0].textContent).toBe("Room 1 / Panel");
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await userEvent.click(within(table).getByRole("button", { name: "Delete rate from 2026-10-15 for Room 1 / Panel" }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("for Room 1 / Panel?"));
+    expect(await confirmation("Delete this rate?")).toHaveTextContent("for Room 1 / Panel?");
   });
 
   it("refuses a missing date and a negative rate without calling the API", async () => {
@@ -514,13 +564,15 @@ describe("TariffsPage", () => {
   });
 
   it("edits the effective date and sends only that", async () => {
-    const calls = open();
+    const toasts = spyToasts();
+    const calls = open(toasts.api);
     const row = (await screen.findByText("2026-10-01")).closest("tr")!;
     await edit(row);
     fireEvent.change(within(row).getByLabelText("Effective from"), { target: { value: "2026-10-05" } });
     await userEvent.click(within(row).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ effective_from: "2026-10-05" }));
     expect(await within(row).findByText("2026-10-05")).toBeInTheDocument();
+    expect(toasts.calls).toEqual([]); // the row edit shows its result in place
   });
 
   it("shows the server's reason in the row when an edit is refused", async () => {
@@ -583,16 +635,48 @@ describe("TariffsPage", () => {
     expect(trigger()).toHaveFocus();
   });
 
-  it("deletes an override only after confirmation", async () => {
-    const calls = open();
+  it("deletes an override only after confirmation in the styled dialog, and says so once", async () => {
+    const toasts = spyToasts();
+    const browserBox = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const calls = open(toasts.api);
     const row = (await screen.findByText("2026-10-15")).closest("tr")!;
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
     await userEvent.click(trash(row));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("LV Panel 1"));
+    const first = await confirmation("Delete this rate?");
+    expect(first).toHaveTextContent("LV Panel 1");
+    expect(first).toHaveTextContent("Costs for those days will change.");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    await userEvent.click(within(first).getByRole("button", { name: "Cancel" }));
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(toasts.calls).toEqual([]);
     await userEvent.click(trash(row));
+    await userEvent.click(within(await confirmation("Delete this rate?")).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/tariffs/3")).toBe(true));
     expect(await screen.findByText(/No overrides/)).toBeInTheDocument();
+    // The row is gone by now; the toast is raised all the same.
+    await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "Rate deleted" }]));
+    expect(browserBox).not.toHaveBeenCalled();
+  });
+
+  it("Escape in the rate delete confirmation deletes nothing, and the focus goes back to the trash button", async () => {
+    const calls = open();
+    const row = (await screen.findByText("2026-10-15")).closest("tr")!;
+    await userEvent.click(trash(row));
+    await confirmation("Delete this rate?");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(trash(row)).toHaveFocus();
+  });
+
+  it("a rate delete the server refuses is shown on the row and raises no toast", async () => {
+    overrides = { "DELETE /api/tariffs/3": { status: 403, body: { detail: "insufficient role" } } };
+    const toasts = spyToasts();
+    open(toasts.api);
+    const row = (await screen.findByText("2026-10-15")).closest("tr")!;
+    await userEvent.click(trash(row));
+    await userEvent.click(within(await confirmation("Delete this rate?")).getByRole("button", { name: "Delete" }));
+    expect(await within(row).findByRole("alert")).toHaveTextContent("insufficient role");
+    expect(toasts.calls).toEqual([]);
   });
 
   it("shows the error when the tariffs cannot be read", async () => {

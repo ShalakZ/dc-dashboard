@@ -7,8 +7,10 @@ import { CreateDashboardDialog } from "../components/dashboard/CreateDashboardDi
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
 import { TableSkeleton } from "../components/Skeleton";
+import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
+import { useConfirm } from "../hooks/useConfirm";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 export function DashboardsPage() {
@@ -22,6 +24,8 @@ export function DashboardsPage() {
   const defaultId = useDefaultDashboard().data?.dashboard_id ?? null;
   const setDefault = usePutDefaultDashboard();
   const { run, error: actionError } = useAction();
+  const [ask, confirmDialog] = useConfirm();
+  const toast = useToast();
   const [creating, setCreating] = useState(false);
 
   const failure = list.error ?? site.error;
@@ -29,8 +33,19 @@ export function DashboardsPage() {
 
   const confirmDelete = (d: DashboardListItem) => run(async () => {
     const warning = d.id === defaultId ? " It is the default dashboard: nobody will land on it any more." : "";
-    if (!window.confirm(`Delete dashboard "${d.name}" and its widgets?${warning}`)) return;
+    if (!(await ask({ title: `Delete dashboard "${d.name}"?`, message: `Its widgets go with it.${warning}` }))) return;
     await remove.mutateAsync(d.id);
+    toast.success(`Dashboard "${d.name}" deleted`);
+  });
+
+  // The menu closes when an item is chosen and the badge moves only after the list is read again: the toast says what just happened.
+  const makeDefault = (d: DashboardListItem) => run(async () => {
+    await setDefault.mutateAsync({ dashboard_id: d.id });
+    toast.success(`"${d.name}" is now the default dashboard`);
+  });
+  const clearDefault = () => run(async () => {
+    await setDefault.mutateAsync({ dashboard_id: null });
+    toast.success("Default dashboard cleared");
   });
 
   // The heading is always there (App.test.tsx finds the page by it); the body waits for the list and the site zone.
@@ -41,6 +56,7 @@ export function DashboardsPage() {
         actions={canEdit ? <button type="button" className="primary" onClick={() => setCreating(true)}>New dashboard</button> : undefined}
       />
       {actionError && <p className="error" role="alert">{actionError}</p>}
+      {confirmDialog}
       {failure && <p className="error" role="alert">{failure.message}</p>}
       {!failure && (!list.data || timezone === undefined) && <TableSkeleton columns={hasActions ? 4 : 3} rows={4} label="Loading dashboards" />}
       {list.data && timezone !== undefined && list.data.length === 0 && (
@@ -73,8 +89,8 @@ export function DashboardsPage() {
                           <RowActions
                             label={`Actions for ${d.name}`}
                             items={[d.id === defaultId
-                              ? { label: "Clear default", onSelect: () => run(() => setDefault.mutateAsync({ dashboard_id: null })) }
-                              : { label: "Make default", onSelect: () => run(() => setDefault.mutateAsync({ dashboard_id: d.id })) }]}
+                              ? { label: "Clear default", onSelect: clearDefault }
+                              : { label: "Make default", onSelect: () => makeDefault(d) }]}
                           />
                         )}
                         {canEdit && <TrashButton label={`Delete ${d.name}`} onClick={() => confirmDelete(d)} />}

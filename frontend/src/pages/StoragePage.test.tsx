@@ -8,6 +8,7 @@ import { FIELD_HELP, TILE_HELP } from "../lib/storageHelp";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { pastSaveWindow, useSaveClock } from "../test/saveWindow";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
 import { checkRange, DISK_NOTE, FIELDS, sizeText, StoragePage, UTC_NOTE, validate } from "./StoragePage";
@@ -24,6 +25,8 @@ const stats = {
   rows_per_day: Array.from({ length: 7 }, (_, i) => ({ day: `2026-10-0${i + 1}`, rows: 1000 * (i + 1) })),
   growth_bytes_per_day: 100 * 1024 ** 2, disk_capacity_bytes: 100 * 1024 ** 3, used_pct: 5, days_until_full: 972.8, warn: false, settings,
 };
+
+useSaveClock();
 
 describe("StoragePage", () => {
   it("shows sizes, projection and rows per day", async () => {
@@ -55,6 +58,7 @@ describe("StoragePage", () => {
     expect(put()).toHaveLength(0);
     await userEvent.clear(raw);
     await userEvent.type(raw, "45");
+    pastSaveWindow();
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
     await waitFor(() => expect(put()).toHaveLength(1));
     expect((put()[0].body as { raw_retention_days: number }).raw_retention_days).toBe(45);
@@ -92,6 +96,7 @@ describe("StoragePage", () => {
     expect(calls.some((c) => c.method === "PUT")).toBe(false);
     await userEvent.clear(raw);
     await userEvent.type(raw, "8");
+    pastSaveWindow();
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
     await waitFor(() => expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1));
     expect((calls.find((c) => c.method === "PUT")!.body as { raw_retention_days: number }).raw_retention_days).toBe(8);
@@ -186,7 +191,8 @@ describe("StoragePage defaults, resets and the confirmation", () => {
     await userEvent.clear(raw);
     await userEvent.type(raw, "60");
     await userEvent.click(screen.getByRole("button", { name: /set as default/i }));
-    expect(await screen.findByText(/not in use yet/i)).toBeInTheDocument();
+    expect(await screen.findByText("This site's default is updated. It is not in use yet: press Save to use these values.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("data-phase", "idle"); // Set as default is not a save of the live settings
     const puts = calls.filter((c) => c.method === "PUT");
     expect(puts).toHaveLength(1);
     expect(puts[0].path).toBe("/api/settings/storage/default");
@@ -593,7 +599,8 @@ describe("StoragePage cards and data bars (W7j)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1));
     expect(calls.find((c) => c.method === "PUT")!.body).toEqual(settings);
-    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Saved" })).toHaveAttribute("data-phase", "saved");
+    expect(screen.queryByText("Saved.")).not.toBeInTheDocument(); // the button is the confirmation; no loose note
   });
 
   it("draws a bar in every row's number cell: the largest day full, the others a share of it, a day with no rows empty", async () => {
@@ -793,5 +800,76 @@ describe("StoragePage controls follow the permissions of the role (a custom role
     expect(paragraphs[1].querySelectorAll(".sk-line")).toHaveLength(READ_ONLY_TEXT.split(/\s+/).length);
     hold.release();
     expect(await screen.findByText(READ_ONLY_TEXT)).toBeInTheDocument();
+  });
+});
+
+describe("StoragePage Save button (W7k)", () => {
+  const put = (calls: { method: string }[]) => calls.filter((c) => c.method === "PUT");
+  const ok = { "PUT /api/settings/storage": (req: { body: unknown }) => ({ body: { ...settings, ...(req.body as object) } }) };
+  // by class: a dialog on top hides the page from the role queries, and its own buttons start with "Save" too
+  const saveButton = () => document.querySelector<HTMLButtonElement>("form.retention-form button.save-btn")!;
+  const savedAt = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveButton()).toHaveAttribute("data-phase", "saved"));
+  };
+
+  it("turns green after the save and shows no loose note", async () => {
+    mockFetch(routes(ok));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await savedAt();
+    expect(saveButton()).toHaveAccessibleName("Saved");
+    expect(screen.queryByText("Saved.")).not.toBeInTheDocument();
+    expect(document.querySelector(".retention-foot [role='status']")).toBeNull();
+  });
+
+  it("typing in a field during the green drops it at once", async () => {
+    mockFetch(routes(ok));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await savedAt();
+    await userEvent.type(screen.getByLabelText(/raw retention/i), "0");
+    expect(saveButton()).toHaveAttribute("data-phase", "idle");
+    expect(saveButton()).toHaveAccessibleName("Save");
+  });
+
+  it("a Reset button during the green drops it at once", async () => {
+    mockFetch(routes(ok));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await savedAt();
+    await userEvent.click(screen.getByRole("button", { name: "Reset to factory settings" }));
+    expect(saveButton()).toHaveAttribute("data-phase", "idle");
+  });
+
+  it("the confirmed save (the readings-deleting 409) turns the button green only after the real save", async () => {
+    const urls: string[] = [];
+    const calls = mockFetch(routes({
+      "PUT /api/settings/storage": (req: { url: string; body: unknown }) => {
+        urls.push(req.url);
+        return req.url.includes("confirm=true")
+          ? { body: { ...settings, ...(req.body as object) } }
+          : { status: 409, body: { detail: "Saving these settings deletes stored readings now: 5 chunks of raw readings. Repeat the request with confirm=true to go ahead.", deletes_now: true, shorter: false } };
+      },
+    }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(saveButton()).toHaveAttribute("data-phase", "idle"); // the refusal is not a save
+    expect(put(calls)).toHaveLength(1);
+    await userEvent.click(within(dialog).getByRole("button", { name: /save and delete/i }));
+    await waitFor(() => expect(saveButton()).toHaveAttribute("data-phase", "saved"));
+    expect(urls).toHaveLength(2);
+  });
+
+  it("typing while the save is running does not detach it: the 409 confirmation still opens", async () => {
+    mockFetch(routes({
+      "PUT /api/settings/storage": { status: 409, body: { detail: "Saving these settings deletes stored readings now: 5 chunks of raw readings. Repeat the request with confirm=true to go ahead.", deletes_now: true, shorter: false } },
+    }));
+    const hold = holdFetch((method, path) => method === "PUT" && path === "/api/settings/storage");
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveButton()).toHaveAttribute("data-phase", "saving"));
+    await userEvent.type(screen.getByLabelText(/warn at/i), "1");
+    expect(saveButton()).toBeDisabled(); // still saving: the double-click guard holds
+    hold.release();
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 });
