@@ -499,6 +499,9 @@ test.describe("W7f: loading skeletons", () => {
       await page.goto(`/assets/${asset.id}`);
       await expect(heading1(page, asset.name)).toBeVisible();
       await expect(chart).toBeVisible();
+      // Let the load's own skeletons be forgotten first (a region follows one that was SEEN less than 250 ms ago without its delay, and the
+      // chart's lazy chunk can keep its block up for a while after a reload): the click below is what this step measures.
+      await page.waitForTimeout(500);
       // 110 ms, not 140: the skeleton fades in after 150 ms and the real answer plus the render add 15 to 25 ms on a loaded machine, so a
       // 10 ms margin failed in two of four full runs of W7i; 40 ms still proves the rule (a skeleton answered inside its delay is never seen).
       await delayApi(page, 110);
