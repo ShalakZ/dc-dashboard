@@ -6,8 +6,9 @@ export type BuiltinRole = "viewer" | "operator" | "admin";
 
 const VIEWER: PermissionId[] = ["assets.view", "dashboards.view", "billing.view", "billing.export"];
 /**
- * What each built-in role holds, copied from Appendix A of the W9a plan (the server's list is backend/dcdash/core/permissions.py; Admin
- * holds all of them). Typed out here and not imported from the app, so a mistake in the app's list is not repeated in its own tests.
+ * What each built-in role holds, copied from Appendix A of the W9a plan (the server's list is backend/dcdash/core/permissions.py). Viewer
+ * and Operator are typed out here and not imported from the app; Admin is the whole catalogue by definition, and the backend parity test
+ * (test_permissions_parity.py) guards that list against drifting from the server's.
  */
 export const BUILTIN_PERMISSIONS: Record<BuiltinRole, PermissionId[]> = {
   viewer: VIEWER,
