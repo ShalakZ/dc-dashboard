@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import COOKIE, account_vanished_is_401, get_db, require_role
+from dcdash.api.deps import COOKIE, account_vanished_is_401, current_user, get_db, require_permission
 from dcdash.core.audit import audit
 from dcdash.core.build import build_info, uptime_seconds
 from dcdash.core.models import User
@@ -23,7 +23,6 @@ from dcdash.diagnostics.report import LINE_LIMIT, gather, load_known, load_sourc
 
 router = APIRouter(prefix="/api", tags=["diagnostics"])
 
-Admin = Depends(require_role("admin"))
 _ALIAS = re.compile(r"\b(?:HOST|URN)-\d+\b")
 NO_STORE = {"Cache-Control": "no-store"}  # a report is not something a browser or a proxy should keep
 
@@ -34,7 +33,7 @@ class VersionOut(BaseModel):
     uptime_seconds: float
 
 
-@router.get("/version", response_model=VersionOut, dependencies=[Depends(require_role("viewer"))])
+@router.get("/version", response_model=VersionOut, dependencies=[Depends(current_user)])
 async def get_version() -> VersionOut:
     """The build this api process runs (the commit it was built from) and how long it has been up."""
     info = build_info()
@@ -55,7 +54,9 @@ def _second_net(body: str, known: list[str], masker: Masker | None) -> str:
     return "\n".join(map(net, body.split("\n")))
 
 
-@router.get("/diagnostics/report", response_model=None)
+@router.get(
+    "/diagnostics/report", response_model=None, dependencies=[Depends(require_permission("diagnostics.view"))]
+)
 async def get_report(
     request: Request,
     detail: Literal["summary", "full"] = "summary",
@@ -64,16 +65,16 @@ async def get_report(
     fmt: Annotated[Literal["text", "json"], Query(alias="format")] = "text",
     client_time: datetime | None = None,
     db: AsyncSession = Depends(get_db),
-    admin: User = Admin,
+    user: User = Depends(current_user),
 ) -> Response:
     """The diagnostics report, as the text to paste (`format=text`, parts joined by a blank line) or as JSON with the parts, the
     checksum and, for `mask=1`, the legend that says which alias stands for which host (for the page only, never in the text).
 
     `client_time` is the browser's clock; the report compares it with the container's (the container and the database share one
-    VM clock, so only the browser can witness that drifting). Admin only: it holds settings, retention, the audit tail and the
+    VM clock, so only the browser can witness that drifting). Needs diagnostics.view: it holds settings, retention, the audit tail and the
     sources' security settings.
     """
-    user_id = admin.id
+    user_id = user.id
     # The session's token is a secret the database never holds (only its hash); this request's own cookie is one more value to hide.
     own_token = request.cookies.get(COOKIE)
     known = await load_known(db, extra=[own_token] if own_token else ())

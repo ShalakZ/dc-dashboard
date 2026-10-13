@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import current_user, get_db
 from dcdash.api.settings import current_timezone
 from dcdash.core.settings_store import get_currency
 
-router = APIRouter(prefix="/api", tags=["site"], dependencies=[Depends(require_role("viewer"))])
+router = APIRouter(prefix="/api", tags=["site"], dependencies=[Depends(current_user)])
 
 
 class Site(BaseModel):
