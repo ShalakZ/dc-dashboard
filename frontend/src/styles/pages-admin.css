@@ -67,6 +67,35 @@
   /* The five W7j pages: the page description may run to about 110 characters (Tariffs has its own copy of the rule in pages-billing.css). */
   .audit-page .page-head .sub, .storage-page .page-head .sub, .settings-page .page-head .sub, .diag-page .page-head .sub { max-width: 110ch; }
 
+  /* Roles (W9b): the list card on the Roles tab, and the editor dialog over it. */
+  .roles-panel .roles-bar { margin: 0 0 12px; }
+  .roles-panel p.error { margin: 0 0 12px; font-weight: 600; }
+  .roles-table td.role-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  /* "Built in": a plain outlined tag. The status chips (.chip) say a state (active, blocked); this says what the role is. */
+  .role-badge { display: inline-block; margin-left: 8px; padding: 1px 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; vertical-align: 1px; }
+  .roles-panel .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; white-space: nowrap; }
+  /* The editor is wider than the 440px every other dialog has (the grid has three columns), and on a short window the body scrolls while
+     the error line and Save / Cancel stay in sight; the same two-row grid as the connection check's dialog. */
+  .dialog.narrow:has(> .role-editor) { width: min(56rem, 96vw); overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
+  .dialog > .role-editor { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .role-editor-body { display: flex; flex-direction: column; gap: 16px; flex: 1 1 auto; min-height: 0; padding-right: 4px; overflow-y: auto; }
+  .role-editor-body > * { flex: none; } /* a flex item that scrolls (.table-wrap) would otherwise be squeezed to the room left, not shown whole */
+  .role-editor > .row, .role-editor > p.error { flex: none; }
+  .role-editor > p.error { font-weight: 600; }
+  .role-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 12px; }
+  .role-start { display: grid; gap: 4px; justify-items: start; }
+  .role-start p, .role-builtin p { margin: 0; font-size: var(--fs-sm); }
+  .role-builtin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .role-grid tbody th[scope="row"] { font-weight: 600; white-space: nowrap; vertical-align: top; }
+  .role-grid td { vertical-align: top; }
+  .role-perm { display: flex; align-items: center; gap: 2px; min-height: 30px; }
+  .role-perm > label.check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-base); }
+  .dialog .role-sensitive { max-width: none; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 0 16px; }
+  .role-sensitive > p { grid-column: 1 / -1; margin: 4px 0 0; font-size: var(--fs-sm); }
+  .role-summary { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .role-summary p { margin: 0; }
+  .role-gaps { margin: 6px 0 0; padding-left: 18px; font-size: var(--fs-sm); }
+
   /* Audit log (W7j) */
 
   /* The toolbar: Search (it grows), User, Action and From to To as one joined control; under it the quick filters at the left and "Go to date"

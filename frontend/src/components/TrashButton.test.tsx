@@ -29,4 +29,14 @@ describe("TrashButton", () => {
     expect(onClick).not.toHaveBeenCalled();
     expect(button).not.toHaveFocus();
   });
+
+  it("carries a title and a description when it is given them, and neither otherwise", () => {
+    const { rerender } = render(<TrashButton label="Delete Executive" onClick={() => {}} disabled title="In use by 1 account." describedBy="why" />);
+    const button = screen.getByRole("button", { name: "Delete Executive" });
+    expect(button).toHaveAttribute("title", "In use by 1 account.");
+    expect(button).toHaveAttribute("aria-describedby", "why");
+    rerender(<TrashButton label="Delete Executive" onClick={() => {}} />);
+    expect(screen.getByRole("button", { name: "Delete Executive" })).not.toHaveAttribute("title");
+    expect(screen.getByRole("button", { name: "Delete Executive" })).not.toHaveAttribute("aria-describedby");
+  });
 });

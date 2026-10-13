@@ -4,7 +4,7 @@ import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { ApiError, api } from "./client";
 import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
-  FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
+  FleetSummary, GeneralSettings, GraphModel, Metric, PermissionRow, PointRow, RangePreset, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
@@ -19,6 +19,7 @@ export const keys = {
   points: (sourceId: number) => ["sources", sourceId, "points"] as const,
   users: ["users"] as const,
   roles: ["roles"] as const,
+  permissions: ["permissions"] as const,
   general: ["settings", "general"] as const,
   signInPolicy: ["settings", "sign-in"] as const,
   storage: ["storage"] as const,
@@ -117,14 +118,40 @@ export function useInvalidate() {
 
 export const useUsers = () => useQuery({ queryKey: keys.users, queryFn: () => api.get<UserRow[]>("/api/users") });
 
-/** The roles and which of them the caller may hand out (`assignable`). Open to users.view and users.edit; the Users page is its reader until the Roles page arrives. */
+/** The roles and which of them the caller may hand out (`assignable`). Open to users.view and users.edit; the Users tab reads it for its selects and the Roles tab for its list (which also gets each role's permissions, for roles.manage only). */
 export const useRoles = (enabled = true) => useQuery({ queryKey: keys.roles, queryFn: () => api.get<RoleRow[]>("/api/roles"), enabled });
+
+/** The permission catalogue as the server words it (area, kind, label, description). roles.manage only; it changes with the build, which reloads the page. */
+export const usePermissions = () =>
+  useQuery({ queryKey: keys.permissions, queryFn: () => api.get<PermissionRow[]>("/api/permissions"), staleTime: Infinity });
+
+/**
+ * What a role change moves: the roles (the list), the users (their role selects and the role's name or description in a row) and the audit log
+ * and its filter options. `onSettled`, not `onSuccess`: a refused change (a 409 "in use", a 404 "Role not found.") means the list on screen is out of date.
+ */
+function useRoleMutation<Variables, Result>(mutationFn: (variables: Variables) => Promise<Result>) {
+  const invalidate = useInvalidate();
+  return useMutation({ mutationFn, onSettled: () => invalidate(keys.roles, keys.users, keys.auditAll) });
+}
+
+export const useCreateRole = () =>
+  useRoleMutation((body: { name: string; description: string; permissions: string[] }) => api.post<RoleRow>("/api/roles", body));
+
+export const usePatchRole = () =>
+  useRoleMutation(({ id, body }: { id: number; body: Partial<{ name: string; description: string; permissions: string[] }> }) =>
+    api.patch<RoleRow>(`/api/roles/${id}`, body));
+
+export const useDeleteRole = () => useRoleMutation((id: number) => api.del(`/api/roles/${id}`));
+
+/** `name` left out = the server's "Copy of <name>" (it finds a free one). */
+export const useDuplicateRole = () =>
+  useRoleMutation(({ id, name }: { id: number; name?: string }) => api.post<RoleRow>(`/api/roles/${id}/duplicate`, name === undefined ? {} : { name }));
 
 export function useCreateUser() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (body: { username: string; password: string; role: string }) => api.post<UserRow>("/api/users", body),
-    onSuccess: () => invalidate(keys.users, keys.auditAll),
+    onSuccess: () => invalidate(keys.users, keys.roles, keys.auditAll), // keys.roles: each role's Users count and whether it may be deleted
   });
 }
 
@@ -133,7 +160,7 @@ export function usePatchUser() {
   return useMutation({
     mutationFn: ({ id, body }: { id: number; body: { role?: string; active?: boolean; password?: string } }) =>
       api.patch<UserRow>(`/api/users/${id}`, body),
-    onSuccess: () => invalidate(keys.users, keys.auditAll),
+    onSuccess: () => invalidate(keys.users, keys.roles, keys.auditAll), // keys.roles: each role's Users count and whether it may be deleted
   });
 }
 
@@ -142,7 +169,7 @@ export function useDeleteUser() {
   return useMutation({
     mutationFn: (id: number) => api.del(`/api/users/${id}`),
     // The audit options are cached for a minute and the delete adds "(deleted)" to the User filter.
-    onSuccess: () => invalidate(keys.users, keys.auditAll),
+    onSuccess: () => invalidate(keys.users, keys.roles, keys.auditAll), // keys.roles: each role's Users count and whether it may be deleted
   });
 }
 
