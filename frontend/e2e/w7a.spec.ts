@@ -177,9 +177,9 @@ test.describe("W7a: the Assets workspace and the shell", () => {
     await expect(chip).toHaveAttribute("data-state", "live");
   });
 
-  test("Billing and Users use the whole width of a 1920 px window", async ({ page }) => {
+  test("Billing and Users & Roles use the whole width of a 1920 px window", async ({ page }) => {
     await page.setViewportSize({ width: 1920, height: 1080 });
-    for (const [path, title] of [["/billing", "Billing"], ["/users", "Users"]] as const) {
+    for (const [path, title] of [["/billing", "Billing"], ["/users", "Users & Roles"]] as const) {
       await page.goto(path);
       await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
       // main's content box: its width without the padding (no 1200 px cap)

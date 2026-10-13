@@ -66,16 +66,25 @@ async def test_get_falls_back_when_stored_timezone_is_unknown(client, db):
     assert response.json() == {"timezone": "UTC"}
 
 
-async def test_billing_settings_are_admin_only(client, db):
+async def test_reading_the_currency_needs_tariffs_view(client, db):
+    # W9b: the read-only Tariffs page shows the currency, so the Operator (who holds tariffs.view) may read it.
     assert (await client.get("/api/settings/billing")).status_code == 401
+    await login_as(client, db, "viewer")
+    assert (await client.get("/api/settings/billing")).status_code == 403
+    for role in ("operator", "admin"):
+        await login_as(client, db, role)
+        assert (await client.get("/api/settings/billing")).json() == {"currency": None}
+
+
+async def test_setting_the_currency_is_admin_only(client, db):
     assert (await client.put("/api/settings/billing", json={"currency": "QAR"})).status_code == 401
     for role in ("viewer", "operator"):
         await login_as(client, db, role)
-        assert (await client.get("/api/settings/billing")).status_code == 403
         assert (await client.put("/api/settings/billing", json={"currency": "QAR"})).status_code == 403
-    await login_as(client, db)
-    assert (await client.get("/api/settings/billing")).json() == {"currency": None}
     assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'billing.currency_changed'") == 0
+    await login_as(client, db)
+    assert (await client.put("/api/settings/billing", json={"currency": "QAR"})).json() == {"currency": "QAR"}
+    assert await db.fetchval("SELECT count(*) FROM audit_log WHERE action = 'billing.currency_changed'") == 1
 
 
 async def test_currency_round_trips_and_can_be_cleared(client, db):

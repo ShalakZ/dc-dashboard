@@ -90,6 +90,27 @@ const MAY_OPEN: Record<BuiltinRole, string[]> = {
 /** The user's button in the top bar: once it shows, the user has loaded and every guard has been decided. */
 const profileButton = () => screen.findByRole("button", { name: /^u (Administrator|Operator|Viewer)$/ });
 
+/**
+ * The ONE change W9b made to what a built-in role may see or open (the rename below only changes a label), kept apart from the literal tables above and applied on top of them (it mirrors the
+ * backend's CHANGED_AFTER_FREEZE; amendment A3a of the W9b plan). The Operator holds `tariffs.view`, so the Tariffs page opens for it,
+ * read-only: it gains the Tariffs link (in an Administer group of one link), the Tariffs hit in the quick find, and the route `/tariffs`.
+ */
+const CHANGED_IN_W9B: Partial<Record<BuiltinRole, { sidebar: [string, string[][]][]; pages: string[]; quickFind: string[] }>> = {
+  operator: { sidebar: [["Administer", [["Tariffs", "/tariffs"]]]], pages: ["/tariffs"], quickFind: ["Tariffs"] },
+};
+/**
+ * The other thing W9b did to the sidebar, also kept apart from the literal tables: the Users page is now called Users & Roles (its address and who may
+ * open it did not change). `sidebarOf` shows the new name; the quick find is still typed with the old word and offers the new name.
+ */
+const RENAMED_IN_W9B: Record<string, string> = { Users: "Users & Roles" };
+const shown = (label: string) => RENAMED_IN_W9B[label] ?? label;
+const sidebarOf = (role: BuiltinRole) =>
+  [...SIDEBAR[role], ...(CHANGED_IN_W9B[role]?.sidebar ?? [])].map(([heading, links]) => [heading, links.map(([label, to]) => [shown(label), to])]);
+const mayOpen = (role: BuiltinRole) => [...MAY_OPEN[role], ...(CHANGED_IN_W9B[role]?.pages ?? [])];
+const quickFindOffers = (role: BuiltinRole) => [
+  ...SIDEBAR[role].flatMap(([, links]) => links.map(([label]) => label)), ...(CHANGED_IN_W9B[role]?.quickFind ?? []),
+];
+
 /** Opens `route` as `role` and returns the first level-1 heading that appears: the page's own, or the notice that keeps the person out. */
 async function opening(role: BuiltinRole, route: string, defaultDashboard: number | null = null) {
   const calls = mockFetch(routes(role, defaultDashboard));
@@ -99,6 +120,18 @@ async function opening(role: BuiltinRole, route: string, defaultDashboard: numbe
   return { heading: heading.textContent, calls };
 }
 const isAPage = (heading: string | null) => /^the .+ page$|^the assets summary$/.test(heading ?? "");
+
+describe("what W9b changed for the built-in roles", () => {
+  it("renamed one page and nothing else: Users is Users & Roles", () => {
+    expect(RENAMED_IN_W9B).toEqual({ Users: "Users & Roles" });
+  });
+
+  it("is only the Operator, and only the Tariffs page", () => {
+    expect(Object.keys(CHANGED_IN_W9B)).toEqual(["operator"]);
+    expect(CHANGED_IN_W9B.operator).toEqual({ sidebar: [["Administer", [["Tariffs", "/tariffs"]]]], pages: ["/tariffs"], quickFind: ["Tariffs"] });
+    for (const role of ROLES) for (const link of CHANGED_IN_W9B[role]?.sidebar.flatMap(([, links]) => links) ?? []) expect(link).toEqual(["Tariffs", "/tariffs"]);
+  });
+});
 
 describe("the sidebar of each built-in role", () => {
   it.each(ROLES)("%s sees exactly its groups and links", async (role) => {
@@ -110,7 +143,7 @@ describe("the sidebar of each built-in role", () => {
       group.querySelector(".nav-heading")?.textContent,
       within(group).getAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")]),
     ]);
-    expect(groups).toEqual(SIDEBAR[role]);
+    expect(groups).toEqual(sidebarOf(role));
   });
 
   it.each(ROLES)("%s: the Dashboards link opens the default dashboard when there is one", async (role) => {
@@ -125,7 +158,7 @@ describe("the pages each built-in role may open", () => {
   const cases = ROLES.flatMap((role) => Object.keys(PAGE).map((route) => [role, route] as const));
   it.each(cases)("%s opening %s", async (role, route) => {
     const { heading } = await opening(role, route);
-    if (MAY_OPEN[role].includes(route)) expect(heading).toBe(PAGE[route]);
+    if (mayOpen(role).includes(route)) expect(heading).toBe(PAGE[route]);
     else expect(isAPage(heading)).toBe(false); // the notice that keeps the person out, whatever its wording
   });
 
@@ -153,11 +186,11 @@ describe("the quick find of each built-in role lists the pages it may open", () 
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
     await profileButton();
     const field = screen.getByRole("combobox");
-    const offered = SIDEBAR[role].flatMap(([, links]) => links.map(([label]) => label));
+    const offered = quickFindOffers(role);
     for (const label of LABELS) {
       await userEvent.clear(field);
       await userEvent.type(field, label);
-      if (offered.includes(label)) expect(await screen.findByRole("option", { name: label })).toBeInTheDocument();
+      if (offered.includes(label)) expect(await screen.findByRole("option", { name: shown(label) })).toBeInTheDocument();
       else expect(await screen.findByText("No match")).toBeInTheDocument();
     }
   });

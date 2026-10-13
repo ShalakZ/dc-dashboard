@@ -68,12 +68,12 @@ def test_the_readme_mentions(text):
 
 def test_the_blocked_sign_in_section_names_every_way_out_and_the_docker_caveat():
     text = section(3, "If you are blocked from signing in")
-    for needle in ("Unblock", "Users page", "Settings", "3 to 20", "1 to 60", "docker compose restart api", "one computer"):
+    for needle in ("Unblock", "Users & Roles", "Settings", "3 to 20", "1 to 60", "docker compose restart api", "one computer"):
         assert needle in text, f"the blocked sign-in section does not mention {needle!r}"
 
 
 def test_the_feature_lists_name_delete_unblock_the_sign_in_protection_and_what_is_audited():
-    users = re.search(r"^- \*\*Users\*\* \(admin\):(.*?)(?=^- \*\*)", README, flags=re.M | re.S)
+    users = re.search(r"^- \*\*Users & Roles\*\* \(admin\):(.*?)(?=^- \*\*)", README, flags=re.M | re.S)
     settings = re.search(r"^- \*\*Settings\*\* \(admin\):(.*?)(?=^- \*\*)", README, flags=re.M | re.S)
     audited = re.search(r"^   Audited:(.*?)Never recorded:", README, flags=re.M | re.S)
     assert users and settings and audited, "a feature list moved: the Users or Settings bullet or the Audited list"

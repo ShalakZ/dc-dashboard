@@ -165,7 +165,7 @@ test("every page an admin can open runs under the policy without one violation, 
     await settled(`/sources/${sources[0].id}/points`, "Points");
     await settled("/scans", "Scans");
     await settled("/discovery", "Discovery");
-    await settled("/users", "Users");
+    await settled("/users", "Users & Roles");
     await settled("/settings", "Settings");
     await settled("/tariffs", "Tariffs");
     await settled("/storage", "Storage");

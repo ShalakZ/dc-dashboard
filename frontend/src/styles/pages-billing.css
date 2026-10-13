@@ -58,6 +58,8 @@
   .tariffs-page .add-form { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border); }
   .tariffs-page .currency-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 20px; }
   .tariffs-page .currency-row .banner { flex: 0 1 auto; margin: 0; } /* beside the form while there is room, under it otherwise */
+  .tariffs-page .currency-read { margin: 0; font-weight: 600; } /* the currency as text, for a role that may see the page but not change it */
+  .tariffs-page .span-all > p.muted { margin: 0; } /* the read-only line at the top of the grid: the grid's gap spaces it */
   .tariffs-page .inline-form .has-tip:not(.asset-field) { flex: none; } /* a label and its tip travel together */
   .tariffs-page .inline-form .asset-field { flex: 1 1 100%; min-width: 0; } /* the Asset field has the first line of the override form to itself */
   .tariffs-page .inline-form .asset-field select { width: calc(100% + 28px); } /* the whole wrapper: the label keeps 28px free for the ? tip (app.css) and the field gives them back */

@@ -70,8 +70,8 @@ async function refusedAttempt(page: Page, who: Account, password: string): Promi
 }
 
 async function createUser(page: Page, who: Account & { role: string }) {
-  await navLink(page, "Users").click();
-  await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
+  await navLink(page, "Users & Roles").click();
+  await expect(page.getByRole("heading", { name: "Users & Roles", exact: true })).toBeVisible();
   const form = page.locator("form").filter({ has: page.getByRole("button", { name: "Create user" }) });
   await form.getByLabel("Username").fill(who.username);
   await form.getByLabel("Password").fill(who.password);

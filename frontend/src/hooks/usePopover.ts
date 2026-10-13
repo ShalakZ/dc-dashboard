@@ -96,11 +96,18 @@ export function usePopover({ hover = true, closeOnScroll = false }: { hover?: bo
     if (!open) return;
     const inside = (target: EventTarget | null) =>
       target instanceof Node && !!(trigger.current?.contains(target) || panel.current?.contains(target));
+    // Registered in the capture phase, and the key is stopped here when the user was dealing with the popover (it was clicked open, opened
+    // from the keyboard, or has the focus): a Modal listens for Escape on the document too (bubble phase), and one press must close only the
+    // topmost thing, the tip, not the dialog around it. A popover that only a resting mouse opened lets the key through: the user is
+    // elsewhere (typing in a field whose own Escape handler must still run, or leaving the dialog). Stopping the event in the capture phase
+    // also keeps React's onKeyDown handlers (React listens at the root, below the document) from seeing the key.
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       const hadFocus = inside(document.activeElement); // a menu that only hover opened must not take the focus from a field being typed in
+      const wasPinned = now.current.pinned;
       dismiss();
       if (hadFocus) trigger.current?.focus();
+      if (wasPinned || hadFocus) event.stopPropagation();
     };
     const onPointerDown = (event: PointerEvent) => { if (!inside(event.target)) hide(); };
     const onFocusIn = (event: FocusEvent) => { if (!inside(event.target)) hide(); };
@@ -116,7 +123,7 @@ export function usePopover({ hover = true, closeOnScroll = false }: { hover?: bo
       if (settling && Math.abs((trigger.current?.getBoundingClientRect().top ?? 0) - openedTop.current) < MOVED_PX) return;
       if (!(event.target instanceof Node && panel.current?.contains(event.target))) close();
     };
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("focusin", onFocusIn);
     if (closeOnScroll) {
@@ -124,7 +131,7 @@ export function usePopover({ hover = true, closeOnScroll = false }: { hover?: bo
       window.addEventListener("resize", close);
     }
     return () => {
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("focusin", onFocusIn);
       window.removeEventListener("scroll", onScroll, true);

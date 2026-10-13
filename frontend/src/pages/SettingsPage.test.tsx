@@ -85,7 +85,7 @@ describe("SettingsPage sign-in protection", () => {
     expect(screen.getByRole("heading", { name: "Sign-in protection" })).toBeInTheDocument();
     expect(section()).toHaveTextContent(
       "After this many wrong passwords for one account from one computer, that account is blocked from that computer for this long. "
-      + "Restarting the api service clears every block; Unblock on the Users page lets one account in sooner.",
+      + "Restarting the api service clears every block; Unblock on the Users & Roles page lets one account in sooner.",
     );
   });
 
@@ -669,6 +669,32 @@ describe("SettingsPage while it loads (W7f)", () => {
     await screen.findByLabelText("Timezone");
   });
 
+  it("draws each card's foot after the permission that card needs: a Save block for settings.edit and settings.security, a line of words for a card the role cannot change", async () => {
+    const draw = async (permissions: PermissionId[]) => {
+      mockFetch({ ...base, ...general, "GET /api/me": { body: userFor("custom", { permissions }) } });
+      const hold = holdFetch((_method, path) => path === "/api/settings/general");
+      const view = renderWithProviders(<><SettingsPage /><SignedIn /></>, { route: "/settings", path: "/settings" });
+      await accountKnown();
+      const cards = Array.from(screen.getByText("Loading settings").parentElement!.querySelectorAll<HTMLElement>(":scope > .page-card"));
+      const feet = cards.map((card) => ({
+        save: card.querySelector(".form-foot .sk-block") !== null,
+        words: card.querySelectorAll(".form-foot .sk-words > *").length,
+        text: card.textContent,
+      }));
+      hold.release();
+      await screen.findByLabelText("Timezone");
+      view.unmount();
+      return feet;
+    };
+    const edit = await draw(["settings.view", "settings.edit"]);
+    expect([edit[0].save, edit[1].save]).toEqual([true, false]);
+    expect(edit[1].words).toBe("Your role can see this but not change it: changing sign-in protection is a separate permission.".split(" ").length);
+    const security = await draw(["settings.view", "settings.security"]);
+    expect([security[0].save, security[1].save]).toEqual([false, true]);
+    expect(security[0].words).toBe(READ_ONLY_TEXT.split(" ").length);
+    expect([edit[1].text, security[0].text]).toEqual(["", ""]); // pills, never words
+  });
+
   it("shows the sign-in card's own wait inside its real card and heading, with two field rows and no card of its own, then the form", async () => {
     const hold = await mount("/api/settings/sign-in");
     await screen.findByLabelText("Timezone"); // the general settings are in; the policy is not
@@ -699,6 +725,7 @@ describe("SettingsPage while it loads (W7f)", () => {
 });
 
 describe("SettingsPage controls follow the permissions of the role (a custom role)", () => {
+  const section = () => screen.getByRole("form", { name: "Sign-in protection" });
   /** A role called "custom" that holds `permissions`; the page is up and the account is known when this returns. */
   const show = async (permissions: PermissionId[]) => {
     const calls = mockFetch({
@@ -715,26 +742,68 @@ describe("SettingsPage controls follow the permissions of the role (a custom rol
     return calls;
   };
 
-  it("settings.view alone: every field is disabled, there is no Save, each form says so once, and nothing is sent", async () => {
+  const SIGN_IN_ONLY = "Your role can see this but not change it: changing sign-in protection is a separate permission.";
+
+  it("settings.view alone: every field is disabled, there is no Save, each card says so once in its own words, and nothing is sent", async () => {
     const calls = await show(["settings.view"]);
     expect(screen.getByLabelText("Timezone")).toBeDisabled();
     expect(screen.getByRole("switch")).toBeDisabled();
     expect(screen.getByLabelText("Failed sign-ins before a block")).toBeDisabled();
     expect(screen.getByLabelText("Block time in minutes")).toBeDisabled();
     expect(screen.queryByRole("button", { name: /save/i })).not.toBeInTheDocument();
-    expect(screen.getAllByText(READ_ONLY_TEXT)).toHaveLength(2);
+    expect(screen.getAllByText(READ_ONLY_TEXT)).toHaveLength(1);
+    expect(screen.getAllByText(SIGN_IN_ONLY)).toHaveLength(1);
+    expect(within(section()).getByText(SIGN_IN_ONLY)).toBeInTheDocument();
     expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
   });
 
-  it("settings.edit: the fields are enabled, both Save buttons are there, no read-only line, and a save is sent", async () => {
+  it("settings.edit alone: General is editable and saves, Sign-in protection is read-only with its own line and no Save", async () => {
     const calls = await show(["settings.view", "settings.edit"]);
     expect(screen.getByLabelText("Timezone")).toBeEnabled();
-    expect(screen.getByRole("switch")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByRole("switch")).toBeDisabled();
+    expect(screen.getByLabelText("Failed sign-ins before a block")).toBeDisabled();
+    expect(screen.getByLabelText("Block time in minutes")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save sign-in protection" })).not.toBeInTheDocument();
     expect(screen.queryByText(READ_ONLY_TEXT)).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Save sign-in protection" }));
-    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.path === "/api/settings/sign-in")).toBe(true));
+    expect(within(section()).getByText(SIGN_IN_ONLY)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.path === "/api/settings/general")).toBe(true));
+    expect(calls.some((c) => c.method === "PUT" && c.path === "/api/settings/sign-in")).toBe(false);
+  });
+
+  it("settings.security alone: Sign-in protection is editable and saves, General is read-only with the page's line and no Save", async () => {
+    const calls = await show(["settings.view", "settings.security"]);
+    expect(screen.getByLabelText("Timezone")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.getByText(READ_ONLY_TEXT)).toBeInTheDocument();
+    expect(screen.queryByText(SIGN_IN_ONLY)).not.toBeInTheDocument();
+    expect(screen.getByRole("switch")).toBeEnabled();
+    expect(screen.getByLabelText("Failed sign-ins before a block")).toBeEnabled();
+    expect(screen.getByLabelText("Block time in minutes")).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Save sign-in protection" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.path === "/api/settings/sign-in")).toBe(true));
+    expect(calls.some((c) => c.method === "PUT" && c.path === "/api/settings/general")).toBe(false);
+  });
+
+  it("settings.security still asks before switching protection off, and sends nothing until Switch off is pressed", async () => {
+    const calls = await show(["settings.view", "settings.security"]);
+    await userEvent.click(screen.getByRole("switch"));
+    await userEvent.click(screen.getByRole("button", { name: "Save sign-in protection" }));
+    expect(await screen.findByRole("dialog", { name: "Stop blocking accounts?" })).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: "Switch off" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.path === "/api/settings/sign-in")).toBe(true));
+  });
+
+  it("both permissions: both cards are editable and neither shows a read-only line", async () => {
+    await show(["settings.view", "settings.edit", "settings.security"]);
+    expect(screen.getByLabelText("Timezone")).toBeEnabled();
+    expect(screen.getByRole("switch")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save sign-in protection" })).toBeEnabled();
+    expect(screen.queryByText(READ_ONLY_TEXT)).not.toBeInTheDocument();
+    expect(screen.queryByText(SIGN_IN_ONLY)).not.toBeInTheDocument();
   });
 
   it("the Administrator role is unchanged: enabled fields, both Saves, no read-only line", async () => {

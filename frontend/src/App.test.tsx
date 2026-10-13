@@ -1,9 +1,10 @@
-import { screen, within } from "@testing-library/react";
+import { cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import { config, dashboard, widget, widgetDataRoute } from "./test/dashboardFixtures";
 import { FakeEventSource } from "./test/fakeEventSource";
 import { mockFetch, shellRoutes } from "./test/fetchMock";
+import { builtinRoles, catalogue } from "./test/permissionFixtures";
 import { renderWithProviders } from "./test/render";
 import { userFor } from "./test/users";
 
@@ -18,6 +19,9 @@ const routes = (role: string) => ({
   "GET /api/assets": { body: [] },
   "GET /api/fleet/summary": { body: { power: { kw: null, counted: 0, of: 0 }, energy_today: null, cost_today: null, currency: "QAR", attention: { total: 0, items: [] } } },
   "GET /api/sources": { body: [] },
+  "GET /api/users": { body: [{ id: 1, username: "u", role: "admin", active: true }] },
+  "GET /api/roles": { body: builtinRoles() },
+  "GET /api/permissions": { body: catalogue() },
   "GET /api/diagnostics/report": { body: { format: "DCDASH-REPORT v1", build_id: "t", detail: "summary", mask: false, checksum: "c", parts: [], legend: [] } },
   "GET /api/sources/4/points": { body: [] },
   "GET /api/billing/costs": { body: { month: "2026-10", timezone: "Asia/Qatar", currency: "QAR", days: [], assets: [] } },
@@ -32,10 +36,50 @@ const visit = (role: string, route: string) => {
 };
 
 describe("App routes", () => {
-  it.each(["viewer", "operator"])("keeps Tariffs away from a %s", async (role) => {
-    const calls = visit(role, "/tariffs");
+  it("keeps Tariffs away from a viewer", async () => {
+    const calls = visit("viewer", "/tariffs");
     expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/tariffs")).toBe(false);
+  });
+
+  it("opens Tariffs read-only for an operator (tariffs.view, assets.view, not tariffs.edit): the rates and the currency are read, nothing can be added", async () => {
+    const calls = visit("operator", "/tariffs");
+    expect(await screen.findByRole("heading", { level: 1, name: "Tariffs" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "No access" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Your role can see this page but not change it.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add rate" })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/tariffs")).toBe(true);
+    expect(calls.some((c) => c.path === "/api/settings/billing")).toBe(true);
+  });
+
+  // The trail above the title has a link of the same name, so the sidebar's is looked up inside the Main navigation.
+  const sidebarLink = () => within(screen.getByRole("navigation", { name: "Main" })).getByRole("link", { name: "Users & Roles" });
+
+  it("opens Users & Roles on the Users tab at /users and on the Roles tab at /users/roles, for an admin, under the page's own tab title", async () => {
+    visit("admin", "/users");
+    expect(await screen.findByRole("heading", { level: 1, name: "Users & Roles" })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Users", selected: true })).toBeInTheDocument();
+    expect(document.title).toBe("Users & Roles \u00b7 DC Dashboard");
+    expect(sidebarLink()).toHaveAttribute("aria-current", "page"); // the sidebar item
+    await userEvent.click(screen.getByRole("tab", { name: "Roles" }));
+    expect(await screen.findByRole("table", { name: "Roles" })).toBeInTheDocument();
+    expect(sidebarLink()).toHaveAttribute("aria-current", "page"); // /users/roles is the same page
+    expect(document.title).toBe("Users & Roles \u00b7 DC Dashboard");
+  });
+
+  it("opens the Roles tab straight from /users/roles after a reload", async () => {
+    visit("admin", "/users/roles");
+    expect(await screen.findByRole("table", { name: "Roles" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Roles", selected: true })).toBeInTheDocument();
+  });
+
+  it.each(["/users", "/users/roles"])("keeps %s away from a viewer and an operator, and asks for neither accounts nor roles", async (route) => {
+    for (const role of ["viewer", "operator"]) {
+      const calls = visit(role, route);
+      expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
+      expect(calls.some((c) => c.path === "/api/users" || c.path === "/api/roles" || c.path === "/api/permissions")).toBe(false);
+      cleanup();
+    }
   });
 
   it.each(["viewer", "operator"])("keeps Diagnostics away from a %s, and asks the report route nothing", async (role) => {

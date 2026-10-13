@@ -1,9 +1,14 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { App } from "../App";
+import { useAuth } from "../auth/AuthProvider";
+import { READ_ONLY_TEXT } from "../components/ReadOnlyNote";
+import type { PermissionId } from "../lib/permissions";
 import { mockFetch, shellRoutes, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
 import { TariffsPage } from "./TariffsPage";
 
@@ -48,9 +53,15 @@ const routes = (role: string): Routes => ({
   },
   ...overrides,
 });
+// The app mounts a page once the account is known (RequireAuth); what a role may change is decided at the page's first render, so the tests
+// do the same, or an admin's page would start read-only and become editable a moment later.
+function WhenKnown({ children }: { children: ReactNode }) {
+  return useAuth().user ? <>{children}</> : null;
+}
+const mountPage = () => renderWithProviders(<WhenKnown><TariffsPage /><SignedIn /></WhenKnown>, { route: "/tariffs", path: "/tariffs" });
 const open = () => {
   const calls = mockFetch(routes("admin"));
-  renderWithProviders(<TariffsPage />, { route: "/tariffs", path: "/tariffs" });
+  mountPage();
   return calls;
 };
 const fillRate = async (form: HTMLElement, from: string, rate: string) => {
@@ -601,24 +612,136 @@ describe("TariffsPage", () => {
     expect(within(form).getAllByRole("option")).toHaveLength(1); // only "Choose an asset…"
   });
 
-  it("never asks for tariffs or the currency when a non-admin opens the route", async () => {
-    const calls = mockFetch({ ...shellRoutes, ...routes("operator") }); // the app shell asks for its chip and clock too
+  it("never asks for tariffs or the currency when a role without tariffs.view opens the route", async () => {
+    const calls = mockFetch({ ...shellRoutes, ...routes("viewer") }); // the app shell asks for its chip and clock too
     renderWithProviders(<App />, { route: "/tariffs", path: "*" });
     expect(await screen.findByRole("heading", { name: "No access" })).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/api/tariffs" || c.path === "/api/settings/billing")).toBe(false);
   });
 });
 
+describe("TariffsPage without tariffs.edit (read-only, W9b)", () => {
+  /** The page for an account that holds `permissions`; it is mounted and the account known when this returns (the app does the same in RequireAuth). */
+  const openAs = async (permissions: PermissionId[] = ["tariffs.view", "assets.view"]) => {
+    const calls = mockFetch({ ...routes("custom"), "GET /api/me": { body: userFor("custom", { username: "a", permissions }) } });
+    mountPage();
+    await accountKnown();
+    return calls;
+  };
+  const writes = (calls: { method: string }[]) => calls.filter((c) => c.method !== "GET");
+
+  it("says once, at the top of the grid and across it, that the role can see the page but not change it", async () => {
+    await openAs();
+    await screen.findByRole("table", { name: "Site default rates" });
+    expect(screen.getAllByText(READ_ONLY_TEXT)).toHaveLength(1);
+    const grid = document.querySelector(".tariffs-page > .page-grid")!;
+    const note = screen.getByText(READ_ONLY_TEXT);
+    expect(grid.firstElementChild).toContainElement(note);
+    expect(grid.firstElementChild).toHaveClass("span-all");
+  });
+
+  it("shows the currency as plain text, with no field, no Save and no form", async () => {
+    await openAs();
+    expect(await screen.findByText("QAR")).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Site currency" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Currency")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  });
+
+  it("says that no currency is set, without asking for a code", async () => {
+    currency = null;
+    await openAs();
+    expect(await screen.findByText("No currency is set, so costs show without a unit.")).toBeInTheDocument();
+    expect(screen.queryByText(/Enter a three-letter code/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("draws both rate tables without the Actions column: no row menu, no trash, no Edit", async () => {
+    await openAs();
+    const defaults = await screen.findByRole("table", { name: "Site default rates" });
+    const perAsset = screen.getByRole("table", { name: "Asset overrides" });
+    expect(within(defaults).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Effective from", "Rate per kWh"]);
+    expect(within(perAsset).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Asset", "Effective from", "Rate per kWh"]);
+    expect(within(defaults).getAllByRole("row")).toHaveLength(3); // header and two rates, as before
+    expect(within(defaults).getByText("0.15")).toBeInTheDocument();
+    expect(within(perAsset).getByText("LV Panel 1")).toBeInTheDocument();
+    expect(within(perAsset).getByText("0.09")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(document.querySelector(".tariff-table td.actions, .tariff-table th.actions")).toBeNull();
+  });
+
+  it("draws neither add form and no Add rate button", async () => {
+    await openAs();
+    await screen.findByRole("table", { name: "Site default rates" });
+    expect(screen.queryByRole("form", { name: "Add site default rate" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Add asset override" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add rate" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Rate per kWh")).not.toBeInTheDocument();
+  });
+
+  it("drops 'Add a rate below.' from the empty note; the other empty note is unchanged", async () => {
+    rows = [];
+    await openAs();
+    expect(await screen.findByText("No site default rate yet. Until one is set, assets with no override show a dash for cost.")).toBeInTheDocument();
+    expect(screen.queryByText(/Add a rate below/)).not.toBeInTheDocument();
+    expect(screen.getByText("No overrides. Every asset uses the site default rate.")).toBeInTheDocument();
+  });
+
+  it("keeps 'Add a rate below.' for a role that can add one", async () => {
+    rows = [];
+    await openAs(["tariffs.view", "tariffs.edit", "assets.view"]);
+    expect(await screen.findByText(/No site default rate yet\. Until one is set, assets with no override show a dash for cost\. Add a rate below\./)).toBeInTheDocument();
+  });
+
+  it("sends nothing but reads, and never opens a confirmation", async () => {
+    const confirm = vi.spyOn(window, "confirm");
+    const calls = await openAs();
+    await screen.findByRole("table", { name: "Site default rates" });
+    expect(writes(calls)).toEqual([]);
+    expect(confirm).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
+  it("with tariffs.edit the page is the editable one: no read-only line, the currency form, the add forms and the Actions column", async () => {
+    await openAs(["tariffs.view", "tariffs.edit", "assets.view"]);
+    const defaults = await screen.findByRole("table", { name: "Site default rates" });
+    expect(screen.queryByText(READ_ONLY_TEXT)).not.toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "Site currency" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Add rate" })).toHaveLength(2);
+    expect(within(defaults).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Effective from", "Rate per kWh", "Actions"]);
+  });
+
+  it("while the rates load it draws no add form, so nothing drops when they land; while the currency loads it draws a line, not the field and the button", async () => {
+    mockFetch({ ...routes("custom"), "GET /api/me": { body: userFor("custom", { username: "a", permissions: ["tariffs.view", "assets.view"] }) } });
+    const hold = holdFetch((_method, path) => path === "/api/tariffs" || path === "/api/settings/billing");
+    mountPage();
+    await accountKnown();
+    expect(screen.getByRole("heading", { level: 1, name: "Tariffs" })).toBeInTheDocument();
+    const currencyRegion = screen.getByText("Loading the currency").parentElement!;
+    expect(currencyRegion).toHaveAttribute("role", "status");
+    expect(currencyRegion.querySelector(".inline-form")).toBeNull();
+    expect(currencyRegion.querySelector(".sk-line")).not.toBeNull();
+    expect(screen.queryByRole("form", { name: "Add site default rate" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Add asset override" })).not.toBeInTheDocument();
+    hold.release();
+    expect(await screen.findByRole("table", { name: "Site default rates" })).toBeInTheDocument();
+    expect(await screen.findByText("QAR")).toBeInTheDocument();
+    expect(document.querySelector(".sk-region")).toBeNull();
+  });
+});
+
 describe("TariffsPage while its lists load (W7f)", () => {
-  const mount = (held: string) => {
+  const mount = async (held: string) => {
     mockFetch(routes("admin"));
     const hold = holdFetch((_method, path) => path === held);
-    renderWithProviders(<TariffsPage />, { route: "/tariffs", path: "/tariffs" });
+    mountPage();
+    await accountKnown();
     return hold;
   };
 
   it("keeps the real header and section heads and shows a one-row bar skeleton for the currency while it is held", async () => {
-    const hold = mount("/api/settings/billing");
+    const hold = await mount("/api/settings/billing");
     expect(screen.getByRole("heading", { level: 1, name: "Tariffs" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Currency" })).toBeInTheDocument();
     const region = screen.getByText("Loading the currency").parentElement!;
@@ -632,7 +755,7 @@ describe("TariffsPage while its lists load (W7f)", () => {
   });
 
   it("shows a table skeleton for the tariffs while they are held, then the two tables and no region", async () => {
-    const hold = mount("/api/tariffs");
+    const hold = await mount("/api/tariffs");
     await screen.findByRole("form", { name: "Site currency" }); // the currency is in; the rates are not
     const region = screen.getByText("Loading tariffs").parentElement!;
     expect(region).toHaveAttribute("role", "status");
@@ -647,7 +770,7 @@ describe("TariffsPage while its lists load (W7f)", () => {
   });
 
   it("draws both rate cards' real heads and purpose lines outside any region while the rates are held, and keeps them when the rates arrive (the skeleton must sit where the table will)", async () => {
-    const hold = mount("/api/tariffs");
+    const hold = await mount("/api/tariffs");
     await screen.findByRole("form", { name: "Site currency" });
     const siteHead = screen.getByRole("heading", { level: 2, name: "Site default rate" });
     const overridesHead = screen.getByRole("heading", { level: 2, name: "Asset overrides" });
@@ -663,7 +786,7 @@ describe("TariffsPage while its lists load (W7f)", () => {
   });
 
   it("puts the one region round the left table only: nothing grey in the right card, and the Currency card keeps its real head", async () => {
-    const hold = mount("/api/tariffs");
+    const hold = await mount("/api/tariffs");
     await screen.findByRole("form", { name: "Site currency" });
     const siteCard = screen.getByRole("heading", { level: 2, name: "Site default rate" }).closest(".page-card")!;
     const overridesCard = screen.getByRole("heading", { level: 2, name: "Asset overrides" }).closest(".page-card")!;
@@ -679,7 +802,7 @@ describe("TariffsPage while its lists load (W7f)", () => {
   });
 
   it("draws both real add forms under the skeleton while the rates are held, outside the region, and keeps what is typed when the rates arrive (so the pinned forms do not drop)", async () => {
-    const hold = mount("/api/tariffs");
+    const hold = await mount("/api/tariffs");
     await screen.findByRole("form", { name: "Site currency" });
     const siteForm = screen.getByRole("form", { name: "Add site default rate" });
     const overrideForm = await screen.findByRole("form", { name: "Add asset override" });
@@ -699,7 +822,7 @@ describe("TariffsPage while its lists load (W7f)", () => {
   });
 
   it("draws the currency skeleton in the Currency card, under its real head, while the currency is held", async () => {
-    const hold = mount("/api/settings/billing");
+    const hold = await mount("/api/settings/billing");
     const card = screen.getByRole("heading", { level: 2, name: "Currency" }).closest(".page-card")!;
     expect(card.querySelector(".sect-purpose")).toHaveTextContent("The unit costs are shown in.");
     expect(card.contains(screen.getByText("Loading the currency"))).toBe(true);
@@ -712,7 +835,7 @@ describe("TariffsPage while its lists load (W7f)", () => {
   it("ends with the errors as alerts, never a region, when the lists fail", async () => {
     overrides = { "GET /api/tariffs": { status: 500, body: { detail: "rates are down" } }, "GET /api/settings/billing": { status: 500, body: { detail: "settings are down" } } };
     mockFetch(routes("admin"));
-    renderWithProviders(<TariffsPage />, { route: "/tariffs", path: "/tariffs" });
+    mountPage();
     expect(await screen.findByText("rates are down")).toBeInTheDocument();
     expect(await screen.findByText("settings are down")).toBeInTheDocument();
     expect(document.querySelector(".sk-region")).toBeNull();

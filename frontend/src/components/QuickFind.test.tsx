@@ -172,10 +172,10 @@ describe("QuickFind structure", () => {
 });
 
 describe("QuickFind matches", () => {
-  it.each(["users", "settings", "sources"])("lists %s to an admin", async (query) => {
+  it.each([["users", "Users & Roles"], ["settings", "Settings"], ["sources", "Sources"]])("lists %s to an admin as %s", async (query, label) => {
     const { user, input } = await mount({ role: "admin" });
     await user.type(input, query);
-    expect(await screen.findByRole("option", { name: new RegExp(`^${query}$`, "i") })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: label })).toBeInTheDocument();
   });
 
   it.each(["users", "settings", "sources", "scans", "discovery", "tariffs", "storage", "audit", "diagnostics"])("never lists the %s page to a viewer", async (query) => {

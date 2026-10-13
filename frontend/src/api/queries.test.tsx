@@ -7,6 +7,7 @@ import { mockFetch } from "../test/fetchMock";
 import {
   auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
+  useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
 
@@ -606,5 +607,92 @@ describe("buildReport", () => {
     expect(seen).toHaveLength(0);
     await act(async () => { await result.current.mutateAsync({ detail: "summary", mask: false, source: null }); });
     expect(seen).toHaveLength(1);
+  });
+});
+
+describe("role queries", () => {
+  const role = (over: Record<string, unknown> = {}) => ({ id: 7, name: "Executive", description: "", builtin: false, user_count: 0, assignable: true, permissions: ["assets.view"], ...over });
+  const userRow = { id: 2, username: "ops", role: "Executive", active: true, blocked: false };
+  const PERMISSION = { id: "assets.view", area: "Assets Tree", kind: "see", label: "See the Assets Tree", description: "Open the Assets Tree." };
+  const count = (calls: { method: string; path: string }[], path: string) => calls.filter((c) => c.method === "GET" && c.path === path).length; // reads only: POST /api/roles shares a path
+
+  it("reads the catalogue once: it is never stale", async () => {
+    const calls = mockFetch({ "GET /api/permissions": { body: [PERMISSION] } });
+    const { result, rerender } = renderHook(() => usePermissions(), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.data).toEqual([PERMISSION]));
+    rerender();
+    window.dispatchEvent(new Event("focus"));
+    expect(count(calls, "/api/permissions")).toBe(1);
+  });
+
+  // Every role change moves what the Users tab shows (the role select, its description, the Users column) and writes an audit row.
+  it.each([
+    ["creating a role", () => useCreateRole(), "POST /api/roles", { name: "Executive", description: "", permissions: ["assets.view"] }, (m: ReturnType<typeof useCreateRole>) => m.mutateAsync({ name: "Executive", description: "", permissions: ["assets.view"] })],
+    ["saving a role", () => usePatchRole(), "PATCH /api/roles/7", { name: "Board" }, (m: ReturnType<typeof usePatchRole>) => m.mutateAsync({ id: 7, body: { name: "Board" } })],
+    ["duplicating a role", () => useDuplicateRole(), "POST /api/roles/2/duplicate", {}, (m: ReturnType<typeof useDuplicateRole>) => m.mutateAsync({ id: 2 })],
+  ] as const)("refetches the roles, the users and the audit options after %s", async (_name, hook, route, sent, run) => {
+    const calls = mockFetch({
+      "GET /api/roles": { body: [role()] },
+      "GET /api/users": { body: [userRow] },
+      "GET /api/audit/options": { body: { actions: [], users: [], unattributed: false } },
+      [route]: { status: route.startsWith("POST") ? 201 : 200, body: role() },
+    });
+    const { result } = renderHook(() => ({ roles: useRoles(), users: useUsers(), options: useAuditOptions(), mutation: hook() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect([result.current.roles.data, result.current.users.data, result.current.options.data].every(Boolean)).toBe(true));
+    await act(async () => { await run(result.current.mutation as never); });
+    await waitFor(() => expect([count(calls, "/api/roles"), count(calls, "/api/users"), count(calls, "/api/audit/options")]).toEqual([2, 2, 2]));
+    expect(calls.find((c) => c.method !== "GET")?.body).toEqual(sent);
+  });
+
+  it("sends the new name to the duplicate route only when one is given", async () => {
+    const calls = mockFetch({ "POST /api/roles/2/duplicate": { status: 201, body: role({ name: "Mine" }) } });
+    const { result } = renderHook(() => useDuplicateRole(), { wrapper: stableWrapper() });
+    await act(async () => { await result.current.mutateAsync({ id: 2, name: "Mine" }); });
+    expect(calls[0].body).toEqual({ name: "Mine" });
+  });
+
+  it("refetches after a delete and ALSO after a refused one (a 409 means the list on screen is out of date)", async () => {
+    let refuse = true;
+    const calls = mockFetch({
+      "GET /api/roles": { body: [role()] },
+      "GET /api/users": { body: [userRow] },
+      "GET /api/audit/options": { body: { actions: [], users: [], unattributed: false } },
+      "DELETE /api/roles/7": () => (refuse ? { status: 409, body: { detail: "role is in use by 1 account(s)" } } : { status: 204 }),
+    });
+    const { result } = renderHook(() => ({ roles: useRoles(), users: useUsers(), options: useAuditOptions(), del: useDeleteRole() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.options.data).toBeDefined());
+    await waitFor(() => expect(result.current.roles.data).toBeDefined());
+    await act(async () => { await expect(result.current.del.mutateAsync(7)).rejects.toThrow("role is in use by 1 account(s)"); });
+    await waitFor(() => expect([count(calls, "/api/roles"), count(calls, "/api/users"), count(calls, "/api/audit/options")]).toEqual([2, 2, 2]));
+    refuse = false;
+    await act(async () => { await result.current.del.mutateAsync(7); });
+    await waitFor(() => expect(count(calls, "/api/roles")).toBe(3));
+  });
+
+  it("refetches after a PATCH that finds the role gone (404), so the list drops it", async () => {
+    const calls = mockFetch({
+      "GET /api/roles": { body: [role()] },
+      "PATCH /api/roles/7": { status: 404, body: { detail: "Role not found." } },
+    });
+    const { result } = renderHook(() => ({ roles: useRoles(), patch: usePatchRole() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.roles.data).toBeDefined());
+    await act(async () => { await expect(result.current.patch.mutateAsync({ id: 7, body: { name: "x" } })).rejects.toThrow("Role not found."); });
+    await waitFor(() => expect(count(calls, "/api/roles")).toBe(2));
+  });
+
+  // The other direction: an account gained, lost or changed its role, so the Users column of the Roles list and the delete button's state are stale.
+  it.each([
+    ["creating a user", () => useCreateUser(), "POST /api/users", (m: ReturnType<typeof useCreateUser>) => m.mutateAsync({ username: "new", password: "a-long-password", role: "Executive" })],
+    ["changing a user", () => usePatchUser(), "PATCH /api/users/2", (m: ReturnType<typeof usePatchUser>) => m.mutateAsync({ id: 2, body: { role: "viewer" } })],
+    ["deleting a user", () => useDeleteUser(), "DELETE /api/users/2", (m: ReturnType<typeof useDeleteUser>) => m.mutateAsync(2)],
+  ] as const)("refetches the roles after %s", async (_name, hook, route, run) => {
+    const calls = mockFetch({
+      "GET /api/roles": { body: [role()] },
+      [route]: route.startsWith("DELETE") ? { status: 204 } : { body: userRow },
+    });
+    const { result } = renderHook(() => ({ roles: useRoles(), mutation: hook() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.roles.data).toBeDefined());
+    await act(async () => { await run(result.current.mutation as never); });
+    await waitFor(() => expect(count(calls, "/api/roles")).toBe(2));
   });
 });

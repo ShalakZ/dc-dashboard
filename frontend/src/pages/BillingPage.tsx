@@ -67,7 +67,7 @@ function Legend() {
   );
 }
 
-/** `canSetRates`: the person may open the Tariffs page, so the note links to it; for anyone else it says to ask. */
+/** `canSetRates`: the person may open the Tariffs page AND change a rate on it, so the note links to it; for anyone else it says to ask. */
 function BillingTable({ costs, canSetRates }: { costs: BillingCosts; canSetRates: boolean }) {
   const depth = useMemo(() => depthsByAsset(costs.assets), [costs.assets]);
   if (costs.assets.length === 0) return <Empty text="No assets yet." />;
@@ -207,7 +207,7 @@ export function BillingPage() {
         costs.errorUpdateCount === 0 ? <TableSkeleton columns={7} rows={5} label="Loading billing" caption /> : <p className="muted">loading…</p>
       )}
       {costs.isError && <p className="error" role="alert">{costs.error.message}</p>}
-      {costs.data && <BillingTable costs={costs.data} canSetRates={meets(PAGE_NEED.tariffs, can)} />}
+      {costs.data && <BillingTable costs={costs.data} canSetRates={can("tariffs.edit") && meets(PAGE_NEED.tariffs, can)} />}
     </section>
   );
 }

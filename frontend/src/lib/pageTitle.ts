@@ -8,7 +8,7 @@ const TITLES: [path: string, title: string][] = [
   ["/sources", "Sources"],
   ["/scans", "Scans"],
   ["/discovery", "Discovery"],
-  ["/users", "Users"],
+  ["/users", "Users & Roles"],
   ["/settings", "Settings"],
   ["/tariffs", "Tariffs"],
   ["/storage", "Storage"],

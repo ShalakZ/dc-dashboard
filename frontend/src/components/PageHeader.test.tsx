@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import type { ReactElement } from "react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { createRef, type ReactElement } from "react";
 import { MemoryRouter } from "react-router";
 import { iconHtml } from "../test/iconHtml";
 import { PageHeader } from "./PageHeader";
@@ -66,6 +66,25 @@ describe("PageHeader", () => {
     const { container } = inRouter(<PageHeader title="MV2" icon="kindSite" crumbs={[{ label: "Assets" }]} sub="Site" actions={<button type="button">Edit</button>} />);
     const parts = Array.from(container.querySelector("header.page-head")!.children).map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${el.className}` : ""}`);
     expect(parts).toEqual(["nav.crumbs", "div.page-title", "p.sub", "div.actions"]);
+  });
+
+  it("with a headingRef the h1 is the ref's element and can be focused by script only; without one it has no tabindex", () => {
+    const ref = createRef<HTMLHeadingElement>();
+    render(<PageHeader title="Users & Roles" headingRef={ref} />);
+    const heading = screen.getByRole("heading", { level: 1, name: "Users & Roles" });
+    expect(ref.current).toBe(heading);
+    expect(heading).toHaveAttribute("tabindex", "-1");
+    ref.current!.focus();
+    expect(heading).toHaveFocus();
+    cleanup();
+    render(<PageHeader title="Billing" />);
+    expect(screen.getByRole("heading", { level: 1 })).not.toHaveAttribute("tabindex");
+  });
+
+  it("the headingRef reaches the h1 inside the tile wrapper too", () => {
+    const ref = createRef<HTMLHeadingElement>();
+    const { container } = render(<PageHeader title="Panel 1" icon="kindPanel" headingRef={ref} />);
+    expect(ref.current).toBe(container.querySelector(".page-title > h1"));
   });
 
   it("without an icon the markup is exactly today's: the h1 straight in the header, no .page-title, no tile", () => {
