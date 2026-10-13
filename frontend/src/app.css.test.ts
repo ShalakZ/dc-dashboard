@@ -448,6 +448,38 @@ describe("long asset names wrap, figures do not", () => {
   });
 });
 
+describe("a very long asset kind wraps instead of widening the page (W7i)", () => {
+  // A kind is free text up to 200 characters, so it may have no space to break at. jsdom has no layout: the declarations are pinned,
+  // the e2e spec (w7i.spec.ts) measures the page.
+  const pages = parseRules(stripComments(readFileSync("src/styles/pages-assets.css", "utf8")));
+  const one = (list: Rule[], selector: string) => {
+    const found = list.filter((r) => r.selector === selector && !r.at.some((a) => a.startsWith("@media")));
+    expect(found, `exactly one unconditional rule for "${selector}"`).toHaveLength(1);
+    expect(inLayer(found[0]), `"${selector}" is inside @layer w6`).toBe(true);
+    return found[0].body;
+  };
+
+  it("the page header's sub line wraps inside its column (it may be 200 characters without a space) and never runs under the actions", () => {
+    const sub = one(rules, ".page-head .sub");
+    expect(sub).toMatch(/min-width:\s*0/);
+    expect(sub).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it("a kind of the fleet summary may shrink to the row, wraps its name anywhere and lets the count drop below it", () => {
+    const li = one(pages, ".kind-list li");
+    expect(li).toMatch(/min-width:\s*0/);
+    expect(li).toMatch(/flex-wrap:\s*wrap/);
+    const name = one(pages, ".kind-name");
+    expect(name).toMatch(/min-width:\s*0/);
+    expect(name).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it("the glyph keeps its 16 px beside a wrapping name (svg.i is flex: none for the whole app)", () => {
+    expect(one(rules, "svg.i")).toMatch(/flex:\s*none/);
+    expect(one(pages, ".kind-name svg.i")).toMatch(/width:\s*16px/);
+  });
+});
+
 describe("the design tokens (W6)", () => {
   it("live in one :root block, so every var() has one meaning", () => {
     expect(rootRules).toHaveLength(1);
