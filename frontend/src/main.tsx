@@ -17,6 +17,7 @@ import { App } from "./App";
 import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";
 import { RouteError } from "./components/RouteError";
+import { ToastProvider } from "./components/Toasts";
 import { installChunkReload } from "./lib/chunkReload";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
@@ -33,7 +34,9 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <AppearanceProvider>
-          <RouterProvider router={router} />
+          <ToastProvider>
+            <RouterProvider router={router} />
+          </ToastProvider>
         </AppearanceProvider>
       </AuthProvider>
     </QueryClientProvider>
