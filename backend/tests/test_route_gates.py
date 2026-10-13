@@ -10,6 +10,7 @@ Routes are enumerated with fastapi.routing.iter_route_contexts because include_r
 FastAPI 0.142. An include-level `dependencies=` is invisible to this walk, so main.py is checked for it separately.
 """
 import ast
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -241,12 +242,13 @@ def test_the_gate_checks_the_public_and_signed_in_lists_too():
 GATED_AND_SIGNED_IN = sorted(set(ROUTE_PERMISSIONS) | set(SIGNED_IN))
 
 
-async def sign_in_with(app, db, name: str, permissions) -> object:
+@contextlib.asynccontextmanager
+async def signed_in_with(app, db, name: str, permissions):
     """A client signed in as an account whose custom role holds `permissions` (stored as given)."""
     await make_role(db, name, permissions)
-    client = silent_client(app)
-    await login_as(client, db, role=name, username=f"user of {name}")
-    return client
+    async with silent_client(app) as client:
+        await login_as(client, db, role=name, username=f"user of {name}")
+        yield client
 
 
 def expected_for(held) -> dict[str, str]:
@@ -274,8 +276,7 @@ async def test_a_role_holding_one_permission_passes_its_routes_and_is_refused_ev
     patch_stream(monkeypatch)
     wrong: dict[str, dict] = {}
     for permission in CUSTOM_IDS:
-        client = await sign_in_with(app, db, f"only {permission}", [permission])
-        async with client:
+        async with signed_in_with(app, db, f"only {permission}", [permission]) as client:
             got = await verdicts(app, client)
         want = expected_for({permission})
         if got != want:
@@ -288,8 +289,7 @@ async def test_a_role_holding_everything_but_one_permission_is_refused_the_route
     wrong: dict[str, dict] = {}
     for permission in CUSTOM_IDS:
         held = ALL_IDS - NOT_FOR_CUSTOM_ROLES - {permission}
-        client = await sign_in_with(app, db, f"all but {permission}", sorted(held))
-        async with client:
+        async with signed_in_with(app, db, f"all but {permission}", sorted(held)) as client:
             got = await verdicts(app, client)
         want = expected_for(held)
         if got != want:
@@ -302,16 +302,14 @@ async def test_a_role_with_no_usable_permission_is_refused_every_permission_rout
     nothing = {key: "403" for key in ROUTE_PERMISSIONS} | {key: "pass" for key in SIGNED_IN}
     junk = ["roles.manage", "no.such", "Assets.View", "", 5, None, ["assets.view"], {"assets.view": True}]
     for name, stored in (("none", []), ("junk", junk)):
-        client = await sign_in_with(app, db, name, stored)
-        async with client:
+        async with signed_in_with(app, db, name, stored) as client:
             assert await verdicts(app, client) == dict(sorted(nothing.items())), name
 
 
 async def test_a_403_says_the_same_short_thing_whichever_permission_is_missing(app, db, monkeypatch):
     patch_stream(monkeypatch)
     requests = route_requests(app)
-    client = await sign_in_with(app, db, "none", [])
-    async with client:
+    async with signed_in_with(app, db, "none", []) as client:
         details = set()
         for key in ROUTE_PERMISSIONS:
             response = await send_for_response(client, *requests[key])
