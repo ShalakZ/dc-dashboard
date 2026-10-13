@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import get_db, require_permission
 from dcdash.api.settings import current_timezone
 from dcdash.core.cost import Cost, HourCost, cost_by_hour, load_tariffs, no_data, rate_at, summarize
 from dcdash.core.csvout import write_csv
@@ -20,7 +20,7 @@ from dcdash.core.settings_store import get_currency
 from dcdash.core.timeutil import local_days, month_bounds, validate_whole_hour_zone
 from dcdash.core.tree import AssetTree
 
-router = APIRouter(prefix="/api", tags=["billing"], dependencies=[Depends(require_role("viewer"))])
+router = APIRouter(prefix="/api", tags=["billing"])
 
 MONTH_PATTERN = r"^\d{4}-(0[1-9]|1[0-2])$"
 CSV_HEADER = ("asset", "date", "kwh", "cost", "currency", "estimated", "partial", "no_data")
@@ -132,7 +132,7 @@ async def month_costs(db: AsyncSession, month: str | None) -> dict[str, Any]:
     }
 
 
-@router.get("/billing/months")
+@router.get("/billing/months", dependencies=[Depends(require_permission("billing.view"))])
 async def months(db: AsyncSession = Depends(get_db)) -> dict[str, str | None]:
     """The site-local month of the first energy reading of any metered point: where the Billing month picker starts.
     The zone is not checked for whole hours; naming a month does not need that."""
@@ -145,14 +145,14 @@ async def months(db: AsyncSession = Depends(get_db)) -> dict[str, str | None]:
     return {"first_month": first.astimezone(ZoneInfo(await current_timezone(db))).strftime("%Y-%m")}
 
 
-@router.get("/billing/costs")
+@router.get("/billing/costs", dependencies=[Depends(require_permission("billing.view"))])
 async def costs(
     month: str | None = Query(default=None, pattern=MONTH_PATTERN), db: AsyncSession = Depends(get_db)
 ) -> dict[str, Any]:
     return await month_costs(db, month)
 
 
-@router.get("/billing/costs.csv")
+@router.get("/billing/costs.csv", dependencies=[Depends(require_permission("billing.export"))])
 async def costs_csv(
     month: str | None = Query(default=None, pattern=MONTH_PATTERN), db: AsyncSession = Depends(get_db)
 ) -> Response:
