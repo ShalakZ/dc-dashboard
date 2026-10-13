@@ -45,6 +45,9 @@
   .settings-page .page-card p { margin: 0; } /* the card's own gap spaces its lines; a browser margin would add to it */
   .settings-page .settings-form { flex: 1; display: flex; flex-direction: column; gap: 14px; }
   .settings-page .form-foot { display: grid; gap: 14px; margin-top: auto; }
+  /* The line under Save that a refusal fills. Always there, one line tall (at the page's own size and line-height, which the p.error inside
+     inherits), so the card keeps its height and Save its place whether or not the server said no. A refusal that wraps may still grow it. */
+  .settings-page .form-status { min-height: 1lh; }
   .settings-page input[type="number"] { max-width: 12em; }
   .settings-page label.check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-base); } /* the sign-in switch: box and text on one line */
   .settings-page .sk-switch { display: flex; align-items: center; gap: 8px; font-size: var(--fs-base); } /* its skeleton: a box and a line */
@@ -72,6 +75,12 @@
   .storage-page .retention-form { flex: 1; display: flex; flex-direction: column; gap: 14px; }
   .storage-page .retention-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; align-items: end; }
   .storage-page .retention-foot { display: grid; gap: 14px; margin-top: auto; }
+  /* The place of the error and of the note Set as default leaves, above the buttons. It is always there and as tall as the longest of them wraps
+     to at the card's width: a hidden copy of that note (data-reserve, a pseudo-element, so no second copy in the page's text) shares the grid cell
+     with whatever message is shown. One line at least; two lines at the width of the two-column card, one in the wider one-column card. */
+  .storage-page .retention-status { display: grid; min-height: 1lh; }
+  .storage-page .retention-status::before { content: attr(data-reserve); grid-area: 1 / 1; visibility: hidden; }
+  .storage-page .retention-status > p { grid-area: 1 / 1; }
 
   /* The five W7j pages: the page description may run to about 110 characters (Tariffs has its own copy of the rule in pages-billing.css). */
   .audit-page .page-head .sub, .storage-page .page-head .sub, .settings-page .page-head .sub, .diag-page .page-head .sub { max-width: 110ch; }

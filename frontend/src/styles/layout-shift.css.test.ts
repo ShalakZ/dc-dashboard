@@ -43,3 +43,44 @@ describe("the message slots that keep a card's height (W7l)", () => {
     expect(px(documentFont.body, "font")).toMatch(/\/1\.4\b/); // the unitless factor the slot restates
   });
 });
+
+describe("the message slots of Settings and Storage (W7l)", () => {
+  // Settings: a refusal under Save added a line and pushed the cards (+33.6 px); Storage: the note Set as default wrapped to two lines and grew
+  // both cards (+53.2 px at 1440). Both feet now keep a slot for it. The slots restate nothing: the page's 14px/1.4 is what the p.error and p.muted
+  // inside them use, so the slot's 1lh is the message's own line.
+  const settingsSlot = () => plain(admin, ".settings-page .form-status");
+  const storageSlot = () => plain(admin, ".storage-page .retention-status");
+
+  it("Settings: .form-status reserves one line, in the foot's grid, at the page's own size (no font-size or line-height of its own)", () => {
+    expect(px(settingsSlot(), "min-height")).toBe("1lh");
+    expect(px(settingsSlot(), "font-size")).toBeUndefined();
+    expect(px(settingsSlot(), "line-height")).toBeUndefined();
+    expect(px(plain(admin, ".settings-page .form-foot"), "display")).toBe("grid");
+  });
+
+  it("Storage: .retention-status reserves at least one line and is a one-cell grid in which the real message and a hidden copy of the longest one overlap", () => {
+    expect(px(storageSlot(), "min-height")).toBe("1lh");
+    expect(px(storageSlot(), "display")).toBe("grid");
+    expect(px(storageSlot(), "font-size")).toBeUndefined();
+    expect(px(storageSlot(), "line-height")).toBeUndefined();
+    const ghost = plain(admin, ".storage-page .retention-status::before");
+    expect(px(ghost, "content")).toBe("attr(data-reserve)");
+    expect(px(ghost, "visibility")).toBe("hidden"); // takes room, shows nothing, is not read out
+    expect(px(ghost, "grid-area")).toBe("1 / 1");
+    expect(px(plain(admin, ".storage-page .retention-status > p"), "grid-area")).toBe("1 / 1");
+    expect(px(plain(admin, ".storage-page .retention-foot"), "display")).toBe("grid");
+  });
+
+  it("the messages inside them are set in the page's own size: nothing on these two pages gives a paragraph or an error a font-size or line-height", () => {
+    const own = admin.filter((r) => /\.(settings|storage)-page/.test(r.selector) && /(^|[\s,>])(p|\.error|\.muted)(?![\w-])/.test(r.selector.replace(/::?[\w-]+/g, "")));
+    expect(own.length).toBeGreaterThan(0); // the guard can see them
+    for (const r of own) {
+      expect(px(r.body, "font-size"), `"${r.selector}" sets no font-size`).toBeUndefined();
+      expect(px(r.body, "line-height"), `"${r.selector}" sets no line-height`).toBeUndefined();
+    }
+    const error = app.find((r) => r.selector === ".error" && r.at.length === 1)!;
+    expect(px(error.body, "font-size")).toBeUndefined();
+    expect(px(app.find((r) => r.selector === ".muted" && r.at.length === 1)!.body, "font-size")).toBeUndefined();
+    expect(px(app.find((r) => r.selector === "body")!.body, "font")).toMatch(/^14px\/1\.4\b/);
+  });
+});

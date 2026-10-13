@@ -822,3 +822,64 @@ describe("SettingsPage controls follow the permissions of the role (a custom rol
     expect(screen.queryByText(READ_ONLY_TEXT)).not.toBeInTheDocument();
   });
 });
+
+describe("SettingsPage message slots (W7l)", () => {
+  // A refusal under Save used to push the cards: the foot now owns one line for it, empty or not. (The pixels are the stylesheet's, pinned in
+  // layout-shift.css.test.ts; here: the slot is always drawn for a role that can save, a message sits inside it, and a role that cannot has none.)
+  const section = () => screen.getByRole("form", { name: "Sign-in protection" });
+  const general = () => screen.getByLabelText("Timezone").closest("form")!;
+  const slot = (form: HTMLElement) => form.querySelector<HTMLElement>(":scope > .form-foot > .form-status");
+
+  it("draws an empty slot under Save in both cards, and the refusal of each save appears inside its own card's slot", async () => {
+    mockFetch({
+      ...base,
+      "GET /api/settings/general": { body: { timezone: "UTC" } },
+      "PUT /api/settings/general": { status: 422, body: { detail: "unknown timezone" } },
+      "PUT /api/settings/sign-in": { status: 422, body: { detail: "block_minutes must be between 1 and 60" } },
+    });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    await screen.findByLabelText("Timezone");
+    await screen.findByRole("form", { name: "Sign-in protection" });
+    for (const form of [general(), section()]) {
+      expect(slot(form)).not.toBeNull();
+      expect(slot(form)).toBeEmptyDOMElement();
+      expect(within(form).getByRole("button", { name: /^Save/ }).closest(".row")!.nextElementSibling).toBe(slot(form)); // under the Save row
+    }
+    await userEvent.click(within(general()).getByRole("button", { name: "Save" }));
+    expect(await within(slot(general())!).findByRole("alert")).toHaveTextContent("unknown timezone");
+    expect(slot(section())).toBeEmptyDOMElement();
+    await userEvent.click(within(section()).getByRole("button", { name: "Save sign-in protection" }));
+    expect(await within(slot(section())!).findByRole("alert")).toHaveTextContent("block_minutes must be between 1 and 60");
+    expect(screen.getAllByRole("alert")).toHaveLength(2); // each one once
+  });
+
+  it("a role that cannot change a card has no slot in it, only its line of words (nothing can be refused there)", async () => {
+    mockFetch({
+      ...base,
+      "GET /api/me": { body: userFor("custom", { permissions: ["settings.view"] }) },
+      "GET /api/settings/general": { body: { timezone: "UTC" } },
+    });
+    renderWithProviders(<><SettingsPage /><SignedIn /></>, { route: "/settings", path: "/settings" });
+    await screen.findByRole("form", { name: "Sign-in protection" });
+    await accountKnown();
+    expect(slot(general())).toBeNull();
+    expect(slot(section())).toBeNull();
+    expect(document.querySelector(".form-status")).toBeNull();
+  });
+
+  it("the loading page draws the slot in each foot that has a Save block, so the page does not move when the data arrives", async () => {
+    mockFetch({ ...base, "GET /api/settings/general": { body: { timezone: "UTC" } } });
+    const hold = holdFetch((_method, path) => path === "/api/settings/general");
+    renderWithProviders(<><SettingsPage /><SignedIn /></>, { route: "/settings", path: "/settings" });
+    await accountKnown();
+    const cards = Array.from(screen.getByText("Loading settings").parentElement!.querySelectorAll<HTMLElement>(":scope > .page-card"));
+    for (const card of cards) {
+      const foot = card.querySelector(".form-foot")!;
+      expect(foot.querySelector(":scope > .row .sk-block")).not.toBeNull();
+      expect(foot.querySelector(":scope > .row")!.nextElementSibling).toHaveClass("form-status");
+      expect(foot.querySelector(".form-status")).toBeEmptyDOMElement();
+    }
+    hold.release();
+    await screen.findByLabelText("Timezone");
+  });
+});

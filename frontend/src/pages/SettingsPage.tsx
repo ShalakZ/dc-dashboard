@@ -149,11 +149,14 @@ function SignInProtection() {
           <p className="muted">{SIGN_IN_HELP}</p>
           <div className="form-foot">
             {canEdit ? (
-              <div className="row">
-                <SaveButton state={put.status} className="primary" ariaLabel="Save sign-in protection" />
-              </div>
+              <>
+                <div className="row">
+                  <SaveButton state={put.status} className="primary" ariaLabel="Save sign-in protection" />
+                </div>
+                {/* One line is always reserved (the CSS): a refusal appearing here must not grow the card or push the ones below it. */}
+                <div className="form-status">{put.isError && !asking && <p className="error" role="alert">{detailText(put.error)}</p>}</div>
+              </>
             ) : <p className="muted">{SIGN_IN_READ_ONLY_TEXT}</p>}
-            {put.isError && !asking && <p className="error" role="alert">{detailText(put.error)}</p>}
           </div>
         </form>
       )}
@@ -209,7 +212,7 @@ export function SettingsPage() {
               <div className="sk-field"><Skeleton width="9ch" /><Skeleton variant="block" height={38} /></div>
               <ParagraphSkeleton text={TIMEZONE_HELP} className="muted" />
               <div className="form-foot">
-                {canEdit ? <div className="row"><Skeleton variant="block" width={SAVE_WIDTH} height={34} /></div> : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
+                {canEdit ? <><div className="row"><Skeleton variant="block" width={SAVE_WIDTH} height={34} /></div><div className="form-status" /></> : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
               </div>
             </div>
           </PageCardSkeleton>
@@ -220,7 +223,7 @@ export function SettingsPage() {
               <div className="sk-field"><Skeleton width="18ch" /><Skeleton variant="block" height={38} /></div>
               <ParagraphSkeleton text={SIGN_IN_HELP} className="muted" />
               <div className="form-foot">
-                {canEditSignIn ? <div className="row"><Skeleton variant="block" width={SAVE_WIDTH} height={34} /></div> : <ParagraphSkeleton text={SIGN_IN_READ_ONLY_TEXT} className="muted" />}
+                {canEditSignIn ? <><div className="row"><Skeleton variant="block" width={SAVE_WIDTH} height={34} /></div><div className="form-status" /></> : <ParagraphSkeleton text={SIGN_IN_READ_ONLY_TEXT} className="muted" />}
               </div>
             </div>
           </PageCardSkeleton>
@@ -262,11 +265,13 @@ export function SettingsPage() {
             <p className="muted">{TIMEZONE_HELP}</p>
             <div className="form-foot">
               {canEdit ? (
-                <div className="row">
-                  <SaveButton state={put.status} className="primary" />
-                </div>
+                <>
+                  <div className="row">
+                    <SaveButton state={put.status} className="primary" />
+                  </div>
+                  <div className="form-status">{put.isError && <p className="error" role="alert">{detailText(put.error)}</p>}</div>
+                </>
               ) : <ReadOnlyNote />}
-              {put.isError && <p className="error" role="alert">{detailText(put.error)}</p>}
             </div>
           </form>
         </PageCard>

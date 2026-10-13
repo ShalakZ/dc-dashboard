@@ -55,6 +55,8 @@ export function validate(s: StorageSettings): string | null {
 export const UTC_NOTE = "Days are UTC days, midnight to midnight UTC, not days in the site's time zone.";
 /** The retention card's first paragraph; the loading frame draws the same words as grey pills, so it breaks into the same lines. */
 export const DISK_NOTE = "Free disk space is not visible from the API container; capacity is a setting below. Set it to the size of the volume holding the database.";
+/** What Set as default says when it worked. It is also the longest line the retention card's message slot has to hold, so the slot reserves its height (data-reserve). */
+const DEFAULT_SET_NOTE = "This site's default is updated. It is not in use yet: press Save to use these values.";
 /** The last sentence of the summary under the buttons; a role that cannot change the settings has no Resets and does not read it. */
 const RESETS_SENTENCE = " The two Resets only fill in the form; nothing changes until you press Save.";
 // What the summary paragraph under the buttons says, with typical numbers: while loading only the length of each word is used.
@@ -232,9 +234,12 @@ export function StoragePage() {
                 </div>
                 <div className="retention-foot">
                   {canEdit ? (
-                    <div className="row">
-                      {[92, 120, 124, 176].map((width) => <Skeleton key={width} variant="block" width={width} height={34} />)}
-                    </div>
+                    <>
+                      <div className="retention-status" data-reserve={DEFAULT_SET_NOTE} />
+                      <div className="row">
+                        {[92, 120, 124, 176].map((width) => <Skeleton key={width} variant="block" width={width} height={34} />)}
+                      </div>
+                    </>
                   ) : <ParagraphSkeleton text={READ_ONLY_TEXT} className="muted" />}
                   <ParagraphSkeleton text={canEdit ? SUMMARY_SAMPLE : SUMMARY_SAMPLE.replace(RESETS_SENTENCE, "")} className="muted" />
                 </div>
@@ -271,7 +276,7 @@ export function StoragePage() {
   const rememberAsDefault = () => {
     if (!checked()) return;
     makeDefault.mutate(form, {
-      onSuccess: () => setNote("This site's default is updated. It is not in use yet: press Save to use these values."),
+      onSuccess: () => setNote(DEFAULT_SET_NOTE),
       onError: (err) => setError(err.message),
     });
   };
@@ -324,15 +329,21 @@ export function StoragePage() {
               ))}
             </div>
             <div className="retention-foot">
-              {error && <p className="error" role="alert">{error}</p>}
-              {note && !error && <p className="muted" role="status">{note}</p>}
               {canEdit ? (
-                <div className="row">
-                  <SaveButton state={save.status} className="primary" />
-                  <button type="button" onClick={rememberAsDefault} disabled={makeDefault.isPending}>Set as default</button>
-                  <button type="button" className="quiet" onClick={() => fill(siteDefault ?? factory)}>Reset to default</button>
-                  <button type="button" className="quiet" onClick={() => fill(factory)}>Reset to factory settings</button>
-                </div>
+                <>
+                  {/* Above the buttons, as the messages always were, but a place of its own: it is as tall as the longest message wraps to at this width
+                      (the CSS lays a hidden copy of data-reserve under the real one), so a message coming or going moves neither card nor Save. */}
+                  <div className="retention-status" data-reserve={DEFAULT_SET_NOTE}>
+                    {error && <p className="error" role="alert">{error}</p>}
+                    {note && !error && <p className="muted" role="status">{note}</p>}
+                  </div>
+                  <div className="row">
+                    <SaveButton state={save.status} className="primary" />
+                    <button type="button" onClick={rememberAsDefault} disabled={makeDefault.isPending}>Set as default</button>
+                    <button type="button" className="quiet" onClick={() => fill(siteDefault ?? factory)}>Reset to default</button>
+                    <button type="button" className="quiet" onClick={() => fill(factory)}>Reset to factory settings</button>
+                  </div>
+                </>
               ) : <ReadOnlyNote />}
               <p className="muted">
                 {siteDefault
