@@ -85,6 +85,14 @@ describe("SettingsPage sign-in protection", () => {
     );
   });
 
+  it("has its Save in the same style as General's: both are the page's primary button", async () => {
+    mockFetch({ ...base, "GET /api/settings/general": { body: { timezone: "UTC" } }, "GET /api/settings/sign-in": { body: policy(7, 12) } });
+    renderWithProviders(<SettingsPage />, { route: "/settings", path: "/settings" });
+    const mine = await screen.findByRole("button", { name: "Save sign-in protection" });
+    expect(mine).toHaveClass("primary");
+    expect(screen.getByRole("button", { name: "Save" })).toHaveClass("primary");
+  });
+
   it("saves both numbers, shows saved, and leaves the timezone alone", async () => {
     let stored = policy();
     const calls = mockFetch({
