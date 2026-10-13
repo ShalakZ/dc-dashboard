@@ -77,7 +77,7 @@ function Nodes({ nodes, view }: { nodes: TreeNode[]; view: View }) {
             <span className="twisty-sp" />
           )}
           <span className="node-icon"><Icon name={assetIcon(node)} /></span>
-          <Link to={`/assets/${node.id}`} title={node.name} aria-current={selected ? "true" : undefined}>
+          <Link to={`/assets/${node.id}`} title={node.name} dir="auto" aria-current={selected ? "true" : undefined}>
             {node.name}
           </Link>
           <span className="kind">{node.kind}</span>

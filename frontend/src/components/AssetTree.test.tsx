@@ -812,3 +812,11 @@ describe("AssetTree skip link", () => {
     expect(screen.queryByRole("link", { name: "Skip the tree" })).not.toBeInTheDocument();
   });
 });
+
+describe("AssetTree names", () => {
+  it("sets each name's direction from its own text (dir=auto), so a right-to-left name is cut at its logical end", () => {
+    const arabic = "\u0645\u0631\u0643\u0632 \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a";
+    render(<MemoryRouter><AssetTree nodes={buildTree([a(1, null, "Site"), a(2, 1, arabic)])} selectedId={null} /></MemoryRouter>);
+    for (const name of ["Site", arabic]) expect(link(name)).toHaveAttribute("dir", "auto");
+  });
+});
