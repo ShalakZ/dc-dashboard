@@ -114,3 +114,14 @@ describe("the toast's stylesheet", () => {
     expect(entry[0].body).toMatch(/opacity:\s*0/);
   });
 });
+
+describe("the room a page leaves under its end for a settled toast (whole-wave review I-3)", () => {
+  it("main and the asset detail column keep --toast-clear (96px) under their content, enough for a two-line toast (62px) and its 16px margin", () => {
+    expect(parseInt(base.get("toast-clear") ?? "0", 10)).toBeGreaterThanOrEqual(62 + 16);
+    for (const selector of ["main", ".assets-detail"]) {
+      const found = appRules.filter((r) => r.selector === selector && r.body.includes("padding"));
+      expect(found, selector).toHaveLength(1);
+      expect(found[0].body, selector).toMatch(/padding:\s*0 var\(--gutter\) var\(--toast-clear\)/);
+    }
+  });
+});

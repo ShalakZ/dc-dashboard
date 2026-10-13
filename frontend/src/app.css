@@ -35,6 +35,7 @@
   --motion: 150ms ease;
   --side-w-open: 236px; --side-w-closed: 64px; --tree-w: 280px; --tree-w-closed: 44px; /* tree 248px below 1180px */
   --find-w: 300px;                                        /* the quick find in the top bar, 220px below 1180px */
+  --toast-clear: 96px;                                    /* room under a page, so the end of a list scrolls clear of a settled toast (two lines: 62px plus its 16px margin) */
 }
 
 /* Everything W6 writes lives in this one layer. The widget and editor-grid rules at the end of the file are unlayered,
@@ -56,7 +57,7 @@
   .shell { --side-w: var(--side-w-open); display: flex; flex-direction: column; min-height: 100vh; }
   .shell[data-sidebar="minimized"] { --side-w: var(--side-w-closed); }
   .frame { flex: 1; min-height: 0; display: flex; }
-  main { flex: 1; min-width: 0; padding: 0 var(--gutter) 48px; }
+  main { flex: 1; min-width: 0; padding: 0 var(--gutter) var(--toast-clear); }
   main:focus { outline: none; }
   .shell-notices { padding-top: 12px; }
   .shell-notices:empty { display: none; }
@@ -319,7 +320,7 @@
   /* Asset tree column (the Assets workspace, option B). main is flush on these pages (main:has(.assets-layout) above), so the column
      meets the sidebar; it is sticky, as tall as the window below the top bar, and the detail area beside it restores the page gutter. */
   .assets-layout { display: flex; align-items: flex-start; min-height: calc(100vh - var(--bar-h)); }
-  .assets-detail { flex: 1; min-width: 0; padding: 0 var(--gutter) 48px; }
+  .assets-detail { flex: 1; min-width: 0; padding: 0 var(--gutter) var(--toast-clear); }
   .assets-detail:focus { outline: none; } /* focused by "Skip the tree" (as main is by "Skip to content"): a ring round the whole pane would only be noise */
   .tree-col { --w: var(--tree-user-w, var(--tree-w)); position: sticky; top: var(--bar-h); align-self: flex-start; width: var(--w); max-width: max(220px, min(50%, calc(100% - 560px))); height: calc(100vh - var(--bar-h)); flex: none; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border-strong); background: var(--bg); } /* --tree-user-w is the width the user chose (inline, from the handle); the max-width is for a window or sidebar that changed after that (a % is of .assets-layout, the room right of the sidebar), as treeMax() and PANE_MIN in lib/treeWidth.ts */
   .shell.ready .tree-col { transition: width var(--motion); } /* from the second frame on, so a remembered state does not animate in */
