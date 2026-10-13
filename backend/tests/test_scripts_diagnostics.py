@@ -1076,8 +1076,7 @@ def ports_runs(scratch):
 def test_a_fixed_port_line_names_the_owner_process_and_its_pid_and_the_other_ports_say_nothing_is_listening(ports_runs):
     pid, fixed, _, lines, _ = ports_runs["real"]
     assert f"port {fixed}: something is listening on 127.0.0.1 (owner: powershell, pid {pid})" in lines
-    assert [l for l in lines if l.startswith("port ")].count(f"port {fixed}: nothing is listening") == 0
-    assert sum("nothing is listening" in l for l in lines) >= 4, lines  # 7, 9, 13 less the one opened, and 80, 443, 8000 (not opened here)
+    assert [int(l.split(":")[0].split()[1]) for l in lines if l.startswith("port ")] == [7, 9, 13, 80, 443, 8000], "one line per fixed port, in order"
 
 
 @needs_powershell
