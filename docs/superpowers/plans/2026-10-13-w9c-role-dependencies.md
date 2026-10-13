@@ -54,7 +54,7 @@
 
 - [x] **Step 1:** `git cherry-pick 34c4d61` (from branch `fix-infotip-overflow`). Resolve a conflict if W7k touched the neighbouring tip rules or `InfoTip` (W7k merged first; expect none).
 - [x] **Step 2:** `cd frontend && npx vitest run src/lib/placeTip.test.ts src/components/InfoTip.test.tsx src/app.css.test.ts src/components/RoleEditor.test.tsx src/components/PageCard.test.tsx src/pages/TariffsPage.test.tsx src/pages/StoragePage.test.tsx` all green; `npm run typecheck`.
-- [ ] **Step 3 (controller, look once):** on the scratch build, a `?` near the right edge of the Roles grid at 1024 and 1440: fully visible, grid shows no sideways scroll bar. (Done together with the scratch stack of Task 4; tick this step then.)
+- [x] **Step 3 (controller, look once):** on the scratch build, a `?` near the right edge of the Roles grid at 1024 and 1440: fully visible, grid shows no sideways scroll bar. Done by the whole-wave review on the scratch build (its section 9: the `?` of "Change scan scopes and the graph layout", "Run the connection check" and "Change users" at 1440 light, 1024 light and 1440 dark; the bubble is a portal on BODY, fully inside the window, `.table-wrap` 842 = 842, closes on mouse leave, Escape and a body scroll).
 - [x] **Step 4:** `git worktree remove /home/ziad/Projects/DC_Dashboard_fix2` and `git branch -D fix-infotip-overflow`.
 
 ### Task 1: the offer logic and the table's tests
@@ -83,7 +83,7 @@ Words (exact strings, `L` = `labelOf`):
 - untick, several: sentence `These need ${L(id)} to show anything. Also untick them?`; items = labels; accept `Also untick ${n} permissions`; decline `Leave ticked`.
 - `needSentence(id, missing, L)` = `${L(id)} also needs ${joinWords(missing.map(L))} to show anything.`
 
-- [ ] **Step 1: Failing tests** in `roleEditor.test.ts` (new `describe` blocks; keep the existing ones):
+- [x] **Step 1: Failing tests** in `roleEditor.test.ts` (new `describe` blocks; keep the existing ones):
 ```ts
 describe("PERMISSION_NEEDS is a sound table", () => {
   it("is closed: whatever a need itself needs is listed too, so one lookup is exact", () => {
@@ -170,8 +170,8 @@ describe("offerWords", () => {
 });
 ```
 Run the "action permission" test against the real table first. If another id fails, the table is wrong or the exemption is real: decide from the audit table, never loosen the test blindly, and record a Ruling.
-- [ ] **Step 2: Run** `npx vitest run src/lib/roleEditor.test.ts` and see the new blocks fail (functions not defined).
-- [ ] **Step 3: Implement** in `roleEditor.ts` (add `isPermissionId` to the `./permissions` import):
+- [x] **Step 2: Run** `npx vitest run src/lib/roleEditor.test.ts` and see the new blocks fail (functions not defined).
+- [x] **Step 3: Implement** in `roleEditor.ts` (add `isPermissionId` to the `./permissions` import):
 ```ts
 /** What `id` needs that is not ticked, in the table's order (the order the hint prints). The table is closed (tested), so one level is exact. */
 export function missingNeeds(id: PermissionId, ticked: ReadonlySet<string>): PermissionId[] {
@@ -199,8 +199,8 @@ export function offerFor(id: string, before: ReadonlySet<string>): DependencyOff
 }
 ```
 and `needSentence`, `OfferWords`, `offerWords` exactly as the Words block above; `permissionGaps` becomes `.map((id) => ({ id, missing: missingNeeds(id, ticked) }))`.
-- [ ] **Step 4: Run** `npx vitest run src/lib/roleEditor.test.ts` green; `npm run typecheck`.
-- [ ] **Step 5: Commit** `feat(w9c): the offer logic for the Roles editor (what a click on a checkbox offers) and the table's soundness tests`.
+- [x] **Step 4: Run** `npx vitest run src/lib/roleEditor.test.ts` green; `npm run typecheck`.
+- [x] **Step 5: Commit** `feat(w9c): the offer logic for the Roles editor (what a click on a checkbox offers) and the table's soundness tests`.
 
 ### Task 2: `DependencyPrompt` and its style
 
@@ -311,12 +311,12 @@ export function DependencyPrompt({ anchor, sentence, items, acceptLabel, decline
 ```
 CSS `role-prompt.css` (own file, `@layer w6`, tokens only, scoped by `.dep-prompt`): `position: fixed; z-index: 5` (inside the dialog's own stacking context; the tip bubble is 1100, toasts 900), `width: max-content; max-width: min(320px, calc(100vw - 16px))`, `display: grid; gap: 8px; padding: 12px 14px`, `border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop)`, `font-size: var(--fs-sm); line-height: 1.45; text-align: left; overflow-wrap: anywhere`, `p { margin: 0 }`, `ul { margin: 0; padding-left: 18px }`, `.dep-prompt-actions { display: flex; flex-wrap: wrap; gap: 8px }`, a fade-in with `transition: opacity var(--motion)` and `@starting-style { .dep-prompt { opacity: 0 } }`, and the R8 arming delay: `.dep-prompt { animation: dep-prompt-arm 1ms linear 400ms backwards; } @keyframes dep-prompt-arm { from { pointer-events: none; } }` (the `from` frame is held during the 400 ms delay by `backwards`, then the card is normal; the test pins that this is the ONLY animation in the file and that its keyframes set nothing but `pointer-events`).
 
-- [ ] **Step 1: Failing tests** `DependencyPrompt.test.tsx` for behaviours 1 to 9 (copy the `PointerEvent` polyfill `beforeAll`/`afterAll` from `RoleEditor.test.tsx` lines 14 to 22; build a small host that renders a `<label><input type="checkbox"/>…</label>` and the prompt, with `vi.fn()` callbacks) and `role-prompt.css.test.ts` (read the file with `readFileSync` like `feedback-toasts.css.test.ts`): exactly one top-level `.dep-prompt` rule (filter with `r.at.length === 1`: `parseRules` also returns the one inside `@starting-style`, as `feedback-toasts.css.test.ts:61` does) with `position: fixed`; a z-index between 1 and 100; no colour literal (`#hex`, `rgb(`, `hsl(`) anywhere in the file; the file is inside `@layer w6`; the R8 keyframes as described. Add `role-prompt.css` to the per-file guard list in `app.css.test.ts` (the `it.each([... "feedback-confirm.css"])` list: one `@layer w6` block, nothing outside, no raw colour). **I-4, the ancestors guard:** a test in `role-prompt.css.test.ts` parses `app.css`, `themes.css` and every `styles/*.css`; for every rule whose selector names `.dialog-backdrop`, `.dialog`, `.role-editor`, `.role-editor-body`, `.table-wrap`, `.role-grid`, `.role-perm`, `.role-sensitive` or `.role-summary`, the body must not match `/(^|[;\s])(transform|filter|backdrop-filter|contain|container-type|container|content-visibility|will-change|perspective|clip-path|mask)\s*:/` (a fixed card's containing block would silently become that ancestor). `.table-wrap.dense { container-type: inline-size }` (`styles/pages-sources.css:14`) is exempt by its exact selector, with a comment, and a second test asserts that `RoleEditor.tsx` renders `className="table-wrap"` without `dense`.
-- [ ] **Step 2: Run** both, see them fail.
-- [ ] **Step 3: Implement** the component, the CSS and the import.
-- [ ] **Step 4: Run** `npx vitest run src/components/DependencyPrompt.test.tsx src/styles/role-prompt.css.test.ts src/components/Modal.test.tsx`; `npm run typecheck`.
-- [ ] **Step 5: A LOOK** (implementer, a `playwright-core` script against a Vite dev server with a harness page built from the real `.dialog`, `.role-editor-body` and `.role-grid` classes, as Task 0's author did, or against the controller's scratch stack if it is up): the card under a checkbox in the Change column at 1024 is fully inside the window, does not cover its checkbox, and the grid shows no scroll bar. Write what was seen in the task report.
-- [ ] **Step 6: Commit** `feat(w9c): DependencyPrompt, a small fixed card that offers to tick what a permission needs`.
+- [x] **Step 1: Failing tests** `DependencyPrompt.test.tsx` for behaviours 1 to 9 (copy the `PointerEvent` polyfill `beforeAll`/`afterAll` from `RoleEditor.test.tsx` lines 14 to 22; build a small host that renders a `<label><input type="checkbox"/>…</label>` and the prompt, with `vi.fn()` callbacks) and `role-prompt.css.test.ts` (read the file with `readFileSync` like `feedback-toasts.css.test.ts`): exactly one top-level `.dep-prompt` rule (filter with `r.at.length === 1`: `parseRules` also returns the one inside `@starting-style`, as `feedback-toasts.css.test.ts:61` does) with `position: fixed`; a z-index between 1 and 100; no colour literal (`#hex`, `rgb(`, `hsl(`) anywhere in the file; the file is inside `@layer w6`; the R8 keyframes as described. Add `role-prompt.css` to the per-file guard list in `app.css.test.ts` (the `it.each([... "feedback-confirm.css"])` list: one `@layer w6` block, nothing outside, no raw colour). **I-4, the ancestors guard:** a test in `role-prompt.css.test.ts` parses `app.css`, `themes.css` and every `styles/*.css`; for every rule whose selector names `.dialog-backdrop`, `.dialog`, `.role-editor`, `.role-editor-body`, `.table-wrap`, `.role-grid`, `.role-perm`, `.role-sensitive` or `.role-summary`, the body must not match `/(^|[;\s])(transform|filter|backdrop-filter|contain|container-type|container|content-visibility|will-change|perspective|clip-path|mask)\s*:/` (a fixed card's containing block would silently become that ancestor). `.table-wrap.dense { container-type: inline-size }` (`styles/pages-sources.css:14`) is exempt by its exact selector, with a comment, and a second test asserts that `RoleEditor.tsx` renders `className="table-wrap"` without `dense`.
+- [x] **Step 2: Run** both, see them fail.
+- [x] **Step 3: Implement** the component, the CSS and the import.
+- [x] **Step 4: Run** `npx vitest run src/components/DependencyPrompt.test.tsx src/styles/role-prompt.css.test.ts src/components/Modal.test.tsx`; `npm run typecheck`.
+- [x] **Step 5: A LOOK** (implementer, a `playwright-core` script against a Vite dev server with a harness page built from the real `.dialog`, `.role-editor-body` and `.role-grid` classes, as Task 0's author did, or against the controller's scratch stack if it is up): the card under a checkbox in the Change column at 1024 is fully inside the window, does not cover its checkbox, and the grid shows no scroll bar. Write what was seen in the task report.
+- [x] **Step 6: Commit** `feat(w9c): DependencyPrompt, a small fixed card that offers to tick what a permission needs`.
 
 ### Task 3: wire it into the editor
 
@@ -336,7 +336,7 @@ Design:
 - Built-in (read-only) role: the checkboxes are disabled, so no toggle, no offer.
 - Saving is untouched: `tickedIds()` is what is posted; the offer state is never read by `submit`.
 
-- [ ] **Step 1: Failing tests** in `RoleEditor.test.tsx`, a new `describe("RoleEditor: offering what a permission needs")` (reuse `open`, `tick`, `box`, `summary`, `save`, `sentBody`, `sorted`):
+- [x] **Step 1: Failing tests** in `RoleEditor.test.tsx`, a new `describe("RoleEditor: offering what a permission needs")` (reuse `open`, `tick`, `box`, `summary`, `save`, `sentBody`, `sorted`):
   - ticking "Change users" on an empty new role opens a group named "Change users also needs See users to show anything." with buttons "Also tick See users" and "Not now"; the primary has the focus; the hint line in the summary is also there.
   - "Also tick See users" ticks both, the group is gone, the focus is on "Change users", the hint line is gone, Save posts exactly `["users.edit","users.view"]` (sorted).
   - "Not now" keeps only "Change users" ticked, the group is gone, the focus is on "Change users", the hint stays; unticking and ticking "Change users" again shows the prompt again (D4: re-prompts only after untick and tick), ticking an unrelated permission in between does not.
@@ -349,17 +349,17 @@ Design:
   - R10: tick "Change tariffs", Not now, click "See tariffs" (a tick offer, no key change needed), Shift+Tab to "See tariffs" and press Space: the untick card "Change tariffs needs See tariffs to show anything. Also untick Change tariffs?" is a fresh card and its "Also untick Change tariffs" button has the focus.
   - the existing keyboard tests pass unchanged; add: focus "Change users", Space, the group's primary has the focus, Enter, both ticked and focus back on "Change users"; and Tab from "Change users" with the prompt open lands on the primary button first (DOM order).
   - the existing "hints" tests still pass.
-- [ ] **Step 2: Run** `npx vitest run src/components/RoleEditor.test.tsx`; new ones fail, old ones pass or show only the expected prompt-induced changes (fix a test only where the prompt legitimately changes what it asserts, and say so in the report).
-- [ ] **Step 3: Implement** as designed.
-- [ ] **Step 4: Run** `npx vitest run src/components/RoleEditor.test.tsx src/components/RolesPanel.test.tsx src/components/DependencyPrompt.test.tsx src/lib/roleEditor.test.ts`; `npm run typecheck`; `npm run build`.
-- [ ] **Step 5: Commit** `feat(w9c): the Roles editor offers to tick what a permission needs, and to untick what needs it`.
+- [x] **Step 2: Run** `npx vitest run src/components/RoleEditor.test.tsx`; new ones fail, old ones pass or show only the expected prompt-induced changes (fix a test only where the prompt legitimately changes what it asserts, and say so in the report).
+- [x] **Step 3: Implement** as designed.
+- [x] **Step 4: Run** `npx vitest run src/components/RoleEditor.test.tsx src/components/RolesPanel.test.tsx src/components/DependencyPrompt.test.tsx src/lib/roleEditor.test.ts`; `npm run typecheck`; `npm run build`.
+- [x] **Step 5: Commit** `feat(w9c): the Roles editor offers to tick what a permission needs, and to untick what needs it`.
 
 ### Task 4: e2e, docs, gallery
 
 **Files:** Create `frontend/e2e/w9c.spec.ts`; Modify `frontend/e2e/playwright.config.ts` (project `w9c`, `dependencies: ["w7k"]`, same `use` as `w9b`), `README.md` (one short paragraph in the Roles section: the editor offers to tick what a permission needs; no migration), `docs/superpowers/backlog.md` (next free section AH: leftovers), `docs/superpowers/plans/2026-10-11-w7-owner-feedback-roadmap.md` (a row O-28; check `W7k-audit-drawer-and-save-feedback.md` and `W7m-asset-kinds.md` first so the number is free), this plan's boxes and an Execution log. Edit docs with the Edit tool or anchored `sed -i` only, never a whole-file rewrite.
 
-- [ ] **Step 1 (audit):** `grep -n "getByLabel(\|getByRole(" frontend/e2e/*.ts` for values that are a substring of "Also tick", "Not now", "Leave ticked", "also needs", the sentences of Task 1 or any permission label while a prompt is open; check that the existing `w9b.spec.ts` ticks (lines ~273, 319, 413, 509) each have their needs ticked first or are no-need permissions, and write the result in the report. Fix any lookup that could now match two elements.
-- [ ] **Step 2:** `w9c.spec.ts` using the helpers of `w9b.spec.ts` (`asUser`, `openRoles`, `editor`, `tick`, `ADMIN`; copy the pieces, do not import across specs unless `w9b` already exports them) with these steps, each asserting what a person sees:
+- [x] **Step 1 (audit):** `grep -n "getByLabel(\|getByRole(" frontend/e2e/*.ts` for values that are a substring of "Also tick", "Not now", "Leave ticked", "also needs", the sentences of Task 1 or any permission label while a prompt is open; check that the existing `w9b.spec.ts` ticks (lines ~273, 319, 413, 509) each have their needs ticked first or are no-need permissions, and write the result in the report. Fix any lookup that could now match two elements.
+- [x] **Step 2:** `w9c.spec.ts` using the helpers of `w9b.spec.ts` (`asUser`, `openRoles`, `editor`, `tick`, `ADMIN`; copy the pieces, do not import across specs unless `w9b` already exports them) with these steps, each asserting what a person sees:
   1. New role (unique name): tick "Change users": the group "Change users also needs See users to show anything." is visible, its box is inside the window and does not overlap the checkbox's label (for this checkbox at its known position it is below it; near the bottom of the window `placeTip` flips the card above, so never assert "below" in general), and the grid's `.table-wrap` has `scrollWidth <= clientWidth`. Click "Also tick See users": both ticked, the group is gone, the focus is on "Change users". Save posts exactly `["users.edit","users.view"]`.
   2. Another new role: tick "Change tariffs", press "Not now": only "Change tariffs" ticked, the hint line is shown; Save posts exactly `["tariffs.edit"]`.
   3. Keyboard: focus "Change users", Space, the primary button is focused, Enter, both ticked and "Change users" focused. Then Space on another needy checkbox, Escape: the group is gone, the dialog is still visible, the checkbox is focused; Escape again closes the dialog.
@@ -368,12 +368,17 @@ Design:
   6. R8/R9, quick follow-up and a press on the text: tick "Change dashboards" (with "See dashboards" ticked) and, as soon as the group shows, click "Change sources" (Playwright waits until the card is armed or the box is hittable; use `page.mouse.click` at the old centre of "Change sources" taken BEFORE the first tick, within 300 ms): "Change sources" is ticked, the first group is gone, and at most one group is open (the one for "Change sources"). Then, with a group open, click the sentence text: the group stays open and the focus is unchanged.
   7. At 1024 and 1440 wide viewports: the same tick in the left (See), middle and right (Change) column; the card stays inside the window; screenshot each into the directory in `process.env.W9C_SHOTS` when set.
   Clean up every role the spec made (delete through the API at the end, as `w9b.spec.ts` does). Always answer or dismiss a prompt before touching what it covers (Playwright would wait for the covered checkbox forever).
-- [ ] **Step 3:** the e2e type-check prints nothing.
-- [ ] **Step 4:** the docs edits above; tick the boxes of Tasks 0 to 4 and write the Execution log skeleton.
-- [ ] **Step 5: Commit** `test(w9c): e2e for the dependency prompt; docs (README, roadmap O-28, backlog AH)`.
+- [x] **Step 3:** the e2e type-check prints nothing.
+- [x] **Step 4:** the docs edits above; tick the boxes of Tasks 0 to 4 and write the Execution log skeleton.
+- [x] **Step 5: Commit** `test(w9c): e2e for the dependency prompt; docs (README, roadmap O-28, backlog AH)`.
 
 ## Controller steps after Task 4 (not implementer work)
 Full frontend suite, typecheck, build; the isolated Playwright run in the scratch project `dcdash_e2e_w9c_vis` (web 18206, second port 18560; copy `drill-lib.sh`, `vis-up.sh`, `vis-rebuild.sh`, `drill-override.yaml` from `.superpowers/sdd/2026-10-13-w7k-feedback/` and edit the workspace path, prefix, ports and image tags; check the guard refuses `dcdash`); the Task 0 step 3 look; ONE whole-wave Opus review in a real browser (1920, 1440, 1024; light and dark; two presets; keyboard; each "needs" row ticked in isolation on the build: the page really shows nothing without its need); ONE fix wave; one scoped re-review; gallery `.superpowers/sdd/overnight-w7/gallery/W9c/`; `git diff main --stat -- backend` empty; the doc-reading backend tests (the 11 files of the W7k run, `.superpowers/sdd/2026-10-13-w7k-feedback/backend-doc-tests.log`) because README/backlog/roadmap changed; merge gate, backup, rebuild, hygiene check, push, markers, memory bullet, MORNING.
 
 ## Execution log
-(controller fills this in)
+- 2026-10-13 19:55 branch from main `c286e3d`; plan `4a7b857`; Opus plan review (0 Critical, 4 Important, 10 Minor, folded in as R8 to R11, the ancestors guard and the key per offer) `8d46e98`.
+- Task 0 `06871cf` (cherry-pick of `34c4d61`, worktree and branch removed); Task 1 `d07e677`; Task 2 `19d89aa`; Task 3 `f03dd7d`; Task 4 `996b9ae`; controller commit `9ee0fd8` (the w7b specs read the tip bubble from the page: it is a portal on body since Task 0).
+- 2026-10-13 22:31 isolated Playwright at `9ee0fd8`: 129 passed (5.4 min), all seven `w9c` specs. Whole-wave Opus review in a browser (1920, 1440, 1024, 800; light, dark, three presets; keyboard; 49 sign-ins to test the "needs" table): 0 Critical, 1 Important (I-1: the card was placed against the window, so in the default 1440x900 New role dialog it hung over Cancel and the left edge of Save and swallowed a click), 1 Minor (M-1: buttons wrapped unevenly). The table was found true on every row.
+- Fix wave `305a57c`: `placeTip(..., bounds)` and `clipBand()` keep the card inside the visible part of the scrolling boxes around its checkbox; card `max-width` 360 px; the new e2e step 8. Scoped Opus re-review: I-1 and M-1 closed over 174 cases, and one Important, a regression of the fix itself: in a 437 px body (800 wide) the "neither side fits" branch pinned the card onto its own checkbox (11 of 174 cases at 800 wide, 1 of 87 at 1024, 0 of 87 at 1440).
+- Fix 2 `3c16c65`: when neither side fits and the checkbox is inside the band the card goes above it (below it only when even that does not fit), never onto it; `clipBand` stops at the first `position: fixed` ancestor; three 800x600 e2e cases (step 9). The re-reviewer's other proposal (skip boxes that do not scroll) was rejected on purpose: on a window about 1250 px tall the editor body stops scrolling and is then the only box that keeps the card off Cancel/Save.
+- Gates at `3c16c65`: frontend 158 files / 4223 tests passed, typecheck and build exit 0; `git diff main --stat -- backend` empty. Leftovers: backlog section AH.
