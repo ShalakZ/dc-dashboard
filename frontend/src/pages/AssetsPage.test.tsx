@@ -8,7 +8,9 @@ import { CacheProbes, probeFetches, probeRoutes } from "../test/cacheProbes";
 import { FakeEventSource } from "../test/fakeEventSource";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
+import type { PermissionId } from "../lib/permissions";
 import { AssetPage } from "./AssetPage";
 import { AssetsPage } from "./AssetsPage";
 import { AssetsSummary } from "./AssetsSummary";
@@ -881,5 +883,68 @@ describe("the stream of an asset's page", () => {
     await screen.findByRole("heading", { name: "Room A", level: 1 });
     expect(livePower()).toHaveTextContent(/^10\.50 kW$/); // not Site's 4.50, and not the 11.25 it showed before
     expect(FakeEventSource.open).toHaveLength(1);
+  });
+});
+
+describe("AssetsPage buttons follow the permissions of the role (a custom role)", () => {
+  /** A role called "custom" that holds `assets.view` and `permissions`; waits until the account is known. */
+  const show = async (permissions: PermissionId[], route: string, title: string) => {
+    mockFetch({ ...authed("custom"), "GET /api/me": { body: userFor("custom", { permissions: ["assets.view", ...permissions] }) } });
+    renderWorkspace(route, { extra: <SignedIn /> });
+    await screen.findByRole("heading", { name: title, level: 1 });
+    await accountKnown();
+  };
+  const buttonNames = (title: string) => within(screen.getByRole("heading", { name: title, level: 1 }).closest("header")!).queryAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
+
+  it("assets.view alone: no button in either header and no + in the tree", async () => {
+    await show([], "/assets/2", "Room A");
+    expect(buttonNames("Room A")).toEqual([]);
+    expect(screen.queryByRole("button", { name: /Add child of|Add a top-level asset/ })).not.toBeInTheDocument();
+  });
+
+  it("assets.view alone: the index header has no actions slot either", async () => {
+    await show([], "/assets", "Assets Tree");
+    expect(screen.getByRole("heading", { name: "Assets Tree", level: 1 }).closest("header")!.querySelector(".actions")).toBeNull();
+  });
+
+  it("assets.edit: Add asset, Edit and the tree's + appear, Delete does not", async () => {
+    await show(["assets.edit"], "/assets/2", "Room A");
+    expect(buttonNames("Room A")).toEqual(["Edit", "Add asset"]);
+    expect(screen.getByRole("button", { name: "Add child of Site" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add a top-level asset" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete Room A" })).not.toBeInTheDocument();
+  });
+
+  it("assets.edit on the index: Add asset only", async () => {
+    await show(["assets.edit"], "/assets", "Assets Tree");
+    expect(buttonNames("Assets Tree")).toEqual(["Add asset"]);
+  });
+
+  it("assets.delete alone: only the trash on an asset's page, no Add, no Edit, no +", async () => {
+    await show(["assets.delete"], "/assets/2", "Room A");
+    expect(buttonNames("Room A")).toEqual(["Delete Room A"]);
+    expect(screen.queryByRole("button", { name: /Add child of|Add a top-level asset/ })).not.toBeInTheDocument();
+  });
+
+  it("assets.delete alone: the index has nothing to delete, so no actions slot", async () => {
+    await show(["assets.delete"], "/assets", "Assets Tree");
+    expect(screen.getByRole("heading", { name: "Assets Tree", level: 1 }).closest("header")!.querySelector(".actions")).toBeNull();
+  });
+
+  it("assets.delete alone really deletes (and asks first)", async () => {
+    const calls = mockFetch({
+      ...authed("custom"),
+      "GET /api/me": { body: userFor("custom", { permissions: ["assets.view", "assets.delete"] }) },
+      "DELETE /api/assets/2": { status: 204, body: null },
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderWorkspace("/assets/2");
+    await userEvent.click(await screen.findByRole("button", { name: "Delete Room A" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/assets/2")).toBe(true));
+  });
+
+  it("both: the same buttons an admin has", async () => {
+    await show(["assets.edit", "assets.delete"], "/assets/2", "Room A");
+    expect(buttonNames("Room A")).toEqual(["Edit", "Delete Room A", "Add asset"]);
   });
 });
