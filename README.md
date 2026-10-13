@@ -520,6 +520,15 @@ and a line names a tick whose page would still show nothing ("Export billing as 
 because the server accepts any combination. A row's menu has **Edit** and **Duplicate** (a built-in role says **View** instead:
 it opens locked, with a Duplicate button), and the bin deletes a role nobody holds (it is disabled, with the reason, while an account has it).
 
+**Offers while you tick (W9c).** Tick a permission whose page would show nothing without another one (**Change users** without **See users**)
+and a small card opens beside the box: "Change users also needs See users to show anything." with **Also tick See users** (when several are
+missing it lists them and one button ticks them all) and **Not now**. Not now, Escape, a click elsewhere and tabbing away all mean Not now:
+the box stays ticked, the hint line stays and nothing is ticked for you. Unticking a permission that another ticked one needs (untick
+**See users** while **Change users** is ticked) opens the reverse card, "Also untick Change users?", with **Leave ticked** as the quiet answer.
+The card ignores the mouse for its first 0.4 seconds, so a quick click on the next box still reaches that box. Nothing opens when a role is
+loaded, **Start from** is chosen or a role is duplicated, and Save still sends exactly the boxes that are ticked. This is the editor only:
+there is no migration and no API change (the server still accepts any combination).
+
 The Executive, who reads energy and cost and nothing else: Roles > **New role**, name `Executive`, tick **See the Assets Tree**,
 **See dashboards**, **See billing** and **Export billing as CSV**, a **Description** such as `Sees energy and cost` (optional), **Save**. On
 the Users tab, create the account and choose `Executive` in **Role** (when the role has a description, a line under the form shows it; a role
