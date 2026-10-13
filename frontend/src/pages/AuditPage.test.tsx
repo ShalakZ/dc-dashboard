@@ -84,7 +84,19 @@ describe("AuditPage", () => {
     expect(first).toHaveTextContent("2026-10-07 13:00:00");
     expect(screen.getByRole("link", { name: "Entry #50, 2026-10-07 13:00:00" })).toHaveAttribute("href", "/audit/50");
     expect(screen.getByRole("columnheader", { name: "Time (Asia/Qatar)" })).toBeInTheDocument();
-    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Time (Asia/Qatar)", "User", "What happened", "Details"]);
+    // the disclosure chevron is the FIRST column (so the empty end of a short sentence is not between it and its entry); its header is read out, not drawn
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Details", "Time (Asia/Qatar)", "User", "What happened"]);
+    const cells = [...document.querySelectorAll(".audit-table tbody tr:first-child > td")];
+    expect(cells.map((c) => c.className)).toEqual(["cell-more", "cell-time", "cell-user", "cell-what"]);
+    expect(cells[0].querySelector("button")).toHaveAttribute("aria-label", "Details of entry #51");
+    expect([...document.querySelectorAll(".audit-table col")].map((c) => (c as HTMLElement).style.width)).toEqual(["36px", "200px", "160px", ""]);
+  });
+
+  it("keeps the raw table at four columns, time first", async () => {
+    setup("/audit?view=raw");
+    await screen.findByRole("cell", { name: "scan.finished" });
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Time (Asia/Qatar)", "User", "Action", "Detail"]);
+    expect(document.querySelector(".audit-table tbody tr:first-child > td:first-child")).toHaveClass("cell-time");
   });
 
   it("links an entry to the thing it is about and opens its details in a row under it from a Details button", async () => {
@@ -486,7 +498,7 @@ describe("AuditPage while the log loads (W7f)", () => {
     expect(screen.getByLabelText("Action")).toBeInTheDocument(); // the filter bar does not wait
     const region = screen.getByText(LABEL).parentElement!;
     expect(region).toHaveAttribute("role", "status");
-    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(4); // Time, User, What happened, Details
+    expect(region.querySelectorAll(".sk-table thead th")).toHaveLength(4); // Details, Time, User, What happened
     expect(screen.queryByText("loading…")).not.toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByText("No audit entries yet.")).not.toBeInTheDocument();

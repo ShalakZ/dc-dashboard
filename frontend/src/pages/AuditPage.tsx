@@ -23,9 +23,10 @@ const KIND_ICON: Record<AuditKind, IconName> = {
   signin: "evSignIn", problem: "evProblem", create: "evCreate", change: "evChange", delete: "evDelete", settings: "evSettings", other: "evOther",
 };
 
-// Column widths in px, null for the rest: the friendly table gives "What happened" the room, the raw one the detail. They sum to less than the
-// narrowest table; the skeleton draws the same columns.
-const FRIENDLY_COLS = [200, 160, null, 44] as const;
+// Column widths in px, null for the rest: the friendly table gives "What happened" the room (and puts the Details chevron first, where a
+// short sentence's empty end does not separate it from its entry), the raw one the detail. They sum to less than the narrowest table; the
+// skeleton draws the same columns.
+const FRIENDLY_COLS = [36, 200, 160, null] as const;
 const RAW_COLS = [200, 160, 220, null] as const;
 
 /** The time of an entry, linked to its page (the link's name says which entry it opens), and under it how long ago, outside the link. */
@@ -59,17 +60,6 @@ function FriendlyRow({ entry, timezone, now }: { entry: AuditEntry; timezone: st
   return (
     <>
       <tr>
-        <TimeCell id={entry.id} ts={entry.ts} timezone={timezone} now={now} />
-        <UserCell name={entry.username} />
-        <td className="cell-what">
-          <div className="what-line">
-            <span className="ev-tile" data-kind={kind} aria-hidden="true"><Icon name={KIND_ICON[kind]} /></span>
-            <div className="what-text">
-              <span className="what">{summary}</span>
-              {link && <Link className="what-link" to={link.to}>{link.label}</Link>}
-            </div>
-          </div>
-        </td>
         <td className="cell-more">
           <button
             type="button"
@@ -82,6 +72,17 @@ function FriendlyRow({ entry, timezone, now }: { entry: AuditEntry; timezone: st
           >
             <Icon name="chevron" />
           </button>
+        </td>
+        <TimeCell id={entry.id} ts={entry.ts} timezone={timezone} now={now} />
+        <UserCell name={entry.username} />
+        <td className="cell-what">
+          <div className="what-line">
+            <span className="ev-tile" data-kind={kind} aria-hidden="true"><Icon name={KIND_ICON[kind]} /></span>
+            <div className="what-text">
+              <span className="what">{summary}</span>
+              {link && <Link className="what-link" to={link.to}>{link.label}</Link>}
+            </div>
+          </div>
         </td>
       </tr>
       {open && (
@@ -216,8 +217,9 @@ export function AuditPage() {
               <colgroup>{(raw ? RAW_COLS : FRIENDLY_COLS).map((w, i) => <col key={i} style={w ? { width: w } : undefined} />)}</colgroup>
               <thead>
                 <tr>
+                  {!raw && <th><span className="sr-only">Details</span></th>}
                   <th title={`Time (${timezone})`}>Time ({timezone})</th><th>User</th>
-                  {raw ? <><th>Action</th><th>Detail</th></> : <><th>What happened</th><th><span className="sr-only">Details</span></th></>}
+                  {raw ? <><th>Action</th><th>Detail</th></> : <th>What happened</th>}
                 </tr>
               </thead>
               <tbody>
