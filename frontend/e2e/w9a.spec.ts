@@ -442,7 +442,7 @@ test.describe("W9a: roles and permissions", () => {
       await expect(heading1(page, "Your role has no pages yet.")).toBeVisible();
       await expect(page.getByText("Ask an administrator to give your role access.", { exact: true })).toBeVisible();
       await expect(page).toHaveURL(onPath("/"));
-      await expect(mainNav(page).getByRole("link")).toHaveCount(0);
+      await expect(mainNav(page)).toHaveCount(0); // no sidebar column at all, not an empty one
       await expect(userBlock(page)).toContainText(ROLE_NONE);
       await expectDenied(page, "/assets");
       expect((await page.request.get("/api/assets")).status()).toBe(403);

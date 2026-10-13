@@ -51,6 +51,11 @@ async function opening(permissions: PermissionId[], route: string, defaultDashbo
   return { heading: heading.textContent, calls, unmount };
 }
 const nav = () => within(screen.getByRole("navigation", { name: "Main" }));
+/** The sidebar's link for a page, or null. A role that opens no page has no sidebar at all, so there is nothing to look in. */
+const sideLink = (label: string) => {
+  const side = screen.queryByRole("navigation", { name: "Main" });
+  return side ? within(side).queryByRole("link", { name: label }) : null;
+};
 const needIds = (need: Need): PermissionId[] => (typeof need === "string" ? [need] : [...need]);
 
 /** Every address behind sign-in that is guarded, with what it needs and the page that opens. */
@@ -113,11 +118,14 @@ describe("the sidebar follows the permissions", () => {
     expect(groups).toEqual([["Monitor", ["Billing"]], ["Operate", ["Sources"]]]);
   });
 
-  it("shows no group and no link to a role with no permissions, and still the profile button", async () => {
+  it("shows no sidebar at all to a role with no permissions (no column, no group, no link), and still the top bar with the profile button", async () => {
     await opening([], "/password");
-    expect(nav().queryAllByRole("group")).toHaveLength(0);
-    expect(nav().queryAllByRole("link")).toHaveLength(0);
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("group")).toHaveLength(0);
+    expect(document.getElementById("sidebar")).toBeNull();
+    expect(screen.getByRole("banner")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `u ${ROLE}` })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "the password page" })).toBeInTheDocument(); // the main area still holds the page
   });
 
   it.each(GROUPS.flatMap((group) => group.items))("$label is in the sidebar for exactly the permissions its page needs", async (item) => {
@@ -125,7 +133,7 @@ describe("the sidebar follows the permissions", () => {
     (await opening(wanted, "/password")).unmount();
     for (const missing of wanted) {
       const view = await opening(wanted.filter((id) => id !== missing), "/password");
-      expect(nav().queryByRole("link", { name: item.label })).not.toBeInTheDocument();
+      expect(sideLink(item.label)).toBeNull();
       view.unmount();
     }
     await opening(wanted, "/password");

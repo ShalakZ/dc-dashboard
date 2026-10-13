@@ -88,6 +88,8 @@ export function Layout() {
   const shellRef = useRef<HTMLDivElement>(null);
   const defaultId = useDefaultDashboard(can("dashboards.view")).data?.dashboard_id; // pending, failed or not asked: undefined, so the Dashboards item opens the list
   const { pathname } = useLocation();
+  // A role that opens no page has nothing to put in the column: no column, so the main area (and its notices) take the width.
+  const groups = visibleGroups(can);
 
   /** Where an item leads: Dashboards goes straight to the default dashboard when there is one. */
   const target = (item: NavItem) => (item.to === DASHBOARDS_PATH && typeof defaultId === "number" ? `${DASHBOARDS_PATH}/${defaultId}` : item.to);
@@ -142,53 +144,55 @@ export function Layout() {
           </div>
         </header>
         <div className="frame">
-          <div className="side" id="sidebar">
-            <nav aria-label="Main">
-              <div className="nav-groups" onScroll={scrolled}>
-                {visibleGroups(can).map((group) => (
-                  <div className="nav-group" role="group" aria-labelledby={group.id} key={group.id}>
-                    <span className="nav-heading" id={group.id}>{group.title}</span>
-                    {group.items.map((item) => {
-                      const content = (
-                        <>
-                          <Icon name={item.icon} />
-                          <span className="lbl">{item.label}</span>
-                        </>
-                      );
-                      return item.match !== undefined ? (
-                        <Link to={target(item)} className="side-row" key={item.to} aria-current={current(item) ? "page" : undefined} {...bind(item.label)}>{content}</Link>
-                      ) : (
-                        <NavLink to={target(item)} className="side-row" key={item.to} {...bind(item.label)}>{content}</NavLink>
-                      );
-                    })}
-                  </div>
-                ))}
+          {groups.length > 0 && (
+            <div className="side" id="sidebar">
+              <nav aria-label="Main">
+                <div className="nav-groups" onScroll={scrolled}>
+                  {groups.map((group) => (
+                    <div className="nav-group" role="group" aria-labelledby={group.id} key={group.id}>
+                      <span className="nav-heading" id={group.id}>{group.title}</span>
+                      {group.items.map((item) => {
+                        const content = (
+                          <>
+                            <Icon name={item.icon} />
+                            <span className="lbl">{item.label}</span>
+                          </>
+                        );
+                        return item.match !== undefined ? (
+                          <Link to={target(item)} className="side-row" key={item.to} aria-current={current(item) ? "page" : undefined} {...bind(item.label)}>{content}</Link>
+                        ) : (
+                          <NavLink to={target(item)} className="side-row" key={item.to} {...bind(item.label)}>{content}</NavLink>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+                <div className="side-foot">
+                  <button type="button" className="side-row side-toggle" onClick={toggle} {...bind(toggleLabel)}>
+                    <Icon name="collapse" />
+                    <span className="lbl">{toggleLabel}</span>
+                  </button>
+                </div>
+              </nav>
+              <div
+                className="side-tip"
+                id="side-tip"
+                role="tooltip"
+                aria-hidden="true"
+                hidden={!tip}
+                style={tip ? { top: tip.top } : undefined}
+                onPointerEnter={keep}
+                onPointerLeave={leave}
+              >
+                {tip && (
+                  <>
+                    <span className="side-tip-text">{tip.text}</span>
+                    {tip.sub && <span className="side-tip-sub">{tip.sub}</span>}
+                  </>
+                )}
               </div>
-              <div className="side-foot">
-                <button type="button" className="side-row side-toggle" onClick={toggle} {...bind(toggleLabel)}>
-                  <Icon name="collapse" />
-                  <span className="lbl">{toggleLabel}</span>
-                </button>
-              </div>
-            </nav>
-            <div
-              className="side-tip"
-              id="side-tip"
-              role="tooltip"
-              aria-hidden="true"
-              hidden={!tip}
-              style={tip ? { top: tip.top } : undefined}
-              onPointerEnter={keep}
-              onPointerLeave={leave}
-            >
-              {tip && (
-                <>
-                  <span className="side-tip-text">{tip.text}</span>
-                  {tip.sub && <span className="side-tip-sub">{tip.sub}</span>}
-                </>
-              )}
             </div>
-          </div>
+          )}
           <main id="main" tabIndex={-1}>
             <div className="shell-notices">
               <RoleChangedNotice />

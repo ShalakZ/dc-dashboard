@@ -417,6 +417,28 @@ describe("Layout sidebar landmarks and groups", () => {
     for (const name of absent) expect(screen.queryByRole("group", { name })).not.toBeInTheDocument();
   });
 
+  it("a role that opens no page has no sidebar column (no navigation, no toggle), and keeps the top bar and the main area", async () => {
+    mockFetch({ ...routes("Nothing"), "GET /api/me": { body: userFor("Nothing", { permissions: [] }) } });
+    const { container } = renderWithProviders(<Layout />, { route: "/", path: "/" });
+    await screen.findByRole("button", { name: /^u Nothing$/ }); // the user has loaded, so the missing column is really gated away
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /sidebar$/ })).not.toBeInTheDocument();
+    expect(container.querySelector("#sidebar")).toBeNull();
+    expect(screen.getByRole("banner")).toHaveClass("navbar");
+    const frame = container.querySelector(".frame") as HTMLElement;
+    expect(Array.from(frame.children).map((el) => el.tagName)).toEqual(["MAIN"]);
+    expect(screen.getByRole("main")).toBeInTheDocument();
+  });
+
+  it("a role with one page keeps the sidebar, with only that page's group", async () => {
+    mockFetch({ ...routes("Reader"), "GET /api/me": { body: userFor("Reader", { permissions: ["assets.view"] }) } });
+    const { container } = renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    await screen.findByRole("button", { name: /^u Reader$/ });
+    expect(container.querySelector("#sidebar")).not.toBeNull();
+    expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-labelledby"))).toEqual(["nav-monitor"]);
+    expect(screen.getByRole("button", { name: "Minimize sidebar" })).toBeInTheDocument();
+  });
+
   it("puts each link in its group, in the order of the old bar", async () => {
     mockFetch(routes("admin"));
     renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
