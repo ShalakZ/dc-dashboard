@@ -1,4 +1,4 @@
-"""POST /api/widget-data and /api/widget-data/csv (spec 10.6). Reads only; every role may call them."""
+"""POST /api/widget-data and /api/widget-data/csv (spec 10.6). Reads only; they need dashboards.view."""
 from datetime import datetime, timezone
 from typing import Any
 
@@ -6,12 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.deps import get_db, require_role
+from dcdash.api.deps import get_db, require_permission
 from dcdash.core.csvout import write_csv
 from dcdash.core.timeutil import RANGE_PRESETS
 from dcdash.core.widgets import WIDGET_TYPES, SiteZoneError, WidgetResult, compute_widget, validate_config
 
-router = APIRouter(prefix="/api", tags=["widget-data"], dependencies=[Depends(require_role("viewer"))])
+router = APIRouter(prefix="/api", tags=["widget-data"], dependencies=[Depends(require_permission("dashboards.view"))])
 CSV_HEADER = ("asset", "source", "unit", "timestamp", "value", "estimated", "partial", "no_data")
 
 

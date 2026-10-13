@@ -7,15 +7,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.asset_names import AssetName, require_free_name
-from dcdash.api.deps import get_db, notify, require_role
+from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.core.asset_icons import AssetIcon
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Asset, Mapping, Tariff, User
 from dcdash.core.pg import CONFIG_CHANNEL
 
 router = APIRouter(prefix="/api", tags=["assets"])
-Admin = Depends(require_role("admin"))
-Viewer = Depends(require_role("viewer"))
 
 
 class AssetIn(BaseModel):
@@ -84,27 +82,31 @@ def _counted(n: int, noun: str) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
-@router.get("/assets", response_model=list[AssetOut], dependencies=[Viewer])
+@router.get("/assets", response_model=list[AssetOut], dependencies=[Depends(require_permission("assets.view"))])
 async def list_assets(db: AsyncSession = Depends(get_db)) -> list[Asset]:
     return list((await db.scalars(select(Asset).order_by(Asset.sort_order, Asset.name))).all())
 
 
-@router.post("/assets", response_model=AssetOut, status_code=201, dependencies=[Admin])
-async def create_asset(body: AssetIn, db: AsyncSession = Depends(get_db), admin: User = Admin) -> Asset:
+@router.post(
+    "/assets", response_model=AssetOut, status_code=201, dependencies=[Depends(require_permission("assets.edit"))]
+)
+async def create_asset(body: AssetIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)) -> Asset:
     if body.parent_id is not None:
         await get_asset(db, body.parent_id)
     await require_free_name(db, body.parent_id, body.name)
     asset = Asset(**body.model_dump())
     db.add(asset)
     await db.flush()  # the row needs the new id
-    await audit(db, admin.id, "asset.created", {"asset_id": asset.id, **_asset_values(asset)})
+    await audit(db, user.id, "asset.created", {"asset_id": asset.id, **_asset_values(asset)})
     await db.commit()
     return asset
 
 
-@router.patch("/assets/{asset_id}", response_model=AssetOut, dependencies=[Admin])
+@router.patch(
+    "/assets/{asset_id}", response_model=AssetOut, dependencies=[Depends(require_permission("assets.edit"))]
+)
 async def update_asset(
-    asset_id: int, body: AssetPatch, db: AsyncSession = Depends(get_db), admin: User = Admin
+    asset_id: int, body: AssetPatch, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> Asset:
     asset = await get_asset(db, asset_id)
     before = _asset_values(asset)
@@ -126,18 +128,20 @@ async def update_asset(
         if value is not None:
             setattr(asset, field, value)
     await audit_change(
-        db, admin.id, "asset.updated", {"asset_id": asset.id, "name": asset.name}, before, _asset_values(asset)
+        db, user.id, "asset.updated", {"asset_id": asset.id, "name": asset.name}, before, _asset_values(asset)
     )
     await db.commit()
     return asset
 
 
-@router.delete("/assets/{asset_id}", status_code=204, response_model=None)
+@router.delete(
+    "/assets/{asset_id}", status_code=204, response_model=None, dependencies=[Depends(require_permission("assets.delete"))]
+)
 async def delete_asset(
     asset_id: int,
     confirm: bool = False,
     db: AsyncSession = Depends(get_db),
-    admin: User = Admin,
+    user: User = Depends(current_user),
 ) -> JSONResponse | None:
     asset = await get_asset(db, asset_id)
     impact = await _subtree_impact(db, asset_id)
@@ -158,6 +162,6 @@ async def delete_asset(
             },
         )
     await db.delete(asset)
-    await audit(db, admin.id, "asset.deleted", {"asset_id": asset_id, "name": asset.name, **impact})
+    await audit(db, user.id, "asset.deleted", {"asset_id": asset_id, "name": asset.name, **impact})
     await notify(db, CONFIG_CHANNEL)  # its mappings are gone, so the collector must reload
     await db.commit()
