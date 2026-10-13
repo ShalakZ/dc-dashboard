@@ -97,6 +97,12 @@ def effective_permissions(name: str, builtin: bool, stored: object) -> frozenset
     return frozenset(item for item in stored if isinstance(item, str) and item in ALL_IDS) - NOT_FOR_CUSTOM_ROLES
 
 
+def catalogue_order(ids: Iterable[str]) -> list[str]:
+    """The known ids among `ids`, each once, in catalogue order (how a custom role's list is stored and shown)."""
+    wanted = set(ids)
+    return [p.id for p in CATALOGUE if p.id in wanted]
+
+
 class CleanedIds(NamedTuple):
     """A requested permission list for a custom role, sorted into what the API must answer to each part of it."""
 
@@ -129,4 +135,4 @@ def clean_custom(ids: Iterable[object]) -> CleanedIds:
                 duplicates.append(item)
         else:
             seen.add(item)
-    return CleanedIds([p.id for p in CATALOGUE if p.id in seen], unknown, forbidden, duplicates)
+    return CleanedIds(catalogue_order(seen), unknown, forbidden, duplicates)

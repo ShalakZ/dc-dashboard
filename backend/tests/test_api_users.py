@@ -131,13 +131,13 @@ async def test_a_patch_that_demotes_or_deactivates_the_only_other_admin_is_allow
 ):
     await login_as(client, db)
     taken: list[tuple[int, bool]] = []
-    real = users_module.lock_admin_changes
+    real = users_module.load_target  # a patch takes the lock, resolves the role, then loads its target
 
-    async def spy(db_, acting, target_id, *, removes_admin):
+    async def spy(db_, current, target_id, *, removes_admin):
         taken.append((target_id, removes_admin))
-        return await real(db_, acting, target_id, removes_admin=removes_admin)
+        return await real(db_, current, target_id, removes_admin=removes_admin)
 
-    monkeypatch.setattr(users_module, "lock_admin_changes", spy)
+    monkeypatch.setattr(users_module, "load_target", spy)
     first = await make_user(db, "first", "admin")
     second = await make_user(db, "second", "admin")
     assert (await client.patch(f"/api/users/{first}", json={"role": "operator"})).status_code == 200
@@ -152,13 +152,13 @@ async def test_a_patch_that_cannot_remove_an_admin_takes_the_lock_but_skips_the_
     await login_as(client, db)
     uid = await make_user(db, "ann", "operator")
     taken: list[tuple[int, bool]] = []
-    real = users_module.lock_admin_changes
+    real = users_module.load_target  # a patch takes the lock, resolves the role, then loads its target
 
-    async def spy(db_, acting, target_id, *, removes_admin):
+    async def spy(db_, current, target_id, *, removes_admin):
         taken.append((target_id, removes_admin))
-        return await real(db_, acting, target_id, removes_admin=removes_admin)
+        return await real(db_, current, target_id, removes_admin=removes_admin)
 
-    monkeypatch.setattr(users_module, "lock_admin_changes", spy)
+    monkeypatch.setattr(users_module, "load_target", spy)
     bodies = ({"role": "admin"}, {"active": True}, {"password": "brand-new-pass-9"}, {})
     for body in bodies:
         assert (await client.patch(f"/api/users/{uid}", json=body)).status_code == 200, body

@@ -466,7 +466,7 @@ async def test_a_vanished_acting_admin_gets_401_even_when_the_target_does_not_ex
 
 def record_hash_and_lock_order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     order: list[str] = []
-    real_hash, real_lock = users_module.hash_password, users_module.lock_admin_changes
+    real_hash, real_lock = users_module.hash_password, users_module.lock_account_changes
 
     def hashing(password):
         order.append("hash")
@@ -477,7 +477,7 @@ def record_hash_and_lock_order(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         return await real_lock(*args, **kwargs)
 
     monkeypatch.setattr(users_module, "hash_password", hashing)
-    monkeypatch.setattr(users_module, "lock_admin_changes", locking)
+    monkeypatch.setattr(users_module, "lock_account_changes", locking)  # the lock step of every account change
     return order
 
 

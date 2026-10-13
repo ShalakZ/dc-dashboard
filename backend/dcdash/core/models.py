@@ -27,6 +27,11 @@ class Role(Base):
     created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
 
+    @property
+    def effective_permissions(self) -> frozenset[str]:
+        """What the role really grants (see dcdash.core.permissions.effective_permissions)."""
+        return effective_permissions(self.name, self.builtin, self.permissions)
+
 
 def _known(ids: tuple[str, ...]) -> frozenset[str]:
     if not ids:
@@ -61,8 +66,7 @@ class User(Base):
     @property
     def permissions(self) -> frozenset[str]:
         """What the account may do, computed from the role every time it is read (no cache: a change applies next request)."""
-        role = self.role_row
-        return effective_permissions(role.name, role.builtin, role.permissions)
+        return self.role_row.effective_permissions
 
     def can(self, *ids: str) -> bool:
         """True when the account holds ALL of these permissions. An unknown id, or none at all, is a ValueError.
