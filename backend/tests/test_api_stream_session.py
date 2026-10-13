@@ -11,6 +11,7 @@ import pytest
 
 from dcdash.api import stream as stream_module
 from dcdash.api.stream import Broadcaster, event_stream
+from dcdash.core.db import get_engine
 from helpers import http_server, login_as, make_role
 
 INTERVAL = 0.05  # the revalidation interval the endpoint tests run at, instead of the real 60 seconds
@@ -130,6 +131,15 @@ async def test_a_healthy_busy_stream_keeps_sending_across_many_intervals(app, db
             pytest.fail("the stream ended while its session was still valid")
     assert frames > 20
     assert checks >= 5  # the stream re-validated again and again (the connect-time check is the route's gate, not counted) and stayed open
+
+
+async def test_an_open_stream_holds_no_database_connection(app, db):
+    # The route's gate and its re-checks each use a short session of their own; a session held by a dependency would stay
+    # open (a pooled connection, idle in transaction) for as long as the browser stays connected.
+    async with busy_stream(app, db) as lines:
+        await asyncio.wait_for(read_data_frames(lines, 5), 5)
+        assert get_engine().pool.checkedout() == 0
+        assert await db.fetchval("SELECT count(*) FROM pg_stat_activity WHERE state = 'idle in transaction'") == 0
 
 
 async def test_a_busy_stream_ends_when_its_role_loses_the_permission(app, db, fast_revalidation):

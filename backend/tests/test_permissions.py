@@ -291,16 +291,35 @@ def test_a_user_cannot_be_built_with_a_bare_role_name():
 
 # ---- User.role in SQL ----------------------------------------------------------------------------------------------------
 
-def test_no_query_compares_the_role_property_of_the_user_class():
-    # `role` is a property on User now (the role's name). At class level it is the property object, not a column, so
-    # `User.role == "admin"` is a plain False and SQLAlchemy compiles it to WHERE false: a last-admin count of zero, an
-    # empty list, no error. Queries use User.role_id (or join Role).
+# `role`, `permissions`, `can` and `can_any` are properties and methods of a User INSTANCE. At class level each is a plain
+# Python object, not a column: `User.role == "admin"` is a plain False and SQLAlchemy compiles it to WHERE false (a last-admin
+# count of zero, an empty list, no error), and `User.can(...)` or `User.permissions` is a call or a read on the wrong object.
+# Queries use User.role_id (or join Role).
+CLASS_LEVEL_USER_ACCESS = re.compile(r"User\.(role|permissions|can|can_any)\b(?!_)")
+
+
+@pytest.mark.parametrize("line", [
+    'select(User).where(User.role == "admin")', "User.permissions", "User.can('assets.view')", "User.can_any('a', 'b')",
+    "func.count().where(User.role != 'viewer')",
+])
+def test_the_class_level_user_access_pattern_finds_what_it_is_for(line):
+    assert CLASS_LEVEL_USER_ACCESS.search(line)
+
+
+@pytest.mark.parametrize("line", [
+    "User.role_id == 3", "User.role_row", "user.can('assets.view')", "user.can_any('a')", "actor.permissions", "current.role",
+    "from dcdash.core.models import User",
+])
+def test_the_class_level_user_access_pattern_leaves_instance_access_and_columns_alone(line):
+    assert not CLASS_LEVEL_USER_ACCESS.search(line)
+
+
+def test_no_query_reads_a_property_or_method_of_the_user_class():
     package = Path(__file__).resolve().parents[1] / "dcdash"
-    pattern = re.compile(r"User\.role\b(?!_)")
     hits = [
         f"{path.relative_to(package.parent)}:{number}: {line.strip()}"
         for path in sorted(package.rglob("*.py"))
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if pattern.search(line)
+        if CLASS_LEVEL_USER_ACCESS.search(line)
     ]
     assert hits == []

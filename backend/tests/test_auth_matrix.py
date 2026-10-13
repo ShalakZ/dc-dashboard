@@ -25,6 +25,11 @@ from helpers import login_as
 FIXTURE = Path(__file__).parent / "fixtures" / "auth_matrix_pre_w9a.json"
 ROLES = ("anon", "viewer", "operator", "admin")
 LOGOUT = "POST /api/logout"
+# The routes the permission table has that the fixture does not: the roles API, added after the freeze.
+ADDED_AFTER_FREEZE = {
+    "GET /api/permissions", "GET /api/roles", "POST /api/roles", "PATCH /api/roles/{role_id}",
+    "DELETE /api/roles/{role_id}", "POST /api/roles/{role_id}/duplicate",
+}
 
 
 async def collect(app, db) -> dict[str, dict[str, int]]:
@@ -98,12 +103,21 @@ def test_every_route_added_after_the_freeze_is_in_the_permission_table():
     assert missing == [], "a route the matrix does not know must declare its permission in ROUTE_PERMISSIONS"
 
 
+def test_every_frozen_route_is_public_open_to_any_account_or_in_the_permission_table():
+    # The agreement test below reads the table with the fixture's keys. A key that the table spells differently (Appendix B
+    # writes {id} where the router writes {asset_id}) would be skipped there, so the two key sets must be the same set.
+    frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert ADDED_AFTER_FREEZE <= set(ROUTE_PERMISSIONS)
+    assert ADDED_AFTER_FREEZE.isdisjoint(frozen)
+    assert set(frozen) == (set(ROUTE_PERMISSIONS) | set(PUBLIC) | set(SIGNED_IN)) - ADDED_AFTER_FREEZE
+
+
 def test_the_permission_table_agrees_with_the_frozen_matrix_for_the_built_in_roles():
     frozen = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    gated = set(frozen) - set(PUBLIC) - set(SIGNED_IN)
-    assert gated == set(ROUTE_PERMISSIONS) & set(frozen), "every frozen route is public, open to any account, or in the table"
+    gated = sorted(set(frozen) - set(PUBLIC) - set(SIGNED_IN))
+    assert gated == sorted(set(ROUTE_PERMISSIONS) & set(frozen)), "every frozen route is public, open to any account, or in the table"
     disagree = {}
-    for key in sorted(gated):
+    for key in gated:
         mode, ids = ROUTE_PERMISSIONS[key]
         for role in ("viewer", "operator", "admin"):
             if satisfies(BUILTIN[role], mode, ids) != (frozen[key][role] == "pass"):

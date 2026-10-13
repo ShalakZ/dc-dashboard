@@ -19,7 +19,7 @@ from fastapi.routing import APIRoute, iter_route_contexts
 
 from auth_expectations import PUBLIC, ROUTE_PERMISSIONS, SIGNED_IN, satisfies
 from auth_probe import classify, patch_stream, probe, route_requests, send_for_response, silent_client
-from dcdash.api.deps import current_user, require_any_permission, require_permission
+from dcdash.api.deps import current_user, get_db, require_any_permission, require_permission
 from dcdash.api.main import create_app
 from dcdash.core.permissions import ALL_IDS, NOT_FOR_CUSTOM_ROLES
 from helpers import login_as, make_role
@@ -58,7 +58,7 @@ def gate_problems(app: FastAPI, route_permissions: dict, public: dict, signed_in
         route = context.original_route
         if not isinstance(route, APIRoute):
             continue
-        listed_in_decorator = {dep.dependency for dep in route.dependencies}
+        first_in_decorator = route.dependencies[0].dependency if route.dependencies else None
         for method in sorted((context.methods or set()) - {"HEAD", "OPTIONS"}):
             key = f"{method} {context.path}"
             seen.add(key)
@@ -75,8 +75,8 @@ def gate_problems(app: FastAPI, route_permissions: dict, public: dict, signed_in
                     problems.append(f"{key}: no permission declared, the table says {want}")
                 elif declaration(gates[0]) != want:
                     problems.append(f"{key}: declares {declaration(gates[0])}, the table says {want}")
-                elif gates[0] not in listed_in_decorator:
-                    problems.append(f"{key}: the gate is not in the decorator's dependencies=[...] (it must run first)")
+                elif gates[0] is not first_in_decorator:
+                    problems.append(f"{key}: the gate is not the first of the decorator's dependencies=[...] (it must run first)")
             elif key in public:
                 if gates or takes_current_user:
                     problems.append(f"{key}: public, but it declares a permission or depends on current_user")
@@ -115,6 +115,13 @@ def test_the_factories_reject_an_unknown_or_missing_permission():
             factory("assets.view", "assets.vieww")
         with pytest.raises(ValueError):
             factory("Assets.View")
+
+
+def test_the_stream_holds_no_request_session():
+    # A dependency that yields a session (get_db, which current_user takes too) is closed only after the response ends, and
+    # a stream ends when the browser leaves: the stream's gate reads the account in a session of its own instead.
+    route = next(c.original_route for c in iter_route_contexts(create_app().routes) if c.path == "/api/stream")
+    assert get_db not in dependency_calls(route.dependant)
 
 
 def test_a_gate_carries_what_it_declares():
@@ -184,17 +191,26 @@ def test_the_gate_fails_for_a_wrong_missing_doubled_or_misplaced_permission():
     async def late(user=Depends(gate)) -> None:
         return None
 
+    async def lookup() -> None:
+        return None
+
+    @app.get("/api/after-a-lookup", dependencies=[Depends(lookup), Depends(gate)])
+    async def after_a_lookup() -> None:
+        return None
+
     @app.get("/api/same-gate-twice", dependencies=[Depends(gate)])
     async def same_gate_twice(user=Depends(gate)) -> None:
         return None
 
     table = {key: ("all", ("assets.view",)) for key in (
-        "GET /api/wrong", "GET /api/none", "GET /api/twice", "GET /api/late", "GET /api/same-gate-twice", "GET /api/gone")}
+        "GET /api/wrong", "GET /api/none", "GET /api/twice", "GET /api/late", "GET /api/after-a-lookup",
+        "GET /api/same-gate-twice", "GET /api/gone")}
     assert gate_problems(app, table, {}, {}) == [
         "GET /api/wrong: declares ('all', ('assets.edit',)), the table says ('all', ('assets.view',))",
         "GET /api/none: no permission declared, the table says ('all', ('assets.view',))",
         "GET /api/twice: 2 permission dependencies; a route has exactly one",
-        "GET /api/late: the gate is not in the decorator's dependencies=[...] (it must run first)",
+        "GET /api/late: the gate is not the first of the decorator's dependencies=[...] (it must run first)",
+        "GET /api/after-a-lookup: the gate is not the first of the decorator's dependencies=[...] (it must run first)",
         "GET /api/gone: listed but there is no such route",
     ]
 
