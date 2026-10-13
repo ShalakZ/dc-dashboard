@@ -9,7 +9,8 @@
 # DOCKER CLOCK compares the clock inside the db container with this computer's (a Docker/WSL2 VM that slept drifts; that is not the SCADA).
 # Per service the last 2000 log lines are read and the ROUTINE ones are dropped (2xx/3xx uvicorn access lines, Caddy admin API requests,
 # TimescaleDB refresh and checkpoint chatter; a line with error, warn, fatal, traceback, exception or panic is never dropped), the count
-# of dropped lines is printed, then the last 300 (file) / 30 (screen) remain. -RawLogs keeps every line.
+# of dropped lines is printed, then the last 300 (file) / 30 (screen) remain. -RawLogs keeps every line. Colour codes are removed from the log
+# text first; a block whose last 300 kept lines hold the Timescale image's first-start noise gets one "known benign" line.
 # -Mask replaces addresses, host names (this computer, the targets, the domain, the DNS and gateway hosts, the time source, a host seen in a URL),
 # the user name and the project and output folders by HOST-n, USER-1 and PATH-n in the files AND on the screen; loopback addresses (127.x,
 # ::1, 0.0.0.0), localhost and the compose service names (db, api, web, collector, simulator) stay as they are. The legend (alias = original) is printed on the screen after the "saved:" lines and never written
@@ -51,6 +52,8 @@ $Containers = $false
 $LogServices = 0
 $KeepAlways = 'error|warn|fatal|traceback|exception|panic'   # a log line with one of these words is never routine
 $RoutinePg = '^\S+ \S+ \S+ \[\d+\] LOG:\s+(continuous aggregate refresh|deleted \d+ row\(s\) from materialization table|inserted \d+ row\(s\) into materialization table|checkpoint (starting|complete):)'
+$BootNoise = 'no usable system locales were found|background worker.*trying to connect to template database, exiting'   # the Timescale image's first start
+$BootNote = 'known benign on a first start (Timescale image): "no usable system locales were found", "background worker ... trying to connect to template database, exiting"'
 $TailLines = 2000   # docker compose logs --tail: read this many, drop the routine ones, keep the last 300
 $OldEnc = $null
 try { if ([Console]::IsOutputRedirected) { $OldEnc = [Console]::OutputEncoding; [Console]::OutputEncoding = $Utf8 } } catch { }   # piped output is UTF-8
@@ -388,6 +391,9 @@ function Test-InsideOneDrive([string]$Path) {   # the folder name says OneDrive,
   }
   return $false
 }
+function Remove-Ansi([string]$Line) {   # colour codes: ESC [ 37;1 m, and the same without the ESC byte when it was lost on the way; a [5m] in running text is no code
+  return $Line -creplace '\x1b\[[0-9;]*m', '' -creplace '\[(?:[0-9]{1,3}(?:;[0-9]{1,3})*)?m(?!\])', ''
+}
 function Test-Routine([string]$Line) {   # a log line nobody needs to read (Decision 1 of the W8c plan); anything that could be a failure is kept
   if ($Line -match $KeepAlways) { return $false }
   $t = $Line -replace '^[A-Za-z0-9][A-Za-z0-9_.-]*\s*\|\s?', ''   # the "api-1  | " docker compose puts in front of every line
@@ -675,13 +681,14 @@ Section "LOGS" {
   foreach ($svc in $names) {
     $r = Invoke-Docker @("compose", "logs", "--no-color", "--tail", "$TailLines", $svc) ($CommandTimeoutSeconds * 3)
     if (-not $r) { break }
-    $got = @(Get-TextLines $r.Out | Where-Object { $_.Trim() })
+    $got = @(Get-TextLines $r.Out | ForEach-Object { Remove-Ansi $_ } | Where-Object { $_.Trim() })   # codes off first: the filter and the counts see the plain text
     if ($r.ExitCode -ne 0 -and $got.Count -eq 0) { Add-Line "-- ${svc}: docker compose logs failed (exit code $($r.ExitCode)): $($r.Err.Trim())" -Clip 300; continue }
     $kept = $(if ($RawLogs) { $got } else { @(foreach ($l in $got) { if (-not (Test-Routine $l)) { $l } }) })
     $tail = @($kept | Select-Object -Last 300)
     $show = @($tail | Select-Object -Last 30)
     $what = $(if ($RawLogs) { "lines read; unfiltered)" } else { "kept lines; dropped $($got.Count - $kept.Count) routine lines of $($got.Count) read)" })
     Add-Line "-- $svc (last $($show.Count) of $($kept.Count) $what$(if ($got.Count -ge $TailLines) { ' (tail limit reached; older lines not read)' })"
+    if (@($tail | Where-Object { $_ -match $BootNoise }).Count -gt 0) { Add-Line $BootNote -Prefix "  " }
     foreach ($l in $show) { Add-Line $l -Clip 240 -Prefix "  " }
     Add-Line "== $svc ==" -To $LogLines
     foreach ($l in $tail) { Add-Line $l -Clip 1000 -To $LogLines }

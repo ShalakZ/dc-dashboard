@@ -710,6 +710,83 @@ def test_raw_logs_drops_nothing_and_says_unfiltered(raw_run):
     assert "(tail limit reached; older lines not read)" in _block(main, "worker")[0]
 
 
+# ---- W7i 4b: colour codes and the first-boot note ----------------------------------------------------------------------
+
+_ESC = "\x1b"
+_BOOT_NOTE = ('known benign on a first start (Timescale image): "no usable system locales were found", '
+              '"background worker ... trying to connect to template database, exiting"')
+_BOOT_LOCALE = "2026-10-12 09:21:11.001 UTC [1] WARNING:  no usable system locales were found"
+_BOOT_WORKER = '2026-10-12 09:21:12.100 UTC [27] ERROR:  background worker "TimescaleDB Background Worker Scheduler": trying to connect to template database, exiting'
+
+
+def _colour(text: str, esc: bool = True) -> str:
+    """A log line wrapped in colour codes, with the ESC byte or (esc=False) with the byte lost on the way."""
+    e = _ESC if esc else ""
+    return f"{e}[37;1m{text}{e}[0m"
+
+
+_ANSI_LOGS = {
+    "api": [*_prefixed("api", [_colour(_access("GET /api/health", "200 OK", 55000 + i), esc=i % 2 == 0) for i in range(60)]),
+            f"{_ESC}[0m", "[0m",   # nothing is left of these once the codes are gone: not lines read
+            *_prefixed("api", [_colour("ERROR:    boom happened"),
+                               f"INFO:     {_ESC}[32m127.0.0.1{_ESC}[0m - [1;31m\"GET /api/sources HTTP/1.1\" 500 Internal Server Error[0m",
+                               "the [5m] marker and [0m] and [1234m stay, a background worker idles"])],
+    "db": _prefixed("db", [_colour(_PG + "checkpoint starting: time"), _colour(_BOOT_LOCALE, esc=False), _colour("database system is ready", esc=False)]),
+    "ts": _prefixed("ts", [_colour(_BOOT_WORKER)]),
+    "web": _prefixed("web", [_colour(_ADMIN, esc=i % 2 == 1) for i in range(20)]
+                     + ["background worker started", "trying to connect to template database, exiting"]),
+}
+
+
+@pytest.fixture(scope="module")
+def ansi_run(scratch):
+    return _fake_run(scratch, logs=_ANSI_LOGS)
+
+
+@needs_powershell
+def test_a_colour_wrapped_routine_line_is_dropped_and_no_escape_byte_reaches_either_file(ansi_run):
+    proc, files = ansi_run
+    assert proc.returncode == 0, proc.stderr
+    main, logs = _main_and_logs(files)
+    assert _ESC not in main and _ESC not in logs and _ESC not in proc.stdout
+    assert _block(main, "api")[0] == "-- api (last 3 of 3 kept lines; dropped 60 routine lines of 63 read)"
+    assert _block(main, "db")[0] == "-- db (last 2 of 2 kept lines; dropped 1 routine lines of 3 read)"
+    assert _block(main, "web")[0] == "-- web (last 2 of 2 kept lines; dropped 20 routine lines of 22 read)"
+    api = _prefixed("api", ["ERROR:    boom happened", 'INFO:     127.0.0.1 - "GET /api/sources HTTP/1.1" 500 Internal Server Error',
+                            "the [5m] marker and [0m] and [1234m stay, a background worker idles"])
+    assert [l.strip() for l in _block(main, "api")[1:]] == api
+    assert _logs_block(logs, "api") == api
+    assert _logs_block(logs, "db") == _prefixed("db", [_BOOT_LOCALE, "database system is ready"])
+
+
+@needs_powershell
+def test_the_first_boot_note_stands_right_after_the_header_of_a_block_whose_tail_holds_a_pattern(ansi_run):
+    main, logs = _main_and_logs(ansi_run[1])
+    for svc in ("db", "ts"):   # db holds the locale line, ts the background worker line
+        assert _block(main, svc)[1] == f"  {_BOOT_NOTE}", svc
+    assert main.count("known benign on a first start") == 2, "one per block, and none for api and web (each holds half of a pattern)"
+    assert "known benign" not in logs, "the logs file holds log lines only"
+
+
+@needs_powershell
+def test_raw_logs_strips_the_colour_and_still_notes_the_first_boot_lines(scratch):
+    proc, files = _fake_run(scratch, ["-RawLogs"], logs=_ANSI_LOGS)
+    assert proc.returncode == 0, proc.stderr
+    main, logs = _main_and_logs(files)
+    assert _ESC not in main and _ESC not in logs
+    assert _block(main, "db")[0] == "-- db (last 3 of 3 lines read; unfiltered)"
+    assert main.count("known benign on a first start") == 2
+
+
+@needs_powershell
+def test_a_pattern_older_than_the_last_300_kept_lines_gives_no_note(scratch):
+    newer = [f"2026-10-12 10:00:00 line number {i} of the day" for i in range(300)]
+    inside = _fake_run(scratch, logs={"db": _prefixed("db", [_BOOT_LOCALE, *newer[1:]])})
+    outside = _fake_run(scratch, logs={"db": _prefixed("db", [_BOOT_LOCALE, *newer])})
+    assert _block(_main_and_logs(inside[1])[0], "db")[1] == f"  {_BOOT_NOTE}"   # 299 newer lines and the old one are 300
+    assert "known benign" not in _main_and_logs(outside[1])[0]   # the 300th pushes the old line out of the tail
+
+
 @needs_powershell
 def test_docker_clock_reads_the_vm_between_two_host_readings(filter_run):
     main, _ = _main_and_logs(filter_run[1])

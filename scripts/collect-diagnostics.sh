@@ -10,7 +10,8 @@
 # 300 KEPT LINES PER SERVICE go to a second file, dcdash-diag-<stamp>-logs.txt (header DCDASH-DIAG-LOGS v1, same footer rule), which is
 # saved but never printed; the report names its path. The logs are read as `--tail 2000`, then the ROUTINE lines are dropped (access lines
 # with a 2xx/3xx status, Caddy admin API requests, TimescaleDB refresh chatter; a line with error, warn, fatal, traceback, exception or
-# panic is never dropped) and each service block says how many; --raw-logs keeps them. DOCKER CLOCK compares the date inside the db
+# panic is never dropped) and each service block says how many; --raw-logs keeps them. Colour codes are removed from the log text first;
+# a block whose last 300 kept lines hold the Timescale image's first-start noise gets one "known benign" line. DOCKER CLOCK compares the date inside the db
 # container with this machine's (Docker/WSL2 clock drift is a local cause). --mask exists only in the PowerShell script. Read-only,
 # needs no internet and none of the application; POSIX tools only (awk, sed, df, date, getent), no Python, no jq. The files are UTF-8
 # with LF line breaks, saved for their owner only (umask 077). The last line of each is `END OF DIAGNOSTICS <12 hex>`: the first 12 hex
@@ -27,6 +28,7 @@ set -u
 
 VERSION=1
 CAP_BYTES=65536   # a raw line is cut here BEFORE scrubbing (far above any clip, so nothing near the cut is shown)
+BOOT_NOTE='known benign on a first start (Timescale image): "no usable system locales were found", "background worker ... trying to connect to template database, exiting"'
 
 # The scrubber, in awk, mawk-safe: no gensub, no 4-argument split, no IGNORECASE, no length(array), no delete. Run it under LC_ALL=C: every
 # length and position is then a BYTE count; "characters" are counted as bytes that are not UTF-8 continuation bytes (\200-\277).
@@ -211,7 +213,20 @@ AWK_END
 # lines are neither read nor kept. The matching is on the text after the `service-1  | ` prefix that `docker compose logs` adds. A line with
 # error, warn, fatal, traceback, exception or panic (any case) is NEVER routine. Routine: (a) a uvicorn access line with a 2xx/3xx status,
 # (b) a Caddy admin API request, (c) TimescaleDB's continuous aggregate refresh and checkpoint chatter. Everything else stays.
+# Colour codes are removed from every line first (also with -v raw=1), so a colour-wrapped routine line is still recognised and a line that
+# held nothing else is blank: ESC [ digits;digits m, and the same without the ESC byte when it was lost on the way ("[0m", "[37;1m"). The
+# ESC-less form needs the m and must not be followed by "]", so a "[5m]" in running text stays (an ERE has no lookahead: a loop does it).
 IFS= read -r -d '' FILTER_PROGRAM <<'AWK_END' || true
+function unansi(s,    out) {
+  if (index(s, "[") == 0) return s
+  gsub(/\033\[[0-9;]*m/, "", s)
+  out = ""
+  while (match(s, /\[([0-9][0-9]?[0-9]?(;[0-9][0-9]?[0-9]?)*)?m/)) {
+    if (substr(s, RSTART + RLENGTH, 1) == "]") { out = out substr(s, 1, RSTART); s = substr(s, RSTART + 1) }   # ordinary text: go on after its "["
+    else { out = out substr(s, 1, RSTART - 1); s = substr(s, RSTART + RLENGTH) }
+  }
+  return out s
+}
 function routine(t,    low) {
   low = tolower(t)
   if (low ~ /error|warn|fatal|traceback|exception|panic/) return 0
@@ -220,6 +235,7 @@ function routine(t,    low) {
   if (low ~ /^[^ ]+ [^ ]+ [^ ]+ \[[0-9]+\] log:[ \t]+(continuous aggregate refresh|deleted [0-9]+ row[(]s[)] from materialization table|inserted [0-9]+ row[(]s[)] into materialization table|checkpoint (starting|complete):)/) return 1
   return 0
 }
+{ $0 = unansi($0) }
 NF {
   read++
   t = $0; sub(/^[^|]*[|] ?/, "", t)
@@ -782,6 +798,9 @@ section_logs() {
     if [ "${RAW_LOGS:-0}" = 1 ]; then emit "-- $svc (last $shown of $kept lines read; unfiltered)$note"
     else emit "-- $svc (last $shown of $kept kept lines; dropped $dropped routine lines of $n read)$note"
     fi
+    if "$AWK" 'BEGIN { rc = 1 } { low = tolower($0); w = index(low, "background worker") }
+      index(low, "no usable system locales were found") || (w && index(low, "trying to connect to template database, exiting") > w) { rc = 0 }
+      END { exit rc }' "$WORK/svc.tail"; then emit "  $BOOT_NOTE"; fi
     tail -n 30 "$WORK/svc.tail" | sed 's/^/  /' | emit_lines 242
     [ -s "$WORK/logs.txt" ] || logs_header
     emit "== $svc ==" 0 logs
