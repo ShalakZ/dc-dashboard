@@ -13,8 +13,11 @@ import { mainNav, navLink, userBlock } from "./shell";
 // take over an Admin; (5) the only Admin cannot demote, deactivate or delete itself, a role in use cannot be deleted and the built-in
 // roles cannot be changed. There is no Roles page yet (W9b), so roles are made through the API here, as an administrator would today.
 //
-// Every request that could do harm if its gate were broken is aimed at id 999999 with an empty body, so a broken gate answers 404 or 422
-// and changes nothing. The one probe at the real `admin` account resets its password to the password it already has.
+// What a broken gate could do to the stack: the denial probes aim at id 999999 with an empty body, so a broken gate answers 404 or 422 and
+// changes nothing; the escalation probes aim at a throwaway Admin (`w9a-admin2`), and the one probe at the real `admin` sends the password
+// it already has; the built-in roles are only ever sent an empty PATCH (a rename would break every Viewer) and a DELETE that the foreign key
+// would refuse anyway. The one place that deliberately hits the real thing is (f): the only Admin is asked to demote, deactivate and delete
+// itself, and must answer 409.
 //
 // Locators: sidebar links go through `mainNav` / `navLink` (e2e/shell.ts, matched by whole name). The two denied/empty screens are
 // matched by their level-1 heading with `exact: true`: "No access" and "Your role has no pages yet." do not contain each other, and
@@ -617,8 +620,9 @@ test.describe("W9a: roles and permissions", () => {
           const deleted = await api.delete(`/api/roles/${role.id}`);
           expect(deleted.status(), `deleting ${role.name}: ${await deleted.text()}`).toBe(409);
           expect(await detail(deleted)).toMatch(/built-in/);
-          const renamed = await api.patch(`/api/roles/${role.id}`, { data: { name: "w9a-renamed" } });
-          expect(renamed.status(), `renaming ${role.name}: ${await renamed.text()}`).toBe(409);
+          // An empty body: it asks for no change and is still refused, and a gate that let it through would change nothing.
+          const changed = await api.patch(`/api/roles/${role.id}`, { data: {} });
+          expect(changed.status(), `changing ${role.name}: ${await changed.text()}`).toBe(409);
         }
         const copy = await api.post(`/api/roles/${roles[2].id}/duplicate`, { data: { name: "w9a-copy-of-admin" } });
         expect(copy.status(), await copy.text()).toBe(201);
