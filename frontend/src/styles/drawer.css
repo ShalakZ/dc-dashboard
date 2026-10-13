@@ -1,0 +1,37 @@
+@layer w6 {
+  /* W7l: the reusable right-hand drawer (components/Drawer.tsx). Tokens only; every rule is scoped by a class this piece owns. */
+
+  /* The footer's height is ONE token. It is declared on the body (while a drawer is in the page) because the toast stack is not inside the
+     drawer: a token declared on .drawer would not reach it, and calc(var(--drawer-foot-h) + 16px) would then be invalid and drop `bottom`. */
+  body:has(.drawer) { --drawer-foot-h: 64px; }
+
+  /* The dimmed page. 800 is the slot the toast stack's own CSS keeps free: above the pop-ups (90) and the sidebar tip (50), below the toasts (900)
+     and the dialogs (1000). It starts at the top edge, over the navy bar, as a dialog does. */
+  .drawer-backdrop { position: fixed; inset: 0; z-index: 800; display: flex; justify-content: flex-end; background: var(--backdrop); overscroll-behavior: contain; animation: drawer-fade 200ms ease; }
+  /* No resting transform on the panel (a transformed box becomes the containing block of every position: fixed box inside it: the row menus,
+     the help bubbles); the slide is a keyframe animation that ends back at none. */
+  .drawer { display: flex; flex-direction: column; width: min(520px, 100vw); height: 100%; background: var(--bg); color: var(--text); border-left: 1px solid var(--border-strong); box-shadow: var(--shadow-dialog); animation: drawer-in 200ms ease; }
+  .drawer:focus { outline: none; } /* focus starts on the panel itself; the controls inside show their own ring (main does the same) */
+
+  .drawer-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+  .drawer-title { margin: 0; min-width: 0; font-size: var(--fs-lg); font-weight: 600; overflow-wrap: anywhere; }
+  .drawer-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 20px; }
+  .drawer-foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: var(--drawer-foot-h); padding: 0 20px; border-top: 1px solid var(--border); background: var(--bg); }
+
+  /* A toast over a drawer would cover the footer's buttons (the stack is bottom right, in the drawer's column): lift it above the footer.
+     One rule for every width, so the narrow full-width drawer gets it too. A drawer without a footer has nothing to clear. */
+  body:has(.drawer) .toast-stack { bottom: calc(var(--drawer-foot-h) + 16px); }
+  body:has(.drawer):not(:has(.drawer-foot)) .toast-stack { bottom: 16px; }
+
+  @keyframes drawer-in { from { transform: translateX(100%); } }
+  @keyframes drawer-fade { from { opacity: 0; } }
+  /* Reduced motion: it appears where it is. (app.css switches off transitions only; these are animations.) */
+  @media (prefers-reduced-motion: reduce) {
+    .drawer-backdrop, .drawer { animation: none; }
+  }
+
+  /* A narrow window: the whole width. */
+  @media (max-width: 719.98px) {
+    .drawer { width: 100%; border-left: 0; }
+  }
+}
