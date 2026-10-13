@@ -460,7 +460,7 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Seventeen specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Eighteen specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
 
 - `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
@@ -528,7 +528,7 @@ Seventeen specs run in one `playwright test` run against the dev-profile stack o
   crumb and the tree heading read "Assets Tree"; the Add asset dialog's Icon field (a collapsed grid, the caption "Automatic (Generic)"
   that follows the Kind, the arrow keys changing the choice and the caption, Server chosen and saved) and the same icon in the tree row,
   the asset page's title and quick find; Edit back to Automatic (the icon follows the kind again); the choice kept across a reload;
-  Esc inside the open grid closing the dialog with nothing saved; Enter on a cell not saving; no horizontal scroll at 1440 and 1024 px
+  Esc inside the open grid closing only the grid (a second Esc closes the dialog) with nothing saved; Enter on a cell not saving; no horizontal scroll at 1440 and 1024 px
   with the dialog open. It creates one asset of its own and deletes it afterwards.
 - `w7h.spec.ts` (its own project, after `w7g`, at 1440 and 1024 px in fresh browser contexts) checks the first-load screen: the HTML the server
   sends already holds the shell and carries the security headers; with `/api/me` held, the navy bar, the sidebar and one "Loading" status
@@ -537,6 +537,11 @@ Seventeen specs run in one `playwright test` run against the dev-profile stack o
   looks, with the sidebar minimized and at 1024 px; the sign-in and setup pages (any case) show no shell; a signed-out deep link lands on the
   sign-in page without the real shell appearing and returns to the page asked for; a slow start never shows an empty page; reduced motion;
   no Content-Security-Policy violation on any of it.
+- `w7i.spec.ts` (its own project, after `w7h`) checks what W7i added: with the API unreachable (the `/api/me` request answered 502 by the
+  test) a deep link shows "Can't reach the server" at the same address instead of the sign-in page and the page loads once the answer
+  is back; the banner inside the app appears after two failed requests and goes with the first answer; an expired session still goes to
+  the sign-in page; a 200-character asset kind wraps instead of widening the page; and the "Skip the tree" link moves focus to the asset
+  details. `headers.spec.ts` also checks the cache and compression headers of the built site.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1271,6 +1276,28 @@ page itself starts loading (its own grey shapes appear after the usual sixth of 
 3. **Verify.** `docker compose exec api alembic current` still prints `0008 (head)`. In the browser's developer tools set the network
    to "Slow 4G", reload any page and watch the navy bar and the sidebar appear before anything else; on `/login` no frame shows.
 4. **Going back.** Check out `45deb14` and rebuild as in step 2. There is no database step.
+
+### Upgrading to W7i (no migration)
+
+Schema stays at `0008`; nothing in the database or the API changes, so there is nothing to restore. The code to go back to is
+`65d9fab` (`main` before W7i).
+
+W7i (an acceptance sweep and polish) changes the `web` image, the front end and two diagnostic scripts. What you will notice:
+the first load is about four times smaller (the web server now compresses its files, and Discovery's graph library is only fetched
+when that page opens); files with a hash in their name are cached for a year, while `index.html` and `theme-init.js` are checked
+with the server on every visit, so an update shows at once instead of after a hard reload; with the server down the app says
+"Can't reach the server" (with a Retry button) instead of showing the sign-in page, and a page left open recovers by itself; a tab
+left open across an update reloads once when it needs a file the update removed, then shows a plain "could not be loaded" panel if
+that does not help; the browser tab names the page; a very long asset kind wraps; and `scripts\collect-diagnostics.ps1` (and the
+shell twin) now name the program that owns each listening port and note the first-start noise of the database image.
+
+1. **Back up first** (a habit here: nothing in the database changes), as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). Only `web` is rebuilt. `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you.
+3. **Verify.** `docker compose exec api alembic current` still prints `0008 (head)`; `scripts/check_web.sh http://localhost` prints
+   nine `ok` lines. If a browser shows a white page or a broken layout right after the update, press Ctrl+F5 once: before this
+   update the web server sent no caching rule for the page, so a browser may reuse the old copy of `index.html` one more time.
+4. **Going back.** Check out `65d9fab` and rebuild as in step 2. There is no database step.
 
 ## Add a connector
 

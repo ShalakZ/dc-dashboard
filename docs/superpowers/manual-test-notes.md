@@ -174,7 +174,7 @@ What was verified (evidence from the run, not from reading code):
 | Restart behaviour | database stopped for 42 s: api and collector recover with no action, readings resume within seconds. Real crash (`pg_ctl stop -m immediate`): container restarted by the restart policy in about 1 s, crash recovery clean, data identical afterwards. Everything stopped, then api/collector started before the db (what a host reboot does, no `depends_on` ordering): both crash-loop (6 restarts) and are healthy about 12 s after the db is up. Note: `docker kill` is not a crash (Docker treats it as a manual stop and does not restart) |
 | TLS (an adapted copy of the script's steps in a scratch certs dir) | unreadable key gives the clear entrypoint message; after the chown to uid 10002, HTTPS 200, HTTP gets 308, HSTS present, the session cookie gains `Secure`, SSE works over HTTP/2 (`: connected` arrives at once) |
 | Setup re-run | `.env` unchanged by a second run; the first run took 44 s (cached build) |
-| `scripts/check_web.sh` | all four lines ok |
+| `scripts/check_web.sh` | all nine lines ok |
 | Secrets in logs | none (db password, secret key and `sim-key` searched in all retained logs of the dev stack) |
 
 Not verified (say so, do not assume): the `.ps1` scripts (they parse cleanly in PowerShell 5.1, but were never executed; a
