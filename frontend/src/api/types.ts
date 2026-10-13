@@ -1,11 +1,14 @@
 import type { Appearance } from "../lib/appearance";
-
-export type Role = "viewer" | "operator" | "admin";
-export const ROLE_LEVEL: Record<Role, number> = { viewer: 0, operator: 1, admin: 2 };
+import type { PermissionId } from "../lib/permissions";
 
 /** The account's appearance choice, as /api/me, /api/login, /api/setup and PUT /api/me/preferences answer it. */
 export type Preferences = Appearance;
-export interface User { id: number; username: string; role: Role; preferences: Preferences }
+/**
+ * The signed-in account, as /api/me, /api/login and /api/setup answer it. `role` is the role's name (a built-in one is `viewer`, `operator` or
+ * `admin`; an administrator may add others); `permissions` is what the role lets the account do. A newer server may send an id this build has
+ * never heard of: it is kept and nothing asks for it.
+ */
+export interface User { id: number; username: string; role: string; permissions: PermissionId[]; preferences: Preferences }
 
 /** `icon` is the chosen icon id (lib/assetIcons.ts), null for Automatic. Optional in the type because many fixtures build an Asset by hand; the API always sends it. */
 export interface Asset { id: number; parent_id: number | null; name: string; kind: string; sort_order: number; icon?: string | null }
@@ -118,7 +121,7 @@ export interface Job {
 export interface CheckResult { ok: boolean; status: string; latency_ms: number | null; message: string }
 
 /** `blocked`: some sign-in key of this account name is blocked right now (GET /api/users). */
-export interface UserRow { id: number; username: string; role: Role; active: boolean; blocked?: boolean }
+export interface UserRow { id: number; username: string; role: string; active: boolean; blocked?: boolean }
 export interface GeneralSettings { timezone: string }
 
 export interface SignInValues { max_failures: number; block_minutes: number }

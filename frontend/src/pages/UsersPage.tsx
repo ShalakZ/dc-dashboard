@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type Ref } from "react";
 import { ApiError } from "../api/client";
 import { useCreateUser, useDeleteUser, usePatchUser, useUnblockUser, useUsers } from "../api/queries";
-import type { Role, UserRow } from "../api/types";
+import type { UserRow } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { RowActions, type RowAction } from "../components/RowActions";
 import { TableSkeleton } from "../components/Skeleton";
 import { TrashButton } from "../components/TrashButton";
 
-const ROLES: Role[] = ["viewer", "operator", "admin"];
+const ROLES: string[] = ["viewer", "operator", "admin"]; // TEMPORARY: Task 4b lists the roles the server knows
 
 /** ApiError.message already carries the API's `detail` (string or formatted validation list). */
 function errorText(error: unknown): string {
@@ -48,7 +48,7 @@ function UserRowView({ user, self, onDeleted }: { user: UserRow; self: boolean; 
           aria-label={`Role for ${user.username}`}
           value={user.role}
           disabled={self || patch.isPending}
-          onChange={(e) => patch.mutate({ id: user.id, body: { role: e.target.value as Role } })}
+          onChange={(e) => patch.mutate({ id: user.id, body: { role: e.target.value } })}
         >
           {ROLES.map((r) => (
             <option key={r} value={r}>{r}</option>
@@ -126,7 +126,7 @@ export function UsersPage() {
   const { user: me } = useAuth();
   const users = useUsers();
   const create = useCreateUser();
-  const [form, setForm] = useState({ username: "", password: "", role: "viewer" as Role });
+  const [form, setForm] = useState({ username: "", password: "", role: "viewer" });
   // The deleted row and its Delete button are gone, so the dialog has nowhere to give focus back to: keep the keyboard user on the page.
   const heading = useRef<HTMLHeadingElement>(null);
   const [deletions, setDeletions] = useState(0);
@@ -172,7 +172,7 @@ export function UsersPage() {
           </label>
           <label>
             Role{" "}
-            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}>
+            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
               {ROLES.map((r) => (
                 <option key={r} value={r}>{r}</option>
               ))}

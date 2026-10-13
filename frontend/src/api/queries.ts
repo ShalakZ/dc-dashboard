@@ -4,7 +4,7 @@ import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { ApiError, api } from "./client";
 import type {
   Asset, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
-  FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, Role, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
+  FleetSummary, GeneralSettings, GraphModel, Metric, PointRow, RangePreset, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
@@ -53,7 +53,8 @@ export const keys = {
 /** Everything whose figures move when a rate, the currency or the timezone changes. `assets` covers the asset summaries (cost_today), `fleet` the Assets Tree landing page's figures. */
 const COST_DEPENDENT = [keys.billing, keys.widgetData, keys.assets, keys.fleet] as const;
 
-export const useAssets = () => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets") });
+/** `enabled` is false for a role that may not see assets (the quick find in the top bar asks for the list on every page). */
+export const useAssets = (enabled = true) => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets"), enabled });
 
 /**
  * The Assets Tree landing page: live power, today's energy and cost over the whole site, and the readings that need attention.
@@ -93,7 +94,7 @@ export const useStatus = () =>
 export const useSecretKeyStatus = () =>
   useQuery({ queryKey: keys.secretKey, queryFn: () => api.get<SecretKeyStatus>("/api/secret-key/status"), refetchInterval: 60_000 });
 
-/** Admins only (the app shell's notice and the Settings page). The collector checks the certificate hourly, so ten minutes is plenty. */
+/** Needs settings.view (the app shell's notice and the Settings page). The collector checks the certificate hourly, so ten minutes is plenty. */
 export const useTlsStatus = () =>
   useQuery({ queryKey: keys.tlsStatus, queryFn: () => api.get<TlsStatus>("/api/tls/status"), refetchInterval: 600_000 });
 
@@ -118,7 +119,7 @@ export const useUsers = () => useQuery({ queryKey: keys.users, queryFn: () => ap
 export function useCreateUser() {
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: (body: { username: string; password: string; role: Role }) => api.post<UserRow>("/api/users", body),
+    mutationFn: (body: { username: string; password: string; role: string }) => api.post<UserRow>("/api/users", body),
     onSuccess: () => invalidate(keys.users, keys.auditAll),
   });
 }
@@ -126,7 +127,7 @@ export function useCreateUser() {
 export function usePatchUser() {
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: ({ id, body }: { id: number; body: { role?: Role; active?: boolean; password?: string } }) =>
+    mutationFn: ({ id, body }: { id: number; body: { role?: string; active?: boolean; password?: string } }) =>
       api.patch<UserRow>(`/api/users/${id}`, body),
     onSuccess: () => invalidate(keys.users, keys.auditAll),
   });
@@ -338,10 +339,12 @@ export const useDashboards = () =>
  * The dashboard people land on (null = none). The server answers null for a stale or unusable value too.
  * The sidebar keeps this query alive for the whole session, so it looks again by itself (when the tab becomes visible again, once stale, and every minute):
  * another admin may delete the dashboard or pick a new default while a control-room screen stays open.
+ * `enabled` is false for a role that may not see dashboards: the query then never leaves `isPending`, so a caller that waits for it must check `enabled` too.
  */
-export const useDefaultDashboard = () =>
+export const useDefaultDashboard = (enabled = true) =>
   useQuery({
     queryKey: keys.defaultDashboard,
+    enabled,
     queryFn: () => api.get<DefaultDashboard>("/api/dashboards/default"),
     staleTime: 30_000,
     refetchOnWindowFocus: true, // the app turns this off for every query (main.tsx); react-query fires it when the tab becomes visible again
