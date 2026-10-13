@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { parseRules, stripComments } from "../test/cssTools";
 import { renderWithProviders } from "../test/render";
+import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
+import type { PermissionId } from "../lib/permissions";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 
 const part = (index: number, of: number, text: string, chars: number, lines: number) => ({ index, of, text, chars, lines });
@@ -368,5 +370,27 @@ describe("the Diagnostics styles (W7j)", () => {
     const rule = rules.find((r) => r.selector.split(",").map((s) => s.trim()).includes(".diag-page .page-head .sub"));
     expect(rule, "the shared .page-head .sub rule names .diag-page").toBeDefined();
     expect(rule!.body).toMatch(/max-width:\s*110ch/);
+  });
+});
+
+describe("DiagnosticsPage follows the permissions of the role (a custom role)", () => {
+  const show = async (permissions: PermissionId[]) => {
+    mockFetch(routes(reply(), { "GET /api/me": { body: userFor("custom", { permissions: ["diagnostics.view", "sources.view", ...permissions] }) } }));
+    renderWithProviders(<><DiagnosticsPage /><SignedIn /></>);
+    await screen.findByRole("heading", { level: 1, name: "Diagnostics" });
+    await accountKnown();
+  };
+
+  it("diagnostics.view and sources.view: the report, and no connection check (that is diagnostics.run)", async () => {
+    await show([]);
+    expect(screen.getByRole("heading", { level: 2, name: "Report" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 2, name: "Connection check" })).not.toBeInTheDocument();
+    await userEvent.click(build());
+    await screen.findByRole("textbox", { name: "Report part 1 of 1" });
+  });
+
+  it("with diagnostics.run the connection check card follows the report", async () => {
+    await show(["diagnostics.run"]);
+    expect(await screen.findByRole("heading", { level: 2, name: "Connection check" })).toBeInTheDocument();
   });
 });
