@@ -12,8 +12,9 @@ import { rowAction, treeLink, userBlock } from "./shell";
 //
 // The run suffix is digits only on purpose, as in w7m: a kind's default icon is a guess from its words, and a number cannot be a keyword.
 //
-// The cases are independent (one failure does not hide the others; workers is 1, so they still run in file order), in five describes:
+// The cases are independent (one failure does not hide the others; workers is 1, so they still run in file order), in six describes:
 //   header buttons       Add asset, Edit and Delete are one height on an asset's page (1440 and 1024 px, light and dark).
+//   header in a narrow   at 1024 px with the sidebar expanded an 11-character name and the sub line stay on one line each (the buttons go under them).
 //   the icon picker      six groups, the search ("transfer", and an arrow-key walk across a group boundary under "security"), a new icon chosen
 //                        and drawn in the tree row and the header, Escape in layers, no sideways scroll and no shift while typing.
 //   delete and move      a kind of three assets: the move form, a fourth asset arriving (409 and the dialog's new count), the move, the audit entry.
@@ -272,6 +273,53 @@ test.describe("W7o: the asset header's buttons", () => {
       }
     });
   }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+test.describe("W7o: the asset header in a narrow pane", () => {
+  test("at 1024 px with the sidebar expanded the title and the sub line each stay on one line, and the buttons sit under them", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signIn(page);
+    // 11 characters, and wide ones: a name of digits would fit the squeezed column (about 144 px) and prove nothing. It is not "W7o <run>", so
+    // afterAll would not find it: it is deleted by its id below. The run's last digits keep a left-over of a stopped run from having the same name.
+    const name = `W7o-MMMM${RUN.slice(-3)}`;
+    expect(name).toHaveLength(11);
+    const asset = await makeAsset(page.request, name, "Generic");
+    try {
+      await page.goto(`/assets/${asset.id}`);
+      await expect(heading1(page, name)).toBeVisible();
+      await page.setViewportSize({ width: 1024, height: 800 });
+      await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024);
+      // The shell starts minimized in a window under 1180 px and has no resize listener, so which way it is depends on the width the page was
+      // loaded at: say which one is wanted instead of assuming.
+      const shell = page.locator(".shell");
+      if ((await shell.getAttribute("data-sidebar")) !== "expanded") await page.locator(".side-toggle").click();
+      await expect(shell).toHaveAttribute("data-sidebar", "expanded");
+      await expect.poll(() => page.locator(".side").evaluate((el) => el.getBoundingClientRect().width), "the sidebar has finished opening").toBeGreaterThan(200);
+      await settled(page);
+
+      // Lines of text: the box's height over its line height (a line height the browser gives no number for is taken as 1.4 x the font size).
+      const lines = (target: Locator) => target.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return el.getBoundingClientRect().height / (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4);
+      });
+      const title = heading1(page, name);
+      const sub = page.locator(".page-head .sub");
+      await expect(sub).toBeVisible();
+      // Polled: the pane may still be settling after the sidebar opened. Under 1.5 lines is one line (two would be 2.0).
+      await expect.poll(() => lines(title), { message: "the title is one line" }).toBeLessThan(1.5);
+      await expect.poll(() => lines(sub), { message: "the sub line is one line" }).toBeLessThan(1.5);
+
+      // Where the buttons went: under the sub line, not in a column beside it.
+      const [subBox, addBox] = [await sub.boundingBox(), await page.locator(".page-head").getByRole("button", { name: "Add asset", exact: true }).boundingBox()];
+      expect(subBox && addBox, "the sub line and the Add asset button are laid out").toBeTruthy();
+      expect(addBox!.y, "the buttons are under the sub line").toBeGreaterThanOrEqual(subBox!.y + subBox!.height - 1);
+    } finally {
+      const gone = await page.request.delete(`/api/assets/${asset.id}?confirm=true`);
+      expect([200, 204, 404], `deleting ${name}: ${gone.status()}`).toContain(gone.status());
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------

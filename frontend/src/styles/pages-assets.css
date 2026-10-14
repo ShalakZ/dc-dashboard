@@ -13,6 +13,15 @@
   /* Asset page: header, tiles (the .tiles grid is in app.css), section headings */
   .asset-page .page-head h1 { overflow-wrap: anywhere; } /* a 46-character asset name wraps instead of pushing the page sideways */
   .asset-page > h2 { margin: 28px 0 10px; font-size: var(--fs-md); font-weight: 600; line-height: 1.3; }
+  /* The header's grid gives its auto column the buttons' whole width (Edit, Delete and Add asset: 304px; a chip adds 60px "live" or 139px "reconnecting…"),
+     so in a narrow pane the title took the whole squeeze: an 11-character name on two lines, a 46-character one on five, and 5px beside the long chip.
+     Below a width the buttons go under the title instead. The header is the container, so the pane's own width decides, not the window's (the sidebar
+     and the tree column take a changing share of it). The widths are the buttons + the 16px gap + 16rem for the title column (its icon tile takes 52px).
+     A page with a chip has its own, wider one: the chip says "reconnecting…" until the stream opens and then "live", and the layout must not change shape
+     at that moment, so it goes by the widest the buttons get. A page with no chip has no such change. */
+  .asset-page .page-head { container-type: inline-size; }
+  @container (max-width: 580px) { .asset-page .page-head > .actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 12px; } }
+  @container (max-width: 720px) { .asset-page .page-head:has(> .actions > .chip) > .actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 12px; } }
 
   /* The trend: a framed block holding a toolbar (metric, range, the notes) above the chart */
   .trend-frame { padding: 14px 16px 8px; border: 1px solid var(--border); border-radius: var(--radius); }
