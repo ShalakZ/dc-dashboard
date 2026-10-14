@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AssetKind } from "../api/types";
 import type { PermissionId } from "../lib/permissions";
@@ -57,8 +57,8 @@ function show({ role = "admin", kinds = [RACK, PUMP, SENSOR], over = {}, permiss
   const me = permissions ? { "GET /api/me": { body: userFor("custom", { permissions }) } } : {};
   const calls = mockFetch({ ...authed(role), ...me, ...fake.routes } as Parameters<typeof mockFetch>[0]);
   const toasts = spyToasts();
-  renderWithProviders(<><AssetKindsPage /><SignedIn /></>, { route: "/assets/kinds", path: "/assets/kinds", toasts: toasts.api });
-  return { ...fake, calls, toasts };
+  const { unmount } = renderWithProviders(<><AssetKindsPage /><SignedIn /></>, { route: "/assets/kinds", path: "/assets/kinds", toasts: toasts.api });
+  return { ...fake, calls, toasts, unmount };
 }
 const rowOf = (name: string) => screen.getByText(name, { selector: "td *" }).closest("tr") as HTMLElement;
 const newKind = () => screen.findByRole("button", { name: "New kind" });
@@ -974,11 +974,19 @@ describe("the toolbar", () => {
     expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toBeEnabled();
   });
 
-  it("is not drawn for a reader of an empty registry (one line, as before)", async () => {
+  // Drawn for everybody once the list is in, as the skeleton already draws its room for a reader too: the empty note must not land where the toolbar was.
+  it("is drawn for a reader of an empty registry too: the zero counts above the empty note, and nothing in the slot", async () => {
     show({ role: "viewer", kinds: [] });
     expect(await screen.findByText("No kinds yet.")).toBeInTheDocument();
     await accountKnown();
-    expect(screen.queryByRole("group", { name: "Show" })).not.toBeInTheDocument();
+    const group = screen.getByRole("group", { name: "Show" });
+    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(["All 0", "Starter 0", "Yours 0", "Unused 0"]);
+    expect(group.closest(".kinds-toolbar")!.compareDocumentPosition(screen.getByText("No kinds yet.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy(); // the note is BELOW it
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add all 39 data-centre kinds" })).not.toBeInTheDocument();
+    expect(document.querySelector(".kinds-slot")).toBeNull();
+    expect(document.querySelector(".kinds-page [aria-live]")).toBeNull();
   });
 
   it("gives a reader the filter and nothing in the slot: no checkbox, no pack button, no announcer", async () => {
@@ -1210,7 +1218,12 @@ describe("picking kinds", () => {
   });
 
   describe("Clear and Escape", () => {
-    it("Clear forgets every tick, and the focus goes to the idle button (never the body)", async () => {
+    // The focus must never land on a button that writes: a second Enter (or a held one: its auto-repeat) on "Add all 39 data-centre kinds" would add
+    // back every pack kind that was just deleted. The pressed filter button is always there, and Enter on it changes nothing.
+    const addAllButton = () => screen.getByRole("button", { name: "Add all 39 data-centre kinds" });
+    const packPosts = (sent: string[]) => ({ "POST /api/asset-kinds/starter-pack": ({ url }: { url: string }) => { sent.push(url); return { body: { added: ["UPS"], already_there: 38 } }; } });
+
+    it("Clear forgets every tick, and the focus goes to the pressed filter button (never the body, never the pack button)", async () => {
       show({ kinds: MIXED });
       await screen.findByText("Rack", { selector: "td *" });
       await userEvent.click(box("Pump"));
@@ -1218,18 +1231,45 @@ describe("picking kinds", () => {
       await userEvent.click(screen.getByRole("button", { name: "Clear" }));
       expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
       expect(box("Pump")).not.toBeChecked();
-      await waitFor(() => expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toHaveFocus());
+      await waitFor(() => expect(filterButton("All 6")).toHaveFocus());
+      expect(addAllButton()).not.toHaveFocus();
       expect(onTheBody()).toBe(false);
     });
 
-    it("Clear by keyboard (Tab to it, Enter) lands on the idle button too", async () => {
+    it("Clear by keyboard (Tab to it, Enter) lands on the pressed filter button too", async () => {
       show({ kinds: MIXED });
       await screen.findByText("Rack", { selector: "td *" });
       await userEvent.click(box("Pump"));
       const clear = screen.getByRole("button", { name: "Clear" });
       clear.focus();
       await userEvent.keyboard("{Enter}");
-      await waitFor(() => expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toHaveFocus());
+      await waitFor(() => expect(filterButton("All 6")).toHaveFocus());
+      expect(addAllButton()).not.toHaveFocus();
+    });
+
+    it("lands on the filter in use, whichever it is", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(filterButton("Yours 4"));
+      await userEvent.click(box("Pump"));
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      await waitFor(() => expect(filterButton("Yours 4")).toHaveFocus());
+    });
+
+    it("a second Enter right after Clear by keyboard presses the filter button, which does nothing: no starter-pack call, nothing is added back", async () => {
+      const sent: string[] = [];
+      const { calls } = show({ kinds: MIXED, over: packPosts(sent) });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      screen.getByRole("button", { name: "Clear" }).focus();
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(filterButton("All 6")).toHaveFocus());
+      await userEvent.keyboard("{Enter}");
+      expect(filterButton("All 6")).toHaveFocus();
+      expect(filterButton("All 6")).toHaveAttribute("aria-pressed", "true");
+      expect(sent).toEqual([]);
+      expect(calls.filter((c) => c.path.includes("starter-pack"))).toEqual([]);
+      expect(namesShown()).toHaveLength(6);
     });
 
     it("Escape clears the ticks; with the focus on a row box the focus stays there", async () => {
@@ -1245,14 +1285,169 @@ describe("picking kinds", () => {
       expect(onTheBody()).toBe(false);
     });
 
-    it("Escape on a button of the bar takes the focus to the idle button when the bar goes", async () => {
+    it("Escape on a button of the bar takes the focus to the pressed filter button when the bar goes", async () => {
       show({ kinds: MIXED });
       await screen.findByText("Rack", { selector: "td *" });
       await userEvent.click(box("Pump"));
       screen.getByRole("button", { name: "Delete" }).focus();
       await userEvent.keyboard("{Escape}");
       expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
-      await waitFor(() => expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toHaveFocus());
+      await waitFor(() => expect(filterButton("All 6")).toHaveFocus());
+      expect(addAllButton()).not.toHaveFocus();
+    });
+
+    it("Enter right after Escape on the bar's Delete adds nothing back: no starter-pack call", async () => {
+      const sent: string[] = [];
+      const { calls } = show({ kinds: MIXED, over: packPosts(sent) });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      screen.getByRole("button", { name: "Delete" }).focus();
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(filterButton("All 6")).toHaveFocus());
+      await userEvent.keyboard("{Enter}");
+      expect(filterButton("All 6")).toHaveFocus();
+      expect(sent).toEqual([]);
+      expect(calls.filter((c) => c.path.includes("starter-pack"))).toEqual([]);
+    });
+
+    describe("with the focus on the page body (the root's onKeyDown never sees a key pressed there)", () => {
+      const tickTwoAndBlur = async () => {
+        await screen.findByText("Rack", { selector: "td *" });
+        await userEvent.click(box("Pump"));
+        await userEvent.click(box("Sensor"));
+        (document.activeElement as HTMLElement).blur();
+        expect(onTheBody()).toBe(true);
+      };
+
+      it("Escape clears the ticks, and the focus goes to the pressed filter button (the same rule as for a bar button)", async () => {
+        show({ kinds: MIXED });
+        await tickTwoAndBlur();
+        await userEvent.keyboard("{Escape}");
+        expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+        expect(box("Pump")).not.toBeChecked();
+        expect(box("Sensor")).not.toBeChecked();
+        await waitFor(() => expect(filterButton("All 6")).toHaveFocus());
+        expect(addAllButton()).not.toHaveFocus();
+      });
+
+      it("a second Enter after that adds nothing back", async () => {
+        const sent: string[] = [];
+        show({ kinds: MIXED, over: packPosts(sent) });
+        await tickTwoAndBlur();
+        await userEvent.keyboard("{Escape}");
+        await waitFor(() => expect(filterButton("All 6")).toHaveFocus());
+        await userEvent.keyboard("{Enter}");
+        expect(sent).toEqual([]);
+      });
+
+      it("does nothing while the Edit dialog is open (its own Escape comes first)", async () => {
+        show({ kinds: MIXED });
+        await screen.findByText("Rack", { selector: "td *" });
+        await userEvent.click(box("Pump"));
+        await choose("Sensor", "Edit");
+        expect(dialog("Edit kind")).toBeInTheDocument();
+        (document.activeElement as HTMLElement).blur();
+        expect(onTheBody()).toBe(true);
+        await userEvent.keyboard("{Escape}");
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(selected("1 selected")).toBeInTheDocument();
+      });
+
+      it("does nothing while the delete confirmation is open", async () => {
+        show({ kinds: MIXED });
+        await screen.findByText("Rack", { selector: "td *" });
+        await userEvent.click(box("Pump"));
+        await choose("Hall", "Delete");
+        (document.activeElement as HTMLElement).blur();
+        expect(onTheBody()).toBe(true);
+        await userEvent.keyboard("{Escape}");
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(selected("1 selected")).toBeInTheDocument();
+      });
+
+      it("does nothing while the bulk delete dialog is open", async () => {
+        show({ kinds: MIXED });
+        await screen.findByText("Rack", { selector: "td *" });
+        await userEvent.click(box("Pump"));
+        await userEvent.click(box("Hall"));
+        await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+        expect(dialog("Delete 2 kinds?")).toBeInTheDocument();
+        (document.activeElement as HTMLElement).blur();
+        expect(onTheBody()).toBe(true);
+        await userEvent.keyboard("{Escape}");
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(selected("2 selected")).toBeInTheDocument();
+      });
+
+      it("does nothing when nothing is ticked", async () => {
+        show({ kinds: MIXED });
+        await screen.findByText("Rack", { selector: "td *" });
+        await userEvent.click(box("Pump"));
+        await userEvent.click(box("Pump")); // ticked and unticked again
+        (document.activeElement as HTMLElement).blur();
+        await userEvent.keyboard("{Escape}");
+        expect(onTheBody()).toBe(true); // no focus is moved when there was nothing to clear
+        expect(addAllButton()).not.toHaveFocus();
+      });
+
+      it("leaves a key that something already handled alone (defaultPrevented)", async () => {
+        show({ kinds: MIXED });
+        await tickTwoAndBlur();
+        const handled = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+        handled.preventDefault();
+        act(() => { document.body.dispatchEvent(handled); }); // act: a state change the listener made would be flushed here, so the assertion below can see it
+        expect(selected("2 selected")).toBeInTheDocument();
+        await userEvent.keyboard("{Escape}"); // and the same key, unhandled, still clears them
+        expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+      });
+
+      it("ignores every other key", async () => {
+        show({ kinds: MIXED });
+        await tickTwoAndBlur();
+        await userEvent.keyboard("{Enter}a{Tab}");
+        expect(selected("2 selected")).toBeInTheDocument();
+      });
+
+      // The page root's onKeyDown owns every key pressed inside the page, so the document listener answers the body ALONE: a key pressed in an
+      // element that is neither (a control outside the page's root) is left alone, which is also why one key is never handled twice.
+      it("answers the body alone: a key pressed in a control outside the page leaves the ticks", async () => {
+        show({ kinds: MIXED });
+        await tickTwoAndBlur();
+        const outside = document.body.appendChild(document.createElement("button"));
+        outside.focus();
+        try {
+          await userEvent.keyboard("{Escape}");
+          expect(selected("2 selected")).toBeInTheDocument();
+        } finally {
+          outside.remove();
+        }
+      });
+
+      it("a key pressed on a row box is the page root's, and the focus stays on the box", async () => {
+        show({ kinds: MIXED });
+        await screen.findByText("Rack", { selector: "td *" });
+        await userEvent.click(box("Pump"));
+        await userEvent.click(box("Sensor"));
+        await userEvent.keyboard("{Escape}");
+        expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+        expect(box("Sensor")).toHaveFocus();
+      });
+
+      it("is taken off when the page goes away: every keydown listener it put on the document is removed again", async () => {
+        const add = vi.spyOn(document, "addEventListener");
+        const remove = vi.spyOn(document, "removeEventListener");
+        const { unmount } = show({ kinds: MIXED });
+        await screen.findByText("Rack", { selector: "td *" });
+        await userEvent.click(box("Pump")); // the listener may be registered anew on a change
+        unmount();
+        const keydown = (calls: unknown[][]) => new Set(calls.filter(([type]) => type === "keydown").map(([, fn]) => fn));
+        const added = keydown(add.mock.calls);
+        const removed = keydown(remove.mock.calls);
+        add.mockRestore();
+        remove.mockRestore();
+        expect(added.size).toBeGreaterThan(0);
+        for (const fn of added) expect(removed.has(fn)).toBe(true);
+      });
     });
 
     it("the header box clearing leaves the focus on the header box", async () => {

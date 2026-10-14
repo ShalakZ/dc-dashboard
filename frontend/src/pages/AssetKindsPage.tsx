@@ -198,12 +198,25 @@ export function AssetKindsPage() {
     if (event.key !== "Escape" || modalOpen || picked.size === 0) return;
     setPicks((state) => clear(state));
   };
+  // The same Escape when nothing has the focus (a click on empty space, a blur): a key pressed on <body> never reaches the root's onKeyDown, which
+  // React attaches below it. Only the body's: every key pressed inside the page is the root's, so no key is handled twice. The same guards as the
+  // root's, and a key that something already handled (defaultPrevented) is left alone. The focus rule below finds the body and moves the focus.
+  useEffect(() => {
+    if (modalOpen || picked.size === 0) return;
+    const onBodyKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.target !== document.body || event.defaultPrevented) return;
+      setPicks((state) => clear(state));
+    };
+    document.addEventListener("keydown", onBodyKey);
+    return () => document.removeEventListener("keydown", onBodyKey);
+  }, [modalOpen, picked.size]);
 
   // When the last pick goes (Clear, Escape, the header box, a refetch) the bar goes with it, and a button of the bar that had the focus takes it
-  // along to the body. The focus then goes to the slot's idle button, else to the filter in use: always somewhere named, and with
-  // preventScroll so a page scrolled far down stays where it is. In an effect, after the commit: the bar is gone by then and so is its button.
+  // along to the body. The focus then goes to the filter in use: always somewhere named, and with preventScroll so a page scrolled far down stays
+  // where it is. NEVER the slot's idle button: it adds the whole catalogue, and a second Enter (or a held one: its auto-repeat) right after Clear
+  // would add back every kind that was just deleted. Enter on the pressed filter does nothing. In an effect, after the commit: the bar is gone by
+  // then and so is its button.
   const slot = useRef<HTMLDivElement>(null);
-  const idleButton = useRef<HTMLButtonElement>(null);
   const activeFilter = useRef<HTMLButtonElement>(null);
   const hadPicks = useRef(false);
   useEffect(() => {
@@ -212,7 +225,7 @@ export function AssetKindsPage() {
     if (!had || picked.size > 0 || !canManage) return;
     const active = document.activeElement;
     if (active && active !== document.body && !slot.current?.contains(active)) return; // the focus is somewhere that still exists: leave it
-    (idleButton.current ?? activeFilter.current)?.focus({ preventScroll: true });
+    activeFilter.current?.focus({ preventScroll: true });
   }, [picked.size, canManage]);
 
   // After a confirmed delete the row, its menu and the dialog's opener are gone, so the dialog has nothing to give the focus back to. It goes to a
@@ -324,9 +337,6 @@ export function AssetKindsPage() {
     { label: "Edit", disabled: locked, onSelect: () => setDialog({ kind: "edit", row }) },
     { label: "Delete", tone: "danger", disabled: locked, onSelect: () => { setTarget(null); setChanged(null); neighbour.current = neighbourId(order, row.id); setDeleting(row); } },
   ];
-  // The toolbar is drawn once the list has loaded, empty or not, for somebody who manages kinds (Add all is then always within reach, and an empty answer
-  // moves nothing); a reader gets it when there is something to filter.
-  const toolbar = canManage || kinds.length > 0;
   return (
     <div className="kinds-page" onKeyDown={onPageKey}>
       {header(canManage ? (
@@ -337,31 +347,31 @@ export function AssetKindsPage() {
       ) : undefined)}
       {needNote}
       {error && <p className="error" role="alert">{error.message}</p>}
-      {toolbar && (
-        <div className="kinds-toolbar">
-          <div className="seg-switch kinds-filter" role="group" aria-label="Show">
-            {KIND_FILTERS.map((f) => (
-              <button key={f} type="button" ref={f === filter ? activeFilter : undefined} aria-pressed={f === filter} onClick={() => chooseFilter(f)}>{`${FILTER_LABEL[f]} ${counts[f]}`}</button>
-            ))}
-          </div>
-          {canManage && (
-            // ONE slot at the right with a fixed size, so that picking a row changes its words and never the height of the toolbar. The live span is
-            // there from the start (a region that appears with its text is often not read) and is the only announcer on the page: no role="status".
-            <div className="kinds-slot" ref={slot}>
-              <span className="kinds-selected" aria-live="polite" aria-atomic="true">{picked.size > 0 ? `${picked.size} selected` : ""}</span>
-              {picked.size === 0 ? (
-                <button type="button" className="quiet" ref={idleButton} aria-disabled={packPending || undefined} disabled={locked} onClick={() => void addPack("all")}>Add all 39 data-centre kinds</button>
-              ) : (
-                <div className="kinds-bar">
-                  <button type="button" className="quiet" aria-disabled={nothingUnused || undefined} onClick={pickUnusedRows}>Select all unused</button>
-                  <button type="button" className="danger-quiet" aria-disabled={locked || undefined} onClick={askBulk}>Delete</button>
-                  <button type="button" className="quiet" onClick={() => setPicks((state) => clear(state))}>Clear</button>
-                </div>
-              )}
-            </div>
-          )}
+      {/* Drawn once the list has loaded, empty or not, for everybody (the skeleton drew its room already): an empty answer moves nothing, and a manager's
+          Add all is always within reach. A reader of an empty registry sees the zero counts above the empty note. */}
+      <div className="kinds-toolbar">
+        <div className="seg-switch kinds-filter" role="group" aria-label="Show">
+          {KIND_FILTERS.map((f) => (
+            <button key={f} type="button" ref={f === filter ? activeFilter : undefined} aria-pressed={f === filter} onClick={() => chooseFilter(f)}>{`${FILTER_LABEL[f]} ${counts[f]}`}</button>
+          ))}
         </div>
-      )}
+        {canManage && (
+          // ONE slot at the right with a fixed size, so that picking a row changes its words and never the height of the toolbar. The live span is
+          // there from the start (a region that appears with its text is often not read) and is the only announcer on the page: no role="status".
+          <div className="kinds-slot" ref={slot}>
+            <span className="kinds-selected" aria-live="polite" aria-atomic="true">{picked.size > 0 ? `${picked.size} selected` : ""}</span>
+            {picked.size === 0 ? (
+              <button type="button" className="quiet" aria-disabled={packPending || undefined} disabled={locked} onClick={() => void addPack("all")}>Add all 39 data-centre kinds</button>
+            ) : (
+              <div className="kinds-bar">
+                <button type="button" className="quiet" aria-disabled={nothingUnused || undefined} onClick={pickUnusedRows}>Select all unused</button>
+                <button type="button" className="danger-quiet" aria-disabled={locked || undefined} onClick={askBulk}>Delete</button>
+                <button type="button" className="quiet" onClick={() => setPicks((state) => clear(state))}>Clear</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       {kinds.length === 0 ? (
         <EmptyNote icon="layers">No kinds yet.</EmptyNote>
       ) : (

@@ -452,11 +452,12 @@ test.describe("W7q: selecting kinds", () => {
       await expectPicked(at(1, 2, 3, 5, 6, 7, 8, 9, 10), "Space again unticks");
     });
 
-    await test.step("Clear takes every tick away and puts the focus on the idle button, not on the body", async () => {
+    await test.step("Clear takes every tick away and puts the focus on the pressed filter button, not on the body and not on the pack button", async () => {
       await barButton(page, "Clear").click();
       await expect(selectedLine(page)).toBeEmpty();
       expect(await pickedNames(page)).toEqual([]);
-      await expect(idleButton(page), "the focus follows the bar to the button that took its place").toBeFocused();
+      await expect(filterButton(page, "All"), "the focus follows the bar to the pressed filter, which writes nothing").toBeFocused();
+      await expect(idleButton(page), "the pack button, which would add kinds back on the next Enter, has no focus").not.toBeFocused();
     });
 
     await test.step("the header box: empty, some (indeterminate), all shown, then none again", async () => {
@@ -494,14 +495,14 @@ test.describe("W7q: selecting kinds", () => {
       await expect(page.locator(".kinds-table tbody tr.is-picked")).toHaveCount(0);
     });
 
-    await test.step("Escape clears the ticks, and the focus is still on a named element", async () => {
+    await test.step("Escape clears the ticks, and with the focus on the bar's Delete it goes to the pressed filter button", async () => {
       await rowBox(page, names[4]).click();
       await expect(selectedLine(page)).toHaveText("1 selected");
-      await rowBox(page, names[4]).focus();
+      await barButton(page, "Delete").focus();
       await page.keyboard.press("Escape");
       await expect(selectedLine(page)).toBeEmpty();
       expect(await pickedNames(page)).toEqual([]);
-      await expect.poll(() => focusName(page), { message: "the focus is not on the page body" }).not.toBe("");
+      await expect.poll(() => focusName(page), { message: "the focus is on the pressed filter button (its name starts with All), not the body and not the pack button" }).toMatch(/^All /);
     });
   });
 });
