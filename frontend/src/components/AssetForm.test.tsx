@@ -474,13 +474,13 @@ describe("AssetForm and the registry", () => {
       expect(drawn()).toBe(iconHtml("kindRow"));
     });
 
-    it("drops the note while an icon of the asset's own is chosen: the note belongs to the Automatic caption, which the chosen icon replaces", async () => {
+    it("keeps the note while an icon of the asset's own is chosen: the kind is registered either way", async () => {
       open([]);
       await typeKind("Aisle");
       expect(field()).toHaveAccessibleDescription(expect.stringContaining(NEW_KIND_NOTE));
       await userEvent.click(screen.getByRole("button", { name: "Change icon" }));
       await userEvent.click(within(grid()).getByRole("radio", { name: "Server", hidden: true }));
-      expect(field()).toHaveAccessibleDescription("Server");
+      expect(field()).toHaveAccessibleDescription(`Server ${NEW_KIND_NOTE}`);
       await userEvent.click(within(grid()).getByRole("radio", { name: "Automatic", hidden: true }));
       expect(field()).toHaveAccessibleDescription(expect.stringContaining(NEW_KIND_NOTE));
     });

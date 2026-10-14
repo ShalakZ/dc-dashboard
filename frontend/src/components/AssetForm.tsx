@@ -39,9 +39,9 @@ export function AssetForm({ assets, kinds, initial, excludeIds, onSubmit, onCanc
   const registryIcon = kinds.find((k) => kindKey(k.name) === kindKey(resolvedKind))?.icon ?? null;
   const automatic = assetIcon({ kind: resolvedKind, kind_icon: registryIcon });
   const caption = icon === null ? `Automatic (${iconLabelFor(automatic)})` : chosenLabel ?? `Unknown icon "${icon}"`;
-  // One answer for the note and for the page's registration. The note is an addition to the Automatic caption, so it is shown only while the icon is Automatic.
+  // One answer for the note and for the page's registration: whenever the kind will be registered, whichever icon the asset itself shows.
   const registers = registersKind(resolvedKind, kinds, startKind);
-  const hint = registers && icon === null ? "New kind: added to Asset kinds." : undefined;
+  const hint = registers ? "New kind: added to Asset kinds." : undefined;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
