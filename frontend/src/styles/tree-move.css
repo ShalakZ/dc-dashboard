@@ -2,4 +2,44 @@
   /* W7p: picking and dragging assets in the Assets Tree (components/AssetTree.tsx): the reserved picked slot, picked rows, the drop markers,
      the root filler. Tokens only. `.node` is owned by app.css: extend it through attribute selectors ([data-picked], [data-drop]) or classes
      of your own, never a bare `.node` rule here. */
+
+  /* The slot between the filter and the rows: one fixed line, drawn for every editor (also while the list loads, empty), so that picking
+     changes its words and never the height. The hint gives way before the buttons. */
+  .tree-slot { flex: none; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; }
+  .tree-slot-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--text-2); }
+  .tree-slot-count { font-weight: 600; color: var(--text); }
+  .tree-slot-btn { flex: none; min-height: 24px; padding: 0 8px; border-radius: var(--radius-sm); font-size: var(--fs-xs); }
+  .tree-slot-btn[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
+  /* A picked row: a tint and a frame all round. The open asset has a tint and a bar on the left (app.css), so the two never read alike, and
+     the frame is shape, not colour. A row that is both keeps the bar and gains the frame. */
+  .node[data-picked] { background: var(--accent-tint); box-shadow: inset 0 0 0 1px var(--accent); }
+  .node[data-picked]:hover { background: var(--accent-tint); }
+  .node[data-picked].is-selected { box-shadow: inset 3px 0 0 var(--accent), inset 0 0 0 1px var(--accent); }
+
+  /* Where a drop would land, written onto the row while dragging (components/AssetTree.tsx never renders these): a line before or after
+     the row, the first-child line (indented like the children it would head), a frame for "inside", and a dashed no-drop frame. */
+  .node[data-drop] { position: relative; }
+  .node[data-drop="inside"] { background: var(--accent-tint); box-shadow: inset 0 0 0 2px var(--accent); }
+  .node[data-drop="before"]::after, .node[data-drop="after"]::after, .node[data-drop="first"]::after { content: ""; position: absolute; left: 6px; right: 6px; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
+  .node[data-drop="before"]::after { top: 0; }
+  .node[data-drop="after"]::after, .node[data-drop="first"]::after { bottom: 0; }
+  .node[data-drop="first"]::after { left: 32px; }
+  .node[data-drop="invalid"] { outline: 2px dashed var(--danger); outline-offset: -2px; cursor: no-drop; }
+  .node[data-drop="invalid"] a { cursor: no-drop; }
+
+  /* The area below the last row is the top level. The scroll box becomes a column only for an editor, so the filler can take the room that is
+     left (a short list leaves a large drop area) and keep 48px when the list fills the box. Its border is always there, only its colour
+     changes while dragging, so nothing moves when a drag starts. */
+  .tree-scroll-move { display: flex; flex-direction: column; }
+  .tree-scroll-move > ul.tree { flex: none; }
+  .tree-root-drop { flex: 1 0 48px; display: grid; place-items: center; margin: 6px 8px 0; border: 1px dashed transparent; border-radius: var(--radius); }
+  .tree-root-hint { padding: 0 8px; font-size: var(--fs-xs); color: var(--text-2); text-align: center; opacity: 0; }
+  .tree-scroll-move[data-dragging] .tree-root-drop { border-color: var(--border-strong); }
+  .tree-scroll-move[data-dragging] .tree-root-hint { opacity: 1; }
+  .tree-root-drop[data-drop="inside"] { border-color: var(--accent); background: var(--accent-tint); }
+  .tree-root-drop[data-drop="invalid"] { border-color: var(--danger); border-style: solid; cursor: no-drop; }
+
+  /* The image that follows the pointer (an off-screen element, removed again right after the drag starts). */
+  .tree-drag-badge { position: fixed; top: -200px; left: -200px; padding: 4px 10px; border-radius: var(--radius); background: var(--accent); color: var(--bg); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; pointer-events: none; }
 }

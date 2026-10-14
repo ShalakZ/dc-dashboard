@@ -1,12 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { Link, NavLink } from "react-router";
 import { Icon } from "./Icon";
 import { Skeleton, SkeletonRegion, TreeSkeleton } from "./Skeleton";
 import { assetIcon } from "../lib/assetIcons";
+import { pickLine, type PickEvent } from "../lib/moveText";
 import { readStored, writeStored } from "../lib/sidebarState";
 import { ancestorIds, type TreeNode } from "../lib/tree";
+import { createTreeDnd } from "../lib/treeDnd";
 import { foldableIds, readFolded, saveFolded } from "../lib/treeFold";
+import type { DropTarget } from "../lib/treeMove";
+import { createPickStore, visibleOrder, type PickStore } from "../lib/treeSelect";
 import { TREE_MIN, TREE_STEP, TREE_STEP_BIG, clampTreeWidth, clearTreeWidth, readTreeWidth, saveTreeWidth, treeMax } from "../lib/treeWidth";
+
+export type { DropTarget };
 
 const KEY = "dcdash.assetTree";
 type ColumnState = "expanded" | "minimized";
@@ -39,6 +45,18 @@ function matchingIds(nodes: TreeNode[], needle: string): Set<number> {
 
 const only = (list: TreeNode[], visible: ReadonlySet<number> | null) => (visible ? list.filter((node) => visible.has(node.id)) : list);
 
+/**
+ * What a row needs to be picked (W7p). Made once per tree: the picks live in a store outside React and the handlers read the latest props
+ * through refs, so nothing in here changes when a row is picked or the tree renders again.
+ */
+interface RowKit {
+  store: PickStore;
+  /** The id of the hidden word "picked": a picked row's link is described by it (its name stays the asset's name). */
+  pickedId: string;
+  click(e: MouseEvent<HTMLAnchorElement>, id: number): void;
+  mouseDown(e: MouseEvent<HTMLAnchorElement>): void;
+}
+
 interface View {
   selectedId: number | null;
   onAddChild?: (id: number) => void;
@@ -48,58 +66,90 @@ interface View {
   /** Null when there is no filter. */
   visible: ReadonlySet<number> | null;
   toggle: (id: number) => void;
+  /** Null for someone who may not move assets: the rows are plain links then. */
+  kit: RowKit | null;
+  /** Rows can be dragged: there is a `move` and the page is not busy. */
+  draggable: boolean;
 }
+
+const NO_SUBSCRIBE = () => () => {};
+
+/** For tests: called with the id of every row that renders, to show that picking re-renders the one row and not the tree. */
+export const rowRenderProbe: { current: ((id: number) => void) | null } = { current: null };
+
+/**
+ * One row and, inside its `li`, the rows below it. A row is memoised on (node, view): `view` changes with the fold, the filter and the open
+ * asset, not with the picks, which a row reads itself from the store, so picking an asset renders that row and no other.
+ */
+const Row = memo(function Row({ node, view }: { node: TreeNode; view: View }) {
+  rowRenderProbe.current?.(node.id);
+  const { kit, draggable } = view;
+  const picked = useSyncExternalStore(kit ? kit.store.subscribe : NO_SUBSCRIBE, () => (kit ? kit.store.has(node.id) : false));
+  const filtering = view.visible !== null;
+  const kids = only(node.children, view.visible);
+  const open = filtering || !view.collapsed.has(node.id); // a filter shows its matches even under a folded branch
+  const selected = node.id === view.selectedId;
+  const childrenId = `asset-children-${node.id}`;
+  // The inner link and buttons are not drags of their own: a dragged link would carry a URL, and the row is what moves.
+  const inner = draggable ? false : undefined;
+  return (
+    <li>
+      <div
+        className={selected ? "node is-selected" : "node"}
+        data-asset-id={kit ? node.id : undefined}
+        data-picked={picked ? "true" : undefined}
+        draggable={draggable ? true : undefined}
+      >
+        {kids.length > 0 ? (
+          <button
+            type="button"
+            className="twisty"
+            aria-expanded={open}
+            aria-controls={childrenId}
+            aria-label={`Children of ${node.name}`}
+            draggable={inner}
+            disabled={filtering}
+            onClick={() => view.toggle(node.id)}
+          >
+            <Caret />
+          </button>
+        ) : (
+          <span className="twisty-sp" />
+        )}
+        <span className="node-icon"><Icon name={assetIcon(node)} /></span>
+        <Link
+          to={`/assets/${node.id}`}
+          title={node.name}
+          dir="auto"
+          aria-current={selected ? "true" : undefined}
+          aria-describedby={picked && kit ? kit.pickedId : undefined}
+          draggable={inner}
+          onClick={kit ? (e) => kit.click(e, node.id) : undefined}
+          onMouseDown={kit?.mouseDown}
+        >
+          {node.name}
+        </Link>
+        <span className="kind">{node.kind}</span>
+        {view.onAddChild && (
+          <button type="button" className="add" aria-label={`Add child of ${node.name}`} title="Add child" draggable={inner} disabled={view.disabled} onClick={() => view.onAddChild!(node.id)}>
+            <Plus />
+          </button>
+        )}
+      </div>
+      {kids.length > 0 && (
+        // Folded is hidden, not removed, so the twisty's aria-controls always names an element.
+        <ul id={childrenId} hidden={!open}>
+          <Nodes nodes={kids} view={view} />
+        </ul>
+      )}
+    </li>
+  );
+});
 
 /** The rows of one level. `nodes` is already narrowed by the filter; the nested `ul` stays inside the parent's `li`. */
 function Nodes({ nodes, view }: { nodes: TreeNode[]; view: View }) {
-  const filtering = view.visible !== null;
-  return nodes.map((node) => {
-    const kids = only(node.children, view.visible);
-    const open = filtering || !view.collapsed.has(node.id); // a filter shows its matches even under a folded branch
-    const selected = node.id === view.selectedId;
-    const childrenId = `asset-children-${node.id}`;
-    return (
-      <li key={node.id}>
-        <div className={selected ? "node is-selected" : "node"}>
-          {kids.length > 0 ? (
-            <button
-              type="button"
-              className="twisty"
-              aria-expanded={open}
-              aria-controls={childrenId}
-              aria-label={`Children of ${node.name}`}
-              disabled={filtering}
-              onClick={() => view.toggle(node.id)}
-            >
-              <Caret />
-            </button>
-          ) : (
-            <span className="twisty-sp" />
-          )}
-          <span className="node-icon"><Icon name={assetIcon(node)} /></span>
-          <Link to={`/assets/${node.id}`} title={node.name} dir="auto" aria-current={selected ? "true" : undefined}>
-            {node.name}
-          </Link>
-          <span className="kind">{node.kind}</span>
-          {view.onAddChild && (
-            <button type="button" className="add" aria-label={`Add child of ${node.name}`} title="Add child" disabled={view.disabled} onClick={() => view.onAddChild!(node.id)}>
-              <Plus />
-            </button>
-          )}
-        </div>
-        {kids.length > 0 && (
-          // Folded is hidden, not removed, so the twisty's aria-controls always names an element.
-          <ul id={childrenId} hidden={!open}>
-            <Nodes nodes={kids} view={view} />
-          </ul>
-        )}
-      </li>
-    );
-  });
+  return nodes.map((node) => <Row key={node.id} node={node} view={view} />);
 }
-
-/** Where a drop lands: under `parent_id` (null = the top level), before the sibling `before_id` (null = last). */
-export interface DropTarget { parent_id: number | null; before_id: number | null }
 
 /** What the Assets page hands the tree for moving assets (W7p). Absent for a role without assets.edit: no picking, no dragging, no slot, no M key. */
 export interface AssetTreeMove {
@@ -107,7 +157,10 @@ export interface AssetTreeMove {
   onDrop(ids: number[], target: DropTarget): void | Promise<void>;
   /** Opens Move to... for these ids; `opener` gets the focus back on Cancel. */
   onMoveTo(ids: number[], opener: HTMLElement | null): void;
-  /** A NEW object after every successful move: the tree clears its picks, unfolds the way to `firstId` and focuses its link. */
+  /**
+   * A NEW object after every successful move: the tree clears its picks, unfolds the way to `firstId` and focuses its link. It may arrive
+   * before the refetched asset list does (the tree waits for a new list, or 250 ms, before it looks for the row).
+   */
   moved: { firstId: number } | null;
 }
 
@@ -211,12 +264,60 @@ function useTreeWidth(column: RefObject<HTMLElement | null>) {
 }
 
 /**
+ * The reserved line between the filter and the rows (W7p), always drawn for someone who may move assets so that nothing below it shifts:
+ * a hint when nothing is picked (with a button to move the open asset), "N picked" with Move to... and Clear otherwise. It reads the picks
+ * itself, so the tree does not render when a row is picked.
+ */
+function PickSlot({ store, open, disabled, onMoveTo, onClear }: {
+  store: PickStore;
+  /** The asset in the URL, if there is one: with nothing picked the slot offers to move that. */
+  open: { id: number; name: string } | null;
+  disabled: boolean;
+  onMoveTo: (ids: number[], opener: HTMLElement) => void;
+  onClear: () => void;
+}) {
+  const count = useSyncExternalStore(store.subscribe, () => store.getSnapshot().ids.size);
+  const title = count > 0 ? `Move ${count === 1 ? "the picked asset" : `the ${count} picked assets`} to another place` : open ? `Move ${open.name} to another place` : undefined;
+  return (
+    <div className="tree-slot" role="group" aria-label="Selection">
+      <span className={count > 0 ? "tree-slot-text tree-slot-count" : "tree-slot-text"}>{count > 0 ? `${count} picked` : "Ctrl-click to pick several"}</span>
+      {(count > 0 || open) && (
+        // aria-disabled, not disabled: a button that has the focus must not lose it when the page gets busy.
+        <button
+          type="button"
+          className="tree-slot-btn"
+          title={title}
+          aria-disabled={disabled ? "true" : undefined}
+          onClick={(e) => {
+            if (disabled) return;
+            const ids = count > 0 ? [...store.getSnapshot().ids] : open ? [open.id] : [];
+            if (ids.length > 0) onMoveTo(ids, e.currentTarget);
+          }}
+        >
+          Move to...
+        </button>
+      )}
+      {count > 0 && <button type="button" className="tree-slot-btn" onClick={onClear}>Clear</button>}
+    </div>
+  );
+}
+
+/** How long after a move the tree waits for the refetched assets before it takes the signal that the tree is already current. */
+const REVEAL_GRACE_MS = 250;
+
+/** The first moved asset, waiting to be shown and focused. `nodes` is the tree as it was when the signal came. */
+interface Reveal { id: number; nodes: TreeNode[]; settled: boolean; timer: ReturnType<typeof setTimeout> }
+
+/**
  * The asset tree as its own column (option B): a title, the top-level +, Collapse all / Expand all and a toggle, then a filter and the
  * tree. The column can be minimized to a strip with just the toggle (remembered in localStorage); the branches fold with a twisty each,
  * and which are folded is remembered too. Selecting an asset unfolds the way to it. A handle on the right edge resizes the column
  * (drag, arrow keys, double click for the default); the width is remembered too.
+ *
+ * With `move` (someone who may change assets) the rows can also be picked (Ctrl/Cmd-click, Shift-click, Space, Shift+arrows) and dragged
+ * onto a row or the area below the last one; the page does the moving. The picks are called "picked": "selected" is the asset in the URL.
  */
-export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, loading }: {
+export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, loading, move }: {
   nodes: TreeNode[];
   /** The asset in the URL (null: none). A node is a link to its page, so there is no select callback. */
   selectedId: number | null;
@@ -228,7 +329,7 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
   disabled?: boolean;
   /** The asset list is on its way: the same column (its width, its state, its handle) with placeholders where the filter and the rows will be. */
   loading?: boolean;
-  /** Present for someone who may change assets (W7p): picking rows, dragging them, Move to.... Built by T4; the type exists so that the page can be written beside it. */
+  /** Present for someone who may change assets (W7p): picking rows, dragging them, Move to.... While `disabled` rows can still be picked but not dragged. */
   move?: AssetTreeMove;
 }) {
   const [state, setState] = useState<ColumnState>(() => (readStored(KEY) === "minimized" ? "minimized" : "expanded"));
@@ -269,26 +370,199 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
     setState(next);
     writeStored(KEY, next);
   };
-  const toggleBranch = (id: number) => setCollapsed((prev) => {
+  // Stable, so that `view` (and with it every memoised row) changes only when the fold, the filter or the open asset does.
+  const toggleBranch = useCallback((id: number) => setCollapsed((prev) => {
     const next = new Set(prev);
     if (!next.delete(id)) next.add(id);
     return next;
-  });
+  }), []);
+  const unfold = useCallback((ids: readonly number[]) => setCollapsed((prev) => {
+    if (!ids.some((id) => prev.has(id))) return prev;
+    const next = new Set(prev);
+    ids.forEach((id) => next.delete(id));
+    return next;
+  }), []);
   const collapseAll = () => setCollapsed(new Set(foldable));
   const expandAll = () => setCollapsed(new Set());
-  const addChild = onAddChild && ((id: number) => {
-    setCollapsed((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-    onAddChild(id); // the new child must not appear inside a folded branch
-  });
+  const addChild = useCallback((id: number) => {
+    unfold([id]);
+    onAddChild?.(id); // the new child must not appear inside a folded branch
+  }, [unfold, onAddChild]);
+
+  // ---- W7p: picking, dragging, Move to... ----
+  const movable = move !== undefined;
+  const draggable = movable && !disabled;
+  const [store] = useState(createPickStore);
+  const pickedId = useId();
+  const liveLine = useRef<HTMLDivElement>(null);
+  const hinted = useRef(false); // "Press M to move" is said once, with the first pick
+  const byId = useMemo(() => {
+    const all = new Map<number, TreeNode>();
+    const walk = (list: readonly TreeNode[]) => list.forEach((node) => { all.set(node.id, node); walk(node.children); });
+    walk(nodes);
+    return all;
+  }, [nodes]);
+  // Everything the handlers below read, as of the last render: the handlers themselves are made once.
+  const latest = useRef({ nodes, byId, collapsed, visible, move, disabled });
+  latest.current = { nodes, byId, collapsed, visible, move, disabled };
+
+  // The one live line of the tree. Written to the DOM directly: no React child, so announcing never renders the rows.
+  const announce = useCallback((text: string) => { if (liveLine.current) liveLine.current.textContent = text; }, []);
+  const focusLink = useCallback((id: number) => {
+    const link = column.current?.querySelector<HTMLElement>(`[data-asset-id="${id}"] a`);
+    link?.focus();
+    return link != null;
+  }, []);
+  const say = useCallback((event: PickEvent) => {
+    const first = (event.kind === "on" || event.kind === "range") && !hinted.current;
+    if (first) hinted.current = true;
+    announce(pickLine(event, store.getSnapshot().ids.size, first));
+  }, [announce, store]);
+  const clearPicks = useCallback(() => {
+    const { nodes: all, collapsed: folded, visible: shown } = latest.current;
+    const { ids, anchor } = store.getSnapshot();
+    if (ids.size === 0) return;
+    // The Clear button disappears with the picks: the focus goes to the row the person last touched, or to the first picked row on screen.
+    const order = visibleOrder(all, folded, shown);
+    const back = anchor !== null && order.includes(anchor) ? anchor : order.find((id) => ids.has(id));
+    store.clear();
+    say({ kind: "clear" });
+    if (back !== undefined) focusLink(back);
+  }, [store, say, focusLink]);
+
+  const kit = useMemo<RowKit>(() => ({
+    store,
+    pickedId,
+    // A Shift press on a link would start a text selection across the rows (and drag it along).
+    mouseDown(e) { if (e.shiftKey) e.preventDefault(); },
+    click(e, id) {
+      if (e.altKey) return; // the browser's own (download)
+      const { nodes: all, byId: names, collapsed: folded, visible: shown } = latest.current;
+      const name = names.get(id)?.name ?? "";
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        e.preventDefault(); // picking must not open the asset (react-router navigates only when this click was not prevented)
+        e.currentTarget.focus({ preventScroll: true }); // the mousedown did not focus it when Shift was held; the keys continue from this row
+        if (e.shiftKey) {
+          store.pickRange(visibleOrder(all, folded, shown), id);
+          say({ kind: "range", count: store.getSnapshot().ids.size });
+        } else {
+          const was = store.has(id);
+          store.toggle(id);
+          say({ kind: was ? "off" : "on", name });
+        }
+        return;
+      }
+      // A plain click opens the asset (the link does that) and ends the picking; the opened row is the anchor of the next Shift-click.
+      const had = store.getSnapshot().ids.size > 0;
+      store.clear(id);
+      if (had) say({ kind: "clear" });
+    },
+  }), [store, pickedId, say]);
+
+  const onTreeKeyDown = useCallback((e: KeyboardEvent<HTMLUListElement>) => {
+    const link = e.target instanceof Element ? e.target.closest<HTMLElement>("a") : null;
+    const row = link?.closest<HTMLElement>("[data-asset-id]");
+    if (!link || !row || e.ctrlKey || e.altKey || e.metaKey) return; // a twisty or + keeps its own keys
+    const { nodes: all, byId: names, collapsed: folded, visible: shown, move: mover, disabled: busy } = latest.current;
+    if (!mover) return;
+    const id = Number(row.dataset.assetId);
+    const openMove = () => {
+      if (busy) return;
+      const picks = store.getSnapshot().ids;
+      mover.onMoveTo(picks.size > 0 ? [...picks] : [id], link);
+    };
+    if (e.key === " " && !e.shiftKey) {
+      e.preventDefault(); // a link does not use Space, the page would scroll
+      const was = store.has(id);
+      store.toggle(id);
+      say({ kind: was ? "off" : "on", name: names.get(id)?.name ?? "" });
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const order = visibleOrder(all, folded, shown);
+      const to = order[order.indexOf(id) + (e.key === "ArrowDown" ? 1 : -1)];
+      if (order.indexOf(id) < 0 || to === undefined) return;
+      if (e.shiftKey) {
+        const anchor = store.getSnapshot().anchor;
+        if (anchor === null || !order.includes(anchor)) store.pick(id); // a range needs a start: the row the key was pressed on
+        store.pickRange(order, to);
+        say({ kind: "range", count: store.getSnapshot().ids.size });
+      }
+      focusLink(to);
+    } else if ((e.key === "m" || e.key === "M") || e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+      e.preventDefault();
+      openMove();
+    } else if (e.key === "Escape" && store.getSnapshot().ids.size > 0) {
+      e.preventDefault();
+      store.clear();
+      say({ kind: "clear" });
+    }
+  }, [store, say, focusLink]);
+
+  const dnd = useMemo(() => createTreeDnd({
+    nodes: () => latest.current.nodes,
+    picked: () => store.getSnapshot().ids,
+    canDrag: () => latest.current.move !== undefined && !latest.current.disabled,
+    drop: (ids, target) => latest.current.move?.onDrop(ids, target),
+    announce,
+    expand: (id) => unfold([id]),
+  }), [store, announce, unfold]);
+  useEffect(() => () => dnd.cancel(), [dnd]);
+
+  // The picks follow the list: an asset that is deleted (or gone from the list) is no longer picked.
+  useEffect(() => { store.prune(new Set(byId.keys())); }, [store, byId]);
+
+  // After a move the page hands over a NEW `moved` object: the picks are over, the way to the first moved asset is unfolded and its link is
+  // focused (the Move to... button is gone with the picks, and a dropped row has moved away from under the pointer). The refetched tree can
+  // reach this component after the signal (the query client tells its observers a tick later), so the asset is not looked for until a new
+  // tree arrives or REVEAL_GRACE_MS has passed (then the tree was current already).
+  const movedSignal = move?.moved ?? null;
+  const lastSignal = useRef(movedSignal); // what was there at mount is not a move
+  const reveal = useRef<Reveal | null>(null);
+  const [settledTick, setSettledTick] = useState(0);
+  useEffect(() => {
+    if (movedSignal !== lastSignal.current) {
+      lastSignal.current = movedSignal;
+      if (movedSignal) {
+        store.clear();
+        if (reveal.current) clearTimeout(reveal.current.timer);
+        const fresh: Reveal = {
+          id: movedSignal.firstId,
+          nodes,
+          settled: false,
+          timer: setTimeout(() => { fresh.settled = true; setSettledTick((n) => n + 1); }, REVEAL_GRACE_MS),
+        };
+        reveal.current = fresh;
+      }
+    }
+    const pending = reveal.current;
+    if (!pending || !(pending.settled || nodes !== pending.nodes)) return;
+    const done = () => { clearTimeout(pending.timer); reveal.current = null; };
+    if (minimized) return done(); // nothing to focus in a closed column
+    if (!byId.has(pending.id)) return; // not in the list (yet)
+    if (visible && !visible.has(pending.id)) { setFilter(""); return; } // the filter hides it: show the row rather than lose the focus
+    const way = ancestorIds(nodes, pending.id);
+    if (way.some((id) => collapsed.has(id))) { unfold(way); return; }
+    if (focusLink(pending.id)) done();
+  }, [movedSignal, nodes, byId, collapsed, visible, minimized, settledTick, store, unfold, focusLink]);
+  useEffect(() => () => { if (reveal.current) clearTimeout(reveal.current.timer); }, []);
 
   const noFold = visible !== null || foldable.size === 0; // a filter has its own view of the tree
   const toggleName = minimized ? "Expand asset tree" : "Minimize asset tree";
-  const view: View = { selectedId, onAddChild: addChild, disabled, collapsed, visible, toggle: toggleBranch };
+  const open = selectedId === null ? undefined : byId.get(selectedId);
+  const view = useMemo<View>(
+    () => ({ selectedId, onAddChild: onAddChild ? addChild : undefined, disabled, collapsed, visible, toggle: toggleBranch, kit: movable ? kit : null, draggable }),
+    [selectedId, onAddChild, addChild, disabled, collapsed, visible, toggleBranch, movable, kit, draggable],
+  );
+  const treeEvents = movable
+    ? {
+        onKeyDown: onTreeKeyDown,
+        onDragStart: dnd.dragStart,
+        onDragEnter: (e: DragEvent<HTMLUListElement>) => dnd.dragEnter(e),
+        onDragOver: (e: DragEvent<HTMLUListElement>) => dnd.dragOver(e),
+        onDragLeave: dnd.dragLeave,
+        onDrop: (e: DragEvent<HTMLUListElement>) => dnd.drop(e),
+      }
+    : undefined;
   return (
     <section
       ref={column}
@@ -333,6 +607,7 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
           // The filter's slot and the rows are one region, so neither shows before the 150 ms delay is over.
           <SkeletonRegion label="Loading the asset tree">
             <div className="tree-filter"><Skeleton variant="block" height={34} /></div>
+            {movable && <div className="tree-slot" aria-hidden="true" />}
             <div className="tree-scroll"><TreeSkeleton /></div>
           </SkeletonRegion>
         ) : (
@@ -344,14 +619,43 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
                 <input id="asset-tree-filter" type="search" placeholder="Filter by name or kind" autoComplete="off" value={filter} onChange={(e) => setFilter(e.target.value)} />
               </div>
             )}
-            <div className="tree-scroll">
+            {move && nodes.length > 0 && (
+              <PickSlot
+                store={store}
+                open={open ? { id: open.id, name: open.name } : null}
+                disabled={!!disabled}
+                onMoveTo={(ids, opener) => move.onMoveTo(ids, opener)}
+                onClear={clearPicks}
+              />
+            )}
+            <div className={movable ? "tree-scroll tree-scroll-move" : "tree-scroll"}>
               {visible && visible.size === 0 && <p className="muted tree-empty">No assets match the filter.</p>}
               {nodes.length > 0 && (!visible || visible.size > 0) && (
-                <ul className="tree">
+                <ul className="tree" {...treeEvents}>
                   <Nodes nodes={only(nodes, visible)} view={view} />
                 </ul>
               )}
+              {/* The top level, last: the area below the last row. Always drawn for an editor (its text only while dragging), so nothing shifts when a drag starts. */}
+              {movable && nodes.length > 0 && (
+                <div
+                  className="tree-root-drop"
+                  aria-hidden="true"
+                  onDragEnter={(e) => dnd.dragEnter(e, true)}
+                  onDragOver={(e) => dnd.dragOver(e, true)}
+                  onDragLeave={dnd.dragLeave}
+                  onDrop={(e) => dnd.drop(e, true)}
+                >
+                  <span className="tree-root-hint">Drop here to move to the top level</span>
+                </div>
+              )}
             </div>
+          </>
+        )}
+        {movable && (
+          <>
+            {/* The word a picked row's link is described by, and the tree's one live line (role-less: a role per item would announce twice). */}
+            <span id={pickedId} className="sr-only">picked</span>
+            <div ref={liveLine} className="sr-only" aria-live="polite" aria-atomic="true" />
           </>
         )}
       </div>
