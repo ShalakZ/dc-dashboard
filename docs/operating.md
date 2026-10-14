@@ -1,8 +1,13 @@
 # Operating the stack
 
+This page is for whoever keeps a running install healthy: where the logs are, what to do when a container restarts
+forever, how the stack stops, what the health checks mean, what the collector cleans up by itself, and how to get back in when
+an account is blocked after wrong passwords. Installing is on [Install and run](install-and-run.md), backups on
+[Backup and restore](backup-and-restore.md).
+
 ## Debugging on the SCADA workstation
 
-The protocol for connecting to the real SCADA and debugging it by copy-paste (the Diagnostics page, the connection check, the report format, the offline `scripts/collect-diagnostics.ps1` / `scripts/collect-diagnostics.sh`, the simulator fault switches `SIM_FAULT_*` for rehearsing a failure) is in [docs/field-debugging.md](docs/field-debugging.md). The offline scripts save their files in the git-ignored `logs/` folder of the project, leave routine lines out of the log tails (`-RawLogs` / `--raw-logs` keeps them), compare the Docker clock with the computer's, and the PowerShell script can hide host names, addresses and the user name with `-Mask`.
+The protocol for connecting to the real SCADA and debugging it by copy-paste (the Diagnostics page, the connection check, the report format, the offline `scripts/collect-diagnostics.ps1` / `scripts/collect-diagnostics.sh`, the simulator fault switches `SIM_FAULT_*` for rehearsing a failure) is in [Field debugging](field-debugging.md). The offline scripts save their files in the git-ignored `logs/` folder of the project, leave routine lines out of the log tails (`-RawLogs` / `--raw-logs` keeps them), compare the Docker clock with the computer's, and the PowerShell script can hide host names, addresses and the user name with `-Mask`.
 
 ## Logs
 
@@ -36,7 +41,7 @@ has no Docker health status. Compose never restarts an unhealthy container: an `
 database migration does not make `scripts/setup.sh` fail; a migration that takes longer than about 220 s needs
 `docker compose up -d` run again, which is safe.
 
-The collector writes a heartbeat to the database every 10 s. `GET /api/collector/status` (operators and admins) says
+The collector writes a heartbeat to the database every 10 s. `GET /api/collector/status` (needs `sources.view`: operators and admins) says
 whether a beat arrived within the last 30 s, measured by the database's clock. The Sources page shows a notice when the
 last beat is older than 30 s and, per source, the age of its newest stored reading in the Last reading column
 (BAD-quality readings count; a source with no stored reading shows a dash; the age keeps counting after a point is
@@ -47,8 +52,9 @@ from the last answer. After a restore the old heartbeat reads as "silent" until 
 
 ## Housekeeping
 
-The collector deletes expired sessions and finished jobs older than 7 days every hour
-(`backend/dcdash/collector/housekeeping.py`). "Test all" runs at most 4 connector tests at once.
+Every hour the collector deletes expired sessions, finished jobs older than 7 days, and diagnostic journal events older than
+14 days or beyond the newest 20 000 (`backend/dcdash/collector/housekeeping.py`). The collector runs at most 4 jobs (connection
+tests, browses, checks) at once, so "Test all" tests at most 4 sources at a time and queues the rest.
 
 ## If you are blocked from signing in
 
@@ -74,3 +80,5 @@ sooner:
 On this Docker setup every browser may look like one computer: Docker can present all browser connections to the stack as coming
 from the one Compose gateway address, so the wrong passwords typed on one machine can block that account for everyone who signs in
 the same way. Browsers on other computers of a network, behind a Linux server, are told apart.
+
+Related: [Field debugging](field-debugging.md), [Backup and restore](backup-and-restore.md), [Install and run](install-and-run.md), [Screens](screens.md).
