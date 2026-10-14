@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ApiError } from "../api/client";
 import { useAddStarterKinds, useAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind } from "../api/queries";
 import type { AssetKind, AssetKindIn, AssetKindPatch } from "../api/types";
@@ -15,9 +15,15 @@ import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { assetIcon } from "../lib/assetIcons";
 import { kindKey } from "../lib/kinds";
+import { addRange, filterCounts, filterKinds, KIND_FILTERS, pickAll, pickUnused, type KindFilter } from "../lib/kindsView";
+import { clear, EMPTY_PICK, prune, toggle, type PickState } from "../lib/treeSelect";
 import { upperFirst } from "../lib/upperFirst";
 
 const CRUMBS = [{ label: "Assets Tree", to: "/assets" }, { label: "Asset kinds" }];
+
+const FILTER_LABEL: Record<KindFilter, string> = { all: "All", starter: "Starter", yours: "Yours", unused: "Unused" };
+const NO_KINDS: AssetKind[] = []; // one array for "no answer yet", so the memos below keep their identity between renders
+const NO_PICKS: ReadonlySet<number> = new Set();
 
 /** What a reader sees where New kind and the row menu would be: the permission is its own, so ReadOnlyNote's words ("change assets") would name the wrong thing. */
 const NEED_KINDS = 'Managing asset kinds needs the "Manage asset kinds" permission.';
@@ -109,11 +115,14 @@ export function AssetKindsPage() {
   const canManage = can("assets.kinds");
   // No `enabled` flag: the route is behind assets.view, so a role that gets here may read the list.
   const { data, error, isLoading } = useAssetKinds();
-  const kinds = data ?? [];
+  const kinds = data ?? NO_KINDS;
   const createKind = useCreateAssetKind();
   const patchKind = usePatchAssetKind();
   const deleteKind = useDeleteAssetKind();
-  const addStarter = useAddStarterKinds();
+  // One mutation per pack: the hook takes the pack as its argument, and the header and the toolbar choose theirs when they are pressed.
+  const addCommon = useAddStarterKinds("common");
+  const addAll = useAddStarterKinds("all");
+  const packPending = addCommon.isPending || addAll.isPending;
   const toast = useToast();
   // The kind as it was when Edit or Delete was chosen, not a lookup into the list: a refetch gives the list new objects, and the open form must not change under the person typing.
   const [dialog, setDialog] = useState<{ kind: "new" } | { kind: "edit"; row: AssetKind } | null>(null);
@@ -136,6 +145,72 @@ export function AssetKindsPage() {
     if (deletions > 0) (newKindButton.current ?? heading.current)?.focus();
   }, [deletions]);
 
+  // The list tools. `picks` is what the person ticked; what the page acts on is `picked`, the picks that are on screen: a kind that left the
+  // shown rows (renamed, got an asset, a refetch) stops counting at once, and the effect below forgets it for good.
+  const [filter, setFilter] = useState<KindFilter>("all");
+  const [picks, setPicks] = useState<PickState>(EMPTY_PICK);
+  const counts = useMemo(() => filterCounts(kinds), [kinds]);
+  const shown = useMemo(() => filterKinds(kinds, filter), [kinds, filter]);
+  const order = useMemo(() => shown.map((k) => k.id), [shown]); // the table's row order, which a Shift range goes by
+  const picked = useMemo(() => (canManage ? new Set(order.filter((id) => picks.ids.has(id))) : NO_PICKS), [canManage, order, picks]);
+  useEffect(() => {
+    setPicks((state) => prune(state, new Set(order)));
+  }, [order]);
+  const allPicked = shown.length > 0 && picked.size === shown.length;
+  const nothingUnused = !shown.some((k) => k.asset_count === 0);
+  // Choosing ANOTHER filter forgets the picks: a pick must never hide in a row the filter took away and then be deleted from there.
+  const chooseFilter = (next: KindFilter) => {
+    if (next === filter) return;
+    setFilter(next);
+    setPicks((state) => clear(state));
+  };
+  const onRowClick = (id: number, event: MouseEvent<HTMLInputElement>) => {
+    // A mouse click with Shift adds a range. A click that came from the keyboard (detail 0: Space) is a plain toggle; Shift+Space is onRowKey's.
+    const range = event.shiftKey && event.detail !== 0;
+    setPicks((state) => (range ? addRange(state, order, id) : toggle(state, id)));
+  };
+  const onRowKey = (id: number, event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== " " || !event.shiftKey) return;
+    event.preventDefault(); // the browser does not click the box, so the range is the whole effect
+    setPicks((state) => addRange(state, order, id));
+  };
+  const onRowMouseDown = (event: MouseEvent<HTMLInputElement>) => {
+    if (event.shiftKey) event.preventDefault(); // a Shift-click between two boxes would otherwise select the text between them
+  };
+  const toggleAll = () => {
+    if (shown.length === 0) return; // aria-disabled, not native: the guard is here
+    setPicks((state) => (allPicked ? clear(state) : pickAll(order)));
+  };
+  const pickUnusedRows = () => {
+    if (nothingUnused) return;
+    setPicks((state) => pickUnused(state, shown));
+  };
+
+  // Escape clears the picks, unless a layer of the page is open: that layer's own Escape comes first (a dialog is portaled but its key events
+  // still bubble through the React tree to this root). A row menu needs no check here: usePopover stops its Escape in the capture phase.
+  // The bulk dialog (W7q T3b) joins this guard.
+  const modalOpen = dialog !== null || deleting !== null;
+  const onPageKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape" || modalOpen || picked.size === 0) return;
+    setPicks((state) => clear(state));
+  };
+
+  // When the last pick goes (Clear, Escape, the header box, a refetch) the bar goes with it, and a button of the bar that had the focus takes it
+  // along to the body. The focus then goes to the slot's idle button, else to the filter in use: always somewhere named, and with
+  // preventScroll so a page scrolled far down stays where it is. In an effect, after the commit: the bar is gone by then and so is its button.
+  const slot = useRef<HTMLDivElement>(null);
+  const idleButton = useRef<HTMLButtonElement>(null);
+  const activeFilter = useRef<HTMLButtonElement>(null);
+  const hadPicks = useRef(false);
+  useEffect(() => {
+    const had = hadPicks.current;
+    hadPicks.current = picked.size > 0;
+    if (!had || picked.size > 0 || !canManage) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && !slot.current?.contains(active)) return; // the focus is somewhere that still exists: leave it
+    (idleButton.current ?? activeFilter.current)?.focus({ preventScroll: true });
+  }, [picked.size, canManage]);
+
   const create = async (body: AssetKindIn) => {
     await worded(createKind.mutateAsync(body));
     toast.success("Kind created");
@@ -148,10 +223,11 @@ export function AssetKindsPage() {
   };
   // A failure is a toast, not a line under the header: a line that arrives late would push the table down. The button waits with aria-disabled and
   // a click guard, never the native attribute: the button has the focus, and a disabled one drops it to the page body.
-  const addPack = async () => {
-    if (addStarter.isPending) return;
+  // `set`: the header's button adds the common kinds (the server's default), the toolbar's quiet one the whole catalogue.
+  const addPack = async (set: "common" | "all" = "common") => {
+    if (packPending) return;
     try {
-      const { added } = await addStarter.mutateAsync();
+      const { added } = await (set === "all" ? addAll : addCommon).mutateAsync();
       toast.success(packText(added.length));
     } catch (e) {
       toast.error(e instanceof Error ? upperFirst(e.message) : String(e));
@@ -196,7 +272,10 @@ export function AssetKindsPage() {
       <div className="kinds-page">
         {header(canManage ? <ActionsSpace /> : undefined)}
         {needNote}
-        <TableSkeleton columns={canManage ? 3 : 2} rows={5} label="Loading asset kinds" />
+        {/* The toolbar's room, empty: a grey block outside the region would show before the skeleton's fade-in delay (as ActionsSpace). The same CSS,
+            so the same height at every width, and the table does not move when the real toolbar replaces it. */}
+        <div className="kinds-toolbar" aria-hidden="true"><div className="kinds-filter-room" />{canManage && <div className="kinds-slot" />}</div>
+        <TableSkeleton columns={canManage ? 4 : 2} widths={canManage ? [40, null, 120, 56] : undefined} rows={5} label="Loading asset kinds" />
       </div>
     );
   }
@@ -207,37 +286,98 @@ export function AssetKindsPage() {
     { label: "Edit", disabled: locked, onSelect: () => setDialog({ kind: "edit", row }) },
     { label: "Delete", tone: "danger", disabled: locked, onSelect: () => { setTarget(null); setChanged(null); setDeleting(row); } },
   ];
+  // The toolbar is drawn once the list has loaded, empty or not, for somebody who manages kinds (Add all is then always within reach, and an empty answer
+  // moves nothing); a reader gets it when there is something to filter.
+  const toolbar = canManage || kinds.length > 0;
   return (
-    <div className="kinds-page">
+    <div className="kinds-page" onKeyDown={onPageKey}>
       {header(canManage ? (
         <>
-          <button type="button" aria-disabled={addStarter.isPending || undefined} disabled={locked} onClick={() => void addPack()}>Add data-centre kinds</button>
+          <button type="button" aria-disabled={packPending || undefined} disabled={locked} onClick={() => void addPack()}>Add data-centre kinds</button>
           <button type="button" className="primary" ref={newKindButton} disabled={locked} onClick={() => setDialog({ kind: "new" })}>New kind</button>
         </>
       ) : undefined)}
       {needNote}
       {error && <p className="error" role="alert">{error.message}</p>}
+      {toolbar && (
+        <div className="kinds-toolbar">
+          <div className="seg-switch kinds-filter" role="group" aria-label="Show">
+            {KIND_FILTERS.map((f) => (
+              <button key={f} type="button" ref={f === filter ? activeFilter : undefined} aria-pressed={f === filter} onClick={() => chooseFilter(f)}>{`${FILTER_LABEL[f]} ${counts[f]}`}</button>
+            ))}
+          </div>
+          {canManage && (
+            // ONE slot at the right with a fixed size, so that picking a row changes its words and never the height of the toolbar. The live span is
+            // there from the start (a region that appears with its text is often not read) and is the only announcer on the page: no role="status".
+            <div className="kinds-slot" ref={slot}>
+              <span className="kinds-selected" aria-live="polite" aria-atomic="true">{picked.size > 0 ? `${picked.size} selected` : ""}</span>
+              {picked.size === 0 ? (
+                <button type="button" className="quiet" ref={idleButton} aria-disabled={packPending || undefined} disabled={locked} onClick={() => void addPack("all")}>Add all 39 data-centre kinds</button>
+              ) : (
+                <div className="kinds-bar">
+                  <button type="button" className="quiet" aria-disabled={nothingUnused || undefined} onClick={pickUnusedRows}>Select all unused</button>
+                  {/* W7q T3b wires this to the bulk dialog; until then it is drawn and off. */}
+                  <button type="button" className="danger-quiet" aria-disabled="true">Delete</button>
+                  <button type="button" className="quiet" onClick={() => setPicks((state) => clear(state))}>Clear</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       {kinds.length === 0 ? (
         <EmptyNote icon="layers">No kinds yet.</EmptyNote>
       ) : (
         <div className="table-wrap">
           <table className="kinds-table">
-            <thead><tr><th>Name</th><th>Assets</th>{canManage && <th className="kind-actions"></th>}</tr></thead>
+            <thead>
+              <tr>
+                {canManage && (
+                  <th className="kind-check">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all shown kinds"
+                      aria-disabled={shown.length === 0 || undefined}
+                      checked={allPicked}
+                      ref={(box) => { if (box) box.indeterminate = picked.size > 0 && !allPicked; }} // no attribute for it: a property, set on every render
+                      onChange={toggleAll}
+                    />
+                  </th>
+                )}
+                <th>Name</th><th>Assets</th>{canManage && <th className="kind-actions"></th>}
+              </tr>
+            </thead>
             <tbody>
-              {kinds.map((row) => (
-                <tr key={row.id}>
+              {shown.map((row) => (
+                <tr key={row.id} data-kind-id={row.id} className={picked.has(row.id) ? "is-picked" : undefined}>
+                  {canManage && (
+                    <td className="kind-check">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${row.name}`}
+                        checked={picked.has(row.id)}
+                        onChange={() => undefined} // the click is read in onClick, which knows the Shift key
+                        onClick={(event) => onRowClick(row.id, event)}
+                        onKeyDown={(event) => onRowKey(row.id, event)}
+                        onMouseDown={onRowMouseDown}
+                      />
+                    </td>
+                  )}
                   <td>
                     <span className="kind-cell">
                       <span className="kind-tile" aria-hidden="true"><Icon name={assetIcon({ kind: row.name, kind_icon: row.icon })} /></span>
                       <span className="kind-label" title={row.name}>{row.name}</span>
+                      {/* Beside the label, not in it: the label's whole text is the kind's name (the e2e rows are found by it). The server decides who is a starter. */}
+                      {row.starter && <span className="role-badge kind-starter">Starter</span>}
                     </span>
                   </td>
-                  <td className={row.asset_count === 0 ? "muted" : undefined}>{countText(row.asset_count)}</td>
+                  <td className={row.asset_count === 0 ? "kind-assets muted" : "kind-assets"}>{countText(row.asset_count)}</td>
                   {canManage && <td className="kind-actions"><RowActions label={`Actions for ${row.name}`} items={actionsOf(row)} /></td>}
                 </tr>
               ))}
             </tbody>
           </table>
+          {shown.length === 0 && <p className="muted kinds-none">No kinds match this filter.</p>}
         </div>
       )}
       {dialog?.kind === "new" && (

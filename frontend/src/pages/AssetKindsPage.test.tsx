@@ -87,11 +87,12 @@ describe("the Asset kinds page", () => {
     const counts = { Rack: "12 assets", Pump: "No assets", Sensor: "1 asset", Odd: "2 assets" };
     for (const name of Object.keys(icons) as (keyof typeof icons)[]) {
       const row = rowOf(name);
-      expect(within(row).getAllByRole("cell").map((c) => c.textContent)).toEqual([name, counts[name], ""]);
+      expect(within(row).getAllByRole("cell").map((c) => c.textContent)).toEqual(["", name, counts[name], ""]); // the checkbox cell, the name, the count, the menu cell
+      expect(row.querySelector("td.kind-assets")).toHaveTextContent(counts[name]);
       expect(row.querySelector(".kind-tile svg")!.innerHTML).toBe(icons[name]); // an icon the catalogue lacks draws the generic one
       expect(row.querySelector(".kind-tile")).toHaveAttribute("aria-hidden", "true");
     }
-    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Name", "Assets", ""]);
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["", "Name", "Assets", ""]);
   });
 
   it("shows a name of any length in full, with its title", async () => {
@@ -161,7 +162,7 @@ describe("Manage asset kinds (assets.kinds)", () => {
     expect(screen.getByRole("button", { name: "Add data-centre kinds" })).toBeEnabled();
     expect(within(rowOf("Rack")).getByRole("button", { name: "Actions for Rack" })).toBeInTheDocument();
     expect(screen.queryByText(REASON)).not.toBeInTheDocument();
-    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Name", "Assets", ""]);
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["", "Name", "Assets", ""]);
   });
 
   it("an administrator holds it, and the reason line is gone once the account is known", async () => {
@@ -729,5 +730,568 @@ describe("Delete kind", () => {
     await screen.findByText("Pump", { selector: "td *" });
     await choose("Pump", "Delete");
     expect(screen.getByRole("button", { name: "New kind" })).toBeDisabled();
+  });
+});
+
+// ---- W7q: the list tools (Starter tag, filters, selection) ----
+
+const starter = (id: number, name: string, icon: string, asset_count = 0): AssetKind => ({ ...kind(id, name, icon, asset_count), starter: true });
+/** Six kinds: two starter (Rack in use, Room unused) and four of the person's own (Pump, Hall, Valve unused, Sensor in use). Unused: Pump, Room, Hall, Valve. */
+const MIXED = [starter(1, "Rack", "rack", 12), kind(2, "Pump", "pump"), kind(3, "Sensor", "sensor", 1), starter(4, "Room", "room"), kind(5, "Hall", "hall"), kind(6, "Valve", "valve")];
+const box = (name: string) => screen.getByRole("checkbox", { name: `Select ${name}` }) as HTMLInputElement;
+const headerBox = () => screen.getByRole("checkbox", { name: "Select all shown kinds" }) as HTMLInputElement;
+const filterButton = (name: string) => screen.getByRole("button", { name });
+const namesShown = () => within(screen.getByRole("table")).getAllByRole("row").slice(1).map((r) => r.querySelector(".kind-label")!.textContent);
+const selected = (text: string) => screen.getByText(text);
+const shiftClick = async (name: string) => {
+  const user = userEvent.setup(); // the direct userEvent.* calls each start with no key held; one instance keeps Shift down across the three steps
+  await user.keyboard("{Shift>}");
+  await user.click(box(name));
+  await user.keyboard("{/Shift}");
+};
+const onTheBody = () => document.activeElement === document.body || document.activeElement === null;
+
+describe("the Starter tag", () => {
+  it("marks the kinds the server calls starter, beside the name and never inside it", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    const tag = within(rowOf("Rack")).getByText("Starter");
+    expect(tag).toHaveClass("role-badge", "kind-starter");
+    expect(tag.parentElement).toHaveClass("kind-cell");
+    expect(tag.parentElement).toBe(rowOf("Rack").querySelector(".kind-label")!.parentElement); // a sibling of the label
+    expect(rowOf("Rack").querySelector(".kind-label")).toHaveTextContent(/^Rack$/); // the label's whole text stays the name (the e2e rows are found by it)
+    expect(within(rowOf("Rack").querySelector(".kind-label") as HTMLElement).queryByText("Starter")).not.toBeInTheDocument();
+    expect(within(rowOf("Room")).getByText("Starter")).toBeInTheDocument();
+  });
+
+  it("is not on a kind of the person's own, however it is spelled", async () => {
+    show({ kinds: [...MIXED, kind(7, "Rack 2", "rack", 1)] });
+    await screen.findByText("Rack", { selector: "td *" });
+    for (const name of ["Pump", "Sensor", "Hall", "Valve", "Rack 2"]) expect(within(rowOf(name)).queryByText("Starter")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Starter", { selector: "td span" })).toHaveLength(2);
+  });
+
+  it("is the server's word alone: a kind named like a starter one gets no tag from its name", async () => {
+    show({ kinds: [kind(1, "Rack", "rack", 1), kind(2, "Server", "server")] }); // starter: false from the server
+    await screen.findByText("Rack", { selector: "td *" });
+    expect(screen.queryByText("Starter", { selector: "td span" })).not.toBeInTheDocument();
+  });
+
+  it("is also shown to a reader", async () => {
+    show({ role: "viewer", kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    expect(within(rowOf("Rack")).getByText("Starter")).toBeInTheDocument();
+  });
+});
+
+describe("the filter", () => {
+  it("is a group named Show of four pressed-state buttons whose names carry the counts over the whole list", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    const group = screen.getByRole("group", { name: "Show" });
+    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(["All 6", "Starter 2", "Yours 4", "Unused 4"]);
+    expect(filterButton("All 6")).toHaveAttribute("aria-pressed", "true");
+    for (const name of ["Starter 2", "Yours 4", "Unused 4"]) expect(filterButton(name)).toHaveAttribute("aria-pressed", "false");
+    expect(namesShown()).toEqual(["Rack", "Pump", "Sensor", "Room", "Hall", "Valve"]);
+  });
+
+  it.each([
+    ["Starter 2", ["Rack", "Room"]],
+    ["Yours 4", ["Pump", "Sensor", "Hall", "Valve"]],
+    ["Unused 4", ["Pump", "Room", "Hall", "Valve"]],
+  ])("%s shows only its rows, in the list's order, and is the one pressed", async (name, rows) => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await userEvent.click(filterButton(name));
+    expect(namesShown()).toEqual(rows);
+    expect(filterButton(name)).toHaveAttribute("aria-pressed", "true");
+    expect(filterButton("All 6")).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(filterButton("All 6"));
+    expect(namesShown()).toHaveLength(6);
+  });
+
+  it("keeps the counts of the whole list while a filter is on and rows are ticked", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await userEvent.click(filterButton("Unused 4"));
+    await userEvent.click(box("Pump"));
+    expect(within(screen.getByRole("group", { name: "Show" })).getAllByRole("button").map((b) => b.textContent)).toEqual(["All 6", "Starter 2", "Yours 4", "Unused 4"]);
+  });
+
+  it("follows the list: a kind that gets an asset leaves Unused when the list is fetched again", async () => {
+    const { rows } = show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await userEvent.click(filterButton("Unused 4"));
+    rows.find((r) => r.name === "Hall")!.asset_count = 3; // an asset joins Hall
+    await userEvent.click(await newKind()); // a write refetches the list
+    await userEvent.type(screen.getByLabelText("Name"), "Dock");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(filterButton("All 7")).toBeInTheDocument());
+    expect(filterButton("Unused 4")).toHaveAttribute("aria-pressed", "true"); // Hall left, Dock (unused) came
+    expect(namesShown()).toEqual(["Pump", "Room", "Valve", "Dock"]);
+  });
+
+  it("says so when a filter shows nothing, keeps the table's header and the toolbar, and a disabled header box", async () => {
+    show({ kinds: [starter(1, "Rack", "rack", 2), starter(2, "Room", "room")] });
+    await screen.findByText("Rack", { selector: "td *" });
+    await userEvent.click(filterButton("Yours 0"));
+    expect(screen.getByText("No kinds match this filter.")).toBeInTheDocument();
+    expect(screen.queryByText("Rack", { selector: "td *" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["", "Name", "Assets", ""]);
+    expect(screen.getByRole("group", { name: "Show" })).toBeInTheDocument();
+    expect(headerBox()).toHaveAttribute("aria-disabled", "true");
+    expect(headerBox()).not.toBeDisabled();
+    expect(headerBox()).not.toBeChecked();
+    await userEvent.click(headerBox());
+    expect(headerBox()).not.toBeChecked();
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    await userEvent.click(filterButton("All 2"));
+    expect(screen.queryByText("No kinds match this filter.")).not.toBeInTheDocument();
+  });
+
+  it("forgets the picks when ANOTHER filter is chosen, and keeps them when the pressed one is pressed again", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await userEvent.click(box("Pump"));
+    await userEvent.click(box("Sensor"));
+    expect(selected("2 selected")).toBeInTheDocument();
+    await userEvent.click(filterButton("All 6"));
+    expect(selected("2 selected")).toBeInTheDocument();
+    await userEvent.click(filterButton("Yours 4"));
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    await userEvent.click(filterButton("All 6"));
+    expect(box("Pump")).not.toBeChecked(); // nothing hides in a row the filter took away
+    expect(box("Sensor")).not.toBeChecked();
+  });
+
+  it("is on a reader's page too, with its counts", async () => {
+    show({ role: "viewer", kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await userEvent.click(filterButton("Starter 2"));
+    expect(namesShown()).toEqual(["Rack", "Room"]);
+  });
+});
+
+describe("the toolbar", () => {
+  it("is drawn for a manager when the registry is empty, with zero counts and the way to add every kind", async () => {
+    show({ kinds: [] });
+    expect(await screen.findByText("No kinds yet.")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Show" })).getAllByRole("button").map((b) => b.textContent)).toEqual(["All 0", "Starter 0", "Yours 0", "Unused 0"]);
+    expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toBeEnabled();
+  });
+
+  it("is not drawn for a reader of an empty registry (one line, as before)", async () => {
+    show({ role: "viewer", kinds: [] });
+    expect(await screen.findByText("No kinds yet.")).toBeInTheDocument();
+    await accountKnown();
+    expect(screen.queryByRole("group", { name: "Show" })).not.toBeInTheDocument();
+  });
+
+  it("gives a reader the filter and nothing in the slot: no checkbox, no pack button, no announcer", async () => {
+    show({ role: "operator", kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await accountKnown();
+    expect(screen.getByRole("group", { name: "Show" })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add all 39 data-centre kinds" })).not.toBeInTheDocument();
+    expect(document.querySelector(".kinds-slot")).toBeNull();
+    expect(document.querySelector(".kinds-page [aria-live]")).toBeNull();
+    await userEvent.keyboard("{Escape}");
+    expect(onTheBody()).toBe(true); // and no focus is moved for somebody who cannot pick
+  });
+
+  it("the idle slot's button adds the whole catalogue (set=all), toasts, and waits with aria-disabled, never the native attribute", async () => {
+    const sent: string[] = [];
+    const { toasts } = show({ over: { "POST /api/asset-kinds/starter-pack": ({ url }: { url: string }) => { sent.push(url); return { body: { added: ["UPS", "PDU"], already_there: 37 } }; } } });
+    const button = await screen.findByRole("button", { name: "Add all 39 data-centre kinds" });
+    const held = holdFetch((method, path) => method === "POST" && path === "/api/asset-kinds/starter-pack");
+    await userEvent.click(button);
+    await waitFor(() => expect(button).toHaveAttribute("aria-disabled", "true"));
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveFocus();
+    await userEvent.click(button); // a second click while it runs sends nothing
+    held.release();
+    await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "Added 2 kinds" }]));
+    expect(sent).toEqual(["/api/asset-kinds/starter-pack?set=all"]);
+  });
+
+  it("the header's button still sends no query at all (the server's default pack)", async () => {
+    const sent: string[] = [];
+    show({ over: { "POST /api/asset-kinds/starter-pack": ({ url }: { url: string }) => { sent.push(url); return { body: { added: [], already_there: 16 } }; } } });
+    await userEvent.click(await screen.findByRole("button", { name: "Add data-centre kinds" }));
+    await waitFor(() => expect(sent).toEqual(["/api/asset-kinds/starter-pack"]));
+  });
+
+  it("is off with the other buttons while a delete confirmation is open", async () => {
+    show();
+    await screen.findByText("Pump", { selector: "td *" });
+    await choose("Pump", "Delete");
+    expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toBeDisabled();
+  });
+});
+
+describe("picking kinds", () => {
+  it("gives a manager a checkbox column: a named box in the header and in each row, and data on the row", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    expect(screen.getAllByRole("checkbox")).toHaveLength(7);
+    expect(headerBox()).not.toBeChecked();
+    expect(rowOf("Pump")).toHaveAttribute("data-kind-id", "2");
+    expect(rowOf("Pump")).not.toHaveClass("is-picked");
+  });
+
+  it("ticks a row on a plain click and takes it off on the next, marks the row, and says how many in ONE live region", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    await userEvent.click(box("Pump"));
+    expect(box("Pump")).toBeChecked();
+    expect(rowOf("Pump")).toHaveClass("is-picked");
+    const live = selected("1 selected");
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(live).toHaveAttribute("aria-atomic", "true");
+    expect(live).not.toHaveAttribute("role");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".kinds-page [aria-live]")).toHaveLength(1);
+    await userEvent.click(box("Sensor"));
+    expect(live).toHaveTextContent("2 selected"); // the same element: it was there from the start
+    await userEvent.click(box("Pump"));
+    expect(box("Pump")).not.toBeChecked();
+    expect(rowOf("Pump")).not.toHaveClass("is-picked");
+    expect(live).toHaveTextContent("1 selected");
+    await userEvent.click(box("Sensor"));
+    expect(live).toBeEmptyDOMElement();
+    expect(document.querySelectorAll(".kinds-page [aria-live]")).toHaveLength(1);
+  });
+
+  it("swaps the idle button for the bar in the same slot: Select all unused, Delete, Clear", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    const slot = document.querySelector(".kinds-slot") as HTMLElement;
+    expect(within(slot).getByRole("button", { name: "Add all 39 data-centre kinds" })).toBeInTheDocument();
+    await userEvent.click(box("Pump"));
+    expect(document.querySelector(".kinds-slot")).toBe(slot); // the same element
+    expect(within(slot).queryByRole("button", { name: "Add all 39 data-centre kinds" })).not.toBeInTheDocument();
+    expect(within(slot).getAllByRole("button").map((b) => b.textContent)).toEqual(["Select all unused", "Delete", "Clear"]);
+    expect(within(slot).getByRole("button", { name: "Delete" })).toHaveAttribute("aria-disabled", "true"); // T3b wires it
+  });
+
+  describe("the header box", () => {
+    it("is unchecked, indeterminate while some rows are ticked, and checked when every shown row is", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      expect(headerBox()).not.toBeChecked();
+      expect(headerBox()).not.toBePartiallyChecked();
+      await userEvent.click(box("Pump"));
+      expect(headerBox()).toBePartiallyChecked();
+      expect(headerBox()).not.toBeChecked();
+      for (const name of ["Rack", "Sensor", "Room", "Hall", "Valve"]) await userEvent.click(box(name));
+      expect(headerBox()).toBeChecked();
+      expect(headerBox()).not.toBePartiallyChecked();
+    });
+
+    it("ticks every shown row from unchecked or indeterminate, and clears them when all are ticked", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(headerBox());
+      expect(selected("6 selected")).toBeInTheDocument();
+      expect(screen.getAllByRole("checkbox").every((c) => (c as HTMLInputElement).checked)).toBe(true);
+      await userEvent.click(headerBox());
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+      await userEvent.click(box("Pump")); // some -> all
+      await userEvent.click(headerBox());
+      expect(selected("6 selected")).toBeInTheDocument();
+    });
+
+    it("works on the shown rows only", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(filterButton("Starter 2"));
+      await userEvent.click(headerBox());
+      expect(selected("2 selected")).toBeInTheDocument();
+      expect(headerBox()).toBeChecked();
+      await userEvent.click(filterButton("All 6"));
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument(); // another filter forgets the picks
+    });
+  });
+
+  describe("Shift and Space", () => {
+    it("Shift-click ADDS the rows from the last ticked one to the clicked one, in the order shown", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      await shiftClick("Room");
+      expect(["Rack", "Pump", "Sensor", "Room", "Hall", "Valve"].filter((n) => box(n).checked)).toEqual(["Pump", "Sensor", "Room"]);
+      expect(selected("3 selected")).toBeInTheDocument();
+      await shiftClick("Valve"); // the anchor stays at Pump: the range grows
+      expect(["Rack", "Pump", "Sensor", "Room", "Hall", "Valve"].filter((n) => box(n).checked)).toEqual(["Pump", "Sensor", "Room", "Hall", "Valve"]);
+    });
+
+    it("keeps the ticks outside the range and goes upwards too", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Rack"));
+      await userEvent.click(box("Hall"));
+      await shiftClick("Sensor");
+      expect(["Rack", "Pump", "Sensor", "Room", "Hall", "Valve"].filter((n) => box(n).checked)).toEqual(["Rack", "Sensor", "Room", "Hall"]);
+    });
+
+    it("goes by the shown order: under a filter, the rows it hides are not in the range", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(filterButton("Unused 4")); // Pump, Room, Hall, Valve
+      await userEvent.click(box("Pump"));
+      await shiftClick("Hall");
+      expect(selected("3 selected")).toBeInTheDocument();
+      await userEvent.click(filterButton("All 6"));
+      await userEvent.click(box("Pump"));
+      await userEvent.click(box("Sensor"));
+      expect(selected("2 selected")).toBeInTheDocument(); // Sensor was never in the range
+    });
+
+    it("a Shift-click with no row ticked before acts like a plain click", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await shiftClick("Sensor");
+      expect(selected("1 selected")).toBeInTheDocument();
+      expect(box("Sensor")).toBeChecked();
+    });
+
+    it("Space on the focused box toggles it", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      box("Pump").focus();
+      await userEvent.keyboard(" ");
+      expect(box("Pump")).toBeChecked();
+      await userEvent.keyboard(" ");
+      expect(box("Pump")).not.toBeChecked();
+    });
+
+    it("Shift+Space on the focused box ADDS the range, the same as Shift-click, and ticks once", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      box("Hall").focus();
+      await userEvent.keyboard("{Shift>}[Space]{/Shift}");
+      expect(["Rack", "Pump", "Sensor", "Room", "Hall", "Valve"].filter((n) => box(n).checked)).toEqual(["Pump", "Sensor", "Room", "Hall"]);
+      expect(selected("4 selected")).toBeInTheDocument();
+    });
+  });
+
+  describe("Select all unused", () => {
+    it("ADDS every shown unused kind to what is ticked (a union) and keeps the used ones that were ticked", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Sensor")); // in use
+      await userEvent.click(screen.getByRole("button", { name: "Select all unused" }));
+      expect(["Rack", "Pump", "Sensor", "Room", "Hall", "Valve"].filter((n) => box(n).checked)).toEqual(["Pump", "Sensor", "Room", "Hall", "Valve"]);
+      expect(selected("5 selected")).toBeInTheDocument();
+    });
+
+    it("counts the same as the Unused filter, and works on the shown rows only", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(filterButton("Starter 2")); // Rack (in use), Room (unused)
+      await userEvent.click(box("Rack"));
+      await userEvent.click(screen.getByRole("button", { name: "Select all unused" }));
+      expect(selected("2 selected")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      await userEvent.click(filterButton("All 6"));
+      await userEvent.click(box("Sensor"));
+      await userEvent.click(screen.getByRole("button", { name: "Select all unused" }));
+      expect(selected("5 selected")).toBeInTheDocument(); // Sensor + the 4 the Unused filter counts
+    });
+
+    it("is aria-disabled, with a click that does nothing, when no shown kind is unused", async () => {
+      show({ kinds: [RACK, SENSOR] });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Rack"));
+      const button = screen.getByRole("button", { name: "Select all unused" });
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      expect(button).not.toBeDisabled();
+      await userEvent.click(button);
+      expect(selected("1 selected")).toBeInTheDocument();
+      expect(box("Sensor")).not.toBeChecked();
+    });
+  });
+
+  describe("Clear and Escape", () => {
+    it("Clear forgets every tick, and the focus goes to the idle button (never the body)", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      await userEvent.click(box("Sensor"));
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+      expect(box("Pump")).not.toBeChecked();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toHaveFocus());
+      expect(onTheBody()).toBe(false);
+    });
+
+    it("Clear by keyboard (Tab to it, Enter) lands on the idle button too", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      const clear = screen.getByRole("button", { name: "Clear" });
+      clear.focus();
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toHaveFocus());
+    });
+
+    it("Escape clears the ticks; with the focus on a row box the focus stays there", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      await userEvent.click(box("Sensor"));
+      expect(box("Sensor")).toHaveFocus();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+      expect(box("Pump")).not.toBeChecked();
+      expect(box("Sensor")).toHaveFocus();
+      expect(onTheBody()).toBe(false);
+    });
+
+    it("Escape on a button of the bar takes the focus to the idle button when the bar goes", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      screen.getByRole("button", { name: "Delete" }).focus();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toHaveFocus());
+    });
+
+    it("the header box clearing leaves the focus on the header box", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(headerBox());
+      await userEvent.click(headerBox());
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+      expect(headerBox()).toHaveFocus();
+    });
+
+    it("Escape with nothing ticked does nothing", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      box("Pump").focus();
+      await userEvent.keyboard("{Escape}");
+      expect(box("Pump")).toHaveFocus();
+    });
+
+    it("Escape closes a row menu opened by a click and keeps the ticks", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      await userEvent.click(within(rowOf("Sensor")).getByRole("button", { name: "Actions for Sensor" }));
+      expect(screen.getByRole("menu", { name: "Actions for Sensor" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(selected("1 selected")).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}"); // the next one has no layer in front of it
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    });
+
+    it("Escape closes a row menu opened with ArrowDown and keeps the ticks", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      within(rowOf("Sensor")).getByRole("button", { name: "Actions for Sensor" }).focus();
+      await userEvent.keyboard("{ArrowDown}");
+      expect(screen.getByRole("menu", { name: "Actions for Sensor" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(selected("1 selected")).toBeInTheDocument();
+    });
+
+    it("Escape in the Edit dialog closes the dialog and keeps the ticks", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      await choose("Sensor", "Edit");
+      expect(dialog("Edit kind")).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(selected("1 selected")).toBeInTheDocument();
+    });
+
+    it("Escape in the delete confirmation closes it and keeps the ticks", async () => {
+      show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      await choose("Hall", "Delete");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(selected("1 selected")).toBeInTheDocument();
+    });
+  });
+
+  describe("when the list changes under the ticks", () => {
+    it("forgets a ticked kind that is gone from the list and counts only the kinds still shown", async () => {
+      const { rows } = show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(box("Pump"));
+      await userEvent.click(box("Hall"));
+      expect(selected("2 selected")).toBeInTheDocument();
+      rows.splice(rows.findIndex((r) => r.name === "Hall"), 1); // deleted elsewhere
+      await userEvent.click(await newKind()); // a write refetches the list
+      await userEvent.type(screen.getByLabelText("Name"), "Dock");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByText("Hall", { selector: "td *" })).not.toBeInTheDocument());
+      expect(selected("1 selected")).toBeInTheDocument();
+      expect(box("Pump")).toBeChecked();
+      // Forgotten for good, not just hidden: when a kind with that id comes back it is not ticked.
+      rows.push(kind(5, "Hall", "hall"));
+      await userEvent.click(await newKind());
+      await userEvent.type(screen.getByLabelText("Name"), "Pier");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByText("Hall", { selector: "td *" });
+      expect(box("Hall")).not.toBeChecked();
+      expect(selected("1 selected")).toBeInTheDocument();
+    });
+
+    it("a kind that stops matching the filter (it got an asset) leaves the ticks with its row", async () => {
+      const { rows } = show({ kinds: MIXED });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(filterButton("Unused 4"));
+      await userEvent.click(box("Pump"));
+      await userEvent.click(box("Hall"));
+      rows.find((r) => r.name === "Pump")!.asset_count = 2;
+      await userEvent.click(await newKind());
+      await userEvent.type(screen.getByLabelText("Name"), "Dock");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByText("Pump", { selector: "td *" })).not.toBeInTheDocument());
+      expect(selected("1 selected")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("the loading page", () => {
+  const loading = (role: "admin" | "viewer") => {
+    mockFetch({ ...authed(role), "GET /api/asset-kinds": { body: [RACK] } });
+    const held = holdFetch((method, path) => method === "GET" && path === "/api/asset-kinds");
+    renderWithProviders(<><AssetKindsPage /><SignedIn /></>, { route: "/assets/kinds", path: "/assets/kinds" });
+    return held;
+  };
+
+  it("draws the toolbar's room and four columns for a manager, so nothing moves when the list arrives", async () => {
+    const held = loading("admin");
+    await accountKnown();
+    const skeleton = screen.getByRole("status").closest("div")!.parentElement!;
+    expect(skeleton.querySelector(".kinds-toolbar")).not.toBeNull();
+    expect(document.querySelector(".kinds-toolbar .kinds-slot")).not.toBeNull();
+    expect(document.querySelectorAll(".sk-table thead th")).toHaveLength(4);
+    expect(document.querySelector(".sk-table colgroup")!.children).toHaveLength(4);
+    held.release();
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(document.querySelectorAll(".kinds-toolbar")).toHaveLength(1);
+  });
+
+  it("draws two columns and no slot for a reader", async () => {
+    const held = loading("viewer");
+    await accountKnown();
+    expect(document.querySelectorAll(".sk-table thead th")).toHaveLength(2);
+    expect(document.querySelector(".kinds-toolbar .kinds-slot")).toBeNull();
+    held.release();
+    await screen.findByRole("table");
   });
 });
