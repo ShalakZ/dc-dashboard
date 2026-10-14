@@ -23,6 +23,11 @@ const assets = [
   { id: 2, parent_id: 1, name: "Room A", kind: "room", sort_order: 0 },
 ];
 type Fixture = typeof assets;
+/** The registry the dialog's Kind select lists: the kinds these assets use (the 0010 seed), with their icons. */
+const registry = [
+  { id: 1, name: "Site", icon: "site", asset_count: 1 },
+  { id: 2, name: "Room", icon: "room", asset_count: 1 },
+];
 
 /** The asset page's summary. No mapped metric by default, so no stream opens and no live chip joins the header's actions. */
 const summaryOf = (asset: Fixture[number], metrics: unknown[] = []) => ({ asset, metrics, energy_today: null, cost_today: null, currency: "QAR" });
@@ -41,6 +46,7 @@ const authed = (role: string, list: Fixture = assets) => ({
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: userFor(role) },
   "GET /api/assets": { body: list },
+  "GET /api/asset-kinds": { body: registry },
   ...pageRoutes(list),
 });
 
@@ -880,6 +886,199 @@ describe("AssetsPage", () => {
         expect(screen.getByRole("button", { name: "Add asset" })).toBeEnabled();
         expect(screen.getByRole("button", { name: "Add child of Site" })).toBeEnabled();
       });
+    });
+  });
+});
+
+describe("AssetsPage and the asset kinds registry", () => {
+  const created = { status: 201, body: { id: 3, parent_id: null, name: "Pump 1", kind: "Pump", sort_order: 0 } };
+  const kindCreated = { status: 201, body: { id: 9, name: "Pump", icon: "pump", asset_count: 1 } };
+  type Calls = { method: string; path: string; body: unknown }[];
+  const at = (calls: Calls, method: string, path: string, after = -1) => calls.findIndex((c, i) => i > after && c.method === method && c.path === path);
+  const count = (calls: Calls, method: string, path: string) => calls.filter((c) => c.method === method && c.path === path).length;
+  const kindsOf = (calls: Calls) => calls.filter((c) => c.method === "POST" && c.path === "/api/asset-kinds");
+  const dialogGone = () => waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+  /** Add asset > Name "Pump 1" > Kind Other… > the typed kind > Save. */
+  async function addWithTypedKind(typed: string) {
+    await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+    await userEvent.type(screen.getByLabelText("Name"), "Pump 1");
+    await userEvent.selectOptions(screen.getByLabelText("Kind"), "Other…");
+    await userEvent.type(screen.getByLabelText("New kind"), typed);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  }
+
+  it("lists the registry in the Kind select: its kinds sorted, generic, Other…; not the kinds assets use", async () => {
+    mockFetch({ ...authed("admin", [...assets, { id: 3, parent_id: 1, name: "Odd", kind: "Aisle", sort_order: 0 }]) });
+    renderWorkspace("/assets");
+    await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+    const texts = within(screen.getByLabelText("Kind")).getAllByRole("option").map((o) => o.textContent);
+    expect(texts).toEqual(["generic", "Room", "Site", "Other…"]);
+  });
+
+  it("creating an asset with a new kind posts the asset, THEN the kind with the keyword guess as its icon, and refreshes once, after both", async () => {
+    const calls = mockFetch({ ...authed("admin"), "POST /api/assets": created, "POST /api/asset-kinds": kindCreated });
+    const toasts = spyToasts();
+    renderWorkspace("/assets", { toasts: toasts.api });
+    await waitFor(() => expect(cacheCounts(calls).fleet).toBe(1)); // the index page's figures, asked for once the list is there
+    expect(count(calls, "GET", "/api/asset-kinds")).toBe(1);
+    await addWithTypedKind("  Pump ");
+    await dialogGone();
+    const assetPost = at(calls, "POST", "/api/assets");
+    const kindPost = at(calls, "POST", "/api/asset-kinds");
+    expect(assetPost).toBeGreaterThan(-1);
+    expect(kindPost).toBeGreaterThan(assetPost);
+    expect(calls[assetPost].body).toMatchObject({ name: "Pump 1", kind: "Pump" });
+    expect(calls[kindPost].body).toEqual({ name: "Pump", icon: "pump" });
+    // One refresh round, after the kind exists: the first refetch of the assets already carries kind_icon.
+    expect(at(calls, "GET", "/api/assets", assetPost)).toBeGreaterThan(kindPost);
+    expect(count(calls, "GET", "/api/assets")).toBe(2);
+    expect(count(calls, "GET", "/api/asset-kinds")).toBe(2);
+    expect(cacheCounts(calls).fleet).toBe(2);
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Asset created" }]);
+  });
+
+  it.each([[500, "the kind registry is down"], [409, 'A kind named "Pump" already exists']])(
+    "a kind request that answers %i does not fail the save: the dialog closes, the asset toast shows, the lists refresh",
+    async (status, detail) => {
+      const calls = mockFetch({ ...authed("admin"), "POST /api/assets": created, "POST /api/asset-kinds": { status, body: { detail } } });
+      const toasts = spyToasts();
+      renderWorkspace("/assets", { toasts: toasts.api });
+      await addWithTypedKind("Pump");
+      await dialogGone();
+      expect(kindsOf(calls)).toHaveLength(1);
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Asset created" }]);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      await waitFor(() => expect(count(calls, "GET", "/api/assets")).toBe(2));
+    },
+  );
+
+  it("a kind request that never reaches the server (a network failure) does not fail the save either", async () => {
+    const calls = mockFetch({
+      ...authed("admin"), "POST /api/assets": created,
+      "POST /api/asset-kinds": () => { throw new TypeError("Failed to fetch"); },
+    });
+    renderWorkspace("/assets");
+    await addWithTypedKind("Pump");
+    await dialogGone();
+    expect(kindsOf(calls)).toHaveLength(1);
+  });
+
+  it("posts no kind for a kind the registry has: chosen, or typed in another case", async () => {
+    const calls = mockFetch({ ...authed("admin"), "POST /api/assets": created, "POST /api/asset-kinds": kindCreated });
+    renderWorkspace("/assets");
+    await addWithTypedKind(" ROOM");
+    await dialogGone();
+    expect(calls.find((c) => c.path === "/api/assets" && c.method === "POST")!.body).toMatchObject({ kind: "Room" }); // the registry's spelling
+    await userEvent.click(screen.getByRole("button", { name: "Add asset" }));
+    await userEvent.type(screen.getByLabelText("Name"), "Pump 2");
+    await userEvent.selectOptions(screen.getByLabelText("Kind"), "Site");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await dialogGone();
+    expect(count(calls, "POST", "/api/assets")).toBe(2);
+    expect(kindsOf(calls)).toHaveLength(0);
+  });
+
+  it.each([["left untouched", null], ["typed as GENERIC", " GENERIC"]])("posts no kind for the default kind, %s, even though the registry lacks it", async (_how, typed) => {
+    const calls = mockFetch({ ...authed("admin"), "POST /api/assets": created, "POST /api/asset-kinds": kindCreated });
+    renderWorkspace("/assets");
+    if (typed === null) {
+      await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+      await userEvent.type(screen.getByLabelText("Name"), "Pump 1");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    } else {
+      await addWithTypedKind(typed);
+    }
+    await dialogGone();
+    expect(calls.find((c) => c.path === "/api/assets" && c.method === "POST")!.body).toMatchObject({ kind: "generic" });
+    expect(kindsOf(calls)).toHaveLength(0);
+  });
+
+  it("a failed asset request registers nothing, and the dialog stays with the server's words", async () => {
+    const calls = mockFetch({
+      ...authed("admin"),
+      "POST /api/assets": { status: 409, body: { detail: 'an asset named "Pump 1" already exists under the top level; choose another name' } },
+      "POST /api/asset-kinds": kindCreated,
+    });
+    renderWorkspace("/assets");
+    await addWithTypedKind("Pump");
+    expect(await screen.findByRole("alert")).toHaveTextContent("already exists");
+    expect(screen.getByRole("dialog", { name: "Add asset" })).toBeInTheDocument();
+    expect(kindsOf(calls)).toHaveLength(0);
+  });
+
+  describe("an edit", () => {
+    const withAisle = [...assets, { id: 3, parent_id: 1, name: "Odd one", kind: "Aisle", sort_order: 0 }];
+    const patched = { body: { id: 3, parent_id: 1, name: "Odd one 2", kind: "Aisle", sort_order: 0 } };
+
+    it("that leaves the kind alone posts no kind, even when the registry has never heard of it", async () => {
+      const calls = mockFetch({ ...authed("admin", withAisle), "PATCH /api/assets/3": patched, "POST /api/asset-kinds": kindCreated });
+      renderWorkspace("/assets/3");
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      expect(within(screen.getByRole("dialog")).getByLabelText("Kind")).toHaveValue("Aisle");
+      await userEvent.type(screen.getByLabelText("Name"), " 2");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await dialogGone();
+      expect(calls.find((c) => c.method === "PATCH")!.body).toMatchObject({ name: "Odd one 2", kind: "Aisle" });
+      expect(kindsOf(calls)).toHaveLength(0);
+      expect(count(calls, "GET", "/api/asset-kinds")).toBe(2); // the save still refreshed the lists
+    });
+
+    it("that changes the kind to a new one patches the asset and then registers the kind", async () => {
+      const calls = mockFetch({
+        ...authed("admin", withAisle), "PATCH /api/assets/3": { body: { ...withAisle[2], kind: "Pump" } }, "POST /api/asset-kinds": kindCreated,
+      });
+      renderWorkspace("/assets/3");
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      await userEvent.selectOptions(screen.getByLabelText("Kind"), "Other…");
+      await userEvent.type(screen.getByLabelText("New kind"), "Pump");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await dialogGone();
+      expect(at(calls, "POST", "/api/asset-kinds")).toBeGreaterThan(at(calls, "PATCH", "/api/assets/3"));
+      expect(kindsOf(calls).map((c) => c.body)).toEqual([{ name: "Pump", icon: "pump" }]);
+    });
+
+    it("that changes the kind to one the registry has posts no kind", async () => {
+      const calls = mockFetch({ ...authed("admin", withAisle), "PATCH /api/assets/3": { body: { ...withAisle[2], kind: "Room" } }, "POST /api/asset-kinds": kindCreated });
+      renderWorkspace("/assets/3");
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      await userEvent.selectOptions(screen.getByLabelText("Kind"), "Room");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await dialogGone();
+      expect(calls.find((c) => c.method === "PATCH")!.body).toMatchObject({ kind: "Room" });
+      expect(kindsOf(calls)).toHaveLength(0);
+    });
+  });
+
+  describe("while the registry loads, and when it cannot", () => {
+    const holdKinds = () => holdFetch((method, path) => method === "GET" && path === "/api/asset-kinds");
+
+    it("keeps Add asset, the tree's +, a node's + and Edit disabled until the registry is there", async () => {
+      mockFetch(authed("admin"));
+      const held = holdKinds();
+      renderWorkspace("/assets/2");
+      await within(await screen.findByRole("region", { name: "Asset tree" })).findByRole("link", { name: "Site" }); // the asset list is there; the registry is not
+      for (const name of ["Add asset", "Edit", "Add a top-level asset", "Add child of Site"]) expect(await screen.findByRole("button", { name })).toBeDisabled();
+      await userEvent.click(screen.getByRole("button", { name: "Add asset" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      held.release();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add asset" })).toBeEnabled());
+      for (const name of ["Edit", "Add a top-level asset", "Add child of Site"]) expect(screen.getByRole("button", { name })).toBeEnabled();
+    });
+
+    it("opens with the defaults when the registry failed to load: generic and Other…, and the dialog still saves", async () => {
+      const calls = mockFetch({
+        ...authed("admin"), "GET /api/asset-kinds": { status: 500, body: { detail: "the registry is down" } },
+        "POST /api/assets": created,
+      });
+      renderWorkspace("/assets");
+      await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+      expect(within(screen.getByLabelText("Kind")).getAllByRole("option").map((o) => o.textContent)).toEqual(["generic", "Other…"]);
+      await userEvent.type(screen.getByLabelText("Name"), "Pump 1");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await dialogGone();
+      expect(calls.find((c) => c.method === "POST")!.body).toMatchObject({ kind: "generic" });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument(); // the page itself is not replaced by the registry's error
     });
   });
 });

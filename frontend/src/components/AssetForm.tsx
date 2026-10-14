@@ -1,20 +1,28 @@
 import { useMemo, useState, type FormEvent } from "react";
-import type { Asset, AssetIn } from "../api/types";
+import type { Asset, AssetIn, AssetKind } from "../api/types";
 import { assetIcon, assetIconLabel, iconLabelFor } from "../lib/assetIcons";
-import { kindIcon } from "../lib/kindIcon";
-import { DEFAULT_KIND, kindKey, kindOptions, resolveKind } from "../lib/kinds";
+import { DEFAULT_KIND, cleanKind, kindChoices, kindKey, registersKind, resolveKind } from "../lib/kinds";
 import { assetOptions } from "./dashboard/AssetPicker";
 import { IconPicker } from "./IconPicker";
 import { useModalBusy } from "./Modal";
 
-export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
-  assets: Asset[]; initial?: Partial<AssetIn>; excludeIds: Set<number>;
-  onSubmit: (body: AssetIn) => Promise<void>; onCancel: () => void;
+/** The server's limit on a kind name (core/asset_kinds.py MAX_NAME), counted in code points. */
+const MAX_KIND = 60;
+
+/**
+ * `kinds` is the registry (empty when it failed to load: the Kind select then offers the default and the asset's own kind). `onSubmit`
+ * gets the body and whether this save adds the kind to the registry (the page does that once the asset is saved): the same answer the
+ * note under the icon gave beforehand.
+ */
+export function AssetForm({ assets, kinds, initial, excludeIds, onSubmit, onCancel }: {
+  assets: Asset[]; kinds: AssetKind[]; initial?: Partial<AssetIn>; excludeIds: Set<number>;
+  onSubmit: (body: AssetIn, registerKind: boolean) => Promise<void>; onCancel: () => void;
 }) {
   const [name, setName] = useState(initial?.name ?? "");
   const [parent, setParent] = useState(initial?.parent_id == null ? "" : String(initial.parent_id));
-  const options = useMemo(() => kindOptions(assets, initial?.kind), [assets, initial?.kind]);
-  // The stored text, untouched; a blank or missing kind starts on the default (in the spelling already in use, if any).
+  const options = useMemo(() => kindChoices(kinds, initial?.kind), [kinds, initial?.kind]);
+  const [startKind] = useState<string | null>(initial?.kind?.trim() ? initial.kind : null); // at mount, like startIcon: what "the kind changed" is measured against
+  // The stored text, untouched; a blank or missing kind starts on the default (in the registry's spelling, if it has one).
   const [kind, setKind] = useState(initial?.kind?.trim() ? initial.kind : resolveKind(DEFAULT_KIND, options));
   const [other, setOther] = useState(false); // "Other…" picked
   const [typed, setTyped] = useState("");
@@ -27,8 +35,13 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
   // The kind the asset will have, as the preview must show it (the select keeps its last value while "Other…" is picked).
   const resolvedKind = other ? resolveKind(typed, options) : kind;
   const chosenLabel = icon === null ? null : assetIconLabel(icon);
-  const automatic = kindIcon(resolvedKind);
+  // What the KIND gives: its icon in the registry, else (a typed kind nobody registered yet) the keyword guess, which is the icon it will be registered with.
+  const registryIcon = kinds.find((k) => kindKey(k.name) === kindKey(resolvedKind))?.icon ?? null;
+  const automatic = assetIcon({ kind: resolvedKind, kind_icon: registryIcon });
   const caption = icon === null ? `Automatic (${iconLabelFor(automatic)})` : chosenLabel ?? `Unknown icon "${icon}"`;
+  // One answer for the note and for the page's registration. The note speaks of "this icon", which is the caption only while Automatic.
+  const registers = registersKind(resolvedKind, kinds, startKind);
+  const hint = registers && icon === null ? "A new kind: it is added to Asset kinds with this icon." : undefined;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -36,11 +49,15 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
     setError(null);
     const stored = other ? resolveKind(typed, options) : kind;
     if (stored === "") return setError("type the new kind");
+    // Held to the server's limit only when the text is new: a typed name that resolves to a kind already listed may be a long seeded one.
+    if (other && !options.some((o) => kindKey(o) === kindKey(typed)) && [...cleanKind(typed.normalize("NFC"))].length > MAX_KIND) {
+      return setError(`A kind name is at most ${MAX_KIND} characters`);
+    }
     setSubmitting(true);
     try {
       const body: AssetIn = { name, parent_id: parent === "" ? null : Number(parent), kind: stored, sort_order: Number(sortOrder) || 0 };
       if (icon !== startIcon) body.icon = icon; // only a change: a stored id the server later drops must not turn every edit into a 422
-      await onSubmit(body);
+      await onSubmit(body, registers);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -67,8 +84,9 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
       <IconPicker
         value={icon}
         onChange={setIcon}
-        previewIcon={assetIcon({ kind: resolvedKind, icon })}
+        previewIcon={assetIcon({ kind: resolvedKind, icon, kind_icon: registryIcon })}
         caption={caption}
+        hint={hint}
         automatic={{ icon: automatic, title: `Automatic: follows the kind (${iconLabelFor(automatic)})` }}
       />
       <label>Sort order<input type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} /></label>

@@ -1,9 +1,7 @@
 import { iconHtml } from "../test/iconHtml";
-import { DEFAULT_KIND, STARTER_KINDS, cleanKind, kindChoices, kindIconForName, kindKey, kindOptions, resolveKind } from "./kinds";
+import { DEFAULT_KIND, cleanKind, kindChoices, kindIconForName, kindKey, registersKind, resolveKind } from "./kinds";
 
-const used = (...kinds: string[]) => kinds.map((kind) => ({ kind }));
 const registry = (...names: string[]) => names.map((name) => ({ name }));
-const keys = (options: string[]) => options.map(kindKey);
 
 describe("kindKey and cleanKind", () => {
   it("ignores case, surrounding blanks and repeated inner blanks", () => {
@@ -22,60 +20,8 @@ describe("kindKey and cleanKind", () => {
   });
 });
 
-describe("kindOptions", () => {
-  const options = kindOptions(used("LV_Panel", "LV_Panel", "lv_panel", "Room", "room", "room", ""));
-
-  it("offers the default, every starter and the kinds in use", () => {
-    expect(options).toContain(DEFAULT_KIND);
-    for (const starter of STARTER_KINDS) expect(keys(options)).toContain(kindKey(starter));
-    expect(keys(options)).toContain("lv_panel");
-  });
-
-  it("keeps the most used spelling of a kind in use, once", () => {
-    expect(options.filter((o) => kindKey(o) === "lv_panel")).toEqual(["LV_Panel"]);
-  });
-
-  it("lets a spelling in use win over a starter's (room beats the starter Room)", () => {
-    expect(options.filter((o) => kindKey(o) === "room")).toEqual(["room"]);
-  });
-
-  it("has no blank option and no two options with one key", () => {
-    expect(options).not.toContain("");
-    expect(keys(options).every((k) => k !== "")).toBe(true);
-    expect(new Set(keys(options)).size).toBe(options.length);
-  });
-
-  it("is sorted by comparison key", () => {
-    expect(keys(options)).toEqual([...keys(options)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
-  });
-
-  it("breaks a tie between two spellings in code-point order", () => {
-    expect(kindOptions(used("Zone", "zone")).filter((o) => kindKey(o) === "zone")).toEqual(["Zone"]);
-  });
-
-  it("lets a starter or the default fill a key nobody uses, and the default give way to a spelling in use", () => {
-    expect(kindOptions([])).toContain("Rack");
-    expect(kindOptions([])).toContain("generic");
-    expect(kindOptions(used("Generic", "Generic")).filter((o) => kindKey(o) === "generic")).toEqual(["Generic"]);
-  });
-
-  it("offers the kind of the asset being edited exactly as stored, replacing the spelling of its key", () => {
-    expect(kindOptions(used("Room", "room", "room"), "Room").filter((o) => kindKey(o) === "room")).toEqual(["Room"]);
-    expect(kindOptions([], "Row ").filter((o) => kindKey(o) === "row")).toEqual(["Row "]);
-  });
-
-  it("adds an edited kind that nobody else uses", () => {
-    expect(kindOptions([], "Aisle")).toContain("Aisle");
-  });
-
-  it("ignores a blank current kind", () => {
-    expect(kindOptions(used("Room"), "")).toEqual(kindOptions(used("Room")));
-    expect(kindOptions(used("Room"), "  ")).toEqual(kindOptions(used("Room")));
-  });
-});
-
 describe("resolveKind", () => {
-  const options = kindOptions(used("LV_Panel", "room"));
+  const options = kindChoices(registry("LV_Panel", "room"));
 
   it("reuses the spelling of an option with the same key", () => {
     expect(resolveKind("lv_panel ", options)).toBe("LV_Panel");
@@ -174,5 +120,43 @@ describe("kindIconForName", () => {
     expect(kindIconForName("tostring", odd)).toBe("kindServer");
     expect(kindIconForName("__proto__", odd)).toBe("kindGeneric");
     expect(kindIconForName("hasOwnProperty", odd)).toBe("kindGeneric");
+  });
+});
+
+describe("registersKind", () => {
+  const kinds = registry("Rack", "Room");
+
+  it("is true for a kind the registry lacks, on a new asset", () => {
+    expect(registersKind("Aisle", kinds, null)).toBe(true);
+    expect(registersKind("Aisle", [], null)).toBe(true);
+  });
+
+  it("is true when an edit changes the kind text to one the registry lacks", () => {
+    expect(registersKind("Aisle", kinds, "Rack")).toBe(true);
+  });
+
+  it("is false when the kind text did not change: an unrelated edit of an asset whose kind nobody registered writes nothing", () => {
+    expect(registersKind("Aisle", kinds, "Aisle")).toBe(false);
+  });
+
+  it("is false for a kind the registry holds, whatever the case or the blanks", () => {
+    expect(registersKind("Rack", kinds, null)).toBe(false);
+    expect(registersKind("rack ", kinds, null)).toBe(false);
+    expect(registersKind("  ROOM", kinds, "Rack")).toBe(false);
+  });
+
+  it("is false for the default kind, in any spelling, even when the registry lacks it", () => {
+    expect(registersKind("generic", [], null)).toBe(false);
+    expect(registersKind("Generic", kinds, "Rack")).toBe(false);
+    expect(registersKind(" GENERIC ", kinds, null)).toBe(false);
+  });
+
+  it("is false for a blank kind", () => {
+    expect(registersKind("", kinds, null)).toBe(false);
+    expect(registersKind("   ", kinds, "Rack")).toBe(false);
+  });
+
+  it("counts a changed spelling as a change (the text is what the asset stores)", () => {
+    expect(registersKind("aisle", [], "Aisle")).toBe(true);
   });
 });
