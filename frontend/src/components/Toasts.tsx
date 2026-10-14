@@ -9,9 +9,22 @@ import { Icon } from "./Icon";
  * `styles/feedback-toasts.css`.
  */
 export interface ToastApi {
-  success(text: string): void;
-  info(text: string): void;
-  error(text: string): void;
+  success(text: string, options?: ToastOptions): void;
+  info(text: string, options?: ToastOptions): void;
+  error(text: string, options?: ToastOptions): void;
+}
+
+/** A button after the message ("Undo"). Pressing it runs `onAction` once and dismisses the toast. */
+export interface ToastAction { label: string; onAction: () => void }
+export interface ToastOptions {
+  /**
+   * A toast with an action never collapses into another toast and nothing collapses into it (two quick "Moved" toasts must keep one Undo each),
+   * and when the cap of three sends one away it goes after the toasts without an action. It is announced as one message: the action is part of
+   * the toast node, not a second addition to the live region.
+   */
+  action?: ToastAction;
+  /** Replaces the default life of this toast (hovered or focused time is still not counted). Zero, negative or not a number: the default. */
+  durationMs?: number;
 }
 
 const NO_TOASTS: ToastApi = { success() {}, info() {}, error() {} };
@@ -22,10 +35,14 @@ export function useToast(): ToastApi {
 }
 
 type Kind = "success" | "info" | "error";
-interface ToastItem { id: number; kind: Kind; text: string; count: number; leaving: boolean }
+interface ToastItem { id: number; kind: Kind; text: string; count: number; leaving: boolean; action?: ToastAction }
 
 /** How long a toast stays, hovered or focused time not counted. */
 const LIFE_MS: Record<Kind, number> = { success: 4000, info: 4000, error: 8000 };
+const lifeOf = (kind: Kind, options?: ToastOptions) => {
+  const ms = options?.durationMs;
+  return ms !== undefined && Number.isFinite(ms) && ms > 0 ? ms : LIFE_MS[kind];
+};
 /** The same kind and text arriving this soon after the previous toast's last arrival is counted into it, not stacked beside it. */
 const COLLAPSE_MS = 1500;
 /** A toast that was held until it was almost due still gets a moment to be read once it is let go. */
@@ -58,6 +75,8 @@ interface Life {
   hover: boolean;
   focus: boolean;
   leaving: boolean;
+  /** This toast's own full life: the default of its kind, or the `durationMs` it was raised with. */
+  lifeMs: number;
   /** The last arrival of this message (a collapse counts), for the 1500 ms rule. */
   arrivedAt: number;
 }
@@ -106,31 +125,47 @@ function createToastStore(timers: Timers, now: () => number) {
   }
 
   /** A fresh full life. A held toast stays held: the timer starts when it is let go. */
-  function restart(id: number, life: Life, kind: Kind) {
+  function restart(id: number, life: Life) {
     if (held(life)) {
       stop(life);
-      life.remaining = LIFE_MS[kind];
-    } else arm(id, life, LIFE_MS[kind]);
+      life.remaining = life.lifeMs;
+    } else arm(id, life, life.lifeMs);
   }
 
-  function push(kind: Kind, text: string) {
+  function push(kind: Kind, text: string, options?: ToastOptions) {
+    const action = options?.action;
+    const lifeMs = lifeOf(kind, options);
     const last = items[items.length - 1];
     const lastLife = last && lives.get(last.id);
     // Only the toast just before this one, and only while it is on screen: A, B, A is three toasts, and a dismissed A is not brought back.
-    if (last && lastLife && !lastLife.leaving && last.kind === kind && last.text === text && now() - lastLife.arrivedAt <= COLLAPSE_MS) {
+    // A toast with an action is never one of the two: its Undo belongs to its own batch, a count badge would keep the first handler and lose the second.
+    if (!action && last && !last.action && lastLife && !lastLife.leaving && last.kind === kind && last.text === text && now() - lastLife.arrivedAt <= COLLAPSE_MS) {
       lastLife.arrivedAt = now();
+      lastLife.lifeMs = lifeMs;
       emit(items.map((t) => (t.id === last.id ? { ...t, count: t.count + 1 } : t)));
-      restart(last.id, lastLife, kind);
+      restart(last.id, lastLife);
       return;
     }
     const id = nextId++;
-    const life: Life = { timer: null, deadline: 0, remaining: LIFE_MS[kind], hover: false, focus: false, leaving: false, arrivedAt: now() };
+    const life: Life = { timer: null, deadline: 0, remaining: lifeMs, hover: false, focus: false, leaving: false, lifeMs, arrivedAt: now() };
     lives.set(id, life);
-    arm(id, life, LIFE_MS[kind]);
-    emit([...items, { id, kind, text, count: 1, leaving: false }]);
-    // Over the cap, the oldest goes, but a slow error is not pushed out by quick successes; the new toast itself is never the one that goes.
+    arm(id, life, lifeMs);
+    emit([...items, { id, kind, text, count: 1, leaving: false, ...(action ? { action } : {}) }]);
+    // Over the cap, the oldest goes, but a slow error is not pushed out by quick successes, and a toast with an action (its Undo is still wanted)
+    // goes after the plain ones; the new toast itself is never the one that goes.
     const others = items.filter((t) => t.id !== id && !lives.get(t.id)!.leaving);
-    if (others.length >= MAX_TOASTS) leave((others.find((t) => t.kind !== "error") ?? others[0]).id);
+    if (others.length >= MAX_TOASTS) {
+      leave((others.find((t) => t.kind !== "error" && !t.action) ?? others.find((t) => t.kind !== "error") ?? others[0]).id);
+    }
+  }
+
+  /** The action button. The toast is marked leaving BEFORE the handler runs, so a second click while it fades finds it leaving and does nothing, and a toast the handler raises is an ordinary new one. */
+  function act(id: number) {
+    const life = lives.get(id);
+    const action = items.find((t) => t.id === id)?.action;
+    if (!life || life.leaving || !action) return;
+    leave(id);
+    action.onAction();
   }
 
   /** Hover and focus-within each hold the timer; it runs again when neither is left. */
@@ -154,9 +189,9 @@ function createToastStore(timers: Timers, now: () => number) {
 
   return {
     api: {
-      success: (text: string) => push("success", text),
-      info: (text: string) => push("info", text),
-      error: (text: string) => push("error", text),
+      success: (text: string, options?: ToastOptions) => push("success", text, options),
+      info: (text: string, options?: ToastOptions) => push("info", text, options),
+      error: (text: string, options?: ToastOptions) => push("error", text, options),
     } satisfies ToastApi,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -164,6 +199,7 @@ function createToastStore(timers: Timers, now: () => number) {
     },
     getItems: () => items,
     dismiss: leave,
+    act,
     hold,
     clear,
   };
@@ -200,7 +236,7 @@ export function ToastProvider({ children, timers = realTimers, now = Date.now }:
 const ICON = { success: "check", info: "info", error: "alert" } as const;
 
 function ToastView({ toast, store }: { toast: ToastItem; store: Store }) {
-  const { id, kind, text, count, leaving } = toast;
+  const { id, kind, text, count, leaving, action } = toast;
   return (
     <div
       className="toast"
@@ -217,6 +253,7 @@ function ToastView({ toast, store }: { toast: ToastItem; store: Store }) {
       <span className="toast-icon"><Icon name={ICON[kind]} /></span>
       <span className="toast-text">{text}</span>
       {count > 1 && <span className="toast-count">{count}</span>}
+      {action && <button type="button" className="toast-action" onClick={() => store.act(id)}>{action.label}</button>}
       <button type="button" className="icon-btn toast-close" aria-label="Dismiss notification" onClick={() => store.dismiss(id)}>
         <Icon name="close" />
       </button>

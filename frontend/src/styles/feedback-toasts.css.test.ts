@@ -49,6 +49,8 @@ describe("the toast's colours, in every look", () => {
       ["the message (--text) on the card", "text", "bg"],
       ["the close cross (--text-2) on the card", "text-2", "bg"],
       ["the count badge (--text-2) on its ground (--surface)", "text-2", "surface"],
+      ["the action label (--accent-ink) on the card (W7p)", "accent-ink", "bg"],
+      ["the action label (--accent-ink) on its hover ground (--accent-tint)", "accent-ink", "accent-tint"],
     ];
     it.each(pairs)("%s reads at 4.5:1", (_name, fg, bg) => {
       expect(contrast(tok(fg), tok(bg))).toBeGreaterThanOrEqual(AA);
@@ -79,6 +81,17 @@ describe("the toast's stylesheet", () => {
     expect(rule(".toast-count")).toMatch(/color:\s*var\(--text-2\)/);
     expect(only(appRules, ".icon-btn").body).toMatch(/color:\s*var\(--text-2\)/); // the close button is an .icon-btn
     expect(rule(".toast-close"), "the close button keeps the .icon-btn colour").not.toMatch(/\bcolor:/);
+  });
+
+  it("styles the action button (W7p) with tokens: the accent ink on the card, the accent tint on hover, no pill, and the text keeps its room", () => {
+    const action = rule(".toast-action");
+    expect(action).toMatch(/color:\s*var\(--accent-ink\)/);
+    expect(action).toMatch(/background:\s*var\(--bg\)/);
+    expect(action).toMatch(/flex:\s*none/);
+    expect(action).toMatch(/max-width:\s*45%/);
+    expect(action).toMatch(/min-height:\s*28px/); // as tall as the close button beside it, so the row does not grow
+    expect(action, "not a pill").not.toMatch(/border-radius/);
+    expect(rule(".toast-action:hover:not(:disabled)")).toMatch(/background:\s*var\(--accent-tint\)/);
   });
 
   it("sits bottom right at 900: above the pop-ups (90) and below the dialogs (1000), and takes no click itself", () => {
