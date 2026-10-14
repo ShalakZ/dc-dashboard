@@ -1,0 +1,4 @@
+@layer w6 {
+  /* W7o: the dialogs of the Asset kinds page that are portaled to document.body, such as the move-and-delete form (components/ConfirmDeleteDialog.tsx,
+     pages/AssetKindsPage.tsx). Tokens only; every rule is scoped by a class this piece owns. */
+}

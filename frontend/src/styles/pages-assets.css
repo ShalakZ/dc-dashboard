@@ -7,13 +7,21 @@
      An asset's header has crumbs and keeps the standard page header. */
   .assets-detail .page-head:not(:has(.crumbs)) { align-items: center; min-height: 52px; margin-bottom: 22px; padding: 0; }
   .assets-detail .page-head:not(:has(.crumbs)) > .actions { grid-row: 1; align-self: center; } /* no crumbs or sub line, so the actions take the one row */
-  .assets-detail .page-head .actions .trash-btn { width: 34px; height: 34px; } /* as tall as the buttons beside it */
   .assets-detail .empty { margin-top: 4px; }
   .assets-detail .empty .empty-title { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
 
   /* Asset page: header, tiles (the .tiles grid is in app.css), section headings */
   .asset-page .page-head h1 { overflow-wrap: anywhere; } /* a 46-character asset name wraps instead of pushing the page sideways */
   .asset-page > h2 { margin: 28px 0 10px; font-size: var(--fs-md); font-weight: 600; line-height: 1.3; }
+  /* The header's grid gives its auto column the buttons' whole width (Edit, Delete and Add asset: 304px; a chip adds 60px "live" or 139px "reconnecting…"),
+     so in a narrow pane the title took the whole squeeze: an 11-character name on two lines, a 46-character one on five, and 5px beside the long chip.
+     Below a width the buttons go under the title instead. The header is the container, so the pane's own width decides, not the window's (the sidebar
+     and the tree column take a changing share of it). The widths are the buttons + the 16px gap + 16rem for the title column (its icon tile takes 52px).
+     A page with a chip has its own, wider one: the chip says "reconnecting…" until the stream opens and then "live", and the layout must not change shape
+     at that moment, so it goes by the widest the buttons get. A page with no chip has no such change. */
+  .asset-page .page-head { container-type: inline-size; }
+  @container (max-width: 580px) { .asset-page .page-head > .actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 12px; } }
+  @container (max-width: 720px) { .asset-page .page-head:has(> .actions > .chip) > .actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 12px; } }
 
   /* The trend: a framed block holding a toolbar (metric, range, the notes) above the chart */
   .trend-frame { padding: 14px 16px 8px; border: 1px solid var(--border); border-radius: var(--radius); }
@@ -65,4 +73,14 @@
   .kinds-page .kind-label { min-width: 0; overflow-wrap: anywhere; color: var(--text); font-weight: 600; } /* a seeded name can be longer than anyone may type now: it wraps in its cell */
   .kinds-page .kinds-table td:nth-child(2) { width: 16%; min-width: 7.5rem; white-space: nowrap; }
   .kinds-page .kinds-table .kind-actions { width: 1%; padding-top: 6px; padding-bottom: 6px; text-align: right; white-space: nowrap; }
+  /* The header holds the title and two buttons. With the sidebar expanded in a narrow window the pane is about 300px, and beside the buttons (about 280px)
+     the title and the trail would be squeezed to a column of single letters: below this width the buttons go under the title. The header is the container,
+     so the pane's own width decides, not the window's (the sidebar and the tree column take a changing share of it). */
+  .kinds-page .page-head { container-type: inline-size; }
+  @container (max-width: 480px) { .kinds-page .page-head > .actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 12px; } }
+  .kinds-page .kinds-note { margin: 0 0 14px; font-size: var(--fs-sm); } /* what a reader is missing, in place of the buttons; one line of muted text above the table */
+  /* The starter pack button waits with aria-disabled while its request runs (a native disabled would drop the focus it has): the same two looks as
+     button:disabled, and the base hover wash is taken back by naming the base colour. */
+  .kinds-page .actions button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+  .kinds-page .actions button[aria-disabled="true"]:hover { background: var(--bg); }
 }

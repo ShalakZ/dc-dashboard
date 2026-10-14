@@ -71,7 +71,7 @@ describe("RoleEditor: the grid", () => {
     expect(within(grid).getAllByRole("checkbox")).toHaveLength(21);
     const sensitive = screen.getByRole("group", { name: "Sensitive actions" });
     expect(within(sensitive).getAllByRole("checkbox").map((c) => c.closest("label")?.textContent)).toEqual([
-      "Delete assets", "Choose the default dashboard", "Export billing as CSV", "Run network scans", "Accept scan results", "Change sign-in protection", "Export the audit log",
+      "Delete assets", "Manage asset kinds", "Choose the default dashboard", "Export billing as CSV", "Run network scans", "Accept scan results", "Change sign-in protection", "Export the audit log",
     ]);
   });
 
@@ -314,7 +314,7 @@ describe("RoleEditor: a built-in role is read-only", () => {
     expect(screen.getByRole("dialog", { name: "Role Operator" })).toBeInTheDocument();
     expect(screen.getByLabelText("Name")).toHaveAttribute("readonly");
     expect(screen.getByLabelText("Description")).toHaveAttribute("readonly");
-    expect(screen.getAllByRole("checkbox")).toHaveLength(28);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(29);
     for (const each of screen.getAllByRole("checkbox")) expect(each).toBeDisabled();
     expect(checked()).toHaveLength(10);
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
@@ -344,8 +344,8 @@ describe("RoleEditor: a built-in role is read-only", () => {
     expect(screen.getByLabelText("Name")).toHaveValue("Administrator");
     expect(box("Manage roles")).toBeChecked();
     expect(box("Manage roles")).toBeDisabled();
-    expect(screen.getAllByRole("checkbox")).toHaveLength(29);
-    expect(checked()).toHaveLength(29);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(30);
+    expect(checked()).toHaveLength(30);
   });
 });
 
@@ -439,7 +439,7 @@ describe("RoleEditor: the keyboard", () => {
       if (at.getAttribute("type") === "checkbox") { reached.add(at); first ??= at; }
       if (at === screen.getByRole("button", { name: "Save" })) break;
     }
-    expect(reached.size).toBe(28);
+    expect(reached.size).toBe(29);
     first!.focus();
     expect(first).not.toBeChecked();
     await userEvent.keyboard(" ");
@@ -507,6 +507,16 @@ describe("RoleEditor: offering what a permission needs", () => {
     expect(cards()).toEqual([]);
     expect(checked().sort()).toEqual(["Change dashboards", "See dashboards", "See scans and the graph", "See the Assets Tree"]);
     expect(hints()).toEqual([]);
+  });
+
+  it("offers Change assets and See the Assets Tree when Manage asset kinds is ticked alone, and one click ticks both", async () => {
+    open(NEW);
+    await tick("Manage asset kinds");
+    const group = cardOf("Manage asset kinds also needs these to show anything:");
+    expect(within(group).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Change assets", "See the Assets Tree"]);
+    await userEvent.click(within(group).getByRole("button", { name: "Also tick 2 permissions" }));
+    expect(cards()).toEqual([]);
+    expect(checked().sort()).toEqual(["Change assets", "Manage asset kinds", "See the Assets Tree"]);
   });
 
   it("Escape closes only the group and gives the box the focus; a second Escape closes the dialog", async () => {

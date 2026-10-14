@@ -1,0 +1,29 @@
+@layer w6 {
+  /* W7o: the icon picker's groups, search box and scroll box (components/IconPicker.tsx). Tokens only; every rule is scoped by a class this
+     piece owns. The older .icon-field / .icon-grid / .icon-cell rules stay in app.css. */
+
+  /* The search row: the box and, beside it, the one live line. The line has the width of its longest message ("No icons match") even
+     when it is empty, so the box does not change size, and nothing below it moves, when the message comes or goes. */
+  .icon-search { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .icon-search > input { flex: 1 1 auto; min-width: 0; }
+  .icon-search-note { flex: none; width: 8em; color: var(--text-2); font-size: var(--fs-xs); white-space: nowrap; }
+
+  /* One section per group: a small heading over its own ten-column grid of cells. */
+  .icon-section { display: grid; gap: 4px; }
+  .icon-group-label { color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; }
+  .icon-cells { display: grid; grid-template-columns: repeat(10, 32px); gap: 4px; justify-content: start; }
+
+  /* A search hides cells and whole sections with the `hidden` attribute. The cell's own `display: grid` (app.css, written to outrank the
+     base label rules) would beat the browser's `[hidden] { display: none }`, so these say it again, with the weight to win. */
+  .icon-grid .icon-cell[hidden], .icon-grid .icon-section[hidden] { display: none; }
+
+  /* An open grid makes the dialog taller than a small window (Add asset is the tallest, and the dialog is one scrolling box with no footer
+     of its own), which would leave Save below the fold. So while a grid is open in a form, its button row stays at the bottom edge of
+     the dialog, and so does an error message just above it (an error would otherwise appear out of sight). A sticky box stops at the
+     scroll box's content edge, which is where the row sits at the end of the scroll too, so it never jumps. The dialog's own 22 px of
+     bottom padding lies below that edge and the fields scroll through it, so the first shadow paints that band in the page colour
+     (they must not show under the buttons); the second is the hairline the scrolled fields slide under. The error's offset is the
+     row's height, one button (`--btn-h`). */
+  form:has(.icon-grid:not([hidden])) > .row:last-child { position: sticky; bottom: 0; z-index: 1; background: var(--bg); box-shadow: 0 22px 0 0 var(--bg), 0 -1px 0 0 var(--border); }
+  form:has(.icon-grid:not([hidden])) > .error { position: sticky; bottom: var(--btn-h); z-index: 1; background: var(--bg); }
+}

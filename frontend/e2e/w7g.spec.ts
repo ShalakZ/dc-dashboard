@@ -136,7 +136,7 @@ test.describe.serial("W7g: asset icons and the Assets Tree name", () => {
       await form.change.click();
       await expect(form.change).toHaveAttribute("aria-expanded", "true");
       await expect(form.grid).toBeVisible();
-      await expect(form.grid.getByRole("radio"), "Automatic and the 28 icons").toHaveCount(29);
+      await expect(form.grid.getByRole("radio"), "Automatic and the 48 icons").toHaveCount(49);
       await expect(form.radio("Automatic")).toBeChecked();
       await expect(form.radio("Automatic")).toBeFocused();
       await expect(form.dialog, "opening the grid must not submit the form").toBeVisible();

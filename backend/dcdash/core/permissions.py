@@ -32,8 +32,11 @@ def _p(id: str, area: str, kind: Kind, label: str, description: str) -> Permissi
 CATALOGUE: tuple[Permission, ...] = (
     _p("assets.view", "Assets Tree", "see", "See the Assets Tree",
        "Open the Assets Tree, an asset's details and charts, and the fleet summary."),
-    _p("assets.edit", "Assets Tree", "change", "Change assets", "Add and edit assets and asset kinds, and map points to them."),
+    _p("assets.edit", "Assets Tree", "change", "Change assets", "Add and edit assets and map points to them."),
     _p("assets.delete", "Assets Tree", "risky", "Delete assets", "Delete an asset (its mappings go with it)."),
+    _p("assets.kinds", "Assets Tree", "risky", "Manage asset kinds",
+       "Create, rename, re-icon and delete asset kinds (a rename or a move changes the kind of every asset that uses it), "
+       "and add the data-centre starter kinds."),
     _p("dashboards.view", "Dashboards", "see", "See dashboards",
        "Open dashboards and their widgets, receive live values, and read the values of any point through a widget."),
     _p("dashboards.edit", "Dashboards", "change", "Change dashboards", "Create, edit and delete dashboards and their widgets."),

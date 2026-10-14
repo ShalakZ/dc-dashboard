@@ -259,6 +259,121 @@ describe("ConfirmDeleteDialog", () => {
     expect(screen.getByRole("button", { name: "trash" })).toHaveFocus();
   });
 
+  // W7o: the delete of a kind in use asks where its assets go. The choice is the dialog's `children`, and the confirm button waits for it.
+  describe("a choice slot (children) and confirmDisabled", () => {
+    const props = { title: 'Delete the kind "Rack"?', message: '12 assets use "Rack".', confirmLabel: "Delete", onCancel: () => {} };
+    const choice = <label>Move the assets to<select defaultValue=""><option value="">Choose a kind…</option><option value="2">Pump</option></select></label>;
+
+    it("renders the children between the message and the buttons, OUTSIDE the polite region the dialog is described by", () => {
+      render(<ConfirmDeleteDialog {...props} onConfirm={async () => {}}>{choice}</ConfirmDeleteDialog>);
+      const select = screen.getByLabelText("Move the assets to");
+      const body = screen.getByText('12 assets use "Rack".').closest("[aria-live]")!;
+      expect(select.closest("[aria-live]")).toBeNull(); // a select inside it would be announced again with every change and read into the description
+      expect(body.contains(select)).toBe(false);
+      expect(screen.getByRole("dialog")).toHaveAttribute("aria-describedby", body.id);
+      expect(screen.getByRole("dialog")).toHaveAccessibleDescription('12 assets use "Rack".');
+      const position = (a: Element, b: Element) => a.compareDocumentPosition(b);
+      expect(position(body, select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(position(select, screen.getByRole("button", { name: "Cancel" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("draws no slot when there are no children (the dialog is as it was)", () => {
+      render(<ConfirmDeleteDialog {...props} onConfirm={async () => {}} />);
+      expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+      expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Cancel", "Delete"]);
+    });
+
+    it("keeps the confirm button off while confirmDisabled, starts on Cancel, and a click confirms nothing", async () => {
+      const onConfirm = vi.fn(async () => {});
+      const { rerender } = render(<ConfirmDeleteDialog {...props} onConfirm={onConfirm} confirmDisabled>{choice}</ConfirmDeleteDialog>);
+      expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(); // initial focus is Cancel, so the native disabled costs the focus nothing
+      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      expect(onConfirm).not.toHaveBeenCalled();
+      rerender(<ConfirmDeleteDialog {...props} onConfirm={onConfirm}>{choice}</ConfirmDeleteDialog>);
+      expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      expect(onConfirm).toHaveBeenCalledTimes(1);
+    });
+
+    it("Tab walks the choice, then Cancel, and wraps (the confirm button is skipped while it is off)", async () => {
+      render(<ConfirmDeleteDialog {...props} onConfirm={async () => {}} confirmDisabled>{choice}</ConfirmDeleteDialog>);
+      expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+      await userEvent.tab();
+      expect(screen.getByLabelText("Move the assets to")).toHaveFocus(); // wrapped: Cancel is the last control while Delete is off
+      await userEvent.tab();
+      expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    });
+
+    it("hands the focus to the choice when the dialog turns into one that needs it while a request was running (the button it was on is off)", async () => {
+      let finish!: () => void;
+      const onConfirm = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+      const { rerender } = render(<ConfirmDeleteDialog {...props} onConfirm={onConfirm} />);
+      await userEvent.click(screen.getByRole("button", { name: "Delete" })); // the focus is on Delete, which the running request switches off
+      expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+      // The server answered "assets joined": the page now asks for a target. The dialog is still busy until the request has been settled.
+      rerender(<ConfirmDeleteDialog {...props} onConfirm={onConfirm} confirmDisabled>{choice}</ConfirmDeleteDialog>);
+      await act(async () => finish());
+      expect(screen.getByLabelText("Move the assets to")).toHaveFocus();
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it("gives the focus back to the choice after a request that left the choice made and the confirm button enabled (a stale count, a 422): Chrome dropped it with the disabled button", async () => {
+      let finish!: () => void;
+      // What Chrome does to a focused button that becomes disabled: the focus is gone. jsdom ignores a blur on a disabled element, so the blur is done
+      // here, at the start of the request, while the button is still enabled in the DOM (React has not committed busy yet).
+      const onConfirm = vi.fn(() => { (document.activeElement as HTMLElement).blur(); return new Promise<void>((resolve) => { finish = resolve; }); });
+      render(<ConfirmDeleteDialog {...props} onConfirm={onConfirm}>{choice}</ConfirmDeleteDialog>);
+      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      expect(document.activeElement).toBe(document.body);
+      await act(async () => finish());
+      expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+      expect(screen.getByLabelText("Move the assets to")).toHaveFocus();
+    });
+
+    it("does not do that for a dialog without a choice: its focus rules are as they were", async () => {
+      let finish!: () => void;
+      const onConfirm = vi.fn(() => { (document.activeElement as HTMLElement).blur(); return new Promise<void>((resolve) => { finish = resolve; }); });
+      render(<ConfirmDeleteDialog {...props} onConfirm={onConfirm} />);
+      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await act(async () => finish());
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("leaves the focus alone when it is still inside and enabled (somebody tabbing through the choice is not pulled back)", async () => {
+      render(<ConfirmDeleteDialog {...props} onConfirm={async () => {}} confirmDisabled>{choice}</ConfirmDeleteDialog>);
+      screen.getByLabelText("Move the assets to").focus();
+      await userEvent.selectOptions(screen.getByLabelText("Move the assets to"), "2");
+      expect(screen.getByLabelText("Move the assets to")).toHaveFocus();
+    });
+  });
+
+  // W7o fix wave: the opener's one line for "what you saw has changed" (the count moved under the dialog). It is the error line of the dialog, not
+  // a second announcer, and unlike an error it does not switch the confirm button off: the question is still answerable.
+  describe("notice (a line from the opener, in the error slot)", () => {
+    const props = { title: 'Delete the kind "Rack"?', message: '12 assets use "Rack".', confirmLabel: "Delete", onCancel: () => {} };
+    const choice = <label>Move the assets to<select defaultValue="2"><option value="">Choose a kind…</option><option value="2">Pump</option></select></label>;
+
+    it("shows the line as the dialog's alert, outside the polite region, and leaves the confirm button on", () => {
+      render(<ConfirmDeleteDialog {...props} onConfirm={async () => {}} notice="14 assets use this kind now. Check the new count and try again.">{choice}</ConfirmDeleteDialog>);
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("14 assets use this kind now. Check the new count and try again.");
+      expect(alert).toHaveClass("error");
+      expect(alert.closest("[aria-live]")).toBeNull(); // the description stays the sentence about the delete
+      expect(screen.getByRole("dialog")).toHaveAccessibleDescription('12 assets use "Rack".');
+      expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    });
+
+    it("draws nothing without one and goes as soon as the opener drops it", () => {
+      const { rerender } = render(<ConfirmDeleteDialog {...props} onConfirm={async () => {}}>{choice}</ConfirmDeleteDialog>);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      rerender(<ConfirmDeleteDialog {...props} onConfirm={async () => {}} notice="Changed.">{choice}</ConfirmDeleteDialog>);
+      expect(screen.getByRole("alert")).toHaveTextContent("Changed.");
+      rerender(<ConfirmDeleteDialog {...props} onConfirm={async () => {}}>{choice}</ConfirmDeleteDialog>);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
   describe("tone", () => {
     const props = { title: "t", message: "m", onConfirm: async () => {}, onCancel: () => {} };
     it("is danger by default and primary on request (a currency change is not a destruction)", () => {

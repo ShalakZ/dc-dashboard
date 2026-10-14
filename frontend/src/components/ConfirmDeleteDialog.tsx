@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAction } from "../hooks/useAction";
 
@@ -18,6 +18,19 @@ interface Props {
   tone?: "danger" | "primary";
   /** The delete can never go ahead from here (something still depends on it): no confirm button at all, and Cancel reads "Close". The message and `loadError` stay to say why. */
   blocked?: boolean;
+  /**
+   * A choice the confirmation needs (where the assets of a deleted kind go): drawn between the message and the buttons, OUTSIDE the polite
+   * region (that region is the dialog's description, and a select inside it would be announced again with every change).
+   */
+  children?: ReactNode;
+  /** The confirm button is off until the choice in `children` is made. Native `disabled` is fine: the first focus is Cancel, and the one case where the focus was on the confirm button is handled below. */
+  confirmDisabled?: boolean;
+  /**
+   * One line the opener wants said in the error slot that is not a failure of the request: what the person saw has changed under the dialog (the
+   * count moved). Drawn as the same alert as an error, so the dialog has a single announcer, but the confirm button stays usable. The opener owns
+   * its life (it drops the line when the choice changes or the next request starts); a refused request shows its own error line as always.
+   */
+  notice?: string;
 }
 
 const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -27,7 +40,7 @@ const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), button:not([di
  * Rendered into the body, like SignOutDialog, so a caller may keep it inside a form or a table row: the backdrop would be invalid markup in a
  * row, and the buttons (plain `type="button"`) would otherwise submit the form they sit in.
  */
-export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confirmLabel = "Delete anyway", loading = false, loadError, tone = "danger", blocked = false }: Props) {
+export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confirmLabel = "Delete anyway", loading = false, loadError, tone = "danger", blocked = false, children, confirmDisabled = false, notice }: Props) {
   const { run, busy, error } = useAction();
   const dialog = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -56,6 +69,19 @@ export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confi
   useEffect(() => {
     if (blocked && !busy) cancel.current?.focus();
   }, [blocked, busy]);
+  // A dialog with a choice (children) whose confirmed request was answered with a change of the question (the count moved, the target is gone, or
+  // assets joined) has lost the confirm button the focus was on: the browser drops the focus of a button that is disabled while the request runs,
+  // and the button is then either off again (nothing chosen) or enabled with the focus gone. Once the request is over, the first control, the
+  // choice, takes it. Nothing happens while the focus is still on an enabled control inside, such as the choice somebody is using, and a dialog
+  // without a choice keeps its old behaviour (blocked has its own rule above).
+  const hasChoice = Boolean(children);
+  useEffect(() => {
+    if (!(confirmDisabled || hasChoice) || busy || blocked) return;
+    const root = dialog.current;
+    const at = document.activeElement;
+    const lost = !(at instanceof Node) || !root?.contains(at) || (at instanceof HTMLElement && at.matches(":disabled"));
+    if (lost) root?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  }, [confirmDisabled, hasChoice, busy, blocked]);
   // Tab and Shift+Tab wrap round inside the dialog, as in Modal. The dialog is the last thing in the body, so without this the browser would
   // take the focus on to its own chrome (and back in on the next Tab); keepFocus stays as the backstop for a click or a script. The controls
   // are read at each keypress, so a disabled confirm button is skipped and one that comes alive counts as the last.
@@ -96,11 +122,13 @@ export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confi
         <div id={bodyId} aria-live="polite" className="confirm-body">
           {loading ? <p className="confirm-checking">Checking what this deletes…</p> : message !== "" && <p>{message}</p>}
         </div>
+        {children}
         {loadError && <p className="error" role="alert">{loadError}</p>}
-        {error && <p className="error" role="alert">{error}</p>}
+        {notice && <p className="error" role="alert">{notice}</p>}
+        {error &&<p className="error" role="alert">{error}</p>}
         <div className="row">
           <button type="button" ref={cancel} onClick={onCancel} disabled={busy}>{blocked ? "Close" : "Cancel"}</button>
-          {!blocked && <button type="button" className={tone} onClick={() => void run(onConfirm)} disabled={busy || loading || !!loadError}>{confirmLabel}</button>}
+          {!blocked && <button type="button" className={tone} onClick={() => void run(onConfirm)} disabled={busy || loading || !!loadError || confirmDisabled}>{confirmLabel}</button>}
         </div>
       </div>
     </div>,

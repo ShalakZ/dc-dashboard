@@ -4,6 +4,8 @@ export type AuditKind = "signin" | "problem" | "create" | "change" | "delete" | 
 const PROBLEMS = new Set(["login.failed", "login.locked", "password.change_failed"]);
 const SIGN_INS = new Set(["login.succeeded", "setup.completed"]);
 const SETTINGS_PREFIXES = ["settings.", "storage.", "billing."];
+// Actions that add things without ending in ".created": the data-centre starter pack registers kinds.
+const CREATE_ACTIONS = new Set(["kind.starter_pack_added"]);
 const CHANGE_SUFFIXES = [".updated", ".changed", "_changed", ".unblocked", ".default_set", ".renamed"];
 
 /**
@@ -16,7 +18,7 @@ export function auditKind(action: string): AuditKind {
   if (SIGN_INS.has(action)) return "signin";
   if (SETTINGS_PREFIXES.some((prefix) => action.startsWith(prefix))) return "settings";
   if (action.endsWith(".deleted")) return "delete";
-  if (action.endsWith(".created")) return "create";
+  if (action.endsWith(".created") || CREATE_ACTIONS.has(action)) return "create";
   if (CHANGE_SUFFIXES.some((suffix) => action.endsWith(suffix))) return "change";
   return "other";
 }

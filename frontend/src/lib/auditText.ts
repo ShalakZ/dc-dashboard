@@ -315,6 +315,14 @@ function kindThing(name: unknown): string {
   return stored ? `asset kind ${shortName(stored)}` : "an asset kind";
 }
 
+/** " and moved 3 assets to Panel" from what a delete-and-move stored (the number the UPDATE moved, the target's name); "" for a plain delete. A count without a target says nothing, a target without a usable count says "its assets". */
+function movedTo(d: Detail): string {
+  const target = text(d.moved_to);
+  if (target === null) return "";
+  const moved = typeof d.assets === "number" && Number.isSafeInteger(d.assets) && d.assets > 0 ? count(d.assets, "asset") : "its assets";
+  return ` and moved ${moved} to ${shortName(target)}`;
+}
+
 /** An icon id as people read it: the catalogue label, else the id as stored; null when there is none. */
 function iconText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -328,6 +336,14 @@ const sideValue = (c: Context, side: "before" | "after", key: string): unknown =
 function followers(value: unknown): string {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) return "";
   return ` (${count(value, "asset")} ${value === 1 ? "follows" : "follow"})`;
+}
+
+/** "Added 36 data-centre asset kinds: UPS, Battery, PDU, RPP, ATS, STS and 30 more" from the stored count and names (kind names, no ids); still a sentence when either is missing. */
+function starterPackAdded(d: Detail): string {
+  const names = Array.isArray(d.names) ? d.names.map(text).filter((name): name is string => name !== null).map(shortName) : [];
+  const stored = typeof d.count === "number" && Number.isSafeInteger(d.count) && d.count > 0 ? d.count : names.length;
+  const what = stored > 0 ? `Added ${count(stored, "data-centre asset kind")}` : "Added data-centre asset kinds";
+  return names.length > 0 ? `${what}: ${labelList(names)}` : what;
 }
 
 const sourcesPage = page("/sources", "Open Sources");
@@ -428,7 +444,7 @@ const RULES: Record<string, Rule> = {
 
   // The detail keeps the kind's name (kind_id is only there for the raw Details JSON): a rename stores it in before/after.
   "kind.created": { summary: (c) => `Created ${kindThing(c.d.name)}`, link: kindsPage },
-  "kind.deleted": { summary: (c) => `Deleted ${kindThing(c.d.name)}` },
+  "kind.deleted": { summary: (c) => `Deleted ${kindThing(c.d.name)}${movedTo(c.d)}` },
   "kind.icon_changed": {
     summary: (c) => {
       const from = iconText(sideValue(c, "before", "icon"));
@@ -448,6 +464,7 @@ const RULES: Record<string, Rule> = {
     },
     link: kindsPage,
   },
+  "kind.starter_pack_added": { summary: (c) => starterPackAdded(c.d), link: kindsPage },
 
   // In these rows the User column is the account that was attacked (unknown when the name did not exist), not someone who acted.
   "login.failed": {

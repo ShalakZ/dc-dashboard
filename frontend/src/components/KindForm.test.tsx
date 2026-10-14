@@ -46,7 +46,7 @@ describe("KindForm, a new kind", () => {
     expect(screen.queryByRole("radio", { name: "Automatic", hidden: true })).not.toBeInTheDocument();
     await userEvent.type(nameField(), "Hall");
     await save();
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ name: "Hall", icon: "room" });
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ name: "Hall", icon: "hall" }); // the keyword guess: "hall" has its own icon since W7o (it was "room")
   });
 
   it("follows the typed name with the keyword guess, saying so, until an icon is picked", async () => {
@@ -82,6 +82,30 @@ describe("KindForm, a new kind", () => {
     expect(drawn()).toBe(iconHtml("kindRack"));
     await save();
     expect(sent(onSubmit)).toEqual({ name: "UPS", icon: "rack" });
+  });
+
+  it("finds an icon with the search box and sends it; the dialog closes layer by layer on Escape: the typed text, the grid, then the dialog", async () => {
+    const onClose = vi.fn();
+    const onSubmit = vi.fn<Submit>(async () => undefined);
+    render(<Modal title="New kind" onClose={onClose}><KindForm kinds={[]} onSubmit={onSubmit} onCancel={onClose} /></Modal>);
+    await userEvent.type(nameField(), "Spare");
+    await userEvent.click(opener());
+    const search = screen.getByRole("searchbox", { name: "Search icons" });
+    await userEvent.type(search, "firewall");
+    expect(screen.getAllByRole("radio").map((c) => c.closest("label")!.textContent)).toEqual(["Firewall", "Generic"]); // Generic is the checked cell: it stays
+    await userEvent.click(cell("Firewall"));
+    await userEvent.type(search, "{Escape}");
+    expect(search).toHaveValue("");
+    expect(grid()).not.toHaveAttribute("hidden");
+    await userEvent.keyboard("{Escape}");
+    expect(grid()).toHaveAttribute("hidden");
+    expect(opener()).toHaveFocus();
+    expect(onClose).not.toHaveBeenCalled(); // the name typed so far is still there
+    expect(nameField()).toHaveValue("Spare");
+    await save();
+    expect(sent(onSubmit)).toEqual({ name: "Spare", icon: "firewall" });
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("sends the name as the server will store it: blanks tidied, NFC", async () => {

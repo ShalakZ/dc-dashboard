@@ -536,9 +536,12 @@ describe("AssetsPage", () => {
         renderWorkspace("/assets/2");
         const head = (await screen.findByRole("heading", { name: "Room A", level: 1 })).closest("header")!;
         const actions = head.querySelector(".actions")!;
-        // the trash button is an icon: its name is the aria-label, not text
-        expect([...actions.children].map((c) => c.textContent || c.getAttribute("aria-label"))).toEqual(["reconnecting…", "Edit", "Delete Room A", "Add asset"]);
+        // the header's Delete is labelled (W7o): it reads "Delete" like Edit and Add asset do, and its accessible name stays "Delete Room A"
+        expect([...actions.children].map((c) => c.textContent)).toEqual(["reconnecting…", "Edit", "Delete", "Add asset"]);
         expect(actions.children[0]).toHaveClass("chip");
+        const trash = within(actions as HTMLElement).getByRole("button", { name: "Delete Room A" });
+        expect(trash).toHaveClass("trash-btn", "trash-btn-labelled");
+        expect(trash).not.toHaveClass("icon-btn");
       });
     });
   });
@@ -1047,6 +1050,62 @@ describe("AssetsPage and the asset kinds registry", () => {
       await dialogGone();
       expect(calls.find((c) => c.method === "PATCH")!.body).toMatchObject({ kind: "Room" });
       expect(kindsOf(calls)).toHaveLength(0);
+    });
+  });
+
+  // W7o: only "Manage asset kinds" writes the registry. A role with Change assets alone still saves an asset with any kind text (the asset routes
+  // never write the registry), but nothing is posted to /api/asset-kinds for it: a 403 there would be noise, and swallowing it would look like success.
+  describe("for a role that may change assets but not manage kinds", () => {
+    const WITHOUT = "Not in Asset kinds yet. Only someone who manages kinds can add it; this asset keeps the text.";
+    const as = (permissions: PermissionId[], list: Fixture = assets) => ({ ...authed("custom", list), "GET /api/me": { body: userFor("custom", { permissions }) } });
+    const EDIT_ONLY: PermissionId[] = ["assets.view", "assets.edit"];
+
+    it("creates the asset with the typed kind, says beforehand that the kind stays text, and posts no kind", async () => {
+      const calls = mockFetch({ ...as(EDIT_ONLY), "POST /api/assets": created, "POST /api/asset-kinds": kindCreated });
+      const toasts = spyToasts();
+      renderWorkspace("/assets", { toasts: toasts.api });
+      await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+      await userEvent.type(screen.getByLabelText("Name"), "Pump 1");
+      await userEvent.selectOptions(screen.getByLabelText("Kind"), "Other…");
+      await userEvent.type(screen.getByLabelText("New kind"), "Pump");
+      expect(screen.getByText(WITHOUT)).toBeInTheDocument();
+      expect(screen.queryByText("New kind: added to Asset kinds.")).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await dialogGone();
+      expect(calls.find((c) => c.method === "POST" && c.path === "/api/assets")!.body).toMatchObject({ name: "Pump 1", kind: "Pump" });
+      expect(kindsOf(calls)).toHaveLength(0);
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Asset created" }]);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      await waitFor(() => expect(count(calls, "GET", "/api/assets")).toBe(2)); // the lists still refresh, though no kind request does it
+    });
+
+    it("an edit to a new kind patches the asset and posts no kind either", async () => {
+      const withAisle = [...assets, { id: 3, parent_id: 1, name: "Odd one", kind: "Aisle", sort_order: 0 }];
+      const calls = mockFetch({ ...as(EDIT_ONLY, withAisle), "PATCH /api/assets/3": { body: { ...withAisle[2], kind: "Pump" } }, "POST /api/asset-kinds": kindCreated });
+      renderWorkspace("/assets/3");
+      await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+      await userEvent.selectOptions(screen.getByLabelText("Kind"), "Other…");
+      await userEvent.type(screen.getByLabelText("New kind"), "Pump");
+      expect(screen.getByText(WITHOUT)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await dialogGone();
+      expect(calls.find((c) => c.method === "PATCH")!.body).toMatchObject({ kind: "Pump" });
+      expect(kindsOf(calls)).toHaveLength(0);
+      await waitFor(() => expect(count(calls, "GET", "/api/assets")).toBe(2));
+    });
+
+    it("a role that holds both registers the kind after the asset, as an administrator does, with the first note", async () => {
+      const calls = mockFetch({ ...as([...EDIT_ONLY, "assets.kinds"]), "POST /api/assets": created, "POST /api/asset-kinds": kindCreated });
+      renderWorkspace("/assets");
+      await userEvent.click(await screen.findByRole("button", { name: "Add asset" }));
+      await userEvent.type(screen.getByLabelText("Name"), "Pump 1");
+      await userEvent.selectOptions(screen.getByLabelText("Kind"), "Other…");
+      await userEvent.type(screen.getByLabelText("New kind"), "Pump");
+      expect(screen.getByText("New kind: added to Asset kinds.")).toBeInTheDocument();
+      expect(screen.queryByText(WITHOUT)).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await dialogGone();
+      expect(kindsOf(calls).map((c) => c.body)).toEqual([{ name: "Pump", icon: "pump" }]);
     });
   });
 

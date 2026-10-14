@@ -244,7 +244,7 @@ describe("AssetForm Icon", () => {
     expect(cell("Automatic")).toHaveFocus();
   });
 
-  it("offers Automatic and the 28 icons, each named by its label and titled", () => {
+  it("offers Automatic and the 48 icons, each named by its label and titled", () => {
     open([]);
     expect(cells().map((c) => c.closest("label")!.textContent)).toEqual(["Automatic", ...ASSET_ICONS.map((e) => e.label)]);
     for (const c of cells()) {
@@ -267,6 +267,20 @@ describe("AssetForm Icon", () => {
     expect(drawn()).toBe(iconHtml("kindSwitch"));
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(sent(onSubmit)).toMatchObject({ name: "Hall", kind: "generic", icon: "switch" });
+  });
+
+  it("finds an icon with the search box, picks it and sends its id; Enter in the box saves nothing", async () => {
+    const { onSubmit } = open([]);
+    await userEvent.type(screen.getByLabelText("Name"), "Hall");
+    await userEvent.click(opener());
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search icons" }), "transfer{Enter}");
+    expect(onSubmit).not.toHaveBeenCalled();
+    const visible = screen.getAllByRole("radio").map((c) => c.closest("label")!.textContent);
+    expect(visible).toEqual(["Automatic", "Automatic transfer switch", "Static transfer switch"]); // Automatic stays whatever is typed
+    await userEvent.click(cell("Static transfer switch"));
+    expect(field()).toHaveAccessibleDescription("Static transfer switch"); // the caption is the form's: the search never writes into it
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(sent(onSubmit)).toMatchObject({ name: "Hall", icon: "sts" });
   });
 
   it("stays open after a pick, and Automatic after a pick sends null on an edit", async () => {

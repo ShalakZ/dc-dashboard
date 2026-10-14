@@ -38,6 +38,8 @@ export const PERMISSION_NEEDS: Record<PermissionId, readonly PermissionId[]> = {
   "assets.view": [],
   "assets.edit": ["assets.view"],
   "assets.delete": ["assets.view"],
+  // the brief says it needs assets.edit; the table spells out the transitive need, as it does for tariffs.edit
+  "assets.kinds": ["assets.edit", "assets.view"],
   "dashboards.view": [],
   // the widget editor loads the assets and the discovery graph: without them Add widget stays disabled
   "dashboards.edit": ["dashboards.view", "assets.view", "discovery.view"],

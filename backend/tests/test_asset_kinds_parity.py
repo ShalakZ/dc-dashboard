@@ -58,7 +58,9 @@ ROWS = [pytest.param(row, id=f"{n:02d}-{shown(row['kind'])}") for n, row in enum
 def test_the_sample_file_is_pure_ascii_with_escapes_and_has_every_required_row():
     text = SAMPLES_FILE.read_text(encoding="ascii")  # raises on a literal invisible character
     assert text.isascii()
-    assert all(set(row) == {"kind", "key", "icon"} for row in SAMPLES)
+    # W7o: a row whose TypeScript answer moved on carries `now` (the id the front end gives today); `icon` stays what the frozen 0010 copy answers.
+    assert all(set(row) in ({"kind", "key", "icon"}, {"kind", "key", "icon", "now"}) for row in SAMPLES)
+    assert all(row["now"] in ICONS and row["now"] != row["icon"] for row in SAMPLES if "now" in row)
     kinds = [row["kind"] for row in SAMPLES]
     assert len(kinds) == len(set(kinds)), "a kind appears twice"
     assert [kind for kind in REQUIRED_KINDS if kind not in kinds] == []

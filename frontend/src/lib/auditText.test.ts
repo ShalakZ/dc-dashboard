@@ -10,7 +10,7 @@ const entry = (action: string, detail: unknown, extra: Partial<AuditEntry> = {})
 const ALL_ACTIONS = [
   "asset.created", "asset.updated", "asset.deleted", "billing.currency_changed",
   "dashboard.created", "dashboard.updated", "dashboard.deleted", "dashboard.default_changed", "diagnostics.report", "discovery.accepted",
-  "kind.created", "kind.deleted", "kind.icon_changed", "kind.renamed",
+  "kind.created", "kind.deleted", "kind.icon_changed", "kind.renamed", "kind.starter_pack_added",
   "login.failed", "login.locked", "login.succeeded", "login.unblocked", "mapping.created", "mapping.updated", "mapping.deleted",
   "password.change_failed", "password.changed", "role.created", "role.updated", "role.deleted", "scan.finished", "scan.started",
   "scope.created", "scope.updated", "scope.deleted", "settings.sign_in_changed", "settings.timezone_changed", "setup.completed",
@@ -480,6 +480,57 @@ describe("describeAudit: asset kinds", () => {
     expect(iconChanged({}).summary).toBe("Changed the icon of an asset kind");
   });
 
+  const deleted = (detail: Record<string, unknown>) => describeAudit(entry("kind.deleted", { kind_id: KIND, ...detail }));
+
+  it("says a deletion that moved assets by the target's name and how many moved, in the singular too", () => {
+    expect(deleted({ name: "Rack", icon: "rack", assets: 3, moved_to: "Panel" }).summary).toBe("Deleted asset kind Rack and moved 3 assets to Panel");
+    expect(deleted({ name: "Rack", assets: 1, moved_to: "Panel" }).summary).toBe("Deleted asset kind Rack and moved 1 asset to Panel");
+    expect(deleted({ assets: 2, moved_to: "Panel" }).summary).toBe("Deleted an asset kind and moved 2 assets to Panel");
+    expect(deleted({ name: "Rack", assets: 2, moved_to: "x".repeat(300) }).summary).toBe(`Deleted asset kind Rack and moved 2 assets to ${"x".repeat(80)}…`);
+  });
+
+  it("leaves a plain deletion as it was and still reads when only part of the moved wording is stored", () => {
+    expect(deleted({ name: "Rack", icon: "rack" }).summary).toBe("Deleted asset kind Rack");
+    expect(deleted({ name: "Rack", assets: 3 }).summary).toBe("Deleted asset kind Rack"); // a count without a target says nothing
+    expect(deleted({ name: "Rack", moved_to: "Panel" }).summary).toBe("Deleted asset kind Rack and moved its assets to Panel");
+    for (const assets of [0, -1, 1.5, "3", null, {}]) {
+      expect(deleted({ name: "Rack", assets, moved_to: "Panel" }).summary, String(assets)).toBe("Deleted asset kind Rack and moved its assets to Panel");
+    }
+    for (const moved_to of ["", "  ", 7, null, [], {}]) expect(deleted({ name: "Rack", assets: 3, moved_to }).summary).toBe("Deleted asset kind Rack");
+  });
+
+  it("shows the moved deletion with no id, no Before/After rows and no link", () => {
+    const view = deleted({ name: "Rack", icon: "rack", assets: 3, moved_to: "Panel" });
+    expect(view.summary).not.toMatch(/\d{5}/);
+    expect(view.changes).toEqual([]);
+    expect(view.link).toBeNull();
+  });
+
+  const starterPack = (detail: unknown) => describeAudit(entry("kind.starter_pack_added", detail));
+
+  it("says the starter pack by the names of the kinds it added, never by an id, and counts the long tail", () => {
+    expect(starterPack({ count: 3, names: ["UPS", "Battery", "PDU"] }).summary).toBe("Added 3 data-centre asset kinds: UPS, Battery, PDU");
+    expect(starterPack({ count: 1, names: ["Pump"] }).summary).toBe("Added 1 data-centre asset kind: Pump");
+    const names = ["UPS", "Battery", "PDU", "RPP", "ATS", "STS", "Switchgear", "Busway", "Ring main unit"];
+    expect(starterPack({ count: 9, names }).summary).toBe("Added 9 data-centre asset kinds: UPS, Battery, PDU, RPP, ATS, STS and 3 more");
+    expect(starterPack({ count: 3, names: ["UPS", "x".repeat(300)] }).summary).toBe(`Added 3 data-centre asset kinds: UPS, ${"x".repeat(80)}…`);
+  });
+
+  it("still reads when the count or the names are missing or are not what they should be", () => {
+    expect(starterPack({ names: ["UPS", "Battery"] }).summary).toBe("Added 2 data-centre asset kinds: UPS, Battery");
+    expect(starterPack({ count: 36 }).summary).toBe("Added 36 data-centre asset kinds");
+    expect(starterPack({}).summary).toBe("Added data-centre asset kinds");
+    expect(starterPack({ count: -2, names: "UPS" }).summary).toBe("Added data-centre asset kinds");
+    expect(starterPack({ count: "3", names: [7, null, "  ", "Pump", {}] }).summary).toBe("Added 1 data-centre asset kind: Pump");
+    expect(starterPack({ count: 1.5, names: {} }).summary).toBe("Added data-centre asset kinds");
+  });
+
+  it("links the starter pack to the Asset kinds page and shows no Before/After rows", () => {
+    const view = starterPack({ count: 2, names: ["UPS", "Battery"] });
+    expect(view.link).toEqual({ to: "/assets/kinds", label: "Open Asset kinds" });
+    expect(view.changes).toEqual([]);
+  });
+
   it("links to the Asset kinds page, except from a deletion", () => {
     expect(describeAudit(entry("kind.created", { kind_id: KIND, name: "Rack" })).link).toEqual({ to: "/assets/kinds", label: "Open Asset kinds" });
     expect(renamed({ before: { name: "a" }, after: { name: "b" } }).link).toEqual({ to: "/assets/kinds", label: "Open Asset kinds" });
@@ -496,8 +547,8 @@ describe("describeAudit: asset kinds", () => {
   });
 
   it("never throws on a kind entry with the wrong shapes", () => {
-    for (const action of ["kind.created", "kind.renamed", "kind.icon_changed", "kind.deleted"]) {
-      for (const detail of [{}, { name: 7 }, { assets: {} }, { before: 5, after: "x" }, { before: { name: {} }, after: { icon: [] } }, { icon: null }]) {
+    for (const action of ["kind.created", "kind.renamed", "kind.icon_changed", "kind.deleted", "kind.starter_pack_added"]) {
+      for (const detail of [{}, { name: 7 }, { assets: {} }, { before: 5, after: "x" }, { before: { name: {} }, after: { icon: [] } }, { icon: null }, { count: {}, names: 5 }, { names: [[], {}] }]) {
         expect(typeof describeAudit(entry(action, detail)).summary).toBe("string");
       }
     }
@@ -777,7 +828,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(49);
+    expect(ALL_ACTIONS).toHaveLength(50);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }
@@ -1075,7 +1126,8 @@ describe("describeAudit: no sentence shows an id", () => {
     "kind.created": { kind_id: KIND, name: "Rack", icon: "rack" },
     "kind.renamed": { kind_id: KIND, assets: 12, before: { name: "Rack" }, after: { name: "Racks" } },
     "kind.icon_changed": { kind_id: KIND, name: "Racks", before: { icon: "rack" }, after: { icon: "server" } },
-    "kind.deleted": { kind_id: KIND, name: "Racks", icon: "server" },
+    "kind.deleted": { kind_id: KIND, name: "Racks", icon: "server", assets: 12, moved_to: "Servers" },
+    "kind.starter_pack_added": { count: 3, names: ["UPS", "Battery", "PDU"] },
     "login.failed": { ...connection, reason: "wrong_password" },
     "login.locked": { ...connection, reason: "wrong_password" },
     "login.succeeded": { client: "10.0.0.5" },

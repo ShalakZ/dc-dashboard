@@ -5,6 +5,21 @@ from helpers import login_as, make_asset, make_point, make_source
 
 # The catalogue, in the order of the picker (frontend/src/lib/assetIcons.ts mirrors it; test_asset_icons_parity.py compares).
 EXPECTED = (
+    # Structure
+    "site", "building", "hall", "room", "row", "rack",
+    # Power
+    "panel", "meter", "circuit", "ups", "battery", "pdu", "rpp", "ats", "sts", "busway", "switchgear", "rmu", "transformer", "generator", "fueltank",
+    # Cooling
+    "chiller", "crac", "ahu", "cdu", "coolingtower", "drycooler", "heatexchanger", "fan", "pump", "valve", "vfd",
+    # IT and network
+    "server", "switch", "router", "firewall", "patchpanel", "cabletray",
+    # Monitoring and safety
+    "controller", "sensor", "smokedetector", "humidity", "leak", "fire", "camera", "door",
+    # Other
+    "lighting", "generic",
+)
+# The 28 ids W7g to W7m stored (assets.icon, asset_kinds.icon): every one is still accepted.
+OLD_IDS = (
     "site", "building", "room", "row", "rack", "panel", "meter", "circuit", "ups", "battery", "pdu", "generator",
     "transformer", "fueltank", "chiller", "crac", "fan", "pump", "server", "switch", "controller", "sensor",
     "lighting", "camera", "door", "fire", "leak", "generic",
@@ -24,13 +39,18 @@ async def audit_rows(db, pattern: str):
     return await db.fetch("SELECT detail FROM audit_log WHERE action LIKE $1 ORDER BY id", pattern)
 
 
-def test_the_catalogue_is_the_28_ids_in_picker_order():
+def test_the_catalogue_is_the_48_ids_in_picker_order():
     assert asset_icons.ICONS == EXPECTED
     assert asset_icons.MAX_LENGTH == 32
 
 
+def test_the_28_older_ids_are_all_still_listed():
+    assert set(OLD_IDS) <= set(asset_icons.ICONS)
+    assert len(set(asset_icons.ICONS) - set(OLD_IDS)) == 20
+
+
 def test_every_id_is_lowercase_ascii_short_and_unique():
-    assert len(set(asset_icons.ICONS)) == len(asset_icons.ICONS) == 28
+    assert len(set(asset_icons.ICONS)) == len(asset_icons.ICONS) == 48
     for icon in asset_icons.ICONS:
         assert icon.isascii() and icon == icon.lower() and icon.isalnum(), icon
         assert 0 < len(icon) <= asset_icons.MAX_LENGTH

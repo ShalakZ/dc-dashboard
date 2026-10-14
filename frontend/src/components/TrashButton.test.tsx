@@ -39,4 +39,37 @@ describe("TrashButton", () => {
     expect(screen.getByRole("button", { name: "Delete Executive" })).not.toHaveAttribute("title");
     expect(screen.getByRole("button", { name: "Delete Executive" })).not.toHaveAttribute("aria-describedby");
   });
+
+  describe("labelled (the page header's Delete)", () => {
+    it("shows the word Delete beside the bin, is named for what it deletes, and is a normal outlined button, not an icon button", () => {
+      render(<TrashButton label="Delete Boiler" onClick={() => {}} labelled />);
+      const button = screen.getByRole("button", { name: "Delete Boiler" }); // the aria-label starts with the visible word: label in name
+      expect(button).toHaveTextContent(/^Delete$/);
+      expect(button).toHaveClass("trash-btn", "trash-btn-labelled");
+      expect(button).not.toHaveClass("icon-btn"); // .icon-btn is a 28px borderless square; this one is as tall as Add asset and Edit
+      expect(button.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+      expect(button.querySelectorAll("svg g.lid")).toHaveLength(1); // the lid still lifts
+    });
+
+    it("calls onClick once per click, and when disabled cannot be clicked and carries its title and description", async () => {
+      const onClick = vi.fn();
+      const { rerender } = render(<TrashButton label="Delete Boiler" onClick={onClick} labelled />);
+      await userEvent.click(screen.getByRole("button", { name: "Delete Boiler" }));
+      expect(onClick).toHaveBeenCalledTimes(1);
+      rerender(<TrashButton label="Delete Boiler" onClick={onClick} labelled disabled title="Busy." describedBy="why" />);
+      const button = screen.getByRole("button", { name: "Delete Boiler" });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("title", "Busy.");
+      expect(button).toHaveAttribute("aria-describedby", "why");
+      await userEvent.click(button);
+      expect(onClick).toHaveBeenCalledTimes(1);
+    });
+
+    it("the icon-only button stays as it was: no visible text", () => {
+      render(<TrashButton label="Delete Boiler" onClick={() => {}} />);
+      const button = screen.getByRole("button", { name: "Delete Boiler" });
+      expect(button).toHaveTextContent("");
+      expect(button).not.toHaveClass("trash-btn-labelled");
+    });
+  });
 });

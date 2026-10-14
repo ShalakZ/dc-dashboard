@@ -3,7 +3,7 @@ import { apiQuery, type AuditFilters } from "../lib/auditFilters";
 import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { ApiError, api } from "./client";
 import type {
-  Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
+  Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, StarterPackResult, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
   FleetSummary, GeneralSettings, GraphModel, Metric, PermissionRow, PointRow, RangePreset, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
@@ -82,7 +82,21 @@ export const useCreateAssetKind = () => useKindMutation((body: AssetKindIn) => a
 export const usePatchAssetKind = () =>
   useKindMutation(({ id, body }: { id: number; body: AssetKindPatch }) => api.patch<AssetKind>(`/api/asset-kinds/${id}`, body));
 
-export const useDeleteAssetKind = () => useKindMutation((id: number) => api.del(`/api/asset-kinds/${id}`));
+/**
+ * `moveTo`: a kind in use is deleted by moving its assets to this kind (its id). `expectAssets`: how many assets the person was shown; the server
+ * refuses with a 409 carrying the real count when it is not that many, and moves nothing. Neither is sent when not given: a plain delete has no query.
+ */
+export const useDeleteAssetKind = () =>
+  useKindMutation(({ id, moveTo, expectAssets }: { id: number; moveTo?: number; expectAssets?: number }) => {
+    const query = new URLSearchParams();
+    if (moveTo !== undefined) query.set("move_to", String(moveTo));
+    if (expectAssets !== undefined) query.set("expect_assets", String(expectAssets));
+    const sent = query.toString();
+    return api.del(`/api/asset-kinds/${id}${sent ? `?${sent}` : ""}`);
+  });
+
+/** Adds the data-centre starter kinds the registry lacks (idempotent on the server); `mutateAsync()` takes no argument. */
+export const useAddStarterKinds = () => useKindMutation((_: void) => api.post<StarterPackResult>("/api/asset-kinds/starter-pack"));
 
 /**
  * The Assets Tree landing page: live power, today's energy and cost over the whole site, and the readings that need attention.

@@ -36,6 +36,7 @@
   --motion: 150ms ease;
   --side-w-open: 236px; --side-w-closed: 64px; --tree-w: 280px; --tree-w-closed: 44px; /* the tree is 280px in a narrow window too: at 248px its five header controls cut the title "Assets Tree" */
   --find-w: 300px;                                        /* the quick find in the top bar, 220px below 1180px */
+  --btn-h: 34px;                                          /* the height of every button: Add asset, Edit and the labelled Delete in a page header are one family (W7o) */
   --toast-clear: 96px;                                    /* room under a page, so the end of a list scrolls clear of a settled toast (two lines: 62px plus its 16px margin) */
 }
 
@@ -256,7 +257,7 @@
 
   /* Buttons: square-ish (radius 4 to 8 px, never a pill). Variants win over the base by class specificity; the base hover and
      disabled states use :where() so they never outrank a variant. */
-  button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; cursor: pointer; }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--btn-h); padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; cursor: pointer; }
   button svg.i { width: 16px; height: 16px; }
   button:where(:hover:not(:disabled)) { background: var(--surface); }
   button:where(:disabled) { opacity: 0.55; cursor: not-allowed; }
@@ -286,6 +287,8 @@
   .row-menu-panel .danger-item { color: var(--crit); }
   .row-menu-panel .danger-item:hover:not(:disabled), .row-menu-panel .danger-item:focus-visible { background: var(--crit-tint); }
   .trash-btn:hover:not(:disabled), .trash-btn:focus-visible { background: var(--crit-tint); color: var(--crit); }
+  .trash-btn-labelled { color: var(--crit); } /* the page header's Delete: a normal outlined button (the base button's size) with a critical word; the hover fill is the rule above */
+  .trash-btn-labelled:hover:not(:disabled), .trash-btn-labelled:focus-visible { border-color: var(--crit); }
   .trash-btn svg { overflow: visible; } /* a lifted lid swings past the icon's own box: clipped there, the handle lost its top edge and its slot closed */
   .trash-btn .lid { transform-box: fill-box; transform-origin: 0% 100%; transition: transform var(--motion); } /* about the lid's left end, its hinge */
   .trash-btn:hover:not(:disabled) .lid, .trash-btn:focus-visible .lid { transform: translateY(-1.5px) rotate(-16deg); }
@@ -602,17 +605,24 @@
      32 px cells. A cell is a label around a native radio clipped inside it, so its rules are written to outrank the base `label` and
      `.dialog label` rules (grid, bold, one column); the checked cell is marked by fill, border and ring, not by colour alone. */
   .icon-field { display: grid; gap: 8px; }
+  /* While a grid is open the dialog's buttons stick over its bottom (styles/icon-picker.css), which the browser does not know: a field
+     scrolled into view by Tab or by opening the grid (scrollIntoView, nearest) would land under them. The scroll padding keeps that much
+     clear: the row (one button), the dialog's 22 px bottom padding band it covers, and a gap. */
+  .dialog:has(.icon-grid:not([hidden])) { scroll-padding-bottom: calc(var(--btn-h) + 22px + 12px); }
   .icon-field-label { font-size: var(--fs-sm); font-weight: 600; }
   .icon-field-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .icon-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--text); }
   .icon-hint { display: block; color: var(--text-2); font-size: var(--fs-xs); }
   .icon-field-row > button { flex: none; }
-  .icon-grid { display: grid; grid-template-columns: repeat(10, 32px); gap: 4px; justify-content: start; } /* 29 cells in 3 rows: the open dialog still fits a 1024 x 640 window */
+  /* The grid is a scroll box of a FIXED height (not a max-height): a search that thins the list must never resize the dialog or move Save.
+     Its padding holds the focus ring (2 px + 1 px offset) that overflow would clip; the gutter keeps the width when a scrollbar comes or goes.
+     The ten-column grid of cells is in each section (.icon-cells, styles/icon-picker.css). */
+  .icon-grid { display: grid; align-content: start; gap: 10px; height: min(15rem, 40vh); overflow: auto; scrollbar-gutter: stable; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); }
   .icon-grid[hidden] { display: none; }
   .dialog .icon-cell, .icon-grid .icon-cell { position: relative; display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-2); font-weight: 400; cursor: pointer; }
   .icon-cell svg.i { width: 20px; height: 20px; }
   .icon-cell:hover { border-color: var(--border-strong); background: var(--row-hover); color: var(--text); }
-  .icon-cell > input { position: absolute; top: 0; left: 0; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); }
+  .icon-cell > input { position: absolute; top: 0; left: 0; width: 100%; height: 100%; margin: 0; overflow: hidden; clip: rect(0 0 0 0); } /* clipped, so invisible; as big as the cell so that focusing it scrolls the WHOLE cell into view (a 1 px box let the cell's body slide under the dialog's sticky buttons) */
   .dialog .icon-cell-auto, .icon-grid .icon-cell-auto { border-style: dashed; } /* the first cell, Automatic: it shows the kind's own icon, so a dashed edge tells it from the same icon in the list */
   .icon-cell:has(> input:checked) { border-color: var(--accent); background: var(--accent-tint); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-ink); }
   .icon-cell:has(> input:focus-visible) { outline: 2px solid var(--ring); outline-offset: 1px; } /* the 4 px gap holds a 2 + 1 px ring; the global ring (2 px offset) would touch the next cell */

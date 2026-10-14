@@ -137,11 +137,8 @@ async def test_0010_differs_from_0009_by_exactly_the_table(db):
     assert at_0010["triggers"] == at_0009["triggers"]
 
 
-def test_the_migration_follows_0009_and_is_the_only_head():
-    assert "0009 -> 0010" in run_alembic("history", "-r", "0009:0010").stdout
-    heads = run_alembic("heads")
-    assert heads.returncode == 0, heads.stderr
-    assert [line.split()[0] for line in heads.stdout.splitlines() if line.strip()] == ["0010"]
+def test_the_migration_follows_0009():
+    assert "0009 -> 0010" in run_alembic("history", "-r", "0009:0010").stdout  # the one head is pinned by the newest migration's test
 
 
 # ---- the seed ---------------------------------------------------------------------------------------------------------------

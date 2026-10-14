@@ -9,11 +9,22 @@ from typing import Annotated
 
 from pydantic import BeforeValidator
 
-# The order of the picker. The ids are stable and independent of the front end's drawing names.
+# The order of the picker, which lists the icons in these six groups (the front end holds the group names and the search words, which the
+# server never needs: it stores ids). The ids are stable and independent of the front end's drawing names. 28 of them were stored before
+# the data-centre pack (W7o) and are never renamed or removed; the pack added 20 and moved the whole list into groups.
 ICONS = (
-    "site", "building", "room", "row", "rack", "panel", "meter", "circuit", "ups", "battery", "pdu", "generator",
-    "transformer", "fueltank", "chiller", "crac", "fan", "pump", "server", "switch", "controller", "sensor",
-    "lighting", "camera", "door", "fire", "leak", "generic",
+    # Structure
+    "site", "building", "hall", "room", "row", "rack",
+    # Power
+    "panel", "meter", "circuit", "ups", "battery", "pdu", "rpp", "ats", "sts", "busway", "switchgear", "rmu", "transformer", "generator", "fueltank",
+    # Cooling
+    "chiller", "crac", "ahu", "cdu", "coolingtower", "drycooler", "heatexchanger", "fan", "pump", "valve", "vfd",
+    # IT and network
+    "server", "switch", "router", "firewall", "patchpanel", "cabletray",
+    # Monitoring and safety
+    "controller", "sensor", "smokedetector", "humidity", "leak", "fire", "camera", "door",
+    # Other
+    "lighting", "generic",
 )
 MAX_LENGTH = 32
 
