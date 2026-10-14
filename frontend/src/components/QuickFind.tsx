@@ -151,7 +151,7 @@ export function QuickFind() {
                           key={hit.key}
                           onClick={() => choose(hit)}
                         >
-                          <Icon name={hit.kind === "asset" ? assetIcon({ kind: hit.assetKind ?? "", icon: hit.assetIcon }) : pageIcon(hit.to)} />
+                          <Icon name={hit.kind === "asset" ? assetIcon({ kind: hit.assetKind ?? "", icon: hit.assetIcon, kind_icon: hit.assetKindIcon }) : pageIcon(hit.to)} />
                           <span className="qf-label">{hit.label}</span>
                           {hit.detail && (
                             <>

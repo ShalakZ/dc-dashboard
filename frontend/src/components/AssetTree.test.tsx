@@ -718,6 +718,25 @@ describe("AssetTree kind icons", () => {
     for (const name of ["Unknown", "Proto", "Ctor", "Empty"]) expect(iconOf(name).innerHTML).toBe(iconHtml("kindRack"));
   });
 
+  it("draws the icon of the node's kind in the registry (kind_icon) over the keyword guess, the node's own icon over both, and generic for a registry icon this build lacks", () => {
+    const registered: Asset[] = [
+      { id: 1, parent_id: null, name: "Pump A", kind: "Pump", sort_order: 1, kind_icon: "server" },
+      { id: 2, parent_id: null, name: "Pump B", kind: "Pump", sort_order: 2, icon: "fan", kind_icon: "server" },
+      { id: 3, parent_id: null, name: "Pump C", kind: "Pump", sort_order: 3, kind_icon: null },
+      { id: 4, parent_id: null, name: "Pump D", kind: "Pump", sort_order: 4 },
+      { id: 5, parent_id: null, name: "Pump E", kind: "Pump", sort_order: 5, kind_icon: "zzz" },
+      { id: 6, parent_id: null, name: "Pump F", kind: "Pump", sort_order: 6, kind_icon: "" },
+      { id: 7, parent_id: null, name: "Pump G", kind: "Pump", sort_order: 7, kind_icon: "constructor" },
+      { id: 8, parent_id: null, name: "Pump H", kind: "Pump", sort_order: 8, icon: "zzz", kind_icon: "rack" },
+    ];
+    render(<MemoryRouter><AssetTree nodes={buildTree(registered)} selectedId={null} /></MemoryRouter>);
+    expect(iconOf("Pump A").innerHTML).toBe(iconHtml("kindServer"));
+    expect(iconOf("Pump B").innerHTML).toBe(iconHtml("kindFan"));
+    for (const name of ["Pump C", "Pump D"]) expect(iconOf(name).innerHTML).toBe(iconHtml("kindPump"));
+    for (const name of ["Pump E", "Pump F", "Pump G"]) expect(iconOf(name).innerHTML).toBe(iconHtml("kindGeneric"));
+    expect(iconOf("Pump H").innerHTML).toBe(iconHtml("kindRack"));
+  });
+
   it("leaves the link text and the accessible name as the asset's name (the icon is decoration beside the link, not inside it)", () => {
     showKinded();
     const link = screen.getByRole("link", { name: "Main" });
@@ -818,5 +837,58 @@ describe("AssetTree names", () => {
     const arabic = "\u0645\u0631\u0643\u0632 \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a";
     render(<MemoryRouter><AssetTree nodes={buildTree([a(1, null, "Site"), a(2, 1, arabic)])} selectedId={null} /></MemoryRouter>);
     for (const name of ["Site", arabic]) expect(link(name)).toHaveAttribute("dir", "auto");
+  });
+});
+
+describe("AssetTree Asset kinds link", () => {
+  const kinds = () => screen.getByRole("link", { name: "Asset kinds" });
+  const head = () => screen.getByText("Assets Tree", { selector: ".tree-title" }).closest(".tree-head") as HTMLElement;
+
+  it("is a link in the header to /assets/kinds, named and titled Asset kinds, with a decorative icon", () => {
+    render(ui());
+    expect(kinds()).toHaveAttribute("href", "/assets/kinds");
+    expect(kinds()).toHaveAttribute("title", "Asset kinds");
+    expect(kinds()).toHaveClass("icon-btn");
+    expect(kinds().closest(".tree-head")).toBe(head());
+    expect(kinds().querySelector("svg.i")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("sits after Expand all and before the column toggle, so the tree's own controls keep their tab order", async () => {
+    render(ui({ onAddTop: vi.fn() }));
+    const order = Array.from(head().querySelectorAll("button, a")).map((el) => el.getAttribute("aria-label"));
+    expect(order).toEqual(["Add a top-level asset", "Collapse all", "Expand all", "Asset kinds", "Minimize asset tree"]);
+    for (let i = 0; i < 4; i++) await userEvent.tab(); // the skip link, Add, Collapse all, Expand all
+    expect(expandAll()).toHaveFocus();
+    await userEvent.tab();
+    expect(kinds()).toHaveFocus();
+  });
+
+  it("is there while the list loads, and is not a node of the tree", () => {
+    render(ui({ nodes: [], loading: true }));
+    expect(kinds()).toBeInTheDocument();
+    expect(kinds().closest("ul.tree")).toBeNull();
+  });
+
+  it("goes away with the other header controls when the column is minimized", () => {
+    localStorage.setItem("dcdash.assetTree", "minimized");
+    render(ui());
+    expect(screen.queryByRole("link", { name: "Asset kinds" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand asset tree" })).toBeInTheDocument();
+  });
+
+  it("marks itself as the current page on /assets/kinds, and not on an asset's page", () => {
+    const at = (route: string) => <MemoryRouter initialEntries={[route]}><AssetTree nodes={nodes()} selectedId={null} /></MemoryRouter>;
+    const { unmount } = render(at("/assets/kinds"));
+    expect(kinds()).toHaveAttribute("aria-current", "page");
+    unmount();
+    render(at("/assets/1"));
+    expect(kinds()).not.toHaveAttribute("aria-current");
+  });
+
+  it("stays when the filter matches no asset (it is not a row of the tree)", async () => {
+    render(ui());
+    await userEvent.type(screen.getByLabelText("Filter assets"), "kinds");
+    expect(screen.getByText("No assets match the filter.")).toBeInTheDocument();
+    expect(kinds()).toBeInTheDocument();
   });
 });

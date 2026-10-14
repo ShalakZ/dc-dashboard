@@ -291,6 +291,53 @@ describe("AssetPage", () => {
     );
   });
 
+  describe("the header tile follows the kind's icon in the summary (kind_icon, resolved by the server)", () => {
+    const withKindIcon = (kind_icon: unknown, icon?: unknown) => ({
+      ...routes(null),
+      "GET /api/assets/4/summary": { body: { ...summary(null), asset: { ...summary(null).asset, icon, kind_icon } } },
+    });
+    const tile = async () => (await screen.findByRole("heading", { name: "Panel 1" })).previousElementSibling!.querySelector("svg")!;
+
+    it("shows the kind's registry icon over the keyword guess for the kind text (panel would say Panel)", async () => {
+      mockFetch(withKindIcon("server"));
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      expect((await tile()).innerHTML).toBe(iconHtml("kindServer"));
+    });
+
+    it("lets the asset's own icon beat the kind's", async () => {
+      mockFetch(withKindIcon("server", "fan"));
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      expect((await tile()).innerHTML).toBe(iconHtml("kindFan"));
+    });
+
+    it.each([null, undefined])("keeps the keyword guess when the kind is not registered (kind_icon %j)", async (kindIcon) => {
+      mockFetch(withKindIcon(kindIcon));
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      expect((await tile()).innerHTML).toBe(iconHtml("kindPanel"));
+    });
+
+    it.each(["zzz", "", "__proto__", "constructor", "toString"])("draws the generic icon, not the guess, for the registry icon %j this build lacks", async (kindIcon) => {
+      mockFetch(withKindIcon(kindIcon));
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      expect((await tile()).innerHTML).toBe(iconHtml("kindGeneric"));
+    });
+
+    it("changes with the next summary when the kind's icon is changed, without a reload", async () => {
+      let kindIcon = "server";
+      const [server, pump] = [iconHtml("kindServer"), iconHtml("kindPump")]; // outside waitFor: drawing an icon changes the DOM, which would re-run the callback for ever
+      mockFetch({ ...routes(null), "GET /api/assets/4/summary": () => ({ body: { ...summary(null), asset: { ...summary(null).asset, kind_icon: kindIcon } } }) });
+      function Invalidator() {
+        const client = useQueryClient();
+        return <button type="button" onClick={() => void client.invalidateQueries({ queryKey: keys.assets })}>kind changed</button>;
+      }
+      renderWithProviders(<><AssetPage /><Invalidator /></>, { route: "/assets/4", path: "/assets/:id" });
+      expect((await tile()).innerHTML).toBe(server);
+      kindIcon = "pump";
+      await userEvent.click(screen.getByRole("button", { name: "kind changed" }));
+      await waitFor(() => expect(screen.getByRole("heading", { name: "Panel 1" }).previousElementSibling!.querySelector("svg")!.innerHTML).toBe(pump));
+    });
+  });
+
   it("lays the three tiles out in one .tiles grid, in the order Live power, Energy today, Cost today", async () => {
     mockFetch(routes({ kwh: 3.25, estimated: false, no_data: false }));
     renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });

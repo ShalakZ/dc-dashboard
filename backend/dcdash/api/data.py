@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import get_db, require_permission
 from dcdash.api.settings import current_timezone
+from dcdash.core.asset_kinds import icon_for, kind_icons
 from dcdash.core.cost import Cost, cost_by_hour, load_tariffs, no_data, rate_at, summarize
 from dcdash.core.energy import Energy, hourly_energy, total
 from dcdash.core.fleet import ATTENTION_LIMIT, MappedReading, PowerReading, attention, fleet_power
@@ -122,7 +123,10 @@ async def summary(asset_id: int, db: AsyncSession = Depends(get_db)) -> dict[str
     tz = await current_timezone(db)
     energy, cost, nothing_recorded = await _energy_cost_today(db, tree, now, tz, [asset_id])
     return {
-        "asset": {"id": asset.id, "name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind, "icon": asset.icon},
+        "asset": {
+            "id": asset.id, "name": asset.name, "parent_id": asset.parent_id, "kind": asset.kind, "icon": asset.icon,
+            "kind_icon": icon_for(asset.kind, await kind_icons(db), {}),
+        },
         "metrics": metrics,
         "power_rollup": power_rollup,
         "energy_today": None if energy is None else {

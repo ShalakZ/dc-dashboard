@@ -105,11 +105,8 @@ async def test_0009_differs_from_0008_by_exactly_the_roles_table_and_the_column_
     assert "jsonb_typeof(permissions) = 'array'" in by_name["roles_permissions_check"]
 
 
-def test_the_migration_follows_0008_and_is_the_only_head():
-    assert "0008 -> 0009" in run_alembic("history", "-r", "0008:0009").stdout
-    heads = run_alembic("heads")
-    assert heads.returncode == 0, heads.stderr
-    assert [line.split()[0] for line in heads.stdout.splitlines() if line.strip()] == ["0009"]
+def test_the_migration_follows_0008():
+    assert "0008 -> 0009" in run_alembic("history", "-r", "0008:0009").stdout  # the one head is pinned by the newest migration's test
 
 
 # ---- the seed ---------------------------------------------------------------------------------------------------------

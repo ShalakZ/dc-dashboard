@@ -29,3 +29,5 @@ def check_icon(value: object) -> object:
 
 
 AssetIcon = Annotated[str, BeforeValidator(check_icon)]
+# The same check, named for the registry: a kind always has an icon, so its fields never add `| None` (Automatic is for assets).
+KindIcon = Annotated[str, BeforeValidator(check_icon)]

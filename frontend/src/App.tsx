@@ -8,6 +8,7 @@ import { PAGE_NEED, visibleGroups } from "./components/navItems";
 import { NoPages } from "./components/NoPages";
 import { Pending } from "./components/Pending";
 import { PageSkeleton } from "./components/Skeleton";
+import { AssetKindsPage } from "./pages/AssetKindsPage";
 import { AssetPage } from "./pages/AssetPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { AssetsSummary } from "./pages/AssetsSummary";
@@ -57,6 +58,8 @@ export function App() {
         <Route path="/" element={<HomeRedirect />} />
         <Route path="/assets" element={<RequirePermission need={PAGE_NEED.assets}><AssetsPage /></RequirePermission>}>
           <Route index element={<AssetsSummary />} />
+          {/* Before :id, which would take "kinds" for an asset. */}
+          <Route path="kinds" element={<AssetKindsPage />} />
           <Route path=":id" element={<AssetPage />} />
         </Route>
         <Route path="/dashboards" element={<RequirePermission need={PAGE_NEED.dashboards}><Suspense fallback={loading}><DashboardsPage /></Suspense></RequirePermission>} />

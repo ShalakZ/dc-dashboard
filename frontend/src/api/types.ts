@@ -10,10 +10,20 @@ export type Preferences = Appearance;
  */
 export interface User { id: number; username: string; role: string; permissions: PermissionId[]; preferences: Preferences }
 
-/** `icon` is the chosen icon id (lib/assetIcons.ts), null for Automatic. Optional in the type because many fixtures build an Asset by hand; the API always sends it. */
-export interface Asset { id: number; parent_id: number | null; name: string; kind: string; sort_order: number; icon?: string | null }
+/**
+ * `icon` is the chosen icon id (lib/assetIcons.ts), null for Automatic. `kind_icon` is the icon of the asset's kind in the registry (the server
+ * matches the kind text to a registry kind by its key), null when the kind is not registered. Both are optional in the type because many fixtures
+ * build an Asset by hand; the API always sends them.
+ */
+export interface Asset { id: number; parent_id: number | null; name: string; kind: string; sort_order: number; icon?: string | null; kind_icon?: string | null }
 /** `icon`: a catalogue id, null to go back to Automatic, left out to leave it as it is (the server treats an absent key as unchanged). */
 export interface AssetIn { name: string; parent_id: number | null; kind: string; sort_order: number; icon?: string | null }
+/** One kind of the registry (GET /api/asset-kinds, sorted by key). `icon` is a catalogue id as stored; `asset_count` counts the assets whose kind text has this kind's key. */
+export interface AssetKind { id: number; name: string; icon: string; asset_count: number }
+/** `icon` left out = generic. */
+export interface AssetKindIn { name: string; icon?: string }
+/** A key left out is left as it is; neither may be null. */
+export interface AssetKindPatch { name?: string; icon?: string }
 /** What deleting an asset takes with it (GET /api/assets/{id}/impact; also the counts in the 409 body of DELETE /api/assets/{id}). */
 export interface AssetImpact { assets: number; mappings: number; tariffs: number }
 /** What deleting a source takes with it (GET /api/sources/{id}/impact; also the counts in the 409 body of DELETE /api/sources/{id}). */
@@ -100,7 +110,7 @@ export interface RollupSource {
   asset_id: number; name: string; path: string; point_id: number; value: number | null; ts: string | null; stale: boolean;
 }
 export interface Summary {
-  asset: { id: number; name: string; parent_id: number | null; kind: string; icon?: string | null };
+  asset: { id: number; name: string; parent_id: number | null; kind: string; icon?: string | null; kind_icon?: string | null };
   metrics: SummaryMetric[];
   /** Set only for an asset with no power meter of its own whose sub-assets have some (optional so older fixtures type-check). */
   power_rollup?: { sources: RollupSource[] } | null;

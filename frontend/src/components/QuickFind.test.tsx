@@ -141,6 +141,25 @@ describe("QuickFind structure", () => {
     for (const name of ["Cool Plain", "Cool Cleared", "Cool Unknown", "Cool Proto"]) expect(iconOf(name)).toBe(iconHtml("kindRack"));
   });
 
+  it("shows the icon of the asset's kind in the registry (kind_icon) over the keyword guess, an own icon over both, and generic for a registry icon this build lacks", async () => {
+    const unit = (id: number, name: string, over: Partial<Asset>): Asset => ({ ...asset(id, name, null), kind: "Rack", ...over });
+    const { user, input } = await mount({
+      assets: {
+        body: [
+          unit(1, "Pool Registered", { kind_icon: "server" }), unit(2, "Pool Own", { icon: "fan", kind_icon: "server" }), unit(3, "Pool Unregistered", { kind_icon: null }),
+          unit(4, "Pool Old", {}), unit(5, "Pool Unlisted", { kind_icon: "zzz" }), unit(6, "Pool Proto", { kind_icon: "__proto__" }),
+        ],
+      },
+    });
+    await user.type(input, "pool");
+    await screen.findByRole("option", { name: "Pool Registered" });
+    const iconOf = (name: string) => screen.getByRole("option", { name: new RegExp(`^${name}`) }).querySelector("svg")!.innerHTML;
+    expect(iconOf("Pool Registered")).toBe(iconHtml("kindServer"));
+    expect(iconOf("Pool Own")).toBe(iconHtml("kindFan"));
+    for (const name of ["Pool Unregistered", "Pool Old"]) expect(iconOf(name)).toBe(iconHtml("kindRack"));
+    for (const name of ["Pool Unlisted", "Pool Proto"]) expect(iconOf(name)).toBe(iconHtml("kindGeneric"));
+  });
+
   it("names the option by its label and then the path above it", async () => {
     const { user, input } = await mount();
     await user.type(input, "mv2");

@@ -3,7 +3,7 @@ import { apiQuery, type AuditFilters } from "../lib/auditFilters";
 import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { ApiError, api } from "./client";
 import type {
-  Asset, AssetImpact, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
+  Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
   FleetSummary, GeneralSettings, GraphModel, Metric, PermissionRow, PointRow, RangePreset, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
@@ -11,6 +11,8 @@ import type {
 
 export const keys = {
   assets: ["assets"] as const,
+  /** Under the `assets` prefix on purpose: every `invalidate(keys.assets)` (an asset saved or deleted, discovery) then also refreshes the kinds and their asset counts. */
+  assetKinds: ["assets", "kinds"] as const,
   summary: (id: number) => ["assets", id, "summary"] as const,
   series: (id: number, metric: Metric, range: Range, mappingId?: number) =>
     ["assets", id, "series", metric, range, mappingId ?? null] as const,
@@ -57,6 +59,30 @@ const COST_DEPENDENT = [keys.billing, keys.widgetData, keys.assets, keys.fleet] 
 
 /** `enabled` is false for a role that may not see assets (the quick find in the top bar asks for the list on every page). */
 export const useAssets = (enabled = true) => useQuery({ queryKey: keys.assets, queryFn: () => api.get<Asset[]>("/api/assets"), enabled });
+
+/**
+ * The asset kinds registry, sorted by key by the server, with the number of assets each kind has. `enabled` is false for a role that may
+ * not see assets (callers pass `can("assets.view")`). A failed request is not fatal to its callers: they fall back to the keyword guess.
+ */
+export const useAssetKinds = (enabled = true) =>
+  useQuery({ queryKey: keys.assetKinds, queryFn: () => api.get<AssetKind[]>("/api/asset-kinds"), enabled });
+
+/**
+ * What a kind change moves: every asset response (`kind_icon`, and the kind text a rename rewrites; `keys.assets` also covers the kinds list and
+ * every asset summary), the fleet summary and the audit log with its filters. `onSettled`, not `onSuccess`: a refused change (a 409 "assets use
+ * this kind", a taken name, a 404) means the list on screen is out of date.
+ */
+function useKindMutation<Variables, Result>(mutationFn: (variables: Variables) => Promise<Result>) {
+  const invalidate = useInvalidate();
+  return useMutation({ mutationFn, onSettled: () => invalidate(keys.assets, keys.fleet, keys.auditAll) });
+}
+
+export const useCreateAssetKind = () => useKindMutation((body: AssetKindIn) => api.post<AssetKind>("/api/asset-kinds", body));
+
+export const usePatchAssetKind = () =>
+  useKindMutation(({ id, body }: { id: number; body: AssetKindPatch }) => api.patch<AssetKind>(`/api/asset-kinds/${id}`, body));
+
+export const useDeleteAssetKind = () => useKindMutation((id: number) => api.del(`/api/asset-kinds/${id}`));
 
 /**
  * The Assets Tree landing page: live power, today's energy and cost over the whole site, and the readings that need attention.

@@ -200,6 +200,7 @@ describe("the Assets workspace", () => {
     mockFetch({
       ...routes("viewer"),
       "GET /api/assets": { body: [site] },
+      "GET /api/asset-kinds": { body: [{ id: 1, name: "Site", icon: "site", asset_count: 1 }, { id: 2, name: "Rack", icon: "rack", asset_count: 0 }] },
       "GET /api/assets/1/summary": { body: { asset: site, metrics: [], energy_today: null, cost_today: null, currency: "QAR" } },
       "GET /api/assets/1/series": { body: { metric: "active_power_kw", unit: "kW", points: [] } },
     });
@@ -218,6 +219,32 @@ describe("the Assets workspace", () => {
     const tree = await screen.findByRole("region", { name: "Asset tree" });
     expect(await screen.findByRole("heading", { name: "Site", level: 1 })).toBeInTheDocument();
     expect(within(tree).getByRole("link", { name: "Site" })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("/assets/kinds shows the Asset kinds page beside the tree, and no asset is selected there", async () => {
+    visitAssets("/assets/kinds");
+    const tree = await screen.findByRole("region", { name: "Asset tree" });
+    expect(await screen.findByRole("heading", { name: "Asset kinds", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByText("Rack", { selector: "td *" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "By kind" })).not.toBeInTheDocument(); // not the fleet summary
+    expect(await within(tree).findByRole("link", { name: "Site" })).not.toHaveAttribute("aria-current"); // "kinds" is not an asset id
+    expect(within(tree).getByRole("link", { name: "Asset kinds" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("a static /assets/kinds beats /assets/:id, which still opens an asset", async () => {
+    visitAssets("/assets/1");
+    expect(await screen.findByRole("heading", { name: "Site", level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Asset kinds" })).not.toBeInTheDocument();
+  });
+
+  it("the link in the tree header opens the Asset kinds page, and a click on a node goes back to an asset", async () => {
+    visitAssets("/assets");
+    const tree = await screen.findByRole("region", { name: "Asset tree" });
+    await userEvent.click(within(tree).getByRole("link", { name: "Asset kinds" }));
+    expect(await screen.findByRole("heading", { name: "Asset kinds", level: 1 })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Asset tree" })).toBe(tree);
+    await userEvent.click(await within(tree).findByRole("link", { name: "Site" }));
+    expect(await screen.findByRole("heading", { name: "Site", level: 1 })).toBeInTheDocument();
   });
 
   it("clicking a node in the tree opens the asset and leaves the tree mounted", async () => {

@@ -57,4 +57,12 @@
   .attn-problem, .attn-time { white-space: nowrap; } /* the chip and its "· 3 points" stay on one line; a narrow table scrolls inside its frame */
   .attn-time { font-variant-numeric: tabular-nums; }
   .attn-more { margin: 10px 0 0; color: var(--text-2); font-size: var(--fs-sm); }
+
+  /* Asset kinds (/assets/kinds): a table of kinds, each with its icon in a small tile. Every rule is under .kinds-page, the page's root. */
+  .kinds-page .kind-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .kinds-page .kind-tile { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent); }
+  .kinds-page .kind-tile svg.i { width: 20px; height: 20px; }
+  .kinds-page .kind-label { min-width: 0; overflow-wrap: anywhere; color: var(--text); font-weight: 600; } /* a seeded name can be longer than anyone may type now: it wraps in its cell */
+  .kinds-page .kinds-table td:nth-child(2) { width: 16%; min-width: 7.5rem; white-space: nowrap; }
+  .kinds-page .kinds-table .kind-actions { width: 1%; padding-top: 6px; padding-bottom: 6px; text-align: right; white-space: nowrap; }
 }

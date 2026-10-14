@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
-import { Link } from "react-router";
+import { Link, NavLink } from "react-router";
 import { Icon } from "./Icon";
 import { Skeleton, SkeletonRegion, TreeSkeleton } from "./Skeleton";
 import { assetIcon } from "../lib/assetIcons";
@@ -130,7 +130,7 @@ function useTreeWidth(column: RefObject<HTMLElement | null>) {
       observer?.disconnect();
     };
   }, [column]);
-  // The default width is a CSS token (248px in a narrow window), so it is read from the layout, also while the column animates.
+  // The default width is a CSS token, so it is read from the layout, also while the column animates.
   useEffect(() => {
     const el = column.current;
     if (!el) return;
@@ -303,6 +303,10 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
             <button type="button" className="icon-btn" aria-label="Expand all" title="Expand all" disabled={noFold} onClick={expandAll}>
               <ChevronsOut />
             </button>
+            {/* After the tree's own controls (they keep their place in the tab order), before the toggle; NavLink marks it current on its page. */}
+            <NavLink to="/assets/kinds" className="icon-btn" aria-label="Asset kinds" title="Asset kinds">
+              <Icon name="layers" />
+            </NavLink>
           </>
         )}
         <button type="button" className="icon-btn tree-toggle" aria-controls="asset-tree-body" aria-expanded={!minimized} aria-label={toggleName} title={toggleName} onClick={toggleColumn}>

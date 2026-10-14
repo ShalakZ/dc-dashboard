@@ -33,7 +33,7 @@
   --radius: 6px; --radius-sm: 4px; --radius-lg: 8px;
   --shadow-dialog: 0 18px 50px rgba(10, 16, 28, 0.28); --shadow-tip: 0 4px 14px rgba(10, 16, 28, 0.25); --shadow-pop: 0 10px 30px rgba(10, 16, 28, 0.18);
   --motion: 150ms ease;
-  --side-w-open: 236px; --side-w-closed: 64px; --tree-w: 280px; --tree-w-closed: 44px; /* tree 248px below 1180px */
+  --side-w-open: 236px; --side-w-closed: 64px; --tree-w: 280px; --tree-w-closed: 44px; /* the tree is 280px in a narrow window too: at 248px its five header controls cut the title "Assets Tree" */
   --find-w: 300px;                                        /* the quick find in the top bar, 220px below 1180px */
   --toast-clear: 96px;                                    /* room under a page, so the end of a list scrolls clear of a settled toast (two lines: 62px plus its 16px margin) */
 }
@@ -272,6 +272,7 @@
   .icon-btn { flex: none; display: grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
   .icon-btn:hover:not(:disabled) { background: var(--accent-tint); color: var(--accent); }
   .icon-btn svg.i { width: 16px; height: 16px; }
+  .icon-btn[aria-current="page"] { background: var(--accent-tint); color: var(--accent); } /* a link styled as an icon button (the tree header's link to Asset kinds) on its own page */
 
   /* Row menu (RowActions), delete button (TrashButton), info tip (InfoTip). The menu panel is a portal on document.body, so it
      is styled from the root, not from its row; z-index 90 is above the top bar (45) and below the dialogs (1000). */
@@ -603,6 +604,7 @@
   .icon-field-label { font-size: var(--fs-sm); font-weight: 600; }
   .icon-field-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .icon-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--text); }
+  .icon-hint { display: block; color: var(--text-2); font-size: var(--fs-xs); }
   .icon-field-row > button { flex: none; }
   .icon-grid { display: grid; grid-template-columns: repeat(10, 32px); gap: 4px; justify-content: start; } /* 29 cells in 3 rows: the open dialog still fits a 1024 x 640 window */
   .icon-grid[hidden] { display: none; }
@@ -638,13 +640,13 @@
   .picker-row { display: flex; gap: 6px; align-items: center; }
   .issues { margin: 0; padding-left: 18px; }
 
-  /* Narrow windows: tighter page gutter and tree column. Set on #root, not :root (a second :root rule would make every
+  /* Narrow windows: tighter page gutter and quick find. Set on #root, not :root (a second :root rule would make every
      var() ambiguous for the contrast test). */
   @media (min-width: 1280px) {
     .page-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; }
   }
   @media (max-width: 1179.98px) {
-    #root { --gutter: 22px; --tree-w: 248px; --find-w: 220px; }
+    #root { --gutter: 22px; --find-w: 220px; }
     .node .kind { display: none; }
     .qf input[type="search"] { padding-right: 10px; }
     .qf kbd { display: none; }

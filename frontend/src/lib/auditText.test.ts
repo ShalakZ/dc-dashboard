@@ -10,6 +10,7 @@ const entry = (action: string, detail: unknown, extra: Partial<AuditEntry> = {})
 const ALL_ACTIONS = [
   "asset.created", "asset.updated", "asset.deleted", "billing.currency_changed",
   "dashboard.created", "dashboard.updated", "dashboard.deleted", "dashboard.default_changed", "diagnostics.report", "discovery.accepted",
+  "kind.created", "kind.deleted", "kind.icon_changed", "kind.renamed",
   "login.failed", "login.locked", "login.succeeded", "login.unblocked", "mapping.created", "mapping.updated", "mapping.deleted",
   "password.change_failed", "password.changed", "role.created", "role.updated", "role.deleted", "scan.finished", "scan.started",
   "scope.created", "scope.updated", "scope.deleted", "settings.sign_in_changed", "settings.timezone_changed", "setup.completed",
@@ -429,6 +430,80 @@ describe("describeAudit: roles", () => {
   });
 });
 
+describe("describeAudit: asset kinds", () => {
+  const KIND = 90016;
+  const renamed = (detail: Record<string, unknown>) => describeAudit(entry("kind.renamed", { kind_id: KIND, ...detail }));
+  const iconChanged = (detail: Record<string, unknown>) => describeAudit(entry("kind.icon_changed", { kind_id: KIND, ...detail }));
+
+  it("says a creation and a deletion by name, else by the kind alone, and never shows the id", () => {
+    expect(describeAudit(entry("kind.created", { kind_id: KIND, name: "Rack", icon: "rack" })).summary).toBe("Created asset kind Rack");
+    expect(describeAudit(entry("kind.created", { kind_id: KIND })).summary).toBe("Created an asset kind");
+    expect(describeAudit(entry("kind.deleted", { kind_id: KIND, name: "Rack", icon: "rack" })).summary).toBe("Deleted asset kind Rack");
+    expect(describeAudit(entry("kind.deleted", { kind_id: KIND, name: "  " })).summary).toBe("Deleted an asset kind");
+  });
+
+  it("says a rename from the two stored names, and how many assets followed", () => {
+    const sides = { before: { name: "Rack" }, after: { name: "Racks" } };
+    expect(renamed({ assets: 12, ...sides }).summary).toBe("Renamed asset kind Rack to Racks (12 assets follow)");
+    expect(renamed({ assets: 1, ...sides }).summary).toBe("Renamed asset kind Rack to Racks (1 asset follows)");
+    expect(renamed({ assets: 0, ...sides }).summary).toBe("Renamed asset kind Rack to Racks");
+    expect(renamed({ ...sides }).summary).toBe("Renamed asset kind Rack to Racks");
+    expect(renamed({ assets: -3, ...sides }).summary).toBe("Renamed asset kind Rack to Racks");
+    expect(renamed({ assets: "12", ...sides }).summary).toBe("Renamed asset kind Rack to Racks");
+  });
+
+  it("still reads when a side of the rename is missing", () => {
+    expect(renamed({ assets: 2, before: {}, after: { name: "Racks" } }).summary).toBe("Renamed an asset kind to Racks (2 assets follow)");
+    expect(renamed({ before: { name: "Rack" }, after: {} }).summary).toBe("Renamed asset kind Rack");
+    expect(renamed({ assets: 2 }).summary).toBe("Renamed an asset kind (2 assets follow)");
+  });
+
+  it("shows the rename as one Name row and the icon change as one Icon row with catalogue labels", () => {
+    const rename = renamed({ assets: 3, before: { name: "Rack" }, after: { name: "Racks" } });
+    expect(rename.changes).toEqual([{ field: "Name", before: "Rack", after: "Racks" }]);
+    const icon = iconChanged({ name: "Racks", before: { icon: "rack" }, after: { icon: "pdu" } });
+    expect(icon.changes).toEqual([{ field: "Icon", before: "Rack", after: "PDU" }]);
+  });
+
+  it("says an icon change with the catalogue labels, and an id the catalogue lacks as it is stored", () => {
+    expect(iconChanged({ name: "Racks", before: { icon: "rack" }, after: { icon: "server" } }).summary).toBe(
+      "Changed the icon of asset kind Racks from Rack to Server",
+    );
+    expect(iconChanged({ name: "Racks", before: { icon: "zzz" }, after: { icon: "server" } }).summary).toBe(
+      "Changed the icon of asset kind Racks from zzz to Server",
+    );
+    expect(iconChanged({ name: "Racks", before: { icon: "server" }, after: { icon: "__proto__" } }).summary).toBe(
+      "Changed the icon of asset kind Racks from Server to __proto__",
+    );
+    expect(iconChanged({ name: "Racks", after: { icon: "server" }, before: {} }).summary).toBe("Changed the icon of asset kind Racks to Server");
+    expect(iconChanged({ name: "Racks" }).summary).toBe("Changed the icon of asset kind Racks");
+    expect(iconChanged({}).summary).toBe("Changed the icon of an asset kind");
+  });
+
+  it("links to the Asset kinds page, except from a deletion", () => {
+    expect(describeAudit(entry("kind.created", { kind_id: KIND, name: "Rack" })).link).toEqual({ to: "/assets/kinds", label: "Open Asset kinds" });
+    expect(renamed({ before: { name: "a" }, after: { name: "b" } }).link).toEqual({ to: "/assets/kinds", label: "Open Asset kinds" });
+    expect(iconChanged({ name: "Rack" }).link).toEqual({ to: "/assets/kinds", label: "Open Asset kinds" });
+    expect(describeAudit(entry("kind.deleted", { kind_id: KIND, name: "Rack" })).link).toBeNull();
+  });
+
+  it("cuts a very long seeded name like a role name and shows markup as text", () => {
+    const long = "n".repeat(500);
+    expect(describeAudit(entry("kind.created", { kind_id: KIND, name: long })).summary).toBe(`Created asset kind ${"n".repeat(80)}…`);
+    expect(describeAudit(entry("kind.deleted", { kind_id: KIND, name: "<img src=x onerror=alert(1)>" })).summary).toBe(
+      "Deleted asset kind <img src=x onerror=alert(1)>",
+    );
+  });
+
+  it("never throws on a kind entry with the wrong shapes", () => {
+    for (const action of ["kind.created", "kind.renamed", "kind.icon_changed", "kind.deleted"]) {
+      for (const detail of [{}, { name: 7 }, { assets: {} }, { before: 5, after: "x" }, { before: { name: {} }, after: { icon: [] } }, { icon: null }]) {
+        expect(typeof describeAudit(entry(action, detail)).summary).toBe("string");
+      }
+    }
+  });
+});
+
 describe("describeAudit: custom role names read well in account entries", () => {
   const update = (before: Record<string, unknown>, after: Record<string, unknown>) =>
     describeAudit(entry("user.updated", { user_id: 9, username: "bob", before, after })).summary;
@@ -702,7 +777,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(45);
+    expect(ALL_ACTIONS).toHaveLength(49);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }
@@ -982,7 +1057,7 @@ describe("describeAudit: names instead of ids (refs)", () => {
 describe("describeAudit: no sentence shows an id", () => {
   // Distinctive ids, so a leaked one is found by its digits: a plain "7" would pass a /#\d+/ check.
   const A = 90001, PARENT = 90002, USER = 90003, SRC = 90004, DASH = 90005, POINT = 90006, MAPPING = 90007, TARIFF = 90008;
-  const ROLE = 90009, SCOPE = 90010, JOB = 90011, SCAN = 90012, A2 = 90013, A3 = 90014, DASH2 = 90015;
+  const ROLE = 90009, SCOPE = 90010, JOB = 90011, SCAN = 90012, A2 = 90013, A3 = 90014, DASH2 = 90015, KIND = 90016;
   const connection = { via: "login", client: "10.0.0.5" };
 
   // The shape each backend writer stores (see the audit calls in backend/dcdash/api).
@@ -997,6 +1072,10 @@ describe("describeAudit: no sentence shows an id", () => {
     "dashboard.default_changed": { before: { dashboard_id: DASH, dashboard: "Ops" }, after: { dashboard_id: DASH2, dashboard: "Plant" } },
     "diagnostics.report": { detail: "full", mask: true, source_id: SRC, parts: 2, chars: 100 },
     "discovery.accepted": { source_id: SRC, asset_id: A, mappings: 3, created_asset: true },
+    "kind.created": { kind_id: KIND, name: "Rack", icon: "rack" },
+    "kind.renamed": { kind_id: KIND, assets: 12, before: { name: "Rack" }, after: { name: "Racks" } },
+    "kind.icon_changed": { kind_id: KIND, name: "Racks", before: { icon: "rack" }, after: { icon: "server" } },
+    "kind.deleted": { kind_id: KIND, name: "Racks", icon: "server" },
     "login.failed": { ...connection, reason: "wrong_password" },
     "login.locked": { ...connection, reason: "wrong_password" },
     "login.succeeded": { client: "10.0.0.5" },
@@ -1057,7 +1136,7 @@ describe("describeAudit: no sentence shows an id", () => {
     expect(Object.keys(FIXTURES).sort()).toEqual([...ALL_ACTIONS].sort());
   });
 
-  it("shows none of the 15 distinctive ids in a sentence, a link label or a Before/After cell, with every lookup state and with or without stored names", () => {
+  it("shows none of the 16 distinctive ids in a sentence, a link label or a Before/After cell, with every lookup state and with or without stored names", () => {
     for (const action of ALL_ACTIONS) {
       for (const detail of [FIXTURES[action], withoutNames(FIXTURES[action])]) {
         for (const refs of [present, {}, undefined]) {

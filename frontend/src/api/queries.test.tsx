@@ -8,6 +8,7 @@ import {
   auditPageOptions, auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
+  useAssetKinds, useAssets, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
 
@@ -708,5 +709,95 @@ describe("role queries", () => {
     await waitFor(() => expect(result.current.roles.data).toBeDefined());
     await act(async () => { await run(result.current.mutation as never); });
     await waitFor(() => expect(count(calls, "/api/roles")).toBe(2));
+  });
+});
+
+describe("asset kind queries", () => {
+  const kind = (over: Record<string, unknown> = {}) => ({ id: 3, name: "Rack", icon: "rack", asset_count: 2, ...over });
+  const count = (calls: { method: string; path: string }[], path: string) => calls.filter((c) => c.method === "GET" && c.path === path).length;
+  const AUDIT = { actions: [], users: [], unattributed: false };
+  const reads = {
+    "GET /api/assets": { body: [] },
+    "GET /api/asset-kinds": { body: [kind()] },
+    "GET /api/assets/4/summary": { body: {} },
+    "GET /api/fleet/summary": { body: {} },
+    "GET /api/audit/options": { body: AUDIT },
+  };
+  /** Everything a kind change can make stale: the asset list (kind_icon, kind text), the kinds with their counts, one asset's summary, the fleet and the audit options. */
+  const mountReaders = (mutation: () => unknown) =>
+    renderHook(
+      () => ({ assets: useAssets(), kinds: useAssetKinds(), summary: useSummary(4), fleet: useFleetSummary(), options: useAuditOptions(), mutation: mutation() }),
+      { wrapper: stableWrapper() },
+    );
+  const settled = async (result: { current: { assets: { data?: unknown }; kinds: { data?: unknown }; summary: { data?: unknown }; fleet: { data?: unknown }; options: { data?: unknown } } }) => {
+    await waitFor(() => {
+      const { assets, kinds, summary, fleet, options } = result.current; // read inside: result.current is replaced on every render
+      expect([assets, kinds, summary, fleet, options].map((query) => query.data !== undefined)).toEqual(Array(5).fill(true));
+    });
+  };
+  const everyReadTwice = (calls: { method: string; path: string }[]) =>
+    [count(calls, "/api/assets"), count(calls, "/api/asset-kinds"), count(calls, "/api/assets/4/summary"), count(calls, "/api/fleet/summary"), count(calls, "/api/audit/options")];
+
+  it("lives under the assets prefix, so every asset change refreshes the kinds and their counts", () => {
+    expect(keys.assetKinds).toEqual(["assets", "kinds"]);
+    expect(keys.assetKinds.slice(0, 1)).toEqual(keys.assets);
+    expect(keys.summary(4).slice(0, 1)).toEqual(keys.assets);
+  });
+
+  it("reads the registry from its endpoint", async () => {
+    const calls = mockFetch({ "GET /api/asset-kinds": { body: [kind()] } });
+    const { result } = renderHook(() => useAssetKinds(), { wrapper: stableWrapper() });
+    await waitFor(() => expect(result.current.data).toEqual([kind()]));
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/asset-kinds"]);
+  });
+
+  it("asks for nothing while it is not enabled (a role that may not see assets), and is not 'loading' then", async () => {
+    const calls = mockFetch({ "GET /api/asset-kinds": { body: [kind()] } });
+    const { result, rerender } = renderHook(({ on }) => useAssetKinds(on), { wrapper: stableWrapper(), initialProps: { on: false } });
+    rerender({ on: false });
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.data).toBeUndefined();
+    expect(calls).toHaveLength(0);
+    rerender({ on: true });
+    await waitFor(() => expect(result.current.data).toEqual([kind()]));
+  });
+
+  it.each([
+    ["creating a kind", () => useCreateAssetKind(), "POST /api/asset-kinds", { name: "Rack", icon: "rack" }, 201, (m: ReturnType<typeof useCreateAssetKind>) => m.mutateAsync({ name: "Rack", icon: "rack" })],
+    ["renaming or re-iconing a kind", () => usePatchAssetKind(), "PATCH /api/asset-kinds/3", { name: "Racks" }, 200, (m: ReturnType<typeof usePatchAssetKind>) => m.mutateAsync({ id: 3, body: { name: "Racks" } })],
+    ["deleting a kind", () => useDeleteAssetKind(), "DELETE /api/asset-kinds/3", undefined, 204, (m: ReturnType<typeof useDeleteAssetKind>) => m.mutateAsync(3)],
+  ] as const)("refetches the assets, the kinds, a summary, the fleet and the audit options after %s", async (_name, hook, route, sent, status, run) => {
+    const calls = mockFetch({ ...reads, [route]: { status, body: status === 204 ? undefined : kind() } });
+    const { result } = mountReaders(hook);
+    await settled(result);
+    expect(everyReadTwice(calls)).toEqual([1, 1, 1, 1, 1]);
+    await act(async () => { await run(result.current.mutation as never); });
+    await waitFor(() => expect(everyReadTwice(calls)).toEqual([2, 2, 2, 2, 2]));
+    expect(calls.find((c) => c.method !== "GET")?.body).toEqual(sent);
+  });
+
+  it("sends the id in the path and only the fields it is given", async () => {
+    const calls = mockFetch({ "PATCH /api/asset-kinds/9": { body: kind({ id: 9 }) }, "DELETE /api/asset-kinds/9": { status: 204 } });
+    const { result } = renderHook(() => ({ patch: usePatchAssetKind(), del: useDeleteAssetKind() }), { wrapper: stableWrapper() });
+    await act(async () => { await result.current.patch.mutateAsync({ id: 9, body: { icon: "server" } }); });
+    await act(async () => { await result.current.del.mutateAsync(9); });
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([["PATCH", "/api/asset-kinds/9", { icon: "server" }], ["DELETE", "/api/asset-kinds/9", undefined]]);
+  });
+
+  // A refused change (the count moved, the key is taken, the kind is gone) means the list on screen is out of date, as for roles.
+  it.each([
+    ["a delete refused because assets use the kind", "DELETE /api/asset-kinds/3", 409, { detail: "3 assets use this kind. Change their kind first.", assets: 3 }, (m: ReturnType<typeof useDeleteAssetKind>) => m.mutateAsync(3), "3 assets use this kind. Change their kind first."],
+    ["a rename onto a taken name", "PATCH /api/asset-kinds/3", 409, { detail: 'A kind named "Racks" already exists' }, (m: ReturnType<typeof usePatchAssetKind>) => m.mutateAsync({ id: 3, body: { name: "Racks" } }), 'A kind named "Racks" already exists'],
+    ["a change to a kind that is gone", "PATCH /api/asset-kinds/3", 404, { detail: "asset kind not found" }, (m: ReturnType<typeof usePatchAssetKind>) => m.mutateAsync({ id: 3, body: { icon: "pump" } }), "asset kind not found"],
+  ] as const)("still refetches the kinds after %s, and the error reaches the caller", async (_name, route, status, body, run, message) => {
+    const calls = mockFetch({ ...reads, [route]: { status, body } });
+    const { result } = renderHook(
+      () => ({ kinds: useAssetKinds(), del: useDeleteAssetKind(), patch: usePatchAssetKind() }),
+      { wrapper: stableWrapper() },
+    );
+    await waitFor(() => expect(result.current.kinds.data).toBeDefined());
+    const mutation = route.startsWith("DELETE") ? result.current.del : result.current.patch;
+    await act(async () => { await expect(run(mutation as never)).rejects.toThrow(message); });
+    await waitFor(() => expect(count(calls, "/api/asset-kinds")).toBe(2));
   });
 });

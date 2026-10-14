@@ -145,6 +145,13 @@ the user `sim` with that password. Modbus needs none.
 
 UI screens, besides Assets Tree, Sources and Points:
 
+- **Asset kinds** (everyone who may open the Assets Tree can read it; `assets.edit` changes it): the button at the top of the Assets
+  Tree opens it. It says once what each kind of asset looks like. An asset shows its own icon if it has one, else the icon of its kind,
+  else the generic one; change a kind's icon here and every asset of that kind follows, and rename a kind and the assets that carry the
+  name follow it. A kind that assets still use cannot be deleted. The kind list in the Add and Edit asset dialogs comes from this page,
+  and a new kind typed there under "Other…" is added here when the asset is saved. The keyword guess that used to pick every icon (a word
+  such as Pump or UPS in the kind) now only suggests the icon when a kind is created, and stays as the fallback for a kind text that is
+  not on the list.
 - **Users & Roles** (admin): on its **Users** tab, create users, change roles, deactivate / reactivate, reset a password, delete a user
   (after a confirmation; never yourself and never the last administrator). Deactivating signs that user out
   everywhere. You cannot deactivate, demote or delete yourself. An account that has been blocked after too many
@@ -452,7 +459,7 @@ behave as they did before roles were made of permissions (the one change, in W9b
 | Area | Permission | What it allows |
 |---|---|---|
 | Assets Tree | `assets.view` | Open the Assets Tree, an asset's details and charts, and the fleet summary. |
-| | `assets.edit` | Add and edit assets, and map points to them. |
+| | `assets.edit` | Add and edit assets and asset kinds, and map points to them. |
 | | `assets.delete` | Delete an asset (its mappings go with it). |
 | Dashboards | `dashboards.view` | Open dashboards and their widgets, receive live values, and read the values of any point through a widget. |
 | | `dashboards.edit` | Create, edit and delete dashboards and their widgets. |
@@ -730,6 +737,17 @@ Twenty-one specs run in one `playwright test` run against the dev-profile stack 
   description, and the Tariffs cards and left date picker do not move when Add rate is pressed with nothing chosen, before and after a valid
   add, both at 1440 and 1024 px. The bin's lid lifts on hover (a screenshot goes into the report). The asset, rates and role it makes contain
   `W7l` and the run suffix; it removes them again.
+- `w7m.spec.ts` (its own project, after `w7l`, at 1600×1000) checks the Asset kinds page and the default icon of a kind. A viewer opens
+  `/assets/kinds`, reads the list, has no New kind and no row menu, and the API refuses its POST, PATCH and DELETE with 403. The tree
+  header's link opens the page (heading, crumb, the tree beside it). New kind "W7m Pump N" guesses the Pump icon from its name until an
+  icon is picked, and its row reads "No assets". An asset added with that kind and Automatic draws the kind's icon in the tree row, the
+  asset page's header and quick find; editing the kind to Server changes all three without a reload, and renaming it to "W7m Pumps N"
+  rewrites the asset's kind text ("1 asset follows"), keeps the icon, and shows the new text on the asset page. An icon of the asset's own
+  (Rack) wins over the kind's. The kind's Delete is refused while the asset uses it, in the dialog and by the API (409), and the page
+  survives a reload; once the asset is gone the kind deletes and leaves the list. Adding an asset with a new typed kind registers that kind
+  with the suggested icon, and the next asset of it needs no choice. No horizontal scroll at 1440 and 1024 px on the page and with the New
+  kind dialog and its grid open. Every kind and asset it makes starts with `W7m` and carries the run suffix, and it makes a viewer account;
+  it removes them all again.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1608,6 +1626,34 @@ id that no longer exists is left out. Nothing else about the answer changes: the
 2. **Verify.** `docker compose exec api alembic current` still prints `0009 (head)`; open the Audit log, press a row's chevron and see the
    drawer open on the right; Esc brings the log back where it was.
 3. **Going back.** Check out `e624a5a` and rebuild as in step 1. There is no database step.
+
+### Upgrading to W7m (migration 0010)
+
+Schema `0009` to `0010`. Downgrade: **lossless** for everything else (it only loses the registry of asset kinds described below, and the
+icons go back to the keyword guess), so option a is open. The code to go back to is `af8f9f8` (`main` before W7m).
+
+W7m (asset kinds) adds migration `0010`: one new table, `asset_kinds`, with a name and an icon for each kind of asset (the same 28 icons an
+asset can be given). It runs in a moment and needs no pre-check. The table is filled from the kinds your assets already use, one row for
+every kind (`LV_Panel` and `lv_panel` are one kind), each with the icon the keyword guess gave it, so **no asset changes its icon**: an
+asset shows its own icon if it has one, else its kind's icon, and the kind's icon is what the guess said before. A kind the guess reads
+differently in two spellings, a blank kind, a kind longer than 200 characters and a kind with a character this server does not know are not
+registered and keep the guess. The starter kinds
+(Site, Building, Room, Row, Rack, Panel, Meter, Circuit, Other equipment and generic) are added for every name no asset uses. `assets` and
+every other table are untouched. What you will notice: the Assets Tree has an Asset kinds button, the Kind list in the Add and Edit asset
+dialogs comes from that page, and a new kind typed under "Other…" is added to it. The API gains `GET` and `POST /api/asset-kinds` and `PATCH`
+and `DELETE /api/asset-kinds/{id}` (needing `assets.view` to read and `assets.edit` to write), and each asset gains `kind_icon`. The `api`
+container applies the migration the first time it starts from the new image.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0009`).
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+3. **Verify.** `docker compose exec api alembic current` prints `0010 (head)`; the Assets Tree shows the same icons as before, and its
+   Asset kinds button opens a page that lists the kinds your assets use and the starter kinds.
+4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0009` and `<old commit>` = `af8f9f8`. The `0010`
+   downgrade drops `asset_kinds`; nothing else changes, so only the registry (and any icon you changed in it) is lost, and every asset
+   shows the keyword guess again, as it did before W7m. `upgrade` fills the registry again from the assets as they are then. A restart of
+   the W7m `api` would run `alembic upgrade head` and apply `0010` again, so the W7m `api` must not be running once the schema is back
+   at `0009`.
 
 ## Add a connector
 

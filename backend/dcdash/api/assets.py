@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.api.asset_names import AssetName, require_free_name
 from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.core.asset_icons import AssetIcon
+from dcdash.core.asset_kinds import icon_for, kind_icons
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Asset, Mapping, Tariff, User
 from dcdash.core.pg import CONFIG_CHANNEL
@@ -40,6 +41,9 @@ class AssetOut(BaseModel):
     kind: str
     sort_order: int
     icon: str | None  # as stored: an id this server no longer lists is still shown, never an error
+    # The icon of the registry kind this asset's kind text names (core/asset_kinds.py), null when the kind is not registered.
+    # Not stored on the asset: the registry is read for the response, so a change of a kind's icon reaches every asset at once.
+    kind_icon: str | None
 
 
 async def get_asset(db: AsyncSession, asset_id: int) -> Asset:
@@ -96,19 +100,32 @@ def _asset_values(asset: Asset) -> dict[str, Any]:
     }
 
 
+async def _out(db: AsyncSession, *assets: Asset) -> list[AssetOut]:
+    """The assets as the API shows them: one read of the registry, one lookup per DISTINCT kind text, however many assets."""
+    icons = await kind_icons(db)
+    cache: dict[str, str | None] = {}
+    return [
+        AssetOut(
+            id=a.id, parent_id=a.parent_id, name=a.name, kind=a.kind, sort_order=a.sort_order, icon=a.icon,
+            kind_icon=icon_for(a.kind, icons, cache),
+        )
+        for a in assets
+    ]
+
+
 def _counted(n: int, noun: str) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
 @router.get("/assets", response_model=list[AssetOut], dependencies=[Depends(require_permission("assets.view"))])
-async def list_assets(db: AsyncSession = Depends(get_db)) -> list[Asset]:
-    return list((await db.scalars(select(Asset).order_by(Asset.sort_order, Asset.name))).all())
+async def list_assets(db: AsyncSession = Depends(get_db)) -> list[AssetOut]:
+    return await _out(db, *(await db.scalars(select(Asset).order_by(Asset.sort_order, Asset.name))).all())
 
 
 @router.post(
     "/assets", response_model=AssetOut, status_code=201, dependencies=[Depends(require_permission("assets.edit"))]
 )
-async def create_asset(body: AssetIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)) -> Asset:
+async def create_asset(body: AssetIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)) -> AssetOut:
     if body.parent_id is not None:
         await get_asset(db, body.parent_id)
     await require_free_name(db, body.parent_id, body.name)
@@ -117,7 +134,7 @@ async def create_asset(body: AssetIn, db: AsyncSession = Depends(get_db), user: 
     await db.flush()  # the row needs the new id
     await audit(db, user.id, "asset.created", {"asset_id": asset.id, **_asset_values(asset)})
     await db.commit()
-    return asset
+    return (await _out(db, asset))[0]
 
 
 @router.patch(
@@ -125,7 +142,7 @@ async def create_asset(body: AssetIn, db: AsyncSession = Depends(get_db), user: 
 )
 async def update_asset(
     asset_id: int, body: AssetPatch, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
-) -> Asset:
+) -> AssetOut:
     asset = await get_asset(db, asset_id)
     before = _asset_values(asset)
     changes = body.model_dump(exclude_unset=True)
@@ -149,7 +166,7 @@ async def update_asset(
         db, user.id, "asset.updated", {"asset_id": asset.id, "name": asset.name}, before, _asset_values(asset)
     )
     await db.commit()
-    return asset
+    return (await _out(db, asset))[0]
 
 
 @router.get("/assets/{asset_id}/impact", dependencies=[Depends(require_permission("assets.delete"))])

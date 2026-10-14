@@ -1,6 +1,6 @@
 import { ICONS } from "../components/Icon";
 import { iconHtml } from "../test/iconHtml";
-import { ASSET_ICONS, assetIcon, assetIconLabel, iconLabelFor } from "./assetIcons";
+import { ASSET_ICONS, assetIcon, assetIconLabel, iconIdFor, iconLabelFor, kindIconId } from "./assetIcons";
 import { kindIcon } from "./kindIcon";
 
 describe("the asset icon catalogue", () => {
@@ -74,6 +74,72 @@ describe("assetIcon: a chosen icon wins, anything else follows the kind", () => 
   it("falls back for a stored value that is not text", () => {
     expect(assetIcon({ kind: "Rack", icon: 5 as never })).toBe("kindRack");
     expect(assetIcon({ kind: "Rack", icon: ["server"] as never })).toBe("kindRack");
+  });
+});
+
+describe("assetIcon: the kind's icon from the registry (kind_icon) sits between the asset's own icon and the keyword guess", () => {
+  it("lets an asset's own icon beat the kind's", () => {
+    expect(assetIcon({ kind: "Pump", icon: "fan", kind_icon: "server" })).toBe("kindFan");
+    expect(assetIcon({ kind: "Pump", icon: "generic", kind_icon: "server" })).toBe("kindGeneric");
+  });
+
+  it("lets the kind's icon beat the keyword guess, even when the guess would say otherwise", () => {
+    expect(assetIcon({ kind: "Pump", kind_icon: "server" })).toBe("kindServer");
+    expect(assetIcon({ kind: "Pump", icon: null, kind_icon: "server" })).toBe("kindServer");
+    expect(assetIcon({ kind: "Rack", icon: undefined, kind_icon: "pump" })).toBe("kindPump");
+    expect(assetIcon({ kind: "", kind_icon: "rack" })).toBe("kindRack");
+  });
+
+  it("uses the keyword guess when the kind is not in the registry (kind_icon null) or the response predates the field (undefined)", () => {
+    expect(assetIcon({ kind: "Pump", kind_icon: null })).toBe("kindPump");
+    expect(assetIcon({ kind: "Pump", kind_icon: undefined })).toBe("kindPump");
+    expect(assetIcon({ kind: "Pump", icon: null, kind_icon: null })).toBe("kindPump");
+    expect(assetIcon({ kind: "Unheard of", kind_icon: null })).toBe("kindGeneric");
+  });
+
+  // The guess is for text the registry does not know. A registry row whose icon this build does not list is still a registered kind: generic, never the guess.
+  it.each(["zzz", "", "__proto__", "constructor", "toString", "Server", " server"])(
+    "draws generic, not the keyword guess, for the registry icon %j the catalogue lacks, and does not throw",
+    (stored) => {
+      expect(assetIcon({ kind: "Rack", kind_icon: stored })).toBe("kindGeneric");
+      expect(assetIcon({ kind: "Rack", icon: null, kind_icon: stored })).toBe("kindGeneric");
+    },
+  );
+
+  it("lets an own icon the catalogue lacks fall through to the kind's icon, then to the guess", () => {
+    expect(assetIcon({ kind: "Rack", icon: "zzz", kind_icon: "server" })).toBe("kindServer");
+    expect(assetIcon({ kind: "Rack", icon: "__proto__", kind_icon: "zzz" })).toBe("kindGeneric");
+    expect(assetIcon({ kind: "Rack", icon: "zzz", kind_icon: null })).toBe("kindRack");
+    expect(assetIcon({ kind: "Rack", icon: "", kind_icon: undefined })).toBe("kindRack");
+  });
+
+  it("falls back to the guess for a kind_icon that is not text", () => {
+    expect(assetIcon({ kind: "Rack", kind_icon: 5 as never })).toBe("kindRack");
+    expect(assetIcon({ kind: "Rack", kind_icon: ["server"] as never })).toBe("kindRack");
+  });
+
+  it("follows every catalogue id", () => {
+    for (const entry of ASSET_ICONS) expect(assetIcon({ kind: "Rack", kind_icon: entry.id })).toBe(entry.icon);
+  });
+});
+
+describe("iconIdFor and kindIconId", () => {
+  it("turns each kind drawing back into its catalogue id (all 28)", () => {
+    for (const entry of ASSET_ICONS) expect(iconIdFor(entry.icon)).toBe(entry.id);
+  });
+
+  it("says generic for a drawing that is not a kind icon", () => {
+    expect(iconIdFor("rate")).toBe("generic");
+    expect(iconIdFor("assets")).toBe("generic");
+  });
+
+  it("gives the keyword guess for a kind as a catalogue id, generic when no word is recognised", () => {
+    expect(kindIconId("Pump")).toBe("pump");
+    expect(kindIconId("LV Panel")).toBe("panel");
+    expect(kindIconId("Cooling Unit")).toBe("crac");
+    expect(kindIconId("Unheard of")).toBe("generic");
+    expect(kindIconId("")).toBe("generic");
+    for (const entry of ASSET_ICONS) expect(ASSET_ICONS.some((e) => e.id === kindIconId(entry.id))).toBe(true);
   });
 });
 

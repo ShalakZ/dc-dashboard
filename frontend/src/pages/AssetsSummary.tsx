@@ -1,15 +1,15 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { useAssets, useFleetSummary, useSite } from "../api/queries";
-import type { Asset, AttentionItem, FleetSummary } from "../api/types";
+import { useAssetKinds, useAssets, useFleetSummary, useSite } from "../api/queries";
+import type { Asset, AssetKind, AttentionItem, FleetSummary } from "../api/types";
+import { useAuth } from "../auth/AuthProvider";
 import { CostTile } from "../components/CostTile";
 import { EnergyTile } from "../components/EnergyTile";
 import { Icon } from "../components/Icon";
 import { fmt } from "../components/MetricsTable";
 import { PageHeader } from "../components/PageHeader";
 import { FleetSkeleton } from "../components/Skeleton";
-import { kindIcon } from "../lib/kindIcon";
-import { cleanKind, kindKey } from "../lib/kinds";
+import { cleanKind, kindIconForName, kindKey } from "../lib/kinds";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { assetActions, useAssetsContext } from "./AssetsPage";
 
@@ -24,8 +24,11 @@ function powerNote({ counted, of }: FleetSummary["power"]): string {
   return of === 1 ? "The meter is not reporting" : `None of the ${of} meters is reporting`;
 }
 
-/** The kinds in use, one per `kindKey`: the most used spelling (ties: code-point order) and the number of assets, most first, then by kind. A blank kind is left out. */
-function kindCounts(assets: readonly Asset[]): { name: string; count: number }[] {
+/**
+ * The kinds in use, one per `kindKey`, and the number of assets, most first, then by kind. A blank kind is left out. A kind the registry has
+ * is named as the registry spells it (the same kind as the Asset kinds page and the tree); any other by its most used spelling (ties: code-point order).
+ */
+function kindCounts(assets: readonly Asset[], registry: readonly AssetKind[] = []): { name: string; count: number }[] {
   const groups = new Map<string, Map<string, number>>();
   for (const { kind } of assets) {
     const key = kindKey(kind);
@@ -38,7 +41,7 @@ function kindCounts(assets: readonly Asset[]): { name: string; count: number }[]
   return [...groups]
     .map(([key, spellings]) => ({
       key,
-      name: [...spellings].sort(([a, n], [b, m]) => m - n || compare(a, b))[0][0],
+      name: registry.find((kind) => kindKey(kind.name) === key)?.name ?? [...spellings].sort(([a, n], [b, m]) => m - n || compare(a, b))[0][0],
       count: [...spellings.values()].reduce((sum, n) => sum + n, 0),
     }))
     .sort((x, y) => y.count - x.count || compare(x.key, y.key));
@@ -85,7 +88,7 @@ function Attention({ attention, timezone }: { attention: FleetSummary["attention
 }
 
 /** The body of the page for a site that has assets and whose figures are in or have failed: the four tiles, the kinds, the readings that need attention. */
-function Fleet({ assets, fleet: { data, error }, timezone }: { assets: readonly Asset[]; fleet: UseQueryResult<FleetSummary>; timezone: string | undefined }) {
+function Fleet({ assets, kinds, fleet: { data, error }, timezone }: { assets: readonly Asset[]; kinds: readonly AssetKind[] | undefined; fleet: UseQueryResult<FleetSummary>; timezone: string | undefined }) {
   if (error || !data) return <p className="error" role="alert">{error?.message ?? "The fleet summary is not available."}</p>;
   return (
     <>
@@ -104,8 +107,8 @@ function Fleet({ assets, fleet: { data, error }, timezone }: { assets: readonly 
       </div>
       <h2 className="section-title">By kind</h2>
       <ul className="kind-list">
-        {kindCounts(assets).map(({ name, count }) => (
-          <li key={name}><span className="kind-name"><Icon name={kindIcon(name)} />{name}</span> <span className="kind-count">{count}</span></li>
+        {kindCounts(assets, kinds).map(({ name, count }) => (
+          <li key={name}><span className="kind-name"><Icon name={kindIconForName(name, kinds)} />{name}</span> <span className="kind-count">{count}</span></li>
         ))}
       </ul>
       <Attention attention={data.attention} timezone={timezone} />
@@ -120,6 +123,9 @@ function Fleet({ assets, fleet: { data, error }, timezone }: { assets: readonly 
 export function AssetsSummary() {
   const { data: assets = [], isLoading } = useAssets();
   const fleet = useFleetSummary(assets.length > 0);
+  // Not part of `waiting`: a registry that is slow or failed must not hold the page. Until it is there (or when it is not) the list draws the keyword guess.
+  const { can } = useAuth();
+  const { data: kinds } = useAssetKinds(can("assets.view") && assets.length > 0);
   const site = useSite(); // asked for here, with the figures, not when they arrive: the time column should not show a dash while the zone follows them
   const ctx = useAssetsContext();
   const waiting = isLoading || (assets.length > 0 && fleet.isLoading);
@@ -135,7 +141,7 @@ export function AssetsSummary() {
           <p className="empty-title">No assets yet.</p>
         </div>
       ) : (
-        <Fleet assets={assets} fleet={fleet} timezone={site.data?.timezone} />
+        <Fleet assets={assets} kinds={kinds} fleet={fleet} timezone={site.data?.timezone} />
       )}
     </>
   );
