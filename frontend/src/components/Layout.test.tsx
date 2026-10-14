@@ -7,6 +7,7 @@ import { noteReach, resetServerReach } from "../lib/serverReach";
 import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { userFor } from "../test/users";
+import { BRAND_MARK_SRC } from "./BrandMark";
 import { Layout } from "./Layout";
 
 const ROLE_WORD = { admin: "Administrator", operator: "Operator", viewer: "Viewer" } as const;
@@ -337,6 +338,19 @@ describe("Layout top bar", () => {
     expect(Array.from(frame.children).map((el) => el.tagName)).toEqual(["DIV", "MAIN"]);
     expect(frame.children[0]).toHaveAttribute("id", "sidebar");
     expect(within(frame.children[0] as HTMLElement).queryByText("DC Dashboard")).not.toBeInTheDocument(); // the brand moved out of the rail
+  });
+
+  it("draws the owner's mark as a decorative image next to the name, and the name once", async () => {
+    mockFetch(routes("viewer"));
+    renderWithProviders(<Layout />, { route: "/assets", path: "/assets" });
+    const brand = screen.getByRole("banner").querySelector<HTMLElement>(".brand")!;
+    const img = brand.querySelector("img.brand-mark")!;
+    expect(img).toHaveAttribute("src", BRAND_MARK_SRC);
+    expect(img).toHaveAttribute("aria-hidden", "true");
+    expect(img).toHaveAttribute("alt", "");
+    expect(brand.querySelector("svg")).toBeNull(); // the drawn bolt is gone
+    expect(within(brand).getAllByText("DC Dashboard")).toHaveLength(1);
+    await profileButton();
   });
 
   it("renders no loading bar of its own (RequireAuth owns the one bar above it)", async () => {

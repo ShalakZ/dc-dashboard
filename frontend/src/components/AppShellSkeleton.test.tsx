@@ -5,6 +5,7 @@ import { mockFetch, shellRoutes } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { userFor } from "../test/users";
 import { AppShellSkeleton } from "./AppShellSkeleton";
+import { BRAND_MARK_SRC } from "./BrandMark";
 import { Layout } from "./Layout";
 
 /** jsdom has no matchMedia; a test that wants a window of a given kind installs one, and the afterEach below removes it. */
@@ -70,7 +71,10 @@ describe("AppShellSkeleton", () => {
       expect(row.querySelector(".sk-circle")).not.toBeNull();
       expect(row.querySelector(".lbl .sk-line")).not.toBeNull();
     }
-    expect(container.querySelector(".brand > .brand-mark svg")).not.toBeNull();
+    const mark = container.querySelector(".brand > img.brand-mark")!;
+    expect(mark).toHaveAttribute("src", BRAND_MARK_SRC);
+    expect(mark).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelector(".brand svg")).toBeNull();
     expect(container.querySelector(".brand > .lbl")).toBeEmptyDOMElement();
   });
 
@@ -160,7 +164,7 @@ describe("AppShellSkeleton", () => {
 });
 
 // index.html carries a static copy of the skeleton (it paints before any script runs). A string comparison would trip on harmless
-// differences (indentation, `<path/>` against `<path></path>`, `data-x` against `data-x=""`, attribute order), so both sides are parsed to DOM
+// differences (indentation, `<img/>` against `<img>`, `data-x` against `data-x=""`, attribute order), so both sides are parsed to DOM
 // and compared with isEqualNode after the whitespace between tags and the comments are dropped. The only difference allowed is `hidden` on the
 // static root: it keeps the copy invisible until the stylesheet shows it (app.css), and the React skeleton must never carry it.
 describe("the static copy in index.html", () => {
@@ -177,6 +181,9 @@ describe("the static copy in index.html", () => {
   const generated = (sidebar: "expanded" | "minimized" = "expanded") => {
     const template = document.createElement("template");
     template.innerHTML = renderToStaticMarkup(<AppShellSkeleton sidebar={sidebar} />);
+    // React 19 hoists a <link rel="preload" as="image"> in front of any tree that holds an <img src> when it renders to a string; the client
+    // never adds one, and the static copy must not (index.html's head is not #root). Dropped so the parity is about the shell alone.
+    template.content.querySelectorAll('link[rel="preload"]').forEach((link) => link.remove());
     return template.content;
   };
 
@@ -190,8 +197,8 @@ describe("the static copy in index.html", () => {
     const expected = generated();
     tidy(expected);
     expect(root.childNodes.length, "#root holds the shell and nothing else").toBe(1);
-    const markup = renderToStaticMarkup(<AppShellSkeleton sidebar="expanded" />);
-    expect(expected.firstChild!.isEqualNode(copy), `the static copy has drifted from AppShellSkeleton; the generated markup is:\n${markup}`).toBe(true);
+    const shellMarkup = (expected.firstChild as Element).outerHTML; // the .shell element only, never the hoisted <link>
+    expect(expected.firstChild!.isEqualNode(copy), `the static copy has drifted from AppShellSkeleton; the generated markup is:\n${shellMarkup}`).toBe(true);
   });
 
   it("starts expanded and hidden: the stylesheet shows it, and without one it never paints unstyled", () => {

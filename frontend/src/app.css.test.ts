@@ -309,6 +309,44 @@ describe("the shell (W6 sidebar)", () => {
   });
 });
 
+describe("the brand mark (W7n)", () => {
+  const marks = rules.filter((r) => /\.brand-mark(?![\w-])/.test(r.selector));
+  const only = (selector: string) => {
+    const found = rules.filter((r) => r.selector === selector);
+    expect(found, `exactly one rule for "${selector}"`).toHaveLength(1);
+    return found[0];
+  };
+
+  // The mark is an <img> of the owner's artwork: nothing here may tint, blend, fade, round or box it, or the gold would change with the theme.
+  it("no rule of the mark sets a background, a border, a radius, a filter, a blend mode or an opacity", () => {
+    expect(marks.map((r) => r.selector).sort()).toEqual([".brand .brand-mark", ".brand-mark"]);
+    for (const rule of marks) {
+      expect(rule.body, `"${rule.selector}"`).not.toMatch(/(?:^|[;\s])(?:background(?:-[\w-]+)?|border(?:-[\w-]+)?|filter|mix-blend-mode|opacity)\s*:/);
+    }
+  });
+
+  it("has no rule for an svg inside the mark: the bolt is gone", () => {
+    expect(rules.filter((r) => /\.brand-mark\s+svg/.test(r.selector))).toEqual([]);
+  });
+
+  it("does not shrink in the bar's flex row and is a block, so the box is the image's own", () => {
+    const body = only(".brand-mark").body;
+    expect(body).toMatch(/flex:\s*none/);
+    expect(body).toMatch(/display:\s*block/);
+    expect(inLayer(only(".brand-mark"))).toBe(true);
+  });
+
+  it("the bar's mark has a keyline in --top-brand-edge (the one bar whose colour is the mark's gold needs it)", () => {
+    const rule = only(".brand .brand-mark");
+    expect(inLayer(rule)).toBe(true);
+    expect(rule.body).toMatch(/outline:\s*1px solid var\(--top-brand-edge\)/);
+  });
+
+  it("--top-brand-edge is the bar's own colour in the base, so the navy look shows no outline", () => {
+    expect(tok("top-brand-edge")).toBe(tok("top-bg"));
+  });
+});
+
 describe("the resizable asset tree column (W7a)", () => {
   const only = (selector: string) => {
     const found = rules.filter((r) => r.selector === selector);
@@ -565,7 +603,7 @@ describe("the design tokens (W6)", () => {
     ["sidebar: group heading on the plain navy", () => tok("side-muted"), () => tok("side-bg")],
     ["sidebar: active item", () => tok("side-text-strong"), () => tok("side-bg-active")],
     ["sidebar: accent on the navy (focus ring, indicator)", () => tok("side-accent"), () => tok("side-bg")],
-    ["sidebar: navy on the accent brand mark", () => tok("side-bg"), () => tok("side-accent")],
+    ["sidebar: navy on the accent marker", () => tok("side-bg"), () => tok("side-accent")],
     ["sidebar: avatar", () => tok("side-avatar-text"), () => tok("side-avatar-bg")],
     ["tooltip", () => tok("tooltip-text"), () => tok("tooltip-bg")],
     ["top bar: white on the bar (brand, site time, user name)", () => tok("side-text-strong"), () => tok("top-bg")],

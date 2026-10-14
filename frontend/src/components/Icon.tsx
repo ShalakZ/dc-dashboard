@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 
 // Inline SVG, 24-unit viewBox, drawn with the 1.7 stroke of `svg.i`; always decorative (the label next to it is the name).
 export const ICONS = {
-  brand: <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />,
   assets: <><path d="M12 3 3 7.5 12 12l9-4.5L12 3Z" /><path d="m3 12 9 4.5 9-4.5" /><path d="m3 16.5 9 4.5 9-4.5" /></>,
   dashboards: <><rect x="3" y="3" width="7.5" height="9" rx="1.5" /><rect x="13.5" y="3" width="7.5" height="5" rx="1.5" /><rect x="13.5" y="11" width="7.5" height="10" rx="1.5" /><rect x="3" y="15" width="7.5" height="6" rx="1.5" /></>,
   billing: <><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z" /><path d="M9 8h6M9 12h6M9 16h3" /></>,

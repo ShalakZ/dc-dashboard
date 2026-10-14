@@ -1,5 +1,5 @@
 import { initialSidebar, type SidebarState } from "../lib/sidebarState";
-import { ICONS } from "./Icon";
+import { BrandMark } from "./BrandMark";
 
 // The shell before the user is known: the navy bar and the sidebar with grey placeholders, in the real shell's own classes so the bar
 // height, the sidebar width and the origin of main come from the real CSS and cannot differ. index.html carries a static copy of this
@@ -35,7 +35,7 @@ export function AppShellSkeleton({ sidebar = initialSidebar() }: { sidebar?: Sid
     <div className="shell sk-shell" data-sidebar={sidebar}>
       <header className="navbar" aria-hidden="true">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24">{ICONS.brand}</svg></span>
+          <BrandMark size={28} />
           <span className="lbl" />
         </div>
         <div className="bar-in">
