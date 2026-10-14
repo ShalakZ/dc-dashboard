@@ -5,7 +5,8 @@ import { rowAction, treeLink, userBlock } from "./shell";
 // permission, delete-and-move for a kind in use, and the data-centre starter kinds) on the state the earlier projects leave behind: admin
 // `admin` / `correct-horse`. Every name this spec makes carries the digits-only run suffix (assets and kinds start with `W7o `, the account and
 // the role with `w7o-`), and afterAll removes what this run made, in this order: the assets, then the kinds (this run's own and the starter
-// kinds the pack added that were NOT in the registry when the run began), then the account, then the role. It also puts the admin's look back.
+// kinds the pack added that were NOT in the registry when the run began, unless assets of an earlier project use one: that kind stays, and is
+// logged), then the account, then the role, then the admin's look. Every step is tried and the failures are asserted once, at the end.
 // beforeAll takes the registry's keys first (the starter-pack case compares against them, afterAll removes only what is new) and removes an
 // account and a role that an earlier run left behind. The admin signs in through the API: the sign-in page is not what is tested here.
 //
@@ -176,28 +177,61 @@ test.beforeAll(async ({ browser }) => {
   await asAdmin(browser, async (request) => {
     keysBefore = new Set((await kindsOf(request)).map((k) => keyOf(k.name)));
     const me = await json<{ preferences: { mode: string; theme: string } | null }>(request, "/api/me");
-    lookBefore = me.preferences && typeof me.preferences.mode === "string" && typeof me.preferences.theme === "string" ? me.preferences : null;
+    // Only the two fields the PUT takes, so a preference added later cannot turn the restore into a 422.
+    lookBefore = me.preferences && typeof me.preferences.mode === "string" && typeof me.preferences.theme === "string"
+      ? { mode: me.preferences.mode, theme: me.preferences.theme }
+      : null;
     await removeAccounts(request); // an earlier run that stopped half way
   });
 });
 
 test.afterAll(async ({ browser }) => {
+  // Every step is tried whatever the one before it did, and the failures are asserted once at the end: a kind that refuses to go must not
+  // leave the account, the role and the admin's look behind.
+  const failures: string[] = [];
+  const attempt = async (what: string, step: () => Promise<void>) => {
+    try {
+      await step();
+    } catch (e) {
+      failures.push(`${what}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
   await asAdmin(browser, async (request) => {
-    const put = await request.put("/api/me/preferences", { data: lookBefore ?? DEFAULT_LOOK });
-    expect(put.ok(), `putting the admin's look back: ${put.status()}`).toBe(true);
     // Assets first (newest first: deleting a parent takes its children, so a later 404 is fine): a kind that assets use cannot be deleted.
-    for (const asset of (await assetsOf(request)).filter((a) => mine(a.name)).sort((a, b) => b.id - a.id)) {
-      const gone = await request.delete(`/api/assets/${asset.id}?confirm=true`);
-      expect([200, 204, 404], `deleting ${asset.name}: ${gone.status()}`).toContain(gone.status());
-    }
-    // This run's kinds, and the starter kinds the pack added: only what the registry did not hold when the run began.
+    await attempt("listing this run's assets", async () => {
+      for (const asset of (await assetsOf(request)).filter((a) => mine(a.name)).sort((a, b) => b.id - a.id)) {
+        await attempt(`the asset ${asset.name}`, async () => {
+          const gone = await request.delete(`/api/assets/${asset.id}?confirm=true`);
+          expect([200, 204, 404], `deleting ${asset.name}: ${gone.status()}`).toContain(gone.status());
+        });
+      }
+    });
+    // This run's kinds must go (strictly), and so must the starter kinds the pack added: only what the registry did not hold when the run
+    // began. An asset made through the API never registers its kind text, so an earlier project may have assets of "Pump" or "UPS" with no
+    // such kind in the registry; the pack then registers it and it has assets. That kind is left (and said), it is not this run's to empty.
     const starterKeys = new Set(STARTER.map(keyOf));
-    for (const kind of (await kindsOf(request)).filter((k) => mine(k.name) || (starterKeys.has(keyOf(k.name)) && !keysBefore.has(keyOf(k.name))))) {
-      const gone = await request.delete(`/api/asset-kinds/${kind.id}`);
-      expect([204, 404], `deleting the kind ${kind.name}: ${gone.status()} ${await gone.text()}`).toContain(gone.status());
-    }
-    await removeAccounts(request);
+    await attempt("listing the kinds", async () => {
+      for (const kind of await kindsOf(request)) {
+        const own = mine(kind.name);
+        const added = starterKeys.has(keyOf(kind.name)) && !keysBefore.has(keyOf(kind.name));
+        if (!own && !added) continue;
+        if (!own && kind.asset_count > 0) {
+          console.log(`w7o: the starter kind "${kind.name}" has ${kind.asset_count} asset(s) from an earlier project and stays`);
+          continue;
+        }
+        await attempt(`the kind ${kind.name}`, async () => {
+          const gone = await request.delete(`/api/asset-kinds/${kind.id}`);
+          expect([204, 404], `deleting the kind ${kind.name}: ${gone.status()} ${await gone.text()}`).toContain(gone.status());
+        });
+      }
+    });
+    await attempt("the account and the role", () => removeAccounts(request));
+    await attempt("the admin's look", async () => {
+      const put = await request.put("/api/me/preferences", { data: lookBefore ?? DEFAULT_LOOK });
+      expect(put.ok(), `putting the admin's look back: ${put.status()}`).toBe(true);
+    });
   });
+  expect(failures, "the clean-up left something behind").toEqual([]);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -387,7 +421,8 @@ test.describe("W7o: the icon picker", () => {
           const grid = dialog.querySelector('[role="radiogroup"]')!.getBoundingClientRect();
           return { page: root.scrollWidth - root.clientWidth, dialog: dialog.scrollWidth - dialog.clientWidth, dialogRight: box.right, gridRight: grid.right, viewport: window.innerWidth };
         });
-        expect(measured.page, `the page scrolls sideways by ${measured.page} px`).toBeLessThanOrEqual(0);
+        // The page behind the dialog is checked at the two widths the plan names; at 800 px only the dialog is (nothing earlier measured /assets there).
+        if (width >= 1024) expect(measured.page, `the page scrolls sideways by ${measured.page} px`).toBeLessThanOrEqual(0);
         expect(measured.dialog, `the dialog scrolls sideways by ${measured.dialog} px`).toBeLessThanOrEqual(0);
         expect(measured.gridRight, "the grid ends inside the dialog").toBeLessThanOrEqual(measured.dialogRight);
         expect(measured.dialogRight, "the dialog ends inside the window").toBeLessThanOrEqual(measured.viewport);

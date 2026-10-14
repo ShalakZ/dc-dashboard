@@ -778,8 +778,8 @@ Twenty-six specs run in one `playwright test` run against the dev-profile stack 
   Static transfer switch (Rack is gone), and choosing the transfer switch saves it and draws it in the tree row and the page header. Typing
   "security" leaves Firewall and Camera, which sit in two groups: Tab from the search lands on Automatic, the arrow keys walk across the
   boundary and back, a cell that was picked is not hidden by a later search, and Escape clears the text, then closes the grid, then the
-  dialog. With the grid open there is no sideways scroll at 1440, 1024 and 800 px, Save stays inside the window at 1024×640 and 800×600,
-  and typing in the search moves nothing. A kind that three assets use opens the move dialog (the count, a
+  dialog. With the grid open the page does not scroll sideways at 1440 and 1024 px, the dialog does not at 1440, 1024 and 800 px, Save stays
+  inside the window at 1440×900, 1024×640 and 800×600, and typing in the search moves nothing. A kind that three assets use opens the move dialog (the count, a
   "Move the assets to" choice of the other kinds, Delete off until one is chosen); an asset that joins while it is open turns the answer into
   the new count and keeps the choice; the assets follow (an icon of the asset's own stays), the kind is gone, and the toast and the audit
   entry name the kind they moved to. Add data-centre kinds adds only what is missing, and a second press says they are all there and writes no
