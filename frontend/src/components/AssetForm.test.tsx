@@ -269,6 +269,20 @@ describe("AssetForm Icon", () => {
     expect(sent(onSubmit)).toMatchObject({ name: "Hall", kind: "generic", icon: "switch" });
   });
 
+  it("finds an icon with the search box, picks it and sends its id; Enter in the box saves nothing", async () => {
+    const { onSubmit } = open([]);
+    await userEvent.type(screen.getByLabelText("Name"), "Hall");
+    await userEvent.click(opener());
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search icons" }), "transfer{Enter}");
+    expect(onSubmit).not.toHaveBeenCalled();
+    const visible = screen.getAllByRole("radio").map((c) => c.closest("label")!.textContent);
+    expect(visible).toEqual(["Automatic", "Automatic transfer switch", "Static transfer switch"]); // Automatic stays whatever is typed
+    await userEvent.click(cell("Static transfer switch"));
+    expect(field()).toHaveAccessibleDescription("Static transfer switch"); // the caption is the form's: the search never writes into it
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(sent(onSubmit)).toMatchObject({ name: "Hall", icon: "sts" });
+  });
+
   it("stays open after a pick, and Automatic after a pick sends null on an edit", async () => {
     const { onSubmit } = open([], { ...named, icon: "rack" });
     await userEvent.click(opener());

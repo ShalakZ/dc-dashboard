@@ -604,13 +604,19 @@
   /* The icon field of the asset dialog: the preview tile (the page header's), its caption and Change icon in one row, then a grid of
      32 px cells. A cell is a label around a native radio clipped inside it, so its rules are written to outrank the base `label` and
      `.dialog label` rules (grid, bold, one column); the checked cell is marked by fill, border and ring, not by colour alone. */
-  .icon-field { display: grid; gap: 8px; }
+  /* scroll-margin-bottom: opening the grid scrolls the dialog just far enough to show the whole field (scrollIntoView, nearest). The buttons
+     stick over the bottom of the dialog (styles/icon-picker.css), which the browser does not know, so the field keeps that much clear: the
+     row (a button), the dialog's 22 px bottom padding band they cover, and a gap. */
+  .icon-field { display: grid; gap: 8px; scroll-margin-bottom: calc(var(--btn-h) + 34px); }
   .icon-field-label { font-size: var(--fs-sm); font-weight: 600; }
   .icon-field-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .icon-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--text); }
   .icon-hint { display: block; color: var(--text-2); font-size: var(--fs-xs); }
   .icon-field-row > button { flex: none; }
-  .icon-grid { display: grid; grid-template-columns: repeat(10, 32px); gap: 4px; justify-content: start; } /* 29 cells in 3 rows: the open dialog still fits a 1024 x 640 window */
+  /* The grid is a scroll box of a FIXED height (not a max-height): a search that thins the list must never resize the dialog or move Save.
+     Its padding holds the focus ring (2 px + 1 px offset) that overflow would clip; the gutter keeps the width when a scrollbar comes or goes.
+     The ten-column grid of cells is in each section (.icon-cells, styles/icon-picker.css). */
+  .icon-grid { display: grid; align-content: start; gap: 10px; height: min(15rem, 40vh); overflow: auto; scrollbar-gutter: stable; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); }
   .icon-grid[hidden] { display: none; }
   .dialog .icon-cell, .icon-grid .icon-cell { position: relative; display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-2); font-weight: 400; cursor: pointer; }
   .icon-cell svg.i { width: 20px; height: 20px; }
