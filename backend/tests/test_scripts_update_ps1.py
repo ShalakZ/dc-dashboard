@@ -1037,6 +1037,23 @@ def test_an_anchor_that_is_only_a_guess_never_replaces_the_notes_of_an_earlier_u
     assert "The notes of the earlier update stay in logs\\update-anchor.txt" in res.said
 
 
+def test_an_api_that_is_up_but_not_healthy_gives_only_a_guess_and_leaves_the_notes_alone(scene, web):
+    """Text (c), the person does not stop the api, runs update again, and `-Force` catches the api between two restarts: it reports the NEW
+    build. That build is not a firm anchor, and the notes of the first run (the only firm anchor) must survive."""
+    note = _anchor_path(scene)
+    note.parent.mkdir()
+    before = b"2026-01-01 10:00:00\r\nabc1234\r\n0007\r\nC:\\backups\\old.dump\r\n"
+    note.write_bytes(before)
+    scene.stack(api="running starting 0")  # at the tip, the api runs the tip's build, but it is not healthy
+    res = scene.run("-Yes")
+    assert res.code == 4 and "the api is not healthy" in res.said and "Notes of an earlier update" in res.said, res.said
+    assert note.read_bytes() == before
+    res = scene.run("-Yes -Force")
+    assert res.code == 0, res.said
+    assert f"Old commit: {scene.short()} (best guess: the api is not healthy, so this build may be a failed update)" in res.said, res.said
+    assert note.read_bytes() == before and "The notes of the earlier update stay" in res.said
+
+
 def test_no_notes_are_written_for_a_dry_run_or_a_failed_backup(scene):
     scene.at("c33")
     assert scene.run("-DryRun").code == 0

@@ -602,6 +602,8 @@ try {
         if ($RunningCommit) {
             $OldCommit = $RunningId
             if ($RunningCommit -ne $HeadFull) { Say "The site runs $RunningId; the code on disk is already at $HeadShort." }
+            # An api that is up between two restarts of a FAILED update reports the new build: firm only when it is healthy.
+            if ($ApiState.Health -ne "healthy") { $OldCommitIsGuess = $true; $OldCommitWhy = "the api is not healthy, so this build may be a failed update" }
         } else {
             $OldCommitIsGuess = $true
             $OldCommitWhy = "the running site was built by hand; its commit is not recorded"
