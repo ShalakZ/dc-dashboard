@@ -787,7 +787,9 @@ Twenty-six specs run in one `playwright test` run against the dev-profile stack 
   not Manage asset kinds sees the list and one line saying what is missing (no New kind, no pack button, no row menu), the API answers 403
   to every write and changes nothing, and a new kind typed in Add asset keeps its text and registers nothing, with the note saying so (an
   administrator's typed kind is registered); the Roles editor offers to tick Change assets and See the Assets Tree with Manage asset kinds.
-  Every name it makes starts with `W7o` or `w7o-`; the kinds the pack added are removed again by name and the admin's look is put back.
+  At 1024 px with the sidebar open, an asset page whose name is only 11 characters long keeps its title and its sub line on one line each
+  (the buttons drop under the title when the pane is narrow). Every name it makes starts with `W7o` or `w7o-`; the kinds the pack added are
+  removed again by name and the admin's look is put back.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
