@@ -73,6 +73,19 @@ export function prune(state: PickState, existing: ReadonlySet<number>): PickStat
 }
 
 /**
+ * Take `ids` off the picks (the rows that a move has just carried away) and leave the other picks, and the anchor unless it is one of them.
+ * Returns the SAME state when none of `ids` is picked and none is the anchor.
+ */
+export function unpick(state: PickState, ids: Iterable<number>): PickState {
+  const gone = new Set(ids);
+  const kept = new Set<number>();
+  for (const id of state.ids) if (!gone.has(id)) kept.add(id);
+  const anchor = state.anchor !== null && gone.has(state.anchor) ? null : state.anchor;
+  if (kept.size === state.ids.size && anchor === state.anchor) return state;
+  return kept.size === 0 && anchor === null ? EMPTY_PICK : { ids: kept, anchor };
+}
+
+/**
  * The ids of the rows on screen, in the order they are drawn (a parent, then its children). Mirrors the tree's own rendering: each level
  * is narrowed by the filter (`visible`, null = no filter) and a folded branch shows no children, except that a filter ignores folds
  * ("a filter shows its matches even under a folded branch"). A range that differs from the rows the person sees picks the wrong rows.
@@ -104,6 +117,7 @@ export interface PickStore {
   pickRange(order: readonly number[], id: number): void;
   clear(anchor?: number | null): void;
   prune(existing: ReadonlySet<number>): void;
+  unpick(ids: Iterable<number>): void;
 }
 
 export function createPickStore(initial: PickState = EMPTY_PICK): PickStore {
@@ -129,5 +143,6 @@ export function createPickStore(initial: PickState = EMPTY_PICK): PickStore {
     pickRange: (order, id) => apply(pickRange(state, order, id)),
     clear: (anchor = null) => apply(clear(state, anchor)),
     prune: (existing) => apply(prune(state, existing)),
+    unpick: (ids) => apply(unpick(state, ids)),
   };
 }

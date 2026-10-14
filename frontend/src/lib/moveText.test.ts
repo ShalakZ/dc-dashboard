@@ -55,41 +55,47 @@ describe("rateWarning", () => {
     expect(rateWarning([root("Pump 3", 0.18, 0.12, true, true)], plain).message).toContain("from 0.18 to 0.12 per kWh");
   });
 
-  it("lists two roots with their rates", () => {
+  // Several roots: only the FIRST one is named, with its rates, then "and N more". The message sits in a box of a FIXED height in the Move to...
+  // dialog (styles/asset-move.css), and a long list in it would either scroll or push the button the person is about to press twice.
+  it("names only the first of two roots with its rates, then counts the other", () => {
     expect(rateWarning([root("Pump 3", 0.18, 0.12), root("Pump 4", 0.18, 0.2)], plain).message).toBe(
-      `Moving these assets changes their rates: "Pump 3" from 0.18 to 0.12 per kWh; "Pump 4" from 0.18 to 0.2 per kWh. ${AFTER}`,
+      `Moving these assets changes their rates ("Pump 3" from 0.18 to 0.12 per kWh, and 1 more). ${AFTER}`,
     );
   });
 
-  it("lists three roots", () => {
-    const roots = [root("A", 1, 2), root("B", 1, 3), root("C", 1, null)];
-    expect(rateWarning(roots, plain).message).toBe(
-      `Moving these assets changes their rates: "A" from 1 to 2 per kWh; "B" from 1 to 3 per kWh; "C" from 1 to no rate. ${AFTER}`,
-    );
-  });
-
-  it("lists the first three and counts the rest for four or more", () => {
-    const four = [root("A", 1, 2), root("B", 1, 3), root("C", 1, 4), root("D", 1, 5)];
-    expect(rateWarning(four, plain).message).toBe(
-      `Moving these assets changes their rates: "A" from 1 to 2 per kWh; "B" from 1 to 3 per kWh; "C" from 1 to 4 per kWh; and 1 more. ${AFTER}`,
-    );
+  it("counts every other changing root, however many there are", () => {
+    const three = [root("A", 1, 2), root("B", 1, 3), root("C", 1, null)];
+    expect(rateWarning(three, plain).message).toBe(`Moving these assets changes their rates ("A" from 1 to 2 per kWh, and 2 more). ${AFTER}`);
+    const four = [...three, root("D", 1, 5)];
+    expect(rateWarning(four, plain).message).toBe(`Moving these assets changes their rates ("A" from 1 to 2 per kWh, and 3 more). ${AFTER}`);
     const six = [...four, root("E", 1, 6), root("F", 1, 7)];
-    expect(rateWarning(six, plain).message).toContain('"C" from 1 to 4 per kWh; and 3 more.');
-    expect(rateWarning(six, plain).message).not.toContain('"D"');
+    expect(rateWarning(six, plain).message).toContain('("A" from 1 to 2 per kWh, and 5 more).');
+    for (const other of ["B", "C", "D", "E", "F"]) expect(rateWarning(six, plain).message).not.toContain(`"${other}"`);
+  });
+
+  it("keeps the same length however many roots change (the box has a fixed height)", () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => root(`Rack ${i}`, 0.2, 0.12));
+    const length = (n: number) => rateWarning(many(n), plain).message.length;
+    expect(length(9)).toBe(length(2)); // "and 8 more" and "and 1 more" are as long as each other; the list does not grow
+    expect(length(120)).toBeLessThanOrEqual(length(2) + 3);
   });
 
   it("counts only the roots whose rate changes", () => {
     const roots = [root("Quiet 1", 0.18, 0.18, false, false), root("Pump 3", 0.18, 0.12), root("Quiet 2", null, null, false, false)];
     expect(rateWarning(roots, plain).message).toBe(`Moving "Pump 3" changes its rate from 0.18 to 0.12 per kWh. ${AFTER}`);
     const five = [root("Q", 1, 1, false, false), root("A", 1, 2), root("B", 1, 3), root("C", 1, 4), root("D", 1, 5)];
-    expect(rateWarning(five, plain).message).toContain("; and 1 more.");
+    expect(rateWarning(five, plain).message).toBe(`Moving these assets changes their rates ("A" from 1 to 2 per kWh, and 3 more). ${AFTER}`); // Q is not counted
+    expect(rateWarning(five, plain).message).not.toContain('"Q"');
   });
 
-  it("words an other-days-only root inside a list", () => {
-    const roots = [root("Pump 3", 0.18, 0.12), root("Pump 4", 0.18, 0.18, false, true)];
-    expect(rateWarning(roots, plain).message).toBe(
-      `Moving these assets changes their rates: "Pump 3" from 0.18 to 0.12 per kWh; "Pump 4" for some periods. ${AFTER}`,
-    );
+  it("words a first root whose rate changes only on other days without rates", () => {
+    const roots = [root("Pump 4", 0.18, 0.18, false, true), root("Pump 3", 0.18, 0.12)];
+    expect(rateWarning(roots, plain).message).toBe(`Moving these assets changes their rates ("Pump 4" for some periods, and 1 more). ${AFTER}`);
+  });
+
+  it("names the first CHANGING root, with its rates, when a root that changes today comes after one that does not change at all", () => {
+    const roots = [root("Quiet", 0.18, 0.18, false, false), root("Pump 3", 0.18, 0.12), root("Pump 4", 0.18, 0.2)];
+    expect(rateWarning(roots, plain).message).toBe(`Moving these assets changes their rates ("Pump 3" from 0.18 to 0.12 per kWh, and 1 more). ${AFTER}`);
   });
 
   it("still says something when no root is marked as changing", () => {

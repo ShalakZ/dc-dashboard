@@ -45,8 +45,13 @@ describe("the Move to... dialog's own styles", () => {
     expect(body).toContain("scrollbar-gutter: stable");
   });
 
-  it("the message slot is three lines tall (plus the tint box's 14px) whether or not it has text, so the warning arriving moves nothing", () => {
-    expect(rule(".place-message")).toContain("min-height: calc(3lh + 14px)"); // 3 lines, plus the padding and border the tinted warning adds
+  it("the message slot is a FIXED box (four lines plus the tint box's 14px) that scrolls, so no text of any length moves the button the person presses twice", () => {
+    const body = rule(".place-message");
+    expect(body).toMatch(/(^|[;\s])height:\s*calc\(4lh \+ 14px\)/); // 4 lines, plus the padding and border the tinted warning adds
+    expect(body).not.toMatch(/min-height|max-height/); // a minimum grows with a longer text, a maximum shrinks with a short one
+    expect(body).toContain("overflow: auto"); // a text longer than the box scrolls inside it
+    expect(body).toContain("flex: none"); // and a short window cannot squeeze the box in a flex column
+    expect(app.filter((r) => r.selector === "*").map((r) => r.body).join(";")).toContain("box-sizing: border-box"); // else the tint's padding would add to the height
   });
 
   it("the one button whose face changes (Move, Checking..., Move anyway) has a minimum width that holds the longest, and a grey look while it is aria-disabled", () => {

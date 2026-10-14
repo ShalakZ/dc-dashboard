@@ -14,8 +14,11 @@ export interface ToastApi {
   error(text: string, options?: ToastOptions): void;
 }
 
-/** A button after the message ("Undo"). Pressing it runs `onAction` once and dismisses the toast. */
-export interface ToastAction { label: string; onAction: () => void }
+/**
+ * A button after the message ("Undo"). Pressing it runs `onAction` once and dismisses the toast. `title` is the hover text and the button's
+ * description (the name stays the label): it is where "Undo (Ctrl+Z)" tells about the keyboard shortcut.
+ */
+export interface ToastAction { label: string; onAction: () => void; title?: string }
 export interface ToastOptions {
   /**
    * A toast with an action never collapses into another toast and nothing collapses into it (two quick "Moved" toasts must keep one Undo each),
@@ -253,7 +256,7 @@ function ToastView({ toast, store }: { toast: ToastItem; store: Store }) {
       <span className="toast-icon"><Icon name={ICON[kind]} /></span>
       <span className="toast-text">{text}</span>
       {count > 1 && <span className="toast-count">{count}</span>}
-      {action && <button type="button" className="toast-action" onClick={() => store.act(id)}>{action.label}</button>}
+      {action && <button type="button" className="toast-action" title={action.title} onClick={() => store.act(id)}>{action.label}</button>}
       <button type="button" className="icon-btn toast-close" aria-label="Dismiss notification" onClick={() => store.dismiss(id)}>
         <Icon name="close" />
       </button>

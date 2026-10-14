@@ -902,6 +902,8 @@ function Where() {
 }
 const where = () => screen.getByTestId("where").textContent;
 const moveApi = (over: Partial<AssetTreeMove> = {}): AssetTreeMove => ({ onDrop: vi.fn(), onMoveTo: vi.fn(), moved: null, ...over });
+/** A move signal for these roots; the first of them is the one the tree reveals and focuses. */
+const signal = (...ids: number[]) => ({ firstId: ids[0], ids });
 const withMove = (props: Props = {}) => (
   <MemoryRouter>
     <AssetTree nodes={nodes()} selectedId={null} move={moveApi()} {...props} />
@@ -1191,6 +1193,65 @@ describe("AssetTree picking with the keyboard", () => {
     expect(pickedNames()).toEqual([]);
   });
 
+  describe("Ctrl+Z (Cmd+Z)", () => {
+    const press = (init: KeyboardEventInit, name = "Room A") => fireEvent.keyDown(hLink(name), init);
+
+    it("asks the page to undo its latest move, and keeps the browser's default away only when it did", () => {
+      const onUndo = vi.fn(() => true);
+      render(withMove({ move: moveApi({ onUndo }) }));
+      hLink("Room A").focus();
+      expect(press({ key: "z", ctrlKey: true })).toBe(false); // false: preventDefault was called
+      expect(onUndo).toHaveBeenCalledTimes(1);
+      expect(press({ key: "Z", metaKey: true })).toBe(false); // Cmd+Z, and a capital from Caps Lock
+      expect(onUndo).toHaveBeenCalledTimes(2);
+      onUndo.mockReturnValue(false); // nothing to undo (the toast is gone, or another move is running)
+      expect(press({ key: "z", ctrlKey: true })).toBe(true);
+      expect(onUndo).toHaveBeenCalledTimes(3);
+    });
+
+    it("works on a layout where the key is not a Latin z (the physical key is KeyZ)", () => {
+      const onUndo = vi.fn(() => true);
+      render(withMove({ move: moveApi({ onUndo }) }));
+      expect(press({ key: "\u0632", code: "KeyZ", ctrlKey: true })).toBe(false);
+      expect(onUndo).toHaveBeenCalledTimes(1);
+      expect(press({ key: "y", code: "KeyZ", ctrlKey: true })).toBe(true); // a Latin layout where that key is another letter
+      expect(onUndo).toHaveBeenCalledTimes(1);
+    });
+
+    it("is not Redo, not Alt+Z and not a bare z", () => {
+      const onUndo = vi.fn(() => true);
+      render(withMove({ move: moveApi({ onUndo }) }));
+      expect(press({ key: "Z", ctrlKey: true, shiftKey: true })).toBe(true);
+      expect(press({ key: "z", ctrlKey: true, altKey: true })).toBe(true);
+      expect(press({ key: "z" })).toBe(true);
+      expect(onUndo).not.toHaveBeenCalled();
+    });
+
+    it("does nothing while the page is busy (the tree is disabled)", () => {
+      const onUndo = vi.fn(() => true);
+      render(withMove({ move: moveApi({ onUndo }), disabled: true }));
+      expect(press({ key: "z", ctrlKey: true })).toBe(true);
+      expect(onUndo).not.toHaveBeenCalled();
+    });
+
+    it("is ignored without a way to undo, and without move at all (the browser keeps the key)", () => {
+      const view = render(withMove({ move: moveApi() })); // an older page: no onUndo
+      expect(press({ key: "z", ctrlKey: true })).toBe(true);
+      view.unmount();
+      render(ui());
+      expect(fireEvent.keyDown(hLink("Room A"), { key: "z", ctrlKey: true })).toBe(true);
+    });
+
+    it("is not the tree's when pressed on a twisty, a + or in the filter", async () => {
+      const onUndo = vi.fn(() => true);
+      render(withMove({ move: moveApi({ onUndo }), onAddChild: vi.fn() }));
+      expect(fireEvent.keyDown(twisty("Site"), { key: "z", ctrlKey: true })).toBe(true);
+      expect(fireEvent.keyDown(screen.getByRole("button", { name: "Add child of Site" }), { key: "z", ctrlKey: true })).toBe(true);
+      expect(fireEvent.keyDown(screen.getByLabelText("Filter assets"), { key: "z", ctrlKey: true })).toBe(true);
+      expect(onUndo).not.toHaveBeenCalled();
+    });
+  });
+
   it("keys pressed in the filter, on a twisty or on a + are not the tree's", async () => {
     const move = moveApi();
     render(withMove({ move, onAddChild: vi.fn() }));
@@ -1257,15 +1318,15 @@ describe("AssetTree renders", () => {
 describe("AssetTree after a move", () => {
   afterEach(() => { vi.useRealTimers(); });
 
-  it("clears the picks, unfolds the way to the first moved asset and focuses its link once the new tree has arrived", () => {
+  it("unpicks the moved rows, unfolds the way to the first moved asset and focuses its link once the new tree has arrived", () => {
     localStorage.setItem(KEY, "[1,2]");
     const before = nodes();
     const view = render(withMove({ nodes: before }));
-    ctrlClick("Site");
-    expect(pickedNames()).toEqual(["Site"]);
-    const moved = { firstId: 3 };
+    ctrlClick("Yard");
+    expect(pickedNames()).toEqual(["Yard"]);
+    const moved = signal(3, 5); // Panel 1 (inside the folded Site) and Yard were the moved roots
     view.rerender(withMove({ nodes: before, move: moveApi({ moved }) }));
-    expect(pickedNames()).toEqual([]); // the picks are over at once
+    expect(pickedNames()).toEqual([]); // the moved rows are no longer picked, at once
     expect(link("Panel 1")).not.toBeInTheDocument(); // the tree has not changed yet: nothing is revealed (it would be the old place)
     view.rerender(withMove({ nodes: buildTree(flat), move: moveApi({ moved }) })); // the refetched tree
     expect(expanded("Site")).toBe("true");
@@ -1278,7 +1339,7 @@ describe("AssetTree after a move", () => {
     localStorage.setItem(KEY, "[1,2]");
     const tree1 = nodes();
     const view = render(withMove({ nodes: tree1 }));
-    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: { firstId: 3 } }) }));
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(3) }) }));
     expect(link("Panel 1")).not.toBeInTheDocument();
     act(() => { vi.advanceTimersByTime(260); });
     expect(link("Panel 1")).toHaveFocus();
@@ -1290,7 +1351,7 @@ describe("AssetTree after a move", () => {
     const view = render(withMove({ nodes: tree1 }));
     await userEvent.type(screen.getByLabelText("Filter assets"), "yard");
     expect(link("Room B")).not.toBeInTheDocument();
-    const moved = { firstId: 4 };
+    const moved = signal(4);
     view.rerender(withMove({ nodes: tree1, move: moveApi({ moved }) }));
     view.rerender(withMove({ nodes: nodes(), move: moveApi({ moved }) }));
     expect(screen.getByLabelText("Filter assets")).toHaveValue("");
@@ -1298,8 +1359,50 @@ describe("AssetTree after a move", () => {
   });
 
   it("a moved object that was there when the tree mounted is not a move", () => {
-    render(withMove({ move: moveApi({ moved: { firstId: 3 } }) }));
+    render(withMove({ move: moveApi({ moved: signal(3) }) }));
     expect(document.body).toHaveFocus();
+  });
+
+  it("leaves the picks that did not move: dragging one unpicked row must not end the picking of the rest", () => {
+    const tree1 = nodes();
+    const view = render(withMove({ nodes: tree1 }));
+    ctrlClick("Room A");
+    ctrlClick("Yard");
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(4) }) })); // Room B, which was never picked
+    expect(pickedNames()).toEqual(["Room A", "Yard"]);
+  });
+
+  it("unpicks every moved root, and the picked rows inside a moved root, which travelled with it", () => {
+    const tree1 = nodes();
+    const view = render(withMove({ nodes: tree1 }));
+    ctrlClick("Site");
+    ctrlClick("Panel 1"); // inside Site: the page sends only the root, Site
+    ctrlClick("Yard");
+    ctrlClick("Shed");
+    expect(pickedNames()).toEqual(["Site", "Panel 1", "Yard", "Shed"]);
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(1, 5) }) }));
+    expect(pickedNames()).toEqual([]); // Site and its Panel 1, Yard and its Shed
+  });
+
+  it("unpicks the restored roots of an Undo the same way, and keeps the others", () => {
+    const tree1 = nodes();
+    const view = render(withMove({ nodes: tree1 }));
+    ctrlClick("Room B");
+    ctrlClick("Yard");
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(2) }) }));
+    expect(pickedNames()).toEqual(["Room B", "Yard"]);
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(4) }) }));
+    expect(pickedNames()).toEqual(["Yard"]);
+  });
+
+  it("says the page's own words on the live line, and a later signal without words (an Undo) clears them", () => {
+    const tree1 = nodes();
+    const view = render(withMove({ nodes: tree1 }));
+    const line = "Moved Room B to Yard. Press Ctrl+Z to undo.";
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: { ...signal(4), line } }) }));
+    expect(liveText()).toBe(line);
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(4) }) }));
+    expect(liveText()).toBe("");
   });
 });
 

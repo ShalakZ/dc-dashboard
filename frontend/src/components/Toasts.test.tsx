@@ -369,6 +369,17 @@ describe("a toast with an action (W7p)", () => {
     expect(textOf(toast)).toBe("Moved 3 assets to Row A"); // the label is not part of the message
   });
 
+  it("an action's title is the button's hover text and description, and its name stays exactly the label", () => {
+    setup();
+    fire(() => api.success("Moved 3 assets to Row A", { action: { label: "Undo", title: "Undo (Ctrl+Z)", onAction: vi.fn() } }));
+    const toast = toastWith("Moved 3 assets to Row A");
+    const button = within(toast).getByRole("button", { name: "Undo" }); // an exact string name: the title did not become part of it
+    expect(button).toHaveAttribute("title", "Undo (Ctrl+Z)");
+    expect(button).toHaveAccessibleDescription("Undo (Ctrl+Z)");
+    fire(() => api.success("Plain", { action: { label: "Undo", onAction: vi.fn() } }));
+    expect(actionOf(toastWith("Plain"))).not.toHaveAttribute("title"); // no title unless one is given
+  });
+
   it("a toast without an action has no action button, exactly as before", () => {
     setup();
     fire(() => api.success("Plain"));

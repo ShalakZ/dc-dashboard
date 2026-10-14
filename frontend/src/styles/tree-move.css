@@ -4,11 +4,14 @@
      of your own, never a bare `.node` rule here. */
 
   /* The slot between the filter and the rows: one fixed line, drawn for every editor (also while the list loads, empty), so that picking
-     changes its words and never the height. The hint gives way before the buttons. */
-  .tree-slot { flex: none; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; }
+     changes its words and never the height. The hint gives way before the buttons. The padding is the header's (12 left, 6 right) and the
+     gap and the buttons' sides are tight, so that "350 picked", Move to... and Clear all fit the narrowest column (220px: 201px of room). */
+  .tree-slot { flex: none; display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 6px 0 12px; }
   .tree-slot-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--text-2); }
-  .tree-slot-count { font-weight: 600; color: var(--text); }
-  .tree-slot-btn { flex: none; min-height: 24px; padding: 0 8px; border-radius: var(--radius-sm); font-size: var(--fs-xs); }
+  /* The count is the one piece of news in the slot: it never gives way (a width where "12 picked" and the two buttons do not all fit cuts the hint,
+     not the count). The auto margin keeps the buttons at the right, which the hint's flex: 1 did before. */
+  .tree-slot-count { flex: none; margin-right: auto; font-weight: 600; color: var(--text); }
+  .tree-slot-btn { flex: none; min-height: 24px; padding: 0 6px; border-radius: var(--radius-sm); font-size: var(--fs-xs); }
   .tree-slot-btn[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 
   /* A picked row: a tint and a frame all round. The open asset has a tint and a bar on the left (app.css), so the two never read alike, and
@@ -18,9 +21,13 @@
   .node[data-picked].is-selected { box-shadow: inset 3px 0 0 var(--accent), inset 0 0 0 1px var(--accent); }
 
   /* Where a drop would land, written onto the row while dragging (components/AssetTree.tsx never renders these): a line before or after
-     the row, the first-child line (indented like the children it would head), a frame for "inside", and a dashed no-drop frame. */
+     the row, the first-child line (indented like the children it would head), a dashed accent frame for "inside" (a picked row's frame is
+     solid and thin, so the target among picked rows is told by its shape), and a dashed red no-drop frame. */
   .node[data-drop] { position: relative; }
-  .node[data-drop="inside"] { background: var(--accent-tint); box-shadow: inset 0 0 0 2px var(--accent); }
+  .node[data-drop="inside"] { background: var(--accent-tint); outline: 2px dashed var(--accent); outline-offset: -2px; }
+  /* A picked row's solid frame is a box-shadow: it would show through the gaps of the dashes, so the target gives it up (the open asset's bar stays). */
+  .node[data-picked][data-drop="inside"] { box-shadow: none; }
+  .node[data-picked].is-selected[data-drop="inside"] { box-shadow: inset 3px 0 0 var(--accent); }
   .node[data-drop="before"]::after, .node[data-drop="after"]::after, .node[data-drop="first"]::after { content: ""; position: absolute; left: 6px; right: 6px; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
   .node[data-drop="before"]::after { top: 0; }
   .node[data-drop="after"]::after, .node[data-drop="first"]::after { bottom: 0; }

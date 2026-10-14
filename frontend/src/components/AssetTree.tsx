@@ -158,10 +158,24 @@ export interface AssetTreeMove {
   /** Opens Move to... for these ids; `opener` gets the focus back on Cancel. */
   onMoveTo(ids: number[], opener: HTMLElement | null): void;
   /**
-   * A NEW object after every successful move: the tree clears its picks, unfolds the way to `firstId` and focuses its link. It may arrive
-   * before the refetched asset list does (the tree waits for a new list, or 250 ms, before it looks for the row).
+   * Starts the latest move's Undo (Ctrl+Z / Cmd+Z on a row) and says whether it did: false when there is nothing to undo any more (the toast
+   * is gone, it was done already) or the page is busy. Absent: the keys are left to the browser.
    */
-  moved: { firstId: number } | null;
+  onUndo?(): boolean;
+  /**
+   * A NEW object after every successful move: the tree unpicks `ids` (the moved roots, and the picked rows inside them, which went along),
+   * unfolds the way to `firstId` and focuses its link. It may arrive before the refetched asset list does (the tree waits for a new list,
+   * or 250 ms, before it looks for the row). `line` is said on the tree's live line ("Moved 3 assets to Row A. Press Ctrl+Z to undo."); a
+   * signal without one (an Undo) clears the line.
+   */
+  moved: { firstId: number; ids: number[]; line?: string } | null;
+}
+
+/** Ctrl+Z and Cmd+Z, but not Redo (Shift) or Alt. On a layout whose key is not a Latin letter (Arabic, Cyrillic) the physical key decides. */
+function isUndoKey(e: KeyboardEvent): boolean {
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return false;
+  const key = e.key.toLowerCase();
+  return key === "z" || (!/^[a-z]$/.test(key) && e.code === "KeyZ");
 }
 
 /** The width right of the sidebar: the column's flex container. A container with no layout (jsdom) or no element yet gives the window's. */
@@ -462,9 +476,13 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
   const onTreeKeyDown = useCallback((e: KeyboardEvent<HTMLUListElement>) => {
     const link = e.target instanceof Element ? e.target.closest<HTMLElement>("a") : null;
     const row = link?.closest<HTMLElement>("[data-asset-id]");
-    if (!link || !row || e.ctrlKey || e.altKey || e.metaKey) return; // a twisty or + keeps its own keys
+    if (!link || !row) return; // a twisty or + keeps its own keys
     const { nodes: all, byId: names, collapsed: folded, visible: shown, move: mover, disabled: busy } = latest.current;
-    if (!mover) return;
+    if (isUndoKey(e)) { // before the modifier check below: Ctrl+Z is how the keyboard reaches the Undo of a move (the toast's button is far away in the tab order)
+      if (mover?.onUndo && !busy && mover.onUndo()) e.preventDefault();
+      return;
+    }
+    if (e.ctrlKey || e.altKey || e.metaKey || !mover) return;
     const id = Number(row.dataset.assetId);
     const openMove = () => {
       if (busy) return;
@@ -516,6 +534,18 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
   // reach this component after the signal (the query client tells its observers a tick later), so the asset is not looked for until a new
   // tree arrives or REVEAL_GRACE_MS has passed (then the tree was current already).
   const movedSignal = move?.moved ?? null;
+  // The moved roots and everything below them: a picked row inside a moved root went along, so its pick is over too.
+  const unpickMoved = useCallback((ids: readonly number[]) => {
+    if (store.getSnapshot().ids.size === 0) return;
+    const gone = new Set<number>();
+    const take = (node: TreeNode) => { gone.add(node.id); node.children.forEach(take); };
+    for (const id of ids) {
+      const node = byId.get(id);
+      if (node) take(node);
+      else gone.add(id);
+    }
+    store.unpick(gone);
+  }, [store, byId]);
   const lastSignal = useRef(movedSignal); // what was there at mount is not a move
   const reveal = useRef<Reveal | null>(null);
   const [settledTick, setSettledTick] = useState(0);
@@ -523,7 +553,8 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
     if (movedSignal !== lastSignal.current) {
       lastSignal.current = movedSignal;
       if (movedSignal) {
-        store.clear();
+        unpickMoved(movedSignal.ids);
+        announce(movedSignal.line ?? "");
         if (reveal.current) clearTimeout(reveal.current.timer);
         const fresh: Reveal = {
           id: movedSignal.firstId,
@@ -543,7 +574,7 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
     const way = ancestorIds(nodes, pending.id);
     if (way.some((id) => collapsed.has(id))) { unfold(way); return; }
     if (focusLink(pending.id)) done();
-  }, [movedSignal, nodes, byId, collapsed, visible, minimized, settledTick, store, unfold, focusLink]);
+  }, [movedSignal, nodes, byId, collapsed, visible, minimized, settledTick, store, unfold, focusLink, announce, unpickMoved]);
   useEffect(() => () => { if (reveal.current) clearTimeout(reveal.current.timer); }, []);
 
   const noFold = visible !== null || foldable.size === 0; // a filter has its own view of the tree

@@ -13,9 +13,11 @@ type RateRoot = Pick<MovePreviewRoot, "name" | "rate_before" | "rate_after" | "r
 
 /**
  * The confirmation shown when a move changes the rate an asset is billed at: from a drag in the confirm dialog, from "Move to..." inside
- * the move dialog. Only the roots whose rate changes are named. One root gets both rates; several get the first three with their rates,
- * then "and N more". `formatRate` writes one rate (see `rateText`); a missing rate is written "no rate" here, because nothing then applies
- * and the asset's energy shows without cost. A root whose rate changes only on other days (a dated tariff row) is named without rates.
+ * the move dialog. Only the roots whose rate changes are counted. One root gets both rates; several get only the FIRST one, with its rates,
+ * then "and N more": the text stays the same length however many assets move, because the dialog shows it in a box of a fixed height (a
+ * longer text would move the button that the person presses twice, Move and then Move anyway). `formatRate` writes one rate (see
+ * `rateText`); a missing rate is written "no rate" here, because nothing then applies and the asset's energy shows without cost. A root
+ * whose rate changes only on other days (a dated tariff row) is named without rates.
  */
 export function rateWarning(roots: readonly RateRoot[], formatRate: (rate: number) => string): { title: string; message: string } {
   const changing = roots.filter((root) => root.rate_changes_today || root.rate_changes_other_days);
@@ -31,9 +33,8 @@ export function rateWarning(roots: readonly RateRoot[], formatRate: (rate: numbe
       ? `Moving "${root.name}" changes its rate ${pair(root)}.`
       : `Moving "${root.name}" changes the rate some periods are billed at.`;
   } else {
-    const items = changing.slice(0, 3).map((root) => `"${root.name}" ${root.rate_changes_today ? pair(root) : "for some periods"}`);
-    if (changing.length > 3) items.push(`and ${changing.length - 3} more`);
-    lead = `Moving these assets changes their rates: ${items.join("; ")}.`;
+    const [first] = changing;
+    lead = `Moving these assets changes their rates ("${first.name}" ${first.rate_changes_today ? pair(first) : "for some periods"}, and ${changing.length - 1} more).`;
   }
   return { title: RATE_WARNING_TITLE, message: `${lead} ${BILLING_NOTE}` };
 }

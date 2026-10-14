@@ -57,7 +57,7 @@ function Harness({ canEdit = true, locked = false, blurOpener = false, capture }
   capture?.(move);
   // A LAYOUT effect: the strictest case. It runs before a passive clean-up such as the Modal's "give the focus back to the opener", so only a
   // hook that closes its dialog in an earlier commit than the signal leaves the focus on the moved root.
-  useLayoutEffect(() => { if (move?.moved) link.current?.focus(); }, [move?.moved]);
+  useLayoutEffect(() => { if (move?.moved && !link.current?.closest("[hidden]")) link.current?.focus(); }, [move?.moved]); // a minimized tree has nothing to focus
   return (
     <div>
       <button type="button" onClick={() => void move?.onDrop([4], { parent_id: 7, before_id: null })}>drop</button>
@@ -111,7 +111,7 @@ describe("useTreeMove", () => {
       expect(posts(calls, "/api/assets/move")[0].body).toEqual({ moves: [GROUP], expect: preview().expect });
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(); // no confirmation without a rate change
       expect(spy.calls).toHaveLength(1);
-      expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Moved Rack 1 to Yard", options: { durationMs: 8000, action: { label: "Undo" } } });
+      expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Moved Rack 1 to Yard", options: { durationMs: 8000, action: { label: "Undo", title: "Undo (Ctrl+Z)" } } });
       expect(busy()).toBe("false");
     });
 
@@ -130,11 +130,27 @@ describe("useTreeMove", () => {
       const one = lastMove(captured).moved;
       await act(async () => { await lastMove(captured).onDrop([4], { parent_id: 7, before_id: null }); });
       const two = lastMove(captured).moved;
-      expect(one).toEqual({ firstId: 4 });
-      expect(two).toEqual({ firstId: 4 });
+      const line = "Moved Rack 1 to Yard. Press Ctrl+Z to undo."; // the tree's live line: the toast's words and the keyboard way to undo
+      expect(one).toEqual({ firstId: 4, ids: [4], line });
+      expect(two).toEqual({ firstId: 4, ids: [4], line });
       expect(two).not.toBe(one);
       expect(lastMove(captured).onDrop).toBe(first.onDrop);
       expect(lastMove(captured).onMoveTo).toBe(first.onMoveTo);
+      expect(lastMove(captured).onUndo).toBe(first.onUndo);
+    });
+
+    it("tells the tree every moved root (its picks are taken off), not only the first", async () => {
+      const two = moved({
+        moved: [
+          { id: 4, name: "Rack 1", from_parent_id: 2, to_parent_id: 7, from_parent_name: "Hall A", to_parent_name: "Yard", change: "parent" },
+          { id: 5, name: "Rack 2", from_parent_id: 2, to_parent_id: 7, from_parent_name: "Hall A", to_parent_name: "Yard", change: "parent" },
+        ],
+      });
+      const { calls, captured, spy } = setup({ "POST /api/assets/move-preview": { body: preview() }, "POST /api/assets/move": { body: two } });
+      await settled(calls);
+      await act(async () => { await lastMove(captured).onDrop([4, 5], { parent_id: 7, before_id: null }); });
+      expect(lastMove(captured).moved).toEqual({ firstId: 4, ids: [4, 5], line: "Moved 2 assets to Yard. Press Ctrl+Z to undo." });
+      expect(spy.calls[0].text).toBe("Moved 2 assets to Yard"); // the toast's own text is unchanged
     });
 
     it("refreshes the asset list after a move (the mutation settles the lists)", async () => {
@@ -332,6 +348,17 @@ describe("useTreeMove", () => {
       expect(busy()).toBe("false");
     });
 
+    it("the signal an Undo gives the tree names the restored roots and carries no words (the toast says Undone)", async () => {
+      const { calls, spy, captured } = setup(routes());
+      await settled(calls);
+      await userEvent.click(screen.getByRole("button", { name: "drop" }));
+      await waitFor(() => expect(spy.calls).toHaveLength(1));
+      await act(async () => { spy.calls[0].options!.action!.onAction(); });
+      await waitFor(() => expect(spy.calls).toHaveLength(2));
+      expect(lastMove(captured).moved).toEqual({ firstId: 4, ids: [4] });
+      expect(lastMove(captured).moved).not.toHaveProperty("line");
+    });
+
     it("a 409 says something moved since, and puts the focus on the moved root", async () => {
       const { calls, spy } = setup(routes({
         "POST /api/assets/move": ({ body }) => ((body as { undo_of?: string }).undo_of ? { status: 409, body: { detail: "These assets were moved or changed since you looked.", stale: true } } : { body: moved() }),
@@ -391,6 +418,219 @@ describe("useTreeMove", () => {
       await act(async () => { spy.calls[0].options!.action!.onAction(); });
       await waitFor(() => expect(posts(calls, "/api/assets/move")).toHaveLength(2));
       await waitFor(() => expect(spy.calls[1]).toEqual({ kind: "success", text: "Undone" }));
+    });
+  });
+
+  describe("Undo by keyboard (Ctrl+Z on a row of the tree)", () => {
+    /** Each move gets its own request id, so a test can tell which move an Undo was for. */
+    function routes(undo: Routes = {}): Routes {
+      let n = 0;
+      return {
+        "POST /api/assets/move-preview": { body: preview() },
+        "POST /api/assets/move": ({ body }) => ((body as { undo_of?: string }).undo_of ? { body: UNDONE } : { body: moved({ request_id: `m-${++n}` }) }),
+        ...undo,
+      };
+    }
+    const undoOf = (calls: { method: string; path: string; body: unknown }[]) => posts(calls, "/api/assets/move").map((c) => (c.body as { undo_of?: string }).undo_of);
+    const dropOnce = async (spy: ReturnType<typeof spyToasts>, count: number) => {
+      await userEvent.click(screen.getByRole("button", { name: "drop" }));
+      await waitFor(() => expect(spy.calls.filter((c) => c.options?.action)).toHaveLength(count));
+    };
+    const press = async (captured: { move: AssetTreeMove | undefined }[]) => {
+      let started = false;
+      await act(async () => { started = lastMove(captured).onUndo!(); });
+      return started;
+    };
+
+    it("starts the server's undo of the latest move once, says Undone, and a second press finds nothing to undo", async () => {
+      const { calls, spy, captured } = setup(routes());
+      await settled(calls);
+      await dropOnce(spy, 1);
+      expect(await press(captured)).toBe(true);
+      await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "success", text: "Undone" }));
+      expect(posts(calls, "/api/assets/move")[1].body).toEqual({ moves: moved().undo.moves, expect: moved().undo.expect, undo_of: "m-1" });
+      expect(await press(captured)).toBe(false);
+      expect(posts(calls, "/api/assets/move")).toHaveLength(2);
+      expect(movedSignal()).toBe("4");
+    });
+
+    it("the toast's own Undo button after Ctrl+Z does nothing more (one undo for one move), and the other way round", async () => {
+      const { calls, spy, captured } = setup(routes());
+      await settled(calls);
+      await dropOnce(spy, 1);
+      expect(await press(captured)).toBe(true);
+      await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "success", text: "Undone" }));
+      await act(async () => { spy.calls[0].options!.action!.onAction(); });
+      expect(posts(calls, "/api/assets/move")).toHaveLength(2); // the move and one undo
+
+      await dropOnce(spy, 2);
+      await act(async () => { spy.calls.filter((c) => c.options?.action)[1].options!.action!.onAction(); });
+      await waitFor(() => expect(posts(calls, "/api/assets/move")).toHaveLength(4));
+      expect(await press(captured)).toBe(false); // the button was first: the key has nothing left
+      expect(posts(calls, "/api/assets/move")).toHaveLength(4);
+    });
+
+    it("is for the LATEST move: a second move replaces the first, whose toast button still works", async () => {
+      const { calls, spy, captured } = setup(routes());
+      await settled(calls);
+      await dropOnce(spy, 1);
+      await dropOnce(spy, 2);
+      expect(await press(captured)).toBe(true);
+      await waitFor(() => expect(undoOf(calls)).toEqual([undefined, undefined, "m-2"]));
+      // The older toast's Undo is its own: it neither needs the key's entry nor wipes a newer one.
+      await act(async () => { spy.calls.filter((c) => c.options?.action)[0].options!.action!.onAction(); });
+      await waitFor(() => expect(undoOf(calls)).toEqual([undefined, undefined, "m-2", "m-1"]));
+    });
+
+    it("an older toast's button does not wipe the newer move's entry", async () => {
+      const { calls, spy, captured } = setup(routes());
+      await settled(calls);
+      await dropOnce(spy, 1);
+      await dropOnce(spy, 2);
+      await act(async () => { spy.calls.filter((c) => c.options?.action)[0].options!.action!.onAction(); });
+      await waitFor(() => expect(undoOf(calls)).toEqual([undefined, undefined, "m-1"]));
+      expect(await press(captured)).toBe(true);
+      await waitFor(() => expect(undoOf(calls)).toEqual([undefined, undefined, "m-1", "m-2"]));
+    });
+
+    it("stops once the toast's 8 seconds are up", async () => {
+      const real = Date.now.bind(Date);
+      let skew = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => real() + skew);
+      try {
+        const { calls, spy, captured } = setup(routes());
+        await settled(calls);
+        await dropOnce(spy, 1);
+        skew = 7900;
+        expect(await press(captured)).toBe(true); // still inside the 8 s
+        await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "success", text: "Undone" }));
+        await dropOnce(spy, 2);
+        skew += 8001;
+        expect(await press(captured)).toBe(false);
+        expect(undoOf(calls)).toEqual([undefined, "m-1", undefined]);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it("does nothing while another move is running, nor beside the Move to... dialog, and starts again after", async () => {
+      const { calls, spy, captured } = setup(routes());
+      await settled(calls);
+      await dropOnce(spy, 1);
+      const held = holdFetch((method, path) => method === "POST" && path === "/api/assets/move-preview");
+      let second!: Promise<void>;
+      act(() => { second = Promise.resolve(lastMove(captured).onDrop([5], { parent_id: 7, before_id: null })); });
+      expect(await press(captured)).toBe(false); // a drop is out
+      await act(async () => { held.release(); await second; });
+      await waitFor(() => expect(busy()).toBe("false"));
+      act(() => lastMove(captured).onMoveTo([4], null));
+      await screen.findByRole("dialog");
+      expect(await press(captured)).toBe(false); // the dialog is open
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(undoOf(calls).filter(Boolean)).toEqual([]); // nothing was undone meanwhile
+    });
+
+    it("a failed Ctrl+Z undo reads like the button's: something moved since", async () => {
+      const { calls, spy, captured } = setup(routes({
+        "POST /api/assets/move": ({ body }) => ((body as { undo_of?: string }).undo_of ? { status: 409, body: { detail: "moved", stale: true } } : { body: moved() }),
+      }));
+      await settled(calls);
+      await dropOnce(spy, 1);
+      expect(await press(captured)).toBe(true);
+      await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "error", text: "Something moved since; the move could not be undone" }));
+    });
+
+    describe("the focus after an Undo", () => {
+      const extras: HTMLElement[] = [];
+      afterEach(() => { extras.splice(0).forEach((el) => el.remove()); });
+      const element = (tag: string, attrs: Record<string, string>, parent: HTMLElement = document.body) => {
+        const el = parent.appendChild(document.createElement(tag));
+        for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, value);
+        extras.push(el);
+        return el;
+      };
+      /** The toast's own Undo button, with the focus on it (where a person who pressed it is). */
+      const focusToastButton = () => {
+        const button = element("button", { type: "button" }, element("div", { class: "toast-stack" }));
+        button.focus();
+        return button;
+      };
+
+      it("pressed from another page (no tree): the focus goes to the main area, never to the body", async () => {
+        const { calls, spy, view } = setup(routes());
+        await settled(calls);
+        await dropOnce(spy, 1);
+        view.unmount(); // the person went to Dashboards
+        const main = element("main", { id: "main", tabindex: "-1" });
+        focusToastButton();
+        await act(async () => { spy.calls[0].options!.action!.onAction(); });
+        await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "success", text: "Undone" }));
+        expect(main).toHaveFocus();
+      });
+
+      it("the same when the undo is refused", async () => {
+        const { calls, spy, view } = setup(routes({
+          "POST /api/assets/move": ({ body }) => ((body as { undo_of?: string }).undo_of ? { status: 409, body: { detail: "moved", stale: true } } : { body: moved() }),
+        }));
+        await settled(calls);
+        await dropOnce(spy, 1);
+        view.unmount();
+        const main = element("main", { id: "main", tabindex: "-1" });
+        focusToastButton();
+        await act(async () => { spy.calls[0].options!.action!.onAction(); });
+        await waitFor(() => expect(spy.calls.at(-1)?.kind).toBe("error"));
+        expect(main).toHaveFocus();
+      });
+
+      it("falls back to the page's heading when there is no main landmark", async () => {
+        const { calls, spy, view } = setup(routes());
+        await settled(calls);
+        await dropOnce(spy, 1);
+        view.unmount();
+        const heading = element("h1", { tabindex: "-1" });
+        focusToastButton();
+        await act(async () => { spy.calls[0].options!.action!.onAction(); });
+        await waitFor(() => expect(heading).toHaveFocus());
+      });
+
+      it("leaves a focus that is on something named alone", async () => {
+        const { calls, spy, view } = setup(routes());
+        await settled(calls);
+        await dropOnce(spy, 1);
+        view.unmount();
+        element("main", { id: "main", tabindex: "-1" });
+        const field = element("input", { type: "text" });
+        field.focus();
+        await act(async () => { spy.calls[0].options!.action!.onAction(); });
+        await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "success", text: "Undone" }));
+        expect(field).toHaveFocus();
+      });
+
+      it("with the tree on screen it is the tree's reveal that places the focus, not the main area", async () => {
+        const { calls, spy } = setup(routes());
+        await settled(calls);
+        await dropOnce(spy, 1);
+        const main = element("main", { id: "main", tabindex: "-1" });
+        focusToastButton();
+        await act(async () => { spy.calls[0].options!.action!.onAction(); });
+        await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "success", text: "Undone" }));
+        expect(main).not.toHaveFocus();
+        expect(screen.getByRole("link", { name: "Rack 1 link" })).toHaveFocus(); // the page's reveal (the harness's layout effect)
+      });
+
+      it("a tree that is folded away (minimized to its strip) does not count as on screen", async () => {
+        const { calls, spy } = setup(routes());
+        await settled(calls);
+        await dropOnce(spy, 1);
+        const tree = document.querySelector("ul.tree")!;
+        const strip = tree.parentElement!;
+        strip.hidden = true; // what the tree column does when it is minimized
+        const main = element("main", { id: "main", tabindex: "-1" });
+        focusToastButton();
+        await act(async () => { spy.calls[0].options!.action!.onAction(); });
+        await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "success", text: "Undone" }));
+        expect(main).toHaveFocus();
+      });
     });
   });
 

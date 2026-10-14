@@ -21,9 +21,10 @@
   .place-reason { display: block; padding: 0 8px 4px 29px; color: var(--text-2); font-size: var(--fs-xs); overflow-wrap: anywhere; }
   .place-more { margin: 0; padding: 6px 8px; color: var(--text-2); font-size: var(--fs-xs); }
 
-  /* The slot for the warning or the refusal: always there, three lines tall PLUS the 14px that a tinted box adds (6 + 6 padding, 2 border), so that
-     its text arriving moves nothing (a text of four lines grows it). */
-  .place-message { min-height: calc(3lh + 14px); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  /* The slot for the warning or the refusal: always there, a FIXED four lines tall PLUS the 14px that a tinted box adds (6 + 6 padding, 2 border;
+     border-box sizing, so the tint adds nothing). Its text arriving moves nothing, whatever the length: the person presses the same button twice
+     (Move, then Move anyway), and a button that moved 18px between the presses was missed by a pointer left where it had been. A longer text scrolls. */
+  .place-message { flex: none; height: calc(4lh + 14px); overflow: auto; font-size: var(--fs-sm); overflow-wrap: anywhere; }
   .place-message[data-tone="warn"] { padding: 6px 10px; border: 1px solid var(--warn-line); border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-ink); }
   .place-message[data-tone="info"] { padding: 6px 10px; border: 1px solid var(--info-line); border-radius: var(--radius); background: var(--info-tint); color: var(--info-ink); }
   .place-message[data-tone="error"] { padding: 6px 10px; border: 1px solid var(--crit); border-radius: var(--radius); background: var(--crit-tint); color: var(--crit); font-weight: 600; }

@@ -16,7 +16,7 @@ const seen = vi.hoisted(() => ({ tree: {} as { move?: AssetTreeMove; disabled?: 
 vi.mock("../components/AssetTree", () => ({
   AssetTree: (props: { move?: AssetTreeMove; disabled?: boolean }) => {
     seen.tree = props;
-    return <nav aria-label="Asset tree stub" data-disabled={String(Boolean(props.disabled))} data-moved={props.move?.moved ? String(props.move.moved.firstId) : ""} />;
+    return <nav aria-label="Asset tree stub" data-disabled={String(Boolean(props.disabled))} data-moved={props.move?.moved ? String(props.move.moved.firstId) : ""} data-moved-ids={props.move?.moved?.ids.join(",") ?? ""} data-line={props.move?.moved?.line ?? ""} />;
   },
 }));
 
@@ -82,7 +82,7 @@ describe("AssetsPage and the tree's moving (W7p)", () => {
     renderPage();
     await accountKnown();
     await waitFor(() => expect(seen.tree.move).toBeDefined());
-    expect(seen.tree.move).toEqual({ onDrop: expect.any(Function), onMoveTo: expect.any(Function), moved: null });
+    expect(seen.tree.move).toEqual({ onDrop: expect.any(Function), onMoveTo: expect.any(Function), onUndo: expect.any(Function), moved: null });
   });
 
   it("locks the page while Move to... is open: the tree is disabled, Add asset is off, and both come back on Cancel", async () => {
@@ -119,6 +119,24 @@ describe("AssetsPage and the tree's moving (W7p)", () => {
       expect: preview.expect,
     });
     expect(stub()).toHaveAttribute("data-disabled", "false"); // unlocked again
+    expect(stub()).toHaveAttribute("data-moved-ids", "2");
+    expect(stub()).toHaveAttribute("data-line", "Moved Room A to Yard. Press Ctrl+Z to undo.");
+  });
+
+  it("gives the tree a Ctrl+Z route to the latest move's Undo: it sends the undo request, and finds nothing to undo after", async () => {
+    const calls = mockFetch({ ...authed("admin"), "POST /api/assets/move-preview": { body: preview }, "POST /api/assets/move": { body: result } });
+    const spy = renderPage();
+    await accountKnown();
+    await waitFor(() => expect(seen.tree.move).toBeDefined());
+    expect(seen.tree.move!.onUndo!()).toBe(false); // nothing moved yet
+    await act(async () => { await seen.tree.move!.onDrop([2], { parent_id: 3, before_id: null }); });
+    let started = false;
+    await act(async () => { started = seen.tree.move!.onUndo!(); });
+    expect(started).toBe(true);
+    await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "success", text: "Undone" }));
+    const moves = calls.filter((c) => c.method === "POST" && c.path === "/api/assets/move");
+    expect(moves.map((c) => (c.body as { undo_of?: string }).undo_of)).toEqual([undefined, "r-1"]);
+    expect(seen.tree.move!.onUndo!()).toBe(false);
   });
 
   it("moves on a drop (a preview, then the move)", async () => {

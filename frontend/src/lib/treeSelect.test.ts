@@ -1,6 +1,6 @@
 import type { Asset } from "../api/types";
 import { buildTree } from "./tree";
-import { EMPTY_PICK, clear, createPickStore, pick, pickRange, prune, toggle, visibleOrder, type PickState } from "./treeSelect";
+import { EMPTY_PICK, clear, createPickStore, pick, pickRange, prune, toggle, unpick, visibleOrder, type PickState } from "./treeSelect";
 
 const state = (ids: number[], anchor: number | null): PickState => ({ ids: new Set(ids), anchor });
 /** The contents of a state, to prove an input was not changed. */
@@ -201,6 +201,35 @@ describe("prune", () => {
   });
 });
 
+describe("unpick", () => {
+  it("takes those ids off the picks and leaves the others (a move of some rows must not end the picking of the rest)", () => {
+    expect(snap(unpick(state([1, 2, 3], 3), [1, 3]))).toEqual({ ids: [2], anchor: null }); // the anchor went with its row
+    expect(snap(unpick(state([1, 2, 3], 2), [1]))).toEqual({ ids: [2, 3], anchor: 2 });
+  });
+
+  it("ignores ids that are not picked, and returns the SAME state when nothing changes", () => {
+    const before = state([1, 2], 2);
+    expect(unpick(before, [7, 8])).toBe(before);
+    expect(unpick(before, [])).toBe(before);
+    expect(unpick(EMPTY_PICK, [1])).toBe(EMPTY_PICK);
+  });
+
+  it("forgets an anchor that is one of the ids even when it was not picked (the row it pointed to has moved)", () => {
+    expect(snap(unpick(state([1, 2], 9), [9]))).toEqual({ ids: [1, 2], anchor: null });
+  });
+
+  it("can take everything", () => {
+    expect(snap(unpick(state([1, 2], 2), [1, 2]))).toEqual({ ids: [], anchor: null });
+  });
+
+  it("does not change its input", () => {
+    const before = state([1, 2, 3], 3);
+    const copy = snap(before);
+    unpick(before, [1, 3]);
+    expect(snap(before)).toEqual(copy);
+  });
+});
+
 describe("visibleOrder", () => {
   const a = (id: number, parent_id: number | null, name: string, kind = "generic"): Asset => ({ id, parent_id, name, kind, sort_order: 0 });
   // Room > (Rack 1 > (Pump, Fan), Rack 2), Yard > Tank
@@ -285,8 +314,14 @@ describe("createPickStore", () => {
     expect(listener).toHaveBeenCalledTimes(3);
     store.prune(new Set([1, 2]));
     expect(listener).toHaveBeenCalledTimes(4);
-    store.clear();
+    store.unpick([2]);
     expect(listener).toHaveBeenCalledTimes(5);
+    store.unpick([2]); // nothing left to take: no news
+    expect(listener).toHaveBeenCalledTimes(5);
+    store.pick(3);
+    expect(listener).toHaveBeenCalledTimes(6);
+    store.clear();
+    expect(listener).toHaveBeenCalledTimes(7);
   });
 
   it("replaces the set once for a range, and tells once", () => {
