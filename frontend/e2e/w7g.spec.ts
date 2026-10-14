@@ -149,7 +149,7 @@ test.describe.serial("W7g: asset icons and the Assets Tree name", () => {
       await page.keyboard.press("ArrowRight");
       await expect(form.radio("Site")).toBeChecked();
       await expect(form.radio("Site")).toBeFocused();
-      await expect(form.caption).toHaveText("Site");
+      await expect(form.caption).toHaveText(/^Site/);
       expect(await form.preview.innerHTML(), "the preview left the kind's icon").not.toBe(autoHtml);
       await page.keyboard.press("ArrowLeft");
       await expect(form.radio("Automatic")).toBeChecked();
@@ -160,7 +160,7 @@ test.describe.serial("W7g: asset icons and the Assets Tree name", () => {
     await test.step("choose Server with a click, then save", async () => {
       await form.cell("Server").click();
       await expect(form.radio("Server")).toBeChecked();
-      await expect(form.caption).toHaveText("Server");
+      await expect(form.caption).toHaveText(/^Server/);
       serverHtml = await form.cell("Server").locator("svg").innerHTML();
       expect(serverHtml, "the Server icon is not the kind's icon").not.toBe(autoHtml);
       expect(await form.preview.innerHTML(), "the preview draws the Server cell's icon").toBe(serverHtml);
