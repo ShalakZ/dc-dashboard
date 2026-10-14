@@ -634,13 +634,13 @@ async def test_the_downgrade_runs_again_when_a_billing_table_is_already_gone(db)
 
 
 async def test_the_readme_precheck_query_finds_what_the_widening_check_refuses(db):
-    # README step 2 tells the operator to run this query before the upgrade; it must agree with the migration.
+    # The CHANGELOG (Phase 3 entry, step 2) tells the operator to run this query before the upgrade; it must agree with the migration.
     import re
 
     from tests.conftest import BACKEND
 
-    readme = (BACKEND.parent / "README.md").read_text(encoding="utf-8")
-    (query,) = re.findall(r"```sql\n\s*(SELECT min\(bucket\) AS oldest.*?;)\n\s*```", readme, flags=re.S)
+    changelog = (BACKEND.parent / "CHANGELOG.md").read_text(encoding="utf-8")  # the query lives in the Phase 3 entry
+    (query,) = re.findall(r"```sql\n\s*(SELECT min\(bucket\) AS oldest.*?;)\n\s*```", changelog, flags=re.S)
     assert tuple(await db.fetchrow(query.rstrip(";"))) == (None, None, None)  # an empty database
     async with _one_day_chunks(db):
         _, oldest_raw = await _readings_dropped_by_retention(db)

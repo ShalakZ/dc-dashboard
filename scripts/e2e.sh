@@ -8,7 +8,7 @@
 #
 # The normal stack must be stopped first: both publish ports 80 and 443. Stop it with
 # `docker compose --profile dev stop`, never with -v. Both also build the images dcdash-backend:local and
-# dcdash-web:local, so this run re-tags them (see the README, section End-to-end test).
+# dcdash-web:local, so this run re-tags them (see docs/end-to-end-tests.md).
 #
 # On Windows, run it from WSL (`wsl bash scripts/e2e.sh`) or run the commands by hand in PowerShell.
 set -euo pipefail

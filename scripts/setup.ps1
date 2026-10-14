@@ -106,7 +106,7 @@ if (Test-Path .env) {
         $volumes = docker volume ls -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.volume=dbdata"
         if ($LASTEXITCODE -ne 0) { throw "Cannot list Docker volumes (is Docker running?). .env was not created." }
         if ($volumes) {
-            throw "Refusing to create .env: the database volume of Compose project '$project' already exists, and it belongs to the .env that is missing. Put the original .env back (keep a copy with every backup), then run this script again. No copy of it? The data is still in the volume: back it up first (README, Backup and restore, 'What the backup does not contain'). Never use down -v."
+            throw "Refusing to create .env: the database volume of Compose project '$project' already exists, and it belongs to the .env that is missing. Put the original .env back (keep a copy with every backup), then run this script again. No copy of it? The data is still in the volume: back it up first (docs/backup-and-restore.md, 'What the backup does not contain'). Never use down -v."
         }
     }
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()

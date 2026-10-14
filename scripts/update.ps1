@@ -3,7 +3,7 @@
 # the stack, checks the database revision and the web, and ends with a plain summary and the way back.
 # Usage: scripts\update.ps1 [-Branch main] [-CopyTo DIR] [-NoPull] [-Yes] [-DryRun] [-Force]
 #   -Branch   the branch to follow (default main)
-#   -CopyTo   passed to scripts\backup.ps1: a second place for the backup (README, "Scheduled backups")
+#   -CopyTo   passed to scripts\backup.ps1: a second place for the backup (docs/scheduled-backups.md)
 #   -NoPull   do not fetch or merge: back up, build and check the code that is checked out now (a detached HEAD is fine)
 #   -Yes      do not ask "Continue? (y/N)"
 #   -DryRun   do the read-only steps (checks, where you are, git fetch, the incoming list) and only PRINT the rest; asks nothing
@@ -64,7 +64,7 @@ $script:OldRevisionText = ""
 $script:AfterBuild = $false
 $script:StartedByUp = $false
 $script:CollectorBefore = ""
-$GoBack = 'README, "Upgrading and going back", step 6'
+$GoBack = 'docs/upgrading.md, step 6 (Going back)'
 
 function Get-PositiveNumber([string]$Name, [double]$Default) {
     $Text = [Environment]::GetEnvironmentVariable($Name)
@@ -187,7 +187,7 @@ function Wait-Until([scriptblock]$Test, [double]$Seconds, [double]$ReportEvery =
     }
 }
 
-# README step 3 is the release notes: the person reads them here, once, before anything is changed. stdin is read with
+# docs/upgrading.md steps 2 and 3 (release notes, pre-checks): the person reads the release notes here, once, before anything is changed. stdin is read with
 # [Console]::In.ReadLine(), never Read-Host: it works on a console, on a pipe and under -NonInteractive, and a closed stdin is $null.
 function Confirm-Continue {
     Say "Read the release notes for these changes and do the pre-checks they name before you continue."
@@ -378,7 +378,7 @@ function Confirm-SiteHealthy([string]$ExpectedCommit = "", [string]$ExpectedId =
         Stop-Check 4 "web is not healthy ($Seen)." @("api", "web")
     }
     Say "ok: web is healthy."
-    # The four lines of README step 5, from this computer through the published port. `compose port` says 0.0.0.0:80 or [::]:80 for "every
+    # The four lines of docs/upgrading.md step 5, from this computer through the published port. `compose port` says 0.0.0.0:80 or [::]:80 for "every
     # interface" (this computer is then 127.0.0.1); a Compose override that binds web to ONE address (192.168.1.5:80) is checked there.
     $Port = Invoke-Compose @("port", "web", "80") -Quiet
     if ($Port.Code -ne 0 -or (Get-FirstLine $Port) -notmatch '^(.*):(\d+)\s*$') { Stop-Check 4 "Docker did not say on which port web listens." @("api", "web") }
@@ -497,10 +497,10 @@ try {
     if ($ComposeVersion.Code -ne 0) { Refuse "'docker compose' is not available." "Update Docker Desktop to a version that includes Compose v2, then run this again." }
     # Absolute paths from here on: Windows PowerShell 5.1 cannot resolve a RELATIVE -LiteralPath when the current folder has [ ] in its name.
     if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
-        Refuse ".env is missing." "On a new install run scripts\setup.ps1. If .env was lost, put the original back (README, 'What the backup does not contain'); never make a new one over an existing database."
+        Refuse ".env is missing." "On a new install run scripts\setup.ps1. If .env was lost, put the original back (docs/backup-and-restore.md, 'What the backup does not contain'); never make a new one over an existing database."
     }
     if (-not (Select-String -LiteralPath $EnvFile -Pattern '^DCDASH_DB_PASSWORD=.' -Quiet)) {
-        Refuse ".env has no DCDASH_DB_PASSWORD." "Restore the original .env (README, 'What the backup does not contain'); this script does not edit it."
+        Refuse ".env has no DCDASH_DB_PASSWORD." "Restore the original .env (docs/backup-and-restore.md, 'What the backup does not contain'); this script does not edit it."
     }
     # Nothing installed yet would make 'start only the database' create an empty database and 'back it up'.
     $Volumes = Invoke-Native "docker" @("volume", "ls", "-q", "--filter", "label=com.docker.compose.project=$ProjectName", "--filter", "label=com.docker.compose.volume=dbdata") -Quiet
@@ -577,7 +577,7 @@ try {
         $OldRevision = Get-FirstLine $Psql
         if ($Psql.Code -ne 0 -or -not $OldRevision) { $OldRevision = "unknown (the database did not say)" }
         elseif ($OldRevision -notmatch '^[A-Za-z0-9_]+$') {
-            Refuse "the database reports the revision '$OldRevision', which does not look like a revision." "Look at the database by hand (README, Upgrading and going back), then run this again."
+            Refuse "the database reports the revision '$OldRevision', which does not look like a revision." "Look at the database by hand (docs/upgrading.md), then run this again."
         }
     }
     Say "Database revision: $OldRevision"
@@ -691,12 +691,12 @@ try {
     } elseif ($RunningId -and -not $RunningCommit) {
         Say "The running site's commit is unknown, so the pending migrations cannot be listed; the backup records the database revision."
     }
-    # The code that will be built must know the database it is going to open (README, Upgrading and going back, step 6).
+    # The code that will be built must know the database it is going to open (docs/upgrading.md, step 6 (Going back)).
     $RevisionChecked = $false
     if ($OldRevision -match '^[A-Za-z0-9_]+$') {
         $RevisionChecked = $true
         if (-not (Test-RevisionKnown $OldRevision $TargetSha)) {
-            Refuse "the code you are about to run does not know database revision $OldRevision (it is older than the database); see README, Upgrading and going back, step 6." "Update to a newer commit of the branch (do not use -NoPull on old code), or go back as the README describes."
+            Refuse "the code you are about to run does not know database revision $OldRevision (it is older than the database); see docs/upgrading.md, step 6 (Going back)." "Update to a newer commit of the branch (do not use -NoPull on old code), or go back as docs/upgrading.md describes."
         }
     }
     $RunningIsCurrent = ($RunningCommit -and $RunningCommit -eq $HeadFull)
@@ -799,7 +799,7 @@ try {
         if ($Backup.Code -eq 5) {
             $Local = "the local copy is not usable"
             if ($Wrote) { $Local = "the local backup was made: $($Wrote[1])" }
-            Refuse "the backup was made on this computer but could NOT be copied to $CopyTo; $Local." "Fix the copy folder (README, 'Scheduled backups': the folder needs a .dcdash-backup-target file) or run update without -CopyTo, then run it again." -Changed $Changed -Code 2
+            Refuse "the backup was made on this computer but could NOT be copied to $CopyTo; $Local." "Fix the copy folder (docs/scheduled-backups.md: the folder needs a .dcdash-backup-target file) or run update without -CopyTo, then run it again." -Changed $Changed -Code 2
         }
         if ($Backup.Code -ne 0 -or -not $Wrote) {
             Refuse "the backup failed (exit $($Backup.Code)), so nothing was updated." "Read the lines above, fix the cause, then run this again. No old backup was touched." -Changed $Changed -Code 2
@@ -809,7 +809,7 @@ try {
         if (-not (Test-Path -LiteralPath $BackupPath -PathType Leaf) -or -not (Test-Path -LiteralPath "$BackupPath.version" -PathType Leaf)) {
             Refuse "the backup script said it wrote $BackupPath, but the dump or its .version file is not there." "Run scripts\backup.ps1 by hand and look at its messages, then run this again." -Changed $Changed -Code 2
         }
-        # The .version file is what restore.ps1 and the README read to know what the dump holds: it must say what the backup script reported.
+        # The .version file is what restore.ps1 and docs/backup-and-restore.md describe to know what the dump holds: it must say what the backup script reported.
         $VersionText = ""
         try { $VersionText = ("" + (Get-Content -LiteralPath "$BackupPath.version" -Raw)).Trim() } catch { }
         if ($VersionText -ne $BackupSchema) {
@@ -818,7 +818,7 @@ try {
         Say "Backup written: $BackupPath (schema $BackupSchema)"
         # The database was not running at step 2, so its revision was not known until now: the same check, before anything changes.
         if (-not $RevisionChecked -and -not (Test-RevisionKnown $BackupSchema $TargetSha)) {
-            Refuse "the code you are about to run does not know database revision $BackupSchema (it is older than the database); see README, Upgrading and going back, step 6." "Update to a newer commit of the branch, then run this again. The backup above is complete." -Changed $Changed
+            Refuse "the code you are about to run does not know database revision $BackupSchema (it is older than the database); see docs/upgrading.md, step 6 (Going back)." "Update to a newer commit of the branch, then run this again. The backup above is complete." -Changed $Changed
         }
         # Printed now, before the code moves, so that they survive a closed window.
         $script:OldRevisionText = $BackupSchema
@@ -939,12 +939,12 @@ try {
                 if ($script:ApiVerdict -eq "restarting") { $Now = "the api is restarting over and over" }
                 Stop-AfterBackup 4 @("STOPPED: the api keeps restarting or has stopped ($Now), so the new version cannot start.",
                     "No readings are being collected. Docker keeps retrying the database migration because the container is set to restart (restart: unless-stopped).") `
-                    @("If the log shows the migration starting again by itself and finishing, wait: some old installs restart once on their own (README, release notes of 0004).",
+                    @("If the log shows the migration starting again by itself and finishing, wait: some old installs restart once on their own (CHANGELOG.md, 'Upgrading an existing database to Phase 3').",
                       "Fix: First stop the retries (docker compose$ProfileText stop api collector), and only then think about going back.",
-                      "Then read the api log above. Your data is in the backup; going back is explained in the README.") -GoingBack
+                      "Then read the api log above. Your data is in the backup; going back is explained in docs/upgrading.md.") -GoingBack
             }
             Stop-AfterBackup 4 @("STOPPED: the api did not become healthy within $WaitText, but it is still running ($($Last.Status), health $($Last.Health)).",
-                "A long database migration can outlast the wait (README, Upgrading and going back, step 4), so this may still be working.") `
+                "A long database migration can outlast the wait (docs/upgrading.md, step 4 (Apply)), so this may still be working.") `
                 @("Do NOT restore the backup or go back yet.",
                   "Fix: watch it with: docker compose$ProfileText logs -f api   until Uvicorn prints 'Application startup complete', then run update again: it checks the site and tells you what is still wrong.")
         }
