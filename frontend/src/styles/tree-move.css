@@ -1,0 +1,5 @@
+@layer w6 {
+  /* W7p: picking and dragging assets in the Assets Tree (components/AssetTree.tsx): the reserved picked slot, picked rows, the drop markers,
+     the root filler. Tokens only. `.node` is owned by app.css: extend it through attribute selectors ([data-picked], [data-drop]) or classes
+     of your own, never a bare `.node` rule here. */
+}

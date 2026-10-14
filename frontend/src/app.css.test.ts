@@ -720,7 +720,7 @@ describe("the page style files (src/styles/*.css)", () => {
     );
   });
 
-  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css", "role-prompt.css", "drawer.css", "icon-picker.css", "kinds-dialogs.css"])(
+  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css", "role-prompt.css", "drawer.css", "icon-picker.css", "kinds-dialogs.css", "tree-move.css", "asset-move.css"])(
     "%s is one @layer w6 block with nothing outside it, no raw colour and no accent in a sidebar rule",
     (file) => {
       expect(existsSync(`${STYLES}/${file}`), `${STYLES}/${file} exists`).toBe(true);

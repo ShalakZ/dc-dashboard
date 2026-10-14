@@ -98,6 +98,19 @@ function Nodes({ nodes, view }: { nodes: TreeNode[]; view: View }) {
   });
 }
 
+/** Where a drop lands: under `parent_id` (null = the top level), before the sibling `before_id` (null = last). */
+export interface DropTarget { parent_id: number | null; before_id: number | null }
+
+/** What the Assets page hands the tree for moving assets (W7p). Absent for a role without assets.edit: no picking, no dragging, no slot, no M key. */
+export interface AssetTreeMove {
+  /** Raw ids (the picked set, or the single dragged row) and where they land; the page reduces them to roots, previews, warns and moves. */
+  onDrop(ids: number[], target: DropTarget): void | Promise<void>;
+  /** Opens Move to... for these ids; `opener` gets the focus back on Cancel. */
+  onMoveTo(ids: number[], opener: HTMLElement | null): void;
+  /** A NEW object after every successful move: the tree clears its picks, unfolds the way to `firstId` and focuses its link. */
+  moved: { firstId: number } | null;
+}
+
 /** The width right of the sidebar: the column's flex container. A container with no layout (jsdom) or no element yet gives the window's. */
 const availableWidth = (column: HTMLElement | null) => column?.parentElement?.clientWidth || window.innerWidth;
 
@@ -215,6 +228,8 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
   disabled?: boolean;
   /** The asset list is on its way: the same column (its width, its state, its handle) with placeholders where the filter and the rows will be. */
   loading?: boolean;
+  /** Present for someone who may change assets (W7p): picking rows, dragging them, Move to.... Built by T4; the type exists so that the page can be written beside it. */
+  move?: AssetTreeMove;
 }) {
   const [state, setState] = useState<ColumnState>(() => (readStored(KEY) === "minimized" ? "minimized" : "expanded"));
   const [filter, setFilter] = useState("");
