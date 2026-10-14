@@ -139,6 +139,14 @@ describe("useTreeMove", () => {
       expect(lastMove(captured).onUndo).toBe(first.onUndo);
     });
 
+    it("tells the tree the roots that were already in place too: a picked root the server skipped as unchanged is no longer picked either", async () => {
+      const mixed = moved({ unchanged: [5] }); // Rack 1 moved, Rack 2 was already in Yard
+      const { calls, captured } = setup({ "POST /api/assets/move-preview": { body: preview() }, "POST /api/assets/move": { body: mixed } });
+      await settled(calls);
+      await act(async () => { await lastMove(captured).onDrop([4, 5], { parent_id: 7, before_id: null }); });
+      expect(lastMove(captured).moved).toMatchObject({ firstId: 4, ids: [4, 5] }); // the first MOVED root is the one to reveal; the unchanged one only joins the unpicking
+    });
+
     it("tells the tree every moved root (its picks are taken off), not only the first", async () => {
       const two = moved({
         moved: [
@@ -348,6 +356,18 @@ describe("useTreeMove", () => {
       expect(busy()).toBe("false");
     });
 
+    it("the signal of an Undo also names the roots that were already in place", async () => {
+      const { calls, spy, captured } = setup(routes({
+        "POST /api/assets/move": ({ body }) => ((body as { undo_of?: string }).undo_of ? { body: { ...UNDONE, unchanged: [5] } } : { body: moved() }),
+      }));
+      await settled(calls);
+      await userEvent.click(screen.getByRole("button", { name: "drop" }));
+      await waitFor(() => expect(spy.calls).toHaveLength(1));
+      await act(async () => { spy.calls[0].options!.action!.onAction(); });
+      await waitFor(() => expect(spy.calls).toHaveLength(2));
+      expect(lastMove(captured).moved).toEqual({ firstId: 4, ids: [4, 5] });
+    });
+
     it("the signal an Undo gives the tree names the restored roots and carries no words (the toast says Undone)", async () => {
       const { calls, spy, captured } = setup(routes());
       await settled(calls);
@@ -452,6 +472,23 @@ describe("useTreeMove", () => {
       expect(await press(captured)).toBe(false);
       expect(posts(calls, "/api/assets/move")).toHaveLength(2);
       expect(movedSignal()).toBe("4");
+    });
+
+    it("Ctrl+Z takes the move's toast away like its own button does (the toast's signal aborts); the button leaves the toast to itself", async () => {
+      const { calls, spy, captured } = setup(routes());
+      await settled(calls);
+      await dropOnce(spy, 1);
+      const signal = spy.calls[0].options!.signal!;
+      expect(signal.aborted).toBe(false);
+      expect(await press(captured)).toBe(true);
+      expect(signal.aborted).toBe(true);
+      await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "success", text: "Undone" }));
+      await dropOnce(spy, 2); // a second move: its own signal, still alive
+      const second = spy.calls.filter((c) => c.options?.action)[1].options!.signal!;
+      expect(second.aborted).toBe(false);
+      await act(async () => { spy.calls.filter((c) => c.options?.action)[1].options!.action!.onAction(); });
+      await waitFor(() => expect(posts(calls, "/api/assets/move")).toHaveLength(4));
+      expect(second.aborted, "the real toast is leaving by itself when its button is pressed; the abort is harmless").toBe(true);
     });
 
     it("the toast's own Undo button after Ctrl+Z does nothing more (one undo for one move), and the other way round", async () => {
@@ -616,6 +653,28 @@ describe("useTreeMove", () => {
         await waitFor(() => expect(spy.calls.at(-1)).toEqual({ kind: "success", text: "Undone" }));
         expect(main).not.toHaveFocus();
         expect(screen.getByRole("link", { name: "Rack 1 link" })).toHaveFocus(); // the page's reveal (the harness's layout effect)
+      });
+
+      it("a refused DRAG whose row and opener are gone does not leave the focus on the body either", async () => {
+        const { calls, captured } = setup({ "POST /api/assets/move-preview": { status: 422, body: { detail: "No.", refusals: [{ id: 4, name: "Rack 1", reason: "No.", code: "cycle" }] } } });
+        await settled(calls);
+        const main = element("main", { id: "main", tabindex: "-1" });
+        document.querySelector("ul.tree")!.remove(); // the row the refocus looks for is not there
+        (document.activeElement as HTMLElement | null)?.blur();
+        await act(async () => { await lastMove(captured).onDrop([4], { parent_id: 7, before_id: null }); });
+        await waitFor(() => expect(main).toHaveFocus());
+      });
+
+      it("a closed Move to... dialog whose opener is gone leaves the focus on the main area, not the body", async () => {
+        const { calls, captured } = setup({ "POST /api/assets/move-preview": { body: preview() }, "POST /api/assets/move": { body: moved() } });
+        await settled(calls);
+        const main = element("main", { id: "main", tabindex: "-1" });
+        const opener = element("button", { type: "button" });
+        act(() => lastMove(captured).onMoveTo([4], opener));
+        await screen.findByRole("dialog");
+        opener.remove(); // the row it was pressed on went away while the dialog was open
+        await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(main).toHaveFocus());
       });
 
       it("a tree that is folded away (minimized to its strip) does not count as on screen", async () => {

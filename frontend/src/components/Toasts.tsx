@@ -28,6 +28,11 @@ export interface ToastOptions {
   action?: ToastAction;
   /** Replaces the default life of this toast (hovered or focused time is still not counted). Zero, negative or not a number: the default. */
   durationMs?: number;
+  /**
+   * When it aborts, this toast leaves like a dismissed one (its action is not run): the owner did what the action was for in another way,
+   * as the Undo of a move that Ctrl+Z has just undone. A signal that is aborted already makes the toast leave at once; only this toast is touched.
+   */
+  signal?: AbortSignal;
 }
 
 const NO_TOASTS: ToastApi = { success() {}, info() {}, error() {} };
@@ -154,6 +159,9 @@ function createToastStore(timers: Timers, now: () => number) {
     lives.set(id, life);
     arm(id, life, lifeMs);
     emit([...items, { id, kind, text, count: 1, leaving: false, ...(action ? { action } : {}) }]);
+    const signal = options?.signal;
+    if (signal?.aborted) leave(id);
+    else signal?.addEventListener("abort", () => leave(id), { once: true }); // a toast that has left already ignores it
     // Over the cap, the oldest goes, but a slow error is not pushed out by quick successes, and a toast with an action (its Undo is still wanted)
     // goes after the plain ones; the new toast itself is never the one that goes.
     const others = items.filter((t) => t.id !== id && !lives.get(t.id)!.leaving);

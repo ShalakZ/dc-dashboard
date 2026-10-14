@@ -20,12 +20,20 @@ const UNDO_TITLE = "Undo (Ctrl+Z)";
 
 /**
  * The latest move that can still be undone, for both routes to it: the toast's Undo button and Ctrl+Z on a row. `used` is shared by the two, so
- * whichever comes second does nothing (the toast of an undone move may still be on screen). `until` is when the toast's own 8 seconds are up.
+ * whichever comes second does nothing, and the first takes the toast away (`toastGone`: Ctrl+Z must not leave an Undo button on screen that does
+ * nothing). `until` is when the toast's own 8 seconds are up.
  */
-interface UndoEntry { result: MoveResult; until: number; used: boolean }
+interface UndoEntry { result: MoveResult; until: number; used: boolean; toastGone: AbortController }
 
 /** The tree is on screen (not folded away to its strip): a move's own focus handling takes care of the focus there. */
 const treeOnScreen = () => Array.from(document.querySelectorAll("ul.tree")).some((tree) => !tree.closest("[hidden]"));
+
+/** The focus is on the page body, or on a toast's button that is about to leave: it goes to the page's main area (Layout's `#main` has tabIndex -1), else its first h1. */
+function focusMainIfLost() {
+  const active = document.activeElement;
+  if (active && active !== document.body && !active.closest(".toast-stack")) return;
+  (document.getElementById("main") ?? document.querySelector<HTMLElement>("h1"))?.focus({ preventScroll: true });
+}
 
 /** Where the focus goes once a dialog or a failed drag has left: an element (the opener), or the link of an asset row. */
 interface Refocus {
@@ -75,10 +83,15 @@ export function useTreeMove({ assets, canEdit, locked }: { assets: Asset[]; canE
       return;
     }
     const text = movedToast(result.moved);
-    const entry: UndoEntry = { result, until: Date.now() + UNDO_MS, used: false };
+    const entry: UndoEntry = { result, until: Date.now() + UNDO_MS, used: false, toastGone: new AbortController() };
     lastUndo.current = entry; // a newer move replaces the older one: Ctrl+Z undoes the latest
-    toast.success(text, { action: { label: "Undo", title: UNDO_TITLE, onAction: () => { void latest.current.undo(entry); } }, durationMs: UNDO_MS });
-    setMoved({ firstId: first.id, ids: result.moved.map((root) => root.id), line: `${text}. Press Ctrl+Z to undo.` }); // a NEW object every time: a second move to the same first root is still a signal
+    toast.success(text, {
+      action: { label: "Undo", title: UNDO_TITLE, onAction: () => { void latest.current.undo(entry); } },
+      durationMs: UNDO_MS,
+      signal: entry.toastGone.signal,
+    });
+    // The roots the server found in place already (`unchanged`) are part of the gesture too: the tree unpicks them with the moved ones.
+    setMoved({ firstId: first.id, ids: [...result.moved.map((root) => root.id), ...result.unchanged], line: `${text}. Press Ctrl+Z to undo.` }); // a NEW object every time: a second move to the same first root is still a signal
   }
 
   /** A drag or an Undo that failed: the words for the person, and the focus somewhere named. */
@@ -137,22 +150,21 @@ export function useTreeMove({ assets, canEdit, locked }: { assets: Asset[]; canE
    * screen its own reveal (or `refocus` below) puts the focus on the assets.
    */
   function keepFocus() {
-    if (treeOnScreen()) return;
-    const active = document.activeElement;
-    if (active && active !== document.body && !active.closest(".toast-stack")) return;
-    (document.getElementById("main") ?? document.querySelector<HTMLElement>("h1"))?.focus({ preventScroll: true });
+    if (!treeOnScreen()) focusMainIfLost();
   }
 
   async function undo(entry: UndoEntry): Promise<void> {
     if (entry.used) return;
     entry.used = true;
+    entry.toastGone.abort(); // from the toast's own button it is leaving already: nothing then
     if (lastUndo.current === entry) lastUndo.current = null; // only its own: an older toast's button must not wipe a newer move's entry
     const { result } = entry;
     begin();
     try {
       const undone = await mutateAsync({ moves: result.undo.moves, expect: result.undo.expect, undo_of: result.request_id });
       toast.success("Undone"); // no second Undo
-      const ids = undone.moved.length > 0 ? undone.moved.map((root) => root.id) : result.undo.moves.flatMap((group) => group.ids);
+      const restored = [...undone.moved.map((root) => root.id), ...undone.unchanged];
+      const ids = restored.length > 0 ? restored : result.undo.moves.flatMap((group) => group.ids);
       if (ids.length > 0) setMoved({ firstId: ids[0], ids }); // no words: the toast says "Undone", and a line from the move itself is out of date
     } catch (error) {
       const failure = moveFailure(error);
@@ -198,6 +210,7 @@ export function useTreeMove({ assets, canEdit, locked }: { assets: Asset[]; canE
     setRefocus(null);
     if (refocus.el) {
       if (refocus.el.isConnected) refocus.el.focus();
+      focusMainIfLost(); // an opener that is gone or cannot take the focus: still not the body
       return;
     }
     const active = document.activeElement;
@@ -205,6 +218,7 @@ export function useTreeMove({ assets, canEdit, locked }: { assets: Asset[]; canE
       // Inside the tree: the breadcrumbs and the attention list of the pane carry the same hrefs.
       document.querySelector<HTMLElement>(`ul.tree a[href="/assets/${refocus.rowId}"]`)?.focus();
     }
+    focusMainIfLost(); // the row or the opener may be gone: the focus is still not the body's
   }, [refocus]);
 
   const cancelDialog = () => {

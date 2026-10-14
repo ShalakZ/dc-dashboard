@@ -442,6 +442,39 @@ describe("a toast with an action (W7p)", () => {
     expect(texts()).toEqual(["Undone"]);
   });
 
+  it("a toast whose signal aborts leaves like a dismissed one (the owner of the action has done it another way); the action never runs", () => {
+    const { c } = setup();
+    const a = undo();
+    const controller = new AbortController();
+    fire(() => api.success("Moved", { ...a.options, signal: controller.signal }));
+    fire(() => api.success("Other", {}));
+    expect(staying()).toEqual(["Moved", "Other"]);
+    fire(() => controller.abort());
+    expect(leaving()).toEqual(["Moved"]);
+    expect(staying()).toEqual(["Other"]); // only its own toast
+    c.advance(150);
+    expect(texts()).toEqual(["Other"]);
+    expect(a.onAction).not.toHaveBeenCalled();
+    fire(() => controller.abort()); // a second abort is nothing
+    expect(texts()).toEqual(["Other"]);
+  });
+
+  it("a signal that was aborted already makes a toast that leaves at once, and a signal that never aborts changes nothing", () => {
+    const { c } = setup();
+    const gone = new AbortController();
+    gone.abort();
+    fire(() => api.success("Late", { signal: gone.signal }));
+    expect(leaving()).toEqual(["Late"]);
+    c.advance(150);
+    expect(texts()).toEqual([]);
+    const live = new AbortController();
+    fire(() => api.success("Kept", { signal: live.signal }));
+    c.advance(3999);
+    expect(staying()).toEqual(["Kept"]);
+    c.advance(1);
+    expect(leaving()).toEqual(["Kept"]); // its own life, as ever
+  });
+
   it("works on an error toast (role=alert) and keeps the error's own life", () => {
     const { c } = setup();
     const a = undo("Retry");
