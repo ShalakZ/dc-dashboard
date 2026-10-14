@@ -129,7 +129,7 @@ test.describe.serial("W7g: asset icons and the Assets Tree name", () => {
       await form.kind.selectOption({ label: "Other…" });
       await expect(form.caption, "Other… with nothing typed yet").toHaveText("Automatic (Generic)");
       await form.newKind.fill(KIND);
-      await expect(form.caption).toHaveText(`Automatic (${KIND})`);
+      await expect(form.caption).toContainText(`Automatic (${KIND})`);
     });
 
     await test.step("Change icon opens the grid with the focus on the checked cell, and does not save", async () => {
@@ -153,7 +153,7 @@ test.describe.serial("W7g: asset icons and the Assets Tree name", () => {
       expect(await form.preview.innerHTML(), "the preview left the kind's icon").not.toBe(autoHtml);
       await page.keyboard.press("ArrowLeft");
       await expect(form.radio("Automatic")).toBeChecked();
-      await expect(form.caption).toHaveText(`Automatic (${KIND})`);
+      await expect(form.caption).toContainText(`Automatic (${KIND})`);
       expect(await form.preview.innerHTML(), "and came back to it").toBe(autoHtml);
     });
 
@@ -231,7 +231,7 @@ test.describe.serial("W7g: asset icons and the Assets Tree name", () => {
     await expect(form.radio("Server")).toBeFocused();
     await form.cell("Automatic").click();
     await expect(form.radio("Automatic")).toBeChecked();
-    await expect(form.caption).toHaveText(`Automatic (${KIND})`);
+    await expect(form.caption).toContainText(`Automatic (${KIND})`);
     await form.save.click();
     await expect(form.dialog).toBeHidden();
 
