@@ -14,6 +14,10 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## W7q (2026-10-15, 50228b7)
+
+Asset kinds you can tell apart and tidy: a Starter tag, filters (All, Starter, Yours, Unused), ticking and deleting several kinds with one move target, and a starter pack that adds the 16 common data-centre kinds ("Add all 39" adds the rest); no migration.
+
 ## W7p (2026-10-14, 246f103)
 
 ### Upgrading to W7p (no migration)
@@ -42,6 +46,10 @@ The API gains two routes, both needing `assets.edit`; a client that uses neither
    Tree: the line above the rows says "2 picked"; press Clear.
 4. **Going back.** Check out `823560b` and rebuild as in step 2. There is no database step. Moves already made stay made (they are ordinary
    parent and order changes), and their `asset.moved` entries stay in the audit log.
+
+## W8e (2026-10-14, 425aaf9)
+
+`scripts\update.ps1`, one safe command that backs up, fast-forwards the code, rebuilds with the build id and checks every service (see [Upgrading and going back](docs/upgrading.md)); scripts and docs only, a Linux twin is parked.
 
 ## W7o (2026-10-14, 823560b)
 
@@ -74,6 +82,10 @@ from the new image.
    permission to the custom roles holding `assets.edit` again, including a role that was made on W7o without it on purpose. A restart of
    the W7o `api` would run `alembic upgrade head` and apply `0011` again, so the W7o `api` must not be running once the schema is back
    at `0010`.
+
+## W7n (2026-10-14, 365b5e6)
+
+The owner's gold M is the app's logo and favicon (the original file is kept in `docs/brand`); front end and static files only.
 
 ## W7m (2026-10-14, a7c855e)
 
@@ -128,6 +140,10 @@ id that no longer exists is left out. Nothing else about the answer changes: the
 2. **Verify.** `docker compose exec api alembic current` still prints `0009 (head)`; open the Audit log, press a row's chevron and see the
    drawer open on the right; Esc brings the log back where it was.
 3. **Going back.** Check out `e624a5a` and rebuild as in step 1. There is no database step.
+
+## W9c (2026-10-14, e624a5a)
+
+The Roles editor offers to tick what a permission needs and to untick what needs it, and help bubbles no longer clip in the Roles grid; front end only.
 
 ## W7k (2026-10-13, c286e3d)
 
@@ -384,6 +400,22 @@ the server. The `api` container applies the migration the first time it starts f
    again with every account on the defaults. A restart of the W7d `api` would run `alembic upgrade head` and apply `0007` again, so the
    W7d `api` must not be running once the schema is back at `0006`.
 
+## W8c (2026-10-12, ee1e985)
+
+Field polish: the offline diagnostics scripts filter routine log lines, save into `logs/`, compare the Docker clock and can mask names (`-Mask`); the report adds DNS lookup lines; the setup scripts take the timezone at install.
+
+## W7c (2026-10-12, 298293f)
+
+An admin chooses a default dashboard that the sidebar and sign-in open, and Billing gets Year and Month selects.
+
+## W7b (2026-10-12, 40d71db)
+
+A row action menu and trash button, help bubbles, the Storage tiles and rows per day, Tariffs in sections, and the sign-in protection switch.
+
+## W8b (2026-10-12, 2f7a518)
+
+Simulator fault switches (`SIM_FAULT_*`), client-side refusal reporting, the offline diagnostics scripts and blind-read examples for field debugging.
+
 ## W8 (2026-10-12, 682b636)
 
 ### Upgrading to W8 (migration 0006)
@@ -403,6 +435,46 @@ starts from the new image.
 4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0005` and `<old commit>` = `b933bc7`. The `0006`
    downgrade drops `diag_events`; nothing else changes, and `upgrade` creates it empty again. A restart of the W8 `api` would run
    `alembic upgrade head` and apply `0006` again, so the W8 `api` must not be running once the schema is back at `0005`.
+
+## W7a (2026-10-12, b933bc7)
+
+One Assets workspace (tree and fleet summary) and the app shell with the navy top bar and breadcrumbs.
+
+## W6 (2026-10-11, ffa44fd)
+
+UI overhaul: a navy sidebar that can be minimized, the asset tree column, and restyled pages, dialogs, banners and forms (widgets unchanged).
+
+## W3d follow-up (2026-10-11, b821ba7)
+
+Passwords inside source URLs are scrubbed from the container logs, an account deleted mid-request answers 401, and the Audit filter refreshes after user changes.
+
+## W3d (2026-10-11, 4ca1b6d)
+
+The sign-in block is configurable and can be lifted per account, accounts can be deleted, and the user name and password inside a source's URL are never returned.
+
+## W3c (2026-10-11, 8301733)
+
+The Audit screen filters, searches, exports CSV, pages, jumps to a date, links each entry to what it is about and shows a friendly sentence next to the raw entry.
+
+## W3b (2026-10-11, 03b3c6d)
+
+Dashboards close up vertically, long names are shortened in legends and axes, the Trend refetches by range, and a parent asset shows the sum of its children's live power.
+
+## W3a (2026-10-11, f0beeb8)
+
+Add an asset under any branch, pick its kind from a list, a sortable and searchable points list, a mapping dialog with a unit warning, Edit on the Sources page, and an honest status for sources that are not polled.
+
+## W2 Part B (2026-10-10, 1fec877)
+
+Pinned base images and a re-pin command, the certificate expiry notice, security headers with a Report-Only content policy, and a notice when your role changes.
+
+## W2 Part A (2026-10-10, f74eed0)
+
+Backup and restore scripts that cannot reach the wrong stack, rotating verified backups, the Windows scripts, and the upgrade and go-back runbook.
+
+## W1b (2026-10-10, ab0869c)
+
+Storage, restore and name safety: a confirmation before retention deletes data, restore pauses retention, a warning when the secret key does not match, duplicate asset names refused, and non-finite readings and scales refused.
 
 ## W1a (2026-10-10, efc7e66)
 
@@ -430,6 +502,18 @@ The `api` container applies it the first time it starts from the new image.
    - **Option b, restore the backup from step 1.** Everything collected since that backup is lost. The restore script is the one of
      the old commit (see step 5 of option b in "Upgrading and going back"). `--force` is needed: the volume
      still holds the W1a database (`0005`) and the dump's `.version` says `0004`, so the script refuses without it.
+
+## W0b (2026-10-10, 60d8b65)
+
+Log rotation, a graceful stop, a readiness health check, the collector heartbeat, and status writes off the poll path.
+
+## W0a (2026-10-09, ec1062b)
+
+UI and documentation fixes from the first manual acceptance pass.
+
+## Phase 3 visual fixes (2026-10-09, e6ca151)
+
+The time axis of energy and cost series is bounded to their range.
 
 ## Phase 3 (2026-10-09, 0ada373)
 
@@ -541,3 +625,23 @@ interval are not collected.
    step, `docker compose start api collector`, finds no containers and prints `collector is missing dependency api`, which the script
    ignores by design. Afterwards check out the branch you came from to return to the Phase 3 code; `.env` and `backups/` are not in
    git, so they stay.
+
+## Phase 2 (2026-10-08)
+
+Network discovery: scan scopes, the scan job, the graph, drag-and-drop mapping and the audit log. Its merge commit is not named on purpose: a database at `0004` or later cannot go back to Phase 2 code (see the Phase 3 entry).
+
+## Phase 1C (2026-10-07, 7ed2c44)
+
+OPC UA and Modbus TCP connectors, the storage tiers and the backup scripts.
+
+## Phase 1D (2026-10-07, dcbab5c)
+
+Users, settings, hardening, optional TLS and the end-to-end tests.
+
+## Phase 1B (2026-10-07, 25bf25a)
+
+The React web UI served through Caddy.
+
+## Phase 1A (2026-10-07, 552e9c7)
+
+The backend, the collector and the API.
