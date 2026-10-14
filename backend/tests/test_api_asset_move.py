@@ -265,9 +265,11 @@ async def test_a_before_id_that_is_not_a_child_of_the_target_is_refused(client, 
 async def test_an_asset_or_a_target_that_is_gone_is_409_stale(client, db):
     a = await build(db)
     await login_as(client, db)
-    for request in (body(group([999_999], a["Row C"])), body(group([a["Pump 1"]], 999_999))):
-        response = await client.post(MOVE, json=request)
-        assert response.status_code == 409 and response.json()["stale"] is True, response.text
+    gone_before = body(group([a["Pump 1"]], a["Row A"], 999_999))  # the sibling it was to go before was deleted since the person looked
+    for request in (body(group([999_999], a["Row C"])), body(group([a["Pump 1"]], 999_999)), gone_before):
+        for url in (MOVE, PREVIEW):
+            response = await client.post(url, json=request)
+            assert response.status_code == 409 and response.json()["stale"] is True, (url, response.text)
     assert await moved_rows(db) == []
 
 
@@ -313,6 +315,11 @@ async def test_what_is_already_in_place_is_skipped_and_listed_while_the_rest_mov
     {"moves": [{"ids": [1], "parent_id": None}], "expect": {"parents": {"x": 1}}},
     {"moves": [{"ids": [1], "parent_id": None}], "expect": {"assets": -1}},
     {"moves": [{"ids": [1], "parent_id": None}], "expect": {"surprise": 1}},
+    {"moves": [{"ids": [None], "parent_id": None}]},
+    {"moves": [{"ids": [1], "parent_id": "x"}]},
+    {"moves": [{"ids": [1], "parent_id": None}], "expect": {"parents": {"1": 2_147_483_648}}},
+    {"moves": [{"ids": [1], "parent_id": None}], "expect": {"parents": {"2147483648": 1}}},
+    {"moves": [{"ids": [1], "parent_id": None}], "expect": {"parents": {str(n): None for n in range(1, 502)}}},  # more than a request can name
 ])
 async def test_a_malformed_body_is_422_before_any_work(client, db, request_body):
     await login_as(client, db)
@@ -392,6 +399,19 @@ async def test_a_child_added_under_a_moved_asset_after_the_preview_is_refused_an
     fresh = await preview_expect(client, request)
     assert fresh["assets"] == 4
     assert (await client.post(MOVE, json=body(request, expect=fresh))).status_code == 200
+
+
+async def test_a_preview_with_one_root_already_in_place_is_accepted_with_its_own_expect(client, db):
+    a = await build(db)
+    await login_as(client, db)
+    groups = (group([a["Pump 1"]], a["Row A"], a["Pump 2"]), group([a["Fan"]], a["Row C"]))  # Pump 1 is where it was asked to go
+    expect = await preview_expect(client, *groups)
+    assert expect["parents"] == {str(a["Pump 1"]): a["Row A"], str(a["Fan"]): a["Row B"]}  # the root in place is named too
+
+    response = await client.post(MOVE, json=body(*groups, expect=expect))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["unchanged"] == [a["Pump 1"]] and [m["id"] for m in response.json()["moved"]] == [a["Fan"]]
 
 
 async def test_an_asset_moved_by_somebody_else_after_the_preview_is_refused(client, db):
@@ -493,6 +513,65 @@ async def test_an_undo_of_something_moved_again_in_the_meantime_is_refused(clien
     response = await client.post(MOVE, json=body(*undo["moves"], expect=undo["expect"], undo_of=moved["request_id"]))
     assert response.status_code == 409 and response.json()["stale"] is True
     assert await kids(db, n["B"]) == ["A"]
+
+
+async def letters(db, names="ABCD") -> dict[str, int]:
+    """P holding one child per letter, all with sort_order 0 (so they read in letter order)."""
+    ids = {"P": await make_asset(db, "P"), "Q": await make_asset(db, "Q")}
+    for name in names:
+        ids[name] = await make_asset(db, name, ids["P"])
+    return ids
+
+
+def undo_request(moved: dict) -> dict:
+    return body(*moved["undo"]["moves"], expect=moved["undo"]["expect"], undo_of=moved["request_id"])
+
+
+async def test_the_undo_of_a_reorder_of_two_picks_that_are_not_neighbours_is_accepted(client, db):
+    # A and C dragged after B (before D): B A C D. Once A is back before B, C already sits before D, so the undo's second group
+    # changes nothing; the expectation still names both roots and must still hold.
+    n = await letters(db)
+    await login_as(client, db)
+    moved = (await client.post(MOVE, json=body(group([n["A"], n["C"]], n["P"], n["D"])))).json()
+    assert await kids(db, n["P"]) == ["B", "A", "C", "D"]
+    assert moved["undo"]["expect"]["parents"] == {str(n["A"]): n["P"], str(n["C"]): n["P"]}
+
+    response = await client.post(MOVE, json=undo_request(moved))
+
+    assert response.status_code == 200, response.text
+    assert await kids(db, n["P"]) == ["A", "B", "C", "D"]
+    assert response.json()["unchanged"] == [n["C"]] and [m["id"] for m in response.json()["moved"]] == [n["A"]]
+    assert len(await moved_rows(db)) == 3  # two roots moved, then one put back (the one already in place writes no row)
+
+
+async def test_an_undo_of_three_runs_where_the_middle_one_is_already_in_place_is_accepted(client, db):
+    n = await letters(db, "ABCDEF")
+    await login_as(client, db)
+    moved = (await client.post(MOVE, json=body(group([n["A"], n["C"], n["E"]], n["P"], n["F"])))).json()  # B D A C E F
+    assert await kids(db, n["P"]) == ["B", "D", "A", "C", "E", "F"]
+    assert [g["ids"] for g in moved["undo"]["moves"]] == [[n["A"]], [n["C"]], [n["E"]]]
+    # Somebody puts C back in front of D by hand meanwhile (a number change moves no parent): B C D A F E.
+    for number, name in enumerate("BCDAFE"):
+        await db.execute("UPDATE assets SET sort_order = $1 WHERE id = $2", number, n[name])
+
+    response = await client.post(MOVE, json=undo_request(moved))
+
+    assert response.status_code == 200, response.text
+    assert await kids(db, n["P"]) == list("ABCDEF")
+    assert response.json()["unchanged"] == [n["C"]]
+
+
+async def test_an_undo_of_a_reorder_in_which_one_root_really_moved_since_is_still_refused(client, db):
+    n = await letters(db)
+    await login_as(client, db)
+    moved = (await client.post(MOVE, json=body(group([n["A"], n["C"]], n["P"], n["D"])))).json()
+    assert (await client.patch(f"/api/assets/{n['C']}", json={"parent_id": n["Q"]})).status_code == 200
+
+    response = await client.post(MOVE, json=undo_request(moved))
+
+    assert response.status_code == 409 and response.json()["stale"] is True, response.text
+    assert await kids(db, n["P"]) == ["B", "A", "D"] and await kids(db, n["Q"]) == ["C"]  # not even A went back
+    assert len(await moved_rows(db)) == 2
 
 
 async def test_the_undo_of_a_reorder_goes_back_before_the_sibling_that_followed(client, db):

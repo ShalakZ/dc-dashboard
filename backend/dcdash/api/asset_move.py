@@ -8,8 +8,9 @@ decision is core/tree_move.py's (pure, no database); this module fetches its inp
 
 Status codes: 200; 401/403 as everywhere; 422 `{"detail", "refusals": [{id, name, reason, code}]}` when a rule refuses (nothing moves:
 a refusal anywhere in the request refuses all of it) and `{"detail", "refusals": [], "unchanged": [ids]}` when every asset is already
-where it was asked to go; 409 `{"detail", "stale": true}` when what the person saw is no longer true (an asset or the target is gone, an
-`expect` does not hold, a row changed while this waited for it).
+where it was asked to go; 409 `{"detail", "stale": true}` when what the person saw is no longer true (an asset, the target or the sibling
+to go before is gone, an `expect` does not hold, a row changed while this waited for it). A `before_id` that exists but is not a child of
+the target is the person's mistake, not a race: 422 `bad_before`.
 
 Order of work in the move, and why (the order is the design; see also api/asset_kinds.py for the kinds route's):
 1. The names lock (`pg_advisory_xact_lock`, held to commit) comes first. Every route that creates, renames or moves an asset takes it,
@@ -67,7 +68,9 @@ class ExpectIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     assets: int | None = Field(default=None, ge=0, le=INT32_MAX)  # how many assets move in all; a larger real number is refused
-    parents: dict[AssetId, AssetId | None] | None = None  # each moved root's parent as shown; the set of roots must match too
+    # each root's parent as shown (the moved roots and the ones already in place); the set of roots must match too. At most MAX_IDS: a
+    # request names no more roots than that, and an oversized map would only be parsed and compared. The cap sits inside the Optional.
+    parents: Annotated[dict[AssetId, AssetId | None], Field(max_length=MAX_IDS)] | None = None
     rate_changes: bool | None = None  # false: refuse if the move turns out to change a rate
 
 
@@ -193,7 +196,7 @@ def stale_expectation(expect: ExpectIn | None, result: Plan) -> str | None:
         return None
     if expect.assets is not None and result.assets > expect.assets:
         return f"More assets would move than you were shown ({result.assets}, not {expect.assets}). Check again."
-    if expect.parents is not None and expect.parents != result.parents:  # the same roots, each under the parent it was shown under
+    if expect.parents is not None and expect.parents != result.parents:  # the same roots (moved or already in place), each under the parent it was shown under
         return "These assets were moved or changed since you looked. Check again."
     return None
 
@@ -208,7 +211,9 @@ async def move_assets(body: MoveIn, db: AsyncSession = Depends(get_db), user: Us
     tree, result = decided
     reason = stale_expectation(body.expect, result)
     if reason is None and body.expect is not None and body.expect.rate_changes is False:
-        # The caller was told no rate changes. A tariff entered since the preview must not slip past that.
+        # The caller was told no rate changes. A tariff entered since the preview must not slip past that. Tariffs are read without a
+        # lock, so one committed in the milliseconds between this read and our commit still slips by: accepted, since the only cost is
+        # a warning that was not shown (the tree and the billing, which reads the live tree, stay consistent).
         if any(c.today or c.other_days for c in await rates_of(db, tree, result)):
             reason = "A rate changed since you looked. Check the warning again."
     if reason is not None:

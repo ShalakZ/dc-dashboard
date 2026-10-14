@@ -39,7 +39,7 @@ export interface SourceImpact { points: number; mappings: number }
 export interface MoveGroup { ids: number[]; parent_id: number | null; before_id: number | null }
 /**
  * What the person was shown; the server refuses (409 `stale`) when reality differs and moves nothing. `assets`: assets that move in all
- * (roots plus descendants); `parents`: each ROOT's parent id as shown, keyed by the root's id; `rate_changes`: the preview's verdict, so
+ * (roots plus descendants); `parents`: each ROOT's parent id as shown, keyed by the root's id, the roots already in place included (at most 500); `rate_changes`: the preview's verdict, so
  * a tariff added after it cannot slip past the warning. Every key is optional; the preview answers with all three.
  */
 export interface MoveExpect { assets?: number; parents?: Record<string, number | null>; rate_changes?: boolean }
@@ -70,8 +70,12 @@ export interface MovedAsset {
 export interface MoveUndo { moves: MoveGroup[]; expect: Required<Pick<MoveExpect, "assets" | "parents">> }
 /** The answer to POST /api/assets/move. `unchanged` ids were skipped (already there). */
 export interface MoveResult { request_id: string; assets: number; unchanged: number[]; moved: MovedAsset[]; undo: MoveUndo }
-/** One entry of the `refusals` list in the body of a 422 from the move routes; `reason` is a full sentence in names, `code` a short word (cycle, name_clash, ...). */
-export interface MoveRefusal { id: number; name: string; reason: string; code: string }
+/**
+ * One entry of the `refusals` list in the body of a 422 from the move routes; `reason` is a full sentence in names, `code` a short word
+ * (cycle, name_clash, ...). `name` is null when the server has no asset to name (the `invalid` code, which body validation makes unreachable);
+ * `moveRefusals` turns that into "".
+ */
+export interface MoveRefusal { id: number; name: string | null; reason: string; code: string }
 
 export interface Source {
   id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";

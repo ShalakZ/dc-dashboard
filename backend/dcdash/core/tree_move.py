@@ -22,7 +22,7 @@ from dcdash.core.tree import AssetTree
 MAX_GROUPS = 500
 MAX_IDS = 500  # an undo of 500 separate roots needs 500 groups, so the two caps are equal
 
-STALE = "stale"  # an asset or the target is gone: the route answers 409, everything else here 422
+STALE = "stale"  # an asset, the target or the sibling to go before is gone: the route answers 409, everything else here 422
 CYCLE = "cycle"
 BAD_BEFORE = "bad_before"
 NAME_CLASH = "name_clash"
@@ -88,7 +88,7 @@ class Plan:
     unchanged: list[int]  # roots already exactly where they were asked to go: skipped
     undo: list[Group]  # the groups that put it back, to be sent as one request
     assets: int  # how many assets move in all (roots and what is below them, each counted once)
-    parents: dict[int, int | None]  # each moved root's parent before the move
+    parents: dict[int, int | None]  # each root's parent before the move: the moved roots and the ones already in place (`unchanged`)
     lock_ids: list[int]  # every row the route must lock before it writes, by id
     tree: AssetTree  # the tree as it will be (the input tree when refused)
 
@@ -190,6 +190,10 @@ def _examine(
     stale = [Refusal(i, STALE, "An asset you are moving no longer exists.") for i in group.ids if i not in tree.nodes]
     if group.parent_id is not None and group.parent_id not in tree.nodes:
         stale.append(Refusal(group.parent_id, STALE, "The place you are moving to no longer exists."))
+    if group.before_id is not None and group.before_id not in tree.nodes and not undo:
+        # A sibling deleted between the person looking and dropping is the same race as an asset deleted: the screen is out of date,
+        # so it is told to look again, not that its request was wrong. (An undo never refuses on it: it falls back to last, below.)
+        stale.append(Refusal(group.before_id, STALE, "The asset you wanted to place these before no longer exists. The tree changed; try again."))
     if stale:
         return _Step(refusals=tuple(stale))
 
@@ -211,15 +215,12 @@ def _examine(
 
     siblings = _siblings(tree, parent)
     before = group.before_id
-    if before is not None and before not in siblings:  # not a child of the target, or gone
+    if before is not None and before not in siblings:  # not a child of the target (a before_id that is gone was answered above)
         if not undo:
-            if before not in tree.nodes:
-                reason = f"The asset you wanted to place {_q(tree, roots[0])} before no longer exists."
-            else:
-                inside = "at the top level" if parent is None else f"inside {_q(tree, parent)}"
-                reason = f"Cannot place {_q(tree, roots[0])} before {_q(tree, before)}: {_q(tree, before)} is not {inside}."
+            inside = "at the top level" if parent is None else f"inside {_q(tree, parent)}"
+            reason = f"Cannot place {_q(tree, roots[0])} before {_q(tree, before)}: {_q(tree, before)} is not {inside}."
             return _Step(refusals=(Refusal(roots[0], BAD_BEFORE, reason),))
-        before = None  # an undo puts them last when the sibling it remembered has gone; expect.parents guards the real conflict
+        before = None  # an undo puts them last when the sibling it remembered has gone or sits elsewhere now; expect.parents guards the real conflict
     moving = set(roots)
     rest = [s for s in siblings if s not in moving]
     if before in moving:  # "before something that moves too": the first sibling after it that stays
@@ -334,10 +335,15 @@ def plan(
         for root, was, size in moved
     ]
     lock_ids = sorted(touched | {w.id for w in writes} | {r.id for r in roots})
+    # Every root of the request, moved or not: an undo of two picks that were not neighbours ends with one group that finds its root
+    # already in place, and the expectation the person (or the undo) carries names both. An id is named once in a request, so no root
+    # is in both lists; an unchanged root sits where it sat when the request came in, which is its parent.
+    parents = {r.id: r.from_parent_id for r in roots}
+    parents.update({root: tree.nodes[root].parent_id for root in unchanged})
     return Plan(
         refusals=[], writes=writes, roots=roots, unchanged=unchanged,
         undo=[g for per_group in reversed(undo_groups) for g in per_group], assets=len(moving_assets),
-        parents={r.id: r.from_parent_id for r in roots}, lock_ids=lock_ids, tree=current,
+        parents=parents, lock_ids=lock_ids, tree=current,
     )
 
 

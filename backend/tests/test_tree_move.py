@@ -102,13 +102,21 @@ def test_a_cycle_made_by_two_groups_of_one_request_is_refused_and_nothing_is_pla
     assert result.writes == [] and result.roots == []
 
 
-def test_a_before_id_that_is_not_a_child_of_the_target_is_refused_also_when_it_is_gone():
+def test_a_before_id_that_is_not_a_child_of_the_target_is_refused():
     tree = tree_of()
     keys = keys_of(tree)
     elsewhere = decide(tree, Group((6,), 4, 5), keys)  # Row C is a child of Site, not of Row B
     assert codes(elsewhere) == ["bad_before"] and '"Row C"' in elsewhere[0].reason and '"Row B"' in elsewhere[0].reason
-    assert codes(decide(tree, Group((6,), 4, 99), keys)) == ["bad_before"]  # gone
     assert codes(decide(tree, Group((6,), None, 8), keys)) == ["bad_before"]  # Fan is not at the top level
+
+
+def test_a_before_id_that_is_gone_is_stale_like_any_other_asset_the_person_saw_and_the_tree_lost():
+    tree = tree_of()
+    keys = keys_of(tree)
+    gone = decide(tree, Group((6,), 4, 99), keys)
+    assert codes(gone) == ["stale"] and gone[0].asset_id == 99 and "try again" in gone[0].reason
+    assert codes(decide(tree, Group((3,), 3, 99), keys)) == ["stale"]  # also before the cycle check can speak for the same group
+    assert codes(run(STANDARD, [Group((6,), 4, 99)]).refusals) == ["stale"]
 
 
 def test_for_an_undo_a_before_id_that_is_no_longer_a_child_falls_back_to_last():
@@ -298,6 +306,41 @@ def test_applying_the_undo_to_the_moved_tree_restores_the_parents_and_the_siblin
     assert back.refusals == []
     assert back.tree.children(1) == before.children(1) == [2, 3, 4, 5]
     assert {i: back.tree.nodes[i].parent_id for i in before.nodes} == {i: n.parent_id for i, n in before.nodes.items()}
+
+
+LETTERS = [(1, None, "P"), (2, 1, "A"), (3, 1, "B"), (4, 1, "C"), (5, 1, "D")]
+
+
+def test_the_undo_of_a_reorder_of_two_picks_that_are_not_neighbours_names_both_roots_though_one_is_already_in_place():
+    # A and C dragged after B (before = D) give B A C D. The undo is (A before B), (C before D): once A is back, C already sits right
+    # before D, so the second group changes nothing. Its root still belongs in `parents`: the undo's own expectation names both.
+    forward = run(LETTERS, [Group((2, 4), 1, 5)])
+    assert order(forward, 1) == [3, 2, 4, 5] and forward.parents == {2: 1, 4: 1}
+    assert [(g.ids, g.before_id) for g in forward.undo] == [((2,), 3), ((4,), 5)]
+
+    back = plan(forward.tree, forward.undo, keys_of(forward.tree), undo=True)
+
+    assert back.refusals == [] and order(back, 1) == [2, 3, 4, 5]
+    assert [r.id for r in back.roots] == [2] and back.unchanged == [4]
+    assert back.parents == {2: 1, 4: 1}  # the moved root and the one that was already there
+
+
+def test_an_undo_of_three_runs_where_the_middle_one_is_already_in_place_names_all_three():
+    # P holds B A C D F E (explicit numbers). (A before B) moves A, (C before D) finds C there already, (E before F) moves E.
+    rows = [(1, None, "P"), (2, 1, "A", 1), (3, 1, "B", 0), (4, 1, "C", 2), (5, 1, "D", 3), (6, 1, "E", 5), (7, 1, "F", 4)]
+    groups = [Group((2,), 1, 3), Group((4,), 1, 5), Group((6,), 1, 7)]
+
+    result = run(rows, groups, undo=True)
+
+    assert result.refusals == [] and order(result, 1) == [2, 3, 4, 5, 6, 7]
+    assert [r.id for r in result.roots] == [2, 6] and result.unchanged == [4]
+    assert result.parents == {2: 1, 4: 1, 6: 1}
+
+
+def test_parents_names_a_root_already_in_place_too_so_a_preview_and_its_move_build_the_same_map():
+    result = run(STANDARD, [Group((6,), 3, 7), Group((8,), 5, None)])  # Pump 1 before Pump 2: nothing to do; Fan really moves
+    assert result.unchanged == [6] and [r.id for r in result.roots] == [8]
+    assert result.parents == {6: 3, 8: 4}
 
 
 # ---- the shape of a request -----------------------------------------------------------------------------------------------

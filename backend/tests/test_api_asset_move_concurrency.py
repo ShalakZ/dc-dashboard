@@ -16,11 +16,27 @@ from test_api_asset_move import MOVE, PREVIEW, body, group, kids, moved_rows, sn
 from test_api_delete_locks import WAIT, holder
 
 
-async def pending(request_coroutine) -> asyncio.Task:
-    """Start a request and give it time to reach whatever it must wait for; it must not have answered yet."""
+async def wait_until_blocked(db, waiting: int, timeout: float = 5.0, interval: float = 0.02) -> bool:
+    """Poll pg_stat_activity until `waiting` other backends are waiting on a lock (a row or the names lock), or the bound is hit."""
+    clock = asyncio.get_running_loop().time
+    deadline = clock() + timeout
+    while clock() < deadline:
+        count = await db.fetchval(
+            "SELECT count(*) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock'"
+        )
+        if count >= waiting:
+            return True
+        await asyncio.sleep(interval)
+    return False
+
+
+async def pending(db, waiting: int, request_coroutine) -> asyncio.Task:
+    """Start a request and return once it is the `waiting`-th backend queued on a lock (those started before it count): it has reached
+    the lock the test means it to wait on, so the next request cannot overtake it. It must not have answered yet."""
     task = asyncio.create_task(request_coroutine)
-    await asyncio.sleep(0.5)
-    assert not task.done(), "the request answered without waiting for the transaction in flight"
+    if not await wait_until_blocked(db, waiting) or task.done():
+        task.cancel()
+        raise AssertionError(f"the request did not come to wait for a lock ({waiting} expected); it may have answered without waiting")
     return task
 
 
@@ -53,8 +69,8 @@ async def test_two_moves_that_would_make_a_loop_end_with_one_winner(client, db):
     x, y = await make_asset(db, "X"), await make_asset(db, "Y")
     async with holder(db) as (conn, tx):
         await hold_names_lock(conn)
-        first = await pending(client.post(MOVE, json=body(group([x], y))))
-        second = await pending(client.post(MOVE, json=body(group([y], x))))
+        first = await pending(db, 1, client.post(MOVE, json=body(group([x], y))))
+        second = await pending(db, 2, client.post(MOVE, json=body(group([y], x))))
         await tx.rollback()
         responses = await finished(first, second)
     assert sorted(r.status_code for r in responses) == [200, 422], [r.text for r in responses]
@@ -70,8 +86,8 @@ async def test_a_move_and_a_patch_of_the_parent_that_would_make_a_loop_end_with_
     x, y = await make_asset(db, "X"), await make_asset(db, "Y")
     async with holder(db) as (conn, tx):
         await hold_names_lock(conn)
-        moving = await pending(client.post(MOVE, json=body(group([x], y))))
-        patching = await pending(client.patch(f"/api/assets/{y}", json={"parent_id": x}))  # takes the same lock first, since W7p
+        moving = await pending(db, 1, client.post(MOVE, json=body(group([x], y))))
+        patching = await pending(db, 2, client.patch(f"/api/assets/{y}", json={"parent_id": x}))  # takes the same lock first, since W7p
         await tx.rollback()
         responses = await finished(moving, patching)
     assert sorted(r.status_code for r in responses) == [200, 422], [r.text for r in responses]
@@ -85,8 +101,8 @@ async def test_two_moves_of_overlapping_sets_both_succeed_in_turn_and_leave_a_co
     a, b, c = [await make_asset(db, name) for name in ("A", "B", "C")]
     async with holder(db) as (conn, tx):
         await hold_names_lock(conn)
-        one = await pending(client.post(MOVE, json=body(group([a, b], t1))))
-        two = await pending(client.post(MOVE, json=body(group([b, c], t2))))
+        one = await pending(db, 1, client.post(MOVE, json=body(group([a, b], t1))))
+        two = await pending(db, 2, client.post(MOVE, json=body(group([b, c], t2))))
         await tx.rollback()
         responses = await finished(one, two)
     assert [r.status_code for r in responses] == [200, 200], [r.text for r in responses]
@@ -116,8 +132,8 @@ async def test_a_rename_that_waited_behind_a_move_is_checked_against_the_new_sib
     await make_asset(db, "Fan", row_c)
     async with holder(db) as (conn, tx):
         await conn.fetchval("SELECT id FROM assets WHERE id = $1 FOR UPDATE", pump)  # the move stalls at its row locks, names lock in hand
-        moving = await pending(client.post(MOVE, json=body(group([pump], row_c))))
-        renaming = await pending(client.patch(f"/api/assets/{pump}", json={"name": "Fan"}))  # queues behind the names lock
+        moving = await pending(db, 1, client.post(MOVE, json=body(group([pump], row_c))))
+        renaming = await pending(db, 2, client.patch(f"/api/assets/{pump}", json={"name": "Fan"}))  # queues behind the names lock
         await tx.rollback()
         moved, renamed = await finished(moving, renaming)
     assert moved.status_code == 200, moved.text
@@ -133,7 +149,7 @@ async def test_a_move_whose_asset_was_deleted_while_it_waited_for_its_lock_is_40
     before = await snapshot(db)
     async with holder(db) as (conn, tx):
         await conn.fetchval("SELECT id FROM assets WHERE id = $1 FOR UPDATE", pump)
-        moving = await pending(client.post(MOVE, json=body(group([pump], row_c))))
+        moving = await pending(db, 1, client.post(MOVE, json=body(group([pump], row_c))))
         await conn.execute("DELETE FROM assets WHERE id = $1", pump)
         await tx.commit()
         response = (await finished(moving))[0]
@@ -149,7 +165,7 @@ async def test_a_sibling_whose_number_changed_while_the_move_waited_makes_it_sta
     fan = await make_asset(db, "Fan", row_c)
     async with holder(db) as (conn, tx):
         await conn.fetchval("SELECT id FROM assets WHERE id = $1 FOR UPDATE", fan)
-        moving = await pending(client.post(MOVE, json=body(group([pump], row_c, fan))))  # before Fan: Fan is renumbered, so locked
+        moving = await pending(db, 1, client.post(MOVE, json=body(group([pump], row_c, fan))))  # before Fan: Fan is renumbered, so locked
         await conn.execute("UPDATE assets SET sort_order = 5 WHERE id = $1", fan)  # a sort-order edit takes no names lock
         await tx.commit()
         response = (await finished(moving))[0]
@@ -169,8 +185,8 @@ async def test_deleting_the_grandparent_of_the_target_while_moving_into_it_never
     mover = await make_asset(db, "Mover")
     async with holder(db) as (conn, tx):
         await conn.fetchval("SELECT id FROM assets WHERE id = $1 FOR UPDATE", child)
-        deleting = await pending(client.delete(f"/api/assets/{grand}?confirm=true"))  # holds Grandparent and Target, waits for Child
-        moving = await pending(client.post(MOVE, json=body(group([mover], target, child))))  # Child is renumbered: the lock set has all of them
+        deleting = await pending(db, 1, client.delete(f"/api/assets/{grand}?confirm=true"))  # holds Grandparent and Target, waits for Child
+        moving = await pending(db, 2, client.post(MOVE, json=body(group([mover], target, child))))  # Child is renumbered: the lock set has all of them
         await tx.rollback()
         deleted, moved = await finished(deleting, moving)
     assert deleted.status_code == 204, deleted.text
@@ -189,14 +205,63 @@ async def test_deleting_a_kind_in_use_while_moving_into_a_target_of_that_kind_en
     await db.execute("UPDATE assets SET kind = 'Rack'")
     async with holder(db) as (conn, tx):
         await conn.fetchval("SELECT id FROM assets WHERE id = $1 FOR UPDATE", child)
-        deleting = await pending(client.delete(f"/api/asset-kinds/{rack['id']}?move_to={cabinet['id']}"))  # locks Target, waits for Child
-        moving = await pending(client.post(MOVE, json=body(group([mover], target, child))))
+        deleting = await pending(db, 1, client.delete(f"/api/asset-kinds/{rack['id']}?move_to={cabinet['id']}"))  # locks Target, waits for Child
+        moving = await pending(db, 2, client.post(MOVE, json=body(group([mover], target, child))))
         await tx.rollback()
         deleted, moved = await finished(deleting, moving)
     assert deleted.status_code == 204, deleted.text
     assert moved.status_code == 200, moved.text
     assert await kids(db, target) == ["Mover", "Child"]
     assert {r["kind"] for r in await db.fetch("SELECT kind FROM assets")} == {"Cabinet"}
+
+
+async def test_moving_into_a_target_whose_grandparent_is_deleted_never_deadlocks_when_the_move_holds_the_target(client, db):
+    # The order the deadlock needs, which the two tests above do not reach (there the delete holds the target first and the move is
+    # simply told it is gone). The holder has the row with the HIGHEST id of the move's set (Mover, created last), so the move locks
+    # Target, Child and Child 2 in id order and waits for Mover; only then does the delete start, take Grandparent and wait for Target.
+    # A move whose lock set lacked the target would take Mover and then need the target for its foreign key: it would wait for the
+    # delete, which waits for Child, which the move holds. This test is red (40P01) with the target taken out of `lock_ids`.
+    await login_as(client, db)
+    grand = await make_asset(db, "Grandparent")
+    target = await make_asset(db, "Target", grand)
+    child = await make_asset(db, "Child", target)
+    await make_asset(db, "Child 2", target)
+    mover = await make_asset(db, "Mover")
+    async with holder(db) as (conn, tx):
+        await conn.fetchval("SELECT id FROM assets WHERE id = $1 FOR UPDATE", mover)
+        moving = await pending(db, 1, client.post(MOVE, json=body(group([mover], target, child))))
+        # expect_assets=4: Grandparent, Target and its two children, as a dialog would have shown before Mover came under Target.
+        deleting = await pending(db, 2, client.delete(f"/api/assets/{grand}?confirm=true&expect_assets=4"))
+        await tx.rollback()
+        moved, deleted = await finished(moving, deleting)
+    assert moved.status_code == 200, moved.text
+    assert deleted.status_code == 409, deleted.text  # one more asset is in the subtree now: refused, not cascaded onto Mover
+    assert len(await db.fetch("SELECT id FROM assets")) == 5
+    assert await kids(db, target) == ["Mover", "Child", "Child 2"]
+    assert len(await moved_rows(db)) == 1
+
+
+async def test_moving_into_a_target_while_its_kind_is_deleted_never_deadlocks_when_the_move_holds_the_target(client, db):
+    # Same order as the test above, against the kind's delete-and-move: the move holds Target and Child and waits for Mover (the
+    # highest id); the kind delete then takes the kind rows and waits for Target. Red (40P01) with the target out of `lock_ids`.
+    await login_as(client, db)
+    rack = (await client.post("/api/asset-kinds", json={"name": "Rack", "icon": "generic"})).json()
+    cabinet = (await client.post("/api/asset-kinds", json={"name": "Cabinet", "icon": "generic"})).json()
+    target = await make_asset(db, "Target")
+    child = await make_asset(db, "Child", target)
+    mover = await make_asset(db, "Mover")
+    await db.execute("UPDATE assets SET kind = 'Rack'")
+    async with holder(db) as (conn, tx):
+        await conn.fetchval("SELECT id FROM assets WHERE id = $1 FOR UPDATE", mover)
+        moving = await pending(db, 1, client.post(MOVE, json=body(group([mover], target, child))))
+        deleting = await pending(db, 2, client.delete(f"/api/asset-kinds/{rack['id']}?move_to={cabinet['id']}"))
+        await tx.rollback()
+        moved, deleted = await finished(moving, deleting)
+    assert moved.status_code == 200, moved.text
+    assert deleted.status_code == 204, deleted.text
+    assert await kids(db, target) == ["Mover", "Child"]
+    assert {r["kind"] for r in await db.fetch("SELECT kind FROM assets")} == {"Cabinet"}
+    assert len(await moved_rows(db)) == 1
 
 
 async def test_an_asset_deleted_while_its_move_waited_for_the_names_lock_is_409_and_nothing_moves(client, db):
@@ -206,7 +271,7 @@ async def test_an_asset_deleted_while_its_move_waited_for_the_names_lock_is_409_
     await make_asset(db, "Pump 2", row_a)
     async with holder(db) as (conn, tx):
         await hold_names_lock(conn)
-        moving = await pending(client.post(MOVE, json=body(group([pump], row_c))))
+        moving = await pending(db, 1, client.post(MOVE, json=body(group([pump], row_c))))
         assert (await client.delete(f"/api/assets/{pump}")).status_code == 204  # a delete takes no names lock: it goes through
         await tx.rollback()
         response = (await finished(moving))[0]
