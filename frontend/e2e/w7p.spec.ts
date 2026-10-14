@@ -13,7 +13,7 @@ import { treeLink } from "./shell";
 // `keyboard.down("Control")`, which the mouse events pick up) and cannot stop in the middle (case 4 reads the invalid mark WHILE the pointer is over the
 // row). The mouse path is the one W7p's own Chromium trace used (the second small move is the dragover a real drag would repeat every 50 ms; the marker
 // and the drop do not depend on it). A zone is a height on the target row: 10% = before, 50% = inside, 90% = after (the row is `.node`, which is what
-// the tree measures; the bottom quarter of an OPEN row with children means "first child", so no case aims there). Every case recentres its plant first
+// the tree measures; the bottom quarter of an OPEN row with children means "first child", which only case 11 aims at, with the zone "first"). Every case recentres its plant first
 // (the shared tree holds every earlier project's assets, and Chromium's native drag autoscroll starts near the scroll box's edge).
 //
 // The cases (independent; workers is 1, so they still run in file order):
@@ -30,6 +30,12 @@ import { treeLink } from "./shell";
 //   8  The audit log reads the rows in names ("Moved ... from ... to ... together with 1 other") and the audit drawer says the same.
 //   9  A viewer sees no picking, no draggable rows and no M key, and the API answers 403 on both routes.
 //   10 Layout at 1440 and 1024 px (the sidebar minimised and expanded): the tree title, rows that do not move on the first pick, no sideways scroll.
+//   11 The two drop areas the other cases leave out: the bottom edge of an open row (the first child) and the area below the last row (the top level);
+//      the tree filter puts both on screen at once.
+//   12 Ctrl+Z on the focused row undoes the latest move (parents and order), with the focus on a named row; the toast's Undo says so in its title and the
+//      tree's live line says it after the move.
+//   13 A stale Undo (a third party moved one of the assets): the toast says something moved since, and nothing is half restored.
+//   14 The warning for four assets in Move to... does not move the button: Move anyway is where Move was (800x600).
 //
 // Locators. The tree is the region "Asset tree"; a row is its `.node` found by its own link (the name is unique per run); the Selection slot is the
 // group "Selection". Playwright matches names by case-insensitive SUBSTRING: every button and dialog name below is `exact: true` ("Move" is also the start
@@ -267,8 +273,9 @@ async function openTree(page: Page, plant: Plant): Promise<void> {
   await centre(page, plant);
 }
 
-type Zone = "before" | "inside" | "after";
-const HEIGHT_OF: Record<Zone, number> = { before: 0.1, inside: 0.5, after: 0.9 };
+/** "first" is the bottom edge of an open row that shows children: the same height as "after" on a row that does not. */
+type Zone = "before" | "inside" | "after" | "first";
+const HEIGHT_OF: Record<Zone, number> = { before: 0.1, inside: 0.5, after: 0.9, first: 0.9 };
 
 interface DragOptions {
   /** Ctrl is down from before the first move to after the drop (a modifier changes nothing about a move; Windows maps Ctrl+drag to copy). */
@@ -317,9 +324,9 @@ async function sidebar(page: Page, want: "expanded" | "minimized"): Promise<void
     .toBe(true);
 }
 
-/** The move dialog and its parts. */
-function moveDialog(page: Page, name: string) {
-  const dialog = page.getByRole("dialog", { name: `Move "${name}" to...`, exact: true });
+/** The move dialog and its parts: for one asset (by its name) or for several (by their number). */
+function moveDialog(page: Page, what: string | number) {
+  const dialog = page.getByRole("dialog", { name: typeof what === "number" ? `Move ${what} assets to...` : `Move "${what}" to...`, exact: true });
   return {
     dialog,
     search: dialog.getByRole("searchbox", { name: "Search places", exact: true }),
@@ -330,6 +337,13 @@ function moveDialog(page: Page, name: string) {
     message: dialog.locator(".place-message"),
   };
 }
+
+/** The text of the element that has the focus ("" when it is the page body: nothing named has it). */
+const activeText = (page: Page) =>
+  page.evaluate(() => {
+    const el = document.activeElement;
+    return el && el !== document.body ? (el.getAttribute("aria-label") ?? el.textContent ?? "").trim() : "";
+  });
 
 /** What the rate warning says for one root (a currency may follow each rate; `from` and `to` are the plain numbers). */
 const warning = (name: string, from: string, to: string) =>
@@ -513,6 +527,46 @@ test.describe("W7p: moving assets", () => {
     expect(await shapeOf(page.request, plant)).toEqual({ ...STD_SHAPE, "Rack A2": "Row C" });
     await expect(treeLink(page, a2), "the focus is on the moved asset's link").toBeFocused();
   });
+
+  test("the bottom edge of an open row makes the first child, and the area below the last row moves to the top level", async ({ page }) => {
+    test.setTimeout(150_000);
+    const plant = await makePlant(page.request, "edges", "Hall A", [
+      { key: "Hall A" },
+      { key: "Rack Q", parent: "Hall A", sort: 10 },
+      { key: "Rack B", parent: "Hall A", sort: 20 },
+      { key: "Hall B" },
+      { key: "Rack Z", parent: "Hall B" },
+    ]);
+    const [hallA, hallB, q, b, z] = [plant.name("Hall A"), plant.name("Hall B"), plant.name("Rack Q"), plant.name("Rack B"), plant.name("Rack Z")];
+    await openTree(page, plant);
+    // The filter leaves this plant's rows only (each name starts with the plant's), so the area below the last row is on screen together with them.
+    await tree(page).getByLabel("Filter assets", { exact: true }).fill(plant.name(""));
+    await expect(treeLink(page, plant.name(""))).toBeVisible();
+    const filler = tree(page).locator(".tree-root-drop");
+    await expect(filler).toBeVisible();
+    await settled(page);
+    const shape = { "Hall A": ROOT, "Rack Q": "Hall A", "Rack B": "Hall A", "Hall B": ROOT, "Rack Z": "Hall B" };
+    expect(await shapeOf(page.request, plant)).toEqual(shape);
+
+    await test.step("Rack Z on the bottom edge of Hall A, which is open with two racks: the mark says first, and Rack Z becomes Hall A's first child", async () => {
+      await dragRow(page, rowOf(page, z), rowOf(page, hallA), "first", {
+        whileOver: async () => { await expect(rowOf(page, hallA)).toHaveAttribute("data-drop", "first"); },
+      });
+      await expect(toast(page, `Moved ${z} to ${hallA}`)).toBeVisible();
+      expect(await orderUnder(page.request, plant, "Hall A")).toEqual(["Rack Z", "Rack Q", "Rack B"]);
+      expect(await shapeOf(page.request, plant)).toEqual({ ...shape, "Rack Z": "Hall A" });
+      await expect(kids(page, hallA)).toHaveText([z, q, b]);
+    });
+
+    await test.step("Hall B onto the area below the last row: it moves to the top level, out of the plant", async () => {
+      await dragRow(page, rowOf(page, hallB), filler, "inside", {
+        whileOver: async () => { await expect(filler).toHaveAttribute("data-drop", "inside"); },
+      });
+      await expect(toast(page, `Moved ${hallB} to the top level`)).toBeVisible();
+      expect(await shapeOf(page.request, plant)).toEqual({ ...shape, "Rack Z": "Hall A", "Hall B": TOP });
+      await expect(filler, "the mark is gone once the drag is over").not.toHaveAttribute("data-drop", /.*/);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -610,6 +664,47 @@ test.describe("W7p: the rate warning", () => {
       expect(await shapeOf(page.request, plant)).toEqual({ ...RATES_SHAPE, "Rack B1": "Hall A" });
     });
   });
+
+  test("the warning for four assets keeps Move anyway exactly where Move was, at 800x600 (a longer text must not move the button pressed twice)", async ({ page }) => {
+    test.setTimeout(120_000);
+    const plant = await makePlant(page.request, "four", "Hall B", [
+      { key: "Hall A", rate: 0.111 },
+      { key: "Rack 1", parent: "Hall A" },
+      { key: "Rack 2", parent: "Hall A" },
+      { key: "Rack 3", parent: "Hall A" },
+      { key: "Rack 4", parent: "Hall A" },
+      { key: "Hall B", rate: 0.222 },
+    ]);
+    const [first, last, hallB] = [plant.name("Rack 1"), plant.name("Rack 4"), plant.name("Hall B")];
+    await openTree(page, plant);
+    await treeLink(page, first).click({ modifiers: ["Control"] });
+    await treeLink(page, last).click({ modifiers: ["Shift"] });
+    await expectPicked(page, plant, ["Rack 1", "Rack 2", "Rack 3", "Rack 4"]);
+    await page.keyboard.press("M"); // the Shift-click left the focus on the last row
+    const form = moveDialog(page, 4);
+    await expect(form.dialog).toBeVisible();
+    await form.search.fill(hallB);
+    await form.radio(hallB).check();
+    // The window shrinks with the dialog open (the tree needs the room for the picks, the dialog is what is measured): the dialog sizes itself by the viewport.
+    await page.setViewportSize({ width: 800, height: 600 });
+    await settled(page);
+    const button = form.dialog.locator(".place-go");
+    const before = await boxOf(button, "the Move button");
+
+    await form.go.click();
+    await expect(form.goAnyway, "the button now asks again").toBeVisible();
+    await expect(form.message).toHaveText(
+      /^Moving these assets changes their rates \(".+" from 0\.111( \S+)? to 0\.222( \S+)? per kWh, and 3 more\)\. Past periods are recalculated at the new place, and the totals of both branches change\.$/,
+    );
+    const after = await boxOf(button, "the Move anyway button");
+    expect(Math.abs(after.y - before.y), `Move was at y=${before.y} and Move anyway is at y=${after.y}`).toBeLessThanOrEqual(0.5);
+    expect(after.y + after.height, "the footer is inside the window").toBeLessThanOrEqual(600);
+    expect(await shapeOf(page.request, plant), "the warning moved nothing").toEqual({
+      "Hall A": ROOT, "Rack 1": "Hall A", "Rack 2": "Hall A", "Rack 3": "Hall A", "Rack 4": "Hall A", "Hall B": ROOT,
+    });
+    await form.cancel.click();
+    await expect(form.dialog).toBeHidden();
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -658,6 +753,79 @@ test.describe("W7p: Undo and the audit log", () => {
       await expect(kids(page, hallA)).toHaveText([q, b, m, c]);
       expect(await orderUnder(page.request, plant, "Hall A")).toEqual(["Rack Q", "Rack B", "Rack M", "Rack C"]);
     });
+  });
+
+  test("Ctrl+Z on the focused row undoes the latest move: the parents and the order come back, and the focus is on a named row", async ({ page }) => {
+    test.setTimeout(150_000);
+    // Numbered 10 to 40, so NOT in the order of their names (Q, B, M, C): a name sort would fake the result.
+    const plant = await makePlant(page.request, "ctrlz", "Hall A", [
+      { key: "Hall A" },
+      { key: "Rack Q", parent: "Hall A", sort: 10 },
+      { key: "Rack B", parent: "Hall A", sort: 20 },
+      { key: "Rack M", parent: "Hall A", sort: 30 },
+      { key: "Rack C", parent: "Hall A", sort: 40 },
+      { key: "Hall B" },
+    ]);
+    const [hallA, hallB] = [plant.name("Hall A"), plant.name("Hall B")];
+    const [q, b, m, c] = [plant.name("Rack Q"), plant.name("Rack B"), plant.name("Rack M"), plant.name("Rack C")];
+    await openTree(page, plant);
+    const moved = `Moved 2 assets to ${hallB}`;
+
+    await test.step("Rack B and Rack C go to Hall B; the focus is on Rack B, the toast's Undo and the live line say Ctrl+Z", async () => {
+      await treeLink(page, b).click({ modifiers: ["Control"] });
+      await treeLink(page, c).click({ modifiers: ["Control"] });
+      await expectPicked(page, plant, ["Rack B", "Rack C"]);
+      await dragRow(page, rowOf(page, b), rowOf(page, hallB), "inside");
+      await expect(toast(page, moved)).toBeVisible();
+      await expect(kids(page, hallB)).toHaveText([b, c]);
+      await expect(undoOf(page, moved), "the button names its key").toHaveAttribute("title", "Undo (Ctrl+Z)");
+      await expect(tree(page).locator('div.sr-only[aria-live="polite"]')).toHaveText(`${moved}. Press Ctrl+Z to undo.`);
+      await expect(treeLink(page, b), "the focus is on the first moved row").toBeFocused();
+    });
+
+    await test.step("Ctrl+Z on that row: both come back between the racks that stayed, and the focus is on one of them", async () => {
+      await page.keyboard.press("Control+z");
+      await expect(toast(page, "Undone")).toBeVisible();
+      await expect(kids(page, hallA)).toHaveText([q, b, m, c]);
+      await expect(kids(page, hallB)).toHaveCount(0);
+      expect(await orderUnder(page.request, plant, "Hall A")).toEqual(["Rack Q", "Rack B", "Rack M", "Rack C"]);
+      expect((await shapeOf(page.request, plant))["Rack C"]).toBe("Hall A");
+      await expect.poll(() => activeText(page), { message: "the focus is on a restored row, not on the page body" }).toMatch(new RegExp(`^(${escapeRe(b)}|${escapeRe(c)})$`));
+    });
+  });
+
+  test("an Undo that is stale (a third party moved one of the assets) says something moved since, and nothing is half restored", async ({ page }) => {
+    test.setTimeout(150_000);
+    const plant = await makePlant(page.request, "stale", "Hall A", [
+      { key: "Hall A" },
+      { key: "Rack Q", parent: "Hall A", sort: 10 },
+      { key: "Rack B", parent: "Hall A", sort: 20 },
+      { key: "Rack C", parent: "Hall A", sort: 30 },
+      { key: "Hall B" },
+      { key: "Row C" },
+    ]);
+    const [hallB, b] = [plant.name("Hall B"), plant.name("Rack B")];
+    const moved = `Moved 2 assets to ${hallB}`;
+    await openTree(page, plant);
+
+    await treeLink(page, b).click({ modifiers: ["Control"] });
+    await treeLink(page, plant.name("Rack C")).click({ modifiers: ["Control"] });
+    await dragRow(page, rowOf(page, b), rowOf(page, hallB), "inside");
+    await expect(toast(page, moved)).toBeVisible();
+    expect(await shapeOf(page.request, plant)).toEqual({ "Hall A": ROOT, "Rack Q": "Hall A", "Rack B": "Hall B", "Rack C": "Hall B", "Hall B": ROOT, "Row C": ROOT });
+
+    // Somebody else puts Rack B in Row C before the Undo is pressed.
+    const patched = await page.request.patch(`/api/assets/${plant.id["Rack B"]}`, { data: { parent_id: plant.id["Row C"] } });
+    expect(patched.ok(), `moving Rack B: ${patched.status()} ${await patched.text()}`).toBe(true);
+
+    await undoOf(page, moved).click();
+    await expect(toast(page, "Something moved since; the move could not be undone")).toBeVisible();
+    await expect(toast(page, "Undone"), "it was not undone").toHaveCount(0);
+    expect(await shapeOf(page.request, plant), "nothing is half restored: Rack C stayed in Hall B, Rack B stayed where the third party put it").toEqual({
+      "Hall A": ROOT, "Rack Q": "Hall A", "Rack B": "Row C", "Rack C": "Hall B", "Hall B": ROOT, "Row C": ROOT,
+    });
+    expect(await orderUnder(page.request, plant, "Hall A")).toEqual(["Rack Q"]);
+    await expect.poll(() => activeText(page), { message: "the focus is on a named element after the toast's button is gone" }).not.toBe("");
   });
 
   test("the audit log reads the moves in names, and the audit drawer says the same with the others that moved along", async ({ page }) => {
