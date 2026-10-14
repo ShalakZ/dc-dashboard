@@ -18,7 +18,8 @@ function UsersAndRoles({ active }: { active: "users" | "roles" }) {
   // After a delete the row and its Delete button are gone, so the dialog has nowhere to give focus back to: keep the keyboard user on the page.
   const heading = useRef<HTMLHeadingElement>(null);
   const [deletions, setDeletions] = useState(0);
-  useEffect(() => { if (deletions > 0) heading.current?.focus(); }, [deletions]);
+  // preventScroll: focusing an element far from the viewport scrolls the page to it; the owner saw the Asset kinds page jump to the top after each delete.
+  useEffect(() => { if (deletions > 0) heading.current?.focus({ preventScroll: true }); }, [deletions]);
 
   const tabs: TabDef[] = [
     ...(can("users.view") ? [{ id: "users", label: "Users" }] : []),
