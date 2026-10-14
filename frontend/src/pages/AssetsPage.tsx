@@ -10,6 +10,7 @@ import { ImpactDeleteDialog } from "../components/ImpactDeleteDialog";
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
+import { useTreeMove } from "../hooks/useTreeMove";
 import { kindIconId } from "../lib/assetIcons";
 import { assetDeletePath, assetImpact, assetLoss } from "../lib/impact";
 import { buildTree, descendantIds, parseAssetId } from "../lib/tree";
@@ -69,6 +70,7 @@ export function assetActions(ctx: AssetsContext | null, asset: { id: number; nam
  */
 export function AssetsPage() {
   const { can } = useAuth();
+  const canEdit = can("assets.edit");
   // Writing the registry is its own permission (assets.kinds), not part of changing assets: without it a typed new kind stays the asset's text.
   const canRegister = can("assets.kinds");
   const { data: assets = [], error, isLoading } = useAssets();
@@ -87,7 +89,11 @@ export function AssetsPage() {
   // While the delete confirmation is open, no form may open next to it (two dialogs would share Escape and the focus trap);
   // and none opens before the lists are there: the form's parent picker needs the assets and its Kind select the registry
   // (`isLoading`, not `isPending`: a query that is not enabled stays pending for ever).
-  const locked = deleting !== null || isLoading || kindsLoading;
+  const baseLocked = deleting !== null || isLoading || kindsLoading;
+  // Moving assets (W7p): a drop, a Move to... dialog, its warning and an Undo. Nothing starts while the page is locked or an Add/Edit dialog is open;
+  // and while a move is in flight (or its dialog is open) no Add/Edit/+ may open beside it, so `busy` joins the lock.
+  const { move, dialogs, busy } = useTreeMove({ assets, canEdit, locked: baseLocked || dialog !== null });
+  const locked = baseLocked || busy;
   const openAdd = (parentId: number | null) => { if (!locked) setDialog({ kind: "add", parentId }); };
   const openEdit = () => { if (!locked) setDialog({ kind: "edit" }); };
 
@@ -129,7 +135,6 @@ export function AssetsPage() {
   const remove = () => { if (selected && !locked) setDeleting(selected); };
 
   if (error) return <p className="error" role="alert">{error.message}</p>;
-  const canEdit = can("assets.edit");
   const context: AssetsContext = { canEdit, canDelete: can("assets.delete"), locked, openAdd, openEdit, remove };
   return (
     <>
@@ -141,6 +146,7 @@ export function AssetsPage() {
           onAddTop={canEdit ? () => openAdd(null) : undefined}
           disabled={locked}
           loading={isLoading}
+          move={move}
         />
         <div className="assets-detail" id="asset-detail" tabIndex={-1}>
           <Outlet context={context} />
@@ -159,6 +165,7 @@ export function AssetsPage() {
           onCancel={() => setDeleting(null)}
         />
       )}
+      {dialogs}
       {dialog?.kind === "add" && (
         <Modal title="Add asset" onClose={closeDialog}>
           <AssetForm key={dialog.parentId ?? "none"} assets={assets} kinds={kinds} initial={{ parent_id: dialog.parentId }} excludeIds={new Set()} canRegister={canRegister} onSubmit={create} onCancel={closeDialog} />
