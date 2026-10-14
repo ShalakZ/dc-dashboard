@@ -40,17 +40,17 @@ describe("formatValue", () => {
 });
 
 describe("describeAudit: updates with before and after", () => {
-  it("shows a tariff change as a sentence and one change row, with the subject as facts", () => {
+  it("shows a tariff change as a sentence naming the asset, and one change row", () => {
     const view = describeAudit(
-      entry("tariff.updated", { tariff_id: 3, asset_id: 7, before: { rate_per_kwh: 0.1 }, after: { rate_per_kwh: 0.12 } }),
+      entry(
+        "tariff.updated",
+        { tariff_id: 3, asset_id: 7, before: { rate_per_kwh: 0.1 }, after: { rate_per_kwh: 0.12 } },
+        { refs: { asset: { "7": "Panel A" } } },
+      ),
     );
-    expect(view.summary).toBe("Changed tariff #3: rate per kwh");
+    expect(view.summary).toBe("Changed the tariff for asset Panel A: rate per kwh");
     expect(view.changes).toEqual([{ field: "Rate per kwh", before: "0.1", after: "0.12" }]);
     expect(view.unchanged).toBe(0);
-    expect(view.facts).toEqual([
-      { label: "Tariff id", value: "3" },
-      { label: "Asset id", value: "7" },
-    ]);
     expect(view.link).toEqual({ to: "/tariffs", label: "Open Tariffs" });
   });
 
@@ -66,14 +66,10 @@ describe("describeAudit: updates with before and after", () => {
     expect(view.summary).toBe("Changed the storage settings: raw retention days");
     expect(view.changes).toEqual([{ field: "Raw retention days", before: "30", after: "60" }]);
     expect(view.unchanged).toBe(4);
-    expect(view.facts).toEqual([
-      { label: "Policies reapplied", value: "yes" },
-      { label: "Origin", value: "manual" },
-    ]);
     expect(view.link).toEqual({ to: "/storage", label: "Open Storage" });
   });
 
-  it("says the policies were re-applied when a storage save changed no value, and keeps the nested loss as a fact", () => {
+  it("says the policies were re-applied when a storage save changed no value", () => {
     const same = { raw_retention_days: 30, compress_after_days: 7 };
     const view = describeAudit(
       entry("storage.changed", {
@@ -87,8 +83,6 @@ describe("describeAudit: updates with before and after", () => {
     expect(view.summary).toBe("Saved the storage settings (policies re-applied)");
     expect(view.changes).toEqual([]);
     expect(view.unchanged).toBe(2);
-    expect(view.facts).toContainEqual({ label: "Confirmed loss", value: '{"shorter":true,"raw_chunks":4,"rollup_1m_chunks":0}' });
-    expect(view.facts).toContainEqual({ label: "Origin", value: "factory" });
   });
 
   it("shows the dashboard layout as a sentence, never as the hash", () => {
@@ -193,7 +187,6 @@ describe("describeAudit: updates with before and after", () => {
       entry("settings.sign_in_changed", { blocks_ended: 2, before: { block_minutes: 5, enabled: true }, after: { block_minutes: 10, enabled: false } }),
     );
     expect(withNumbers.summary).toBe("Sign-in protection switched off (2 blocks ended): block minutes");
-    expect(withNumbers.facts).toEqual([{ label: "Blocks ended", value: "2" }]);
   });
 
   it("does not claim a switch when `enabled` is not a real change or not a boolean", () => {
@@ -227,10 +220,6 @@ describe("describeAudit: updates with before and after", () => {
       entry("user.updated", { user_id: 9, username: "bob", before: { role: "viewer" }, after: { role: "operator" } }),
     );
     expect(view.summary).toBe("Changed the role of bob from viewer to operator");
-    expect(view.facts).toEqual([
-      { label: "Account id", value: "9" },
-      { label: "Username", value: "bob" },
-    ]);
     expect(view.link).toEqual({ to: "/users", label: "Open Users & Roles" });
   });
 });
@@ -273,9 +262,9 @@ describe("describeAudit: user.updated reads as what was done to the account", ()
     );
   });
 
-  it("names the account by id when the stored name is missing, and falls back to a generic sentence", () => {
+  it("never numbers an account whose stored name is missing, and falls back to a generic sentence", () => {
     expect(describeAudit(entry("user.updated", { user_id: 9, before: { active: true }, after: { active: false } })).summary).toBe(
-      "Deactivated user #9",
+      "Deactivated user",
     );
     expect(describeAudit(entry("user.updated", { before: { role: "viewer" }, after: { role: "admin" } })).summary).toBe(
       "Changed the role of a user from viewer to admin",
@@ -311,7 +300,6 @@ describe("describeAudit: roles", () => {
     );
     expect(view.summary).toBe("Created role Executive: See the Assets Tree, See billing, Export billing as CSV");
     expect(view.link).toEqual({ to: "/users/roles", label: "Open Roles" }); // the Roles tab of Users & Roles
-    expect(view.facts.map((fact) => fact.label)).toEqual(["Role id", "Name", "Description", "Permissions"]);
   });
 
   it("says so when a new role has no permissions, and names the role it was copied from", () => {
@@ -370,15 +358,15 @@ describe("describeAudit: roles", () => {
   it("falls back to the generic sentence when the entry shows none of the three changes", () => {
     expect(updated({ before: { nickname: "a" }, after: { nickname: "b" } }).summary).toBe("Changed role Executive: nickname");
     expect(updated({ before: { name: "same" }, after: { name: "same" } }).summary).toBe("Changed role Executive");
-    expect(describeAudit(entry("role.updated", { role_id: 4 })).summary).toBe("Changed role #4");
+    expect(describeAudit(entry("role.updated", { role_id: 4 })).summary).toBe("Changed role");
     expect(describeAudit(entry("role.updated", {})).summary).toBe("Changed role");
   });
 
-  it("says a deletion by name, else by id, without a link", () => {
+  it("says a deletion by name, else by the kind alone, without a link", () => {
     const view = describeAudit(entry("role.deleted", { role_id: 4, name: "Executive", permissions: ["assets.view"] }));
     expect(view.summary).toBe("Deleted role Executive");
     expect(view.link).toBeNull();
-    expect(describeAudit(entry("role.deleted", { role_id: 4 })).summary).toBe("Deleted role #4");
+    expect(describeAudit(entry("role.deleted", { role_id: 4 })).summary).toBe("Deleted role");
   });
 
   it("works out what an edit added and removed from the permissions before and after when the entry has no lists", () => {
@@ -470,7 +458,6 @@ describe("describeAudit: creations, deletions and events", () => {
     expect(view.summary).toBe("Deleted asset Panel A");
     expect(view.link).toBeNull();
     expect(view.changes).toEqual([]);
-    expect(view.facts).toContainEqual({ label: "Mappings", value: "3" });
   });
 
   it("links a created or changed asset to its page and a deleted one to nothing", () => {
@@ -509,30 +496,24 @@ describe("describeAudit: creations, deletions and events", () => {
       expect(view.unchanged).toBe(1);
     });
 
-    it("shows the icon of a created asset as its label, Automatic for null, the raw id when unknown", () => {
+    it("says a created asset in one sentence, whatever its icon; the stored fields are the drawer's JSON block, not a list here", () => {
       const created = (icon: unknown) =>
         describeAudit(entry("asset.created", { asset_id: 8, name: "Rack 1", parent_id: null, kind: "Rack", sort_order: 0, icon }));
-      const fact = (view: ReturnType<typeof describeAudit>) => view.facts.find((f) => f.label === "Icon");
-      expect(fact(created("server"))).toEqual({ label: "Icon", value: "Server" });
-      expect(fact(created(null))).toEqual({ label: "Icon", value: "Automatic" });
-      expect(fact(created("zzz"))).toEqual({ label: "Icon", value: "zzz" });
-      expect(created("server").facts).toContainEqual({ label: "Kind", value: "Rack" });
-      expect(created("server").summary).toBe("Created asset Rack 1");
-    });
-
-    it("shows no Icon fact for an older created row that has no icon key", () => {
-      const view = describeAudit(entry("asset.created", { asset_id: 8, name: "Rack 1", kind: "Rack" }));
-      expect(view.facts.map((f) => f.label)).toEqual(["Asset id", "Name", "Kind"]);
+      for (const icon of ["server", null, "zzz"]) {
+        expect(created(icon).summary).toBe("Created asset Rack 1");
+        expect(created(icon).changes).toEqual([]);
+      }
     });
   });
 
   it("links a created mapping and an accepted discovery to the asset, and only from integer ids", () => {
+    // No lookup: the link keeps its place, with no name to put in the label, and the sentence says "a point" and "an asset".
     const created = describeAudit(entry("mapping.created", { mapping_id: 4, point_id: 11, asset_id: 7, metric: "power", scale: 1 }));
-    expect(created.link).toEqual({ to: "/assets/7", label: "Open asset #7" });
-    expect(created.summary).toBe("Mapped point #11 to asset #7 as power");
+    expect(created.link).toEqual({ to: "/assets/7", label: "Open asset" });
+    expect(created.summary).toBe("Mapped a point to an asset as power");
     const accepted = describeAudit(entry("discovery.accepted", { source_id: 2, asset_id: 15, mappings: 3, created_asset: true }));
-    expect(accepted.link).toEqual({ to: "/assets/15", label: "Open asset #15" });
-    expect(accepted.summary).toBe("Accepted discovery: created asset #15 with 3 mappings");
+    expect(accepted.link).toEqual({ to: "/assets/15", label: "Open asset" });
+    expect(accepted.summary).toBe("Accepted discovery: created an asset with 3 mappings");
     expect(describeAudit(entry("discovery.accepted", { asset_id: "7", mappings: 1, created_asset: false })).link).toBeNull();
     expect(describeAudit(entry("mapping.created", { mapping_id: 4, asset_id: "7" })).link).toBeNull();
     expect(describeAudit(entry("asset.updated", { asset_id: 7.5, name: "X", before: { a: 1 }, after: { a: 2 } })).link).toBeNull();
@@ -540,8 +521,8 @@ describe("describeAudit: creations, deletions and events", () => {
 
   it("links a changed mapping only when the new asset is in the entry", () => {
     const moved = describeAudit(entry("mapping.updated", { mapping_id: 4, point_id: 11, before: { asset_id: 2 }, after: { asset_id: 7 } }));
-    expect(moved.link).toEqual({ to: "/assets/7", label: "Open asset #7" });
-    expect(moved.summary).toBe("Changed mapping #4: asset id");
+    expect(moved.link).toEqual({ to: "/assets/7", label: "Open asset" });
+    expect(moved.summary).toBe("Changed the mapping of a point: asset");
     const rescaled = describeAudit(entry("mapping.updated", { mapping_id: 4, point_id: 11, before: { scale: 1 }, after: { scale: 2 } }));
     expect(rescaled.link).toBeNull();
     expect(describeAudit(entry("mapping.updated", { mapping_id: 4, before: { asset_id: "2" }, after: { asset_id: "7" } })).link).toBeNull();
@@ -565,16 +546,13 @@ describe("describeAudit: creations, deletions and events", () => {
       expect(view.link).toBeNull();
       expect(view.summary).not.toBe(humanise(action));
     }
-    expect(describeAudit(entry("login.succeeded", { client: "10.0.0.5" })).facts).toEqual([{ label: "Client", value: "10.0.0.5" }]);
   });
 
-  it("says whose sign-in an admin unblocked, links to the Users & Roles page and labels the account id", () => {
+  it("says whose sign-in an admin unblocked and links to the Users & Roles page", () => {
     const view = describeAudit(entry("login.unblocked", { user_id: 9, username: "bob", cleared: 2 }));
     expect(view.summary).toBe("Unblocked sign-in for user bob");
     expect(view.link).toEqual({ to: "/users", label: "Open Users & Roles" });
-    expect(view.facts).toContainEqual({ label: "Account id", value: "9" });
-    expect(view.facts).toContainEqual({ label: "Cleared", value: "2" });
-    expect(describeAudit(entry("login.unblocked", { user_id: 9, cleared: 1 })).summary).toBe("Unblocked sign-in for user #9");
+    expect(describeAudit(entry("login.unblocked", { user_id: 9, cleared: 1 })).summary).toBe("Unblocked sign-in for user");
     expect(describeAudit(entry("login.unblocked", {})).summary).toBe("Unblocked sign-in for user");
   });
 
@@ -592,7 +570,6 @@ describe("describeAudit: creations, deletions and events", () => {
     expect(describeAudit(entry("login.failed", { via: "login", reason: "" })).summary).toBe("Failed sign-in to this account");
     expect(describeAudit(entry("login.failed", { via: "login", reason: 5 })).summary).toBe("Failed sign-in to this account");
     expect(failed("wrong_password").link).toBeNull();
-    expect(failed("wrong_password").facts).toContainEqual({ label: "Reason", value: "wrong_password" });
   });
 
   it("keeps the lockout wording and adds the reason when there is one", () => {
@@ -608,7 +585,7 @@ describe("describeAudit: creations, deletions and events", () => {
       "Generated a diagnostics report (summary, not masked)",
     );
     expect(report({ detail: "full", mask: true, source_id: 4, parts: 5, chars: 55000 }).summary).toBe(
-      "Generated a diagnostics report (full, masked, source #4)",
+      "Generated a diagnostics report (full, masked, a source)", // no lookup: never the id
     );
     expect(report({}).summary).toBe("Generated a diagnostics report (summary, not masked)");
     expect(report({ detail: "summary", mask: false, source_id: 4, parts: 1, chars: 5 }).link).toEqual({ to: "/diagnostics", label: "Open Diagnostics" });
@@ -644,7 +621,7 @@ describe("describeAudit: creations, deletions and events", () => {
       "Deleted user carol",
     );
     expect(describeAudit(entry("user.deleted", { user_id: 3, username: "carol", role: "operator", active: true })).link).toBeNull();
-    expect(describeAudit(entry("user.deleted", { user_id: 3 })).summary).toBe("Deleted user #3");
+    expect(describeAudit(entry("user.deleted", { user_id: 3 })).summary).toBe("Deleted user");
     expect(describeAudit(entry("scope.created", { scope_id: 1, name: "Lab" })).summary).toBe("Created scan scope Lab");
     expect(describeAudit(entry("scope.deleted", { scope_id: 1, name: "Lab" })).link).toBeNull();
     expect(describeAudit(entry("setup.completed", { username: "admin", role: "admin" })).link).toBeNull();
@@ -656,33 +633,23 @@ describe("describeAudit: creations, deletions and events", () => {
     ).toBe("Created tariff 0.1 per kWh from 2026-01-01 (site default)");
     expect(
       describeAudit(entry("tariff.created", { tariff_id: 2, asset_id: 7, rate_per_kwh: 0.2, effective_from: "2026-02-01" })).summary,
-    ).toBe("Created tariff 0.2 per kWh from 2026-02-01 for asset #7");
+    ).toBe("Created tariff 0.2 per kWh from 2026-02-01 for an asset"); // no lookup: never the id
   });
 });
 
 describe("describeAudit: old, odd and unknown rows", () => {
-  it("shows the stored fields as facts when an update has no before and after", () => {
+  it("keeps a sentence and no change rows when an update has no before and after", () => {
     const view = describeAudit(entry("tariff.updated", { tariff_id: 3, asset_id: 7, rate_per_kwh: 0.12, effective_from: "2026-01-01" }));
-    expect(view.summary).toBe("Changed tariff #3");
+    expect(view.summary).toBe("Changed the tariff for an asset");
     expect(view.changes).toEqual([]);
     expect(view.unchanged).toBe(0);
-    expect(view.facts).toEqual([
-      { label: "Tariff id", value: "3" },
-      { label: "Asset id", value: "7" },
-      { label: "Rate per kwh", value: "0.12" },
-      { label: "Effective from", value: "2026-01-01" },
-    ]);
   });
 
-  it("falls back to the humanised action and the stored fields for an action it does not know", () => {
+  it("falls back to the humanised action for an action it does not know", () => {
     const view = describeAudit(entry("foo.bar_baz", { x: 1, name: "n" }));
     expect(view.summary).toBe("Foo bar baz");
     expect(view.link).toBeNull();
     expect(view.changes).toEqual([]);
-    expect(view.facts).toEqual([
-      { label: "X", value: "1" },
-      { label: "Name", value: "n" },
-    ]);
   });
 
   it("does not mistake an inherited object key for a known action", () => {
@@ -702,30 +669,21 @@ describe("describeAudit: old, odd and unknown rows", () => {
     ]);
     expect(view.unchanged).toBe(2);
     const odd = describeAudit(entry("foo.bar", { a: null, b: { c: [1, { d: null }] }, e: [] }));
-    expect(odd.facts).toEqual([
-      { label: "A", value: "—" },
-      { label: "B", value: '{"c":[1,{"d":null}]}' },
-      { label: "E", value: "[]" },
-    ]);
+    expect(odd.summary).toBe("Foo bar");
+    expect(odd.changes).toEqual([]);
   });
 
-  it("treats a before or after that is not a plain object as a stored field", () => {
+  it("draws no change rows for a before or after that is not a plain object", () => {
     const view = describeAudit(entry("asset.updated", { asset_id: 1, name: "A", before: "old", after: { name: "B" } }));
     expect(view.changes).toEqual([]);
-    expect(view.facts).toContainEqual({ label: "Before", value: "old" });
-    expect(view.facts).toContainEqual({ label: "After", value: '{"name":"B"}' });
+    expect(view.summary).toBe("Changed asset A");
     const listed = describeAudit(entry("asset.updated", { asset_id: 1, name: "A", before: [1], after: [2] }));
     expect(listed.changes).toEqual([]);
-    expect(listed.facts).toContainEqual({ label: "Before", value: "[1]" });
   });
 
   it("reads keys that are also names on every object as ordinary fields", () => {
     const view = describeAudit(entry("foo.bar", JSON.parse('{"constructor": 1, "__proto__": 2, "before": {"toString": 1}, "after": {"toString": 2}}')));
     expect(view.changes).toEqual([{ field: "ToString", before: "1", after: "2" }]);
-    expect(view.facts).toEqual([
-      { label: "Constructor", value: "1" },
-      { label: "Proto", value: "2" },
-    ]);
   });
 
   it("never throws and always answers text, whatever the detail is", () => {
@@ -735,7 +693,6 @@ describe("describeAudit: old, odd and unknown rows", () => {
         const view = describeAudit(entry(action, detail));
         expect(typeof view.summary).toBe("string");
         expect(Array.isArray(view.changes)).toBe(true);
-        expect(Array.isArray(view.facts)).toBe(true);
         expect(typeof view.unchanged).toBe("number");
         expect(view.link === null || (typeof view.link.to === "string" && typeof view.link.label === "string")).toBe(true);
       }
@@ -761,5 +718,377 @@ describe("describeAudit: old, odd and unknown rows", () => {
   it("builds a link path from an integer only, whatever else the detail holds", () => {
     const view = describeAudit(entry("asset.created", { asset_id: 3, name: "../../login" }));
     expect(view.link?.to).toBe("/assets/3");
+  });
+});
+
+describe("describeAudit: names instead of ids (refs)", () => {
+  const refs = {
+    asset: { "5": "MV2-R1-LV-Panel-02", "6": "Hall 2" },
+    point: { "11": "Voltage L1" },
+    source: { "2": "PM-1" },
+    user: { "9": "bob" },
+    dashboard: { "4": "Ops", "7": "Plant" },
+  };
+  const withRefs = (action: string, detail: unknown) => describeAudit(entry(action, detail, { refs }));
+  const gone = (action: string, detail: unknown) => describeAudit(entry(action, detail, { refs: {} }));
+  const noLookup = (action: string, detail: unknown) => describeAudit(entry(action, detail));
+  const tariff = { tariff_id: 3, asset_id: 5, rate_per_kwh: 0.16, effective_from: "2026-10-13" };
+
+  describe("tariffs", () => {
+    it("names the asset in the sentence from the owner's screenshot", () => {
+      const view = withRefs("tariff.created", tariff);
+      expect(view.summary).toBe("Created tariff 0.16 per kWh from 2026-10-13 for asset MV2-R1-LV-Panel-02");
+      expect(view.link).toEqual({ to: "/tariffs", label: "Open Tariffs" });
+    });
+
+    it("says 'a deleted asset' when the lookup cannot find it, and 'an asset' when no lookup was made", () => {
+      expect(gone("tariff.created", tariff).summary).toBe("Created tariff 0.16 per kWh from 2026-10-13 for a deleted asset");
+      expect(noLookup("tariff.created", tariff).summary).toBe("Created tariff 0.16 per kWh from 2026-10-13 for an asset");
+      expect(gone("tariff.deleted", tariff).summary).toBe("Deleted tariff 0.16 per kWh from 2026-10-13 for a deleted asset");
+      expect(withRefs("tariff.deleted", tariff).summary).toBe("Deleted tariff 0.16 per kWh from 2026-10-13 for asset MV2-R1-LV-Panel-02");
+    });
+
+    it("keeps '(site default)' for a tariff of no asset, and 'a deleted asset' only where an asset id was stored", () => {
+      const site = { tariff_id: 1, asset_id: null, rate_per_kwh: 0.1, effective_from: "2026-01-01" };
+      expect(gone("tariff.created", site).summary).toBe("Created tariff 0.1 per kWh from 2026-01-01 (site default)");
+      expect(withRefs("tariff.created", site).summary).toBe("Created tariff 0.1 per kWh from 2026-01-01 (site default)");
+    });
+
+    it("names which tariff an update changed", () => {
+      const change = { before: { rate_per_kwh: 0.1 }, after: { rate_per_kwh: 0.12 } };
+      expect(withRefs("tariff.updated", { tariff_id: 3, asset_id: 5, ...change }).summary).toBe(
+        "Changed the tariff for asset MV2-R1-LV-Panel-02: rate per kwh",
+      );
+      expect(gone("tariff.updated", { tariff_id: 3, asset_id: 5, ...change }).summary).toBe("Changed the tariff for a deleted asset: rate per kwh");
+      expect(noLookup("tariff.updated", { tariff_id: 3, asset_id: 5, ...change }).summary).toBe("Changed the tariff for an asset: rate per kwh");
+      expect(withRefs("tariff.updated", { tariff_id: 3, asset_id: null, ...change }).summary).toBe("Changed the site default tariff: rate per kwh");
+      expect(withRefs("tariff.updated", { tariff_id: 3, ...change }).summary).toBe("Changed a tariff: rate per kwh");
+      expect(withRefs("tariff.updated", { tariff_id: 3 }).summary).toBe("Changed a tariff");
+    });
+  });
+
+  describe("discovery, diagnostics and mappings", () => {
+    it("names the asset a discovery was accepted into, and links to it only while it exists", () => {
+      const added = { source_id: 2, asset_id: 6, mappings: 3, created_asset: false };
+      expect(withRefs("discovery.accepted", added).summary).toBe("Accepted discovery: added 3 mappings to asset Hall 2");
+      expect(withRefs("discovery.accepted", added).link).toEqual({ to: "/assets/6", label: "Open asset Hall 2" });
+      expect(withRefs("discovery.accepted", { ...added, created_asset: true }).summary).toBe("Accepted discovery: created asset Hall 2 with 3 mappings");
+      expect(gone("discovery.accepted", added).summary).toBe("Accepted discovery: added 3 mappings to a deleted asset");
+      expect(gone("discovery.accepted", added).link).toBeNull();
+      expect(noLookup("discovery.accepted", added).summary).toBe("Accepted discovery: added 3 mappings to an asset");
+      expect(withRefs("discovery.accepted", { mappings: 1 }).summary).toBe("Accepted discovery: added 1 mapping to an asset");
+    });
+
+    it("names the source a diagnostics report was limited to", () => {
+      const report = { detail: "full", mask: true, source_id: 2, parts: 2, chars: 10 };
+      expect(withRefs("diagnostics.report", report).summary).toBe("Generated a diagnostics report (full, masked, source PM-1)");
+      expect(gone("diagnostics.report", report).summary).toBe("Generated a diagnostics report (full, masked, a deleted source)");
+      expect(withRefs("diagnostics.report", { ...report, source_id: null }).summary).toBe("Generated a diagnostics report (full, masked)");
+    });
+
+    it("describes a mapping by its point and asset, never by its own number", () => {
+      const created = { mapping_id: 4, point_id: 11, asset_id: 5, metric: "power", scale: 1 };
+      expect(withRefs("mapping.created", created).summary).toBe("Mapped point Voltage L1 to asset MV2-R1-LV-Panel-02 as power");
+      expect(gone("mapping.created", created).summary).toBe("Mapped a deleted point to a deleted asset as power");
+      expect(withRefs("mapping.created", { mapping_id: 4 }).summary).toBe("Created a mapping");
+      expect(withRefs("mapping.created", created).link).toEqual({ to: "/assets/5", label: "Open asset MV2-R1-LV-Panel-02" });
+      expect(gone("mapping.created", created).link).toBeNull();
+
+      const moved = { mapping_id: 4, point_id: 11, before: { asset_id: 6, scale: 1 }, after: { asset_id: 5, scale: 2 } };
+      const view = withRefs("mapping.updated", moved);
+      expect(view.summary).toBe("Changed the mapping of point Voltage L1: asset, scale");
+      expect(view.changes).toEqual([
+        { field: "Asset", before: "Hall 2", after: "MV2-R1-LV-Panel-02" },
+        { field: "Scale", before: "1", after: "2" },
+      ]);
+      expect(view.link).toEqual({ to: "/assets/5", label: "Open asset MV2-R1-LV-Panel-02" });
+      expect(withRefs("mapping.updated", { mapping_id: 4, before: { scale: 1 }, after: { scale: 2 } }).summary).toBe("Changed a mapping: scale");
+
+      expect(withRefs("mapping.deleted", { mapping_id: 4, point_id: 11, asset_id: 5, metric: "power" }).summary).toBe(
+        "Deleted the mapping of point Voltage L1 to asset MV2-R1-LV-Panel-02",
+      );
+      expect(gone("mapping.deleted", { mapping_id: 4, point_id: 11, asset_id: 5 }).summary).toBe("Deleted the mapping of a deleted point to a deleted asset");
+      expect(withRefs("mapping.deleted", { mapping_id: 4 }).summary).toBe("Deleted a mapping");
+      expect(withRefs("mapping.deleted", { mapping_id: 4, point_id: 11 }).link).toBeNull();
+    });
+  });
+
+  describe("accounts and sources", () => {
+    it("names an account that the entry carries only as an id", () => {
+      expect(withRefs("login.unblocked", { user_id: 9, cleared: 2 }).summary).toBe("Unblocked sign-in for user bob");
+      expect(gone("login.unblocked", { user_id: 9, cleared: 2 }).summary).toBe("Unblocked sign-in for a deleted user");
+      expect(withRefs("user.created", { user_id: 9, role: "viewer" }).summary).toBe("Created user bob (viewer)");
+      const update = (extra: object) => ({ user_id: 9, ...extra });
+      expect(withRefs("user.updated", update({ before: { role: "viewer" }, after: { role: "admin" } })).summary).toBe("Changed the role of bob from viewer to admin");
+      expect(gone("user.updated", update({ before: { role: "viewer" }, after: { role: "admin" } })).summary).toBe("Changed the role of a deleted user from viewer to admin");
+      expect(gone("user.updated", update({ before: { active: true }, after: { active: false } })).summary).toBe("Deactivated a deleted user");
+      expect(withRefs("user.updated", update({ before: { active: true }, after: { active: false } })).summary).toBe("Deactivated user bob");
+      expect(gone("user.updated", update({ before: { password: "set" }, after: { password: "changed" } })).summary).toBe("Reset the password of a deleted user");
+    });
+
+    it("names a source the entry carries only as an id", () => {
+      expect(withRefs("source.tested", { source_id: 2, job_id: 9 }).summary).toBe("Started a connection test of source PM-1");
+      expect(withRefs("source.checked", { source_id: 2 }).summary).toBe("Started a connection check of source PM-1");
+      expect(gone("source.browsed", { source_id: 2 }).summary).toBe("Started a browse of a deleted source");
+      expect(noLookup("source.browsed", { source_id: 2 }).summary).toBe("Started a browse of source");
+    });
+
+    it("never numbers a role, a scan scope or a deleted record", () => {
+      expect(withRefs("role.updated", { role_id: 4 }).summary).toBe("Changed role");
+      expect(withRefs("scope.created", { scope_id: 3 }).summary).toBe("Created scan scope");
+      expect(withRefs("scope.deleted", { scope_id: 3 }).summary).toBe("Deleted scan scope");
+      expect(gone("user.deleted", { user_id: 9 }).summary).toBe("Deleted user"); // gone by definition: not "a deleted user"
+      expect(gone("source.deleted", { source_id: 2 }).summary).toBe("Deleted source");
+    });
+  });
+
+  describe("the stored name wins (R2)", () => {
+    it("keeps the name an entry was written with, even when the lookup knows another", () => {
+      const asset = { asset_id: 5, name: "Panel A", before: { name: "Pan" }, after: { name: "Panel A" } };
+      expect(withRefs("asset.deleted", { asset_id: 5, name: "Panel A" }).summary).toBe("Deleted asset Panel A");
+      expect(withRefs("asset.updated", asset).summary).toBe("Changed asset Panel A: name");
+      expect(withRefs("asset.updated", asset).link).toEqual({ to: "/assets/5", label: "Open asset Panel A" });
+      expect(withRefs("source.updated", { source_id: 2, name: "Old name", before: { enabled: true }, after: { enabled: false } }).summary).toBe(
+        "Changed source Old name: enabled",
+      );
+      expect(withRefs("login.unblocked", { user_id: 9, username: "robert" }).summary).toBe("Unblocked sign-in for user robert");
+    });
+
+    it("names an asset the lookup knows when the entry stored no name, and drops the link when it is gone (R6)", () => {
+      expect(withRefs("asset.updated", { asset_id: 5, before: { kind: "a" }, after: { kind: "b" } }).summary).toBe(
+        "Changed asset MV2-R1-LV-Panel-02: kind",
+      );
+      expect(withRefs("asset.updated", { asset_id: 5, before: { kind: "a" }, after: { kind: "b" } }).link).toEqual({
+        to: "/assets/5", label: "Open asset MV2-R1-LV-Panel-02",
+      });
+      expect(gone("asset.updated", { asset_id: 5, name: "Panel A", before: { kind: "a" }, after: { kind: "b" } }).summary).toBe(
+        "Changed asset Panel A: kind", // the stored name still reads
+      );
+      expect(gone("asset.updated", { asset_id: 5, name: "Panel A", before: { kind: "a" }, after: { kind: "b" } }).link).toBeNull();
+      expect(gone("asset.created", { asset_id: 5, name: "Panel A" }).link).toBeNull();
+      expect(gone("dashboard.created", { dashboard_id: 4, name: "Ops" }).link).toBeNull();
+      expect(withRefs("dashboard.created", { dashboard_id: 4, name: "Ops" }).link).toEqual({ to: "/dashboards/4", label: "Open dashboard Ops" });
+      // Without a lookup nothing is known to be gone, so the link stays, with no name when the entry stored none.
+      expect(noLookup("asset.updated", { asset_id: 5, before: { kind: "a" }, after: { kind: "b" } }).link).toEqual({ to: "/assets/5", label: "Open asset" });
+    });
+  });
+
+  describe("the default dashboard", () => {
+    const side = (id: number | null, name?: string | null) => ({ dashboard_id: id, ...(name === undefined ? {} : { dashboard: name }) });
+
+    it("keeps the stored names, and falls back to the lookup for a side that has only an id", () => {
+      expect(withRefs("dashboard.default_changed", { before: side(4, "Ops"), after: side(7, "Plant") }).summary).toBe(
+        "Changed the default dashboard from Ops to Plant",
+      );
+      expect(withRefs("dashboard.default_changed", { before: side(4), after: side(7) }).summary).toBe("Changed the default dashboard from Ops to Plant");
+      expect(withRefs("dashboard.default_changed", { before: side(null), after: side(7) }).summary).toBe("Made dashboard Plant the default dashboard");
+      expect(gone("dashboard.default_changed", { before: side(4), after: side(7) }).summary).toBe(
+        "Changed the default dashboard from a deleted dashboard to a deleted dashboard",
+      );
+      expect(gone("dashboard.default_changed", { before: side(null), after: side(7) }).summary).toBe("Made a deleted dashboard the default dashboard");
+      expect(gone("dashboard.default_changed", { before: side(4), after: side(null) }).summary).toBe("Cleared the default dashboard (was a deleted dashboard)");
+    });
+
+    it("links to the new default only while it exists", () => {
+      expect(withRefs("dashboard.default_changed", { before: side(4, "Ops"), after: side(7, "Plant") }).link).toEqual({
+        to: "/dashboards/7", label: "Open dashboard Plant",
+      });
+      expect(gone("dashboard.default_changed", { before: side(4, "Ops"), after: side(7, "Plant") }).link).toBeNull();
+    });
+
+    it("shows one row for the dashboard, not the name and then the id", () => {
+      const view = withRefs("dashboard.default_changed", { before: side(4, "Ops"), after: side(7, "Plant") });
+      expect(view.changes).toEqual([{ field: "Dashboard", before: "Ops", after: "Plant" }]);
+      // Without the name field the id row is the only one and reads as the name.
+      expect(withRefs("dashboard.default_changed", { before: side(4), after: side(7) }).changes).toEqual([
+        { field: "Dashboard", before: "Ops", after: "Plant" },
+      ]);
+    });
+  });
+
+  describe("the Before / After table", () => {
+    it("shows a moved asset's parents by name, never the asset's own stored name, and 'a deleted asset' for a parent that is gone", () => {
+      const move = { asset_id: 5, name: "Panel B", before: { parent_id: 6 }, after: { parent_id: 5 } };
+      expect(withRefs("asset.updated", move).changes).toEqual([{ field: "Parent asset", before: "Hall 2", after: "MV2-R1-LV-Panel-02" }]);
+      expect(withRefs("asset.updated", move).summary).toBe("Changed asset Panel B: parent asset");
+      expect(gone("asset.updated", move).changes).toEqual([{ field: "Parent asset", before: "a deleted asset", after: "a deleted asset" }]);
+      expect(noLookup("asset.updated", move).changes).toEqual([{ field: "Parent asset", before: "an asset", after: "an asset" }]);
+    });
+
+    it("shows no parent as a dash", () => {
+      const view = withRefs("asset.updated", { asset_id: 5, name: "P", before: { parent_id: null }, after: { parent_id: 6 } });
+      expect(view.changes).toEqual([{ field: "Parent asset", before: "—", after: "Hall 2" }]);
+      expect(withRefs("asset.updated", { asset_id: 5, name: "P", before: {}, after: { parent_id: 6 } }).changes).toEqual([
+        { field: "Parent asset", before: "—", after: "Hall 2" },
+      ]);
+    });
+
+    it("labels each id field without the word id", () => {
+      const view = withRefs("foo.bar", {
+        before: { user_id: 9, source_id: 2, point_id: 11, dashboard_id: 4 }, after: { user_id: 1, source_id: 3, point_id: 12, dashboard_id: 7 },
+      });
+      expect(view.changes).toEqual([
+        { field: "User", before: "bob", after: "a deleted user" },
+        { field: "Source", before: "PM-1", after: "a deleted source" },
+        { field: "Point", before: "Voltage L1", after: "a deleted point" },
+        { field: "Dashboard", before: "Ops", after: "Plant" },
+      ]);
+    });
+
+    it("shows a value that is not an id as it is stored", () => {
+      const view = withRefs("foo.bar", { before: { asset_id: "5" }, after: { asset_id: 0 } });
+      expect(view.changes).toEqual([{ field: "Asset", before: "5", after: "0" }]);
+    });
+
+    it("does not treat a field named like an object method as an id field", () => {
+      expect(withRefs("foo.bar", JSON.parse('{"before": {"constructor": 5}, "after": {"constructor": 6}}')).changes).toEqual([
+        { field: "Constructor", before: "5", after: "6" },
+      ]);
+    });
+  });
+
+  describe("a lookup that is missing or malformed", () => {
+    const task = { tariff_id: 3, asset_id: 5, rate_per_kwh: 0.16, effective_from: "2026-10-13" };
+
+    it("tells no lookup (undefined) from an empty one ({})", () => {
+      expect(describeAudit(entry("tariff.created", task)).summary).toContain("for an asset");
+      expect(describeAudit(entry("tariff.created", task, { refs: {} })).summary).toContain("for a deleted asset");
+      expect(describeAudit(entry("tariff.created", task, { refs: undefined })).summary).toContain("for an asset");
+    });
+
+    it("treats a refs value that is not an object as no lookup, and a kind that is not an object, or a blank name, as gone", () => {
+      for (const refs of [null, "x", 5, ["asset"]]) {
+        expect(describeAudit(entry("tariff.created", task, { refs: refs as never })).summary).toContain("for an asset");
+      }
+      for (const asset of [null, "x", ["MV"], { "5": "" }, { "5": "  " }, { "5": 7 }, { "6": "Hall 2" }]) {
+        expect(describeAudit(entry("tariff.created", task, { refs: { asset } as never })).summary).toContain("for a deleted asset");
+      }
+      expect(describeAudit(entry("tariff.created", task, { refs: { user: { "5": "bob" } } })).summary).toContain("for a deleted asset"); // another kind
+    });
+
+    it("reads only its own keys of a lookup", () => {
+      const inherited = JSON.parse('{"asset": {"__proto__": "x", "constructor": "y"}}');
+      expect(describeAudit(entry("tariff.created", task, { refs: inherited })).summary).toContain("for a deleted asset");
+    });
+  });
+
+  it("answers a summary, the changes, the unchanged count and a link, and no list of stored fields (the drawer's JSON block shows those)", () => {
+    for (const view of [withRefs("tariff.created", tariff), describeAudit(entry("foo.bar", { a: 1 })), describeAudit(null as unknown as AuditEntry)]) {
+      expect(Object.keys(view).sort()).toEqual(["changes", "link", "summary", "unchanged"]);
+    }
+  });
+});
+
+describe("describeAudit: no sentence shows an id", () => {
+  // Distinctive ids, so a leaked one is found by its digits: a plain "7" would pass a /#\d+/ check.
+  const A = 90001, PARENT = 90002, USER = 90003, SRC = 90004, DASH = 90005, POINT = 90006, MAPPING = 90007, TARIFF = 90008;
+  const ROLE = 90009, SCOPE = 90010, JOB = 90011, SCAN = 90012, A2 = 90013, A3 = 90014, DASH2 = 90015;
+  const connection = { via: "login", client: "10.0.0.5" };
+
+  // The shape each backend writer stores (see the audit calls in backend/dcdash/api).
+  const FIXTURES: Record<string, unknown> = {
+    "asset.created": { asset_id: A, name: "Rack 1", parent_id: PARENT, kind: "Rack", sort_order: 0, icon: null },
+    "asset.updated": { asset_id: A, name: "Rack 1", before: { parent_id: A2, name: "Rack" }, after: { parent_id: A3, name: "Rack 1" } },
+    "asset.deleted": { asset_id: A, name: "Rack 1", assets: 1, mappings: 2, tariffs: 0 },
+    "billing.currency_changed": { before: { currency: "QAR" }, after: { currency: "USD" } },
+    "dashboard.created": { dashboard_id: DASH, name: "Ops", widgets: 0 },
+    "dashboard.updated": { dashboard_id: DASH, name: "Ops", before: { name: "O", widgets: 1 }, after: { name: "Ops", widgets: 2 } },
+    "dashboard.deleted": { dashboard_id: DASH, name: "Ops", widgets: 2, was_default: true },
+    "dashboard.default_changed": { before: { dashboard_id: DASH, dashboard: "Ops" }, after: { dashboard_id: DASH2, dashboard: "Plant" } },
+    "diagnostics.report": { detail: "full", mask: true, source_id: SRC, parts: 2, chars: 100 },
+    "discovery.accepted": { source_id: SRC, asset_id: A, mappings: 3, created_asset: true },
+    "login.failed": { ...connection, reason: "wrong_password" },
+    "login.locked": { ...connection, reason: "wrong_password" },
+    "login.succeeded": { client: "10.0.0.5" },
+    "login.unblocked": { user_id: USER, username: "bob", cleared: 2 },
+    "mapping.created": { mapping_id: MAPPING, point_id: POINT, asset_id: A, metric: "power", scale: 1 },
+    "mapping.updated": { mapping_id: MAPPING, point_id: POINT, before: { asset_id: A2, scale: 1 }, after: { asset_id: A3, scale: 2 } },
+    "mapping.deleted": { mapping_id: MAPPING, point_id: POINT, asset_id: A, metric: "power" },
+    "password.change_failed": connection,
+    "password.changed": { other_sessions_signed_out: 1 },
+    "role.created": { role_id: ROLE, name: "Exec", description: "", permissions: ["assets.view"], copied_from: "operator" },
+    "role.updated": { role_id: ROLE, name: "Exec", before: { name: "E", permissions: [] }, after: { name: "Exec", permissions: ["assets.view"] } },
+    "role.deleted": { role_id: ROLE, name: "Exec", permissions: [] },
+    "scan.finished": { scan_id: SCAN, status: "done" },
+    "scan.started": { scan_id: SCAN, scope_name: "Lab", hosts: 4 },
+    "scope.created": { scope_id: SCOPE, name: "Lab" },
+    "scope.updated": { scope_id: SCOPE, name: "Lab", before: { ports: [502] }, after: { ports: [502, 503] } },
+    "scope.deleted": { scope_id: SCOPE, name: "Lab" },
+    "settings.sign_in_changed": { blocks_ended: 2, before: { enabled: true, max_failures: 5 }, after: { enabled: false, max_failures: 6 } },
+    "settings.timezone_changed": { before: { timezone: "UTC" }, after: { timezone: "Asia/Qatar" } },
+    "setup.completed": { username: "admin", role: "admin" },
+    "source.browsed": { source_id: SRC, name: "PM-1", job_id: JOB },
+    "source.checked": { source_id: SRC, name: "PM-1", job_id: JOB },
+    "source.created": { source_id: SRC, connector_type: "modbus", name: "PM-1", enabled: true },
+    "source.deleted": { source_id: SRC, name: "PM-1", points: 4, mappings: 4 },
+    "source.test_all": { sources: 3, job_ids: [JOB, JOB + 1] },
+    "source.tested": { source_id: SRC, name: "PM-1", job_id: JOB },
+    "source.updated": { source_id: SRC, name: "PM-1", before: { enabled: true }, after: { enabled: false } },
+    "storage.changed": { before: { raw_retention_days: 30 }, after: { raw_retention_days: 60 } },
+    "storage.default_set": {},
+    "tariff.created": { tariff_id: TARIFF, asset_id: A, rate_per_kwh: 0.16, effective_from: "2026-10-13" },
+    "tariff.updated": { tariff_id: TARIFF, asset_id: A, before: { rate_per_kwh: 0.1 }, after: { rate_per_kwh: 0.12 } },
+    "tariff.deleted": { tariff_id: TARIFF, asset_id: A, rate_per_kwh: 0.16, effective_from: "2026-10-13" },
+    "user.created": { user_id: USER, username: "bob", role: "viewer", active: true },
+    "user.updated": { user_id: USER, username: "bob", before: { role: "viewer", active: true }, after: { role: "admin", active: false } },
+    "user.deleted": { user_id: USER, username: "bob", role: "viewer", active: true },
+  };
+
+  const present = {
+    asset: { [A]: "Panel A", [PARENT]: "Hall 1", [A2]: "Hall 2", [A3]: "Hall 3" },
+    user: { [USER]: "robert" }, source: { [SRC]: "Meter 1" }, dashboard: { [DASH]: "Overview", [DASH2]: "Plant" }, point: { [POINT]: "Voltage L1" },
+  };
+
+  // The same entry with every name it stored taken out: an old entry, or one whose writer did not keep the name.
+  const withoutNames = (detail: unknown): unknown => {
+    const strip = (value: Record<string, unknown>) => {
+      const copy = { ...value };
+      for (const key of ["name", "username", "dashboard", "scope_name", "copied_from"]) delete copy[key];
+      return copy;
+    };
+    const copy = strip(detail as Record<string, unknown>);
+    for (const side of ["before", "after"]) {
+      if (typeof copy[side] === "object" && copy[side] !== null) copy[side] = strip(copy[side] as Record<string, unknown>);
+    }
+    return copy;
+  };
+
+  it("has a fixture for every action the backend writes", () => {
+    expect(Object.keys(FIXTURES).sort()).toEqual([...ALL_ACTIONS].sort());
+  });
+
+  it("shows none of the 15 distinctive ids in a sentence, a link label or a Before/After cell, with every lookup state and with or without stored names", () => {
+    for (const action of ALL_ACTIONS) {
+      for (const detail of [FIXTURES[action], withoutNames(FIXTURES[action])]) {
+        for (const refs of [present, {}, undefined]) {
+          const view = describeAudit(entry(action, detail, { refs }));
+          // The Scan numbers are the one id a sentence keeps: the Scans page shows them as "Scan #N" too.
+          const shown = [view.summary, view.link?.label ?? "", ...view.changes.flatMap((c) => [c.field, c.before, c.after])]
+            .join("\n")
+            .replaceAll(`Scan #${SCAN}`, "Scan")
+            .replaceAll(`scan #${SCAN}`, "scan");
+          const where = `${action} (${refs === undefined ? "no lookup" : refs === present ? "names" : "gone"}): ${shown}`;
+          expect(shown, where).not.toMatch(/900\d\d/);
+          expect(shown, where).not.toMatch(/#\d/);
+        }
+      }
+    }
+  });
+
+  it("keeps the Scan numbers, which the Scans page shows too", () => {
+    expect(describeAudit(entry("scan.finished", FIXTURES["scan.finished"])).summary).toBe(`Scan #${SCAN} finished (done)`);
+    expect(describeAudit(entry("scan.started", FIXTURES["scan.started"])).summary).toBe(`Started scan #${SCAN} of scope Lab`);
+  });
+
+  it("names the targets in the sentences that carry only ids, when the lookup knows them", () => {
+    const say = (action: string) => describeAudit(entry(action, withoutNames(FIXTURES[action]), { refs: present })).summary;
+    expect(say("tariff.created")).toBe("Created tariff 0.16 per kWh from 2026-10-13 for asset Panel A");
+    expect(say("mapping.created")).toBe("Mapped point Voltage L1 to asset Panel A as power");
+    expect(say("discovery.accepted")).toBe("Accepted discovery: created asset Panel A with 3 mappings");
+    expect(say("diagnostics.report")).toBe("Generated a diagnostics report (full, masked, source Meter 1)");
+    expect(say("login.unblocked")).toBe("Unblocked sign-in for user robert");
+    expect(say("user.updated")).toBe("Changed the role of robert from viewer to admin; Deactivated user robert");
+    expect(say("source.tested")).toBe("Started a connection test of source Meter 1");
+    expect(say("dashboard.default_changed")).toBe("Changed the default dashboard from Overview to Plant");
   });
 });

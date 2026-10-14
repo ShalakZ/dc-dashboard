@@ -123,6 +123,7 @@ function AddTariff({ assets, labels, assetsError = null }: {
   const [problem, setProblem] = useState<string | null>(null);
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    create.reset(); // a new attempt: the last server refusal is old news, and the status slot holds one line, not two
     if (assets !== null && assetId === "") return setProblem("Choose an asset.");
     if (from === "") return setProblem("Choose the date the rate takes effect.");
     if (!validRate(rate)) return setProblem("Enter a rate of zero or more.");
@@ -167,9 +168,12 @@ function AddTariff({ assets, labels, assetsError = null }: {
         <InfoTip>{RATE_TIP}</InfoTip>
       </div>
       <button type="submit" disabled={create.isPending}>Add rate</button>
-      {assetsError !== null && <p className="error" role="alert">Could not load the assets: {assetsError}</p>}
-      {problem && <p className="error" role="alert">{problem}</p>}
-      {create.isError && <p className="error" role="alert">{errorText(create.error)}</p>}
+      {/* One line is always reserved (the CSS), so neither card grows when a message comes and goes: the forms are pinned to the card bottoms
+          and the two cards share a grid row. A validation problem and a server refusal never show together; the asset-list failure may. */}
+      <div className="add-status">
+        {assetsError !== null && <p className="error" role="alert">Could not load the assets: {assetsError}</p>}
+        {problem ? <p className="error" role="alert">{problem}</p> : create.isError ? <p className="error" role="alert">{errorText(create.error)}</p> : null}
+      </div>
     </form>
   );
 }

@@ -97,13 +97,18 @@ test("W3c: the audit screen filters, links, exports and pages, and is for admins
     await expect(rows).toHaveCount(2);
   });
 
-  await test.step("an entry has its own page with the friendly text and the raw JSON", async () => {
+  await test.step("an entry opens in a drawer over the log with the friendly text and the raw JSON, and Esc closes it", async () => {
     await rows.first().locator("td.cell-time").getByRole("link").click(); // the Details chevron is the first cell (W7j)
-    await expect(page).toHaveURL(/\/audit\/\d+$/);
-    await expect(page.getByRole("heading", { name: /^Audit entry #\d+$/ })).toBeVisible();
-    await expect(page.getByText(GONE).first()).toBeVisible();
-    await expect(page.locator("pre")).toContainText('"name"');
-    await page.getByRole("link", { name: "Back to the log" }).click();
+    // W7l: the entry is a drawer over the log, not a page of its own; the address names the entry and keeps the log's query (the search).
+    const drawer = page.getByRole("dialog", { name: "Audit entry", exact: true });
+    await expect(drawer).toBeVisible();
+    await expect(page).toHaveURL(/\/audit\/\d+\?.*q=W3c/);
+    await expect(drawer.locator("dl.kv")).toContainText(/#\d+/);
+    await expect(drawer.locator("dd .what")).toContainText(GONE);
+    await expect(drawer.locator("pre")).toContainText('"name"');
+    await page.keyboard.press("Escape");
+    await expect(drawer).toBeHidden();
+    await expect(page).toHaveURL(/\/audit\?.*q=W3c/);
     await expect(page.getByRole("heading", { name: "Audit log" })).toBeVisible();
   });
 

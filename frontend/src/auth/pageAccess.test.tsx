@@ -28,7 +28,6 @@ vi.mock("../pages/SettingsPage", () => ({ SettingsPage: () => <h1>the settings p
 vi.mock("../pages/TariffsPage", () => ({ TariffsPage: () => <h1>the tariffs page</h1> }));
 vi.mock("../pages/StoragePage", () => ({ StoragePage: () => <h1>the storage page</h1> }));
 vi.mock("../pages/AuditPage", () => ({ AuditPage: () => <h1>the audit page</h1> }));
-vi.mock("../pages/AuditEntryPage", () => ({ AuditEntryPage: () => <h1>the audit entry page</h1> }));
 vi.mock("../pages/DiagnosticsPage", () => ({ DiagnosticsPage: () => <h1>the diagnostics page</h1> }));
 vi.mock("../pages/PasswordPage", () => ({ PasswordPage: () => <h1>the password page</h1> }));
 
@@ -82,7 +81,7 @@ const ROUTES: [string, Need, string][] = [
   ["/tariffs", PAGE_NEED.tariffs, "the tariffs page"],
   ["/storage", PAGE_NEED.storage, "the storage page"],
   ["/audit", PAGE_NEED.audit, "the audit page"],
-  ["/audit/7", PAGE_NEED.audit, "the audit entry page"],
+  ["/audit/7", PAGE_NEED.audit, "the audit page"], // the same page, with the entry open in the drawer
   ["/diagnostics", PAGE_NEED.diagnostics, "the diagnostics page"],
 ];
 

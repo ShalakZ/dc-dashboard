@@ -674,7 +674,7 @@ describe("the page style files (src/styles/*.css)", () => {
     );
   });
 
-  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css", "role-prompt.css"])(
+  it.each(["pages-admin.css", "pages-assets.css", "pages-auth.css", "pages-billing.css", "pages-sources.css", "feedback-save.css", "feedback-toasts.css", "feedback-confirm.css", "role-prompt.css", "drawer.css"])(
     "%s is one @layer w6 block with nothing outside it, no raw colour and no accent in a sidebar rule",
     (file) => {
       expect(existsSync(`${STYLES}/${file}`), `${STYLES}/${file} exists`).toBe(true);
@@ -746,6 +746,9 @@ describe("the page style files (src/styles/*.css)", () => {
 
   it("no class is written on its own in one page file and named in another (one page group cannot restyle another)", () => {
     expect(parsed.length).toBeGreaterThanOrEqual(5);
+    // The one deliberate cross-file rule (W7l, review C2): while a drawer is open, drawer.css lifts the toast stack above the drawer's footer
+    // (`body:has(.drawer) .toast-stack`). The stack is feedback-toasts.css's; the lift can only be written where the drawer's footer height is.
+    const SANCTIONED = new Set([".toast-stack: bare in feedback-toasts.css, named in drawer.css"]);
     const clashes: string[] = [];
     for (const a of parsed) {
       for (const cls of bareClasses(a.rules)) {
@@ -754,7 +757,8 @@ describe("the page style files (src/styles/*.css)", () => {
         }
       }
     }
-    expect(clashes).toEqual([]);
+    expect(clashes.filter((clash) => !SANCTIONED.has(clash))).toEqual([]);
+    for (const clash of SANCTIONED) expect(clashes, "the sanctioned exception is still in use (else delete it)").toContain(clash);
   });
 
   it("no selector is written in two page files, and no plain class rule is written in both a page file and app.css", () => {
@@ -764,7 +768,8 @@ describe("the page style files (src/styles/*.css)", () => {
       for (const r of list) for (const part of selectorParts(r.selector).filter(keep)) owners.set(part, (owners.get(part) ?? new Set()).add(file));
     };
     note("app.css", rules, (part) => /^\.[\w-]+$/.test(part));
-    for (const p of parsed) note(p.file, p.rules, () => true);
+    // The steps of an animation ("from", "to", "50%") are not selectors of a page: two files may each have an animation that starts at `from`.
+    for (const p of parsed) note(p.file, p.rules.filter((r) => !r.at.some((a) => a.startsWith("@keyframes"))), () => true);
     const twice = [...owners].filter(([, files]) => files.size > 1).map(([selector, files]) => `${selector}: ${[...files].join(", ")}`);
     expect(twice).toEqual([]);
   });
@@ -869,6 +874,10 @@ describe("the row menu, the trash button and the info tip (W7b)", () => {
     const lifted = rules.find((r) => parts(r.selector).includes(".trash-btn:hover:not(:disabled) .lid"))!;
     expect(parts(lifted.selector)).toContain(".trash-btn:focus-visible .lid");
     expect(lifted.body).toMatch(/transform:\s*translateY\(-1\.5px\) rotate\(-16deg\)/);
+  });
+
+  it("the bin's icon does not clip: a lifted lid swings past the icon's own box (with the default hidden overflow the handle lost its top edge and its slot closed)", () => {
+    expect(only(".trash-btn svg").body).toMatch(/overflow:\s*visible/);
   });
 
   it("with reduced motion the lid does not move: the hover and focus selectors are repeated, because the plain one would lose on specificity", () => {

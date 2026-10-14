@@ -166,7 +166,12 @@ UI screens, besides Assets Tree, Sources and Points:
 - **Scans** and **Discovery** (operators and admins; only admins can change anything): see "Discovery".
 - **Audit** (admin): the read-only audit log, newest first, 50 entries per page. Changes to configuration
   and access are recorded with who did it (the name stays even after the account is deleted), when, and for
-  updates the values before and after; sign-in successes, failures and lockouts are recorded too.
+  updates the values before and after; sign-in successes, failures and lockouts are recorded too. A row, its
+  chevron or its time opens the entry in a drawer on the right (the address becomes `/audit/ID` and keeps the
+  log's filters and page), with **Previous** and **Next** to step through the log and a **Copy** button for the
+  entry's number; Esc, Close or the browser's Back brings the log back exactly as it was. The friendly sentences
+  name things instead of numbering them ("for asset MV2-R1-LV-Panel-02", or "a deleted asset" once it is gone);
+  the Raw view, the drawer's JSON and the CSV keep every id.
 - **Dashboards** (everyone can read; operators and admins build): shared dashboards of widgets; an
   admin can mark one as the default, and the sidebar entry and the first page after signing in then open
   it; see "Dashboards and billing".
@@ -714,6 +719,17 @@ Twenty-one specs run in one `playwright test` run against the dev-profile stack 
   still closes a dialog under a toast, a toast appears and leaves under reduced motion, the menu of the last Sources row is reachable under
   "Source added" at 1440×900 and 1024×768, the toast keeps its 16 px margins below 720 px, and the dialog works from the keyboard. Every name
   it makes contains `W7k` and the run suffix; it removes them again.
+- `w7l.spec.ts` (its own project, after `w9c`, at 1600×1000) checks the audit log's names and drawer. A rate's entry reads `Created tariff 0.37
+  per kWh from 2019-03-14 for asset NAME` with no `#`, in the row and in the drawer, and `for a deleted asset` once the asset is gone, while
+  Raw and the drawer's JSON keep `asset_id`. An entry opens in a drawer 480-520 px wide at the right edge (a click on the sentence, the chevron
+  or the time), focus inside, the page behind inert and not scrollable; Previous and Next replace the address (one Back closes the drawer),
+  cross the end of a page, and stop at the newest and oldest entries with the reason in the button's name; Esc, Close and a click beside the
+  drawer put the focus back on the chevron of the entry that was open; a deep link opens the drawer over its own page, and an entry that is
+  not on that page opens but cannot be stepped from. Closing keeps the page number and the scroll position. Copy shows its toast above the
+  drawer without covering Previous or Next, at 1600 and 600 px. The Create user card has one height for Viewer, Operator and a role with no
+  description, and the Tariffs cards and left date picker do not move when Add rate is pressed with nothing chosen, before and after a valid
+  add, both at 1440 and 1024 px. The bin's lid lifts on hover (a screenshot goes into the report). The asset, rates and role it makes contain
+  `W7l` and the run suffix; it removes them again.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1570,6 +1586,28 @@ The API gains two read-only routes and an optional check; a client that uses nei
 3. **Verify.** `docker compose exec api alembic current` still prints `0009 (head)`; open an asset's page and press its bin: one dialog
    opens, says what the delete takes with it, and Cancel changes nothing.
 4. **Going back.** Check out `53fff56` and rebuild as in step 2. There is no database step.
+
+### Upgrading to W7l (no migration)
+
+Schema stays `0009`; no data is rewritten, so there is nothing to restore. The code to go back to is `e624a5a` (`main` before W7l).
+
+W7l rebuilds the `api` and `web` images. What you will notice: an audit entry opens in a drawer on the right instead of a page of its own
+(the old `/audit/ID` page is gone; the address still works and now opens the log with the drawer over it), with Previous, Next and a Copy
+button for its number; the audit sentences name assets, users, sources, dashboards and points instead of numbering them, and a target that
+no longer exists reads "a deleted asset"; and two cards no longer change height when a message appears (the Create user card under a role
+without a description, and the two Tariffs add forms).
+
+The one API change is additive: each item of `GET /api/audit` and the entry from `GET /api/audit/{id}` gains `refs`, always present and `{}`
+when empty: `{"asset": {"5": "MV2-R1-LV-Panel-02"}}`, the current names (from `assets.name`, `users.username`, `sources.name`,
+`dashboards.name`, `points.name`) of the ids the entry's details point at, for the kinds `asset`, `user`, `source`, `dashboard` and `point`. An
+id that no longer exists is left out. Nothing else about the answer changes: the stored details, `GET /api/audit.csv` and the permissions
+(`audit.view`, `audit.export`) are as before, and a client that ignores `refs` behaves exactly as it did.
+
+1. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has the
+   simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+2. **Verify.** `docker compose exec api alembic current` still prints `0009 (head)`; open the Audit log, press a row's chevron and see the
+   drawer open on the right; Esc brings the log back where it was.
+3. **Going back.** Check out `e624a5a` and rebuild as in step 1. There is no database step.
 
 ## Add a connector
 

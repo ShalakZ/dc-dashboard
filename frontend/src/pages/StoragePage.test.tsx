@@ -873,3 +873,67 @@ describe("StoragePage Save button (W7k)", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 });
+
+describe("StoragePage message slot (W7l)", () => {
+  // The error and the note Set as default leaves used to be extra lines in the foot, growing both cards. They now go into a slot that is always
+  // there, above the buttons; its height is the stylesheet's (layout-shift.css.test.ts). Here: where it is, what is inside, what it reserves for.
+  const NOTE = "This site's default is updated. It is not in use yet: press Save to use these values.";
+  const slot = () => document.querySelector<HTMLElement>(".retention-foot > .retention-status")!;
+
+  it("is an empty slot above the buttons until there is something to say, and reserves room for the Set as default note", async () => {
+    mockFetch(routes());
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByLabelText(/raw retention/i);
+    expect(slot()).toBeEmptyDOMElement();
+    expect(slot().getAttribute("data-reserve")).toBe(NOTE);
+    expect(slot().nextElementSibling).toHaveClass("row"); // directly above the buttons
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument(); // the reserved copy is an attribute (drawn by the stylesheet), not text in the page
+  });
+
+  it("holds the note Set as default leaves, as a status, once", async () => {
+    mockFetch(routes({ "PUT /api/settings/storage/default": (req: { body: unknown }) => ({ body: req.body as object }) }));
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    await screen.findByLabelText(/raw retention/i);
+    await userEvent.click(screen.getByRole("button", { name: /set as default/i }));
+    const note = await screen.findByText(NOTE);
+    expect(note).toHaveAttribute("role", "status");
+    expect(slot()).toContainElement(note);
+  });
+
+  it("holds the error of a refused value, as an alert, and the note gives way to it", async () => {
+    mockFetch(routes());
+    renderWithProviders(<StoragePage />, { route: "/storage", path: "/storage" });
+    const raw = await screen.findByLabelText(/raw retention/i);
+    await userEvent.clear(raw);
+    await userEvent.type(raw, "3");
+    await userEvent.click(screen.getByRole("button", { name: /set as default/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/at least 8 days/i);
+    expect(slot()).toContainElement(alert);
+    expect(slot().children).toHaveLength(1);
+  });
+
+  it("has no slot for a role that cannot change the settings (nothing can be refused or set there), and the loading page draws it where there are buttons", async () => {
+    mockFetch({ ...base, "GET /api/me": { body: userFor("custom", { permissions: ["storage.view"] }) }, "GET /api/storage": { body: stats }, "GET /api/settings/storage": { body: settingsOut } });
+    const hold = holdFetch((_method, path) => path === "/api/storage");
+    renderWithProviders(<><StoragePage /><SignedIn /></>, { route: "/storage", path: "/storage" });
+    await accountKnown();
+    expect(document.querySelector(".retention-status")).toBeNull(); // the skeleton of a role without storage.edit
+    hold.release();
+    await screen.findByText(READ_ONLY_TEXT);
+    expect(document.querySelector(".retention-status")).toBeNull();
+  });
+
+  it("the loading page draws the slot above the button blocks, empty, so Save does not move when the data arrives", async () => {
+    mockFetch(routes());
+    const hold = holdFetch((_method, path) => path === "/api/storage");
+    renderWithProviders(<><StoragePage /><SignedIn /></>, { route: "/storage", path: "/storage" });
+    await accountKnown();
+    const skeletonSlot = document.querySelector<HTMLElement>(".sk-region .retention-foot > .retention-status")!;
+    expect(skeletonSlot).toBeEmptyDOMElement();
+    expect(skeletonSlot.getAttribute("data-reserve")).toBe(NOTE);
+    expect(skeletonSlot.nextElementSibling).toHaveClass("row");
+    hold.release();
+    await screen.findByLabelText(/raw retention/i);
+  });
+});

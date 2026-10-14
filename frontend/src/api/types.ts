@@ -201,9 +201,15 @@ export type AcceptIn = { source_id: number; points: AcceptPointIn[] } & (
   | { new_asset: { name: string; parent_id: number | null }; asset_id?: never }
 );
 export interface AcceptResult { asset_id: number; mapping_ids: number[] }
+/** The kinds of record an audit entry's details can point at; the server looks their names up (GET /api/audit `refs`). */
+export type RefKind = "asset" | "user" | "source" | "dashboard" | "point";
+/** Kind -> id (as a string key) -> the name it has now. A kind or an id that is missing is a target that no longer exists. */
+export type AuditRefs = Partial<Record<RefKind, Record<string, string>>>;
 export interface AuditEntry {
   id: number; user_id: number | null; actor_id: number | null; username: string | null; action: string;
   detail: Record<string, unknown>; ts: string;
+  /** Optional only so test fixtures stay small: undefined = no lookup was made (not "everything is deleted"). */
+  refs?: AuditRefs;
 }
 export interface AuditList { total: number; offset: number; limit: number; items: AuditEntry[] }
 export interface AuditOptions { actions: string[]; users: { id: number; name: string }[]; unattributed: boolean }

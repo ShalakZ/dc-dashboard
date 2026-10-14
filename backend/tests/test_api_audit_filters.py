@@ -272,7 +272,8 @@ async def test_options_position_and_the_single_entry_are_their_own_routes(client
     assert item["id"] == entry and item["action"] == "r.one" and item["detail"] == {"k": {"n": None}}
     assert item["actor_id"] == 4 and item["username"] == "dora" and item["user_id"] is None
     assert item["ts"].startswith("2026-10-05T10:00:00")
-    assert set(item) == {"id", "user_id", "actor_id", "username", "action", "detail", "ts"}
+    assert set(item) == {"id", "user_id", "actor_id", "username", "action", "detail", "ts", "refs"}
+    assert item["refs"] == {}  # the detail holds no ids
     missing = await client.get("/api/audit/999999")
     assert missing.status_code == 404 and missing.json() == {"detail": "audit entry not found"}
     assert (await client.get("/api/audit/abc")).status_code == 404

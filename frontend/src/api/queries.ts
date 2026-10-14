@@ -1,4 +1,4 @@
-import { hashKey, keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, keepPreviousData, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiQuery, type AuditFilters } from "../lib/auditFilters";
 import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { ApiError, api } from "./client";
@@ -288,13 +288,19 @@ export const useScan = (scanId: number | null) =>
 /** The discovery graph. No polling: refresh it by invalidating `keys.graph`. */
 export const useGraph = () => useQuery({ queryKey: keys.graph, queryFn: () => api.get<GraphModel>("/api/discovery/graph") });
 
-/** One page of the filtered audit log. The previous page stays on screen while the next loads (`isPlaceholderData` says so). */
-export const useAudit = (filters: AuditFilters, limit: number, offset: number) =>
-  useQuery({
+/**
+ * One page of the filtered audit log, as a query. `useAudit` and the drawer's Previous/Next (`queryClient.fetchQuery`, to look into the
+ * neighbouring page before moving to it) both take this, so they share a key: the page fetched for a step is already in the cache when the list shows it.
+ */
+export const auditPageOptions = (filters: AuditFilters, limit: number, offset: number) =>
+  queryOptions({
     queryKey: keys.audit(filters, limit, offset),
     queryFn: () => api.get<AuditList>(`/api/audit?${apiQuery(filters, { limit, offset })}`),
-    placeholderData: keepPreviousData,
   });
+
+/** One page of the filtered audit log. The previous page stays on screen while the next loads (`isPlaceholderData` says so). */
+export const useAudit = (filters: AuditFilters, limit: number, offset: number) =>
+  useQuery({ ...auditPageOptions(filters, limit, offset), placeholderData: keepPreviousData });
 
 /** The actions and users the audit filters offer. */
 export const useAuditOptions = () =>

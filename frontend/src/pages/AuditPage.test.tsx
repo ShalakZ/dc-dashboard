@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "../api/client";
+import type { AuditRefs } from "../api/types";
 import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
@@ -17,7 +18,9 @@ vi.mock("../lib/download", () => ({ downloadCsv: vi.fn() }));
 const entry = (id: number, action: string, detail: Record<string, unknown> = { scan_id: id }, username: string | null = "admin") => ({
   id, user_id: username ? 1 : null, actor_id: username ? 1 : null, username, action, detail, ts: "2026-10-07T10:00:00Z",
 });
-const list = (total: number, items: ReturnType<typeof entry>[], offset = 0) => ({ body: { total, offset, limit: 50, items } });
+const list = (total: number, items: (ReturnType<typeof entry> & { refs?: AuditRefs })[], offset = 0) => ({
+  body: { total, offset, limit: 50, items },
+});
 
 const admin: Routes = {
   "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin") },
@@ -40,7 +43,8 @@ function setup(route: string, auditReply: Routes[string] = twoRows, routes: Rout
     },
     ...routes,
   });
-  const view = renderWithDataRouter(<AuditPage />, { route, path: "/audit", toasts });
+  // <main id="main"> is the Layout's: the drawer sends focus there when the entry it was opened for has no row to go back to
+  const view = renderWithDataRouter(<main id="main" tabIndex={-1}><AuditPage /></main>, { route, path: "/audit/:id?", toasts });
   return { ...view, urls, calls, search: () => view.router.state.location.search };
 }
 
@@ -110,29 +114,29 @@ describe("AuditPage", () => {
     expect(document.querySelector(".what-text")!.textContent).toBe("Created asset Panel A Open asset Panel A");
   });
 
-  it("links an entry to the thing it is about and opens its details in a row under it from a Details button", async () => {
+  it("names the asset of a tariff entry from the entry's refs, and says 'a deleted asset' when the server did not find it", async () => {
+    const tariff = { tariff_id: 3, asset_id: 7, rate_per_kwh: 0.16, effective_from: "2026-10-13" };
+    setup("/audit", list(2, [
+      { ...entry(9, "tariff.created", tariff), refs: { asset: { "7": "MV2-R1-LV-Panel-02" } } },
+      { ...entry(8, "tariff.created", tariff), refs: {} },
+    ]));
+    expect(await screen.findByText("Created tariff 0.16 per kWh from 2026-10-13 for asset MV2-R1-LV-Panel-02")).toBeInTheDocument();
+    expect(screen.getByText("Created tariff 0.16 per kWh from 2026-10-13 for a deleted asset")).toBeInTheDocument();
+    expect(screen.queryByText(/#\d/)).not.toBeInTheDocument(); // no id in any visible text
+  });
+
+  it("links an entry to the thing it is about, and its Details button opens a drawer (no row opens under it any more)", async () => {
     setup("/audit", list(1, [entry(9, "asset.created", { asset_id: 7, name: "Panel A" })]));
     expect(await screen.findByText("Created asset Panel A")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open asset Panel A" })).toHaveAttribute("href", "/assets/7");
     const details = screen.getByRole("button", { name: "Details of entry #9" });
-    expect(details).toHaveAttribute("aria-expanded", "false");
-    expect(details).not.toHaveAttribute("aria-controls"); // nothing to control while the row is not drawn
-    expect(screen.queryByText("Asset id")).not.toBeInTheDocument(); // closed: nothing drawn yet
-    const body = document.querySelector(".audit-table tbody")!;
-    expect(body.querySelectorAll("tr")).toHaveLength(1);
-    await userEvent.click(details);
-    expect(await screen.findByText("Asset id")).toBeInTheDocument();
-    expect(details).toHaveAttribute("aria-expanded", "true");
-    const opened = body.querySelectorAll("tr");
-    expect(opened).toHaveLength(2);
-    expect(opened[1]).toHaveAttribute("id", details.getAttribute("aria-controls")); // the row under the entry
-    expect(opened[1].querySelector("td")).toHaveAttribute("colspan", "4");
-    expect(opened[1]).toContainElement(screen.getByText("Asset id"));
-    await userEvent.click(details);
-    expect(screen.queryByText("Asset id")).not.toBeInTheDocument();
-    expect(body.querySelectorAll("tr")).toHaveLength(1);
-    expect(details).toHaveAttribute("aria-expanded", "false");
+    expect(details).toHaveAttribute("aria-haspopup", "dialog");
+    expect(details).not.toHaveAttribute("aria-expanded");
     expect(details).not.toHaveAttribute("aria-controls");
+    await userEvent.click(details);
+    expect(await screen.findByRole("dialog", { name: "Audit entry" })).toBeInTheDocument();
+    expect(document.querySelector(".detail-row")).toBeNull();
+    expect(document.querySelectorAll(".audit-table tbody tr")).toHaveLength(1);
   });
 
   it("gives every entry its own Details button, named by the entry", async () => {
@@ -253,7 +257,7 @@ describe("AuditPage", () => {
   it("names the time link of a raw row by its entry too", async () => {
     setup("/audit?view=raw");
     const link = await screen.findByRole("link", { name: "Entry #51, 2026-10-07 13:00:00" });
-    expect(link).toHaveAttribute("href", "/audit/51");
+    expect(link).toHaveAttribute("href", "/audit/51?view=raw"); // the list's query rides along, so the drawer opens over the same list
     expect(link).toHaveTextContent("2026-10-07 13:00:00");
   });
 
@@ -595,5 +599,852 @@ describe("AuditPage Export CSV follows the permission of the role (a custom role
   it("the Administrator role is unchanged: Export CSV is there", async () => {
     setup("/audit");
     expect(await screen.findByRole("button", { name: "Export CSV" })).toBeInTheDocument();
+  });
+});
+
+describe("AuditPage: an entry opens in the drawer (W7l)", () => {
+  const tariff = { tariff_id: 3, asset_id: 7, rate_per_kwh: 0.16, effective_from: "2026-10-13" };
+  const SENTENCE = "Created tariff 0.16 per kWh from 2026-10-13 for asset Panel A";
+  const page = list(51, [
+    { ...entry(51, "tariff.created", tariff), refs: { asset: { "7": "Panel A" } } },
+    entry(50, "scan.started", { scan_id: 50 }),
+    entry(49, "asset.created", { asset_id: 7, name: "Panel A" }),
+  ]);
+  const found = (id: number) => ({ ...entry(id, "scan.finished", { scan_id: id, status: "done" }), refs: {} });
+  const dialog = () => screen.findByRole("dialog", { name: "Audit entry" });
+  const noDialog = () => expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  const rowOf = (id: number) => document.querySelector<HTMLElement>(`tr[data-entry-id="${id}"]`)!;
+  const chevron = (id: number) => screen.getByRole("button", { name: `Details of entry #${id}` });
+  const where = (view: { router: { state: { location: { pathname: string; search: string } } } }) => {
+    const { pathname, search } = view.router.state.location;
+    return pathname + search;
+  };
+  /** A page of the log; the entry route answers `entries` (an id missing from it is a 404). */
+  const mount = (route: string, entries: Record<number, ReturnType<typeof found>> = {}, toasts?: ToastApi) =>
+    setup(route, page, {
+      ...Object.fromEntries(Object.entries(entries).map(([id, e]) => [`GET /api/audit/${id}`, { body: e }])),
+    }, toasts);
+
+  describe("opening", () => {
+    it("opens from the Details button, from the time link and from a click on the row, each as one new history entry that keeps the list's query", async () => {
+      const view = mount("/audit?q=Panel");
+      await screen.findByText(SENTENCE);
+      expect(view.router.state.historyAction).toBe("POP");
+
+      await userEvent.click(chevron(51));
+      const first = await dialog();
+      expect(within(first).getByText(SENTENCE)).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/51?q=Panel");
+      expect(view.router.state.historyAction).toBe("PUSH");
+      expect(view.router.state.location.state).toEqual({ fromList: true, search: "?q=Panel" });
+
+      await userEvent.click(within(first).getByRole("button", { name: "Close" }));
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit?q=Panel");
+
+      const time = screen.getByRole("link", { name: /^Entry #50,/ });
+      expect(time).toHaveAttribute("href", "/audit/50?q=Panel"); // a real link: a middle click opens the deep link
+      await userEvent.click(time);
+      expect(await dialog()).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/50?q=Panel");
+      expect(view.router.state.historyAction).toBe("PUSH");
+      expect(view.router.state.location.state).toEqual({ fromList: true, search: "?q=Panel" });
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+
+      await userEvent.click(rowOf(49).querySelector(".cell-user")!);
+      expect(await dialog()).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/49?q=Panel");
+      expect(view.router.state.historyAction).toBe("PUSH");
+    });
+
+    it("opens from a click on a raw row and from its time link, and shows the same drawer", async () => {
+      const view = mount("/audit?view=raw");
+      await screen.findByText("tariff.created");
+      await userEvent.click(rowOf(50).querySelector(".cell-action")!);
+      const open = await dialog();
+      expect(where(view)).toBe("/audit/50?view=raw");
+      expect(within(open).getByText("Started scan #50")).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      await userEvent.click(screen.getByRole("link", { name: /^Entry #49,/ }));
+      expect(await within(await dialog()).findByText("Created asset Panel A")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/49?view=raw");
+    });
+
+    it("pushes once for the Details button (its click is not also the row's)", async () => {
+      const view = mount("/audit");
+      await screen.findByText(SENTENCE);
+      const navigate = vi.spyOn(view.router, "navigate");
+      await userEvent.click(chevron(50));
+      await dialog();
+      expect(navigate).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not open for a click on a link in the row (it does its own thing)", async () => {
+      const view = mount("/audit");
+      const link = await screen.findByRole("link", { name: "Open asset Panel A" });
+      link.addEventListener("click", (e) => e.preventDefault()); // the link would leave for /assets/7; this test is about the row
+      await userEvent.click(link);
+      noDialog();
+      expect(where(view)).toBe("/audit");
+    });
+
+    it("does not open for a click that ends a text selection, and opens again once nothing is selected", async () => {
+      const view = mount("/audit");
+      await screen.findByText(SENTENCE);
+      const cell = rowOf(50).querySelector<HTMLElement>(".cell-what")!;
+      window.getSelection()!.selectAllChildren(cell.querySelector(".what")!);
+      expect(window.getSelection()!.toString()).toBe("Started scan #50");
+      fireEvent.click(cell);
+      noDialog();
+      expect(where(view)).toBe("/audit");
+      window.getSelection()!.removeAllRanges();
+      fireEvent.click(cell);
+      expect(await dialog()).toBeInTheDocument();
+    });
+
+    it("marks the open row (and only that one) and drops the mark on close", async () => {
+      mount("/audit");
+      await screen.findByText(SENTENCE);
+      expect(document.querySelector("tr[data-open]")).toBeNull();
+      await userEvent.click(chevron(50));
+      await dialog();
+      expect([...document.querySelectorAll("tr[data-open]")].map((r) => r.getAttribute("data-entry-id"))).toEqual(["50"]);
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      expect(document.querySelector("tr[data-open]")).toBeNull();
+    });
+  });
+
+  describe("the address", () => {
+    it("a deep link to an entry of the loaded page opens the drawer over the list and asks for no second copy of it", async () => {
+      const view = mount("/audit/50?q=Panel");
+      const open = await dialog();
+      expect(await within(open).findByText("Started scan #50")).toBeInTheDocument();
+      expect(rowOf(51)).toBeInTheDocument(); // the list is behind it
+      expect(rowOf(50)).toHaveAttribute("data-open");
+      expect(where(view)).toBe("/audit/50?q=Panel");
+      expect(view.calls.some((c) => c.path === "/api/audit/50")).toBe(false);
+    });
+
+    it("a deep link to an entry that is not on the page fetches it once the list has answered, and shows it", async () => {
+      const view = mount("/audit/7", { 7: found(7) });
+      const open = await dialog();
+      expect(await within(open).findByText("Scan #7 finished (done)")).toBeInTheDocument();
+      expect(view.calls.filter((c) => c.path === "/api/audit/7")).toHaveLength(1);
+      const order = view.calls.map((c) => c.path);
+      expect(order.indexOf("/api/audit")).toBeLessThan(order.indexOf("/api/audit/7"));
+      expect(document.querySelector("tr[data-open]")).toBeNull(); // it is not a row of this page
+    });
+
+    it("shows a skeleton in the drawer while that entry loads", async () => {
+      mockFetch({ ...admin, "GET /api/audit": page, "GET /api/audit/7": { body: found(7) } });
+      const held = holdFetch((_method, path) => path === "/api/audit/7");
+      renderWithDataRouter(<AuditPage />, { route: "/audit/7", path: "/audit/:id?" });
+      const open = await dialog();
+      expect(await within(open).findByText("Loading the entry")).toBeInTheDocument();
+      expect(within(open).queryByText("What happened")).not.toBeInTheDocument();
+      held.release();
+      expect(await within(open).findByText("Scan #7 finished (done)")).toBeInTheDocument();
+      expect(within(open).queryByText("Loading the entry")).not.toBeInTheDocument();
+    });
+
+    it.each(["abc", "99999999999", "0", "1.5"])("says not found for the id %s inside the drawer, without asking the API", async (id) => {
+      const view = mount(`/audit/${id}`);
+      const open = await dialog();
+      expect(await within(open).findByRole("alert")).toHaveTextContent("Audit entry not found.");
+      expect(view.calls.some((c) => c.path.startsWith("/api/audit/") && c.path !== "/api/audit/options")).toBe(false);
+    });
+
+    it("says not found for an entry the API does not hold, and shows its message for any other failure", async () => {
+      mockFetch({
+        ...admin, "GET /api/audit": page,
+        "GET /api/audit/404": { status: 404, body: { detail: "audit entry not found" } },
+        "GET /api/audit/500": { status: 500, body: { detail: "database is down" } },
+      });
+      const gone = renderWithDataRouter(<AuditPage />, { route: "/audit/404", path: "/audit/:id?" });
+      expect(await within(await dialog()).findByRole("alert")).toHaveTextContent("Audit entry not found.");
+      gone.unmount();
+      renderWithDataRouter(<AuditPage />, { route: "/audit/500", path: "/audit/:id?" });
+      expect(await within(await dialog()).findByRole("alert")).toHaveTextContent("database is down");
+    });
+  });
+
+  describe("closing", () => {
+    it.each([
+      ["Escape", async () => { await userEvent.keyboard("{Escape}"); }],
+      ["the Close button", async () => { await userEvent.click(screen.getByRole("button", { name: "Close" })); }],
+      ["a click on the backdrop", async () => { await userEvent.click(document.querySelector(".drawer-backdrop")!); }],
+    ])("%s goes back to the list it was opened from: same query, the page not reloaded", async (_name, close) => {
+      const view = mount("/audit?q=Panel&view=raw");
+      await screen.findByText("tariff.created");
+      const lists = () => view.calls.filter((c) => c.path === "/api/audit").length;
+      const before = lists();
+      await userEvent.click(rowOf(50).querySelector(".cell-action")!);
+      await dialog();
+      await close();
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit?q=Panel&view=raw");
+      expect(view.router.state.historyAction).toBe("POP"); // one step back, not a new entry
+      expect(lists()).toBe(before);
+      expect(screen.getByRole("button", { name: "Raw" })).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("from a deep link it goes to the list with the same query (replacing the entry, there is nothing to go back to)", async () => {
+      const view = mount("/audit/50?q=Panel");
+      await dialog();
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit?q=Panel");
+      expect(view.router.state.historyAction).toBe("REPLACE");
+    });
+
+    it("the browser's Back button closes it", async () => {
+      const view = mount("/audit?q=Panel");
+      await screen.findByText(SENTENCE);
+      await userEvent.click(chevron(51));
+      await dialog();
+      await act(async () => { await view.router.navigate(-1); });
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit?q=Panel");
+    });
+
+    it("a key held down (a second Escape before the first close lands) goes back once", async () => {
+      const view = mount("/audit");
+      await screen.findByText(SENTENCE);
+      await userEvent.click(chevron(51));
+      await dialog();
+      const navigate = vi.spyOn(view.router, "navigate");
+      const escape = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await act(async () => { escape(); escape(); }); // both land before React has taken the drawer away
+      await waitFor(noDialog);
+      expect(navigate).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith(-1);
+    });
+
+    it("can be opened and closed again", async () => {
+      const view = mount("/audit");
+      await screen.findByText(SENTENCE);
+      for (const id of [51, 50, 51]) {
+        await userEvent.click(chevron(id));
+        await dialog();
+        await userEvent.keyboard("{Escape}");
+        await waitFor(noDialog);
+        expect(where(view)).toBe("/audit");
+      }
+    });
+  });
+
+  describe("focus on close", () => {
+    it("goes to the Details button of the row that was open", async () => {
+      mount("/audit");
+      await screen.findByText(SENTENCE);
+      await userEvent.click(rowOf(50).querySelector(".cell-user")!); // a click on the row: nothing in it had focus
+      await dialog();
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(chevron(50)).toHaveFocus());
+    });
+
+    it("goes to the time link of the open row in the raw view, which has no Details button", async () => {
+      mount("/audit?view=raw");
+      await screen.findByText("tariff.created");
+      await userEvent.click(rowOf(50).querySelector(".cell-action")!);
+      await dialog();
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(within(rowOf(50)).getByRole("link")).toHaveFocus());
+    });
+
+    it("goes to the page when the entry has no row on it (a deep link to another page)", async () => {
+      mount("/audit/7", { 7: found(7) });
+      await within(await dialog()).findByText("Scan #7 finished (done)");
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      await waitFor(() => expect(document.getElementById("main")).toHaveFocus());
+    });
+  });
+});
+
+describe("AuditPage: Previous and Next in the drawer (W7l)", () => {
+  /**
+   * A log of `total` entries, newest first: the entry at position i (from the top) has the id 200 - i. `arrived` entries can come in on top
+   * of it later (every entry then sits that many places further down). An offset in `failing` answers with an error.
+   */
+  function log(total = 120) {
+    const log = { arrived: 0, failing: new Set<number>() };
+    const at = (i: number) => {
+      const id = 200 + log.arrived - i;
+      return entry(id, "scan.started", { scan_id: id });
+    };
+    const reply = (req: { url: string }) => {
+      const query = new URL(req.url, "http://x").searchParams;
+      const offset = Number(query.get("offset") ?? 0);
+      if (log.failing.has(offset)) return { status: 500, body: { detail: "database is down" } };
+      const limit = Number(query.get("limit") ?? 50);
+      const all = total + log.arrived;
+      return list(all, Array.from({ length: Math.max(0, Math.min(offset + limit, all) - offset) }, (_, k) => at(offset + k)), offset);
+    };
+    return { log, reply };
+  }
+  const dialog = () => screen.findByRole("dialog", { name: "Audit entry" });
+  const noDialog = () => expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  const rowOf = (id: number) => document.querySelector<HTMLElement>(`tr[data-entry-id="${id}"]`)!;
+  const chevron = (id: number) => screen.getByRole("button", { name: `Details of entry #${id}` });
+  const previous = () => screen.getByRole("button", { name: /^Previous entry/ });
+  const next = () => screen.getByRole("button", { name: /^Next entry/ });
+  /** A button that waits for a page being read: not `disabled` (that would drop its focus), `aria-disabled`. */
+  const waits = (button: HTMLElement) => {
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).not.toBeDisabled();
+  };
+  const liveOf = (open: HTMLElement) => open.querySelector<HTMLElement>('[aria-live="polite"]')!;
+  const where = (view: { router: { state: { location: { pathname: string; search: string } } } }) => {
+    const { pathname, search } = view.router.state.location;
+    return pathname + search;
+  };
+  /** Holds every request whose URL contains `part`; `held.count` says how many came. Install after setup(). */
+  function holdOffset(part: string) {
+    const held = { count: 0 };
+    const release = hold((url) => {
+      if (url.includes(part)) held.count += 1;
+      return url.includes(part);
+    });
+    return { held, release };
+  }
+  /** Focus lost to the body some other way while a page is read (a toast it was in was dismissed, say): the restore must still find the button. */
+  function dropFocus() {
+    act(() => { (document.activeElement as HTMLElement).blur(); });
+  }
+  const settle = (ms = 30) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+  /** Open the drawer on entry `id` of the page and wait for it. */
+  async function openAt(id: number) {
+    await screen.findByText(`Started scan #${id}`);
+    await userEvent.click(chevron(id));
+    return dialog();
+  }
+
+  describe("inside a page", () => {
+    it("Previous is the entry above, Next the one below: each step replaces the history entry and keeps the query, the state and the same drawer", async () => {
+      const view = setup("/audit?q=scan", log().reply);
+      const open = await openAt(198);
+      const live = liveOf(open);
+      const lists = view.urls.length;
+      expect(view.router.state.location.state).toEqual({ fromList: true, search: "?q=scan" });
+
+      await userEvent.click(next());
+      await waitFor(() => expect(where(view)).toBe("/audit/197?q=scan"));
+      expect(view.router.state.historyAction).toBe("REPLACE");
+      expect(view.router.state.location.state).toEqual({ fromList: true, search: "?q=scan" }); // C6: the state rides along
+      expect(within(open).getByText("Started scan #197")).toBeInTheDocument();
+      expect(rowOf(197)).toHaveAttribute("data-open");
+      expect(rowOf(198)).not.toHaveAttribute("data-open");
+
+      await userEvent.click(previous());
+      await userEvent.click(previous());
+      await waitFor(() => expect(where(view)).toBe("/audit/199?q=scan"));
+      expect(within(open).getByText("Started scan #199")).toBeInTheDocument();
+      // the same panel and the same live node all along: the drawer never went back to its skeleton (the status stayed "ready")
+      expect(screen.getByRole("dialog", { name: "Audit entry" })).toBe(open);
+      expect(liveOf(open)).toBe(live);
+      expect(live).toHaveTextContent("Entry #199: Started scan #199");
+      expect(within(open).queryByText("Loading the entry")).not.toBeInTheDocument();
+      expect(view.urls).toHaveLength(lists); // nothing was asked of the API
+    });
+
+    it("steps in the raw view too, and keeps it", async () => {
+      const view = setup("/audit?view=raw", log().reply);
+      await waitFor(() => expect(rowOf(199)).toBeInTheDocument());
+      await userEvent.click(rowOf(199).querySelector(".cell-action")!);
+      await dialog();
+      await userEvent.click(next());
+      await waitFor(() => expect(where(view)).toBe("/audit/198?view=raw"));
+    });
+
+    it("gives the buttons their visible words and the entry's name, and an enabled one carries no reason", async () => {
+      setup("/audit", log().reply);
+      await openAt(198);
+      expect(previous()).toHaveTextContent("Previous");
+      expect(previous()).toHaveAccessibleName("Previous entry");
+      expect(next()).toHaveTextContent("Next");
+      expect(next()).toHaveAccessibleName("Next entry");
+      expect(previous()).toBeEnabled();
+      expect(next()).toBeEnabled();
+      expect(previous()).not.toHaveAttribute("title");
+    });
+  });
+
+  describe("the ends of the log and entries that cannot be stepped from", () => {
+    it("Previous is off at the newest entry, and says why in its name and its title", async () => {
+      setup("/audit", log().reply);
+      await openAt(200);
+      expect(previous()).toBeDisabled();
+      expect(previous()).toHaveAccessibleName("Previous entry: this is the newest entry");
+      expect(previous()).toHaveAttribute("title", "Previous entry: this is the newest entry");
+      expect(next()).toBeEnabled();
+    });
+
+    it("Next is off at the oldest entry, and says why", async () => {
+      setup("/audit?offset=100", log().reply); // 20 rows, the last of the 120
+      await openAt(81);
+      expect(next()).toBeDisabled();
+      expect(next()).toHaveAccessibleName("Next entry: this is the oldest entry");
+      expect(next()).toHaveAttribute("title", "Next entry: this is the oldest entry");
+      expect(previous()).toBeEnabled();
+    });
+
+    it("both are off for an entry that is not on the loaded page (a deep link), with the way out in the name", async () => {
+      const { reply } = log();
+      setup("/audit/7", reply, { "GET /api/audit/7": { body: { ...entry(7, "scan.finished", { scan_id: 7, status: "done" }), refs: {} } } });
+      await within(await dialog()).findByText("Scan #7 finished (done)");
+      for (const [button, noun] of [[previous(), "Previous"], [next(), "Next"]] as const) {
+        expect(button).toBeDisabled();
+        expect(button).toHaveAccessibleName(`${noun} entry: open it from the list to step through the log`);
+        expect(button).toHaveAttribute("title", `${noun} entry: open it from the list to step through the log`);
+      }
+    });
+
+    it("both are off while the drawer has no entry to show (a bad id), and for the same reason", async () => {
+      setup("/audit/abc", log().reply);
+      await within(await dialog()).findByRole("alert");
+      expect(previous()).toBeDisabled();
+      expect(next()).toBeDisabled();
+      expect(next()).toHaveAccessibleName("Next entry: open it from the list to step through the log");
+    });
+
+    it("both are off while the page they would step in is a placeholder for the next one, and the old rows are never stepped through", async () => {
+      const { reply } = log();
+      const view = setup("/audit/190", reply, { "GET /api/audit/190": { body: { ...entry(190, "scan.started", { scan_id: 190 }), refs: {} } } });
+      await within(await dialog()).findByText("Started scan #190");
+      expect(next()).toBeEnabled();
+      const { release } = holdOffset("offset=50");
+      await act(async () => { await view.router.navigate("/audit/190?offset=50"); }); // 190 is a row of the page it came from, not of this one
+      await waitFor(() => expect(screen.getByRole("table")).toHaveAttribute("aria-busy", "true"));
+      expect(within(screen.getByRole("dialog")).getByText("Started scan #190")).toBeInTheDocument(); // still shown, from the placeholder rows
+      expect(next()).toBeDisabled();
+      expect(next()).toHaveAccessibleName("Next entry: the list is still loading");
+      expect(previous()).toHaveAccessibleName("Previous entry: the list is still loading");
+      await act(async () => { release(); });
+      await waitFor(() => expect(next()).toHaveAccessibleName("Next entry: open it from the list to step through the log"));
+    });
+  });
+
+  describe("across the edge of a page", () => {
+    it("Previous at the top of a page fetches the page before it, waits for it, and moves the drawer into it (raw view kept)", async () => {
+      const view = setup("/audit?offset=50&view=raw", log().reply);
+      await waitFor(() => expect(rowOf(150)).toBeInTheDocument());
+      await userEvent.click(rowOf(150).querySelector(".cell-action")!);
+      const open = await dialog();
+      const live = liveOf(open);
+      expect(previous()).toBeEnabled(); // the first row of page 2 still has an entry above it
+      const { held, release } = holdOffset("offset=0");
+      const navigate = vi.spyOn(view.router, "navigate");
+
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      waits(next()); // both, while it runs
+      expect(held.count).toBe(1);
+      expect(where(view)).toBe("/audit/150?offset=50&view=raw"); // nothing moved yet
+      expect(within(open).getByText("Started scan #150")).toBeInTheDocument();
+
+      await act(async () => { release(); });
+      expect(await within(open).findByText("Started scan #151")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/151?view=raw"); // the list is page 1 now: one navigation, the offset and the entry together
+      expect(navigate).toHaveBeenCalledTimes(1);
+      expect(view.router.state.historyAction).toBe("REPLACE");
+      expect(view.router.state.location.state).toEqual({ fromList: true, search: "?offset=50&view=raw" });
+      expect(rowOf(151)).toHaveAttribute("data-open");
+      expect(liveOf(open)).toBe(live);
+      expect(live).toHaveTextContent("Entry #151: Started scan #151");
+      expect(within(open).queryByText("Loading the entry")).not.toBeInTheDocument();
+      expect(screen.getByText("Showing 1–50 of 120")).toBeInTheDocument();
+      expect(previous()).toBeEnabled();
+      expect(next()).toBeEnabled();
+    });
+
+    it("Next at the bottom of a page fetches the page after it and lands on its first entry", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      const open = await openAt(101);
+      const live = liveOf(open);
+      await userEvent.click(next());
+      expect(await within(open).findByText("Started scan #100")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/100?offset=100");
+      expect(rowOf(100)).toHaveAttribute("data-open");
+      expect(liveOf(open)).toBe(live);
+      expect(view.router.state.historyAction).toBe("REPLACE");
+    });
+
+    it("can go over the same edge and back: the buttons are free again on the entry it started from", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      await userEvent.click(previous());
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      await userEvent.click(next());
+      await within(screen.getByRole("dialog")).findByText("Started scan #150");
+      expect(where(view)).toBe("/audit/150?offset=50");
+      expect(previous()).toBeEnabled();
+      expect(next()).toBeEnabled();
+      await userEvent.click(next());
+      expect(await within(screen.getByRole("dialog")).findByText("Started scan #149")).toBeInTheDocument();
+    });
+
+    it("chooses the neighbour by id, not by place, when the page does not start on a multiple of its size (offset 37, size 50)", async () => {
+      const { reply } = log();
+      const view = setup("/audit?offset=37", reply);
+      await openAt(163); // the top row of 37..86
+      expect(previous()).toBeEnabled();
+      await userEvent.click(previous()); // the page before is 0..49, which holds the one above 163 in its middle, not at its end
+      expect(await within(screen.getByRole("dialog")).findByText("Started scan #164")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/164");
+      expect(view.urls.at(-1)).toContain("offset=0");
+    });
+
+    it("and when entries arrived but the page before still holds the open entry, the neighbour in it is the right one", async () => {
+      const { log: world, reply } = log();
+      const view = setup("/audit?offset=37", reply);
+      await openAt(163);
+      world.arrived = 2; // 163 is now the 40th entry, inside 0..49, with 164 above it
+      await userEvent.click(previous());
+      expect(await within(screen.getByRole("dialog")).findByText("Started scan #164")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/164");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("chooses by id when entries arrived since the list loaded: Next picks the one below, not the first row of the page", async () => {
+      const { log: world, reply } = log();
+      const view = setup("/audit?offset=37", reply);
+      await openAt(114); // the last row of 37..86
+      world.arrived = 2; // two new entries: 114 now sits two places lower, and 87..136 starts two ids higher
+      await userEvent.click(next());
+      expect(await within(screen.getByRole("dialog")).findByText("Started scan #113")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/113?offset=87");
+    });
+
+    it("does not skip entries when the page before has fallen wholly above the open one: it says so, refreshes the list, and the next press works", async () => {
+      const { log: world, reply } = log();
+      const view = setup("/audit?offset=50", reply);
+      await openAt(150);
+      world.arrived = 3; // 150 is now the 53rd entry; page 0..49 holds only newer ones, and the one just above 150 (151) is not in it
+      await userEvent.click(previous());
+      const note = await screen.findByRole("alert");
+      expect(note).toHaveTextContent("New entries arrived since this list loaded");
+      expect(within(note.closest(".drawer-foot") as HTMLElement).getByRole("button", { name: /^Previous entry/ })).toBeInTheDocument(); // in the footer
+      expect(where(view)).toBe("/audit/150?offset=50"); // it stayed where it was
+      // the list behind it was asked again; 150 is still a row of it, with 151 above it
+      await waitFor(() => expect(previous()).toBeEnabled());
+      await waitFor(() => expect(view.urls.filter((u) => u.includes("offset=50"))).toHaveLength(2));
+      await userEvent.click(previous());
+      await waitFor(() => expect(where(view)).toBe("/audit/151?offset=50"));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument(); // the line belonged to the entry it was shown for
+    });
+  });
+
+  describe("a failure, a second click, a late answer", () => {
+    it("shows one line in the footer when the neighbouring page cannot be read, changes nothing, and gives the buttons back", async () => {
+      const { log: world, reply } = log();
+      const view = setup("/audit?offset=50", reply);
+      const open = await openAt(150);
+      world.failing.add(0);
+      await userEvent.click(previous());
+      const note = await screen.findByRole("alert");
+      expect(note).toHaveTextContent("Could not step to the previous entry: database is down");
+      expect(note.closest(".drawer-foot")).not.toBeNull();
+      expect(where(view)).toBe("/audit/150?offset=50");
+      expect(within(open).getByText("Started scan #150")).toBeInTheDocument();
+      expect(previous()).toBeEnabled();
+      expect(next()).toBeEnabled();
+      // a step that works takes the line away with it
+      await userEvent.click(next());
+      await waitFor(() => expect(where(view)).toBe("/audit/149?offset=50"));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("the line belongs to the entry it was shown for: moving to another entry some other way takes it away", async () => {
+      const { log: world, reply } = log();
+      const view = setup("/audit?offset=50", reply);
+      await openAt(150);
+      world.failing.add(0);
+      await userEvent.click(previous());
+      await screen.findByRole("alert");
+      await act(async () => { await view.router.navigate("/audit/149?offset=50", { replace: true }); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #149");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("a second try takes the old line away while it runs", async () => {
+      const { log: world, reply } = log();
+      setup("/audit?offset=50", reply);
+      await openAt(150);
+      world.failing.add(0);
+      await userEvent.click(previous());
+      await screen.findByRole("alert");
+      world.failing.delete(0);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+    });
+
+    it("a step over an edge, Close, and the same entry opened again later: the buttons are free (nothing is left of the first step)", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      await userEvent.click(previous());
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      await userEvent.click(screen.getByRole("button", { name: "Next" })); // the pager: page 2, where 150 is again the top row
+      await openAt(150);
+      expect(where(view)).toBe("/audit/150?offset=50");
+      expect(previous()).toBeEnabled();
+      expect(next()).toBeEnabled();
+    });
+
+    it("two clicks in one tick start one step (the second finds the first running), and the buttons are off meanwhile", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { held, release } = holdOffset("offset=0");
+      const navigate = vi.spyOn(view.router, "navigate");
+      const button = previous();
+      await act(async () => { fireEvent.click(button); fireEvent.click(button); });
+      expect(held.count).toBe(1);
+      await act(async () => { release(); });
+      expect(await within(screen.getByRole("dialog")).findByText("Started scan #151")).toBeInTheDocument();
+      expect(where(view)).toBe("/audit/151");
+      expect(navigate).toHaveBeenCalledTimes(1);
+    });
+
+    it("clicks on a button that is off do nothing", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { held, release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(next()));
+      const navigate = vi.spyOn(view.router, "navigate");
+      await userEvent.click(next());
+      await userEvent.click(previous());
+      expect(navigate).not.toHaveBeenCalled();
+      expect(held.count).toBe(1);
+      await act(async () => { release(); });
+      await waitFor(() => expect(where(view)).toBe("/audit/151"));
+    });
+
+    it("an answer that comes after the drawer was closed does not open it again (Escape before the page arrived)", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit?offset=50");
+      const navigate = vi.spyOn(view.router, "navigate");
+      await act(async () => { release(); });
+      await settle();
+      noDialog();
+      expect(where(view)).toBe("/audit?offset=50");
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it("an answer that comes after the drawer moved to another entry is dropped too (Back, then forward to a different address)", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      await act(async () => { await view.router.navigate("/audit/120?offset=50", { replace: true }); });
+      const navigate = vi.spyOn(view.router, "navigate");
+      await act(async () => { release(); });
+      await settle();
+      expect(where(view)).toBe("/audit/120?offset=50");
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it("an answer that comes after the page was left does not navigate", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      const navigate = vi.spyOn(view.router, "navigate");
+      view.unmount();
+      await act(async () => { release(); });
+      await settle();
+      expect(navigate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("history", () => {
+    /** The list is the second entry of the history, "/assets" the first, so one Back after closing leaves the audit page. */
+    async function listOnTopOfAssets(route: string) {
+      const view = setup("/assets", log().reply);
+      await screen.findByText("assets page");
+      await act(async () => { await view.router.navigate(route); });
+      return view;
+    }
+
+    it("the drawer is one history entry however many steps are taken: after three steps and Close, one Back leaves the audit page", async () => {
+      const view = await listOnTopOfAssets("/audit");
+      await openAt(198);
+      for (const go of [next, next, previous]) await userEvent.click(go());
+      await waitFor(() => expect(where(view)).toBe("/audit/197"));
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit"); // Close went one step back, onto the list the drawer was opened from
+      await act(async () => { await view.router.navigate(-1); });
+      expect(await screen.findByText("assets page")).toBeInTheDocument();
+    });
+
+    it("after a step across a page, Close puts the list on that page (a replace), and Back goes to the list it was opened from", async () => {
+      const view = await listOnTopOfAssets("/audit?offset=50");
+      await openAt(150);
+      await userEvent.click(previous());
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      expect(where(view)).toBe("/audit/151");
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      expect(where(view)).toBe("/audit");
+      expect(view.router.state.historyAction).toBe("REPLACE");
+      expect(screen.getByText("Showing 1–50 of 120")).toBeInTheDocument();
+      await act(async () => { await view.router.navigate(-1); });
+      await waitFor(() => expect(where(view)).toBe("/audit?offset=50"));
+    });
+  });
+
+  describe("focus", () => {
+    it("Escape after a step returns focus to the Details button of the entry now shown", async () => {
+      setup("/audit", log().reply);
+      await openAt(198);
+      await userEvent.click(next());
+      await waitFor(() => expect(rowOf(197)).toHaveAttribute("data-open"));
+      await userEvent.keyboard("{Escape}");
+      await waitFor(noDialog);
+      await waitFor(() => expect(chevron(197)).toHaveFocus());
+    });
+
+    it("stays on the button that was pressed while it still has somewhere to go", async () => {
+      setup("/audit", log().reply);
+      await openAt(198);
+      await userEvent.click(next());
+      await waitFor(() => expect(rowOf(197)).toHaveAttribute("data-open"));
+      expect(next()).toHaveFocus();
+    });
+
+    it("moves to the drawer panel when the pressed button became off (the end of the log), not to the body", async () => {
+      setup("/audit?offset=100", log().reply);
+      await openAt(82);
+      await userEvent.click(next()); // 81 is the oldest
+      await waitFor(() => expect(next()).toBeDisabled());
+      await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+      expect(document.body).not.toHaveFocus();
+    });
+
+    it("moves to the panel at the newest end as well", async () => {
+      setup("/audit", log().reply);
+      await openAt(199);
+      await userEvent.click(previous()); // 200 is the newest
+      await waitFor(() => expect(previous()).toBeDisabled());
+      await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+    });
+
+    it("keeps focus on the pressed button while the neighbouring page is read (aria-disabled, not disabled), and a click on either button does nothing", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { held, release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      waits(next());
+      // the point of the change: a native `disabled` here would have dropped focus to the body for the whole read
+      expect(previous()).toHaveFocus();
+      expect(document.body).not.toHaveFocus();
+      expect(previous()).toHaveAccessibleName("Previous entry: reading another page of the log");
+      expect(previous()).toHaveAttribute("title", "Previous entry: reading another page of the log");
+      expect(next()).toHaveAccessibleName("Next entry: reading another page of the log");
+      const navigate = vi.spyOn(view.router, "navigate");
+      await userEvent.click(previous());
+      await userEvent.keyboard("{Enter}"); // Enter on the focused, waiting button
+      expect(navigate).not.toHaveBeenCalled();
+      expect(held.count).toBe(1);
+      expect(previous()).toHaveFocus();
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      await waitFor(() => expect(previous()).toHaveFocus());
+      expect(previous()).not.toHaveAttribute("aria-disabled");
+      expect(previous()).toHaveAccessibleName("Previous entry");
+      expect(next()).toHaveAccessibleName("Next entry");
+    });
+
+    it("a click on the other button while a page is read does nothing either, and the focus it took is left where the user put it", async () => {
+      const view = setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { held, release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      const navigate = vi.spyOn(view.router, "navigate");
+      await userEvent.click(next());
+      expect(navigate).not.toHaveBeenCalled();
+      expect(held.count).toBe(1);
+      expect(next()).toHaveFocus(); // a click puts focus on what is clicked, waiting or not; it is never the body
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      expect(where(view)).toBe("/audit/151");
+      await waitFor(() => expect(next()).not.toHaveAttribute("aria-disabled"));
+      expect(next()).toHaveFocus(); // the pressed button is not given focus back from under the user
+    });
+
+    it("goes back to the pressed button after a page was fetched, if focus fell to the body some other way meanwhile", async () => {
+      setup("/audit?offset=50", log().reply);
+      await openAt(150);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      dropFocus();
+      expect(document.body).toHaveFocus();
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #151");
+      await waitFor(() => expect(previous()).toHaveFocus());
+    });
+
+    it("the whole path at the end of the log: focus stays on Next during the read, the page lands, Next turns off for good, focus goes to the panel (never the body)", async () => {
+      const { reply } = log(101); // 200..100: the last page holds one entry
+      setup("/audit?offset=50", reply);
+      await openAt(101);
+      const { release } = holdOffset("offset=100");
+      await userEvent.click(next());
+      await waitFor(() => waits(next()));
+      expect(next()).toHaveFocus(); // not dropped to the body while the page is read
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #100");
+      await waitFor(() => expect(next()).toBeDisabled());
+      await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+      expect(document.body).not.toHaveFocus();
+    });
+
+    it("goes to the panel after a page was fetched that ends the log", async () => {
+      const { reply } = log(101); // 200..100: the last page holds one entry
+      setup("/audit?offset=50", reply);
+      await openAt(101);
+      const { release } = holdOffset("offset=100");
+      await userEvent.click(next());
+      await waitFor(() => waits(next()));
+      dropFocus();
+      await act(async () => { release(); });
+      await within(screen.getByRole("dialog")).findByText("Started scan #100");
+      await waitFor(() => expect(next()).toHaveAccessibleName("Next entry: this is the oldest entry"));
+      await waitFor(() => expect(screen.getByRole("dialog")).toHaveFocus());
+    });
+
+    it("leaves focus alone when it went somewhere else meanwhile (the Copy button)", async () => {
+      setup("/audit?offset=50", log().reply);
+      const open = await openAt(150);
+      const { release } = holdOffset("offset=0");
+      await userEvent.click(previous());
+      await waitFor(() => waits(previous()));
+      const copy = within(open).getByRole("button", { name: "Copy entry number" });
+      act(() => { copy.focus(); });
+      await act(async () => { release(); });
+      await waitFor(() => expect(within(open).getByText("Started scan #151")).toBeInTheDocument());
+      expect(copy).toHaveFocus();
+    });
   });
 });

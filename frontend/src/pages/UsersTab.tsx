@@ -229,8 +229,9 @@ export function UsersTab({ onDeleted }: { onDeleted: () => void }) {
               </select>
             </label>
             <button type="submit" className="primary" disabled={create.isPending || offered.length === 0}>Create user</button>
-            {/* After the button, on a line of its own under the row (the CSS spans it): inside the label it would become part of the select's name. */}
-            {chosenNote ? <p id={noteId} className="muted field-help role-note">{chosenNote}</p> : null}
+            {/* After the button, on a line of its own under the row (the CSS spans it): inside the label it would become part of the select's name.
+                Always drawn, empty for a role without a description (hidden, no id, nothing points at it), so the card keeps its height when the role changes. */}
+            <p id={chosenNote ? noteId : undefined} aria-hidden={chosenNote ? undefined : true} className="muted field-help role-note">{chosenNote}</p>
             {create.isError && <p className="error" role="alert">{errorText(create.error)}</p>}
           </form>
         </div>

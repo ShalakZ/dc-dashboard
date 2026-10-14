@@ -7,7 +7,7 @@ import { expect, test, type Locator, type Page, type Route } from "@playwright/t
 // What it pins, for the five pages Audit log, Storage, Tariffs, Settings and Diagnostics: no sideways scroll at 1920, 1440 and 1024 px; at
 // 1440 px the card pairs sit side by side (Settings' two cards have one height and their Save buttons one top; Tariffs' Currency card is a row
 // of its own above its two rate cards) and at 1024 px they stack; Tariffs' description is wide; the Audit toolbar is at most two rows and keeps
-// every accessible name, its table has a header row and Details opens a detail row; the version line never says "built unknown"; and the
+// every accessible name, its table has a header row and Details opens the entry's drawer (W7l; it was a detail row); the version line never says "built unknown"; and the
 // skeletons of Tariffs, Audit, Storage (at 1024 px; w7f covers 1440) and Settings (at 1440 and 1024 px) sit where the loaded page lands.
 // Pixel sizes are NOT pinned, only pairs against each other: a retuned layout needs no edit here.
 //
@@ -262,19 +262,21 @@ test.describe("W7j: pages that use their space", () => {
       await expect(table.getByRole("columnheader", { name: "Details", exact: true }), "the first column (the Details buttons) is named for screen readers").toHaveCount(1);
     });
 
-    await test.step("Details opens the detail row under the entry, and closes it again", async () => {
+    await test.step("Details opens the entry in a drawer (W7l), and closing it puts the focus back on the button", async () => {
       const details = table.getByRole("button", { name: "Details" }).first();
-      await expect(details).toHaveAttribute("aria-expanded", "false");
-      await expect(table.locator(".detail-row"), "no detail row is drawn while closed").toHaveCount(0);
+      // The button opens a dialog and no longer expands a row under the entry: no aria-expanded, no aria-controls, no detail row.
+      await expect(details).toHaveAttribute("aria-haspopup", "dialog");
+      expect(await details.getAttribute("aria-expanded"), "the button no longer expands anything").toBeNull();
+      expect(await details.getAttribute("aria-controls")).toBeNull();
       await details.click();
-      await expect(details).toHaveAttribute("aria-expanded", "true");
-      const row = table.locator(".detail-row");
-      await expect(row, "the detail row is drawn").toHaveCount(1);
-      await expect(row).toBeVisible();
-      expect(await details.getAttribute("aria-controls"), "the button points at the detail row").toBe(await row.getAttribute("id"));
-      await details.click();
-      await expect(details).toHaveAttribute("aria-expanded", "false");
-      await expect(table.locator(".detail-row")).toHaveCount(0);
+      const drawer = page.getByRole("dialog", { name: "Audit entry", exact: true });
+      await expect(drawer).toBeVisible();
+      await expect(page).toHaveURL(/\/audit\/\d+/);
+      await expect(table.locator(".detail-row"), "no detail row is drawn").toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(drawer).toBeHidden();
+      await expect(page).toHaveURL(/\/audit(\?|$)/);
+      await expect(details, "the focus is back on the button that opened it").toBeFocused();
     });
   });
 

@@ -694,6 +694,86 @@ describe("TariffsPage", () => {
     expect(form.contains(alert)).toBe(true);
     expect(screen.getAllByRole("alert")).toHaveLength(1); // the tariffs themselves loaded fine
     expect(within(form).getAllByRole("option")).toHaveLength(1); // only "Choose an asset…"
+    expect(form.querySelector(".add-status")?.contains(alert)).toBe(true); // in the status slot, like every other message of the form
+  });
+
+  describe("the status slot of the add forms (W7l: a message line must not move the cards)", () => {
+    const FORMS = ["Add site default rate", "Add asset override"];
+
+    it("draws one empty .add-status in each add form, last in the form, before any message and after a valid add", async () => {
+      open();
+      for (const name of FORMS) {
+        const form = await screen.findByRole("form", { name });
+        const slots = form.querySelectorAll(".add-status");
+        expect(slots, `${name} has one slot`).toHaveLength(1);
+        expect(slots[0]).toBeEmptyDOMElement();
+        expect(form.lastElementChild, "the slot closes the form").toBe(slots[0]);
+        expect(slots[0].closest(".add-form")).toBe(form);
+      }
+      const form = screen.getByRole("form", { name: "Add site default rate" });
+      await fillRate(form, "2026-11-01", "0.2");
+      await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
+      await waitFor(() => expect(within(screen.getByRole("table", { name: "Site default rates" })).getByText("2026-11-01")).toBeInTheDocument());
+      expect(form.querySelector(".add-status")).toBeEmptyDOMElement(); // the line is back to empty once nothing is wrong
+    });
+
+    it("shows a validation problem and a server refusal INSIDE the slot, as alerts, one line at a time", async () => {
+      overrides = {
+        "POST /api/tariffs": { status: 409, body: { detail: "a rate for this asset (or the site default) already starts on that date" } },
+      };
+      open();
+      const override = await screen.findByRole("form", { name: "Add asset override" });
+      await userEvent.click(within(override).getByRole("button", { name: "Add rate" }));
+      const choose = await within(override).findByRole("alert");
+      expect(choose).toHaveTextContent("Choose an asset.");
+      expect(override.querySelector(".add-status")?.contains(choose)).toBe(true);
+
+      const form = screen.getByRole("form", { name: "Add site default rate" });
+      await fillRate(form, "2026-10-01", "0.2");
+      await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
+      const refused = await within(form).findByRole("alert");
+      expect(refused).toHaveTextContent("already starts on that date");
+      expect(form.querySelector(".add-status")?.contains(refused)).toBe(true);
+
+      // a new submit that fails validation replaces the old server message: two lines would grow the slot
+      await userEvent.clear(within(form).getByLabelText("Rate per kWh"));
+      await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
+      await waitFor(() => expect(within(form).getByRole("alert")).toHaveTextContent("Enter a rate of zero or more."));
+      expect(within(form).getAllByRole("alert")).toHaveLength(1);
+      expect(within(form).queryByText(/already starts on that date/)).not.toBeInTheDocument();
+    });
+
+    it("keeps a server refusal from an earlier submit out of the slot when the next submit is accepted", async () => {
+      let attempts = 0;
+      overrides = {
+        "POST /api/tariffs": ({ body }) => {
+          attempts += 1;
+          if (attempts === 1) return { status: 409, body: { detail: "already starts on that date" } };
+          const b = body as { asset_id: number | null; rate_per_kwh: number; effective_from: string };
+          return { status: 201, body: tariff(10, b.asset_id, b.rate_per_kwh, b.effective_from) };
+        },
+      };
+      open();
+      const form = await screen.findByRole("form", { name: "Add site default rate" });
+      await fillRate(form, "2026-10-01", "0.2");
+      await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
+      expect(await within(form).findByRole("alert")).toHaveTextContent("already starts on that date");
+      await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
+      await waitFor(() => expect(attempts).toBe(2));
+      await waitFor(() => expect(within(form).queryByRole("alert")).not.toBeInTheDocument());
+      expect(form.querySelector(".add-status")).toBeEmptyDOMElement();
+    });
+
+    it("lets the asset-list failure share the override form's slot with one other line", async () => {
+      overrides = { "GET /api/assets": { status: 500, body: { detail: "assets unavailable" } } };
+      open();
+      const form = await screen.findByRole("form", { name: "Add asset override" });
+      await within(form).findByText(/Could not load the assets/);
+      await userEvent.click(within(form).getByRole("button", { name: "Add rate" }));
+      await waitFor(() => expect(within(form).getAllByRole("alert")).toHaveLength(2)); // the standing failure and the new problem
+      const slot = form.querySelector(".add-status")!;
+      for (const alert of within(form).getAllByRole("alert")) expect(slot.contains(alert)).toBe(true);
+    });
   });
 
   it("never asks for tariffs or the currency when a role without tariffs.view opens the route", async () => {
@@ -903,6 +983,20 @@ describe("TariffsPage while its lists load (W7f)", () => {
     expect(screen.getByRole("form", { name: "Add site default rate" })).toBe(siteForm); // the same element: typing survived
     expect(within(siteForm).getByLabelText("Rate per kWh")).toHaveValue(0.3);
     expect(document.querySelector(".sk-region")).toBeNull();
+  });
+
+  it("has the status slot in both add forms before the rates land, and it is the same slot after (the cards do not grow when the page loads)", async () => {
+    const hold = await mount("/api/tariffs");
+    await screen.findByRole("form", { name: "Site currency" });
+    const slots = ["Add site default rate", "Add asset override"].map((name) => {
+      const form = screen.getByRole("form", { name });
+      const slot = form.querySelector(".add-status");
+      expect(slot, `${name} while the rates are held`).not.toBeNull();
+      return slot;
+    });
+    hold.release();
+    await screen.findByRole("table", { name: "Site default rates" });
+    ["Add site default rate", "Add asset override"].forEach((name, i) => expect(screen.getByRole("form", { name }).querySelector(".add-status")).toBe(slots[i]));
   });
 
   it("draws the currency skeleton in the Currency card, under its real head, while the currency is held", async () => {
