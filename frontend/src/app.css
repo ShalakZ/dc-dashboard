@@ -36,6 +36,7 @@
   --motion: 150ms ease;
   --side-w-open: 236px; --side-w-closed: 64px; --tree-w: 280px; --tree-w-closed: 44px; /* the tree is 280px in a narrow window too: at 248px its five header controls cut the title "Assets Tree" */
   --find-w: 300px;                                        /* the quick find in the top bar, 220px below 1180px */
+  --btn-h: 34px;                                          /* the height of every button: Add asset, Edit and the labelled Delete in a page header are one family (W7o) */
   --toast-clear: 96px;                                    /* room under a page, so the end of a list scrolls clear of a settled toast (two lines: 62px plus its 16px margin) */
 }
 
@@ -256,7 +257,7 @@
 
   /* Buttons: square-ish (radius 4 to 8 px, never a pill). Variants win over the base by class specificity; the base hover and
      disabled states use :where() so they never outrank a variant. */
-  button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; cursor: pointer; }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--btn-h); padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font-family: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; cursor: pointer; }
   button svg.i { width: 16px; height: 16px; }
   button:where(:hover:not(:disabled)) { background: var(--surface); }
   button:where(:disabled) { opacity: 0.55; cursor: not-allowed; }
@@ -286,6 +287,8 @@
   .row-menu-panel .danger-item { color: var(--crit); }
   .row-menu-panel .danger-item:hover:not(:disabled), .row-menu-panel .danger-item:focus-visible { background: var(--crit-tint); }
   .trash-btn:hover:not(:disabled), .trash-btn:focus-visible { background: var(--crit-tint); color: var(--crit); }
+  .trash-btn-labelled { color: var(--crit); } /* the page header's Delete: a normal outlined button (the base button's size) with a critical word; the hover fill is the rule above */
+  .trash-btn-labelled:hover:not(:disabled), .trash-btn-labelled:focus-visible { border-color: var(--crit); }
   .trash-btn svg { overflow: visible; } /* a lifted lid swings past the icon's own box: clipped there, the handle lost its top edge and its slot closed */
   .trash-btn .lid { transform-box: fill-box; transform-origin: 0% 100%; transition: transform var(--motion); } /* about the lid's left end, its hinge */
   .trash-btn:hover:not(:disabled) .lid, .trash-btn:focus-visible .lid { transform: translateY(-1.5px) rotate(-16deg); }

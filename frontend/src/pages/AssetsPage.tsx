@@ -45,7 +45,7 @@ export function useAssetsContext(): AssetsContext | null {
 
 /**
  * The buttons a person may use in a page header, Add asset (the page's one primary) last; nothing when there is none. `asset` is the asset
- * the page shows: Edit (assets.edit) and Delete (assets.delete, the trash, named for the asset) exist only then, and Add asset (assets.edit)
+ * the page shows: Edit (assets.edit) and Delete (assets.delete, the labelled trash, named for the asset) exist only then, and Add asset (assets.edit)
  * adds under it. Null on the fleet summary: Add asset adds a top-level asset.
  */
 export function assetActions(ctx: AssetsContext | null, asset: { id: number; name: string } | null): ReactNode {
@@ -56,7 +56,7 @@ export function assetActions(ctx: AssetsContext | null, asset: { id: number; nam
   return (
     <>
       {asset && edit && <button type="button" onClick={ctx.openEdit} disabled={ctx.locked}><Icon><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z" /><path d="m14 7 3 3" /></Icon>Edit</button>}
-      {asset && del && <TrashButton label={`Delete ${asset.name}`} onClick={ctx.remove} disabled={ctx.locked} />}
+      {asset && del && <TrashButton labelled label={`Delete ${asset.name}`} onClick={ctx.remove} disabled={ctx.locked} />}
       {edit && <button type="button" className="primary" onClick={() => ctx.openAdd(asset?.id ?? null)} disabled={ctx.locked}><Icon><path d="M12 5v14M5 12h14" /></Icon>Add asset</button>}
     </>
   );

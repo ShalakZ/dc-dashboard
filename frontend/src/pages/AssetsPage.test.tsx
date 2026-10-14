@@ -536,9 +536,12 @@ describe("AssetsPage", () => {
         renderWorkspace("/assets/2");
         const head = (await screen.findByRole("heading", { name: "Room A", level: 1 })).closest("header")!;
         const actions = head.querySelector(".actions")!;
-        // the trash button is an icon: its name is the aria-label, not text
-        expect([...actions.children].map((c) => c.textContent || c.getAttribute("aria-label"))).toEqual(["reconnecting…", "Edit", "Delete Room A", "Add asset"]);
+        // the header's Delete is labelled (W7o): it reads "Delete" like Edit and Add asset do, and its accessible name stays "Delete Room A"
+        expect([...actions.children].map((c) => c.textContent)).toEqual(["reconnecting…", "Edit", "Delete", "Add asset"]);
         expect(actions.children[0]).toHaveClass("chip");
+        const trash = within(actions as HTMLElement).getByRole("button", { name: "Delete Room A" });
+        expect(trash).toHaveClass("trash-btn", "trash-btn-labelled");
+        expect(trash).not.toHaveClass("icon-btn");
       });
     });
   });
