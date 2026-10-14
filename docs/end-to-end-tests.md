@@ -1,13 +1,18 @@
 # End-to-end tests
 
+This page is for developers: how to run the Playwright end-to-end suite against a fresh stack without touching your data, what each
+spec guards, and the two scratch-stack self-tests. The unit tests are on [Developing](developing.md).
+
 > **Data safety.** `docker compose down -v` on the normal project deletes the `dcdash_dbdata` volume:
 > every reading, user, source, tariff and dashboard you have. Never run it where that data matters. Run
 > the end-to-end tests only in the isolated Compose project described below, which has its own volume;
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Twenty-eight specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
-(`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
+Twenty-nine specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+(`E2E_BASE_URL` changes it). `frontend/e2e/playwright.config.ts` makes each spec its own project and runs them one at a time in the
+order below, each depending on the one before; all but `journey` use a 1600×1000 window unless a spec sets its own sizes. Its
+`global-setup.ts` waits up to 120 s for the stack and refuses a database that already has users.
 
 - `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
   points and watching live values.
@@ -83,12 +88,12 @@ Twenty-eight specs run in one `playwright test` run against the dev-profile stac
   looks, with the sidebar minimized and at 1024 px; the sign-in and setup pages (any case) show no shell; a signed-out deep link lands on the
   sign-in page without the real shell appearing and returns to the page asked for; a slow start never shows an empty page; reduced motion;
   no Content-Security-Policy violation on any of it.
-- `w7i.spec.ts` (its own project, after `w7h`) checks what W7i added: with the API unreachable (the `/api/me` request answered 502 by the
+- `w7i.spec.ts` (its own project, after `w7h`) checks the offline and recovery paths: with the API unreachable (the `/api/me` request answered 502 by the
   test) a deep link shows "Can't reach the server" at the same address instead of the sign-in page and the page loads once the answer
   is back; the banner inside the app appears after two failed requests and goes with the first answer; an expired session still goes to
   the sign-in page; a 200-character asset kind wraps instead of widening the page; and the "Skip the tree" link moves focus to the asset
   details. `headers.spec.ts` also checks the cache and compression headers of the built site.
-- `w7j.spec.ts` (its own project, after `w7i`) checks the page layouts of W7j at 1920, 1440 and 1024 px: no sideways scroll on the Audit log,
+- `w7j.spec.ts` (its own project, after `w7i`) checks the page layouts at 1920, 1440 and 1024 px: no sideways scroll on the Audit log,
   Storage, Tariffs, Settings and Diagnostics; Settings' two cards the same height with their Save buttons level; Tariffs' and Storage's two cards
   side by side at 1440 and stacked at 1024; Tariffs' description wider than 800 px; the Audit toolbar in at most two rows with every accessible
   name still found, the table still a table with a header row and a Details button that opens a detail row; the version line never saying
@@ -110,7 +115,7 @@ Twenty-eight specs run in one `playwright test` run against the dev-profile stac
   admin cannot change their own role, a taken name keeps the dialog open; Duplicate of the Operator opens `Copy of operator` with its
   ticks; the Operator's Tariffs has no form; `settings.edit` and `settings.security` each open one card of Settings (the spec puts the
   time zone back); and the editor works from the keyboard. Every name starts with `w9b-`; they are removed again, users first.
-- `w7k.spec.ts` (its own project, after `w9b`, at 1600×1000) checks the W7k feedback. The three Save buttons that save in place (Settings'
+- `w7k.spec.ts` (its own project, after `w9b`, at 1600×1000) checks the save and delete feedback. The three Save buttons that save in place (Settings'
   General and Sign-in protection, Tariffs' Site currency, saved unchanged) go from "Save" to "Saving…" (the request is held) to a green
   "Saved" on the theme's `--ok` colour and back in about 3 s, with one width in all four phases, light and dark at 1440 px, no toast and no
   loose "saved" word. A leaf asset's trash opens ONE styled dialog (the browser's own box never opens) that says "Checking what this
@@ -122,6 +127,12 @@ Twenty-eight specs run in one `playwright test` run against the dev-profile stac
   still closes a dialog under a toast, a toast appears and leaves under reduced motion, the menu of the last Sources row is reachable under
   "Source added" at 1440×900 and 1024×768, the toast keeps its 16 px margins below 720 px, and the dialog works from the keyboard. Every name
   it makes contains `W7k` and the run suffix; it removes them again.
+- `w9c.spec.ts` (its own project, after `w7k`, at 1600×1000) checks the Roles editor's dependency card: ticking Change users offers to
+  tick See users too (the card sits whole inside the window, "Also tick" ticks both, Save posts exactly the two ids), "Not now" ticks
+  nothing more and leaves the hint line, unticking a permission another ticked one needs offers to untick that one too, the whole flow
+  works from the keyboard (Escape closes only the card), every `?` bubble of the Change column opens whole without sideways scroll, a
+  quick click on a box the card covers reaches that box, and at 1024, 1440 and 800×600 the card never covers its own box, Cancel or
+  Save. Every role it makes starts with `w9c-` and is removed again; it makes no account.
 - `w7l.spec.ts` (its own project, after `w9c`, at 1600×1000) checks the audit log's names and drawer. A rate's entry reads `Created tariff 0.37
   per kWh from 2019-03-14 for asset NAME` with no `#`, in the row and in the drawer, and `for a deleted asset` once the asset is gone, while
   Raw and the drawer's JSON keep `asset_id`. An entry opens in a drawer 480-520 px wide at the right edge (a click on the sentence, the chevron
@@ -139,7 +150,7 @@ Twenty-eight specs run in one `playwright test` run against the dev-profile stac
   icon is picked, and its row reads "No assets". An asset added with that kind and Automatic draws the kind's icon in the tree row, the
   asset page's header and quick find; editing the kind to Server changes all three without a reload, and renaming it to "W7m Pumps N"
   rewrites the asset's kind text ("1 asset follows"), keeps the icon, and shows the new text on the asset page. An icon of the asset's own
-  (Rack) wins over the kind's. The kind's Delete asks where to move the asset (since W7o: Delete stays off until a kind is chosen, and
+  (Rack) wins over the kind's. The kind's Delete asks where to move the asset (Delete stays off until a kind is chosen, and
   Cancel leaves everything as it was) and the API refuses a plain delete of a kind in use (409), and the page survives a reload; once the
   asset is gone the kind deletes and leaves the list. Adding an asset with a new typed kind registers that kind
   with the suggested icon, and the next asset of it needs no choice. No horizontal scroll at 1440 and 1024 px on the page and with the New
@@ -162,7 +173,7 @@ Twenty-eight specs run in one `playwright test` run against the dev-profile stac
   inside the window at 1440×900, 1024×640 and 800×600, and typing in the search moves nothing. A kind that three assets use opens the move dialog (the count, a
   "Move the assets to" choice of the other kinds, Delete off until one is chosen); an asset that joins while it is open turns the answer into
   the new count and keeps the choice; the assets follow (an icon of the asset's own stays), the kind is gone, and the toast and the audit
-  entry name the kind they moved to. Since W7q the header's Add common data-centre kinds adds only the missing ones of the 16 common kinds,
+  entry name the kind they moved to. The header's Add common data-centre kinds adds only the missing ones of the 16 common kinds,
   and Add all 39 data-centre kinds (beside the filter) adds the rest; a second press of either says they are all there and writes no audit
   entry, and a starter kind that is already there under another spelling or icon is left alone. A custom role with Change assets but
   not Manage asset kinds sees the list and one line saying what is missing (no New kind, no pack button, no row menu), the API answers 403
@@ -186,7 +197,7 @@ Twenty-eight specs run in one `playwright test` run against the dev-profile stac
   and no Selection line, M and Space do nothing, and both routes answer 403. At 1440 px and at 1024 px with the sidebar minimised and expanded
   the tree's title is there, the first pick moves no row, and the tree does not scroll sideways. Every name it makes starts with `W7p` or
   `w7p-` and is removed again.
-- `w7q.spec.ts` (its own project, after `w7p`, at 1600×1000) checks the Asset kinds page you can tell apart and tidy. The stack is shared, so
+- `w7q.spec.ts` (its own project, after `w7p`, at 1600×1000) checks telling kinds apart and tidying them on the Asset kinds page. The stack is shared, so
   every kind it makes is named `W7q <run> ...`, an account and a role start `w7q-`, and it removes only those (and the starter kinds its pack
   cases added that were not there before). In a 1024×640 window with a list at least 600 px longer than the window, deleting one kind through
   the row menu leaves `scrollY` where it was (1 px, or the new end of the page when it got shorter), with the focus on the next row's menu
@@ -212,12 +223,16 @@ separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal s
     docker compose -p dcdash_e2e --profile dev down -v
 
 or, with a fresh stack already running: `cd frontend && npx playwright test -c e2e/playwright.config.ts`.
-First time only: `npx playwright install chromium`. Reports: `npx playwright show-report`.
+First time only: `npx playwright install chromium`. Reports: `npx playwright show-report`. On Windows run `scripts/e2e.sh` from WSL
+(`wsl bash scripts/e2e.sh`) or type the commands above in PowerShell.
 
 `scripts/e2e.sh` runs the same steps in one go, always in the project `dcdash_e2e` (so its `down -v`
 removes only `dcdash_e2e_dbdata`); only its final `down` has no `-v`. It refuses to start while the
 normal stack is running, because both hold ports 80 and 443, and it refuses a project name that does
-not start with `dcdash_e2e` (`E2E_COMPOSE_PROJECT` can pick another throwaway name). When it ends it removes the containers but
+not start with `dcdash_e2e` (`E2E_COMPOSE_PROJECT` can pick another throwaway name). It also refuses to start while a
+`SIM_FAULT_*` switch is set in the shell or in `.env`, because the simulator it starts would inherit the fault (see
+[Field debugging](field-debugging.md#rehearsing-a-failure-development-simulator-only)). It passes the build id to the images like
+`setup.sh` does. When it ends it removes the containers but
 keeps the volume until the next run, which starts with `down -v`;
 `docker compose -p dcdash_e2e --profile dev down -v` removes it right away.
 
@@ -225,7 +240,7 @@ The isolated `-p dcdash_e2e` run builds the same `dcdash-backend:local` and `dcd
 as the normal stack, so it re-tags them. If your database is still at an older schema, read "Upgrading
 and going back" before you start the normal stack again: because the image tag was
 replaced, any later `docker compose up -d` on the normal project (with or without `--build`) creates or
-recreates `api`, which then runs the database migrations. Otherwise rebuild your normal stack afterwards
+recreates `api`, which then runs the database migrations (see [Upgrading and going back](upgrading.md)). Otherwise rebuild your normal stack afterwards
 (`docker compose --profile dev up -d --build`) to be sure it runs your own code. Either way, check with
 `docker volume ls` that `dcdash_dbdata` is still listed.
 
@@ -233,4 +248,6 @@ recreates `api`, which then runs the database migrations. Otherwise rebuild your
 (`<project>-backend:scratch` and `<project>-web:scratch`, so `dcdash-backend:local` and `dcdash-web:local`
 are not re-tagged) and publishes only on `127.0.0.1` (ports 18080 and 18443 by default), so neither takes
 ports 80 and 443. They run in a Compose project whose name must start with `dcdash_e2e`, and they delete only
-that project's own volume; see "Practise a restore".
+that project's own volume; see [Practise a restore](backup-and-restore.md#practise-a-restore).
+
+Related: [Developing](developing.md), [Adding a connector](adding-a-connector.md), [Backup and restore](backup-and-restore.md).
