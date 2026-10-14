@@ -148,10 +148,16 @@ UI screens, besides Assets Tree, Sources and Points:
 - **Asset kinds** (everyone who may open the Assets Tree can read it; `assets.kinds` changes it): the button at the top of the Assets
   Tree opens it. It says once what each kind of asset looks like. An asset shows its own icon if it has one, else the icon of its kind,
   else the generic one; change a kind's icon here and every asset of that kind follows, and rename a kind and the assets that carry the
-  name follow it. A kind that assets still use cannot be deleted. The kind list in the Add and Edit asset dialogs comes from this page,
-  and a new kind typed there under "Other…" is added here when the asset is saved. The keyword guess that used to pick every icon (a word
-  such as Pump or UPS in the kind) now only suggests the icon when a kind is created, and stays as the fallback for a kind text that is
-  not on the list.
+  name follow it. A kind that assets still use is deleted by moving them: the dialog shows how many assets use it and a "Move the assets
+  to" choice (Delete stays off until a kind is chosen), and the assets, the delete and one audit row happen together or not at all; if the
+  count changed while the dialog was open the server refuses and the dialog shows the new count. **Add data-centre kinds** adds a starter
+  set of 39 (UPS, PDU, ATS, Chiller, CRAC and so on) once: a kind you already have, in any spelling and with any icon, is skipped and never
+  changed, and pressing it again says they are all there. The kind list in the Add and Edit asset dialogs comes from this page, and a new
+  kind typed there under "Other…" is added here when the asset is saved **if you may manage asset kinds**; without that permission the
+  dialog says so and the asset keeps the text. The 48 icons (an asset or a kind chooses one, or Automatic) are in six groups (Structure,
+  Power, Cooling, IT and network, Monitoring and safety, Other) with a search box that finds an icon by its name, a keyword or its short
+  name ("transfer" finds ATS and STS). The keyword guess that used to pick every icon (a word such as Pump or UPS in the kind) now only
+  suggests the icon when a kind is created, and stays as the fallback for a kind text that is not on the list.
 - **Users & Roles** (admin): on its **Users** tab, create users, change roles, deactivate / reactivate, reset a password, delete a user
   (after a confirmation; never yourself and never the last administrator). Deactivating signs that user out
   everywhere. You cannot deactivate, demote or delete yourself. An account that has been blocked after too many
@@ -314,7 +320,8 @@ data-retrieval requests the connectors already use, nothing else.
    switch (`settings.sign_in_changed`), the site timezone, the currency, the storage settings (every save, `storage.changed`, whose
    subject carries `origin`, and, for a save that needed confirmation, `confirmed_loss`; remembering a site
    default is `storage.default_set`), assets, mappings,
-   sources (create, edit, delete, test, test all, browse), tariffs, dashboards, scopes, scans (start and
+   sources (create, edit, delete, test, test all, browse), tariffs, dashboards, asset kinds (a delete that moves assets records how many and
+   where to; adding the starter kinds records which), scopes, scans (start and
    finish) and accepted discoveries. Never recorded: passwords and password hashes, source secrets and
    credentials inside a URL (a marker shows that one was set or changed: `secret: set -> changed`, or
    `config_credentials: unchanged -> changed` when the credentials inside a source's URL changed, also when
@@ -752,8 +759,9 @@ Twenty-six specs run in one `playwright test` run against the dev-profile stack 
   icon is picked, and its row reads "No assets". An asset added with that kind and Automatic draws the kind's icon in the tree row, the
   asset page's header and quick find; editing the kind to Server changes all three without a reload, and renaming it to "W7m Pumps N"
   rewrites the asset's kind text ("1 asset follows"), keeps the icon, and shows the new text on the asset page. An icon of the asset's own
-  (Rack) wins over the kind's. The kind's Delete is refused while the asset uses it, in the dialog and by the API (409), and the page
-  survives a reload; once the asset is gone the kind deletes and leaves the list. Adding an asset with a new typed kind registers that kind
+  (Rack) wins over the kind's. The kind's Delete asks where to move the asset (since W7o: Delete stays off until a kind is chosen, and
+  Cancel leaves everything as it was) and the API refuses a plain delete of a kind in use (409), and the page survives a reload; once the
+  asset is gone the kind deletes and leaves the list. Adding an asset with a new typed kind registers that kind
   with the suggested icon, and the next asset of it needs no choice. No horizontal scroll at 1440 and 1024 px on the page and with the New
   kind dialog and its grid open. Every kind and asset it makes starts with `W7m` and carries the run suffix, and it makes a viewer account;
   it removes them all again.
@@ -764,6 +772,19 @@ Twenty-six specs run in one `playwright test` run against the dev-profile stack 
   keeps the mark and the name, the sign-in page shows the mark at 58 by 56, and the static copy of the shell in `index.html` (only the app's
   script is held) puts the mark where the real bar does. No request for an icon fails and no console message names one; with the logo blocked
   the bar keeps the mark's 29 by 28 box and the name does not move. It creates and changes nothing.
+- `w7o.spec.ts` (its own project, after `w7n`, at 1600×1000) checks the kinds pack. On an asset's page Add asset, Edit and Delete are three
+  outlined buttons of one height at 1440 and 1024 px, light and dark; Delete reads "Delete" and keeps the name "Delete NAME". The icon picker
+  has 48 icons (49 choices with Automatic) in six labelled groups; typing "transfer" leaves the Automatic transfer switch and the Static
+  transfer switch (Rack is gone), the arrow keys walk the cells that are left across a group boundary, and choosing the transfer switch saves
+  it and draws it in the tree row and the page header. With the grid open there is no sideways scroll at 1440 and 1024, Save stays inside the
+  window at 1024×640 and 800×600, and typing in the search moves nothing. A kind that three assets use opens the move dialog (the count, a
+  "Move the assets to" choice of the other kinds, Delete off until one is chosen); an asset that joins while it is open turns the answer into
+  the new count and keeps the choice; the assets follow (an icon of the asset's own stays), the kind is gone, and the toast and the audit
+  entry name the kind they moved to. Add data-centre kinds adds only what is missing, and a second press says they are all there and writes no
+  audit entry. A custom role with Change assets but not Manage asset kinds sees the list and one line saying what is missing (no New kind, no
+  pack button, no row menu), the API answers 403 to every write and changes nothing, and a new kind typed in Add asset keeps its text and
+  registers nothing, with the note saying so; the Roles editor offers to tick Change assets and See the Assets Tree with Manage asset kinds.
+  Every name it makes starts with `W7o` or `w7o-`; the kinds the pack added are removed again by name and the admin's look is put back.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1716,7 +1737,7 @@ registered and keep the guess. The starter kinds
 (Site, Building, Room, Row, Rack, Panel, Meter, Circuit, Other equipment and generic) are added for every name no asset uses. `assets` and
 every other table are untouched. What you will notice: the Assets Tree has an Asset kinds button, the Kind list in the Add and Edit asset
 dialogs comes from that page, and a new kind typed under "Other…" is added to it. The API gains `GET` and `POST /api/asset-kinds` and `PATCH`
-and `DELETE /api/asset-kinds/{id}` (needing `assets.view` to read and `assets.edit` to write), and each asset gains `kind_icon`. The `api`
+and `DELETE /api/asset-kinds/{id}` (needing `assets.view` to read and `assets.edit` to write; since W7o the write needs `assets.kinds`), and each asset gains `kind_icon`. The `api`
 container applies the migration the first time it starts from the new image.
 
 1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0009`).
@@ -1729,6 +1750,36 @@ container applies the migration the first time it starts from the new image.
    shows the keyword guess again, as it did before W7m. `upgrade` fills the registry again from the assets as they are then. A restart of
    the W7m `api` would run `alembic upgrade head` and apply `0010` again, so the W7m `api` must not be running once the schema is back
    at `0009`.
+
+### Upgrading to W7o (migration 0011)
+
+Schema `0010` to `0011`. Downgrade: **lossless** for the data of the schema (the migration only changes which permissions a custom role
+lists, described below), so option a is open. The code to go back to is `425aaf9` (`main` before W7o).
+
+W7o (the data-centre kinds pack) adds migration `0011`, **data only**: no table, column or index changes. Until now every change to the
+asset kinds list needed Change assets (`assets.edit`). It now needs its own permission, **Manage asset kinds** (`assets.kinds`), because a
+rename or a delete-and-move changes the kind of every asset that uses it. So that nobody loses what they could do, the migration adds
+`assets.kinds` to every **custom** role that holds `assets.edit` (once: running it again adds nothing). A custom role without
+`assets.edit` is not changed, the built-in Viewer and Operator never held either, and the built-in Admin holds every permission, so it
+has the new one without any change. A role that may add and edit assets but must not touch the kinds list has the new tick taken off on
+the Roles tab. Reading the list stays `assets.view`. Everything else in W7o is code: 20 more icons (48 in all, in six groups, with a search
+box in the picker), deleting a kind that assets use by moving them to another kind, the **Add data-centre kinds** button, and the asset
+page's Delete button (labelled, the same height as Add asset and Edit). The `api` container applies the migration the first time it starts
+from the new image.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0010`).
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+3. **Verify.** `docker compose exec api alembic current` prints `0011 (head)`; on the Roles tab a custom role that held Change assets now
+   shows Manage asset kinds ticked (in the sensitive group), and the Asset kinds page offers Add data-centre kinds to an administrator.
+4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0010` and `<old commit>` = `425aaf9`. The
+   `0011` downgrade removes `assets.kinds` from every custom role that also holds `assets.edit`; it cannot tell a role that was given it
+   by the upgrade from one that had it ticked later, so it takes it from all of them (a role that held it without `assets.edit` keeps the
+   id, and the older server ignores it). An icon chosen from the 20 new ones, on an asset or a kind, stays stored and **shows the generic
+   icon on the older build** (it does not know the id); pick another icon there or upgrade again. `upgrade` after a downgrade adds the
+   permission to the custom roles holding `assets.edit` again, including a role that was made on W7o without it on purpose. A restart of
+   the W7o `api` would run `alembic upgrade head` and apply `0011` again, so the W7o `api` must not be running once the schema is back
+   at `0010`.
 
 ## Add a connector
 
