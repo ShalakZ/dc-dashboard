@@ -1,8 +1,18 @@
 # Changelog
 
-One entry for each release that changes the database: the revision it leads to, what it changes, the pre-checks to run before it,
-how to verify it, and whether its downgrade is lossless (which decides whether option a of "Upgrading and going back" is open). Read
-the entries of every release you skip over, oldest first. Add the entry of the next release at the end.
+What each release (a merged wave) changed, newest first. Each section is headed `## <wave> (<date>, <merge commit>)`.
+
+A release that needs an upgrade note carries it as a `###` entry: the schema revision it leads to when there is a migration, what
+changes and what you will notice, the pre-checks to run before it, how to verify it, whether its downgrade is lossless (which decides
+whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 17 releases have such an
+entry; 9 of them have no migration. The other releases changed no schema and need nothing beyond the usual steps of
+[Upgrading and going back](docs/upgrading.md); they have one or two lines here.
+
+**Before you upgrade,** read every entry between the version you run and the new one, starting at the oldest of them (lower on
+this page) and working up. **To go back,** use the commit each entry names ("the code to go back to"): a wave's merge commit in a
+heading is NOT a place to go back to, because it already contains that wave.
+
+**The next release** gets its section at the TOP of this page, above the newest one.
 
 ## W7p (2026-10-14, 246f103)
 
@@ -411,7 +421,7 @@ The `api` container applies it the first time it starts from the new image.
    the simulator).
 3. **Verify.** `docker compose exec api alembic current` prints `0005 (head)`.
 4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0004` and `<old commit>` = `1ef27a2`. Do
-   not use step 6 of the Phase 3 entry above for this: it returns to Phase 2 (schema `0003`), which is not a place to go back to from
+   not use step 6 of the Phase 3 entry below for this: it returns to Phase 2 (schema `0003`), which is not a place to go back to from
    a `0004` or `0005` database (Alembic fails with an unknown revision). In both options a restart of the W1a `api` would run
    `alembic upgrade head` and apply `0005` again, so the W1a `api` must not be running again once the schema is back at `0004`.
    - **Option a, keep what was collected since the upgrade.** The `0005` downgrade drops the trigger, its function and the two snapshot
