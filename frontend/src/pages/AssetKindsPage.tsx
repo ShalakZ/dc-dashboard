@@ -42,6 +42,8 @@ const assetsIn = (body: unknown): number => {
   const n = (body as { assets?: unknown } | null | undefined)?.assets;
   return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : 1;
 };
+/** The line the dialog shows when a 409 changed what it asked: the server's own words ("14 assets use this kind now. Check the new count and try again."), with a capital. */
+const changedText = (e: ApiError) => (typeof e.detail === "string" && e.detail !== "" ? upperFirst(e.detail) : "The count changed while this was open. Check the new count and try again.");
 
 // Code-point comparison, as lib/kinds.ts: deterministic across runtimes.
 const compare = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
@@ -54,8 +56,8 @@ const movable = (kinds: readonly AssetKind[], id: number) => kinds.filter((k) =>
  * `children`, so it sits outside the region the dialog is described by. One ConfirmDeleteDialog throughout: a refusal of the server only changes
  * its props (the same instance keeps the focus rules), such as the plain question turning into the move form.
  */
-function DeleteKindDialog({ row, others, target, onTarget, onConfirm, onCancel }: {
-  row: AssetKind; others: readonly AssetKind[]; target: number | null; onTarget: (id: number | null) => void;
+function DeleteKindDialog({ row, others, target, notice, onTarget, onConfirm, onCancel }: {
+  row: AssetKind; others: readonly AssetKind[]; target: number | null; notice: string | null; onTarget: (id: number | null) => void;
   onConfirm: () => Promise<unknown>; onCancel: () => void;
 }) {
   const used = row.asset_count > 0;
@@ -66,6 +68,7 @@ function DeleteKindDialog({ row, others, target, onTarget, onConfirm, onCancel }
       title={`Delete the kind "${row.name}"?`}
       message={!used ? "Assets that carry the name later get an automatic icon." : blocked ? "" : usedText(row, true)}
       loadError={blocked ? usedText(row, false) : undefined}
+      notice={blocked ? undefined : notice ?? undefined} // the blocked dialog already says why, in its own line
       blocked={blocked}
       confirmLabel="Delete"
       confirmDisabled={used && target === null}
@@ -117,6 +120,9 @@ export function AssetKindsPage() {
   const [deleting, setDeleting] = useState<AssetKind | null>(null);
   // Where the assets of the kind being deleted go: the id the person chose. Only kinds still in the list count, so one that vanished from a refreshed list is no choice any more.
   const [target, setTarget] = useState<number | null>(null);
+  // What the server's last 409 said about the count: one line in the dialog, so a second press of Delete is a conscious one. Gone when the person
+  // chooses another kind and when the next request starts.
+  const [changed, setChanged] = useState<string | null>(null);
   const others = deleting ? movable(kinds, deleting.id) : [];
   const chosen = others.find((k) => k.id === target) ?? null;
   const locked = deleting !== null; // no second dialog next to the confirmation (two would share Escape and the focus trap)
@@ -155,12 +161,14 @@ export function AssetKindsPage() {
   const removed = async (row: AssetKind) => {
     const to = row.asset_count > 0 ? chosen : null;
     if (row.asset_count > 0 && to === null) return; // Delete is off until a kind is chosen; nothing to ask
+    setChanged(null);
     try {
       await deleteKind.mutateAsync(to ? { id: row.id, moveTo: to.id, expectAssets: row.asset_count } : { id: row.id });
     } catch (e) {
       // 409: the count is not what the dialog showed (assets joined the kind; or, when moving, the number changed). The dialog it was asked in shows the
       // server's count and so turns into the move form (the plain question), or the blocked dialog (no other kind): the choice stays if that kind still exists.
       if (e instanceof ApiError && e.status === 409) {
+        setChanged(changedText(e));
         setDeleting({ ...row, asset_count: assetsIn(e.body) });
         return;
       }
@@ -197,7 +205,7 @@ export function AssetKindsPage() {
   }
   const actionsOf = (row: AssetKind): RowAction[] => [
     { label: "Edit", disabled: locked, onSelect: () => setDialog({ kind: "edit", row }) },
-    { label: "Delete", tone: "danger", disabled: locked, onSelect: () => { setTarget(null); setDeleting(row); } },
+    { label: "Delete", tone: "danger", disabled: locked, onSelect: () => { setTarget(null); setChanged(null); setDeleting(row); } },
   ];
   return (
     <div className="kinds-page">
@@ -243,7 +251,7 @@ export function AssetKindsPage() {
         </Modal>
       )}
       {deleting && (
-        <DeleteKindDialog row={deleting} others={others} target={chosen?.id ?? null} onTarget={setTarget} onConfirm={() => removed(deleting)} onCancel={() => setDeleting(null)} />
+        <DeleteKindDialog row={deleting} others={others} target={chosen?.id ?? null} notice={changed} onTarget={(id) => { setChanged(null); setTarget(id); }} onConfirm={() => removed(deleting)} onCancel={() => setDeleting(null)} />
       )}
     </div>
   );

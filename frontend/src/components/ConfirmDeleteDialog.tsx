@@ -25,6 +25,12 @@ interface Props {
   children?: ReactNode;
   /** The confirm button is off until the choice in `children` is made. Native `disabled` is fine: the first focus is Cancel, and the one case where the focus was on the confirm button is handled below. */
   confirmDisabled?: boolean;
+  /**
+   * One line the opener wants said in the error slot that is not a failure of the request: what the person saw has changed under the dialog (the
+   * count moved). Drawn as the same alert as an error, so the dialog has a single announcer, but the confirm button stays usable. The opener owns
+   * its life (it drops the line when the choice changes or the next request starts); a refused request shows its own error line as always.
+   */
+  notice?: string;
 }
 
 const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -34,7 +40,7 @@ const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), button:not([di
  * Rendered into the body, like SignOutDialog, so a caller may keep it inside a form or a table row: the backdrop would be invalid markup in a
  * row, and the buttons (plain `type="button"`) would otherwise submit the form they sit in.
  */
-export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confirmLabel = "Delete anyway", loading = false, loadError, tone = "danger", blocked = false, children, confirmDisabled = false }: Props) {
+export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confirmLabel = "Delete anyway", loading = false, loadError, tone = "danger", blocked = false, children, confirmDisabled = false, notice }: Props) {
   const { run, busy, error } = useAction();
   const dialog = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -118,7 +124,8 @@ export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confi
         </div>
         {children}
         {loadError && <p className="error" role="alert">{loadError}</p>}
-        {error && <p className="error" role="alert">{error}</p>}
+        {notice && <p className="error" role="alert">{notice}</p>}
+        {error &&<p className="error" role="alert">{error}</p>}
         <div className="row">
           <button type="button" ref={cancel} onClick={onCancel} disabled={busy}>{blocked ? "Close" : "Cancel"}</button>
           {!blocked && <button type="button" className={tone} onClick={() => void run(onConfirm)} disabled={busy || loading || !!loadError || confirmDisabled}>{confirmLabel}</button>}

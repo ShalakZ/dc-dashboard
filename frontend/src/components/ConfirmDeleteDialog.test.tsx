@@ -348,6 +348,32 @@ describe("ConfirmDeleteDialog", () => {
     });
   });
 
+  // W7o fix wave: the opener's one line for "what you saw has changed" (the count moved under the dialog). It is the error line of the dialog, not
+  // a second announcer, and unlike an error it does not switch the confirm button off: the question is still answerable.
+  describe("notice (a line from the opener, in the error slot)", () => {
+    const props = { title: 'Delete the kind "Rack"?', message: '12 assets use "Rack".', confirmLabel: "Delete", onCancel: () => {} };
+    const choice = <label>Move the assets to<select defaultValue="2"><option value="">Choose a kind…</option><option value="2">Pump</option></select></label>;
+
+    it("shows the line as the dialog's alert, outside the polite region, and leaves the confirm button on", () => {
+      render(<ConfirmDeleteDialog {...props} onConfirm={async () => {}} notice="14 assets use this kind now. Check the new count and try again.">{choice}</ConfirmDeleteDialog>);
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("14 assets use this kind now. Check the new count and try again.");
+      expect(alert).toHaveClass("error");
+      expect(alert.closest("[aria-live]")).toBeNull(); // the description stays the sentence about the delete
+      expect(screen.getByRole("dialog")).toHaveAccessibleDescription('12 assets use "Rack".');
+      expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    });
+
+    it("draws nothing without one and goes as soon as the opener drops it", () => {
+      const { rerender } = render(<ConfirmDeleteDialog {...props} onConfirm={async () => {}}>{choice}</ConfirmDeleteDialog>);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      rerender(<ConfirmDeleteDialog {...props} onConfirm={async () => {}} notice="Changed.">{choice}</ConfirmDeleteDialog>);
+      expect(screen.getByRole("alert")).toHaveTextContent("Changed.");
+      rerender(<ConfirmDeleteDialog {...props} onConfirm={async () => {}}>{choice}</ConfirmDeleteDialog>);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
   describe("tone", () => {
     const props = { title: "t", message: "m", onConfirm: async () => {}, onCancel: () => {} };
     it("is danger by default and primary on request (a currency change is not a destruction)", () => {

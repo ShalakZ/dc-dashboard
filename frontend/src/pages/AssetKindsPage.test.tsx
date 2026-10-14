@@ -499,7 +499,7 @@ describe("Delete kind", () => {
             if (!stale) return { status: 204 };
             stale = false;
             fake.rows[0].asset_count = 14;
-            return { status: 409, body: { detail: "14 assets use this kind now.", assets: 14 } };
+            return { status: 409, body: { detail: "14 assets use this kind now. Check the new count and try again.", assets: 14 } };
           })(fake),
         });
         await screen.findByText("Rack", { selector: "td *" });
@@ -510,12 +510,77 @@ describe("Delete kind", () => {
         await waitFor(() => expect(ask).toHaveAccessibleDescription('14 assets use "Rack". Move them to another kind, then delete "Rack".'));
         expect(picker(ask)).toHaveValue("3"); // the choice stays
         expect(within(ask).getByRole("button", { name: "Delete" })).toBeEnabled();
-        expect(within(ask).queryByRole("alert")).not.toBeInTheDocument(); // the sentence changed, in the polite region; no second voice
+        expect(within(ask).getAllByRole("alert").map((a) => a.textContent)).toEqual(["14 assets use this kind now. Check the new count and try again."]); // why it changed: the server's words, in the dialog's own error line
         expect(toasts.calls).toEqual([]);
         await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
         await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
         expect(sent).toEqual(["/api/asset-kinds/1?move_to=3&expect_assets=12", "/api/asset-kinds/1?move_to=3&expect_assets=14"]);
         expect(toasts.calls).toEqual([{ kind: "success", text: 'Kind "Rack" deleted, 14 assets moved to Sensor' }]);
+      });
+
+      // The server's line says the count changed (W7o fix wave): a second Delete press is then a conscious one.
+      const staleTwice = (sent: string[], counts: number[]) => (fake: Fake) => removing(1, sent, () => {
+        const n = counts.shift();
+        if (n === undefined) return { status: 204 };
+        fake.rows[0].asset_count = n;
+        return { status: 409, body: { detail: `${n} assets use this kind now. Check the new count and try again.`, assets: n } };
+      })(fake);
+      const chooseSensorAndDelete = async () => {
+        await screen.findByText("Rack", { selector: "td *" });
+        await choose("Rack", "Delete");
+        const ask = dialog('Delete the kind "Rack"?');
+        await userEvent.selectOptions(picker(ask), "Sensor");
+        await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
+        return ask;
+      };
+
+      it("takes the line away when another kind is chosen, and Delete still works", async () => {
+        const sent: string[] = [];
+        show({ over: staleTwice(sent, [14]) });
+        const ask = await chooseSensorAndDelete();
+        expect(await within(ask).findByRole("alert")).toHaveTextContent("14 assets use this kind now. Check the new count and try again.");
+        await userEvent.selectOptions(picker(ask), "Pump");
+        expect(within(ask).queryByRole("alert")).not.toBeInTheDocument();
+        expect(within(ask).getByRole("button", { name: "Delete" })).toBeEnabled();
+        await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        expect(sent).toEqual(["/api/asset-kinds/1?move_to=3&expect_assets=12", "/api/asset-kinds/1?move_to=2&expect_assets=14"]);
+      });
+
+      it("replaces the line with the newer one when the count moves again (one line, never two)", async () => {
+        show({ over: staleTwice([], [14, 15]) });
+        const ask = await chooseSensorAndDelete();
+        expect(await within(ask).findByRole("alert")).toHaveTextContent("14 assets use");
+        await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
+        await waitFor(() => expect(within(ask).getByRole("alert")).toHaveTextContent("15 assets use this kind now."));
+        expect(within(ask).getAllByRole("alert")).toHaveLength(1);
+      });
+
+      it("a later refusal (422) shows only its own words: the old line is gone when the next request starts", async () => {
+        let answers = 0;
+        show({
+          over: (fake) => ({
+            "DELETE /api/asset-kinds/1": () => {
+              answers += 1;
+              if (answers === 1) { fake.rows[0].asset_count = 14; return { status: 409, body: { detail: "14 assets use this kind now. Check the new count and try again.", assets: 14 } }; }
+              return { status: 422, body: { detail: "that kind no longer exists." } };
+            },
+          }),
+        });
+        const ask = await chooseSensorAndDelete();
+        expect(await within(ask).findByRole("alert")).toHaveTextContent("14 assets use");
+        await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
+        await waitFor(() => expect(within(ask).getByRole("alert")).toHaveTextContent("That kind no longer exists."));
+        expect(within(ask).getAllByRole("alert")).toHaveLength(1);
+      });
+
+      it("opens clean the next time (the line of an earlier dialog is not remembered)", async () => {
+        show({ over: staleTwice([], [14]) });
+        const ask = await chooseSensorAndDelete();
+        expect(await within(ask).findByRole("alert")).toBeInTheDocument();
+        await userEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+        await choose("Rack", "Delete");
+        expect(within(dialog('Delete the kind "Rack"?')).queryByRole("alert")).not.toBeInTheDocument();
       });
 
       it("drops the choice when that kind is gone from the refreshed list, and the focus goes to the select (not the page body)", async () => {
@@ -554,7 +619,7 @@ describe("Delete kind", () => {
         expect(within(ask).getByRole("button", { name: "Delete" })).toBeDisabled(); // a choice first
         await waitFor(() => expect(picker(ask)).toHaveFocus());
         expect(document.activeElement).not.toBe(document.body);
-        expect(within(ask).queryByRole("alert")).not.toBeInTheDocument();
+        expect(within(ask).getAllByRole("alert").map((a) => a.textContent)).toEqual(["3 assets use this kind. Change their kind first."]); // why the plain question became the form
         expect(toasts.calls).toEqual([]);
         expect(screen.getByText("Pump", { selector: "td *" })).toBeInTheDocument();
         expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
@@ -585,7 +650,7 @@ describe("Delete kind", () => {
             if (!first) return { status: 204 };
             first = false;
             fake.rows[0].asset_count = 0;
-            return { status: 409, body: { detail: "0 assets use this kind now.", assets: 0 } };
+            return { status: 409, body: { detail: "No assets use this kind now. Check the new count and try again.", assets: 0 } };
           })(fake),
         });
         await screen.findByText("Rack", { selector: "td *" });
@@ -595,6 +660,7 @@ describe("Delete kind", () => {
         await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
         expect(await within(ask).findByText("Assets that carry the name later get an automatic icon.")).toBeInTheDocument();
         expect(within(ask).queryByRole("combobox")).not.toBeInTheDocument();
+        expect(within(ask).getAllByRole("alert").map((a) => a.textContent)).toEqual(["No assets use this kind now. Check the new count and try again."]);
         await waitFor(() => expect(within(ask).getByRole("button", { name: "Delete" })).toBeEnabled());
         await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
         await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
