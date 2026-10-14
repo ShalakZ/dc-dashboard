@@ -106,21 +106,26 @@ const ID_FIELDS: Record<string, { kind: RefKind; label: string }> = {
   point_id: { kind: "point", label: "Point" },
 };
 
-/** An id field's value: the name, "a deleted asset", "an asset" without a lookup, "—" for none; anything that is not an id as it is stored. */
-function idFieldValue(refs: AuditRefs | undefined, kind: RefKind, value: unknown): string {
+/**
+ * An id field's value: the name, "a deleted asset", "an asset" without a lookup, "—" for none; anything that is not an id as it is stored.
+ * `stored` is a name the entry kept beside the id (asset.moved keeps `parent_name`): it reads when the lookup has lost the record.
+ */
+function idFieldValue(refs: AuditRefs | undefined, kind: RefKind, value: unknown, stored: string | null = null): string {
   if (value === null || value === undefined) return "—";
   const id = idOf(value);
   if (id === null) return formatValue(value);
   const found = ref(refs, kind, id);
-  return found.is === "name" ? found.name : nameless(found, kind);
+  return found.is === "name" ? found.name : (stored ?? nameless(found, kind));
 }
 
 // What a field is called, and how its value reads, where the stored form is not for people.
-function describeChange(refs: AuditRefs | undefined, key: string, before: unknown, after: unknown): AuditChange {
+function describeChange(refs: AuditRefs | undefined, key: string, before: unknown, after: unknown, sides?: Sides): AuditChange {
   if (key === "widgets_hash") return { field: "Widget layout", before: "earlier layout", after: "the widget layout changed" };
   if (has(ID_FIELDS, key)) {
     const { kind, label } = ID_FIELDS[key];
-    return { field: label, before: idFieldValue(refs, kind, before), after: idFieldValue(refs, kind, after) };
+    // A parent keeps its name beside its id on a move (asset.moved): the name at the time reads once the parent is gone.
+    const stored = (side: Detail | undefined) => (key === "parent_id" && side ? text(get(side, "parent_name")) : null);
+    return { field: label, before: idFieldValue(refs, kind, before, stored(sides?.before)), after: idFieldValue(refs, kind, after, stored(sides?.after)) };
   }
   return { field: humanise(key), before: fieldValue(key, before), after: fieldValue(key, after) };
 }
@@ -131,12 +136,14 @@ function diff(sides: Sides, refs: AuditRefs | undefined): { changes: AuditChange
   // dashboard.default_changed keeps the dashboard's name beside its id; the name row says it, so the id row would say it twice.
   const namedDashboard = has(sides.before, "dashboard") || has(sides.after, "dashboard");
   for (const key of new Set([...Object.keys(sides.before), ...Object.keys(sides.after)])) {
+    // The name stored beside parent_id is only that row's fallback (asset.moved): a row of its own would say the parent twice, and maybe by an old name.
+    if (key === "parent_name") continue;
     const before = get(sides.before, key);
     const after = get(sides.after, key);
     if (stable(before) === stable(after)) {
       if (has(sides.before, key) && has(sides.after, key)) unchanged += 1;
     } else if (!(key === "dashboard_id" && namedDashboard)) {
-      changes.push(describeChange(refs, key, before, after));
+      changes.push(describeChange(refs, key, before, after, sides));
     }
   }
   return { changes, unchanged };
@@ -346,6 +353,50 @@ function starterPackAdded(d: Detail): string {
   return names.length > 0 ? `${what}: ${labelList(names)}` : what;
 }
 
+/** Where a moved asset stood on one side of the entry: the top level, a parent by name, or nothing known (the side or its parent_id is missing). */
+type Place = { at: "top" } | { at: "asset"; name: string } | { at: "unknown" };
+
+/** A parent by its current name from the lookup, else the name stored with the entry, else "a deleted asset" ("an asset" when no lookup was made). */
+function placeOf(c: Context, side: "before" | "after"): Place {
+  if (!c.sides || !has(c.sides[side], "parent_id")) return { at: "unknown" };
+  const raw = get(c.sides[side], "parent_id");
+  if (raw === null) return { at: "top" };
+  const stored = text(get(c.sides[side], "parent_name"));
+  const id = idOf(raw);
+  if (id === null) return stored ? { at: "asset", name: stored } : { at: "unknown" };
+  const found = ref(c.refs, "asset", id);
+  return { at: "asset", name: found.is === "name" ? found.name : (stored ?? nameless(found, "asset")) };
+}
+
+/** The moved asset itself: the name stored when it moved (R2), else the lookup's, else "an asset" ("a deleted asset" when the lookup lost it). */
+function movedAssetName(c: Context): string {
+  const stored = text(c.d.name);
+  if (stored) return stored;
+  const id = idOf(c.d.asset_id);
+  if (id === null) return "an asset";
+  const found = ref(c.refs, "asset", id);
+  return found.is === "name" ? found.name : nameless(found, "asset");
+}
+
+/** " together with 2 others" from how many other roots the same request moved; "" for none or for a value that is not a count. */
+function togetherWith(value: unknown): string {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? ` together with ${count(value, "other")}` : "";
+}
+
+/** "Moved Pump 3 from Row A to Row B", "Moved Pump 3 to the top level", "Reordered Pump 3 within Row A", each with the others that went with it. */
+function assetMoved(c: Context): string {
+  const name = movedAssetName(c);
+  const from = placeOf(c, "before");
+  const to = placeOf(c, "after");
+  const together = togetherWith(c.d.moved_with);
+  const sameParent = c.sides !== null && has(c.sides.before, "parent_id") && has(c.sides.after, "parent_id") && stable(get(c.sides.before, "parent_id")) === stable(get(c.sides.after, "parent_id"));
+  if (sameParent) return `Reordered ${name} ${to.at === "asset" ? `within ${to.name}` : "at the top level"}${together}`;
+  const origin = from.at === "top" ? " from the top level" : from.at === "asset" ? ` from ${from.name}` : "";
+  const destination = to.at === "top" ? " to the top level" : to.at === "asset" ? ` to ${to.name}` : "";
+  // A drop at the top level reads "to the top level" alone: where it came from is in the Before / After table.
+  return `Moved ${name}${to.at === "top" ? "" : origin}${destination}${together}`;
+}
+
 const sourcesPage = page("/sources", "Open Sources");
 const scansPage = page("/scans", "Open Scans");
 const usersPage = page("/users", "Open Users & Roles");
@@ -395,6 +446,8 @@ const RULES: Record<string, Rule> = {
   "asset.created": made("asset", "asset_id", ownAsset),
   "asset.updated": changed("asset", "asset_id", ownAsset),
   "asset.deleted": removed("asset", "asset_id"),
+  // One entry per moved root, both sides in full (parent_id, parent_name, sort_order); the rows of one drag share a request_id that no sentence shows.
+  "asset.moved": { summary: assetMoved, link: ownAsset },
 
   "billing.currency_changed": {
     summary: ({ sides }) =>

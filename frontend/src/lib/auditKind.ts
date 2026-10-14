@@ -6,7 +6,7 @@ const SIGN_INS = new Set(["login.succeeded", "setup.completed"]);
 const SETTINGS_PREFIXES = ["settings.", "storage.", "billing."];
 // Actions that add things without ending in ".created": the data-centre starter pack registers kinds.
 const CREATE_ACTIONS = new Set(["kind.starter_pack_added"]);
-const CHANGE_SUFFIXES = [".updated", ".changed", "_changed", ".unblocked", ".default_set", ".renamed"];
+const CHANGE_SUFFIXES = [".updated", ".changed", "_changed", ".unblocked", ".default_set", ".renamed", ".moved"];
 
 /**
  * The first rule that matches wins: problem, signin, settings, delete, create, change; anything else (checks, scans, browsing,

@@ -8,7 +8,7 @@ const entry = (action: string, detail: unknown, extra: Partial<AuditEntry> = {})
 
 // Every action the backend writes (the Python parity test keeps this list and the table in step).
 const ALL_ACTIONS = [
-  "asset.created", "asset.updated", "asset.deleted", "billing.currency_changed",
+  "asset.created", "asset.updated", "asset.deleted", "asset.moved", "billing.currency_changed",
   "dashboard.created", "dashboard.updated", "dashboard.deleted", "dashboard.default_changed", "diagnostics.report", "discovery.accepted",
   "kind.created", "kind.deleted", "kind.icon_changed", "kind.renamed", "kind.starter_pack_added",
   "login.failed", "login.locked", "login.succeeded", "login.unblocked", "mapping.created", "mapping.updated", "mapping.deleted",
@@ -828,7 +828,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(50);
+    expect(ALL_ACTIONS).toHaveLength(51);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }
@@ -1105,6 +1105,113 @@ describe("describeAudit: names instead of ids (refs)", () => {
   });
 });
 
+describe("describeAudit: moved assets (W7p)", () => {
+  // The shape api/asset_move.py stores: the subject, then both sides in full (audit_change with always=True).
+  const side = (parent: number | null, name: string | null, order = 0) => ({ parent_id: parent, parent_name: name, sort_order: order });
+  const moved = (over: Record<string, unknown> = {}) => ({
+    asset_id: 5, name: "Pump 3", request_id: "8f14e45f-ceea-467a-9575-1e9b4b7d3c1a", moved_with: 0, subtree_assets: 1,
+    before: side(6, "Row A"), after: side(7, "Row B", 2), ...over,
+  });
+  const refs = { asset: { "5": "Pump 3", "6": "Row A", "7": "Row B" } };
+  const say = (detail: unknown, lookup: AuditEntry["refs"] = refs) => describeAudit(entry("asset.moved", detail, { refs: lookup }));
+  const noLookup = (detail: unknown) => describeAudit(entry("asset.moved", detail)); // `say(detail, undefined)` would use the default lookup
+
+  it("says where an asset went, in names", () => {
+    expect(say(moved()).summary).toBe("Moved Pump 3 from Row A to Row B");
+  });
+
+  it("says the top level for a drop there, and for where an asset came from", () => {
+    expect(say(moved({ before: side(6, "Row A"), after: side(null, null) })).summary).toBe("Moved Pump 3 to the top level");
+    expect(say(moved({ before: side(null, null), after: side(7, "Row B") })).summary).toBe("Moved Pump 3 from the top level to Row B");
+  });
+
+  it("calls a change of order inside one parent a reorder", () => {
+    expect(say(moved({ before: side(6, "Row A", 0), after: side(6, "Row A", 3) })).summary).toBe("Reordered Pump 3 within Row A");
+    expect(say(moved({ before: side(null, null, 0), after: side(null, null, 3) })).summary).toBe("Reordered Pump 3 at the top level");
+  });
+
+  it("adds how many others went with it, from one up; nothing for none or for a value that is not a count", () => {
+    expect(say(moved({ moved_with: 1 })).summary).toBe("Moved Pump 3 from Row A to Row B together with 1 other");
+    expect(say(moved({ moved_with: 2 })).summary).toBe("Moved Pump 3 from Row A to Row B together with 2 others");
+    expect(say(moved({ moved_with: 11, before: side(6, "Row A"), after: side(null, null) })).summary).toBe("Moved Pump 3 to the top level together with 11 others");
+    expect(say(moved({ moved_with: 3, before: side(6, "Row A", 0), after: side(6, "Row A", 3) })).summary).toBe("Reordered Pump 3 within Row A together with 3 others");
+    for (const value of [0, -1, 1.5, "2", null, Number.NaN, 2 ** 60]) expect(say(moved({ moved_with: value })).summary, String(value)).toBe("Moved Pump 3 from Row A to Row B");
+    const without = moved();
+    delete (without as Record<string, unknown>).moved_with;
+    expect(say(without).summary).toBe("Moved Pump 3 from Row A to Row B");
+  });
+
+  it("prefers a parent's current name from the lookup, then the name stored with the entry, then 'a deleted asset'", () => {
+    const renamed = { asset: { "5": "Pump 3", "6": "Row A (old)", "7": "Row B2" } };
+    expect(say(moved(), renamed).summary).toBe("Moved Pump 3 from Row A (old) to Row B2");
+    const gone = { asset: { "5": "Pump 3" } }; // both parents deleted since
+    expect(say(moved(), gone).summary).toBe("Moved Pump 3 from Row A to Row B");
+    expect(say(moved({ before: side(6, null), after: side(7, null) }), gone).summary).toBe("Moved Pump 3 from a deleted asset to a deleted asset");
+    expect(say(moved({ before: side(6, "  "), after: side(7, 5 as never) }), {}).summary).toBe("Moved Pump 3 from a deleted asset to a deleted asset");
+  });
+
+  it("without a lookup, uses the stored name, else 'an asset' (it does not claim a deletion it does not know of)", () => {
+    expect(noLookup(moved()).summary).toBe("Moved Pump 3 from Row A to Row B");
+    expect(noLookup(moved({ before: side(6, null), after: side(7, null) })).summary).toBe("Moved Pump 3 from an asset to an asset");
+  });
+
+  it("names the moved asset by the name stored at the time, else the lookup, else 'an asset' or 'a deleted asset'", () => {
+    const own = (detail: Record<string, unknown>, lookup: AuditEntry["refs"] = refs) => say({ ...moved(), ...detail }, lookup).summary;
+    expect(own({ name: "Pump 3" }, { asset: { "5": "Pump 3b", "6": "Row A", "7": "Row B" } })).toBe("Moved Pump 3 from Row A to Row B"); // the stored name wins, as everywhere (R2)
+    expect(own({ name: undefined })).toBe("Moved Pump 3 from Row A to Row B"); // the lookup's name
+    expect(own({ name: undefined }, { asset: { "6": "Row A", "7": "Row B" } })).toBe("Moved a deleted asset from Row A to Row B");
+    expect(noLookup(moved({ name: undefined })).summary).toBe("Moved an asset from Row A to Row B");
+    expect(noLookup(moved({ name: undefined, asset_id: "x" })).summary).toBe("Moved an asset from Row A to Row B");
+  });
+
+  it("is still a sentence when the entry has no sides, or only one", () => {
+    const bare = { asset_id: 5, name: "Pump 3" };
+    expect(say(bare).summary).toBe("Moved Pump 3");
+    expect(say({ ...bare, moved_with: 1 }).summary).toBe("Moved Pump 3 together with 1 other");
+    expect(say({ ...bare, before: side(6, "Row A") }).summary).toBe("Moved Pump 3");
+    expect(say({ ...bare, before: side(6, "Row A"), after: {} }).summary).toBe("Moved Pump 3 from Row A");
+    expect(say({ ...bare, before: {}, after: side(7, "Row B") }).summary).toBe("Moved Pump 3 to Row B");
+    expect(say({ ...bare, before: "x", after: [1] }).summary).toBe("Moved Pump 3");
+    expect(say({}).summary).toBe("Moved an asset");
+  });
+
+  it("links to the asset while it exists, with the stored name, and not once it is gone", () => {
+    expect(say(moved()).link).toEqual({ to: "/assets/5", label: "Open asset Pump 3" });
+    expect(say(moved(), { asset: { "6": "Row A" } }).link).toBeNull();
+    expect(say(moved({ asset_id: 0 })).link).toBeNull();
+    expect(noLookup(moved()).link).toEqual({ to: "/assets/5", label: "Open asset Pump 3" });
+  });
+
+  it("lists the parent by name (the stored name when the lookup lost it) and the sort number, and no 'Parent name' row", () => {
+    expect(say(moved()).changes).toEqual([
+      { field: "Parent asset", before: "Row A", after: "Row B" },
+      { field: "Sort order", before: "0", after: "2" },
+    ]);
+    expect(say(moved(), { asset: { "5": "Pump 3" } }).changes).toEqual([
+      { field: "Parent asset", before: "Row A", after: "Row B" },
+      { field: "Sort order", before: "0", after: "2" },
+    ]);
+    expect(say(moved({ before: side(6, null), after: side(7, null, 2) }), { asset: {} }).changes[0]).toEqual({ field: "Parent asset", before: "a deleted asset", after: "a deleted asset" });
+    expect(say(moved({ before: side(6, "Row A"), after: side(null, null, 2) })).changes[0]).toEqual({ field: "Parent asset", before: "Row A", after: "—" });
+  });
+
+  it("counts what did not change for a reorder, and lists only the sort number", () => {
+    const view = say(moved({ before: side(6, "Row A", 0), after: side(6, "Row A", 3) }));
+    expect(view.changes).toEqual([{ field: "Sort order", before: "0", after: "3" }]);
+    expect(view.unchanged).toBe(1); // the parent
+  });
+
+  it("never shows the request id, the undo id or a number", () => {
+    const view = say(moved({ undo_of: "0c1b8f3e-6f0a-4d2e-9a43-5d6e7f8a9b0c", moved_with: 1 }));
+    expect(view.summary).not.toMatch(/8f14e45f|0c1b8f3e|\d{2}/);
+    expect(view.link?.label).not.toMatch(/\d{2}/);
+  });
+
+  it("reads a stored name as text, never as markup", () => {
+    expect(say(moved({ name: "<b>Pump</b>", before: side(6, "<i>A</i>"), after: side(null, null) }), { asset: { "5": "x" } }).summary).toBe("Moved <b>Pump</b> to the top level");
+  });
+});
+
 describe("describeAudit: no sentence shows an id", () => {
   // Distinctive ids, so a leaked one is found by its digits: a plain "7" would pass a /#\d+/ check.
   const A = 90001, PARENT = 90002, USER = 90003, SRC = 90004, DASH = 90005, POINT = 90006, MAPPING = 90007, TARIFF = 90008;
@@ -1116,6 +1223,10 @@ describe("describeAudit: no sentence shows an id", () => {
     "asset.created": { asset_id: A, name: "Rack 1", parent_id: PARENT, kind: "Rack", sort_order: 0, icon: null },
     "asset.updated": { asset_id: A, name: "Rack 1", before: { parent_id: A2, name: "Rack" }, after: { parent_id: A3, name: "Rack 1" } },
     "asset.deleted": { asset_id: A, name: "Rack 1", assets: 1, mappings: 2, tariffs: 0 },
+    "asset.moved": {
+      asset_id: A, name: "Rack 1", request_id: "8f14e45f-ceea-467a-9575-1e9b4b7d3c1a", moved_with: 2, subtree_assets: 4, undo_of: "0c1b8f3e-6f0a-4d2e-9a43-5d6e7f8a9b0c",
+      before: { parent_id: A2, parent_name: "Hall 2", sort_order: 0 }, after: { parent_id: A3, parent_name: "Hall 3", sort_order: 1 },
+    },
     "billing.currency_changed": { before: { currency: "QAR" }, after: { currency: "USD" } },
     "dashboard.created": { dashboard_id: DASH, name: "Ops", widgets: 0 },
     "dashboard.updated": { dashboard_id: DASH, name: "Ops", before: { name: "O", widgets: 1 }, after: { name: "Ops", widgets: 2 } },
@@ -1174,7 +1285,7 @@ describe("describeAudit: no sentence shows an id", () => {
   const withoutNames = (detail: unknown): unknown => {
     const strip = (value: Record<string, unknown>) => {
       const copy = { ...value };
-      for (const key of ["name", "username", "dashboard", "scope_name", "copied_from"]) delete copy[key];
+      for (const key of ["name", "username", "dashboard", "scope_name", "copied_from", "parent_name"]) delete copy[key];
       return copy;
     };
     const copy = strip(detail as Record<string, unknown>);
