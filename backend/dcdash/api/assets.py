@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dcdash.api.asset_names import AssetName, require_free_name
+from dcdash.api.asset_names import AssetName, lock_asset_names, require_free_name
 from dcdash.api.deps import current_user, get_db, notify, require_permission
 from dcdash.core.asset_icons import AssetIcon
 from dcdash.core.asset_kinds import icon_for, kind_icons
@@ -143,6 +143,10 @@ async def create_asset(body: AssetIn, db: AsyncSession = Depends(get_db), user: 
 async def update_asset(
     asset_id: int, body: AssetPatch, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> AssetOut:
+    if "parent_id" in body.model_fields_set or "name" in body.model_fields_set:
+        # BEFORE the row is read: a rename that waited behind a move (api/asset_move.py holds this lock) must see where the move
+        # left the asset and its new siblings, not the parent it read first. Taking it later, inside require_free_name, was too late.
+        await lock_asset_names(db)
     asset = await get_asset(db, asset_id)
     before = _asset_values(asset)
     changes = body.model_dump(exclude_unset=True)

@@ -19,6 +19,10 @@
   .toast-text { flex: 1; min-width: 0; padding-top: 1px; overflow-wrap: anywhere; } /* a long asset name wraps, it never widens the toast */
   .toast-count { flex: none; min-width: 20px; padding: 0 6px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; line-height: 20px; text-align: center; }
   .toast-close { margin-top: -2px; }
+  /* W7p: the optional action after the message ("Undo"). Compact like the close button beside it, the label in the accent ink so it reads as the one
+     thing to press; it keeps the focus ring and the hover of a plain button. Short labels never wrap; a long one wraps inside 45% so the text keeps its room. */
+  .toast-action { flex: none; max-width: 45%; min-height: 28px; margin-top: -2px; padding: 0 10px; border-color: var(--border-strong); background: var(--bg); color: var(--accent-ink); font-weight: 600; overflow-wrap: anywhere; }
+  .toast-action:hover:not(:disabled) { background: var(--accent-tint); }
 
   /* A narrow window: the full width between the two margins. */
   @media (max-width: 719.98px) {

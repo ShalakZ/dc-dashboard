@@ -31,6 +31,52 @@ export interface AssetImpact { assets: number; mappings: number; tariffs: number
 /** What deleting a source takes with it (GET /api/sources/{id}/impact; also the counts in the 409 body of DELETE /api/sources/{id}). */
 export interface SourceImpact { points: number; mappings: number }
 
+/**
+ * POST /api/assets/move-preview and /api/assets/move (assets.edit). One group puts `ids` under `parent_id` (null = the top level), in front
+ * of the sibling `before_id` (null = last). The server reduces `ids` to roots (an id below another id of the request travels inside it) and
+ * orders them as the tree orders them. At most 500 groups and 500 ids in all, each id once.
+ */
+export interface MoveGroup { ids: number[]; parent_id: number | null; before_id: number | null }
+/**
+ * What the person was shown; the server refuses (409 `stale`) when reality differs and moves nothing. `assets`: assets that move in all
+ * (roots plus descendants); `parents`: each ROOT's parent id as shown, keyed by the root's id, the roots already in place included (at most 500); `rate_changes`: the preview's verdict, so
+ * a tariff added after it cannot slip past the warning. Every key is optional; the preview answers with all three.
+ */
+export interface MoveExpect { assets?: number; parents?: Record<string, number | null>; rate_changes?: boolean }
+export interface MoveBody { moves: MoveGroup[]; expect?: MoveExpect | null; undo_of?: string | null }
+/**
+ * One moved root in a preview. `rate_before`/`rate_after` are the per-kWh rates of today (null: no tariff applies, its energy shows without
+ * cost). The rate can also change on other days (a dated tariff row): `rate_changes_other_days`. `change` "order" is a reorder inside one
+ * parent, which never changes a rate.
+ */
+export interface MovePreviewRoot {
+  id: number; name: string; subtree_assets: number;
+  from_parent_id: number | null; from_parent_name: string | null; to_parent_id: number | null; to_parent_name: string | null;
+  change: "parent" | "order";
+  rate_before: number | null; rate_after: number | null; rate_changes_today: boolean; rate_changes_other_days: boolean;
+}
+/** The answer to POST /api/assets/move-preview: nothing is written. `expect` is what to send back with the move. `currency` is the site's (null = not set). */
+export interface MovePreview {
+  assets: number; unchanged: number[]; currency: string | null; rate_changes: boolean; roots: MovePreviewRoot[];
+  expect: Required<MoveExpect>;
+}
+/** One root the move moved or reordered. */
+export interface MovedAsset {
+  id: number; name: string;
+  from_parent_id: number | null; to_parent_id: number | null; from_parent_name: string | null; to_parent_name: string | null;
+  change: "parent" | "order";
+}
+/** The request that puts everything back: send `moves` with `expect`, and `undo_of` = the first request's `request_id`. */
+export interface MoveUndo { moves: MoveGroup[]; expect: Required<Pick<MoveExpect, "assets" | "parents">> }
+/** The answer to POST /api/assets/move. `unchanged` ids were skipped (already there). */
+export interface MoveResult { request_id: string; assets: number; unchanged: number[]; moved: MovedAsset[]; undo: MoveUndo }
+/**
+ * One entry of the `refusals` list in the body of a 422 from the move routes; `reason` is a full sentence in names, `code` a short word
+ * (cycle, name_clash, ...). `name` is null when the server has no asset to name (the `invalid` code, which body validation makes unreachable);
+ * `moveRefusals` turns that into "".
+ */
+export interface MoveRefusal { id: number; name: string | null; reason: string; code: string }
+
 export interface Source {
   id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";
   enabled: boolean; status: string; last_seen: string | null; last_error: string | null; has_secret: boolean;

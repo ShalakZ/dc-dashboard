@@ -3,7 +3,7 @@ import { auditKind, type AuditKind } from "./auditKind";
 
 // The expected kind of every action the backend writes (lib/auditText.ts keeps the table; the test below reads its keys, so a new action fails here until it is listed).
 const EXPECTED: Record<string, AuditKind> = {
-  "asset.created": "create", "asset.updated": "change", "asset.deleted": "delete",
+  "asset.created": "create", "asset.updated": "change", "asset.deleted": "delete", "asset.moved": "change",
   "billing.currency_changed": "settings",
   "dashboard.created": "create", "dashboard.updated": "change", "dashboard.deleted": "delete", "dashboard.default_changed": "change",
   "diagnostics.report": "other", "discovery.accepted": "other",
@@ -24,11 +24,11 @@ const EXPECTED: Record<string, AuditKind> = {
 };
 
 describe("auditKind", () => {
-  it("names the kind of every one of the 50 actions in the audit text table", () => {
+  it("names the kind of every one of the 51 actions in the audit text table", () => {
     const source = readFileSync("src/lib/auditText.ts", "utf8"); // vitest runs from the frontend directory
     const table = source.slice(source.indexOf("const RULES"), source.indexOf("function build("));
     const actions = [...table.matchAll(/^ {2}"([a-z_.]+)":/gm)].map((m) => m[1]);
-    expect(actions).toHaveLength(50);
+    expect(actions).toHaveLength(51);
     expect([...actions].sort()).toEqual(Object.keys(EXPECTED).sort());
     for (const action of actions) expect(auditKind(action), action).toBe(EXPECTED[action]);
   });

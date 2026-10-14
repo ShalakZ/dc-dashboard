@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import type { Asset } from "../api/types";
 import { buildTree } from "../lib/tree";
 import { iconHtml } from "../test/iconHtml";
-import { AssetTree } from "./AssetTree";
+import { AssetTree, rowRenderProbe, type AssetTreeMove } from "./AssetTree";
 
 const KEY = "dcdash.assetTreeFolded";
 const a = (id: number, parent_id: number | null, name: string): Asset => ({ id, parent_id, name, kind: "generic", sort_order: id });
@@ -890,5 +890,815 @@ describe("AssetTree Asset kinds link", () => {
     await userEvent.type(screen.getByLabelText("Filter assets"), "kinds");
     expect(screen.getByText("No assets match the filter.")).toBeInTheDocument();
     expect(kinds()).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// W7p: picking rows and dragging them. The tree reports raw ids and a place; the page does the moving.
+// Rows: Site 1, Room A 2, Panel 1 3, Room B 4, Yard 5, Shed 6 (see `flat`).
+
+function Where() {
+  return <p data-testid="where">{useLocation().pathname}</p>;
+}
+const where = () => screen.getByTestId("where").textContent;
+const moveApi = (over: Partial<AssetTreeMove> = {}): AssetTreeMove => ({ onDrop: vi.fn(), onMoveTo: vi.fn(), moved: null, ...over });
+/** A move signal for these roots; the first of them is the one the tree reveals and focuses. */
+const signal = (...ids: number[]) => ({ firstId: ids[0], ids });
+const withMove = (props: Props = {}) => (
+  <MemoryRouter>
+    <AssetTree nodes={nodes()} selectedId={null} move={moveApi()} {...props} />
+    <Where />
+  </MemoryRouter>
+);
+const hLink = (name: string) => screen.getByRole("link", { name, hidden: true });
+const rowEl = (name: string) => hLink(name).closest(".node") as HTMLElement;
+const pickedNames = () => [...document.querySelectorAll(".node[data-picked] a")].map((a) => a.textContent);
+const slot = () => screen.getByRole("group", { name: "Selection" });
+const liveText = () => document.querySelector("[aria-live]")!.textContent;
+
+/** A click on `el`. The result is whether the tree itself prevented the default (picking does, and so must not open the asset). */
+function clickPrevented(el: Element, init: MouseEventInit = {}) {
+  let prevented = false;
+  const spy = (e: Event) => { prevented = e.defaultPrevented; e.preventDefault(); }; // also keeps jsdom from "navigating" on a click nobody handled
+  document.addEventListener("click", spy);
+  fireEvent.click(el, init);
+  document.removeEventListener("click", spy);
+  return prevented;
+}
+const ctrlClick = (name: string) => clickPrevented(hLink(name), { ctrlKey: true });
+const shiftClick = (name: string) => clickPrevented(hLink(name), { shiftKey: true });
+
+describe("AssetTree without move (a role that may not change assets)", () => {
+  it("draws no slot, no draggable row, no filler and no live line, and a Ctrl-click is left to the browser", () => {
+    render(ui());
+    expect(screen.queryByRole("group", { name: "Selection" })).not.toBeInTheDocument();
+    expect(document.querySelector("[data-asset-id]")).toBeNull();
+    expect(document.querySelector("[draggable]")).toBeNull();
+    expect(document.querySelector(".tree-root-drop")).toBeNull();
+    expect(document.querySelector("[aria-live]")).toBeNull();
+    expect(document.querySelector(".tree-scroll-move")).toBeNull();
+    expect(clickPrevented(hLink("Room A"), { ctrlKey: true })).toBe(false);
+    expect(document.querySelector(".node[data-picked]")).toBeNull();
+  });
+
+  it("ignores Space, M and the arrow keys on a row", () => {
+    render(ui());
+    hLink("Room A").focus();
+    for (const key of [" ", "m", "ArrowDown"]) expect(fireEvent.keyDown(hLink("Room A"), { key })).toBe(true); // true: not prevented
+    expect(document.querySelector(".node[data-picked]")).toBeNull();
+    expect(hLink("Room A")).toHaveFocus();
+  });
+});
+
+describe("AssetTree picked slot", () => {
+  it("is a group named Selection between the filter and the rows, with a hint when nothing is picked", () => {
+    render(withMove());
+    expect(slot()).toHaveTextContent("Ctrl-click to pick several");
+    const body = slot().parentElement!;
+    const kids = [...body.children];
+    expect(kids.indexOf(body.querySelector(".tree-filter")!)).toBeLessThan(kids.indexOf(slot()));
+    expect(kids.indexOf(slot())).toBeLessThan(kids.indexOf(body.querySelector(".tree-scroll")!));
+    expect(within(slot()).queryByRole("button")).not.toBeInTheDocument(); // no open asset, nothing picked: nothing to move
+  });
+
+  it("offers to move the open asset when nothing is picked, and hands the page that asset and the button", async () => {
+    const move = moveApi();
+    render(withMove({ move, selectedId: 4 }));
+    const button = within(slot()).getByRole("button", { name: "Move to..." });
+    expect(button).toHaveAttribute("title", "Move Room B to another place");
+    await userEvent.click(button);
+    expect(move.onMoveTo).toHaveBeenCalledWith([4], button);
+  });
+
+  it("shows how many are picked with Move to... and Clear, and Move to... takes the picks (not the open asset)", async () => {
+    const move = moveApi();
+    render(withMove({ move, selectedId: 4 }));
+    ctrlClick("Room A");
+    ctrlClick("Shed");
+    expect(slot()).toHaveTextContent("2 picked");
+    expect(slot()).not.toHaveTextContent("Ctrl-click");
+    const button = within(slot()).getByRole("button", { name: "Move to..." });
+    await userEvent.click(button);
+    expect(move.onMoveTo).toHaveBeenCalledTimes(1);
+    const [ids, opener] = vi.mocked(move.onMoveTo).mock.calls[0];
+    expect([...ids].sort()).toEqual([2, 6]);
+    expect(opener).toBe(button);
+  });
+
+  it("Clear ends the picks and puts the focus on the row the person touched last", async () => {
+    render(withMove());
+    ctrlClick("Room A");
+    ctrlClick("Room B");
+    await userEvent.click(within(slot()).getByRole("button", { name: "Clear" }));
+    expect(pickedNames()).toEqual([]);
+    expect(slot()).toHaveTextContent("Ctrl-click to pick several");
+    expect(hLink("Room B")).toHaveFocus();
+  });
+
+  it("while the page is busy Move to... keeps its focus and does nothing (aria-disabled, not disabled)", async () => {
+    const move = moveApi();
+    render(withMove({ move, selectedId: 4, disabled: true }));
+    const button = within(slot()).getByRole("button", { name: "Move to..." });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    expect(move.onMoveTo).not.toHaveBeenCalled();
+  });
+
+  it("is drawn empty and hidden from assistive technology in the loading skeleton, where the filter and the rows will be", () => {
+    render(withMove({ nodes: [], loading: true }));
+    const region = screen.getByRole("status");
+    const placeholder = region.querySelector(".tree-slot")!;
+    expect(placeholder).toBeEmptyDOMElement();
+    expect(placeholder).toHaveAttribute("aria-hidden", "true");
+    const kids = [...region.children];
+    expect(kids.indexOf(region.querySelector(".tree-filter")!)).toBeLessThan(kids.indexOf(placeholder));
+    expect(kids.indexOf(placeholder)).toBeLessThan(kids.indexOf(region.querySelector(".tree-scroll")!));
+    expect(screen.queryByRole("group", { name: "Selection" })).not.toBeInTheDocument();
+  });
+
+  it("is not drawn for an empty tree, and stays above the rows when the filter matches nothing", async () => {
+    const view = render(withMove({ nodes: [] }));
+    expect(screen.queryByRole("group", { name: "Selection" })).not.toBeInTheDocument();
+    view.rerender(withMove());
+    await userEvent.type(screen.getByLabelText("Filter assets"), "zzz");
+    expect(slot()).toBeInTheDocument();
+  });
+});
+
+describe("AssetTree picking with the mouse", () => {
+  it("Ctrl-click picks a row without opening it and a second Ctrl-click takes it off", () => {
+    render(withMove());
+    expect(ctrlClick("Room A")).toBe(true);
+    expect(where()).toBe("/");
+    expect(pickedNames()).toEqual(["Room A"]);
+    expect(rowEl("Room A")).toHaveAttribute("data-picked", "true");
+    expect(rowEl("Room A").className).not.toContain("is-selected");
+    ctrlClick("Room A");
+    expect(pickedNames()).toEqual([]);
+  });
+
+  it("Cmd-click (the Mac's key) does the same", () => {
+    render(withMove());
+    expect(clickPrevented(hLink("Room A"), { metaKey: true })).toBe(true);
+    expect(pickedNames()).toEqual(["Room A"]);
+    expect(where()).toBe("/");
+  });
+
+  it("a picked row says so to assistive technology without changing the link's name", () => {
+    render(withMove());
+    ctrlClick("Room A");
+    const link = screen.getByRole("link", { name: "Room A" }); // a string name is matched in full: the name is still just the asset's
+    expect(link).toHaveAccessibleDescription("picked");
+    expect(screen.getByRole("link", { name: "Room B" })).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("a plain click opens the asset and clears the picks", () => {
+    render(withMove());
+    ctrlClick("Room A");
+    ctrlClick("Yard");
+    expect(clickPrevented(hLink("Room B"))).toBe(true); // react-router navigated
+    expect(where()).toBe("/assets/4");
+    expect(pickedNames()).toEqual([]);
+  });
+
+  it("Shift-click picks the rows from the anchor to the clicked row, in tree order, and replaces the earlier picks", () => {
+    render(withMove());
+    ctrlClick("Shed");
+    ctrlClick("Room A"); // the anchor is now Room A
+    expect(shiftClick("Yard")).toBe(true);
+    expect(pickedNames()).toEqual(["Room A", "Panel 1", "Room B", "Yard"]);
+    expect(where()).toBe("/");
+    shiftClick("Room B"); // the same anchor
+    expect(pickedNames()).toEqual(["Room A", "Panel 1", "Room B"]);
+  });
+
+  it("the mousedown of a Shift-click is prevented (it would extend a text selection across the rows)", () => {
+    render(withMove());
+    expect(fireEvent.mouseDown(hLink("Room A"), { shiftKey: true })).toBe(false);
+    expect(fireEvent.mouseDown(hLink("Room A"))).toBe(true);
+  });
+
+  it("a range leaves out the rows of a folded branch", async () => {
+    render(withMove());
+    await userEvent.click(twisty("Room A")); // Panel 1 is hidden
+    ctrlClick("Site");
+    shiftClick("Yard");
+    expect(pickedNames()).toEqual(["Site", "Room A", "Room B", "Yard"]);
+  });
+
+  it("a range leaves out the rows a filter hides", async () => {
+    render(withMove());
+    await userEvent.type(screen.getByLabelText("Filter assets"), "room");
+    ctrlClick("Site");
+    shiftClick("Room B");
+    expect(pickedNames()).toEqual(["Site", "Room A", "Room B"]); // Panel 1, Yard and Shed do not match
+  });
+
+  it("after a plain click on a row the next Shift-click ranges from that row", () => {
+    render(withMove());
+    clickPrevented(hLink("Room A"));
+    shiftClick("Yard");
+    expect(pickedNames()).toEqual(["Room A", "Panel 1", "Room B", "Yard"]);
+  });
+
+  it("a pick that disappears from the list is forgotten", () => {
+    const move = moveApi();
+    const view = render(withMove({ move }));
+    ctrlClick("Room A");
+    ctrlClick("Shed");
+    expect(slot()).toHaveTextContent("2 picked");
+    view.rerender(withMove({ move, nodes: buildTree(flat.filter((x) => x.id !== 6)) }));
+    expect(slot()).toHaveTextContent("1 picked");
+    expect(pickedNames()).toEqual(["Room A"]);
+  });
+});
+
+describe("AssetTree picking with the keyboard", () => {
+  it("Space picks the focused row and Space again takes it off", async () => {
+    render(withMove());
+    hLink("Room A").focus();
+    await userEvent.keyboard(" ");
+    expect(pickedNames()).toEqual(["Room A"]);
+    await userEvent.keyboard(" ");
+    expect(pickedNames()).toEqual([]);
+    expect(where()).toBe("/");
+  });
+
+  it("ArrowDown and ArrowUp move the focus between the rows that are on screen", async () => {
+    render(withMove());
+    hLink("Room B").focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(hLink("Yard")).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}{ArrowUp}");
+    expect(hLink("Panel 1")).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}{ArrowUp}{ArrowUp}{ArrowUp}");
+    expect(hLink("Site")).toHaveFocus(); // the first row stays the first
+    await userEvent.click(twisty("Site")); // fold the whole branch
+    hLink("Site").focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(hLink("Yard")).toHaveFocus(); // the folded children are skipped
+  });
+
+  it("Shift+ArrowDown extends a range from the row the key was pressed on", async () => {
+    render(withMove());
+    hLink("Site").focus();
+    await userEvent.keyboard("{Shift>}{ArrowDown}{ArrowDown}{/Shift}");
+    expect(pickedNames()).toEqual(["Site", "Room A", "Panel 1"]);
+    expect(hLink("Panel 1")).toHaveFocus();
+    await userEvent.keyboard("{Shift>}{ArrowUp}{/Shift}");
+    expect(pickedNames()).toEqual(["Site", "Room A"]);
+  });
+
+  it("M opens Move to... for the picked rows, handing over the focused link; with nothing picked it moves the row it was pressed on", async () => {
+    const move = moveApi();
+    render(withMove({ move }));
+    hLink("Panel 1").focus();
+    await userEvent.keyboard("m");
+    expect(move.onMoveTo).toHaveBeenLastCalledWith([3], hLink("Panel 1"));
+    ctrlClick("Room A");
+    ctrlClick("Yard");
+    hLink("Room B").focus();
+    await userEvent.keyboard("M");
+    const [ids, opener] = vi.mocked(move.onMoveTo).mock.calls.at(-1)!;
+    expect([...ids].sort()).toEqual([2, 5]);
+    expect(opener).toBe(hLink("Room B"));
+  });
+
+  it("Shift+F10 and the context-menu key do the same, and Ctrl+M is the browser's", () => {
+    const move = moveApi();
+    render(withMove({ move }));
+    hLink("Room A").focus();
+    expect(fireEvent.keyDown(hLink("Room A"), { key: "F10", shiftKey: true })).toBe(false);
+    expect(fireEvent.keyDown(hLink("Room A"), { key: "ContextMenu" })).toBe(false);
+    expect(move.onMoveTo).toHaveBeenCalledTimes(2);
+    expect(fireEvent.keyDown(hLink("Room A"), { key: "m", ctrlKey: true })).toBe(true);
+    expect(move.onMoveTo).toHaveBeenCalledTimes(2);
+  });
+
+  it("M does nothing while the page is busy", async () => {
+    const move = moveApi();
+    render(withMove({ move, disabled: true }));
+    hLink("Room A").focus();
+    await userEvent.keyboard("m");
+    expect(move.onMoveTo).not.toHaveBeenCalled();
+  });
+
+  it("Escape clears the picks, and does nothing (not even a preventDefault) when nothing is picked", () => {
+    render(withMove());
+    hLink("Room A").focus();
+    expect(fireEvent.keyDown(hLink("Room A"), { key: "Escape" })).toBe(true);
+    ctrlClick("Room A");
+    expect(fireEvent.keyDown(hLink("Room A"), { key: "Escape" })).toBe(false);
+    expect(pickedNames()).toEqual([]);
+  });
+
+  describe("Ctrl+Z (Cmd+Z)", () => {
+    const press = (init: KeyboardEventInit, name = "Room A") => fireEvent.keyDown(hLink(name), init);
+
+    it("asks the page to undo its latest move, and keeps the browser's default away only when it did", () => {
+      const onUndo = vi.fn(() => true);
+      render(withMove({ move: moveApi({ onUndo }) }));
+      hLink("Room A").focus();
+      expect(press({ key: "z", ctrlKey: true })).toBe(false); // false: preventDefault was called
+      expect(onUndo).toHaveBeenCalledTimes(1);
+      expect(press({ key: "Z", metaKey: true })).toBe(false); // Cmd+Z, and a capital from Caps Lock
+      expect(onUndo).toHaveBeenCalledTimes(2);
+      onUndo.mockReturnValue(false); // nothing to undo (the toast is gone, or another move is running)
+      expect(press({ key: "z", ctrlKey: true })).toBe(true);
+      expect(onUndo).toHaveBeenCalledTimes(3);
+    });
+
+    it("works on a layout where the key is not a Latin z (the physical key is KeyZ)", () => {
+      const onUndo = vi.fn(() => true);
+      render(withMove({ move: moveApi({ onUndo }) }));
+      expect(press({ key: "\u0632", code: "KeyZ", ctrlKey: true })).toBe(false);
+      expect(onUndo).toHaveBeenCalledTimes(1);
+      expect(press({ key: "y", code: "KeyZ", ctrlKey: true })).toBe(true); // a Latin layout where that key is another letter
+      expect(onUndo).toHaveBeenCalledTimes(1);
+    });
+
+    it("is not Redo, not Alt+Z and not a bare z", () => {
+      const onUndo = vi.fn(() => true);
+      render(withMove({ move: moveApi({ onUndo }) }));
+      expect(press({ key: "Z", ctrlKey: true, shiftKey: true })).toBe(true);
+      expect(press({ key: "z", ctrlKey: true, altKey: true })).toBe(true);
+      expect(press({ key: "z" })).toBe(true);
+      expect(onUndo).not.toHaveBeenCalled();
+    });
+
+    it("does nothing while the page is busy (the tree is disabled)", () => {
+      const onUndo = vi.fn(() => true);
+      render(withMove({ move: moveApi({ onUndo }), disabled: true }));
+      expect(press({ key: "z", ctrlKey: true })).toBe(true);
+      expect(onUndo).not.toHaveBeenCalled();
+    });
+
+    it("is ignored without a way to undo, and without move at all (the browser keeps the key)", () => {
+      const view = render(withMove({ move: moveApi() })); // an older page: no onUndo
+      expect(press({ key: "z", ctrlKey: true })).toBe(true);
+      view.unmount();
+      render(ui());
+      expect(fireEvent.keyDown(hLink("Room A"), { key: "z", ctrlKey: true })).toBe(true);
+    });
+
+    it("is not the tree's when pressed on a twisty, a + or in the filter", async () => {
+      const onUndo = vi.fn(() => true);
+      render(withMove({ move: moveApi({ onUndo }), onAddChild: vi.fn() }));
+      expect(fireEvent.keyDown(twisty("Site"), { key: "z", ctrlKey: true })).toBe(true);
+      expect(fireEvent.keyDown(screen.getByRole("button", { name: "Add child of Site" }), { key: "z", ctrlKey: true })).toBe(true);
+      expect(fireEvent.keyDown(screen.getByLabelText("Filter assets"), { key: "z", ctrlKey: true })).toBe(true);
+      expect(onUndo).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keys pressed in the filter, on a twisty or on a + are not the tree's", async () => {
+    const move = moveApi();
+    render(withMove({ move, onAddChild: vi.fn() }));
+    await userEvent.type(screen.getByLabelText("Filter assets"), "m");
+    await userEvent.clear(screen.getByLabelText("Filter assets"));
+    expect(move.onMoveTo).not.toHaveBeenCalled();
+    twisty("Site").focus();
+    await userEvent.keyboard("m");
+    screen.getByRole("button", { name: "Add child of Site" }).focus();
+    await userEvent.keyboard("m");
+    expect(move.onMoveTo).not.toHaveBeenCalled();
+    expect(document.querySelector(".node[data-picked]")).toBeNull();
+  });
+});
+
+describe("AssetTree live line", () => {
+  it("is one role-less polite region; the first pick says Press M to move, later ones do not", () => {
+    render(withMove());
+    const line = document.querySelector("[aria-live]")!;
+    expect(line).toHaveAttribute("aria-live", "polite");
+    expect(line).not.toHaveAttribute("role");
+    expect(document.querySelectorAll("[aria-live]")).toHaveLength(1);
+    expect(liveText()).toBe("");
+    ctrlClick("Room A");
+    expect(liveText()).toBe("Room A picked. Press M to move");
+    ctrlClick("Room B");
+    expect(liveText()).toBe("Room B picked, 2 picked in all");
+    ctrlClick("Room B");
+    expect(liveText()).toBe("Room B unpicked, 1 picked");
+    shiftClick("Yard"); // from Room B, the row last touched, to Yard
+    expect(liveText()).toBe("2 picked");
+    fireEvent.keyDown(hLink("Yard"), { key: "Escape" });
+    expect(liveText()).toBe("Picks cleared");
+  });
+});
+
+describe("AssetTree renders", () => {
+  afterEach(() => { rowRenderProbe.current = null; });
+
+  it("picking a grandchild renders that row and no other; picking a parent renders that row, not its children", () => {
+    const seen: number[] = [];
+    render(withMove());
+    rowRenderProbe.current = (id) => seen.push(id);
+    ctrlClick("Panel 1");
+    expect(seen).toEqual([3]);
+    seen.length = 0;
+    ctrlClick("Room A");
+    expect(seen).toEqual([2]);
+    seen.length = 0;
+    shiftClick("Yard"); // a range replaces the set once: only the rows whose flag flips render
+    expect(seen.sort()).toEqual([4, 5].sort()); // Room A and Panel 1 stay picked; Room B and Yard join
+  });
+
+  it("folding a branch renders the rows again (the view changed), the picks do not", async () => {
+    render(withMove());
+    ctrlClick("Yard");
+    const seen: number[] = [];
+    rowRenderProbe.current = (id) => seen.push(id);
+    await userEvent.click(twisty("Room A"));
+    expect(seen).toContain(2);
+  });
+});
+
+describe("AssetTree after a move", () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("unpicks the moved rows, unfolds the way to the first moved asset and focuses its link once the new tree has arrived", () => {
+    localStorage.setItem(KEY, "[1,2]");
+    const before = nodes();
+    const view = render(withMove({ nodes: before }));
+    ctrlClick("Yard");
+    expect(pickedNames()).toEqual(["Yard"]);
+    const moved = signal(3, 5); // Panel 1 (inside the folded Site) and Yard were the moved roots
+    view.rerender(withMove({ nodes: before, move: moveApi({ moved }) }));
+    expect(pickedNames()).toEqual([]); // the moved rows are no longer picked, at once
+    expect(link("Panel 1")).not.toBeInTheDocument(); // the tree has not changed yet: nothing is revealed (it would be the old place)
+    view.rerender(withMove({ nodes: buildTree(flat), move: moveApi({ moved }) })); // the refetched tree
+    expect(expanded("Site")).toBe("true");
+    expect(expanded("Room A")).toBe("true");
+    expect(link("Panel 1")).toHaveFocus();
+  });
+
+  it("takes a tree that was current already: after a short wait it still unfolds and focuses", () => {
+    vi.useFakeTimers();
+    localStorage.setItem(KEY, "[1,2]");
+    const tree1 = nodes();
+    const view = render(withMove({ nodes: tree1 }));
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(3) }) }));
+    expect(link("Panel 1")).not.toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(260); });
+    expect(link("Panel 1")).toHaveFocus();
+    expect(expanded("Site")).toBe("true");
+  });
+
+  it("shows a moved asset the filter hides, by clearing the filter", async () => {
+    const tree1 = nodes();
+    const view = render(withMove({ nodes: tree1 }));
+    await userEvent.type(screen.getByLabelText("Filter assets"), "yard");
+    expect(link("Room B")).not.toBeInTheDocument();
+    const moved = signal(4);
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved }) }));
+    view.rerender(withMove({ nodes: nodes(), move: moveApi({ moved }) }));
+    expect(screen.getByLabelText("Filter assets")).toHaveValue("");
+    expect(link("Room B")).toHaveFocus();
+  });
+
+  it("a moved object that was there when the tree mounted is not a move", () => {
+    render(withMove({ move: moveApi({ moved: signal(3) }) }));
+    expect(document.body).toHaveFocus();
+  });
+
+  it("leaves the picks that did not move: dragging one unpicked row must not end the picking of the rest", () => {
+    const tree1 = nodes();
+    const view = render(withMove({ nodes: tree1 }));
+    ctrlClick("Room A");
+    ctrlClick("Yard");
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(4) }) })); // Room B, which was never picked
+    expect(pickedNames()).toEqual(["Room A", "Yard"]);
+  });
+
+  it("unpicks every moved root, and the picked rows inside a moved root, which travelled with it", () => {
+    const tree1 = nodes();
+    const view = render(withMove({ nodes: tree1 }));
+    ctrlClick("Site");
+    ctrlClick("Panel 1"); // inside Site: the page sends only the root, Site
+    ctrlClick("Yard");
+    ctrlClick("Shed");
+    expect(pickedNames()).toEqual(["Site", "Panel 1", "Yard", "Shed"]);
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(1, 5) }) }));
+    expect(pickedNames()).toEqual([]); // Site and its Panel 1, Yard and its Shed
+  });
+
+  it("unpicks the restored roots of an Undo the same way, and keeps the others", () => {
+    const tree1 = nodes();
+    const view = render(withMove({ nodes: tree1 }));
+    ctrlClick("Room B");
+    ctrlClick("Yard");
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(2) }) }));
+    expect(pickedNames()).toEqual(["Room B", "Yard"]);
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(4) }) }));
+    expect(pickedNames()).toEqual(["Yard"]);
+  });
+
+  it("says the page's own words on the live line, and a later signal without words (an Undo) clears them", () => {
+    const tree1 = nodes();
+    const view = render(withMove({ nodes: tree1 }));
+    const line = "Moved Room B to Yard. Press Ctrl+Z to undo.";
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: { ...signal(4), line } }) }));
+    expect(liveText()).toBe(line);
+    view.rerender(withMove({ nodes: tree1, move: moveApi({ moved: signal(4) }) }));
+    expect(liveText()).toBe("");
+  });
+});
+
+describe("AssetTree dragging", () => {
+  const dtOf = () => {
+    const data: Record<string, string> = {};
+    return { data, dropEffect: "none", effectAllowed: "uninitialized", types: [] as string[], setData: vi.fn((kind: string, value: string) => { data[kind] = value; }), setDragImage: vi.fn() };
+  };
+  type Dt = ReturnType<typeof dtOf>;
+  function drag(type: string, el: Element, init: { y?: number; dt?: Dt; related?: Element | null } = {}) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientY: init.y ?? 0, relatedTarget: init.related ?? null });
+    Object.defineProperty(event, "dataTransfer", { value: init.dt ?? null });
+    fireEvent(el, event);
+    return event;
+  }
+  /** Every .node gets a rectangle, 32px rows stacked from the top in document order (jsdom has no layout). */
+  function layout() {
+    document.querySelectorAll<HTMLElement>(".node").forEach((el, i) => {
+      el.getBoundingClientRect = () => ({ top: i * 32, bottom: i * 32 + 32, height: 32, left: 0, right: 200, width: 200, x: 0, y: i * 32, toJSON() { return {}; } }) as DOMRect;
+    });
+  }
+  const OFFSET = { before: 4, inside: 16, after: 28 };
+  const at = (name: string, zone: keyof typeof OFFSET) => [...document.querySelectorAll(".node")].indexOf(rowEl(name)) * 32 + OFFSET[zone];
+  const filler = () => document.querySelector(".tree-root-drop")!;
+
+  /** Starts dragging `name` and returns the transfer; `layout()` has run. */
+  function start(name: string) {
+    layout();
+    const dt = dtOf();
+    drag("dragstart", rowEl(name), { dt });
+    return dt;
+  }
+
+  it("makes the row draggable and its link and buttons not", () => {
+    render(withMove({ onAddChild: vi.fn() }));
+    expect(rowEl("Room A")).toHaveAttribute("draggable", "true");
+    expect(hLink("Room A")).toHaveAttribute("draggable", "false");
+    expect(twisty("Site")).toHaveAttribute("draggable", "false");
+    expect(screen.getByRole("button", { name: "Add child of Site" })).toHaveAttribute("draggable", "false");
+  });
+
+  it("a page that is busy makes no row draggable and starts no drag", () => {
+    render(withMove({ disabled: true }));
+    expect(document.querySelector("[draggable]")).toBeNull();
+    const dt = start("Shed");
+    expect(dt.setData).not.toHaveBeenCalled();
+    expect(drag("dragover", rowEl("Room B"), { y: at("Room B", "inside"), dt }).defaultPrevented).toBe(false);
+  });
+
+  it("starts with the names as text, the move effect and a badge that is gone again right after", async () => {
+    render(withMove());
+    const before = document.querySelectorAll(".node").length;
+    const dt = start("Shed");
+    expect(dt.data["text/plain"]).toBe("Shed");
+    expect(dt.effectAllowed).toBe("move");
+    expect(dt.setDragImage).toHaveBeenCalledTimes(1);
+    const badge = dt.setDragImage.mock.calls[0][0] as HTMLElement;
+    expect(badge.className).toBe("tree-drag-badge");
+    expect(badge).toHaveTextContent("Shed");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(badge.isConnected).toBe(false);
+    expect(document.querySelectorAll(".node")).toHaveLength(before);
+    expect(document.querySelector(".tree-drag-badge")).toBeNull();
+  });
+
+  it("drags every picked row when a picked row is dragged, and only the row itself when it is not picked", () => {
+    const move = moveApi();
+    render(withMove({ move }));
+    ctrlClick("Room A");
+    ctrlClick("Room B");
+    const dt = start("Room B");
+    expect(dt.data["text/plain"]).toBe("Room A\nRoom B");
+    expect(dt.setDragImage.mock.calls[0][0]).toHaveTextContent("2 assets");
+    drag("dragover", rowEl("Yard"), { y: at("Yard", "inside"), dt });
+    drag("drop", rowEl("Yard"), { y: at("Yard", "inside"), dt });
+    expect(move.onDrop).toHaveBeenLastCalledWith([2, 4], { parent_id: 5, before_id: null });
+    expect(pickedNames()).toEqual(["Room A", "Room B"]); // the page clears them when the move is done
+
+    const dt2 = start("Shed"); // not picked
+    expect(dt2.data["text/plain"]).toBe("Shed");
+    drag("dragover", rowEl("Room B"), { y: at("Room B", "inside"), dt: dt2 });
+    drag("drop", rowEl("Room B"), { y: at("Room B", "inside"), dt: dt2 });
+    expect(move.onDrop).toHaveBeenLastCalledWith([6], { parent_id: 4, before_id: null });
+    expect(pickedNames()).toEqual(["Room A", "Room B"]);
+  });
+
+  it("the middle of a row is inside: the row is marked, the drop is accepted as a move and lands as its last child", () => {
+    const move = moveApi();
+    render(withMove({ move }));
+    const dt = start("Shed");
+    const over = drag("dragover", rowEl("Room B"), { y: at("Room B", "inside"), dt });
+    expect(over.defaultPrevented).toBe(true);
+    expect(dt.dropEffect).toBe("move");
+    expect(rowEl("Room B")).toHaveAttribute("data-drop", "inside");
+    drag("drop", rowEl("Room B"), { y: at("Room B", "inside"), dt });
+    expect(move.onDrop).toHaveBeenCalledTimes(1);
+    expect(move.onDrop).toHaveBeenCalledWith([6], { parent_id: 4, before_id: null });
+    expect(rowEl("Room B")).not.toHaveAttribute("data-drop");
+  });
+
+  it.each([
+    ["the top quarter is before the row", "Room B", "before", "before", { parent_id: 1, before_id: 4 }],
+    ["the bottom quarter of a closed row is after it", "Room B", "after", "after", { parent_id: 1, before_id: null }],
+    ["the bottom quarter of an open row with children is its first child", "Site", "after", "first", { parent_id: 1, before_id: 2 }],
+  ] as const)("%s", (_title, row, zone, mark, expected) => {
+    const move = moveApi();
+    render(withMove({ move }));
+    const dt = start("Shed");
+    const over = drag("dragover", rowEl(row), { y: at(row, zone), dt });
+    expect(over.defaultPrevented).toBe(true);
+    expect(rowEl(row)).toHaveAttribute("data-drop", mark);
+    drag("drop", rowEl(row), { y: at(row, zone), dt });
+    expect(move.onDrop).toHaveBeenCalledWith([6], expected);
+  });
+
+  it("the first child dropped on its own parent's bottom edge (the first-child place) would change nothing: invalid, and nothing is called", () => {
+    const move = moveApi();
+    render(withMove({ move }));
+    const dt = start("Room A"); // Site's first child, dragged onto Site's own bottom edge: it would stay first
+    expect(drag("dragover", rowEl("Site"), { y: at("Site", "after"), dt }).defaultPrevented).toBe(false);
+    expect(rowEl("Site")).toHaveAttribute("data-drop", "invalid");
+    expect(rowEl("Site").title).toBe('"Room A" is already there.');
+    drag("drop", rowEl("Site"), { y: at("Site", "after"), dt });
+    expect(move.onDrop).not.toHaveBeenCalled();
+  });
+
+  it("the sibling rule is on the whole tree: a filter that hides the next sibling does not change before_id", async () => {
+    const move = moveApi();
+    const pumps = buildTree([a(1, null, "Site"), a(2, 1, "Pump 1"), a(3, 1, "Fan"), a(4, 1, "Pump 2"), a(5, null, "Pump X")]);
+    render(withMove({ move, nodes: pumps }));
+    await userEvent.type(screen.getByLabelText("Filter assets"), "pump"); // shows Site, Pump 1, Pump 2, Pump X; the Fan between them is hidden
+    expect(link("Fan")).not.toBeInTheDocument();
+    const dt = start("Pump X");
+    drag("dragover", rowEl("Pump 1"), { y: at("Pump 1", "after"), dt });
+    drag("drop", rowEl("Pump 1"), { y: at("Pump 1", "after"), dt });
+    expect(move.onDrop).toHaveBeenCalledWith([5], { parent_id: 1, before_id: 3 }); // before the Fan, not before Pump 2
+  });
+
+  it("the area below the last row is the top level, last", () => {
+    const move = moveApi();
+    render(withMove({ move }));
+    const dt = start("Shed");
+    const over = drag("dragover", filler(), { dt });
+    expect(over.defaultPrevented).toBe(true);
+    expect(filler()).toHaveAttribute("data-drop", "inside");
+    drag("drop", filler(), { dt });
+    expect(move.onDrop).toHaveBeenCalledWith([6], { parent_id: null, before_id: null });
+    expect(filler()).not.toHaveAttribute("data-drop");
+  });
+
+  it("a top-level asset dropped on the area below the last row that is already last there is marked invalid", () => {
+    const move = moveApi();
+    render(withMove({ move }));
+    const dt = start("Yard");
+    expect(drag("dragover", filler(), { dt }).defaultPrevented).toBe(false);
+    expect(filler()).toHaveAttribute("data-drop", "invalid");
+    expect(filler().getAttribute("title")).toBe('"Yard" is already there.');
+    drag("drop", filler(), { dt });
+    expect(move.onDrop).not.toHaveBeenCalled();
+  });
+
+  it("a drop onto the asset's own descendant or itself is not accepted: the reason is the title and the live line, and nothing is moved", () => {
+    const move = moveApi();
+    render(withMove({ move }));
+    const dt = start("Site");
+    const over = drag("dragover", rowEl("Panel 1"), { y: at("Panel 1", "inside"), dt });
+    expect(over.defaultPrevented).toBe(false);
+    expect(dt.dropEffect).toBe("none");
+    expect(rowEl("Panel 1")).toHaveAttribute("data-drop", "invalid");
+    expect(rowEl("Panel 1").title).toBe('"Site" cannot be moved into "Panel 1", which is inside it.');
+    expect(liveText()).toBe('"Site" cannot be moved into "Panel 1", which is inside it.');
+    drag("dragover", rowEl("Site"), { y: at("Site", "inside"), dt });
+    expect(rowEl("Site").title).toBe('"Site" cannot be moved into itself.');
+    expect(rowEl("Panel 1")).not.toHaveAttribute("data-drop"); // the marker follows the pointer
+    expect(rowEl("Panel 1")).not.toHaveAttribute("title");
+    drag("drop", rowEl("Site"), { y: at("Site", "inside"), dt });
+    expect(move.onDrop).not.toHaveBeenCalled();
+    expect(rowEl("Site")).not.toHaveAttribute("data-drop");
+  });
+
+  it("writes the marker once per (row, zone): staying in the zone writes nothing, a new zone moves the marker", () => {
+    render(withMove());
+    const dt = start("Shed");
+    const row = rowEl("Room B");
+    const set = vi.spyOn(row, "setAttribute");
+    drag("dragover", row, { y: at("Room B", "inside"), dt });
+    drag("dragover", row, { y: at("Room B", "inside") + 3, dt });
+    drag("dragover", row, { y: at("Room B", "inside") - 3, dt });
+    expect(set.mock.calls.filter(([name]) => name === "data-drop")).toHaveLength(1);
+    drag("dragover", row, { y: at("Room B", "before"), dt });
+    expect(row).toHaveAttribute("data-drop", "before");
+    expect(document.querySelectorAll("[data-drop]")).toHaveLength(1);
+  });
+
+  it("a dragover causes no render", () => {
+    render(withMove());
+    const dt = start("Shed");
+    const seen: number[] = [];
+    rowRenderProbe.current = (id) => seen.push(id);
+    try {
+      for (const name of ["Room A", "Panel 1", "Room B", "Yard", "Site"]) drag("dragover", rowEl(name), { y: at(name, "inside"), dt });
+      drag("dragover", filler(), { dt });
+    } finally {
+      rowRenderProbe.current = null;
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it("markers go when the pointer leaves the tree, not when it moves to another element inside it", () => {
+    render(withMove());
+    const dt = start("Shed");
+    drag("dragover", rowEl("Room B"), { y: at("Room B", "inside"), dt });
+    const list = document.querySelector("ul.tree")!;
+    drag("dragleave", rowEl("Room B"), { related: rowEl("Yard") });
+    expect(rowEl("Room B")).toHaveAttribute("data-drop", "inside");
+    drag("dragleave", list, { related: filler() });
+    expect(document.querySelector("[data-drop]")).toBeNull();
+  });
+
+  it("markers and the dragging state go at dragend (a drop outside the tree), and a new drag starts clean", () => {
+    render(withMove());
+    const dt = start("Shed");
+    const scroll = document.querySelector(".tree-scroll")!;
+    expect(scroll).toHaveAttribute("data-dragging");
+    drag("dragover", rowEl("Room B"), { y: at("Room B", "inside"), dt });
+    fireEvent(window, new Event("dragend"));
+    expect(document.querySelector("[data-drop]")).toBeNull();
+    expect(scroll).not.toHaveAttribute("data-dragging");
+    expect(drag("dragover", rowEl("Room B"), { y: at("Room B", "inside"), dt }).defaultPrevented).toBe(false); // nothing is being dragged now
+  });
+
+  it("a drag that did not start in the tree (a file, text) is left alone", () => {
+    render(withMove());
+    layout();
+    const over = drag("dragover", rowEl("Room B"), { y: at("Room B", "inside"), dt: dtOf() });
+    expect(over.defaultPrevented).toBe(false);
+    expect(document.querySelector("[data-drop]")).toBeNull();
+    expect(drag("drop", rowEl("Room B"), { dt: dtOf() }).defaultPrevented).toBe(false);
+  });
+
+  it("a drop that the pointer makes on an element between rows is no place", () => {
+    const move = moveApi();
+    render(withMove({ move }));
+    const dt = start("Shed");
+    const over = drag("dragover", document.querySelector("ul.tree")!, { dt });
+    expect(over.defaultPrevented).toBe(false);
+    drag("drop", document.querySelector("ul.tree")!, { dt });
+    expect(move.onDrop).not.toHaveBeenCalled();
+  });
+
+  it("hovering on the middle of a folded row opens it after 600 ms; moving on first cancels that", () => {
+    localStorage.setItem(KEY, "[1]");
+    vi.useFakeTimers();
+    try {
+      render(withMove());
+      const dt = start("Shed");
+      drag("dragover", rowEl("Site"), { y: at("Site", "inside"), dt });
+      act(() => { vi.advanceTimersByTime(599); });
+      expect(expanded("Site")).toBe("false");
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(expanded("Site")).toBe("true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("moving off a folded row before the 600 ms are over keeps it closed", () => {
+    localStorage.setItem(KEY, "[1]");
+    vi.useFakeTimers();
+    try {
+      render(withMove());
+      const dt = start("Shed");
+      drag("dragover", rowEl("Site"), { y: at("Site", "inside"), dt });
+      act(() => { vi.advanceTimersByTime(400); });
+      drag("dragover", rowEl("Site"), { y: at("Site", "before"), dt }); // another zone of the same row also restarts
+      act(() => { vi.advanceTimersByTime(400); });
+      expect(expanded("Site")).toBe("false");
+      drag("dragover", rowEl("Room B"), { y: at("Room B", "inside"), dt });
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(expanded("Site")).toBe("false");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a folded row that is not a valid place (the dragged row itself) does not open under the pointer", () => {
+    localStorage.setItem(KEY, "[1]");
+    vi.useFakeTimers();
+    try {
+      render(withMove());
+      const dt = start("Site"); // dragging the folded row itself over itself: invalid
+      drag("dragover", rowEl("Site"), { y: at("Site", "inside"), dt });
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(expanded("Site")).toBe("false");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

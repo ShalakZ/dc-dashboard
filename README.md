@@ -191,6 +191,66 @@ UI screens, besides Assets Tree, Sources and Points:
 - **Billing** (everyone): cost per asset per day and per month, with a CSV export.
 - **Tariffs** (admin sets, the Operator reads): the site currency and the rates that cost is calculated with.
 
+### Moving assets
+
+Anyone who holds **Change assets** (`assets.edit`; no new permission) can move assets in the Assets Tree: one, or many at once, by dragging
+or from a dialog. Without that permission the tree is plain links: no picking, no draggable rows, no `M` key, and the two routes below
+answer 403.
+
+- **Picking.** A plain click opens an asset, as always, and clears the picks. **Ctrl-click** (**Cmd-click** on a Mac) picks or unpicks a row
+  without opening it; **Shift-click** picks every visible row between the last row you picked or opened and the one you clicked (rows hidden
+  by a folded branch or by the filter are left out, and a second Shift-click replaces the range). On the keyboard, **Space** on a row's link
+  picks it, **Shift+Arrow** extends the range, **Escape** clears. A picked row has a tint and a frame; the open asset keeps its own bar. The
+  line between the filter and the rows says "N picked" with **Move to...** and **Clear** (with nothing picked it shows a hint, and a
+  **Move to...** button for the open asset, which is the way for a tablet). Ctrl-click no longer opens an asset in a new tab here; the
+  middle button and the browser's menu still do. Picks live only in that browser tab and end when you move, press Clear or open an asset.
+- **Dragging.** Drag a picked row to move all the picked rows; drag a row that is not picked to move just that one. The row under the pointer
+  shows where the assets would land: the top quarter of a row puts them **before** it (as its sibling), the middle half **inside** it (as its
+  last child), the bottom quarter **after** it, except on an open row that shows children, where the bottom quarter means **first child**. The
+  dashed area below the last row is the **top level**. Hovering a folded row for about 0.6 seconds opens it; the tree scrolls when the
+  pointer nears its edge; Escape cancels. A place that cannot take the assets (into themselves or below themselves, a name already used
+  there, nothing would change) is marked with a red dashed frame, says why in its tooltip and in the live line, and is refused if you drop.
+  Pick a parent and one of its children and only the parent moves: the child travels inside it. Assets picked from different branches that
+  are dropped on one place become siblings there, each keeping its own subtree, in the order they had in the tree.
+- **Move to...** is the same move without a mouse. Press **M** on a focused row (or Shift+F10, or the context-menu key) for the picked
+  rows, or for that row when none is picked; or press the button in the line above the rows. The dialog has a **Search places** box, **Top
+  level**, and every asset as a radio button in tree order; a place that cannot take the assets is greyed out with the reason under it. The
+  assets become the **last children** of the place you choose. When you cancel, the focus goes back to where you were; after a move it goes
+  to the moved asset's link.
+- **The rate warning.** Before anything is written the server is asked what the move would change. Only when it changes **the rate an asset
+  is billed at** does a question appear (for a drag, a confirmation titled "This changes the rate"; for Move to..., a message inside the
+  dialog, whose button then reads **Move anyway**): `Moving "Pump 3" changes its rate from 0.18 to 0.12 per kWh. Past periods are recalculated at
+  the new place, and the totals of both branches change.` Cancel moves nothing and keeps your picks. An asset's rate is the nearest rate on
+  itself or on an asset above it (else the site default); a rate set on an asset applies to everything under it, so moving an asset into
+  another branch can change which rate applies. The comparison covers today and every date a rate starts, past and future. A reorder inside
+  one parent and a move between two places that bill at the same rate never ask (nor does an asset that keeps a rate of its own).
+- **Billing follows the tree.** Cost is worked out from the live tree on every request, so a move re-bills **past periods** at the new place,
+  not only from today, and the energy and cost totals of **both** branches change, with or without a warning (the warning is only about a
+  changed rate). Nothing else is rewritten: dashboards, mappings, points and rates point at asset ids, which do not change, and the
+  breadcrumbs, quick find and the Tariffs table's paths show the new path at once.
+- **Undo.** The toast "Moved 3 assets to Row A" has an **Undo** button for 8 seconds (hovering it or focusing it holds the toast). Undo puts
+  every moved asset back under its old parent, in its old place among the siblings that are still there, and is audited as its own batch. If
+  something moved since, it is refused with "Something moved since; the move could not be undone" and changes nothing. On the keyboard,
+  **Ctrl+Z** (**Cmd+Z** on a Mac) on a focused row undoes the latest move for the same 8 seconds (the button's tooltip says so, and so does the
+  tree's live line after a move); only the latest move can be undone this way, an older toast's own button still undoes its own batch.
+- **Order.** A drop numbers the new parent's children 0 to n-1 in the order you see them (most assets share the sort number 0 and are
+  shown by name, so "before" needs real numbers); the old parent's children keep theirs. Renumbered siblings write no audit row.
+- **The audit log.** One `asset.moved` entry for each asset you moved (the dragged assets, not what is below them), with the old and new parent
+  by name and id: "Moved Pump 3 from Row A to Row B", "Moved Pump 3 to the top level", "Reordered Pump 3 within Row A", each followed by
+  " together with 2 others" when one gesture moved several. The entries of one gesture share a `request_id` (and `moved_with`, how many
+  others moved with it) in their details, which the audit drawer shows.
+- **One move is all or nothing.** A refusal for any asset refuses the whole request and moves nothing. Two people moving overlapping sets
+  at once are served one after the other. At most 500 assets in one request.
+- **Not here yet.** Rules about which kind may sit under which (a Rack only in a Row, say), a note on a move, a frozen past, approvals, and
+  routing the Edit dialog's Parent field through the same warning (it still moves one asset without it); see the backlog.
+
+For scripts, `POST /api/assets/move-preview` (what a move would do: the roots, where from and to, the rates before and after, whether a rate
+changes; no side effects) and `POST /api/assets/move` (does it) take `{"moves": [{"ids": [...], "parent_id": 7 | null, "before_id": 12 | null}],
+"expect": {...}, "undo_of": "<request_id>"}`; both need `assets.edit`. `parent_id` null is the top level and `before_id` null is "last".
+Answers: 200; 422 with `refusals` (each with the asset, a reason in names and a code) when a rule refuses, or with an empty list and
+`unchanged` when everything is already there; 409 with `"stale": true` when what the caller saw is no longer true (`expect` is optional: the
+page sends the preview's own, so a child added after the preview, a parent that changed or a rate that changed is refused).
+
 ### Protocols
 
 Every connector is read-only toward the source; only `collector` opens connections. A source's
@@ -319,7 +379,8 @@ data-retrieval requests the connectors already use, nothing else.
    a failure), an admin unblocking an account (`login.unblocked`), a change to the sign-in protection numbers or its
    switch (`settings.sign_in_changed`), the site timezone, the currency, the storage settings (every save, `storage.changed`, whose
    subject carries `origin`, and, for a save that needed confirmation, `confirmed_loss`; remembering a site
-   default is `storage.default_set`), assets, mappings,
+   default is `storage.default_set`), assets (create, edit, delete, and moving in the tree: one `asset.moved` entry per moved
+   asset, with its old and new parent, all sharing one request id), mappings,
    sources (create, edit, delete, test, test all, browse), tariffs, dashboards, asset kinds (a delete that moves assets records how many and
    where to; adding the starter kinds records which), scopes, scans (start and
    finish) and accepted discoveries. Never recorded: passwords and password hashes, source secrets and
@@ -466,7 +527,7 @@ behave as they did before roles were made of permissions (the one change, in W9b
 | Area | Permission | What it allows |
 |---|---|---|
 | Assets Tree | `assets.view` | Open the Assets Tree, an asset's details and charts, and the fleet summary. |
-| | `assets.edit` | Add and edit assets and map points to them. |
+| | `assets.edit` | Add and edit assets, map points to them and move assets in the Assets Tree. |
 | | `assets.delete` | Delete an asset (its mappings go with it). |
 | | `assets.kinds` | Create, rename, re-icon and delete asset kinds (a rename or a move changes the kind of every asset that uses it), and add the data-centre starter kinds. |
 | Dashboards | `dashboards.view` | Open dashboards and their widgets, receive live values, and read the values of any point through a widget. |
@@ -626,7 +687,7 @@ names the logo in one place, `BRAND_MARK_SRC` in `frontend/src/components/BrandM
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Twenty-six specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Twenty-eight specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
 
 - `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
@@ -790,6 +851,21 @@ Twenty-six specs run in one `playwright test` run against the dev-profile stack 
   At 1024 px with the sidebar open, an asset page whose name is only 11 characters long keeps its title and its sub line on one line each
   (the buttons drop under the title when the pane is narrow). Every name it makes starts with `W7o` or `w7o-`; the kinds the pack added are
   removed again by name and the admin's look is put back.
+- `w7p.spec.ts` (its own project, after `w7o`, at 1600×1000) checks moving assets in the Assets Tree. Each case builds a small tree of its own
+  through the API (halls, racks, pumps, rates) and removes it again. Ctrl-click picks two racks of different halls and opens nothing, and
+  dragging one with the mouse, Ctrl still held at the drop, moves both under a third place with their pumps; Shift-click picks the visible rows
+  between the anchor and the click (a folded branch is skipped, a second Shift-click replaces the range, one above the anchor picks upwards),
+  and a plain click opens an asset and clears the picks; a parent picked with its child moves alone and the audit log has one row; a drop onto
+  an own descendant shows the red mark, the reason in the row's title and in the live line, and changes nothing; Move to... from the keyboard
+  (M, type in "Search places", Tab, the arrow key, Tab to Move, Enter) moves the asset and puts the focus on its link. The rate warning
+  appears only when the effective rate changes: a drag that changes it opens "This changes the rate" with both rates (Cancel moves nothing,
+  Move anyway moves), the Move to... dialog warns inside itself, and a reorder, a move between two places without a rate and a pump with a rate
+  of its own never ask. Undo of a move of two racks that are not neighbours puts both back between the racks that stayed, and Undo of a reorder
+  restores the order. The audit log reads "Moved ... from ... to ... together with 1 other", "Moved ... to the top level" and "Reordered ...
+  within ..." in names and the drawer says the same and keeps the shared `request_id`. A custom viewer sees no pick handle, no draggable row
+  and no Selection line, M and Space do nothing, and both routes answer 403. At 1440 px and at 1024 px with the sidebar minimised and expanded
+  the tree's title is there, the first pick moves no row, and the tree does not scroll sideways. Every name it makes starts with `W7p` or
+  `w7p-` and is removed again.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1785,6 +1861,33 @@ from the new image.
    permission to the custom roles holding `assets.edit` again, including a role that was made on W7o without it on purpose. A restart of
    the W7o `api` would run `alembic upgrade head` and apply `0011` again, so the W7o `api` must not be running once the schema is back
    at `0010`.
+
+### Upgrading to W7p (no migration)
+
+Schema stays `0011`; no data is rewritten, so there is nothing to restore. The code to go back to is `823560b` (`main` before W7p).
+
+W7p (moving assets) rebuilds the `api` and `web` images and adds no permission: whoever may change assets (`assets.edit`) can now pick
+several assets in the Assets Tree, drag them to a new place or use **Move to...**, and undo it from the toast; see "Moving assets". What you
+will notice: for those people the tree has a line above the rows ("Ctrl-click to pick several"), the rows can be dragged, and Ctrl-click on a
+row picks it instead of opening it in a new tab; a move that changes the rate an asset is billed at asks first. Moving an asset re-bills its
+past periods at the new place (billing reads the live tree), so the totals of both branches change after any move; Undo puts it all back. The
+audit log gains `asset.moved`, one entry per moved asset.
+
+The API gains two routes, both needing `assets.edit`; a client that uses neither behaves exactly as before:
+
+- `POST /api/assets/move-preview` answers what a move would do (the roots that really move, where from and to, the rate before and after, whether
+  any rate changes, and the `expect` to send back) and changes nothing.
+- `POST /api/assets/move` moves one or many assets in one transaction (all or nothing) and answers the `request_id`, the moved roots and the
+  request that undoes the move. `PATCH /api/assets/{id}` still moves one asset and now takes the same lock first when its body names a parent
+  or a name, so a rename that waits behind a move is checked against the new siblings.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back".
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has the
+   simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+3. **Verify.** `docker compose exec api alembic current` still prints `0011 (head)`; as an administrator Ctrl-click two assets in the Assets
+   Tree: the line above the rows says "2 picked"; press Clear.
+4. **Going back.** Check out `823560b` and rebuild as in step 2. There is no database step. Moves already made stay made (they are ordinary
+   parent and order changes), and their `asset.moved` entries stay in the audit log.
 
 ## Add a connector
 

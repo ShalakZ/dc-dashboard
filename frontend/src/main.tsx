@@ -17,6 +17,8 @@ import "./styles/drawer.css";
 import "./styles/role-prompt.css";
 import "./styles/icon-picker.css";
 import "./styles/kinds-dialogs.css";
+import "./styles/tree-move.css";
+import "./styles/asset-move.css";
 import { App } from "./App";
 import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";
