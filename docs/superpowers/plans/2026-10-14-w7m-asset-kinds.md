@@ -104,7 +104,7 @@
 
 **Run:** `cd backend && uv run pytest tests/test_schema_asset_kinds.py tests/test_asset_kinds_parity.py tests/test_api_asset_kinds.py tests/test_api_assets.py tests/test_api_asset_icon.py tests/test_api_data.py tests/test_schema_roles.py tests/test_schema_asset_icon.py tests/test_schema_user_preferences.py tests/test_schema.py tests/test_route_gates.py tests/test_audit_coverage.py tests/test_audit_describers.py tests/test_permissions_parity.py tests/test_permissions.py tests/test_auth_matrix.py -q` (add any file the grep for `AssetOut`, `kind_icon`, `"sort_order"` or a hard-coded head turns up); `cd frontend && npx vitest run src/lib/kindSamples.test.ts src/lib/auditText.test.ts && npm run typecheck`.
 
-- [ ] Task 1a committed (tests red → green, 1a's run line, its commit) 
+- [x] Task 1a committed (68d3bc7) (tests red → green, 1a's run line, its commit) 
 - [ ] Task 1b committed (tests red → green, the Run line above plus the additions, its commit)
 - [ ] Task 1 Opus review (short, effort medium: the migration seed and port, the cascade, the guards, permissions) and its findings applied
 
