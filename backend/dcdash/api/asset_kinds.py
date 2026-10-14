@@ -24,10 +24,13 @@ for it is simply not moved, and the audit row counts what the UPDATE really chan
 The starter pack inserts its kinds one statement each, in the list's order, with ON CONFLICT (key) DO NOTHING: a kind that is
 there (any spelling, any icon) is skipped and never changed, and two presses at once cannot fail or add a kind twice (the second
 waits on the first's uncommitted row for that key, then skips it; both go in one order, so neither waits for the other in a circle).
+`?set=common` (the default) registers the 16 most common kinds, `?set=all` the 39; both walk the pack's order, so a common press and
+an all press at once are as safe as two of a kind. Every kind carries `starter`, true when its key is one of the 49 built-in ones.
 """
 from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -39,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import current_user, get_db, require_permission
 from dcdash.core.asset_icons import KindIcon
-from dcdash.core.asset_kinds import STARTER_PACK, clean_kind_name, kind_key
+from dcdash.core.asset_kinds import STARTER_KEYS, clean_kind_name, kind_key, pack_for
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Asset, AssetKind, User
 
@@ -57,12 +60,13 @@ class KindOut(BaseModel):
     name: str
     icon: str  # as stored: an id this server no longer lists is still shown, never an error
     asset_count: int
+    starter: bool  # one of the 49 built-in kinds, decided by its CURRENT key: renaming a starter kind clears it (core/asset_kinds.py)
 
 
 # The raw length only keeps an enormous body out; the real limit (60 characters) is checked on the cleaned text.
 class StarterOut(BaseModel):
     added: list[str]  # the names this press registered, in the order of the pack
-    already_there: int  # the pack's kinds that were in the registry already
+    already_there: int  # the chosen pack's kinds that were in the registry already
 
 
 class KindIn(BaseModel):
@@ -110,7 +114,7 @@ async def kind_counts(db: AsyncSession) -> Counter[str]:
 
 
 def as_row(kind: AssetKind, counts: Counter[str]) -> KindOut:
-    return KindOut(id=kind.id, name=kind.name, icon=kind.icon, asset_count=counts[kind.key])
+    return KindOut(id=kind.id, name=kind.name, icon=kind.icon, asset_count=counts[kind.key], starter=kind.key in STARTER_KEYS)
 
 
 async def locked_kind(db: AsyncSession, kind_id: int) -> AssetKind:
@@ -181,9 +185,15 @@ async def create_kind(body: KindIn, db: AsyncSession = Depends(get_db), user: Us
 @router.post(
     "/asset-kinds/starter-pack", response_model=StarterOut, dependencies=[Depends(require_permission("assets.kinds"))]
 )
-async def add_starter_pack(db: AsyncSession = Depends(get_db), user: User = Depends(current_user)) -> StarterOut:
+async def add_starter_pack(
+    # ?set=common (the default, the 16 kinds most sites have) or ?set=all (the 39); anything else is the automatic 422.
+    pack: Literal["common", "all"] = Query("common", alias="set"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+) -> StarterOut:
+    chosen = pack_for(pack)
     added: list[str] = []
-    for name, icon in STARTER_PACK:
+    for name, icon in chosen:
         # DO NOTHING, never DO UPDATE: a kind that is there keeps its name and icon. The conflict target is the unique index on `key`,
         # so it holds for another spelling of the key too, and for a kind a concurrent press has not committed yet (this waits for it).
         inserted = await db.scalar(
@@ -198,7 +208,7 @@ async def add_starter_pack(db: AsyncSession = Depends(get_db), user: User = Depe
         await audit(db, user.id, "kind.starter_pack_added", {"count": len(added), "names": added})
     await db.commit()
     # Counted from the inserts, not from a read of the registry before them: a press that committed meanwhile is "already there".
-    return StarterOut(added=added, already_there=len(STARTER_PACK) - len(added))
+    return StarterOut(added=added, already_there=len(chosen) - len(added))
 
 
 @router.patch(

@@ -222,10 +222,58 @@ async def test_the_list_carries_id_name_icon_and_a_count_that_joins_the_spelling
     await login_as(client, db, "viewer")
     listed = (await client.get(URL)).json()
     assert listed == [
-        {"id": rack, "name": "Rack", "icon": "rack", "asset_count": 5},
-        {"id": room, "name": "Room", "icon": "room", "asset_count": 1},
+        {"id": rack, "name": "Rack", "icon": "rack", "asset_count": 5, "starter": True},
+        {"id": room, "name": "Room", "icon": "room", "asset_count": 1, "starter": True},
     ]
-    assert all(set(item) == {"id", "name", "icon", "asset_count"} for item in listed)
+    assert all(set(item) == {"id", "name", "icon", "asset_count", "starter"} for item in listed)
+
+
+async def starter_flags(client) -> dict[str, bool]:
+    listed = await client.get(URL)
+    assert listed.status_code == 200, listed.text
+    return {k["name"]: k["starter"] for k in listed.json()}
+
+
+async def test_the_list_marks_the_ten_seeded_kinds_a_pack_kind_and_any_spelling_of_one_as_starters_and_a_custom_kind_as_not(client, db):
+    seeded = ("Site", "Building", "Room", "Row", "Rack", "Panel", "Meter", "Circuit", "Other equipment", "generic")
+    for name in seeded:
+        await make_kind(db, name)
+    await make_kind(db, "Generator", "generator")  # a pack kind
+    await make_kind(db, "  uPs ", "ups")  # the registry keeps the spelling the assets used; the key is what counts
+    await make_kind(db, f"Cooling{NBSP}tower", "coolingtower")
+    for custom in ("Rack 2", "Racks", "Server rack", "Spare parts"):
+        await make_kind(db, custom)
+    await login_as(client, db, "viewer")  # a reader sees the flag too
+    flags = await starter_flags(client)
+    assert all(flags[name] for name in seeded)
+    assert flags["Generator"] and flags["  uPs "] and flags[f"Cooling{NBSP}tower"]
+    assert not any(flags[name] for name in ("Rack 2", "Racks", "Server rack", "Spare parts"))
+    assert len(flags) == 10 + 3 + 4
+
+
+async def test_create_and_patch_answer_with_the_starter_flag_too(client, db):
+    await login_as(client, db)
+    assert (await added(client, "Spare parts"))["starter"] is False
+    assert (await added(client, "Fire suppression", icon="fire"))["starter"] is True
+    kinds ={k["name"]: k["id"] for k in (await client.get(URL)).json()}
+    patched = await client.patch(f"{URL}/{kinds['Spare parts']}", json={"icon": "fan"})
+    assert patched.status_code == 200 and patched.json()["starter"] is False
+    patched = await client.patch(f"{URL}/{kinds['Fire suppression']}", json={"icon": "fan"})
+    assert patched.status_code == 200 and patched.json()["starter"] is True
+
+
+async def test_a_rename_moves_the_starter_flag_with_the_key_in_both_directions(client, db):
+    await login_as(client, db)
+    rack = await make_kind(db, "Rack", "rack")
+    spare = await make_kind(db, "Spare parts")
+    assert await starter_flags(client) == {"Rack": True, "Spare parts": False}
+    shouted = await client.patch(f"{URL}/{rack}", json={"name": "RACK"})  # same key: still a starter
+    assert shouted.status_code == 200 and shouted.json()["starter"] is True
+    renamed = await client.patch(f"{URL}/{rack}", json={"name": "Cabinet"})  # another key: no longer one
+    assert renamed.status_code == 200 and renamed.json()["starter"] is False
+    named = await client.patch(f"{URL}/{spare}", json={"name": "ups"})  # a custom kind that takes a built-in key becomes one
+    assert named.status_code == 200 and named.json()["starter"] is True
+    assert await starter_flags(client) == {"Cabinet": False, "ups": True}
 
 
 @pytest.mark.parametrize("icon", ["zzz", "", "__proto__", "x" * 100])
@@ -248,7 +296,8 @@ async def test_create_gives_the_generic_icon_by_default_and_audits_it(client, db
     response = await create(client, "Pump")
     assert response.status_code == 201
     body = response.json()
-    assert body == {"id": body["id"], "name": "Pump", "icon": "generic", "asset_count": 0}
+    # "Pump" is one of the 39 pack kinds, so it is a starter whatever icon it is created with (the flag follows the key).
+    assert body == {"id": body["id"], "name": "Pump", "icon": "generic", "asset_count": 0, "starter": True}
     assert await kind_rows(db) == [(body["id"], "Pump", "pump", "generic")]
     assert await audit_rows(db) == [("kind.created", {"kind_id": body["id"], "name": "Pump", "icon": "generic"})]
 
@@ -403,7 +452,7 @@ async def test_a_rename_rewrites_every_spelling_of_the_old_key_and_nothing_else(
     response = await client.patch(f"{URL}/{rack}", json={"name": "Server rack"})
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"id": rack, "name": "Server rack", "icon": "rack", "asset_count": 6}
+    assert response.json() == {"id": rack, "name": "Server rack", "icon": "rack", "asset_count": 6, "starter": False}
     stored = await asset_kinds_stored(db)
     assert {name: stored[name] for name in ("r0", "r1", "r2", "r3", "r4", "own")} == {
         name: "Server rack" for name in ("r0", "r1", "r2", "r3", "r4", "own")
@@ -423,7 +472,7 @@ async def test_a_rename_to_the_same_key_in_another_case_is_allowed_and_the_asset
         await make_kind_asset(db, f"r{i}", spelling)
     response = await client.patch(f"{URL}/{rack}", json={"name": "RACK"})
     assert response.status_code == 200, response.text
-    assert response.json() == {"id": rack, "name": "RACK", "icon": "rack", "asset_count": 4}
+    assert response.json() == {"id": rack, "name": "RACK", "icon": "rack", "asset_count": 4, "starter": True}
     assert set((await asset_kinds_stored(db)).values()) == {"RACK"}
     assert await audit_rows(db) == [
         # three rows changed: the one that already read RACK is not counted
@@ -465,7 +514,7 @@ async def test_an_icon_change_alone_touches_no_asset(client, db):
     await make_kind_asset(db, "r", "rack")
     response = await client.patch(f"{URL}/{rack}", json={"icon": "server"})
     assert response.status_code == 200
-    assert response.json() == {"id": rack, "name": "Rack", "icon": "server", "asset_count": 1}
+    assert response.json() == {"id": rack, "name": "Rack", "icon": "server", "asset_count": 1, "starter": True}
     assert await asset_kinds_stored(db) == {"r": "rack"}
     assert await audit_rows(db) == [
         ("kind.icon_changed", {"kind_id": rack, "name": "Rack", "before": {"icon": "rack"}, "after": {"icon": "server"}})
@@ -478,7 +527,7 @@ async def test_a_name_and_an_icon_in_one_save_write_both_rows_and_the_icon_row_n
     await make_kind_asset(db, "r", "Rack")
     response = await client.patch(f"{URL}/{rack}", json={"name": "Racks", "icon": "server"})
     assert response.status_code == 200
-    assert response.json() == {"id": rack, "name": "Racks", "icon": "server", "asset_count": 1}
+    assert response.json() == {"id": rack, "name": "Racks", "icon": "server", "asset_count": 1, "starter": False}
     assert await audit_rows(db) == [
         ("kind.renamed", {"kind_id": rack, "assets": 1, "before": {"name": "Rack"}, "after": {"name": "Racks"}}),
         ("kind.icon_changed", {"kind_id": rack, "name": "Racks", "before": {"icon": "rack"}, "after": {"icon": "server"}}),
@@ -496,7 +545,7 @@ async def test_a_save_that_changes_nothing_is_a_200_with_no_audit_row_and_no_rew
     await make_kind_asset(db, "r", "rack")  # a spelling a rewrite would change
     response = await client.patch(f"{URL}/{rack}", json=body)
     assert response.status_code == 200, response.text
-    assert response.json() == {"id": rack, "name": "Rack", "icon": "rack", "asset_count": 1}
+    assert response.json() == {"id": rack, "name": "Rack", "icon": "rack", "asset_count": 1, "starter": True}
     assert await asset_kinds_stored(db) == {"r": "rack"}
     assert await audit_rows(db) == []
 
@@ -514,7 +563,7 @@ async def test_a_seeded_name_that_breaks_the_name_rules_is_no_rename_when_sent_b
     await make_kind_asset(db, "a", name)
     response = await client.patch(f"{URL}/{kind}", json={"name": name, "icon": "fan"})
     assert response.status_code == 200, response.text
-    assert response.json() == {"id": kind, "name": name, "icon": "fan", "asset_count": 1}
+    assert response.json() == {"id": kind, "name": name, "icon": "fan", "asset_count": 1, "starter": False}
     assert await kind_rows(db) == [(kind, name, kind_key(name), "fan")]
     assert await asset_kinds_stored(db) == {"a": name}
     assert await audit_rows(db) == [
@@ -820,10 +869,13 @@ STARTER_URL = f"{URL}/starter-pack"
 # The keys migration 0010 seeds (test_schema_asset_kinds.py::STARTERS, lower-cased by hand): the pack must not repeat one.
 KEYS_FROM_0010 = {"site", "building", "room", "row", "rack", "panel", "meter", "circuit", "other equipment", "generic"}
 STARTER_NAMES = [name for name, _icon in kinds_module.STARTER_PACK]
+COMMON_PACK_NAMES = [name for name, _icon in kinds_module.COMMON_PACK]  # 16, in the pack's order
+REST_NAMES = [name for name in STARTER_NAMES if name not in COMMON_PACK_NAMES]  # the 23 the common press leaves out
 
 
-async def press(client):
-    response = await client.post(STARTER_URL)
+async def press(client, which: str | None = None):
+    """One press of the pack. `which` None sends no query at all (the default, common); "common" and "all" send ?set=<which>."""
+    response = await client.post(STARTER_URL, params={"set": which} if which else None)
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -840,7 +892,7 @@ def test_the_starter_list_is_39_distinct_kinds_with_listed_icons_and_none_that_m
 
 async def test_the_pack_adds_every_kind_in_list_order_with_its_icon_and_audits_it_once(client, db):
     await login_as(client, db)
-    body = await press(client)
+    body = await press(client, which="all")
     assert body == {"added": STARTER_NAMES, "already_there": 0}
     rows = await kind_rows(db)
     assert [(name, key, icon) for _id, name, key, icon in rows] == [
@@ -862,7 +914,7 @@ async def test_a_kind_already_there_in_any_spelling_and_icon_is_skipped_and_neve
         await make_kind(db, "Site", "site"),  # a 0010 starter that is not in the pack at all
     ]
     before = await kind_rows(db)
-    body = await press(client)
+    body = await press(client, which="all")
     assert body["already_there"] == 3
     assert body["added"] == [name for name in STARTER_NAMES if name not in ("UPS", "ATS", "Fuel tank")]
     after = await kind_rows(db)
@@ -874,30 +926,104 @@ async def test_a_kind_already_there_in_any_spelling_and_icon_is_skipped_and_neve
 
 async def test_a_second_press_adds_nothing_says_so_and_writes_no_audit_row(client, db):
     await login_as(client, db)
-    await press(client)
+    await press(client, which="all")
     rows, audited = await kind_rows(db), await audit_rows(db)
-    assert await press(client) == {"added": [], "already_there": 39}
+    assert await press(client, which="all") == {"added": [], "already_there": 39}
     assert await kind_rows(db) == rows
     assert await audit_rows(db) == audited and len(audited) == 1  # a press that changes nothing leaves no trace
 
 
 async def test_a_kind_the_owner_deleted_comes_back_with_the_next_press_and_the_rest_do_not(client, db):
     await login_as(client, db)
-    await press(client)
+    await press(client, which="all")
     pump = await db.fetchval("SELECT id FROM asset_kinds WHERE key = 'pump'")
     assert (await client.delete(f"{URL}/{pump}")).status_code == 204
-    assert await press(client) == {"added": ["Pump"], "already_there": 38}
+    assert await press(client, which="all") == {"added": ["Pump"], "already_there": 38}
     assert [a[1] for a in await audit_rows(db, "kind.starter_pack_added")][-1] == {"count": 1, "names": ["Pump"]}
 
 
 async def test_the_pack_touches_no_asset_and_the_assets_of_a_new_kind_belong_to_it_at_once(client, db):
     await login_as(client, db)
     await make_kind_asset(db, "Feed A", "Busway", icon="fan")
-    await press(client)
+    await press(client, which="all")
     assert await asset_kinds_stored(db) == {"Feed A": "Busway"}
     assert await db.fetchval("SELECT icon FROM assets WHERE name = 'Feed A'") == "fan"
     busway = next(k for k in (await client.get(URL)).json() if k["name"] == "Busway")
     assert busway["asset_count"] == 1
+
+
+# --- the common set and the all set (W7q) -----------------------------------------------------------------------------------
+
+async def test_a_press_with_no_set_adds_exactly_the_16_common_kinds_in_pack_order_and_audits_it_once(client, db):
+    await login_as(client, db)
+    assert len(COMMON_PACK_NAMES) == 16
+    body = await press(client)  # no query string at all
+    assert body == {"added": COMMON_PACK_NAMES, "already_there": 0}
+    rows = await kind_rows(db)
+    assert [(name, key, icon) for _id, name, key, icon in rows] == [
+        (name, kind_key(name), icon) for name, icon in kinds_module.COMMON_PACK
+    ]
+    assert await audit_rows(db) == [("kind.starter_pack_added", {"count": 16, "names": COMMON_PACK_NAMES})]  # no `set` in the detail
+    assert {"Busway", "Pump", "Lighting"}.isdisjoint(k["name"] for k in (await client.get(URL)).json())
+
+
+async def test_set_common_is_the_same_press_as_no_set_and_a_second_one_adds_nothing_and_writes_no_audit_row(client, db):
+    await login_as(client, db)
+    assert await press(client, which="common") == {"added": COMMON_PACK_NAMES, "already_there": 0}
+    rows, audited = await kind_rows(db), await audit_rows(db)
+    assert await press(client) == {"added": [], "already_there": 16}
+    assert await press(client, which="common") == {"added": [], "already_there": 16}
+    assert await kind_rows(db) == rows
+    assert await audit_rows(db) == audited and len(audited) == 1
+
+
+async def test_set_all_after_common_adds_the_other_23_and_already_there_follows_the_set_that_was_pressed(client, db):
+    await login_as(client, db)
+    await press(client)
+    assert len(REST_NAMES) == 23
+    assert await press(client, which="all") == {"added": REST_NAMES, "already_there": 16}  # out of 39
+    assert await press(client, which="all") == {"added": [], "already_there": 39}
+    assert await press(client, which="common") == {"added": [], "already_there": 16}  # out of 16
+    assert len(await kind_rows(db)) == 39
+    assert [detail for _action, detail in await audit_rows(db)] == [
+        {"count": 16, "names": COMMON_PACK_NAMES}, {"count": 23, "names": REST_NAMES},
+    ]
+
+
+async def test_set_all_on_an_empty_registry_adds_all_39_with_one_audit_row(client, db):
+    await login_as(client, db)
+    assert await press(client, which="all") == {"added": STARTER_NAMES, "already_there": 0}
+    assert await audit_rows(db) == [("kind.starter_pack_added", {"count": 39, "names": STARTER_NAMES})]
+
+
+async def test_the_common_press_skips_a_kind_that_is_there_in_any_spelling_and_counts_it_against_the_16(client, db):
+    await login_as(client, db)
+    await make_kind(db, "  ups ", "fan")
+    await make_kind(db, "Busway", "busway")  # a pack kind that is not common: neither added nor counted by this press
+    body = await press(client)
+    assert body == {"added": [name for name in COMMON_PACK_NAMES if name != "UPS"], "already_there": 1}
+    assert len(await kind_rows(db)) == 2 + 15
+
+
+@pytest.mark.parametrize("bad", ["bogus", "", "ALL", "Common", "39", "all,common", " all"], ids=repr)
+async def test_an_unknown_set_is_a_422_and_writes_nothing(client, db, bad):
+    await login_as(client, db)
+    response = await client.post(STARTER_URL, params={"set": bad})
+    assert response.status_code == 422, response.text
+    assert await kind_rows(db) == []
+    assert await audit_rows(db) == []
+
+
+async def test_every_kind_a_press_registers_is_a_starter_and_a_custom_kind_beside_them_is_not(client, db):
+    await login_as(client, db)
+    await added(client, "Spare parts")
+    await press(client)
+    flags = await starter_flags(client)
+    assert {name for name, starter in flags.items() if starter} == set(COMMON_PACK_NAMES)
+    await press(client, which="all")
+    flags = await starter_flags(client)
+    assert {name for name, starter in flags.items() if starter} == set(STARTER_NAMES)
+    assert flags["Spare parts"] is False and len(flags) == 40
 
 
 @pytest.mark.parametrize("held", [[], ["assets.view"], ["assets.view", "assets.edit"], ["assets.edit", "assets.delete"]],
@@ -905,8 +1031,9 @@ async def test_the_pack_touches_no_asset_and_the_assets_of_a_new_kind_belong_to_
 async def test_a_role_without_assets_kinds_cannot_press_the_pack(client, db, held):
     await make_role(db, "no kinds", held)
     await login_as(client, db, "no kinds", username="nk")
-    response = await client.post(STARTER_URL)
-    assert (response.status_code, response.json()) == (403, REFUSED)
+    for query in ("", "?set=common", "?set=all"):  # neither set is reachable without the permission
+        response = await client.post(STARTER_URL + query)
+        assert (response.status_code, response.json()) == (403, REFUSED), query
     assert await kind_rows(db) == []
     assert await audit_rows(db) == []
 
@@ -914,16 +1041,20 @@ async def test_a_role_without_assets_kinds_cannot_press_the_pack(client, db, hel
 @pytest.mark.parametrize("role", ["viewer", "operator"])
 async def test_the_built_in_viewer_and_operator_cannot_press_the_pack(client, db, role):
     await login_as(client, db, role)
-    assert (await client.post(STARTER_URL)).status_code == 403
+    for query in ("", "?set=common", "?set=all"):
+        assert (await client.post(STARTER_URL + query)).status_code == 403, query
     assert await kind_rows(db) == []
 
 
 async def test_signed_out_gets_a_401_and_a_role_with_assets_kinds_alone_may_press_the_pack(client, db):
     assert (await client.post(STARTER_URL)).status_code == 401
+    assert (await client.post(STARTER_URL + "?set=all")).status_code == 401
     assert await kind_rows(db) == []
     await make_role(db, "kinds keeper", ["assets.kinds"])
     await login_as(client, db, "kinds keeper", username="kk")
     assert (await press(client))["already_there"] == 0
+    assert len(await kind_rows(db)) == 16  # the default press is the common one
+    assert (await press(client, which="all"))["already_there"] == 16
     assert len(await kind_rows(db)) == 39
 
 
@@ -938,8 +1069,8 @@ async def test_two_presses_at_once_add_each_kind_once_and_neither_fails(app, db)
         async with holder(db) as (conn, tx):
             # The first starter is taken but not committed: both presses reach it first and wait for that transaction.
             await conn.execute("INSERT INTO asset_kinds (name, key, icon) VALUES ('UPS', 'ups', 'ups')")
-            one = await waiting(first.post(STARTER_URL))
-            two = await waiting(second.post(STARTER_URL))
+            one = await waiting(first.post(STARTER_URL, params={"set": "all"}))
+            two = await waiting(second.post(STARTER_URL, params={"set": "all"}))
             await tx.rollback()  # now they race for real; the inserts go in one order, so neither can wait for the other in a circle
             responses = await asyncio.wait_for(asyncio.gather(one, two), WAIT)
     assert [r.status_code for r in responses] == [200, 200], [r.text for r in responses]
@@ -950,5 +1081,31 @@ async def test_two_presses_at_once_add_each_kind_once_and_neither_fails(app, db)
     assert len(keys) == 39 == len(set(keys))
     audited = [detail for _action, detail in await audit_rows(db)]
     assert len(audited) == sum(1 for b in bodies if b["added"])  # a press that added nothing wrote nothing
+    assert sorted(name for detail in audited for name in detail["names"]) == sorted(STARTER_NAMES)
+    assert all(detail["count"] == len(detail["names"]) for detail in audited)
+
+
+async def test_a_common_press_and_an_all_press_at_once_add_each_kind_once_and_neither_fails(app, db):
+    """Both presses insert in the pack's order (COMMON_PACK keeps it), so the common one, which skips the kinds it does not
+    register, can never hold a key the all press needs while waiting for one the all press holds: no circle, no deadlock."""
+    async with signed_in(app, db, "first") as first, signed_in(app, db, "second") as second:
+        async with holder(db) as (conn, tx):
+            # The first starter is taken but not committed: both presses reach it first and wait for that transaction.
+            await conn.execute("INSERT INTO asset_kinds (name, key, icon) VALUES ('UPS', 'ups', 'ups')")
+            common = await waiting(first.post(STARTER_URL, params={"set": "common"}))
+            everything = await waiting(second.post(STARTER_URL, params={"set": "all"}))
+            await tx.rollback()  # now they race for real
+            responses = await asyncio.wait_for(asyncio.gather(common, everything), WAIT)
+    assert [r.status_code for r in responses] == [200, 200], [r.text for r in responses]
+    common_body, all_body = (r.json() for r in responses)
+    assert len(common_body["added"]) + common_body["already_there"] == 16
+    assert len(all_body["added"]) + all_body["already_there"] == 39
+    assert set(common_body["added"]).isdisjoint(all_body["added"])  # a kind is added by exactly one of the two presses
+    assert sorted(common_body["added"] + all_body["added"]) == sorted(STARTER_NAMES)
+    assert set(common_body["added"]) <= set(COMMON_PACK_NAMES)
+    keys = [row[2] for row in await kind_rows(db)]
+    assert len(keys) == 39 == len(set(keys))
+    audited = [detail for _action, detail in await audit_rows(db)]
+    assert len(audited) == sum(1 for b in (common_body, all_body) if b["added"])  # a press that added nothing wrote nothing
     assert sorted(name for detail in audited for name in detail["names"]) == sorted(STARTER_NAMES)
     assert all(detail["count"] == len(detail["names"]) for detail in audited)
