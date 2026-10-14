@@ -1,11 +1,15 @@
 # Scheduled backups
 
+This page is for whoever sets up an installation's nightly backups: how to run the backup script from cron or Task Scheduler, how to
+read its result, and how `--keep` and `--copy-to` behave. What the scripts do, and how to restore, is on
+[Backup and restore](backup-and-restore.md).
+
 Nothing in the stack takes backups by itself. Run `scripts/backup.sh` (or `backup.ps1`) from the machine's scheduler, with a folder
 for the local copies, `--keep N` so that the folder does not fill the disk, and `--copy-to` a folder on another drive or share, so
 that a lost disk does not take the backups with it.
 
 **Linux (cron).** This is an example: the cron entry itself was not run (the script it calls, with `--keep` and `--copy-to`, was; see
-"Practise a restore" for what was proved how). The cron user must be
+[Practise a restore](backup-and-restore.md#practise-a-restore) for what was proved how). The cron user must be
 allowed to run `docker`. cron keeps no exit code, so send the output to a file and look at it (an exit 5 shows as the line
 `local backup made, NOT copied; nothing was rotated (exit 5)`):
 
@@ -24,7 +28,7 @@ Register-ScheduledTask -TaskName dcdash_backup -Action $action -Trigger $trigger
 ```
 
 - Docker Desktop must be running in that user's session, and the copy drive must be mounted, when the task fires. With Docker not
-  running the script exits 1 and makes no backup (see "Backup and restore").
+  running the script exits 1 and makes no backup (see [Backup and restore](backup-and-restore.md)).
 - With `-LogonType Interactive` the task runs only while that user is logged on. After a reboot without a logon, or with the machine
   asleep at the trigger time, it does not run, and `LastTaskResult` keeps the PREVIOUS result: a `0` there can be stale. Read
   `(Get-ScheduledTaskInfo -TaskName dcdash_backup).LastRunTime` as well (or the date of the newest file in the backup folder), and
@@ -75,15 +79,17 @@ only then renames it.
 - One folder per installation. Two installations on one drive need two folders, each with its own marker, and different Compose
   project names. The same goes for the OUTPUT folder: `--keep` counts every dated pair in it, whichever installation wrote it (the
   file names carry no project name), so two installations that back up into the same folder delete each other's backups. Give each
-  its own output folder (the cron example below uses one path; change it per installation).
+  its own output folder (the cron example above uses one path; change it per installation).
 - If the folder is missing, has no marker, names another installation, or is the output folder itself, the local backup is still made
   and verified, nothing is rotated, and the script exits 5.
 
-**What is decided and what is not** (the owner's decision D13). The off-host target is a folder you point `--copy-to` at, for example
+**What is decided and what is not** (an owner decision). The off-host target is a folder you point `--copy-to` at, for example
 a USB drive or a share. The scripts do no file encryption: encrypt the drive or share itself (BitLocker To Go on a Windows edition
 that has it; otherwise a password-protected archive made by hand, for example with 7-Zip). That was decided, not drilled. The scripts
 never copy `.env` or `certs/`, so you keep those yourself. `.env` holds the key for the stored source secrets, so whoever holds the
 dump and `.env` together can read them: keep a copy of `.env` (and `certs/`) off the machine, in a place as well protected as the
 backups, and again whenever they change.
 
-After the first night, look at the folder and at `LastTaskResult` (or the cron log), and do one "Practise a restore" with the dump.
+After the first night, look at the folder and at `LastTaskResult` (or the cron log), and do one [Practise a restore](backup-and-restore.md#practise-a-restore) with the dump.
+
+Related: [Backup and restore](backup-and-restore.md), [Upgrading and going back](upgrading.md), [Operating the stack](operating.md).
