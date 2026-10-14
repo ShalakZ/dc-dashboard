@@ -230,7 +230,9 @@ answer 403.
   breadcrumbs, quick find and the Tariffs table's paths show the new path at once.
 - **Undo.** The toast "Moved 3 assets to Row A" has an **Undo** button for 8 seconds (hovering it or focusing it holds the toast). Undo puts
   every moved asset back under its old parent, in its old place among the siblings that are still there, and is audited as its own batch. If
-  something moved since, it is refused with "Something moved since; the move could not be undone" and changes nothing.
+  something moved since, it is refused with "Something moved since; the move could not be undone" and changes nothing. On the keyboard,
+  **Ctrl+Z** (**Cmd+Z** on a Mac) on a focused row undoes the latest move for the same 8 seconds (the button's tooltip says so, and so does the
+  tree's live line after a move); only the latest move can be undone this way, an older toast's own button still undoes its own batch.
 - **Order.** A drop numbers the new parent's children 0 to n-1 in the order you see them (most assets share the sort number 0 and are
   shown by name, so "before" needs real numbers); the old parent's children keep theirs. Renumbered siblings write no audit row.
 - **The audit log.** One `asset.moved` entry for each asset you moved (the dragged assets, not what is below them), with the old and new parent
