@@ -51,7 +51,7 @@ _MAX_NODES_PER_READ = ua.NodeId(ua.ObjectIds.Server_ServerCapabilities_Operation
 _STANDARD_NAMESPACE = "http://opcfoundation.org/UA/"
 
 _CERT_FILE_HINT = (
-    "The client certificate does not exist at that path inside the collector. Create the certificate and key as the README "
+    "The client certificate does not exist at that path inside the collector. Create the certificate and key as docs/sources-and-discovery.md "
     "describes, put them in ./certs and recreate the collector, or set the security policy to none."
 )
 

@@ -463,7 +463,7 @@ async def test_a_missing_client_certificate_file_is_reported_with_its_path_and_a
     check = opcua_check.OpcUaCheck(connector, [], None)
     step = await check.checker.step("certificates", "Certificates", check.certificates)
     assert step.ok is False and step.error["message"] == f"client certificate not found: {missing}"
-    assert "README" in step.hint
+    assert "docs/sources-and-discovery.md" in step.hint
 
 
 def test_hints_for_the_read_failures_exist():

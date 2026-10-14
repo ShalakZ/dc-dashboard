@@ -12,7 +12,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=localhost" \
 chmod 644 "$SCRATCH_CERTS_DIR/fullchain.pem"
 export DCDASH_TLS_CERT=/certs/fullchain.pem DCDASH_TLS_KEY=/certs/privkey.pem
 compose build api web   # api and web have different tags; building everything in parallel collides on the shared backend tag
-# The web container runs as uid/gid 10002: give it the key the way the README says, through a throwaway container (no sudo, no prompt).
+# The web container runs as uid/gid 10002: give it the key the way docs/install-and-run.md says, through a throwaway container (no sudo, no prompt).
 docker run --rm --user 0 --entrypoint sh -v "$SCRATCH_CERTS_DIR:/c" "${SCRATCH_PROJECT}-web:scratch" \
   -c 'chown 10002:10002 /c/privkey.pem && chmod 640 /c/privkey.pem'
 compose up -d web

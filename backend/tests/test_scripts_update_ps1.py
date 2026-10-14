@@ -1161,7 +1161,7 @@ def test_a_database_revision_the_new_code_does_not_know_is_refused_before_the_qu
     scene.at("c33")
     scene.seq("psql.seq", "0099")
     res = scene.run()
-    _refused(res, "does not know database revision 0099", "older than the database", "README, Upgrading and going back, step 6")
+    _refused(res, "does not know database revision 0099", "older than the database", "docs/upgrading.md, step 6 (Going back)")
     assert "Continue?" not in res.said
     _nothing_changed(scene)
     res = scene.run("-NoPull -Yes")  # -NoPull checks the code on disk the same way
@@ -1473,7 +1473,7 @@ def test_the_happy_path_ends_with_the_summary_the_way_back_and_done(scene, web):
     assert res.code == 0 and res.said.endswith("DONE"), res.said
     summary = [f"Commit: {old} -> {new}", f"Database revision: {OLD_REV} -> {NEW_REV}", f"Backup: {_win(dump)}",
                f"Settings now shows version: {new}",
-               f'To go back: README, "Upgrading and going back", step 6. You need commit {old} and revision {OLD_REV}, and the backup above.']
+               f'To go back: docs/upgrading.md, step 6 (Going back). You need commit {old} and revision {OLD_REV}, and the backup above.']
     positions = [res.said.rindex(line) for line in summary]
     assert positions == sorted(positions), res.said
     assert res.said.rindex("Log: ") > positions[-1] and re.search(r"Log: .*update-\d{8}-\d{6}\.log DONE$", res.said), res.said
@@ -1699,12 +1699,12 @@ def test_an_api_that_stops_or_keeps_restarting_is_text_c_with_the_way_back(scene
     assert res.code == 4 and "FAILED (exit 4)" in res.said, res.said
     for phrase in ("the api keeps restarting or has stopped", "No readings are being collected.", "restart: unless-stopped",
                    "docker compose stop api collector", "Your data is in the backup",
-                   f'To go back: README, "Upgrading and going back", step 6. You need commit {scene.short("c33")} and revision {OLD_REV}, and the backup above.'):
+                   f'To go back: docs/upgrading.md, step 6 (Going back). You need commit {scene.short("c33")} and revision {OLD_REV}, and the backup above.'):
         assert phrase in res.said, res.said
     # M3: the order is spelled out (stop the retries, and only then think about going back); M2: some old installs restart once by themselves
     stop = "First stop the retries (docker compose stop api collector), and only then think about going back."
     wait = ("If the log shows the migration starting again by itself and finishing, wait: some old installs restart once on their own "
-            "(README, release notes of 0004).")
+            "(CHANGELOG.md, 'Upgrading an existing database to Phase 3').")
     assert stop in res.said and wait in res.said, res.said
     assert res.said.index(stop) < res.said.index("To go back:") and res.said.index(wait) < res.said.index("To go back:")
     _failure_block(res, scene, "api")
