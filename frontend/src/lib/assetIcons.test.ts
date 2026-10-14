@@ -1,13 +1,79 @@
 import { ICONS } from "../components/Icon";
 import { iconHtml } from "../test/iconHtml";
-import { ASSET_ICONS, assetIcon, assetIconLabel, iconIdFor, iconLabelFor, kindIconId } from "./assetIcons";
+import { ASSET_ICONS, ICON_GROUPS, assetIcon, assetIconLabel, iconIdFor, iconLabelFor, kindIconId } from "./assetIcons";
 import { kindIcon } from "./kindIcon";
 
+// The 28 icons of W7g to W7m: their ids, labels and drawings are STORED (assets.icon, asset_kinds.icon) or shown to people, so they never change.
+const OLD: ReadonlyArray<readonly [string, string, string]> = [
+  ["site", "Site", "kindSite"], ["building", "Building", "kindBuilding"], ["room", "Room", "kindRoom"], ["row", "Row of racks", "kindRow"],
+  ["rack", "Rack", "kindRack"], ["panel", "Panel", "kindPanel"], ["meter", "Meter", "kindMeter"], ["circuit", "Circuit breaker", "kindCircuit"],
+  ["ups", "UPS", "kindUps"], ["battery", "Battery", "kindBattery"], ["pdu", "PDU", "kindPdu"], ["generator", "Generator", "kindGenerator"],
+  ["transformer", "Transformer", "kindTransformer"], ["fueltank", "Fuel tank", "kindFuelTank"], ["chiller", "Chiller", "kindChiller"],
+  ["crac", "Cooling unit", "kindCrac"], ["fan", "Fan", "kindFan"], ["pump", "Pump", "kindPump"], ["server", "Server", "kindServer"],
+  ["switch", "Network switch", "kindSwitch"], ["controller", "Controller", "kindController"], ["sensor", "Sensor", "kindSensor"],
+  ["lighting", "Lighting", "kindLighting"], ["camera", "Camera", "kindCamera"], ["door", "Door", "kindDoor"], ["fire", "Fire", "kindFire"],
+  ["leak", "Water leak", "kindLeak"], ["generic", "Generic", "kindGeneric"],
+];
+
+// W7o decision 3: the picker's headings, in order, with the ids each holds, in order. The server's ICONS list is this list flattened.
+const GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ["Structure", ["site", "building", "hall", "room", "row", "rack"]],
+  ["Power", ["panel", "meter", "circuit", "ups", "battery", "pdu", "rpp", "ats", "sts", "busway", "switchgear", "rmu", "transformer", "generator", "fueltank"]],
+  ["Cooling", ["chiller", "crac", "ahu", "cdu", "coolingtower", "drycooler", "heatexchanger", "fan", "pump", "valve", "vfd"]],
+  ["IT and network", ["server", "switch", "router", "firewall", "patchpanel", "cabletray"]],
+  ["Monitoring and safety", ["controller", "sensor", "smokedetector", "humidity", "leak", "fire", "camera", "door"]],
+  ["Other", ["lighting", "generic"]],
+];
+
+const NEW_LABELS: Record<string, string> = {
+  ats: "Automatic transfer switch", sts: "Static transfer switch", busway: "Busway", rpp: "Remote power panel", switchgear: "Switchgear",
+  rmu: "Ring main unit", coolingtower: "Cooling tower", drycooler: "Dry cooler", ahu: "Air handling unit", cdu: "Cooling distribution unit",
+  valve: "Valve", vfd: "Variable frequency drive", heatexchanger: "Heat exchanger", patchpanel: "Patch panel", cabletray: "Cable tray",
+  router: "Router", firewall: "Firewall", smokedetector: "Smoke detector", humidity: "Humidity sensor", hall: "Data hall",
+};
+
 describe("the asset icon catalogue", () => {
-  it("lists 28 icons, the picker order starting at Site and ending at Generic", () => {
-    expect(ASSET_ICONS).toHaveLength(28);
+  it("lists 48 icons, the picker order starting at Site and ending at Generic", () => {
+    expect(ASSET_ICONS).toHaveLength(48);
     expect(ASSET_ICONS[0].id).toBe("site");
     expect(ASSET_ICONS[ASSET_ICONS.length - 1].id).toBe("generic");
+  });
+
+  it("keeps the 28 older ids, labels and drawings exactly as they were, and adds 20 with the planned labels", () => {
+    for (const [id, label, icon] of OLD) expect(ASSET_ICONS.find((entry) => entry.id === id), id).toMatchObject({ id, label, icon });
+    const added = ASSET_ICONS.filter((entry) => !OLD.some(([id]) => id === entry.id));
+    expect(Object.fromEntries(added.map((entry) => [entry.id, entry.label]))).toEqual(NEW_LABELS);
+    expect(added).toHaveLength(20);
+  });
+
+  it("puts every entry in one of the six groups, each group in one run, and the runs in the planned order", () => {
+    expect(ICON_GROUPS).toEqual(GROUPS.map(([name]) => name));
+    for (const entry of ASSET_ICONS) expect(ICON_GROUPS, entry.id).toContain(entry.group);
+    const runs = ASSET_ICONS.reduce<string[]>((names, entry) => (names[names.length - 1] === entry.group ? names : [...names, entry.group]), []);
+    expect(runs).toEqual(ICON_GROUPS); // no group appears twice
+    for (const [name, ids] of GROUPS) {
+      expect(ASSET_ICONS.filter((entry) => entry.group === name).map((entry) => entry.id), name).toEqual(ids);
+    }
+    expect(ASSET_ICONS.map((entry) => entry.id)).toEqual(GROUPS.flatMap(([, ids]) => ids));
+  });
+
+  it("gives every entry two to six lower-case search keywords, none blank or repeated", () => {
+    for (const entry of ASSET_ICONS) {
+      expect(entry.keywords.length, entry.id).toBeGreaterThanOrEqual(2);
+      expect(entry.keywords.length, entry.id).toBeLessThanOrEqual(6);
+      for (const word of entry.keywords) {
+        expect(word.trim(), entry.id).not.toBe("");
+        expect(word, entry.id).toBe(word.trim().toLowerCase());
+      }
+      expect(new Set(entry.keywords).size, entry.id).toBe(entry.keywords.length);
+    }
+  });
+
+  it("knows the words a person types for the transfer switches, the cooling and the network gear", () => {
+    const keywords = (id: string) => ASSET_ICONS.find((entry) => entry.id === id)!.keywords;
+    expect(keywords("ats")).toEqual(expect.arrayContaining(["transfer", "automatic"]));
+    expect(keywords("sts")).toEqual(expect.arrayContaining(["transfer", "static"]));
+    expect(keywords("crac")).toEqual(expect.arrayContaining(["computer room", "air conditioner", "cooling"]));
   });
 
   it("has unique, lower-case ids and a label for each", () => {
@@ -25,10 +91,20 @@ describe("the asset icon catalogue", () => {
     expect([...names].sort()).toEqual(Object.keys(ICONS).filter((name) => name.startsWith("kind")).sort());
   });
 
-  it("draws 28 different pictures (a copy-pasted drawing would show here)", () => {
+  it("draws 48 different pictures (a copy-pasted drawing would show here)", () => {
     const drawn = ASSET_ICONS.map((entry) => iconHtml(entry.icon));
     for (const html of drawn) expect(html.length).toBeGreaterThan(20);
-    expect(new Set(drawn).size).toBe(28);
+    expect(new Set(drawn).size).toBe(48);
+  });
+
+  // W7o decision 4, the part jsdom can judge: stroke only (svg.i supplies the stroke and the colour) and at most six drawn elements. The
+  // 2..22 band and the 2-unit gaps need a browser (getBBox): the contact sheet of the wave checks them.
+  it.each(ASSET_ICONS.map((entry) => [entry.id, entry.icon] as const))("%s (%s) follows the drawing rules", (_id, icon) => {
+    const html = iconHtml(icon);
+    expect(html).not.toMatch(/\bfill=|\bstroke=|style=/);
+    const shapes = html.match(/<(?:path|circle|rect|ellipse|line|polyline|polygon)\b/g) ?? [];
+    expect(shapes.length).toBeGreaterThan(0);
+    expect(shapes.length).toBeLessThanOrEqual(6);
   });
 });
 
@@ -124,7 +200,7 @@ describe("assetIcon: the kind's icon from the registry (kind_icon) sits between 
 });
 
 describe("iconIdFor and kindIconId", () => {
-  it("turns each kind drawing back into its catalogue id (all 28)", () => {
+  it("turns each kind drawing back into its catalogue id (all 48)", () => {
     for (const entry of ASSET_ICONS) expect(iconIdFor(entry.icon)).toBe(entry.id);
   });
 

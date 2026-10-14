@@ -46,7 +46,7 @@ describe("KindForm, a new kind", () => {
     expect(screen.queryByRole("radio", { name: "Automatic", hidden: true })).not.toBeInTheDocument();
     await userEvent.type(nameField(), "Hall");
     await save();
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ name: "Hall", icon: "room" });
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ name: "Hall", icon: "hall" }); // the keyword guess: "hall" has its own icon since W7o (it was "room")
   });
 
   it("follows the typed name with the keyword guess, saying so, until an icon is picked", async () => {

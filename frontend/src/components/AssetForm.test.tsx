@@ -244,7 +244,7 @@ describe("AssetForm Icon", () => {
     expect(cell("Automatic")).toHaveFocus();
   });
 
-  it("offers Automatic and the 28 icons, each named by its label and titled", () => {
+  it("offers Automatic and the 48 icons, each named by its label and titled", () => {
     open([]);
     expect(cells().map((c) => c.closest("label")!.textContent)).toEqual(["Automatic", ...ASSET_ICONS.map((e) => e.label)]);
     for (const c of cells()) {

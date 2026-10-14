@@ -49,7 +49,7 @@ describe("kindIcon: matching", () => {
     ["Meters", "kindMeter"],
     ["PDUs", "kindPdu"],
     ["CRAH unit", "kindCrac"],
-    ["ATS", "kindCircuit"],
+    ["ATS", "kindAts"],
     // camelCase and digit boundaries split
     ["LVPanel", "kindPanel"],
     ["UPSRoom", "kindUps"],
@@ -59,12 +59,12 @@ describe("kindIcon: matching", () => {
     // "data" + "center" is one word
     ["Data Center", "kindSite"],
     ["Data Centre", "kindSite"],
-    ["Data Hall A", "kindRoom"],
+    ["Data Hall A", "kindHall"],
     // long forms: "distribution" + "unit" is one word (a PDU), and these words belong to the equipment, not to the place
     ["Power Distribution Unit", "kindPdu"],
     ["Distribution Units", "kindPdu"],
     ["Distribution Board", "kindPanel"],
-    ["Automatic Transfer Switch", "kindCircuit"],
+    ["Automatic Transfer Switch", "kindAts"],
     ["Submeter", "kindMeter"],
     ["Sub-meter", "kindMeter"],
     ["DC Rectifier", "kindUps"],
@@ -75,20 +75,21 @@ describe("kindIcon: matching", () => {
 });
 
 describe("kindIcon: transfer", () => {
-  // "Transfer" alone is not equipment (a transfer pump, a transfer room); "transfer" + "switch" is one word, the transfer switch.
+  // "Transfer" alone is not equipment (a transfer pump, a transfer room); "transfer" + "switch" is one word, the transfer switch: a plain one
+  // stays a circuit breaker, "Automatic" or "Static" in front of it makes it the ATS or the STS (W7o).
   it.each([
     ["Transfer Switch", "kindCircuit"],
-    ["Automatic Transfer Switch", "kindCircuit"],
-    ["Static Transfer Switch", "kindCircuit"],
+    ["Automatic Transfer Switch", "kindAts"],
+    ["Static Transfer Switch", "kindSts"],
     ["Transfer Switches", "kindCircuit"],
-    ["Static Transfer Switches", "kindCircuit"],
+    ["Static Transfer Switches", "kindSts"],
     ["TransferSwitch", "kindCircuit"],
     ["transfer-switch", "kindCircuit"],
-    ["ATS Transfer Switch", "kindCircuit"],
+    ["ATS Transfer Switch", "kindAts"],
     ["Fuel Transfer Pump", "kindPump"],
     ["Transfer", "kindGeneric"],
     ["Transfer Room", "kindRoom"],
-    ["Transfer Switchgear", "kindPanel"],
+    ["Transfer Switchgear", "kindSwitchgear"],
     ["Switch Transfer", "kindGeneric"],
   ])("%s is %s", (kind, icon) => {
     expect(kindIcon(kind)).toBe(icon);
@@ -104,7 +105,7 @@ describe("kindIcon: battery, cooling unit, fan, pump and sensor have their own i
     ["CRAH", "kindCrac"],
     ["Cooling", "kindCrac"],
     ["Cooler", "kindCrac"],
-    ["AHU", "kindCrac"],
+    ["AHU", "kindAhu"],
     ["Fan", "kindFan"],
     ["Fans", "kindFan"],
     ["Pump", "kindPump"],
@@ -121,10 +122,10 @@ describe("kindIcon: battery, cooling unit, fan, pump and sensor have their own i
     ["Battery UPS", "kindUps"],
     ["Battery Room", "kindBattery"],
     ["CRAC Unit", "kindCrac"],
-    ["Cooling Tower", "kindCrac"],
+    ["Cooling Tower", "kindCoolingTower"],
     ["Cooling Pump", "kindPump"],
     ["Cooling Fan", "kindFan"],
-    ["AHU Fan", "kindCrac"],
+    ["AHU Fan", "kindAhu"],
     ["Chiller", "kindChiller"],
     ["Chiller Pump", "kindChiller"],
     ["Fan Coil Unit", "kindFan"],
@@ -143,6 +144,118 @@ describe("kindIcon: battery, cooling unit, fan, pump and sensor have their own i
     ["Boiler", "kindGeneric"],
   ])("%s is %s", (kind, icon) => {
     expect(kindIcon(kind)).toBe(icon);
+  });
+});
+
+describe("kindIcon: the data-centre pack (W7o): every new word and join, plurals included", () => {
+  it.each([
+    // one word each
+    ["Busway", "kindBusway"],
+    ["Busways", "kindBusway"],
+    ["Switchgear", "kindSwitchgear"],
+    ["RPP", "kindRpp"],
+    ["RPPs", "kindRpp"],
+    ["RMU", "kindRmu"],
+    ["CDU", "kindCdu"],
+    ["CDUs", "kindCdu"],
+    ["AHUs", "kindAhu"],
+    ["VFD", "kindVfd"],
+    ["VFDs", "kindVfd"],
+    ["Valve", "kindValve"],
+    ["Valves", "kindValve"],
+    ["Router", "kindRouter"],
+    ["Routers", "kindRouter"],
+    ["Firewall", "kindFirewall"],
+    ["Firewalls", "kindFirewall"],
+    ["Humidity", "kindHumidity"],
+    ["Smoke", "kindSmokeDetector"],
+    ["Hall", "kindHall"],
+    ["Halls", "kindHall"],
+    ["STS", "kindSts"],
+    ["ATS-1", "kindAts"],
+    // two-word joins
+    ["Cooling Tower 2", "kindCoolingTower"],
+    ["Cooling Towers", "kindCoolingTower"],
+    ["CoolingTower", "kindCoolingTower"],
+    ["Dry Cooler", "kindDryCooler"],
+    ["Dry Coolers", "kindDryCooler"],
+    ["Heat Exchanger", "kindHeatExchanger"],
+    ["Heat Exchangers", "kindHeatExchanger"],
+    ["Patch Panel", "kindPatchPanel"],
+    ["Patch Panels", "kindPatchPanel"],
+    ["Cable Tray", "kindCableTray"],
+    ["Cable Trays", "kindCableTray"],
+    ["Smoke Detector", "kindSmokeDetector"],
+    ["Smoke Detectors", "kindSmokeDetector"],
+    ["Air Handling", "kindAhu"],
+    ["Ring Main", "kindRmu"],
+    // three-word joins
+    ["Cooling distribution unit", "kindCdu"],
+    ["Cooling Distribution Units", "kindCdu"],
+    ["Coolant distribution unit", "kindCdu"],
+    ["Air handling unit", "kindAhu"],
+    ["Air Handling Units", "kindAhu"],
+    ["Ring main unit", "kindRmu"],
+    ["Ring Main Units", "kindRmu"],
+    ["Variable frequency drive", "kindVfd"],
+    ["Variable Frequency Drives", "kindVfd"],
+    ["Variable speed drive", "kindVfd"],
+    ["Remote power panel", "kindRpp"],
+    ["Remote Power Panels", "kindRpp"],
+    ["Automatic Transfer Switches", "kindAts"],
+    ["Static Transfer Switch", "kindSts"],
+    // the table order decides when a kind holds two known words
+    ["ATS Panel", "kindAts"],
+    ["Humidity Sensor", "kindHumidity"],
+    ["Humidity Sensors", "kindHumidity"],
+    ["Smoke Sensor", "kindSmokeDetector"],
+    ["Router Room", "kindRouter"],
+    ["Valve Room", "kindValve"],
+    ["Fan Coil Unit", "kindFan"],
+    ["Data Hall", "kindHall"],
+    ["Hall 2", "kindHall"],
+  ])("%s is %s", (kind, icon) => {
+    expect(kindIcon(kind)).toBe(icon);
+  });
+
+  // The joins must not steal the words they are made of when the rest is missing: "distribution unit" is still a PDU, a bare "transfer switch"
+  // a circuit breaker, "tower" a building, and the old pump and panel rules keep their kinds.
+  it.each([
+    ["Power Distribution Unit", "kindPdu"],
+    ["Distribution Unit", "kindPdu"],
+    ["Distribution Board", "kindPanel"],
+    ["Main Power Panel", "kindPanel"],
+    ["Power Panel", "kindPanel"],
+    ["Remote Panel", "kindPanel"],
+    ["Transfer Switch", "kindCircuit"],
+    ["Transfer Switches", "kindCircuit"],
+    ["Automatic Switch", "kindGeneric"],
+    ["Static", "kindGeneric"],
+    ["Tower", "kindBuilding"],
+    ["Cooling", "kindCrac"],
+    ["Cooler", "kindCrac"],
+    ["Cooling Pump", "kindPump"],
+    ["Cooling Tower Pump", "kindPump"],
+    ["Pump Control Panel", "kindPanel"],
+    ["Fuel Transfer Pump", "kindPump"],
+    ["Heat", "kindGeneric"],
+    ["Dry", "kindGeneric"],
+    ["Patch", "kindGeneric"],
+    ["Cable", "kindGeneric"],
+    ["Air", "kindGeneric"],
+    ["Ring", "kindGeneric"],
+    ["Variable Speed", "kindGeneric"],
+    ["Detector", "kindGeneric"],
+    ["Main", "kindGeneric"],
+  ])("%s stays %s", (kind, icon) => {
+    expect(kindIcon(kind)).toBe(icon);
+  });
+
+  it("names a drawing of the catalogue for every pack word, so a suggestion always has an icon", () => {
+    for (const kind of ["Busway", "RPP", "ATS", "STS", "Switchgear", "RMU", "Cooling Tower", "Dry Cooler", "AHU", "CDU", "Valve", "VFD", "Heat Exchanger", "Patch Panel", "Cable Tray", "Router", "Firewall", "Smoke Detector", "Humidity", "Data Hall"]) {
+      expect(Object.keys(ICONS), kind).toContain(kindIcon(kind));
+      expect(kindIcon(kind), kind).not.toBe("kindGeneric");
+    }
   });
 });
 

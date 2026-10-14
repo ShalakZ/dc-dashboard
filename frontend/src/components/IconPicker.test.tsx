@@ -69,7 +69,7 @@ describe("IconPicker", () => {
     expect(opener()).toHaveFocus();
   });
 
-  it("offers the 28 icons, each named by its label, titled with it and drawn as decoration", () => {
+  it("offers the 48 icons, each named by its label, titled with it and drawn as decoration", () => {
     render(<Harness />);
     expect(cells().map((c) => c.closest("label")!.textContent)).toEqual(ASSET_ICONS.map((e) => e.label));
     for (const c of cells()) {
