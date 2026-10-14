@@ -12,6 +12,8 @@
 # update is running; 2 the backup failed or was not copied (-CopyTo problem); 3 the new code could not be fetched or applied; 4 the build
 # failed, or the stack did not start, become healthy or answer, or runs the wrong build; 5 the database revision does not match the code.
 # An unexpected error ends with the exit code of the step it happened in. Every line shown is also written to logs\update-<stamp>.log.
+# After a backup that comes before a change, the old commit, old revision and backup path are also kept in logs\update-anchor.txt, so that
+# a later run can show what to go back to when this update fails.
 # Environment overrides (a value that is not a positive number is ignored): DCDASH_UPDATE_POLL_SECONDS (5, seconds between checks),
 # DCDASH_UPDATE_WAIT_SECONDS (600, how long to wait for the api), DCDASH_UPDATE_DB_WAIT_SECONDS (120, how long to wait for the
 # database before the backup), DCDASH_UPDATE_MIN_FREE_GB (5, free disk space below which it refuses), DCDASH_UPDATE_REPORT_SECONDS
@@ -54,11 +56,14 @@ $script:Lock = $null
 $script:StepNo = 0
 $script:StepTitle = ""
 $script:ProfileArgs = @()
+$ProfileText = ""
 $script:Services = @("api", "collector", "web")
 $script:BackupPath = ""
 $script:OldCommitText = ""
 $script:OldRevisionText = ""
 $script:AfterBuild = $false
+$script:StartedByUp = $false
+$script:CollectorBefore = ""
 $GoBack = 'README, "Upgrading and going back", step 6'
 
 function Get-PositiveNumber([string]$Name, [double]$Default) {
@@ -198,7 +203,9 @@ function Confirm-Continue {
 # tail of the log of each service in $Logs; read-only), what to do ($After) and, with -GoingBack, the way back with its anchors.
 function Stop-AfterBackup([int]$Code, [string[]]$Before, [string[]]$After, [string[]]$Logs = @("api"), [switch]$GoingBack) {
     foreach ($Line in $Before) { Say $Line -Err }
-    if ($script:BackupPath) { Say "Backup: $($script:BackupPath)" -Err } else { Say "This run made no backup and changed nothing." -Err }
+    if ($script:BackupPath) { Say "Backup: $($script:BackupPath)" -Err }
+    elseif ($script:StartedByUp) { Say "This run made no backup. It ran docker compose up -d once to start the services that were not running, and changed nothing else." -Err }
+    else { Say "This run made no backup and changed nothing." -Err }
     Say ""
     Say "docker compose ps -a:"
     foreach ($Line in (Invoke-Compose @("ps", "-a") -Quiet).Lines) { Say "  $Line" }
@@ -209,17 +216,30 @@ function Stop-AfterBackup([int]$Code, [string[]]$Before, [string[]]$After, [stri
     }
     Say ""
     foreach ($Line in $After) { Say $Line -Err }
-    if ($GoingBack) {
+    # No backup, no way back to point at: a run that backed nothing up changed nothing that a backup could undo.
+    if ($GoingBack -and $script:BackupPath) {
         Say "To go back: $GoBack. You need commit $($script:OldCommitText) and revision $($script:OldRevisionText), and the backup above." -Err
     }
     if ($script:BackupPath) { Say "Nothing further was changed. The data is safe in the backup above." -Err }
     Stop-Update $Code
 }
 # A step 7 check failed: exit 4 (a service or the web) or 5 (the database revision). Which advice fits depends on whether this run built.
-function Stop-Check([int]$Code, [string]$What, [string[]]$Logs = @("api"), [switch]$GoingBack) {
+# -MigrationHint: the api is not healthy, which on a run that built nothing may only mean that a migration is still running.
+function Stop-Check([int]$Code, [string]$What, [string[]]$Logs = @("api"), [switch]$GoingBack, [switch]$MigrationHint) {
     $Fix = "Fix: this run rebuilt nothing. Read the lines above; update.ps1 -Force rebuilds the site from the code on disk."
+    if ($MigrationHint -and -not $script:AfterBuild) {
+        $Fix = "Fix: If docker compose logs api shows a migration still running, wait for it first. Otherwise this run rebuilt nothing. Read the lines above; update.ps1 -Force rebuilds the site from the code on disk."
+    }
     if ($script:AfterBuild) { $Fix = "Fix: read the lines above and the log, fix the cause, then run update again: it checks the site once more." }
-    if ($Code -eq 5) { $Fix = "Fix: do not start or stop anything by hand. The database and the code disagree; follow the way back below, or ask whoever looks after this install." }
+    if ($Code -eq 5) {
+        $Fix = "Fix: do not start or stop anything by hand. The database and the code disagree; follow the way back below, or ask whoever looks after this install."
+        if (-not $script:BackupPath) {
+            # Typically a dump restored into a running stack, or an api that was never started again: going back is not the fix.
+            $Changed = "This run changed nothing."
+            if ($script:StartedByUp) { $Changed = "This run only started services that were not running (docker compose up -d)." }
+            $Fix = "Fix: do not start or stop anything by hand. The database and the code disagree. $Changed Make a backup (scripts\backup.ps1), then ask whoever looks after this install. Do not run alembic by hand."
+        }
+    }
     Stop-AfterBackup $Code @("STOPPED: $What") @($Fix) $Logs -GoingBack:$GoingBack
 }
 
@@ -294,7 +314,7 @@ function Confirm-SiteHealthy([string]$ExpectedCommit = "", [string]$ExpectedId =
     if (-not $Api -or $Api.Status -ne "running" -or $Api.Health -ne "healthy") {
         $Seen = "it has no container"
         if ($Api) { $Seen = "state $($Api.Status), health $($Api.Health)" }
-        Stop-Check 4 "the api is not healthy ($Seen)."
+        Stop-Check 4 "the api is not healthy ($Seen)." -MigrationHint
     }
     foreach ($Service in $script:Services) {
         $Problem = Get-ImageProblem $Service
@@ -327,13 +347,17 @@ function Confirm-SiteHealthy([string]$ExpectedCommit = "", [string]$ExpectedId =
         Stop-Check 5 "the database is at revision $Shown but this code's newest revision is '$HeadRev': they must be equal." -GoingBack
     }
     Say "ok: the database is at revision $CurrentRev, the newest this code knows."
-    # A collector that crashes on start is restarted by Docker; two looks one poll apart catch it going round.
+    # A collector that crashes on start is restarted by Docker; two looks one poll apart catch it going round. The two looks can both fall
+    # after the first crash, so a container that THIS run made (after a build, with an id step 2 did not see) must also be at 0 restarts.
+    # One that was kept (-Force on an unchanged tree recreates nothing) may have restarted long before this run.
     $First = Get-ServiceState "collector"
     if ($First -and $First.Status -eq "running") {
         Start-Sleep -Milliseconds ([int][Math]::Max(10, $PollSeconds * 1000))
         $Second = Get-ServiceState "collector"
     }
-    if (-not $First -or $First.Status -ne "running" -or -not $Second -or $Second.Status -ne "running" -or $Second.Id -ne $First.Id -or $Second.Restarts -ne $First.Restarts) {
+    $MadeByThisRun = [bool]($script:AfterBuild -and $First -and $First.Id -ne $script:CollectorBefore)
+    if (-not $First -or $First.Status -ne "running" -or -not $Second -or $Second.Status -ne "running" -or $Second.Id -ne $First.Id -or $Second.Restarts -ne $First.Restarts -or
+        ($MadeByThisRun -and $First.Restarts -ne 0)) {
         Stop-Check 4 "the collector is not running steadily (readings are not being collected)." @("api", "collector")
     }
     Say "ok: the collector is running."
@@ -349,11 +373,15 @@ function Confirm-SiteHealthy([string]$ExpectedCommit = "", [string]$ExpectedId =
         Stop-Check 4 "web is not healthy ($Seen)." @("api", "web")
     }
     Say "ok: web is healthy."
-    # The four lines of README step 5, from this computer through the published port. 127.0.0.1 only: the port is all that is read
-    # from `compose port` (0.0.0.0:80 or [::]:80).
+    # The four lines of README step 5, from this computer through the published port. `compose port` says 0.0.0.0:80 or [::]:80 for "every
+    # interface" (this computer is then 127.0.0.1); a Compose override that binds web to ONE address (192.168.1.5:80) is checked there.
     $Port = Invoke-Compose @("port", "web", "80") -Quiet
-    if ($Port.Code -ne 0 -or (Get-FirstLine $Port) -notmatch ':(\d+)\s*$') { Stop-Check 4 "Docker did not say on which port web listens." @("api", "web") }
-    $Base = "http://127.0.0.1:$($Matches[1])"
+    if ($Port.Code -ne 0 -or (Get-FirstLine $Port) -notmatch '^(.*):(\d+)\s*$') { Stop-Check 4 "Docker did not say on which port web listens." @("api", "web") }
+    $WebHost = $Matches[1].Trim()
+    $WebPort = $Matches[2]
+    if (-not $WebHost -or $WebHost -in @("0.0.0.0", "[::]") -or $WebHost -notmatch '^[A-Za-z0-9.:\[\]-]+$') { $WebHost = "127.0.0.1" }
+    $Base = "http://${WebHost}:$WebPort"
+    Say "The site is checked at $Base (the address Docker publishes for web)."
     $Index = Get-HttpAnswer "$Base/"
     if ($Index.Status -in @(301, 302, 307, 308) -and $Index.Location -like "https://*") {
         Say "The site redirects to https (TLS is on). The four web checks are skipped here; web's own health check stands in for them."
@@ -397,15 +425,21 @@ try { $OutputBefore = [Console]::OutputEncoding } catch { }
 # step -> exit code of an unexpected error in it (decision 17)
 $StepExit = @{ 1 = 1; 2 = 1; 3 = 3; 4 = 2; 5 = 3; 6 = 4; 7 = 4 }
 
-Push-Location (Join-Path $PSScriptRoot "..")
+# -LiteralPath, and inside the try: a folder name with [ ] is a wildcard pattern for -Path, and a failure here must still end in FAILED.
+$Pushed = $false
+$script:StepTitle = "Starting"
 try {
+    Push-Location -LiteralPath (Join-Path $PSScriptRoot "..")
+    $Pushed = $true
     try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
     $Root = (Get-Location).ProviderPath
     $LogDir = Join-Path $Root "logs"
+    $AnchorFile = Join-Path $LogDir "update-anchor.txt"
+    $EnvFile = Join-Path $Root ".env"
     $Stamp = Get-Date -Format yyyyMMdd-HHmmss
     $LogProblem = ""
     try {
-        [void](New-Item -ItemType Directory -Force -Path $LogDir)
+        [void][IO.Directory]::CreateDirectory($LogDir)
         $script:LogPath = Join-Path $LogDir "update-$Stamp.log"
         [IO.File]::AppendAllText($script:LogPath, "", $Utf8)
     } catch {
@@ -455,10 +489,11 @@ try {
     if ($Info.Code -ne 0) { Refuse "Docker is not running." "Start Docker Desktop, wait until it says it is running, then run this again." }
     $ComposeVersion = Invoke-Native "docker" @("compose", "version") -Quiet
     if ($ComposeVersion.Code -ne 0) { Refuse "'docker compose' is not available." "Update Docker Desktop to a version that includes Compose v2, then run this again." }
-    if (-not (Test-Path -LiteralPath ".env" -PathType Leaf)) {
+    # Absolute paths from here on: Windows PowerShell 5.1 cannot resolve a RELATIVE -LiteralPath when the current folder has [ ] in its name.
+    if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
         Refuse ".env is missing." "On a new install run scripts\setup.ps1. If .env was lost, put the original back (README, 'What the backup does not contain'); never make a new one over an existing database."
     }
-    if (-not (Select-String -Path ".env" -Pattern '^DCDASH_DB_PASSWORD=.' -Quiet)) {
+    if (-not (Select-String -LiteralPath $EnvFile -Pattern '^DCDASH_DB_PASSWORD=.' -Quiet)) {
         Refuse ".env has no DCDASH_DB_PASSWORD." "Restore the original .env (README, 'What the backup does not contain'); this script does not edit it."
     }
     # Nothing installed yet would make 'start only the database' create an empty database and 'back it up'.
@@ -524,6 +559,7 @@ try {
     $Simulator = Invoke-Native "docker" @("compose", "--profile", "dev", "ps", "-a", "-q", "simulator") -Quiet
     if ($Simulator.Code -eq 0 -and (Get-FirstLine $Simulator)) {
         $script:ProfileArgs = @("--profile", "dev")
+        $ProfileText = " --profile dev"
         $script:Services = @("api", "collector", "web", "simulator")
         Say "The SCADA simulator is installed here, so every Compose command below uses --profile dev."
     }
@@ -548,9 +584,15 @@ try {
     } else {
         Say "Running build: not running"
     }
-    # The going-back anchor is the code the site RUNS, not what is on disk: someone may have pulled by hand and never rebuilt.
+    # The collector's container id now: after a build, a collector with another id was made by this run (see the collector check).
+    $CollectorPs = Invoke-Compose @("ps", "-a", "-q", "collector") -Quiet
+    if ($CollectorPs.Code -eq 0) { $script:CollectorBefore = Get-FirstLine $CollectorPs }
+    # The going-back anchor is the code the site RUNS, not what is on disk: someone may have pulled by hand and never rebuilt. When no
+    # api container runs (a failed update that was stopped, or one that is restarting), what it ran is unknown and the disk may already
+    # hold the NEW code, so the commit is only a guess: it is never printed as a firm anchor.
     $OldCommit = $HeadShort
     $OldCommitIsGuess = $false
+    $OldCommitWhy = ""
     $RunningCommit = ""
     if ($RunningId) {
         $Clean = $RunningId -replace '-dirty$', ''
@@ -562,13 +604,27 @@ try {
             if ($RunningCommit -ne $HeadFull) { Say "The site runs $RunningId; the code on disk is already at $HeadShort." }
         } else {
             $OldCommitIsGuess = $true
+            $OldCommitWhy = "the running site was built by hand; its commit is not recorded"
             Say "The running site was built by hand, so its commit is not recorded: $HeadShort is the best guess. The backup's database revision is the firm anchor."
         }
+    } else {
+        $OldCommitIsGuess = $true
+        $OldCommitWhy = "the site is not running, so its build is unknown"
+        Say "The site is not running, so the code it was last built from is unknown: $HeadShort is the best guess. The backup's database revision is the firm anchor."
     }
     $OldCommitText = $OldCommit
-    if ($OldCommitIsGuess) { $OldCommitText = "$OldCommit (best guess: the running site was built by hand; its commit is not recorded)" }
+    if ($OldCommitIsGuess) { $OldCommitText = "$OldCommit (best guess: $OldCommitWhy)" }
     $script:OldCommitText = $OldCommitText
     $script:OldRevisionText = $OldRevision
+    # What an earlier update left (written right after its backup): shown whatever the state, so a rerun after a failure cannot lose it.
+    try {
+        if (Test-Path -LiteralPath $AnchorFile -PathType Leaf) {
+            $Notes = @([IO.File]::ReadAllLines($AnchorFile, $Utf8) | ForEach-Object { "$_".Trim() })
+            if ($Notes.Count -ge 4 -and $Notes[1] -and $Notes[2] -and $Notes[3]) {
+                Say "Notes of an earlier update (logs\update-anchor.txt): old commit $($Notes[1]), old revision $($Notes[2]), backup $($Notes[3]) - if that update failed, this is what to go back to"
+            }
+        }
+    } catch { }
 
     # ======== 3/7 ====================================================================================================================
     Start-Step 3 "What is coming"
@@ -603,7 +659,7 @@ try {
         if ($Incoming -gt 0) {
             # A person who copied a new script in by hand before pulling would have the merge fail halfway: catch it here.
             $Added = Invoke-Git @("-c", "core.quotepath=off", "diff", "--name-only", "--diff-filter=A", "HEAD..$TargetSha") -Quiet
-            $Blocking = @($Added.Out | Where-Object { "$_".Trim() -and (Test-Path -LiteralPath "$_".Trim()) })
+            $Blocking = @($Added.Out | Where-Object { $Rel = "$_".Trim(); $Rel -and (Test-Path -LiteralPath (Join-Path $Root $Rel)) })
             if ($Blocking.Count -gt 0) {
                 Refuse "the update adds files that already exist here as untracked files:" "Move each file away (for example rename it to name.old), then run this again. Do not copy update scripts in by hand: the README's first update uses three commands." @($Blocking | ForEach-Object { "  $_" })
             }
@@ -615,10 +671,11 @@ try {
             Say "No new commits on origin/${Branch}."
         }
     }
-    # The migrations the new code carries beyond what the site RUNS (not beyond the disk, see step 2).
+    # The migrations the new code carries beyond what the site RUNS (not beyond the disk, see step 2). Only ADDED files are migrations to
+    # apply; a deleted or edited one prints nothing (and a rename counts as its new file).
     $MigrationBase = $HeadFull
     if ($RunningCommit) { $MigrationBase = $RunningCommit }
-    $Pending = @((Invoke-Git @("diff", "--name-only", "$MigrationBase..$TargetSha", "--", "backend/migrations/versions") -Quiet).Out | Where-Object { "$_".Trim() })
+    $Pending = @((Invoke-Git @("-c", "core.quotepath=off", "diff", "--name-only", "--no-renames", "--diff-filter=A", "$MigrationBase..$TargetSha", "--", "backend/migrations/versions") -Quiet).Out | Where-Object { "$_".Trim() })
     if ($Pending.Count -gt 0) {
         Say "Database migrations this update will apply:"
         foreach ($File in $Pending) { Say "  $File" }
@@ -640,6 +697,30 @@ try {
         # The checks are all read-only, so -DryRun runs them for real too.
         Start-Step 7 "Checking"
         Say "Nothing is incoming and the running site was built from ${HeadShort}: checking that it is healthy (nothing is rebuilt)."
+        Say "If an earlier update of this install failed, what to go back to is in logs\update-anchor.txt and in that run's log."
+        # An earlier update whose first `up -d` failed while the api migrated left web and collector created, never started. Once the api
+        # is healthy on the current image, start them with the one plain `up -d` (no build, no recreate flags) and let the checks judge.
+        $ApiNow = Get-ServiceState "api"
+        if ($ApiNow -and $ApiNow.Status -eq "running" -and $ApiNow.Health -eq "healthy" -and -not (Get-ImageProblem "api")) {
+            $NotStarted = @()
+            foreach ($Service in $script:Services) {
+                if ($Service -eq "api") { continue }
+                $Look = Get-ServiceState $Service
+                if ($Look -and $Look.Status -in @("created", "exited")) { $NotStarted += "$Service ($($Look.Status))" }
+            }
+            if ($NotStarted.Count -gt 0) {
+                Say "The api is healthy, but these services were never started or have stopped: $($NotStarted -join ', '). Starting them with docker compose$ProfileText up -d (nothing is rebuilt)."
+                if ($DryRun) {
+                    Say "Would run: docker compose$ProfileText up -d"
+                } else {
+                    $script:StartedByUp = $true
+                    $Up = Invoke-Compose @("up", "-d")
+                    if ($Up.Code -ne 0) {
+                        Stop-Check 4 "docker compose up -d exited $($Up.Code), so the rest of the site was not started." @("api", "web")
+                    }
+                }
+            }
+        }
         [void](Confirm-SiteHealthy)
         Say ""
         Say "Already up to date at $HeadLine"
@@ -674,17 +755,19 @@ try {
     $BackupArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $BackupScript)
     if ($CopyTo) { $BackupArgs += @("-CopyTo", $CopyTo) }
     if ($DryRun) {
-        Say "Would run: docker compose up -d db   (only if the database container is not running; it starts nothing else)"
+        Say "Would run: docker compose up -d --no-recreate db   (only if the database container is not running; it starts nothing else)"
         Say "Would run: scripts\backup.ps1$(if ($CopyTo) { ' -CopyTo ' + $CopyTo })"
     } else {
         $DbNow = Get-ServiceState "db"
         $DbReady = ($DbNow -and $DbNow.Status -eq "running" -and $DbNow.Health -in @("healthy", "none"))
         if (-not $DbReady) {
             if (-not $DbNow -or $DbNow.Status -ne "running") {
-                Say "The database container is not running: starting only the database (docker compose up -d db)."
-                $Up = Invoke-Compose @("up", "-d", "db")
+                # --no-recreate: a stopped container starts exactly as it was. Without it, Compose recreates it from a compose.yaml or .env that
+                # changed since (a pulled-by-hand update), before the backup exists.
+                Say "The database container is not running: starting only the database (docker compose up -d --no-recreate db)."
+                $Up = Invoke-Compose @("up", "-d", "--no-recreate", "db")
                 if ($Up.Code -ne 0) {
-                    Refuse "the database container could not be started (docker compose up -d db exited $($Up.Code))." "Read the lines above, fix the cause, then run this again." -Changed "Nothing else was changed." -Code 2
+                    Refuse "the database container could not be started (docker compose up -d --no-recreate db exited $($Up.Code))." "Read the lines above, fix the cause, then run this again." -Changed "Nothing else was changed." -Code 2
                 }
                 $DbStartedByUs = $true
             } else {
@@ -716,6 +799,12 @@ try {
         if (-not (Test-Path -LiteralPath $BackupPath -PathType Leaf) -or -not (Test-Path -LiteralPath "$BackupPath.version" -PathType Leaf)) {
             Refuse "the backup script said it wrote $BackupPath, but the dump or its .version file is not there." "Run scripts\backup.ps1 by hand and look at its messages, then run this again." -Changed $Changed -Code 2
         }
+        # The .version file is what restore.ps1 and the README read to know what the dump holds: it must say what the backup script reported.
+        $VersionText = ""
+        try { $VersionText = ("" + (Get-Content -LiteralPath "$BackupPath.version" -Raw)).Trim() } catch { }
+        if ($VersionText -ne $BackupSchema) {
+            Refuse "the backup script said it wrote $BackupPath (schema $BackupSchema), but its .version file says '$VersionText'." "Run scripts\backup.ps1 by hand and look at its messages, then run this again." -Changed $Changed -Code 2
+        }
         Say "Backup written: $BackupPath (schema $BackupSchema)"
         # The database was not running at step 2, so its revision was not known until now: the same check, before anything changes.
         if (-not $RevisionChecked -and -not (Test-RevisionKnown $BackupSchema $TargetSha)) {
@@ -728,12 +817,24 @@ try {
         Say "  Old commit: $OldCommitText"
         Say "  Old database revision: $BackupSchema"
         Say "  Backup: $BackupPath"
+        # Kept in a file as well, for a LATER run: after a failed update the disk holds the new code and the log of this run is easy to
+        # lose. A run whose commit is only a guess (no api was running) never replaces an earlier note, which may be the firm anchor.
+        if ($OldCommitIsGuess -and (Test-Path -LiteralPath $AnchorFile -PathType Leaf)) {
+            Say "The notes of the earlier update stay in logs\update-anchor.txt (this run only has a best guess, which must not replace them)."
+        } else {
+            try {
+                $NoteTime = (Get-Date).ToString("yyyy-MM-dd HH':'mm':'ss", [Globalization.CultureInfo]::InvariantCulture)
+                $NoteLines = @($NoteTime, $OldCommitText, $BackupSchema, $BackupPath)
+                [IO.File]::WriteAllText($AnchorFile, (($NoteLines -join "`r`n") + "`r`n"), $Utf8)
+                Say "These are also saved in logs\update-anchor.txt."
+            } catch {
+                Say "WARNING: logs\update-anchor.txt could not be written ($($_.Exception.Message)); the lines above and the log hold the same."
+            }
+        }
     }
 
     # ======== 5/7 ====================================================================================================================
     Start-Step 5 "Getting the new code"
-    $ProfileText = ""
-    if ($script:ProfileArgs.Count -gt 0) { $ProfileText = " --profile dev" }
     if ($NoPull) {
         Say "-NoPull: the code is not merged. $HeadShort stays as it is."
     } elseif ($Incoming -eq 0) {
@@ -749,6 +850,11 @@ try {
         if ($DbStartedByUs) { $Kept = "The backup above is complete; only the database container was started (it keeps running); nothing else was changed." }
         if ($Merge.Code -ne 0 -and $HeadNow -ne $HeadFull) {
             Refuse "the code was partly updated, HEAD is $HeadNow (git merge exited $($Merge.Code))." "Do not build. Ask whoever looks after this install; the old commit is in the lines above." -Changed "No image was built and no container was touched. $Kept" -Code 3
+        }
+        if ($Merge.Code -ne 0 -and $TreeNow.Count -gt 0) {
+            # A file held open on Windows (an editor, an antivirus) makes git rewrite part of the tree and then give up with HEAD unmoved.
+            $ChangedFiles = @($TreeNow | Select-Object -First 20 | ForEach-Object { ("$_" -replace '^.. ', '').Trim() })
+            Refuse "git stopped part-way: these tracked files were changed: $($ChangedFiles -join ', '); HEAD is still $HeadShort; nothing was built." "Do not build. Undo each listed file with: git restore <file> (or ask whoever looks after this install), then run this again." -Changed "No image was built and no container was touched. $Kept" -Code 3
         }
         if ($Merge.Code -ne 0) {
             Refuse "the new code could not be applied (git merge --ff-only exited $($Merge.Code))." "Read the git message above (a file in the way is the usual reason), fix it, then run this again." -Changed "The code was not changed (HEAD is still $HeadShort). $Kept" -Code 3
@@ -819,9 +925,12 @@ try {
             if ($ApiUp -or -not $Last -or $Last.Status -ne "running") {
                 $Now = "it has no container"
                 if ($Last) { $Now = "it is $($Last.Status)" }
+                # A verdict of 'restarting' can be reached while the container shows running between two restarts: 'it is running' would be odd.
+                if ($script:ApiVerdict -eq "restarting") { $Now = "the api is restarting over and over" }
                 Stop-AfterBackup 4 @("STOPPED: the api keeps restarting or has stopped ($Now), so the new version cannot start.",
                     "No readings are being collected. Docker keeps retrying the database migration because the container is set to restart (restart: unless-stopped).") `
-                    @("Fix: to stop the retries without removing anything, run: docker compose$ProfileText stop api collector",
+                    @("If the log shows the migration starting again by itself and finishing, wait: some old installs restart once on their own (README, release notes of 0004).",
+                      "Fix: First stop the retries (docker compose$ProfileText stop api collector), and only then think about going back.",
                       "Then read the api log above. Your data is in the backup; going back is explained in the README.") -GoingBack
             }
             Stop-AfterBackup 4 @("STOPPED: the api did not become healthy within $WaitText, but it is still running ($($Last.Status), health $($Last.Health)).",
@@ -868,9 +977,14 @@ try {
     if ($script:StepNo -eq 4) { Say "The database container may have been started and a backup may be in backups\ (it is complete only if 'Backup written' was shown above). Nothing else was changed." -Err }
     if ($script:StepNo -ge 5 -and $script:BackupPath) {
         Say "The backup is $($script:BackupPath). The site may be partly updated: run 'docker compose ps' and read the lines above. HEAD is at $(Get-FirstLine (Invoke-Git @('rev-parse', 'HEAD') -Quiet))." -Err
+        # An error while building, waiting or checking can land while the api still migrates: the warning comes before the way back.
+        if ($script:StepNo -ge 6) {
+            Say "Do NOT restore or go back while docker compose ps shows the api starting or restarting: a migration may still be running. Watch: docker compose logs -f api" -Err
+        }
         Say "To go back: $GoBack. You need commit $($script:OldCommitText) and revision $($script:OldRevisionText), and the backup above." -Err
     } elseif ($script:StepNo -ge 5) {
-        Say "This run made no backup and changed nothing." -Err
+        if ($script:StartedByUp) { Say "This run made no backup. It ran docker compose up -d once to start the services that were not running, and changed nothing else." -Err }
+        else { Say "This run made no backup and changed nothing." -Err }
     }
     Say "FAILED (exit $ErrorExit)" -Err
     exit $ErrorExit
@@ -878,5 +992,5 @@ try {
     foreach ($VarName in $SessionVars) { [Environment]::SetEnvironmentVariable($VarName, $SessionBefore[$VarName]) }
     if ($script:Lock) { $script:Lock.Dispose() }
     if ($OutputBefore) { try { [Console]::OutputEncoding = $OutputBefore } catch { } }
-    Pop-Location
+    if ($Pushed) { Pop-Location }
 }

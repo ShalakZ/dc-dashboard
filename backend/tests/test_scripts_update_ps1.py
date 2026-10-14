@@ -17,8 +17,11 @@ The harness (the fake docker is a model of a stack: old containers and images be
 - `build` moves the image tags (newtag-*) and records the build variables; a full `up -d` swaps each service to its NEW container
   (ps-<service>.after) and copies the built id to what `printenv` answers, so a test makes a service stay old by editing one file.
   `ctr-<id>.txt` / `tag-<tag>.txt` answer the two `inspect` forms of the image check, `alembic-current.seq` / `alembic-heads.seq`
-  the revision check, `port.txt` the published web port (a WebStub thread in this process answers on it; the `web` fixture FAILS a
-  test when powershell.exe cannot reach it). UPDATE_TEST_SHOW=1 pytest -s prints every run's screen.
+  the revision check, `port.txt` the published web port (`port-host.txt` the address in front of it; a WebStub thread in this process
+  answers on it; the `web` fixture FAILS a test when powershell.exe cannot reach it). UPDATE_TEST_SHOW=1 pytest -s prints every run's screen.
+- `up -d --no-recreate db` only starts the database (plain `up -d db` is a fake error: the script must never recreate it). A full `up -d`
+  that exits non-zero (up.seq) leaves the collector and web containers CREATED, never started, as a real failed `up -d` does while the api
+  migrates; the next `up -d` that exits 0 starts them.
 - `stdin` is DEVNULL for every run unless a test feeds an answer.
 """
 import http.server
@@ -117,6 +120,7 @@ FAKE_DOCKER = [
     ")",
     "exit /b 0",
     ":cport",
+    'if exist "%D%port-host.txt" (set /p HOST=<"%D%port-host.txt" & set /p PORT=<"%D%port.txt" & echo !HOST!:!PORT!& exit /b 0)',
     'if exist "%D%port-v6.flag" (set /p PORT=<"%D%port.txt" & echo [::]:!PORT!& exit /b 0)',
     'if not exist "%D%port.txt" (echo no port published 1>&2& exit /b 1)',
     'set /p PORT=<"%D%port.txt"',
@@ -126,9 +130,10 @@ FAKE_DOCKER = [
     "echo FAKE-LOG %~4 line one",
     "echo FAKE-LOG %~4 line two",
     "exit /b 0",
-    ":cup",  # up -d db only starts the database; a full up -d records its variables, takes its exit code from up.seq and swaps the containers
+    ":cup",  # up -d --no-recreate db only starts the database; a full up -d records its variables, takes its exit code from up.seq and swaps the containers
     'if exist "%D%up-fail.flag" exit /b 1',
-    'if "%~3"=="db" exit /b 0',
+    'if "%~3"=="--no-recreate" if "%~4"=="db" exit /b 0',
+    'if "%~3"=="db" (echo FAKE DOCKER: up -d db without --no-recreate 1>&2& exit /b 99)',
     '>>"%D%up-env.txt" echo id=%DCDASH_BUILD_ID% time=%DCDASH_BUILD_TIME% attest=%BUILDX_NO_DEFAULT_ATTESTATIONS%',
     'set "UPCODE=0"',
     'call :seq "up.seq"',
@@ -141,6 +146,22 @@ FAKE_DOCKER = [
     '  set "N=%%~nxf"',
     '  copy /y "%%~ff" "%D%!N:.after=.seq!" >nul',
     '  del "%D%!N:.after=.seq!.n" 2>nul',
+    ")",
+    # A failed up -d (the api was still migrating) leaves the containers that wait for the api CREATED, never started; the next
+    # up -d that exits 0 starts them (their normal state comes back from the .good copy).
+    'for %%s in (collector web simulator) do if exist "%D%ps-%%s.after" (',
+    '  set /p CID=<"%D%ps-%%s.after"',
+    '  if "!UPCODE!"=="0" (',
+    '    if exist "%D%inspect-!CID!.seq.good" (',
+    '      copy /y "%D%inspect-!CID!.seq.good" "%D%inspect-!CID!.seq" >nul',
+    '      del "%D%inspect-!CID!.seq.good"',
+    '      del "%D%inspect-!CID!.seq.n" 2>nul',
+    "    )",
+    "  ) else (",
+    '    if not exist "%D%inspect-!CID!.seq.good" copy /y "%D%inspect-!CID!.seq" "%D%inspect-!CID!.seq.good" >nul',
+    '    >"%D%inspect-!CID!.seq" echo created none 0',
+    '    del "%D%inspect-!CID!.seq.n" 2>nul',
+    "  )",
     ")",
     "exit /b !UPCODE!",
     ":cexec",
@@ -216,7 +237,7 @@ ALLOWED_DOCKER = [re.compile(p) for p in (
     rf"^compose{PROFILE} config --no-interpolate$",
     rf"^compose{PROFILE} ps -a -q {SVC}$",
     rf"^compose{PROFILE} ps -a$",
-    rf"^compose{PROFILE} up -d( db)?$",
+    rf"^compose{PROFILE} up -d( --no-recreate db)?$",
     rf"^compose{PROFILE} build api web$",
     rf"^compose{PROFILE} port web 80$",
     rf"^compose{PROFILE} logs --tail 80 (api|web|collector|simulator)$",
@@ -319,13 +340,15 @@ class _Stream:
         self.count = 0
         self.clock = 1_700_000_000
 
-    def commit(self, ref: str, message: str, files: dict[str, bytes], parent: int | None) -> int:
+    def commit(self, ref: str, message: str, files: dict[str, bytes], parent: int | None, deletes: tuple[str, ...] = ()) -> int:
         self.count += 1
         self.clock += 60
         msg = message.encode()
         out = [f"commit {ref}\nmark :{self.count}\ncommitter Test <test@example.com> {self.clock} +0000\ndata {len(msg)}\n".encode(), msg, b"\n"]
         if parent is not None:
             out.append(f"from :{parent}\n".encode())
+        for path in deletes:
+            out.append(f"D {path}\n".encode())
         for path, data in files.items():
             out.append(f"M 100644 inline {path}\ndata {len(data)}\n".encode() + data + b"\n")
         out.append(b"\n")
@@ -367,6 +390,9 @@ def template(made_folders):
     marks["ahead"] = s.count
     s.commit("refs/heads/scn-changelog", "add the changelog", {"CHANGELOG.md": b"# Changelog\n"}, tip)
     marks["changelog"] = s.count
+    # an incoming commit that DELETES a migration file (the oldest one): the list of migrations an update applies must not show it
+    s.commit("refs/heads/scn-delmig", "remove an old migration", {}, tip, deletes=(f"{MIG_DIR}/{MIGRATIONS[0].name}",))
+    marks["delmig"] = s.count
     export = folder / "marks.txt"
     _git(origin, "fast-import", "--quiet", f"--export-marks={_win(export)}", stdin=b"".join(s.parts))
     mark_sha = {int(a[1:]): b for a, b in (line.split() for line in export.read_text().splitlines())}
@@ -562,8 +588,10 @@ class Scene:
         for flag in ("pgdump-fail.flag", "pgdump-lock.flag", "build-fail.flag", "up-stale-build.flag", "port-v6.flag", "alembic-fail.flag",
                      "alembic-info.flag", "alembic-noise.flag"):
             self.drop(flag)
-        for name in ("up.seq", "build-env.txt", "up-env.txt", "built-id.txt", "ps-simulator.seq", "ps-simulator.after"):
+        for name in ("up.seq", "build-env.txt", "up-env.txt", "built-id.txt", "ps-simulator.seq", "ps-simulator.after", "port-host.txt"):
             self.drop(name)
+        for cid in ("collid", "collid2", "webid", "webid2", "simid", "simid2"):  # what a failed up -d saved for the next one (see :cup)
+            self.drop(f"inspect-{cid}.seq.good")
         # The rest of the world, current as it stands. `build` moves the tags to the new images (newtag-*); the full `up -d` swaps every
         # service to a NEW container (ps-<service>.after) that runs the new image, so a service can be left old by editing one file, and
         # the new containers' inspect sequences start at their first line (the old ones were read in steps 1 to 4).
@@ -847,6 +875,31 @@ def test_a_normal_folder_says_nothing_about_onedrive(scene):
     assert "onedrive" not in scene.run().said.lower()
 
 
+def test_an_install_path_with_square_brackets_runs_the_checks_and_a_dry_run(make_scene, web):
+    """M8: [ and ] are wildcards for -Path, never for -LiteralPath. A -DryRun, because scripts\\backup.ps1 itself still does
+    `Set-Location (Join-Path $PSScriptRoot "..")` (a -Path call) and stops in such a folder: that is its own open item, not update.ps1's."""
+    scene = make_scene("my [dc] install")
+    scene.at("c33")
+    res = scene.run("-DryRun")
+    assert res.code == 0 and res.said.endswith("DONE") and "Dry run finished: nothing was changed." in res.said, res.said
+    assert "Incoming: 2 new commit(s)" in res.said and "UNEXPECTED ERROR" not in res.said, res.said
+    assert (scene.root / "logs" / ".update.lock").exists() and "Dry run finished" in res.log
+    scene.at("tip")  # and the A1 path, which runs the real checks (including the four web lines) in that folder
+    res = scene.run("-Yes")
+    assert res.code == 0 and "Already up to date" in res.said and "ok: stream route" in res.said, res.said
+
+
+def test_the_untracked_file_check_also_works_in_a_folder_with_square_brackets(make_scene):
+    """Windows PowerShell 5.1 cannot resolve a RELATIVE -LiteralPath when the current folder has [ ] in its name: the checks use full paths."""
+    scene = make_scene("my [dc] install")
+    scene.at("pre")
+    shutil.copy(SCRIPTS / "update.ps1", scene.root / "scripts" / "update.ps1")
+    res = scene.run("-Yes")
+    _refused(res, "the update adds files that already exist here as untracked files", "scripts/update.ps1")
+    (scene.root / ".env").unlink()
+    _refused(scene.run(), ".env is missing")
+
+
 def test_an_install_path_with_a_space_works_from_start_to_finish(make_scene, web):
     scene = make_scene("my dc install")
     scene.at("c33")
@@ -934,6 +987,77 @@ def test_the_going_back_anchor_is_the_running_build_not_the_disk(scene, web, run
         assert "Old commit: " + scene.short("tip") + " (best guess" in res.said
 
 
+ANCHOR_FILE = ("logs", "update-anchor.txt")
+ANCHOR_HINT = "If an earlier update of this install failed, what to go back to is in logs\\update-anchor.txt and in that run's log."
+
+
+def _anchor_path(scene: Scene) -> Path:
+    return scene.root.joinpath(*ANCHOR_FILE)
+
+
+def test_a_site_that_is_not_running_gives_a_best_guess_anchor_never_a_firm_one(scene, web):
+    scene.at("c33")
+    scene.stack(api=None)  # the api container does not run: the code it was built from is unknown
+    res = scene.run("-Yes")
+    assert res.code == 0, res.said
+    guess = f"{scene.short('c33')} (best guess: the site is not running, so its build is unknown)"
+    assert f"Old commit: {guess}" in res.said and f"You need commit {guess} and revision {OLD_REV}, and the backup above." in res.said, res.said
+    assert "The site is not running, so the code it was last built from is unknown" in res.said
+    assert guess in _anchor_path(scene).read_text(encoding="utf-8")
+
+
+def test_the_anchor_notes_are_written_after_the_backup_and_shown_by_the_next_run(scene, web):
+    scene.at("c33")
+    note = _anchor_path(scene)
+    note.parent.mkdir()
+    note.write_bytes(b"2026-01-01 10:00:00\r\nabc1234\r\n0007\r\nC:\\backups\\old.dump\r\n")  # what an earlier run left
+    res = scene.run("-Yes")
+    assert res.code == 0, res.said
+    assert ("Notes of an earlier update (logs\\update-anchor.txt): old commit abc1234, old revision 0007, backup C:\\backups\\old.dump"
+            " - if that update failed, this is what to go back to") in res.said, res.said
+    assert res.said.index("Notes of an earlier update") < res.said.index("== 3/7")
+    raw = note.read_bytes()
+    assert not raw.startswith(b"\xef\xbb\xbf"), "UTF-8 without a BOM"
+    lines = raw.decode("utf-8").splitlines()
+    assert len(lines) == 4 and re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d", lines[0]), lines
+    assert lines[1:] == [scene.short("c33"), OLD_REV, _win(scene.dumps()[0])], lines
+    assert "logs\\update-anchor.txt" in res.said.split("Write these down")[1]
+
+
+def test_an_anchor_that_is_only_a_guess_never_replaces_the_notes_of_an_earlier_update(scene, web):
+    scene.at("c33")
+    scene.stack(api=None)
+    note = _anchor_path(scene)
+    note.parent.mkdir()
+    before = b"2026-01-01 10:00:00\r\nabc1234\r\n0007\r\nC:\\backups\\old.dump\r\n"
+    note.write_bytes(before)
+    res = scene.run("-Yes")
+    assert res.code == 0 and "Notes of an earlier update" in res.said, res.said
+    assert note.read_bytes() == before, "run 2 after a failed update only knows a guess: the firm anchor of run 1 stays"
+    assert "The notes of the earlier update stay in logs\\update-anchor.txt" in res.said
+
+
+def test_no_notes_are_written_for_a_dry_run_or_a_failed_backup(scene):
+    scene.at("c33")
+    assert scene.run("-DryRun").code == 0
+    scene.flag("pgdump-fail.flag")
+    assert scene.run("-Yes").code == 2
+    assert not _anchor_path(scene).exists()
+
+
+def test_a_run_with_nothing_incoming_points_at_the_notes_and_ignores_an_unreadable_file(scene, web):
+    note = _anchor_path(scene)
+    note.parent.mkdir()
+    note.write_bytes(b"2026-01-01 10:00:00\r\nonly two lines\r\n")  # incomplete: ignored, never an error
+    res = scene.run("-Yes")
+    assert res.code == 0 and "Already up to date" in res.said and ANCHOR_HINT in res.said, res.said
+    assert "Notes of an earlier update" not in res.said
+    note.unlink()
+    note.mkdir()  # a folder where the file should be: cannot be read either
+    res = scene.run("-Yes")
+    assert res.code == 0 and ANCHOR_HINT in res.said and "Notes of an earlier update" not in res.said, res.said
+
+
 # ---- step 3: what is coming ---------------------------------------------------------------------------------------------------------
 
 def test_the_incoming_commits_and_the_migration_sentence_and_the_release_notes_pointer(scene):
@@ -945,6 +1069,14 @@ def test_the_incoming_commits_and_the_migration_sentence_and_the_release_notes_p
     assert "This update changes the database: the backup is taken first, and going back needs both the dump and the commit shown above." in res.said
     assert 'Release notes: README.md, section "Release notes"' in res.said
     assert res.code == 1 and "No answer was given. Run it in a window you can type in, or add -Yes." in res.said
+
+
+def test_the_migration_list_names_only_added_files_a_deleted_one_prints_nothing(scene):
+    scene.at("tip")
+    scene.origin_main("delmig")  # the incoming commit deletes the oldest migration file and adds none
+    res = scene.run("-DryRun")
+    assert res.code == 0 and "Incoming: 1 new commit(s)" in res.said and "remove an old migration" in res.said, res.said
+    assert "Database migrations this update will apply" not in res.said and MIGRATIONS[0].name not in res.said, res.said
 
 
 def test_the_release_notes_pointer_names_the_changelog_when_the_new_code_has_one(scene):
@@ -1078,7 +1210,7 @@ def test_dry_run_asks_nothing_changes_nothing_and_prints_what_it_would_run(scene
     before = scene.head()
     res = scene.run("-DryRun")
     assert res.code == 0 and "Continue?" not in res.said and "Dry run: not asking." in res.said, res.said
-    assert "Would run: docker compose up -d db" in res.said and "Would run: scripts\\backup.ps1" in res.said, res.said
+    assert "Would run: docker compose up -d --no-recreate db" in res.said and "Would run: scripts\\backup.ps1" in res.said, res.said
     assert f"Would run: git merge --ff-only {scene.sha('tip')}" in res.said
     assert "Would run: docker compose build api web" in res.said and "Would run: docker compose up -d" in res.said, res.said
     assert "Would check: every service (api, collector, web)" in res.said and "Dry run finished: nothing was changed." in res.said, res.said
@@ -1135,8 +1267,10 @@ def test_a_stopped_database_is_started_alone_and_waited_for_before_the_backup(sc
     assert res.code == 0 and "The database container is not running: starting only the database" in res.said, res.said
     calls = scene.calls()
     before_dump = calls[:next(i for i, c in enumerate(calls) if "pg_dump" in c)]
-    assert [c for c in before_dump if " up " in f" {c} "] == ["compose up -d db"], calls
-    assert "compose up -d" in calls[calls.index("compose up -d db") + 1:], "the full up comes after the backup"
+    # I2: a stopped container is started exactly as it was (--no-recreate), never recreated from a newer compose.yaml before the backup
+    assert [c for c in before_dump if " up " in f" {c} "] == ["compose up -d --no-recreate db"], calls
+    assert "compose up -d db" not in calls
+    assert "compose up -d" in calls[calls.index("compose up -d --no-recreate db") + 1:], "the full up comes after the backup"
     assert "Backup written:" in res.said
 
 
@@ -1191,6 +1325,38 @@ def test_a_good_backup_prints_the_path_the_schema_and_the_anchors_before_the_cod
     # the order of the screen: checks, where, coming, backup, anchors, and only then the new code
     order = [res.said.index(t) for t in ("== 1/7", "== 2/7", "== 3/7", "== 4/7", "Backup written:", "Write these down", "== 5/7")]
     assert order == sorted(order)
+
+
+def _stub_backup(scene: Scene, version_line: str) -> None:
+    """Replaces scripts\\backup.ps1 by a stub that says `wrote ... (schema OLD_REV)` and writes the .version file the way `version_line`
+    says. Committed in the scratch clone (the tree stays clean); run with -NoPull (the clone is then ahead of origin)."""
+    body = "\r\n".join([
+        'param([string]$CopyTo = "")',
+        '$dir = Join-Path (Get-Location).ProviderPath "backups"',
+        "[void][IO.Directory]::CreateDirectory($dir)",
+        '$file = Join-Path $dir "dcdash-20260101-000000.dump"',
+        '[IO.File]::WriteAllText($file, "dump")',
+        version_line,
+        f'Write-Host "wrote $file (schema {OLD_REV})"',
+        ""])
+    (scene.root / "scripts" / "backup.ps1").write_bytes(body.encode("ascii"))
+    scene.git("add", "scripts/backup.ps1")
+    scene.git("commit", "-q", "-m", "stub backup")
+
+
+@pytest.mark.parametrize("version_line, code, phrase", [
+    ("", 2, "but the dump or its .version file is not there"),  # a `wrote` line but no .version file
+    ('[IO.File]::WriteAllText("$file.version", "0001")', 2, f"(schema {OLD_REV}), but its .version file says '0001'"),
+    (f'[IO.File]::WriteAllText("$file.version", "{OLD_REV}`r`n")', 0, "Backup written:"),  # the same content, trimmed: fine
+])
+def test_the_version_file_of_the_backup_must_say_the_schema_the_backup_script_reported(scene, web, version_line, code, phrase):
+    scene.at("c33")
+    _stub_backup(scene, version_line)
+    res = scene.run("-NoPull -Yes")
+    assert res.code == code and phrase in res.said, res.said
+    if code == 2:
+        assert "STOPPED:" in res.said and "Nothing was changed." in res.said and "FAILED (exit 2)" in res.said, res.said
+        assert _builds(scene) == [] and _full_ups(scene) == [] and not _anchor_path(scene).exists(), scene.calls()
 
 
 def test_the_log_file_holds_what_the_screen_showed(scene, web):
@@ -1280,6 +1446,19 @@ def test_the_web_port_is_read_from_either_address_form(scene, web):
     scene.flag("port-v6.flag")  # `[::]:<port>` instead of `0.0.0.0:<port>`
     res = scene.run("-Yes")
     assert res.code == 0 and "ok: stream route" in res.said, res.said
+    assert f"The site is checked at http://127.0.0.1:{web.port}" in res.said, "all interfaces mean this computer: 127.0.0.1"
+
+
+def test_the_web_checks_follow_the_address_docker_publishes_when_it_is_a_single_one(scene, web):
+    # M1: a Compose override that binds web to one address (127.0.0.2 is loopback on Windows and refuses at once; a LAN address
+    # such as 192.168.1.5 would be the real case, but it may hang here)
+    (scene.bin / "port-host.txt").write_bytes(b"127.0.0.2")
+    res = scene.run("-Yes")
+    assert res.code == 4 and f"The site is checked at http://127.0.0.2:{web.port}" in res.said, res.said
+    assert "web check 'index' failed: GET / gave no answer" in res.said and web.requests == [], (res.said, web.requests)
+    (scene.bin / "port-host.txt").write_bytes(b"0.0.0.0")
+    res = scene.run("-Yes")
+    assert res.code == 0 and f"The site is checked at http://127.0.0.1:{web.port}" in res.said, res.said
 
 
 def test_no_pull_builds_what_is_checked_out_without_fetching_or_merging(scene, web):
@@ -1365,6 +1544,26 @@ def test_a_merge_that_says_it_worked_but_left_head_alone_is_exit_3(scene):
     assert scene.head() == scene.sha("c33") and _builds(scene) == [] and _full_ups(scene) == [], scene.calls()
 
 
+def test_a_merge_that_fails_part_way_with_changed_files_and_head_unchanged_names_the_files(scene):
+    """I6: a file held open on Windows makes git write some files and then give up with HEAD unmoved: say so, not 'the code was not changed'."""
+    scene.at("c33")
+    real = GIT.replace("/mnt/c", "C:").replace("/", chr(92))
+    (scene.bin / "git.cmd").write_bytes("\r\n".join([
+        "@echo off",
+        'echo %* | findstr /B /C:"merge --ff-only" >nul',
+        "if not errorlevel 1 (echo half done>> README.md& exit /b 1)",  # a tracked file is rewritten, HEAD stays
+        f'"{real}" %*',
+        "exit /b %ERRORLEVEL%", ""]).encode("ascii"))
+    res = scene.run("-Yes")
+    _refused(res, "git stopped part-way: these tracked files were changed: README.md", f"HEAD is still {scene.short('c33')}", "nothing was built",
+             "The backup above is complete", code=3, label="STOPPED")
+    assert "The code was not changed" not in res.said
+    assert scene.head() == scene.sha("c33") and _builds(scene) == [] and _full_ups(scene) == [], scene.calls()
+    # and the next run refuses at step 1 and lists the file (nothing is mixed with it)
+    again = scene.run("-Yes")
+    _refused(again, "these tracked files were changed", "README.md")
+
+
 def test_no_pull_with_a_dry_run_prints_the_build_and_changes_nothing(scene):
     scene.at("c33")
     scene.alembic(OLD_REV, OLD_REV)
@@ -1435,8 +1634,22 @@ def test_an_api_that_stops_or_keeps_restarting_is_text_c_with_the_way_back(scene
                    "docker compose stop api collector", "Your data is in the backup",
                    f'To go back: README, "Upgrading and going back", step 6. You need commit {scene.short("c33")} and revision {OLD_REV}, and the backup above.'):
         assert phrase in res.said, res.said
+    # M3: the order is spelled out (stop the retries, and only then think about going back); M2: some old installs restart once by themselves
+    stop = "First stop the retries (docker compose stop api collector), and only then think about going back."
+    wait = ("If the log shows the migration starting again by itself and finishing, wait: some old installs restart once on their own "
+            "(README, release notes of 0004).")
+    assert stop in res.said and wait in res.said, res.said
+    assert res.said.index(stop) < res.said.index("To go back:") and res.said.index(wait) < res.said.index("To go back:")
     _failure_block(res, scene, "api")
     assert not any(c.split()[:2] == ["compose", "stop"] for c in scene.calls()), "the script only NAMES the stop command"
+
+
+def test_a_restart_loop_is_described_in_plain_words_even_when_the_container_shows_running(scene, web):
+    scene.at("c33")
+    scene.seq("inspect-apiid2.seq", "running starting 0", "running starting 1", "running starting 2", "running starting 3")
+    res = scene.run("-Yes")
+    assert res.code == 4 and "the api keeps restarting or has stopped (the api is restarting over and over)" in res.said, res.said
+    assert "(it is running)" not in res.said and "it is running" not in res.said, res.said
 
 
 @pytest.mark.parametrize("last", ["restarting none 1", None])
@@ -1491,6 +1704,8 @@ def test_build_ids_are_compared_as_commits_not_as_strings(scene, web):
 @pytest.mark.parametrize("states, why", [
     (("running none 0", "running none 1"), "restarted"),
     (("exited none 0", "exited none 0"), "not running"),
+    # I8: after a build the collector container is NEW: a count above 0 at the first look is a crash loop, even when the two looks agree
+    (("running none 1", "running none 1"), "already restarted at the first look"),
 ])
 def test_a_collector_that_restarts_or_is_not_running_is_exit_4(scene, web, states, why):
     scene.at("c33")
@@ -1498,6 +1713,19 @@ def test_a_collector_that_restarts_or_is_not_running_is_exit_4(scene, web, state
     res = scene.run("-Yes")
     assert res.code == 4 and "the collector is not running steadily (readings are not being collected)" in res.said, res.said
     _failure_block(res, scene, "api", "collector")
+
+
+def test_a_collector_kept_by_a_rebuild_may_have_restarted_before_that_is_not_a_crash_loop(scene, web):
+    """-Force on an unchanged tree: the build changes no image, `up -d` recreates nothing, the OLD collector (restarted once, long ago) stays."""
+    for cid, image in (("apiid", "old-backend"), ("collid", "old-backend"), ("webid", "old-web")):
+        scene.ctr(cid, image, WEB_TAG if cid == "webid" else BACKEND_TAG)
+    for service, cid in (("api", "apiid"), ("collector", "collid"), ("web", "webid")):
+        scene.seq(f"ps-{service}.after", cid)
+    for tag, old in ((BACKEND_TAG, "old-backend"), (WEB_TAG, "old-web")):  # the rebuilt image is the same image
+        (scene.bin / f"newtag-{tag.replace(':', '_')}.txt").write_bytes(f"sha256:{old}\r\n".encode("ascii"))
+    scene.seq("inspect-collid.seq", "running none 2")
+    res = scene.run("-Yes -Force")
+    assert res.code == 0 and "ok: the collector is running." in res.said, res.said
 
 
 @pytest.mark.parametrize("current, heads, shown", [("0001", NEW_REV, "0001"), ("NONE", NEW_REV, "none"), (NEW_REV, "0099", NEW_REV)])
@@ -1579,14 +1807,19 @@ def test_a1_the_same_build_with_an_unhealthy_api_is_exit_4_and_never_up_to_date(
     assert res.code == 4 and "the api is not healthy (state running, health unhealthy)." in res.said, res.said
     assert "Already up to date" not in res.said and "This run made no backup and changed nothing." in res.said
     assert "update.ps1 -Force rebuilds the site from the code on disk." in res.said
+    # M4: a migration may still be running (text b was just before): wait for it before anything else
+    assert "If docker compose logs api shows a migration still running, wait for it first. Otherwise" in res.said, res.said
     _nothing_changed(scene, scene.sha("tip"))
     assert "To go back" not in res.said
 
 
-def test_a1_the_same_build_with_a_revision_mismatch_is_exit_5(scene, web):
+def test_a1_the_same_build_with_a_revision_mismatch_is_exit_5_and_does_not_send_anyone_back(scene, web):
     scene.alembic("0001")
     res = scene.run("-Yes")
-    assert res.code == 5 and "Already up to date" not in res.said and "To go back:" in res.said, res.said
+    assert res.code == 5 and "Already up to date" not in res.said, res.said
+    # I5: this run made no backup and changed nothing, so there is no way back to point at (and no "backup above")
+    assert "This run changed nothing. Make a backup (scripts\\backup.ps1), then ask whoever looks after this install. Do not run alembic by hand." in res.said
+    assert "To go back" not in res.said and "way back" not in res.said and "the backup above" not in res.said, res.said
     _nothing_changed(scene, scene.sha("tip"))
 
 
@@ -1594,7 +1827,82 @@ def test_a1_the_same_build_with_an_old_web_image_is_exit_4(scene, web):
     scene.ctr("webid", "older-web", WEB_TAG)
     res = scene.run("-Yes")
     assert res.code == 4 and "web still runs the old version" in res.said and "Already up to date" not in res.said, res.said
+    assert "wait for it first" not in res.said, "the migration advice belongs to the api-not-healthy case only"
     _nothing_changed(scene, scene.sha("tip"))
+
+
+def test_a_rerun_after_text_b_starts_what_the_first_up_left_created_and_then_finishes(scene, web):
+    """I4: the first `up -d` failed while the api migrated, so web and collector were created and never started. Text (b) promises that
+    running update again finishes the job: the A1 path must run `up -d` once for them, not fail with 'the collector is not running'."""
+    scene.at("c33")
+    scene.seq("up.seq", "1")
+    scene.seq("inspect-apiid2.seq", "running starting 0")
+    first = scene.run("-Yes", env={"DCDASH_UPDATE_WAIT_SECONDS": "1"})
+    assert first.code == 4 and "Do NOT restore the backup or go back yet." in first.said, first.said
+    ups_before = len(_full_ups(scene))
+    scene.seq("inspect-apiid2.seq", "running healthy 0")  # the migration finished meanwhile
+    scene.seq("up.seq", "0")
+    second = scene.run("-Yes")
+    assert second.code == 0 and "Already up to date" in second.said and second.said.endswith("DONE"), second.said
+    assert "collector (created)" in second.said and "web (created)" in second.said and "nothing is rebuilt" in second.said, second.said
+    assert len(_full_ups(scene)) - ups_before == 1, scene.calls()
+    assert len(_builds(scene)) == 1 and len(scene.dumps()) == 1, "the rerun built nothing and made no second backup"
+    _no_destructive_call(scene)
+
+
+def _stopped_service_that_up_starts(scene: Scene, service: str, state: str) -> None:
+    """The world of a run that builds nothing (nothing incoming, the site healthy, one container created / exited): `up -d` leaves every
+    container as it is and gives `service` a NEW container on the SAME image, running."""
+    names = {"api": ("apiid", BACKEND_TAG, "old-backend"), "collector": ("collid", BACKEND_TAG, "old-backend"), "web": ("webid", WEB_TAG, "old-web")}
+    for svc, (cid, tag, image) in names.items():
+        started = f"{cid}b" if svc == service else cid
+        scene.seq(f"ps-{svc}.after", started)
+        scene.ctr(started, image, tag)
+    scene.seq(f"inspect-{names[service][0]}.seq", state)
+    scene.seq(f"inspect-{names[service][0]}b.seq", "running healthy 0" if service == "web" else "running none 0")
+
+
+@pytest.mark.parametrize("service, state", [("web", "created none 0"), ("collector", "exited none 0")])
+def test_a1_starts_a_service_that_is_created_or_exited_once_and_lets_the_checks_judge(scene, web, service, state):
+    _stopped_service_that_up_starts(scene, service, state)
+    res = scene.run("-Yes")
+    assert res.code == 0 and "Already up to date" in res.said, res.said
+    assert f"{service} ({state.split()[0]})" in res.said and len(_full_ups(scene)) == 1 and _builds(scene) == [], scene.calls()
+    assert scene.dumps() == [] and scene.head() == scene.sha("tip")
+
+
+def test_a1_extra_up_that_fails_is_exit_4_and_does_not_claim_it_changed_nothing(scene, web):
+    _stopped_service_that_up_starts(scene, "web", "created none 0")
+    scene.seq("up.seq", "1")
+    res = scene.run("-Yes")
+    assert res.code == 4 and "docker compose up -d exited 1, so the rest of the site was not started" in res.said, res.said
+    assert "This run made no backup. It ran docker compose up -d once to start the services that were not running" in res.said
+    assert "This run made no backup and changed nothing." not in res.said and "Already up to date" not in res.said
+    assert len(_full_ups(scene)) == 1 and _builds(scene) == [] and scene.dumps() == []
+
+
+def test_a1_with_all_services_running_runs_no_up_at_all(scene, web):
+    res = scene.run("-Yes")
+    assert res.code == 0 and _full_ups(scene) == [] and "never started" not in res.said
+
+
+def test_a1_does_not_start_anything_when_the_api_is_not_healthy_or_runs_an_old_image(scene, web):
+    _stopped_service_that_up_starts(scene, "web", "created none 0")
+    scene.seq("inspect-apiid.seq", "running unhealthy 0")
+    res = scene.run("-Yes")
+    assert res.code == 4 and "the api is not healthy" in res.said and _full_ups(scene) == [], res.said
+    scene.seq("inspect-apiid.seq", "running healthy 0")
+    scene.ctr("apiid", "older-backend", BACKEND_TAG)
+    res = scene.run("-Yes")
+    assert res.code == 4 and "api still runs the old version" in res.said and _full_ups(scene) == [], res.said
+
+
+def test_a_dry_run_of_a_rerun_only_says_it_would_start_the_stopped_services(scene, web):
+    _stopped_service_that_up_starts(scene, "web", "created none 0")
+    res = scene.run("-DryRun", env={"DCDASH_UPDATE_WAIT_SECONDS": "1"})
+    assert "Would run: docker compose up -d" in res.said and _full_ups(scene) == [], res.said
+    assert res.code == 4 and "web is not healthy" in res.said, "the checks are real: web does not run"
+    assert "This run made no backup and changed nothing." in res.said
 
 
 def test_a_rerun_after_a_failed_update_does_not_say_up_to_date(scene, web):
@@ -1644,6 +1952,10 @@ def test_an_unexpected_error_after_the_backup_names_the_backup_and_the_way_back(
     dump = scene.dumps()[0]
     assert res.code == 4 and "UNEXPECTED ERROR in step 6 (Building and starting)" in res.said and "FAILED (exit 4)" in res.said, res.said
     assert f"The backup is {_win(dump)}." in res.said and "To go back:" in res.said, res.said
+    # I7: a step 6 error can land while a migration still runs: the warning comes BEFORE the way back
+    caution = ("Do NOT restore or go back while docker compose ps shows the api starting or restarting: a migration may still be running. "
+               "Watch: docker compose logs -f api")
+    assert caution in res.said and res.said.index(caution) < res.said.index("To go back:"), res.said
     assert _builds(scene) == [] and _full_ups(scene) == []
 
 
@@ -1711,7 +2023,7 @@ def test_the_script_is_pure_ascii_and_windows_powershell_5_1_syntax():
     for token in ("&&", "||", "??", "?.", "Out-File", "-Parallel", "ForEach-Object -Parallel"):
         assert token not in code, f"{token!r} is not Windows PowerShell 5.1"
     assert not re.search(r"\$\w+\s*=\s*\(?[^'\"\n]*\s\?\s[^'\"\n]*\s:\s", code), "a ternary is PowerShell 7 syntax"
-    assert len(CODE_LINES) + sum(1 for _ in SCRIPT_TEXT.decode().splitlines() if _.lstrip().startswith("#")) <= 900
+    assert len(CODE_LINES) + sum(1 for _ in SCRIPT_TEXT.decode().splitlines() if _.lstrip().startswith("#")) <= 1000
     assert SCRIPT_TEXT.count(b"\r\n") in (0, SCRIPT_TEXT.count(b"\n")), "one line ending style"
 
 
