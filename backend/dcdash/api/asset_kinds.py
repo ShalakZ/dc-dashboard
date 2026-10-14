@@ -1,4 +1,5 @@
-"""Asset kinds: the registry that says what each kind of asset looks like (list, create, rename or change the icon, delete).
+"""Asset kinds: the registry that says what each kind of asset looks like (list, create, rename or change the icon, delete, add the
+data-centre starter pack).
 
 `assets.kind` is free text. A registry row owns a KEY, the normalised name (core/asset_kinds.py), and an asset belongs to the
 row when the key of its kind text equals it: "Rack", " rack " and "RACK" are one kind. Renaming a kind rewrites every asset
@@ -12,6 +13,10 @@ browser tab produces anyway (free text; an unregistered key falls back to the ke
 with delete_asset. What IS serialised is the kind row itself (SELECT ... FOR UPDATE, first in a PATCH and a DELETE, so that a name
 sent back as stored is compared with the stored one under the lock) and the unique index on `key`, which is the final word on two
 requests that take one key at once.
+
+The starter pack inserts its kinds one statement each, in the list's order, with ON CONFLICT (key) DO NOTHING: a kind that is
+there (any spelling, any icon) is skipped and never changed, and two presses at once cannot fail or add a kind twice (the second
+waits on the first's uncommitted row for that key, then skips it; both go in one order, so neither waits for the other in a circle).
 """
 from collections import Counter
 from collections.abc import AsyncIterator
@@ -21,12 +26,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dcdash.api.deps import current_user, get_db, require_permission
 from dcdash.core.asset_icons import KindIcon
-from dcdash.core.asset_kinds import clean_kind_name, kind_key
+from dcdash.core.asset_kinds import STARTER_PACK, clean_kind_name, kind_key
 from dcdash.core.audit import audit, audit_change
 from dcdash.core.models import Asset, AssetKind, User
 
@@ -44,6 +50,11 @@ class KindOut(BaseModel):
 
 
 # The raw length only keeps an enormous body out; the real limit (60 characters) is checked on the cleaned text.
+class StarterOut(BaseModel):
+    added: list[str]  # the names this press registered, in the order of the pack
+    already_there: int  # the pack's kinds that were in the registry already
+
+
 class KindIn(BaseModel):
     name: str = Field(max_length=256)
     icon: KindIcon = "generic"
@@ -127,6 +138,29 @@ async def create_kind(body: KindIn, db: AsyncSession = Depends(get_db), user: Us
     counts = await kind_counts(db)  # assets that already carry the text belong to the new kind at once
     await db.commit()
     return as_row(kind, counts)
+
+
+@router.post(
+    "/asset-kinds/starter-pack", response_model=StarterOut, dependencies=[Depends(require_permission("assets.kinds"))]
+)
+async def add_starter_pack(db: AsyncSession = Depends(get_db), user: User = Depends(current_user)) -> StarterOut:
+    added: list[str] = []
+    for name, icon in STARTER_PACK:
+        # DO NOTHING, never DO UPDATE: a kind that is there keeps its name and icon. The conflict target is the unique index on `key`,
+        # so it holds for another spelling of the key too, and for a kind a concurrent press has not committed yet (this waits for it).
+        inserted = await db.scalar(
+            pg_insert(AssetKind)
+            .values(name=name, key=kind_key(name), icon=icon)
+            .on_conflict_do_nothing(index_elements=["key"])
+            .returning(AssetKind.name)
+        )
+        if inserted is not None:
+            added.append(inserted)
+    if added:  # a press that changes nothing leaves no trace
+        await audit(db, user.id, "kind.starter_pack_added", {"count": len(added), "names": added})
+    await db.commit()
+    # Counted from the inserts, not from a read of the registry before them: a press that committed meanwhile is "already there".
+    return StarterOut(added=added, already_there=len(STARTER_PACK) - len(added))
 
 
 @router.patch(

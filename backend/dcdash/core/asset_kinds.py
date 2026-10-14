@@ -18,6 +18,23 @@ from dcdash.core.models import AssetKind
 
 MAX_NAME = 60  # characters (code points) of a name a person writes; a seeded name may be longer
 
+# The data-centre starter kinds (W7o), as (name, icon id), in the order the pack adds them. One press of "Add data-centre kinds"
+# registers the ones whose key is not in the registry yet; a kind that is there is never touched, whatever its spelling or icon.
+# None of the ten kinds migration 0010 seeds is in it (site, building, room, row, rack, panel, meter, circuit, other equipment,
+# generic), and every key is distinct: test_api_asset_kinds.py holds the list to both.
+STARTER_PACK: tuple[tuple[str, str], ...] = (
+    ("UPS", "ups"), ("Battery", "battery"), ("PDU", "pdu"), ("RPP", "rpp"), ("ATS", "ats"), ("STS", "sts"),
+    ("Switchgear", "switchgear"), ("Busway", "busway"), ("Ring main unit", "rmu"), ("Transformer", "transformer"),
+    ("Generator", "generator"), ("Fuel tank", "fueltank"),
+    ("Chiller", "chiller"), ("CRAC", "crac"), ("Air handling unit", "ahu"), ("Cooling distribution unit", "cdu"),
+    ("Cooling tower", "coolingtower"), ("Dry cooler", "drycooler"), ("Heat exchanger", "heatexchanger"), ("Pump", "pump"),
+    ("Fan", "fan"), ("Valve", "valve"), ("Variable frequency drive", "vfd"),
+    ("Server", "server"), ("Network switch", "switch"), ("Router", "router"), ("Firewall", "firewall"),
+    ("Patch panel", "patchpanel"), ("Cable tray", "cabletray"), ("Data hall", "hall"),
+    ("Controller", "controller"), ("Sensor", "sensor"), ("Smoke detector", "smokedetector"), ("Humidity sensor", "humidity"),
+    ("Fire suppression", "fire"), ("Leak detector", "leak"), ("Camera", "camera"), ("Door", "door"), ("Lighting", "lighting"),
+)
+
 # ECMAScript white space, spelled out: it is what JavaScript's trim() and \s remove. Python's str.split() and \s differ (they
 # treat U+001C to U+001F and U+0085 as white space and U+FEFF as a letter), so neither may stand in for this class.
 _BLANKS = re.compile(r"[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+")

@@ -330,6 +330,14 @@ function followers(value: unknown): string {
   return ` (${count(value, "asset")} ${value === 1 ? "follows" : "follow"})`;
 }
 
+/** "Added 36 data-centre asset kinds: UPS, Battery, PDU, RPP, ATS, STS and 30 more" from the stored count and names (kind names, no ids); still a sentence when either is missing. */
+function starterPackAdded(d: Detail): string {
+  const names = Array.isArray(d.names) ? d.names.map(text).filter((name): name is string => name !== null).map(shortName) : [];
+  const stored = typeof d.count === "number" && Number.isSafeInteger(d.count) && d.count > 0 ? d.count : names.length;
+  const what = stored > 0 ? `Added ${count(stored, "data-centre asset kind")}` : "Added data-centre asset kinds";
+  return names.length > 0 ? `${what}: ${labelList(names)}` : what;
+}
+
 const sourcesPage = page("/sources", "Open Sources");
 const scansPage = page("/scans", "Open Scans");
 const usersPage = page("/users", "Open Users & Roles");
@@ -448,6 +456,7 @@ const RULES: Record<string, Rule> = {
     },
     link: kindsPage,
   },
+  "kind.starter_pack_added": { summary: (c) => starterPackAdded(c.d), link: kindsPage },
 
   // In these rows the User column is the account that was attacked (unknown when the name did not exist), not someone who acted.
   "login.failed": {
