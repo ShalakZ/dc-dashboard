@@ -720,7 +720,7 @@ test.describe("W9c: the Roles editor offers what a permission needs", () => {
     test.setTimeout(120_000);
     await asAdminPage(browser, async (page) => {
       const dialog = await openNewRole(page);
-      // Tick every box in the page in one go (28 clicks through Playwright would take long); the last box may leave one card open.
+      // Tick every box in the page in one go (29 clicks through Playwright would take long); the last box may leave one card open.
       await dialog.locator('input[type="checkbox"]:not(:disabled)').evaluateAll((nodes) => {
         for (const node of nodes) if (!(node as HTMLInputElement).checked) (node as HTMLInputElement).click();
       });

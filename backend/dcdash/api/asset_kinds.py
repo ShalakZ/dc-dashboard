@@ -3,7 +3,9 @@
 `assets.kind` is free text. A registry row owns a KEY, the normalised name (core/asset_kinds.py), and an asset belongs to the
 row when the key of its kind text equals it: "Rack", " rack " and "RACK" are one kind. Renaming a kind rewrites every asset
 spelling of the old key in the same transaction; a kind that assets still use cannot be deleted. Reads need assets.view,
-every write assets.edit (a rename changes assets.kind, which assets.edit already allows).
+every write assets.kinds ("Manage asset kinds", a risky permission since W7o: before it every write needed assets.edit). The
+asset routes never write the registry, so assets.edit alone still saves an asset with any kind text. The gate is single, as
+everywhere here: a holder of assets.kinds without assets.edit can still rewrite the kind text of many assets by renaming a kind.
 
 No table lock: an asset saved with the old spelling while a rename runs, or created while a delete counts, leaves what a stale
 browser tab produces anyway (free text; an unregistered key falls back to the keyword guess), and a table lock would deadlock
@@ -109,7 +111,7 @@ async def list_kinds(db: AsyncSession = Depends(get_db)) -> list[KindOut]:
 
 
 @router.post(
-    "/asset-kinds", response_model=KindOut, status_code=201, dependencies=[Depends(require_permission("assets.edit"))]
+    "/asset-kinds", response_model=KindOut, status_code=201, dependencies=[Depends(require_permission("assets.kinds"))]
 )
 async def create_kind(body: KindIn, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)) -> KindOut:
     name = clean_kind_name(body.name)
@@ -128,7 +130,7 @@ async def create_kind(body: KindIn, db: AsyncSession = Depends(get_db), user: Us
 
 
 @router.patch(
-    "/asset-kinds/{kind_id}", response_model=KindOut, dependencies=[Depends(require_permission("assets.edit"))]
+    "/asset-kinds/{kind_id}", response_model=KindOut, dependencies=[Depends(require_permission("assets.kinds"))]
 )
 async def update_kind(
     kind_id: int, body: KindPatch, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
@@ -175,7 +177,7 @@ async def update_kind(
 
 
 @router.delete(
-    "/asset-kinds/{kind_id}", status_code=204, response_model=None, dependencies=[Depends(require_permission("assets.edit"))]
+    "/asset-kinds/{kind_id}", status_code=204, response_model=None, dependencies=[Depends(require_permission("assets.kinds"))]
 )
 async def delete_kind(
     kind_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)

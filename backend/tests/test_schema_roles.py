@@ -129,7 +129,7 @@ async def test_the_seed_is_viewer_operator_and_admin_with_the_mirrors_of_the_cod
     assert len(by_name["admin"]) == len(set(by_name["admin"])) == 28
     assert set(by_name["viewer"]) == BUILTIN["viewer"]
     assert set(by_name["operator"]) == BUILTIN["operator"]
-    # The Admin row is the 0009 snapshot: 28 ids, no `settings.security` (added later; the column grants nothing, code does).
+    # The Admin row is the 0009 snapshot: 28 ids, no `settings.security` or `assets.kinds` (added later; the column grants nothing, code does).
     assert set(by_name["admin"]) == ALL_IDS - ADDED_AFTER_0009
     assert next_id == 4, "the id sequence must continue after the three seeded rows"
 

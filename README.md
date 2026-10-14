@@ -145,7 +145,7 @@ the user `sim` with that password. Modbus needs none.
 
 UI screens, besides Assets Tree, Sources and Points:
 
-- **Asset kinds** (everyone who may open the Assets Tree can read it; `assets.edit` changes it): the button at the top of the Assets
+- **Asset kinds** (everyone who may open the Assets Tree can read it; `assets.kinds` changes it): the button at the top of the Assets
   Tree opens it. It says once what each kind of asset looks like. An asset shows its own icon if it has one, else the icon of its kind,
   else the generic one; change a kind's icon here and every asset of that kind follows, and rename a kind and the assets that carry the
   name follow it. A kind that assets still use cannot be deleted. The kind list in the Add and Edit asset dialogs comes from this page,
@@ -442,9 +442,9 @@ used in widgets.
 ## Roles and permissions
 
 Every action in the API needs a named permission, and an account holds one role: a role is a set of permissions. The screens only hide
-what the server would refuse. There are 29 permissions, in groups by area. A **See** permission opens a page, a **Change** permission
+what the server would refuse. There are 30 permissions, in groups by area. A **See** permission opens a page, a **Change** permission
 edits what is on it, and a few risky actions are separate on purpose (deleting assets, exporting billing or the audit log, running
-scans, accepting scan results, choosing the default dashboard, changing sign-in protection, managing roles).
+scans, accepting scan results, choosing the default dashboard, changing sign-in protection, managing asset kinds, managing roles).
 
 **Built-in roles.** Viewer, Operator and Admin exist from the start. They cannot be edited or deleted (the API answers 409), and they
 behave as they did before roles were made of permissions (the one change, in W9b, is below):
@@ -454,13 +454,14 @@ behave as they did before roles were made of permissions (the one change, in W9b
   `diagnostics.run`.
 - **Admin**: every permission in the catalogue, now and when a later release adds one (it is computed from the catalogue, not stored).
 
-**The 29 permissions** (`backend/dcdash/core/permissions.py` is the one list; the Roles tab draws from it):
+**The 30 permissions** (`backend/dcdash/core/permissions.py` is the one list; the Roles tab draws from it):
 
 | Area | Permission | What it allows |
 |---|---|---|
 | Assets Tree | `assets.view` | Open the Assets Tree, an asset's details and charts, and the fleet summary. |
-| | `assets.edit` | Add and edit assets and asset kinds, and map points to them. |
+| | `assets.edit` | Add and edit assets and map points to them. |
 | | `assets.delete` | Delete an asset (its mappings go with it). |
+| | `assets.kinds` | Create, rename, re-icon and delete asset kinds (a rename or a move changes the kind of every asset that uses it), and add the data-centre starter kinds. |
 | Dashboards | `dashboards.view` | Open dashboards and their widgets, receive live values, and read the values of any point through a widget. |
 | | `dashboards.edit` | Create, edit and delete dashboards and their widgets. |
 | | `dashboards.default` | Choose the dashboard everybody lands on. |
@@ -573,8 +574,8 @@ no row menus) and may read the currency (`GET /api/settings/billing` answers 200
 missing-rate banner on Billing still tells the Operator to "Ask an administrator". Sign-in protection moved out of `settings.edit` into
 `settings.security`, so **a role made through the API before W9b that holds `settings.edit` lacks `settings.security` until someone ticks
 it** on the Roles tab (the Administrator has every permission and is unaffected). The `permissions` column of the three built-in rows in
-the database is the snapshot migration `0009` wrote (28 ids, no `settings.security`) and is never refreshed: a built-in role's permissions
-come from the code, so reading that column shows an Admin row without `settings.security`, and nothing is affected.
+the database is the snapshot migration `0009` wrote (28 ids, no `settings.security` and, since W7o, no `assets.kinds`) and is never refreshed: a
+built-in role's permissions come from the code, so reading that column shows an Admin row without them, and nothing is affected.
 
 ## Develop
 

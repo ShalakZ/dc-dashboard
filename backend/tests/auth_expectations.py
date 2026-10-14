@@ -61,7 +61,8 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
          "PATCH /api/mappings/{mapping_id}", "DELETE /api/mappings/{mapping_id}"),
     # Added in W7m (asset kinds): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and isolation tests cover them.
     _all("assets.view", "GET /api/asset-kinds"),
-    _all("assets.edit", "POST /api/asset-kinds", "PATCH /api/asset-kinds/{kind_id}", "DELETE /api/asset-kinds/{kind_id}"),
+    # Every change to the kinds list moved from assets.edit to assets.kinds in W7o (migration 0011 grants it to the custom roles that held assets.edit).
+    _all("assets.kinds", "POST /api/asset-kinds", "PATCH /api/asset-kinds/{kind_id}", "DELETE /api/asset-kinds/{kind_id}"),
     _all("assets.delete", "DELETE /api/assets/{asset_id}", "GET /api/assets/{asset_id}/impact"),
     _all("dashboards.view", "GET /api/dashboards", "GET /api/dashboards/default", "GET /api/dashboards/{dashboard_id}",
          "POST /api/widget-data", "POST /api/widget-data/csv"),

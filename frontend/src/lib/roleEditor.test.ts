@@ -26,11 +26,11 @@ describe("groupPermissions", () => {
   it("collects the risky ids as the sensitive actions, in catalogue order, and puts roles.manage nowhere", () => {
     const { areas, sensitive } = groupPermissions(catalogue());
     expect(ids(sensitive)).toEqual([
-      "assets.delete", "dashboards.default", "billing.export", "discovery.scan", "discovery.accept", "settings.security", "audit.export",
+      "assets.delete", "assets.kinds", "dashboards.default", "billing.export", "discovery.scan", "discovery.accept", "settings.security", "audit.export",
     ]);
     const everyId = [...areas.flatMap((a) => [...a.see, ...a.change]), ...sensitive].map((r) => r.id);
     expect(everyId).not.toContain("roles.manage");
-    expect(everyId).toHaveLength(28); // 29 in the catalogue, minus the locked one
+    expect(everyId).toHaveLength(29); // 30 in the catalogue, minus the locked one
   });
 
   it("orders areas by the first row of each (a risky row counts) and leaves out an area with only risky rows", () => {
@@ -71,6 +71,7 @@ describe("PERMISSION_NEEDS", () => {
     expect(PERMISSION_NEEDS["tariffs.edit"]).toEqual(["tariffs.view", "assets.view"]);
     expect(PERMISSION_NEEDS["diagnostics.view"]).toEqual(["sources.view"]);
     expect(PERMISSION_NEEDS["settings.security"]).toEqual(["settings.view"]);
+    expect(PERMISSION_NEEDS["assets.kinds"]).toEqual(["assets.edit", "assets.view"]); // the need that needs a need is spelled out
     expect(PERMISSION_NEEDS["assets.view"]).toEqual([]);
   });
 });
@@ -213,7 +214,7 @@ describe("summarizeRole", () => {
   it("counts roles.manage among the sensitive ones when it is ticked (the built-in Admin)", () => {
     const admin = summarizeRole(list, new Set(BUILTIN_PERMISSIONS.admin));
     expect(admin.sensitive).toContain("Manage roles");
-    expect(admin.sensitive).toHaveLength(8);
+    expect(admin.sensitive).toHaveLength(9); // the nine risky ids of the catalogue, Manage roles among them
   });
 
   it("ignores an id this build does not know for the pages, lists it by its server label, and does not throw", () => {

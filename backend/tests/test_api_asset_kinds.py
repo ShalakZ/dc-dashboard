@@ -120,16 +120,70 @@ async def test_a_viewer_and_an_operator_read_the_kinds_but_cannot_change_them(cl
     assert await audit_rows(db) == []
 
 
-async def test_a_role_with_assets_edit_alone_writes_but_does_not_even_read_the_names(client, db):
+@pytest.mark.parametrize("held", [["assets.edit"], ["assets.view", "assets.edit"], ["assets.view", "assets.edit", "assets.delete"]],
+                         ids=["edit alone", "view and edit", "view, edit and delete"])
+async def test_a_role_with_assets_edit_but_not_assets_kinds_cannot_change_the_kinds_list(client, db, held):
+    """W7o: until now assets.edit changed the kinds list; the kinds list has its own permission, assets.kinds."""
     kind = await make_kind(db, "Secret pump", "pump")
-    await make_role(db, "kind editor", ["assets.edit"])
+    await make_role(db, "kind editor", held)
     await login_as(client, db, "kind editor", username="ed")
+    for method, url, body in (
+        ("POST", URL, {"name": "Fan"}), ("PATCH", f"{URL}/{kind}", {"icon": "fan"}), ("PATCH", f"{URL}/{kind}", {"name": "Pump"}),
+        ("DELETE", f"{URL}/{kind}", None),
+    ):
+        response = await client.request(method, url, json=body)
+        assert (response.status_code, response.json()) == (403, REFUSED), (method, url, body)
+    assert await kind_rows(db) == [(kind, "Secret pump", "secret pump", "pump")]  # nothing created, renamed, re-iconed or deleted
+    assert await audit_rows(db) == []
     listed = await client.get(URL)
-    assert (listed.status_code, listed.json()) == (403, REFUSED)  # the names are not leaked
+    if "assets.view" in held:
+        assert listed.status_code == 200
+    else:
+        assert (listed.status_code, listed.json()) == (403, REFUSED)  # the names are not leaked
+        assert "Secret pump" not in listed.text
+
+
+async def test_a_role_with_assets_edit_still_saves_an_asset_with_any_kind_text_and_the_registry_is_not_written(client, db):
+    """The asset routes never write the registry (the front end registers a typed kind with a separate POST /api/asset-kinds)."""
+    await make_role(db, "asset editor", ["assets.view", "assets.edit"])
+    await login_as(client, db, "asset editor", username="ae")
+    created = await client.post("/api/assets", json={"name": "Odd one", "kind": "A kind nobody registered"})
+    assert created.status_code == 201 and created.json()["kind"] == "A kind nobody registered"
+    changed = await client.patch(f"/api/assets/{created.json()['id']}", json={"kind": "Another new text"})
+    assert changed.status_code == 200 and changed.json()["kind"] == "Another new text"
+    assert await kind_rows(db) == []
+    assert await audit_rows(db) == []
+
+
+async def test_a_role_with_assets_kinds_alone_changes_the_kinds_list_but_reads_no_names_and_changes_no_asset(client, db):
+    kind = await make_kind(db, "Secret pump", "pump")
+    asset = await make_kind_asset(db, "P1", "Secret pump")
+    await make_role(db, "kinds keeper", ["assets.kinds"])
+    await login_as(client, db, "kinds keeper", username="kk")
+    listed = await client.get(URL)
+    assert (listed.status_code, listed.json()) == (403, REFUSED)  # reading needs assets.view
     assert "Secret pump" not in listed.text
+    made = await create(client, "Fan", icon="fan")
+    assert made.status_code == 201
+    assert (await client.patch(f"{URL}/{made.json()['id']}", json={"icon": "pump"})).status_code == 200
+    assert (await client.delete(f"{URL}/{made.json()['id']}")).status_code == 204
+    # a rename rewrites the kind text of the assets that use it: that is what the permission is about
+    assert (await client.patch(f"{URL}/{kind}", json={"name": "Pump"})).status_code == 200
+    assert await asset_kinds_stored(db) == {"P1": "Pump"}
+    # but the asset routes need assets.edit, which this role does not hold
+    assert (await client.post("/api/assets", json={"name": "New"})).status_code == 403
+    assert (await client.patch(f"/api/assets/{asset}", json={"kind": "Other"})).status_code == 403
+    assert (await client.delete(f"/api/assets/{asset}")).status_code == 403
+    assert await asset_kinds_stored(db) == {"P1": "Pump"}
+
+
+async def test_a_role_with_assets_kinds_and_assets_view_lists_and_changes_the_kinds(client, db):
+    await make_kind(db, "Pump", "pump")
+    await make_role(db, "kinds and view", ["assets.view", "assets.kinds"])
+    await login_as(client, db, "kinds and view", username="kv")
+    listed = await client.get(URL)
+    assert listed.status_code == 200 and [k["name"] for k in listed.json()] == ["Pump"]
     assert (await create(client, "Fan")).status_code == 201
-    assert (await client.patch(f"{URL}/{kind}", json={"icon": "fan"})).status_code == 200
-    assert (await client.delete(f"{URL}/{kind}")).status_code == 204
 
 
 async def test_a_role_with_assets_view_alone_reads_and_is_refused_every_write(client, db):
