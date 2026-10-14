@@ -772,18 +772,21 @@ Twenty-six specs run in one `playwright test` run against the dev-profile stack 
   keeps the mark and the name, the sign-in page shows the mark at 58 by 56, and the static copy of the shell in `index.html` (only the app's
   script is held) puts the mark where the real bar does. No request for an icon fails and no console message names one; with the logo blocked
   the bar keeps the mark's 29 by 28 box and the name does not move. It creates and changes nothing.
-- `w7o.spec.ts` (its own project, after `w7n`, at 1600×1000) checks the kinds pack. On an asset's page Add asset, Edit and Delete are three
-  outlined buttons of one height at 1440 and 1024 px, light and dark; Delete reads "Delete" and keeps the name "Delete NAME". The icon picker
-  has 48 icons (49 choices with Automatic) in six labelled groups; typing "transfer" leaves the Automatic transfer switch and the Static
-  transfer switch (Rack is gone), the arrow keys walk the cells that are left across a group boundary, and choosing the transfer switch saves
-  it and draws it in the tree row and the page header. With the grid open there is no sideways scroll at 1440 and 1024, Save stays inside the
-  window at 1024×640 and 800×600, and typing in the search moves nothing. A kind that three assets use opens the move dialog (the count, a
+- `w7o.spec.ts` (its own project, after `w7n`, at 1600×1000) checks the kinds pack. On an asset's page Add asset, Edit and Delete are one
+  height at 1440 and 1024 px, light and dark, and Delete is an outlined button that reads "Delete" and keeps the name "Delete NAME". The icon
+  picker has 48 icons (49 choices with Automatic) in six labelled groups; typing "transfer" leaves the Automatic transfer switch and the
+  Static transfer switch (Rack is gone), and choosing the transfer switch saves it and draws it in the tree row and the page header. Typing
+  "security" leaves Firewall and Camera, which sit in two groups: Tab from the search lands on Automatic, the arrow keys walk across the
+  boundary and back, a cell that was picked is not hidden by a later search, and Escape clears the text, then closes the grid, then the
+  dialog. With the grid open there is no sideways scroll at 1440, 1024 and 800 px, Save stays inside the window at 1024×640 and 800×600,
+  and typing in the search moves nothing. A kind that three assets use opens the move dialog (the count, a
   "Move the assets to" choice of the other kinds, Delete off until one is chosen); an asset that joins while it is open turns the answer into
   the new count and keeps the choice; the assets follow (an icon of the asset's own stays), the kind is gone, and the toast and the audit
   entry name the kind they moved to. Add data-centre kinds adds only what is missing, and a second press says they are all there and writes no
-  audit entry. A custom role with Change assets but not Manage asset kinds sees the list and one line saying what is missing (no New kind, no
-  pack button, no row menu), the API answers 403 to every write and changes nothing, and a new kind typed in Add asset keeps its text and
-  registers nothing, with the note saying so; the Roles editor offers to tick Change assets and See the Assets Tree with Manage asset kinds.
+  audit entry, and a starter kind that is already there under another spelling or icon is left alone. A custom role with Change assets but
+  not Manage asset kinds sees the list and one line saying what is missing (no New kind, no pack button, no row menu), the API answers 403
+  to every write and changes nothing, and a new kind typed in Add asset keeps its text and registers nothing, with the note saying so (an
+  administrator's typed kind is registered); the Roles editor offers to tick Change assets and See the Assets Tree with Manage asset kinds.
   Every name it makes starts with `W7o` or `w7o-`; the kinds the pack added are removed again by name and the admin's look is put back.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
