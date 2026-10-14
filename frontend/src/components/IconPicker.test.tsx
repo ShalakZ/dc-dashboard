@@ -525,7 +525,15 @@ describe("IconPicker styles", () => {
     const error = selectors("form:has(.icon-grid:not([hidden])) > .error");
     expect(error).toHaveLength(1);
     expect(error[0].body).toMatch(/position:\s*sticky/);
-    expect(declares(".icon-field", /scroll-margin-bottom:\s*calc\(var\(--btn-h\)/)).toBe(true); // opening the grid keeps the field clear of that row
+    // What Tab and the opening scroll bring into view must stay clear of that row: the dialog's scroll padding, not a margin on the field (the two add up)
+    expect(declares(".dialog:has(.icon-grid:not([hidden]))", /scroll-padding-bottom:\s*calc\(var\(--btn-h\)\s*\+\s*22px/)).toBe(true);
+    expect(declares(".icon-field", /scroll-margin/)).toBe(false);
+  });
+
+  it("makes the clipped radio as big as its cell, so focusing it scrolls the whole cell (not a 1 px corner) clear of the sticky buttons", () => {
+    expect(declares(".icon-cell > input", /width:\s*100%/)).toBe(true);
+    expect(declares(".icon-cell > input", /height:\s*100%/)).toBe(true);
+    expect(declares(".icon-cell > input", /clip:\s*rect\(0 0 0 0\)/)).toBe(true); // still invisible
   });
 
   it("lays the cells out in ten columns inside each section, not in the scroll box itself", () => {

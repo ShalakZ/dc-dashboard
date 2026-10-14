@@ -604,10 +604,11 @@
   /* The icon field of the asset dialog: the preview tile (the page header's), its caption and Change icon in one row, then a grid of
      32 px cells. A cell is a label around a native radio clipped inside it, so its rules are written to outrank the base `label` and
      `.dialog label` rules (grid, bold, one column); the checked cell is marked by fill, border and ring, not by colour alone. */
-  /* scroll-margin-bottom: opening the grid scrolls the dialog just far enough to show the whole field (scrollIntoView, nearest). The buttons
-     stick over the bottom of the dialog (styles/icon-picker.css), which the browser does not know, so the field keeps that much clear: the
-     row (a button), the dialog's 22 px bottom padding band they cover, and a gap. */
-  .icon-field { display: grid; gap: 8px; scroll-margin-bottom: calc(var(--btn-h) + 34px); }
+  .icon-field { display: grid; gap: 8px; }
+  /* While a grid is open the dialog's buttons stick over its bottom (styles/icon-picker.css), which the browser does not know: a field
+     scrolled into view by Tab or by opening the grid (scrollIntoView, nearest) would land under them. The scroll padding keeps that much
+     clear: the row (one button), the dialog's 22 px bottom padding band it covers, and a gap. */
+  .dialog:has(.icon-grid:not([hidden])) { scroll-padding-bottom: calc(var(--btn-h) + 22px + 12px); }
   .icon-field-label { font-size: var(--fs-sm); font-weight: 600; }
   .icon-field-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .icon-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--text); }
@@ -621,7 +622,7 @@
   .dialog .icon-cell, .icon-grid .icon-cell { position: relative; display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-2); font-weight: 400; cursor: pointer; }
   .icon-cell svg.i { width: 20px; height: 20px; }
   .icon-cell:hover { border-color: var(--border-strong); background: var(--row-hover); color: var(--text); }
-  .icon-cell > input { position: absolute; top: 0; left: 0; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); }
+  .icon-cell > input { position: absolute; top: 0; left: 0; width: 100%; height: 100%; margin: 0; overflow: hidden; clip: rect(0 0 0 0); } /* clipped, so invisible; as big as the cell so that focusing it scrolls the WHOLE cell into view (a 1 px box let the cell's body slide under the dialog's sticky buttons) */
   .dialog .icon-cell-auto, .icon-grid .icon-cell-auto { border-style: dashed; } /* the first cell, Automatic: it shows the kind's own icon, so a dashed edge tells it from the same icon in the list */
   .icon-cell:has(> input:checked) { border-color: var(--accent); background: var(--accent-tint); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-ink); }
   .icon-cell:has(> input:focus-visible) { outline: 2px solid var(--ring); outline-offset: 1px; } /* the 4 px gap holds a 2 + 1 px ring; the global ring (2 px offset) would touch the next cell */
