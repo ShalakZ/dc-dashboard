@@ -69,6 +69,8 @@ export function assetActions(ctx: AssetsContext | null, asset: { id: number; nam
  */
 export function AssetsPage() {
   const { can } = useAuth();
+  // Writing the registry is its own permission (assets.kinds), not part of changing assets: without it a typed new kind stays the asset's text.
+  const canRegister = can("assets.kinds");
   const { data: assets = [], error, isLoading } = useAssets();
   // The Kind select lists the registry. A failure is not fatal (the dialog opens with NO_KINDS); only the wait is, like the asset list's.
   const { data: kinds = NO_KINDS, isLoading: kindsLoading } = useAssetKinds(can("assets.view"));
@@ -94,7 +96,8 @@ export function AssetsPage() {
   // `newKind`: the kind the dialog said it would add to the registry. That happens after the asset is saved (never a kind with no asset
   // behind it) and before the lists are refreshed, so the first refetch already carries the kind's icon. Best effort: the asset is saved
   // either way and falls back to the keyword guess, so every failure (a 409 from a race included) is swallowed. The kind request refreshes
-  // the assets, the fleet and the audit log itself, whether it worked or not; asking again here would only repeat it.
+  // the assets, the fleet and the audit log itself, whether it worked or not; asking again here would only repeat it. Nobody without
+  // assets.kinds gets here with a kind (the form says false for them): the check is repeated so that no 403 is ever sent and swallowed.
   const finish = async (newKind: string | null = null) => {
     if (newKind === null) {
       await invalidate(keys.assets, keys.fleet);
@@ -106,11 +109,11 @@ export function AssetsPage() {
   const create = async (body: AssetIn, registerKind: boolean) => {
     await api.post("/api/assets", body);
     toast.success("Asset created"); // right after the request: the dialog closes and the tree is the only other sign (an edit needs no word)
-    await finish(registerKind ? body.kind : null);
+    await finish(registerKind && canRegister ? body.kind : null);
   };
   const update = async (body: AssetIn, registerKind: boolean) => {
     await api.patch(`/api/assets/${selected!.id}`, body);
-    await finish(registerKind ? body.kind : null);
+    await finish(registerKind && canRegister ? body.kind : null);
   };
   // `seen`: the counts the dialog showed; the server refuses (and the dialog shows the new numbers) if more would go now.
   const removed = async (asset: Asset, seen: AssetImpact) => {
@@ -158,12 +161,12 @@ export function AssetsPage() {
       )}
       {dialog?.kind === "add" && (
         <Modal title="Add asset" onClose={closeDialog}>
-          <AssetForm key={dialog.parentId ?? "none"} assets={assets} kinds={kinds} initial={{ parent_id: dialog.parentId }} excludeIds={new Set()} onSubmit={create} onCancel={closeDialog} />
+          <AssetForm key={dialog.parentId ?? "none"} assets={assets} kinds={kinds} initial={{ parent_id: dialog.parentId }} excludeIds={new Set()} canRegister={canRegister} onSubmit={create} onCancel={closeDialog} />
         </Modal>
       )}
       {dialog?.kind === "edit" && selected && (
         <Modal title="Edit asset" onClose={closeDialog}>
-          <AssetForm assets={assets} kinds={kinds} initial={selected} excludeIds={descendantIds(tree, selected.id)} onSubmit={update} onCancel={closeDialog} />
+          <AssetForm assets={assets} kinds={kinds} initial={selected} excludeIds={descendantIds(tree, selected.id)} canRegister={canRegister} onSubmit={update} onCancel={closeDialog} />
         </Modal>
       )}
     </>

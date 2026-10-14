@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "../api/client";
-import { useAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind } from "../api/queries";
+import { useAddStarterKinds, useAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind } from "../api/queries";
 import type { AssetKind, AssetKindIn, AssetKindPatch } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
@@ -18,8 +18,12 @@ import { upperFirst } from "../lib/upperFirst";
 
 const CRUMBS = [{ label: "Assets Tree", to: "/assets" }, { label: "Asset kinds" }];
 
+/** What a reader sees where New kind and the row menu would be: the permission is its own, so ReadOnlyNote's words ("change assets") would name the wrong thing. */
+const NEED_KINDS = 'Managing asset kinds needs the "Manage asset kinds" permission.';
+
 const countText = (n: number) => (n === 0 ? "No assets" : n === 1 ? "1 asset" : `${n} assets`);
 const renamedText = (n: number) => (n === 0 ? "Kind renamed" : n === 1 ? "Kind renamed, 1 asset follows" : `Kind renamed, ${n} assets follow`);
+const packText = (added: number) => (added === 0 ? "All the data-centre kinds are already there" : `Added ${added} ${added === 1 ? "kind" : "kinds"}`);
 const inUseText = ({ name, asset_count: n }: AssetKind) =>
   n === 1 ? `1 asset uses "${name}", so it can't be deleted. Change its kind first.` : `${n} assets use "${name}", so it can't be deleted. Change their kind first.`;
 
@@ -42,16 +46,19 @@ async function worded<T>(request: Promise<T>): Promise<T> {
 /**
  * Asset kinds: what each kind of asset looks like. An asset with no icon of its own shows its kind's icon, so changing one here changes
  * every asset of that kind. A child of the Assets workspace (the tree stays beside it). Everyone who may open Assets reads the list;
- * assets.edit adds New kind and the row menu (Edit, Delete). A kind that assets still use cannot be deleted: the dialog says why.
+ * assets.kinds ("Manage asset kinds", not assets.edit: a rename or a move changes the kind of every asset that uses it) adds New kind, the
+ * starter pack button and the row menu (Edit, Delete); everybody else gets one line that says what is missing. A kind that assets still
+ * use cannot be deleted: the dialog says why.
  */
 export function AssetKindsPage() {
   const { can } = useAuth();
-  const canEdit = can("assets.edit");
+  const canManage = can("assets.kinds");
   // No `enabled` flag: the route is behind assets.view, so a role that gets here may read the list.
   const { data, error, isLoading } = useAssetKinds();
   const createKind = useCreateAssetKind();
   const patchKind = usePatchAssetKind();
   const deleteKind = useDeleteAssetKind();
+  const addStarter = useAddStarterKinds();
   const toast = useToast();
   // The kind as it was when Edit or Delete was chosen, not a lookup into the list: a refetch gives the list new objects, and the open form must not change under the person typing.
   const [dialog, setDialog] = useState<{ kind: "new" } | { kind: "edit"; row: AssetKind } | null>(null);
@@ -76,6 +83,17 @@ export function AssetKindsPage() {
     const saved = await worded(patchKind.mutateAsync({ id: row.id, body }));
     toast.success(body.name !== undefined ? renamedText(saved.asset_count) : "Kind saved");
     setDialog(null);
+  };
+  // A failure is a toast, not a line under the header: a line that arrives late would push the table down. The button waits with aria-disabled and
+  // a click guard, never the native attribute: the button has the focus, and a disabled one drops it to the page body.
+  const addPack = async () => {
+    if (addStarter.isPending) return;
+    try {
+      const { added } = await addStarter.mutateAsync();
+      toast.success(packText(added.length));
+    } catch (e) {
+      toast.error(e instanceof Error ? upperFirst(e.message) : String(e));
+    }
   };
   const removed = async (row: AssetKind) => {
     try {
@@ -103,11 +121,14 @@ export function AssetKindsPage() {
     />
   );
 
+  // Known from the first render (the account is loaded before any page), so drawn in the skeleton too: the table never moves down when the list arrives.
+  const needNote = !canManage && <p className="muted kinds-note">{NEED_KINDS}</p>;
   if (isLoading) {
     return (
       <div className="kinds-page">
-        {header(canEdit ? <ActionsSpace /> : undefined)}
-        <TableSkeleton columns={canEdit ? 3 : 2} rows={5} label="Loading asset kinds" />
+        {header(canManage ? <ActionsSpace /> : undefined)}
+        {needNote}
+        <TableSkeleton columns={canManage ? 3 : 2} rows={5} label="Loading asset kinds" />
       </div>
     );
   }
@@ -121,14 +142,20 @@ export function AssetKindsPage() {
   ];
   return (
     <div className="kinds-page">
-      {header(canEdit ? <button type="button" className="primary" ref={newKindButton} disabled={locked} onClick={() => setDialog({ kind: "new" })}>New kind</button> : undefined)}
+      {header(canManage ? (
+        <>
+          <button type="button" aria-disabled={addStarter.isPending || undefined} disabled={locked} onClick={() => void addPack()}>Add data-centre kinds</button>
+          <button type="button" className="primary" ref={newKindButton} disabled={locked} onClick={() => setDialog({ kind: "new" })}>New kind</button>
+        </>
+      ) : undefined)}
+      {needNote}
       {error && <p className="error" role="alert">{error.message}</p>}
       {kinds.length === 0 ? (
         <EmptyNote icon="layers">No kinds yet.</EmptyNote>
       ) : (
         <div className="table-wrap">
           <table className="kinds-table">
-            <thead><tr><th>Name</th><th>Assets</th>{canEdit && <th className="kind-actions"></th>}</tr></thead>
+            <thead><tr><th>Name</th><th>Assets</th>{canManage && <th className="kind-actions"></th>}</tr></thead>
             <tbody>
               {kinds.map((row) => (
                 <tr key={row.id}>
@@ -139,7 +166,7 @@ export function AssetKindsPage() {
                     </span>
                   </td>
                   <td className={row.asset_count === 0 ? "muted" : undefined}>{countText(row.asset_count)}</td>
-                  {canEdit && <td className="kind-actions"><RowActions label={`Actions for ${row.name}`} items={actionsOf(row)} /></td>}
+                  {canManage && <td className="kind-actions"><RowActions label={`Actions for ${row.name}`} items={actionsOf(row)} /></td>}
                 </tr>
               ))}
             </tbody>

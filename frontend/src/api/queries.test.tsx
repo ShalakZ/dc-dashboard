@@ -8,7 +8,7 @@ import {
   auditPageOptions, auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
-  useAssetKinds, useAssets, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
+  useAddStarterKinds, useAssetKinds, useAssets, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
 } from "./queries";
 import type { RangePreset, WidgetConfig } from "./types";
 
@@ -766,6 +766,7 @@ describe("asset kind queries", () => {
     ["creating a kind", () => useCreateAssetKind(), "POST /api/asset-kinds", { name: "Rack", icon: "rack" }, 201, (m: ReturnType<typeof useCreateAssetKind>) => m.mutateAsync({ name: "Rack", icon: "rack" })],
     ["renaming or re-iconing a kind", () => usePatchAssetKind(), "PATCH /api/asset-kinds/3", { name: "Racks" }, 200, (m: ReturnType<typeof usePatchAssetKind>) => m.mutateAsync({ id: 3, body: { name: "Racks" } })],
     ["deleting a kind", () => useDeleteAssetKind(), "DELETE /api/asset-kinds/3", undefined, 204, (m: ReturnType<typeof useDeleteAssetKind>) => m.mutateAsync(3)],
+    ["adding the data-centre kinds", () => useAddStarterKinds(), "POST /api/asset-kinds/starter-pack", undefined, 200, (m: ReturnType<typeof useAddStarterKinds>) => m.mutateAsync()],
   ] as const)("refetches the assets, the kinds, a summary, the fleet and the audit options after %s", async (_name, hook, route, sent, status, run) => {
     const calls = mockFetch({ ...reads, [route]: { status, body: status === 204 ? undefined : kind() } });
     const { result } = mountReaders(hook);
@@ -784,19 +785,28 @@ describe("asset kind queries", () => {
     expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([["PATCH", "/api/asset-kinds/9", { icon: "server" }], ["DELETE", "/api/asset-kinds/9", undefined]]);
   });
 
+  it("posts the starter pack with no body and hands back what the server answered", async () => {
+    const answer = { added: ["UPS", "Battery"], already_there: 37 };
+    const calls = mockFetch({ "POST /api/asset-kinds/starter-pack": { body: answer } });
+    const { result } = renderHook(() => useAddStarterKinds(), { wrapper: stableWrapper() });
+    await act(async () => { await expect(result.current.mutateAsync()).resolves.toEqual(answer); });
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([["POST", "/api/asset-kinds/starter-pack", undefined]]);
+  });
+
   // A refused change (the count moved, the key is taken, the kind is gone) means the list on screen is out of date, as for roles.
   it.each([
     ["a delete refused because assets use the kind", "DELETE /api/asset-kinds/3", 409, { detail: "3 assets use this kind. Change their kind first.", assets: 3 }, (m: ReturnType<typeof useDeleteAssetKind>) => m.mutateAsync(3), "3 assets use this kind. Change their kind first."],
     ["a rename onto a taken name", "PATCH /api/asset-kinds/3", 409, { detail: 'A kind named "Racks" already exists' }, (m: ReturnType<typeof usePatchAssetKind>) => m.mutateAsync({ id: 3, body: { name: "Racks" } }), 'A kind named "Racks" already exists'],
     ["a change to a kind that is gone", "PATCH /api/asset-kinds/3", 404, { detail: "asset kind not found" }, (m: ReturnType<typeof usePatchAssetKind>) => m.mutateAsync({ id: 3, body: { icon: "pump" } }), "asset kind not found"],
+    ["a starter pack the role may not add", "POST /api/asset-kinds/starter-pack", 403, { detail: "insufficient permission" }, (m: ReturnType<typeof useAddStarterKinds>) => m.mutateAsync(), "Your role does not allow this."],
   ] as const)("still refetches the kinds after %s, and the error reaches the caller", async (_name, route, status, body, run, message) => {
     const calls = mockFetch({ ...reads, [route]: { status, body } });
     const { result } = renderHook(
-      () => ({ kinds: useAssetKinds(), del: useDeleteAssetKind(), patch: usePatchAssetKind() }),
+      () => ({ kinds: useAssetKinds(), del: useDeleteAssetKind(), patch: usePatchAssetKind(), pack: useAddStarterKinds() }),
       { wrapper: stableWrapper() },
     );
     await waitFor(() => expect(result.current.kinds.data).toBeDefined());
-    const mutation = route.startsWith("DELETE") ? result.current.del : result.current.patch;
+    const mutation = route.startsWith("DELETE") ? result.current.del : route.endsWith("starter-pack") ? result.current.pack : result.current.patch;
     await act(async () => { await expect(run(mutation as never)).rejects.toThrow(message); });
     await waitFor(() => expect(count(calls, "/api/asset-kinds")).toBe(2));
   });

@@ -9,14 +9,19 @@ import { useModalBusy } from "./Modal";
 /** The server's limit on a kind name (core/asset_kinds.py MAX_NAME), counted in code points. */
 const MAX_KIND = 60;
 
+const NOTE_ADDED = "New kind: added to Asset kinds.";
+const NOTE_TEXT_ONLY = "Not in Asset kinds yet. Only someone who manages kinds can add it; this asset keeps the text.";
+
 /**
  * `kinds` is the registry (empty when it failed to load: the Kind select then offers the default and the asset's own kind). `onSubmit`
  * gets the body and whether this save adds the kind to the registry (the page does that once the asset is saved): the same answer the
- * note under the icon gave beforehand.
+ * note under the icon gave beforehand. `canRegister`: this person may write the registry (assets.kinds). The page says so; the form never asks
+ * the account itself. Without it a typed new kind is stored as the asset's text only, and the note says that. Optional and true when left out, so a
+ * form rendered on its own keeps its old behaviour; the page always passes it.
  */
-export function AssetForm({ assets, kinds, initial, excludeIds, onSubmit, onCancel }: {
+export function AssetForm({ assets, kinds, initial, excludeIds, onSubmit, onCancel, canRegister = true }: {
   assets: Asset[]; kinds: AssetKind[]; initial?: Partial<AssetIn>; excludeIds: Set<number>;
-  onSubmit: (body: AssetIn, registerKind: boolean) => Promise<void>; onCancel: () => void;
+  onSubmit: (body: AssetIn, registerKind: boolean) => Promise<void>; onCancel: () => void; canRegister?: boolean;
 }) {
   const [name, setName] = useState(initial?.name ?? "");
   const [parent, setParent] = useState(initial?.parent_id == null ? "" : String(initial.parent_id));
@@ -40,8 +45,10 @@ export function AssetForm({ assets, kinds, initial, excludeIds, onSubmit, onCanc
   const automatic = assetIcon({ kind: resolvedKind, kind_icon: registryIcon });
   const caption = icon === null ? `Automatic (${iconLabelFor(automatic)})` : chosenLabel ?? `Unknown icon "${icon}"`;
   // One answer for the note and for the page's registration: whenever the kind will be registered, whichever icon the asset itself shows.
-  const registers = registersKind(resolvedKind, kinds, startKind);
-  const hint = registers ? "New kind: added to Asset kinds." : undefined;
+  // A kind that is new but may not be registered by this person is still new: its note says what happens instead.
+  const isNew = registersKind(resolvedKind, kinds, startKind);
+  const registers = isNew && canRegister;
+  const hint = !isNew ? undefined : canRegister ? NOTE_ADDED : NOTE_TEXT_ONLY;
 
   async function submit(event: FormEvent) {
     event.preventDefault();

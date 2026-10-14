@@ -24,6 +24,8 @@ export interface AssetKind { id: number; name: string; icon: string; asset_count
 export interface AssetKindIn { name: string; icon?: string }
 /** A key left out is left as it is; neither may be null. */
 export interface AssetKindPatch { name?: string; icon?: string }
+/** The answer to POST /api/asset-kinds/starter-pack: the names of the kinds it added (in the order it added them), and how many starter kinds were already in the registry. */
+export interface StarterPackResult { added: string[]; already_there: number }
 /** What deleting an asset takes with it (GET /api/assets/{id}/impact; also the counts in the 409 body of DELETE /api/assets/{id}). */
 export interface AssetImpact { assets: number; mappings: number; tariffs: number }
 /** What deleting a source takes with it (GET /api/sources/{id}/impact; also the counts in the 409 body of DELETE /api/sources/{id}). */
