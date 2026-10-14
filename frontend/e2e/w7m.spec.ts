@@ -91,7 +91,8 @@ const exactly = (text: string) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\
 /** A kind's row on the Asset kinds page, by its label as a whole. */
 const kindRow = (page: Page, name: string) => page.getByRole("row").filter({ has: page.locator(".kind-label", { hasText: exactly(name) }) });
 const kindTile = (page: Page, name: string) => kindRow(page, name).locator(".kind-tile svg");
-const kindCount = (page: Page, name: string) => kindRow(page, name).getByRole("cell").nth(1);
+// By class, not by position: a manager's table has a checkbox cell first (W7q), so "the second cell" is the Name cell.
+const kindCount = (page: Page, name: string) => kindRow(page, name).locator("td.kind-assets");
 
 /** The <svg> of the asset's tree row, found by the row's own link (the same name can also be a crumb on the asset page). */
 const treeIcon = (page: Page, name: string) => tree(page).locator(".node").filter({ has: page.getByRole("link", { name, exact: true }) }).locator(".node-icon svg");
@@ -468,7 +469,17 @@ test.describe.serial("W7m: asset kinds", () => {
     await expect(confirm).toBeHidden();
     await expect(toast(page, `Kind "${KIND_PUMPS}" deleted`)).toBeVisible();
     await expect(kindRow(page, KIND_PUMPS), "gone from the list").toHaveCount(0);
-    await expect(page.getByRole("button", { name: "New kind", exact: true }), "the focus did not fall to the page body").toBeFocused();
+    // W7q: the focus goes to the menu button of the row that took the deleted row's place (else the filter in use), never to New kind: reaching
+    // that button from a list scrolled far down would throw the page back to the top.
+    await expect
+      .poll(
+        () => page.evaluate(() => {
+          const el = document.activeElement;
+          return el instanceof HTMLElement && el !== document.body && el.closest(".kinds-table, .kinds-filter") !== null;
+        }),
+        { message: "the focus did not fall to the page body, and is not on New kind" },
+      )
+      .toBe(true);
     expect((await kindsOf(page.request)).some((k) => k.id === kindId), "and from the server").toBe(false);
   });
 
