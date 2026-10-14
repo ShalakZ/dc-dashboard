@@ -96,3 +96,42 @@ describe("docs/brand/logo-original.svg", () => {
     for (const line of pathLines(logoMark)) expect(original).toContain(line);
   });
 });
+
+describe("the head of index.html (N7)", () => {
+  const html = readFileSync("index.html", "utf8");
+  const head = /<head>([\s\S]*?)<\/head>/.exec(html)?.[1] ?? "";
+  const links = head.match(/<link\b[^>]*>/g) ?? [];
+
+  it("links the ICO, then the SVG with sizes=any, then the apple touch icon, in that order", () => {
+    expect(links).toEqual([
+      '<link rel="icon" href="/favicon.ico" sizes="48x48" />',
+      '<link rel="icon" type="image/svg+xml" href="/favicon.svg" sizes="any" />',
+      '<link rel="apple-touch-icon" href="/apple-touch-icon.png" />',
+    ]);
+  });
+
+  it("preloads nothing", () => {
+    expect(head).not.toMatch(/rel="preload"/);
+  });
+});
+
+describe("pages-auth.css (the sign-in mark)", () => {
+  const css = readFileSync("src/styles/pages-auth.css", "utf8");
+  const rule = (selector: string) => new RegExp(`(?:^|\\n)\\s*${selector.replace(/\./g, "\\.")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+
+  it("has no .auth-mark svg rule left", () => {
+    expect(css).not.toMatch(/\.auth-mark\s+svg/);
+  });
+
+  it(".auth-mark is only a box: no background, border, radius or filter", () => {
+    const body = rule(".auth-mark");
+    expect(body).not.toBe("");
+    for (const property of ["background", "border", "border-radius", "filter"]) expect(body).not.toContain(`${property}:`);
+  });
+
+  it("the brand name is 18px (--fs-lg), weight 600", () => {
+    const body = rule(".auth-brand");
+    expect(body).toContain("font-size: var(--fs-lg)");
+    expect(body).toContain("font-weight: 600");
+  });
+});

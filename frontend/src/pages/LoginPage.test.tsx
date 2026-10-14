@@ -4,7 +4,7 @@ import { useLocation } from "react-router";
 import { mockFetch } from "../test/fetchMock";
 import { renderWithProviders } from "../test/render";
 import { userFor } from "../test/users";
-import { LoginPage } from "./LoginPage";
+import { AuthBrand, LoginPage } from "./LoginPage";
 
 const base = { "GET /api/setup": { body: { needed: false } }, "GET /api/me": { status: 401, body: { detail: "x" } } };
 
@@ -12,7 +12,32 @@ function Where() {
   return <output data-testid="where">{useLocation().pathname}</output>;
 }
 
+describe("AuthBrand", () => {
+  it("is a p (not a heading) holding the 58 by 56 decorative mark and the name once", () => {
+    const { container } = renderWithProviders(<AuthBrand />);
+    const brand = container.querySelector("p.auth-brand");
+    expect(brand).toBeInTheDocument();
+    const mark = brand?.querySelector("img.auth-mark");
+    expect(mark).toHaveAttribute("src", "/logo-mark.svg");
+    expect(mark).toHaveAttribute("width", "58");
+    expect(mark).toHaveAttribute("height", "56");
+    expect(mark).toHaveAttribute("alt", "");
+    expect(mark).toHaveAttribute("aria-hidden", "true");
+    expect(brand?.querySelector("svg")).toBeNull();
+    expect(brand).toHaveTextContent(/^DC Dashboard$/);
+    expect(screen.getAllByText("DC Dashboard")).toHaveLength(1);
+  });
+});
+
 describe("LoginPage", () => {
+  it("has one auth-brand and the page's single h1", async () => {
+    mockFetch(base);
+    const { container } = renderWithProviders(<LoginPage />, { route: "/login", path: "/login" });
+    await screen.findByLabelText("Username");
+    expect(container.querySelectorAll(".auth-brand")).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
   it("posts credentials and navigates to the stored return path", async () => {
     sessionStorage.setItem("dcdash.returnTo", "/assets/4");
     const calls = mockFetch({ ...base, "POST /api/login": { body: userFor("admin", { username: "admin" }) } });
