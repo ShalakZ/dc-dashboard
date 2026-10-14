@@ -315,6 +315,14 @@ function kindThing(name: unknown): string {
   return stored ? `asset kind ${shortName(stored)}` : "an asset kind";
 }
 
+/** " and moved 3 assets to Panel" from what a delete-and-move stored (the number the UPDATE moved, the target's name); "" for a plain delete. A count without a target says nothing, a target without a usable count says "its assets". */
+function movedTo(d: Detail): string {
+  const target = text(d.moved_to);
+  if (target === null) return "";
+  const moved = typeof d.assets === "number" && Number.isSafeInteger(d.assets) && d.assets > 0 ? count(d.assets, "asset") : "its assets";
+  return ` and moved ${moved} to ${shortName(target)}`;
+}
+
 /** An icon id as people read it: the catalogue label, else the id as stored; null when there is none. */
 function iconText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -436,7 +444,7 @@ const RULES: Record<string, Rule> = {
 
   // The detail keeps the kind's name (kind_id is only there for the raw Details JSON): a rename stores it in before/after.
   "kind.created": { summary: (c) => `Created ${kindThing(c.d.name)}`, link: kindsPage },
-  "kind.deleted": { summary: (c) => `Deleted ${kindThing(c.d.name)}` },
+  "kind.deleted": { summary: (c) => `Deleted ${kindThing(c.d.name)}${movedTo(c.d)}` },
   "kind.icon_changed": {
     summary: (c) => {
       const from = iconText(sideValue(c, "before", "icon"));

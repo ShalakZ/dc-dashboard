@@ -480,6 +480,32 @@ describe("describeAudit: asset kinds", () => {
     expect(iconChanged({}).summary).toBe("Changed the icon of an asset kind");
   });
 
+  const deleted = (detail: Record<string, unknown>) => describeAudit(entry("kind.deleted", { kind_id: KIND, ...detail }));
+
+  it("says a deletion that moved assets by the target's name and how many moved, in the singular too", () => {
+    expect(deleted({ name: "Rack", icon: "rack", assets: 3, moved_to: "Panel" }).summary).toBe("Deleted asset kind Rack and moved 3 assets to Panel");
+    expect(deleted({ name: "Rack", assets: 1, moved_to: "Panel" }).summary).toBe("Deleted asset kind Rack and moved 1 asset to Panel");
+    expect(deleted({ assets: 2, moved_to: "Panel" }).summary).toBe("Deleted an asset kind and moved 2 assets to Panel");
+    expect(deleted({ name: "Rack", assets: 2, moved_to: "x".repeat(300) }).summary).toBe(`Deleted asset kind Rack and moved 2 assets to ${"x".repeat(80)}…`);
+  });
+
+  it("leaves a plain deletion as it was and still reads when only part of the moved wording is stored", () => {
+    expect(deleted({ name: "Rack", icon: "rack" }).summary).toBe("Deleted asset kind Rack");
+    expect(deleted({ name: "Rack", assets: 3 }).summary).toBe("Deleted asset kind Rack"); // a count without a target says nothing
+    expect(deleted({ name: "Rack", moved_to: "Panel" }).summary).toBe("Deleted asset kind Rack and moved its assets to Panel");
+    for (const assets of [0, -1, 1.5, "3", null, {}]) {
+      expect(deleted({ name: "Rack", assets, moved_to: "Panel" }).summary, String(assets)).toBe("Deleted asset kind Rack and moved its assets to Panel");
+    }
+    for (const moved_to of ["", "  ", 7, null, [], {}]) expect(deleted({ name: "Rack", assets: 3, moved_to }).summary).toBe("Deleted asset kind Rack");
+  });
+
+  it("shows the moved deletion with no id, no Before/After rows and no link", () => {
+    const view = deleted({ name: "Rack", icon: "rack", assets: 3, moved_to: "Panel" });
+    expect(view.summary).not.toMatch(/\d{5}/);
+    expect(view.changes).toEqual([]);
+    expect(view.link).toBeNull();
+  });
+
   const starterPack = (detail: unknown) => describeAudit(entry("kind.starter_pack_added", detail));
 
   it("says the starter pack by the names of the kinds it added, never by an id, and counts the long tail", () => {
@@ -1100,7 +1126,7 @@ describe("describeAudit: no sentence shows an id", () => {
     "kind.created": { kind_id: KIND, name: "Rack", icon: "rack" },
     "kind.renamed": { kind_id: KIND, assets: 12, before: { name: "Rack" }, after: { name: "Racks" } },
     "kind.icon_changed": { kind_id: KIND, name: "Racks", before: { icon: "rack" }, after: { icon: "server" } },
-    "kind.deleted": { kind_id: KIND, name: "Racks", icon: "server" },
+    "kind.deleted": { kind_id: KIND, name: "Racks", icon: "server", assets: 12, moved_to: "Servers" },
     "kind.starter_pack_added": { count: 3, names: ["UPS", "Battery", "PDU"] },
     "login.failed": { ...connection, reason: "wrong_password" },
     "login.locked": { ...connection, reason: "wrong_password" },
