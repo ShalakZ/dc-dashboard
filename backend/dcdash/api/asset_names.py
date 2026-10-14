@@ -3,6 +3,7 @@
 The check is a query, not an index, so it is serialised with a transaction-level advisory lock taken by every route that
 creates, renames or moves an asset. Both sides of the comparison are normalised in SQL so the rule has a single definition.
 """
+from collections.abc import Iterable
 from typing import Annotated
 
 from fastapi import HTTPException
@@ -29,13 +30,31 @@ _CLASH = text(
 )
 
 
+_KEYS = text(f"SELECT a.id, {_KEY.format('a.name')} AS key FROM assets a WHERE a.id = ANY(CAST(:ids AS integer[]))")
+
+
+async def lock_asset_names(db: AsyncSession) -> None:
+    """Take the names lock (transaction level: it is released at commit or rollback). Taking it twice in one transaction is free.
+
+    Whoever changes WHERE an asset sits or WHAT it is called takes it before reading the rows it decides on, so that what it read
+    is still true when it writes: a request that waited here sees the siblings the previous holder left."""
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ASSET_NAMES_LOCK})
+
+
+async def name_keys(db: AsyncSession, ids: Iterable[int]) -> dict[int, str]:
+    """The normalised name of each asset in `ids` (an id that no longer exists is missing from the answer): the text two sibling
+    names are compared by, computed by the database with the same expression as the clash check above, so that the rule has one
+    definition (core/tree_move.py gets these as its input and never re-implements the normalisation)."""
+    return {row.id: row.key for row in await db.execute(_KEYS, {"ids": sorted(set(ids))})}
+
+
 async def require_free_name(db: AsyncSession, parent_id: int | None, name: str, *, exclude_id: int | None = None) -> None:
     """409 if a sibling under `parent_id` (None = the top level) already has this name. `exclude_id` is the asset being edited.
 
     Takes the advisory lock first and holds it until the caller commits or rolls back (READ COMMITTED: the query after the
     lock sees whatever the previous lock holder committed), so two requests for one name cannot both pass.
     """
-    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ASSET_NAMES_LOCK})
+    await lock_asset_names(db)
     clash = (await db.execute(_CLASH, {"parent": parent_id, "name": name, "me": exclude_id})).first()
     if clash is None:
         return

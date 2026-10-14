@@ -319,7 +319,8 @@ data-retrieval requests the connectors already use, nothing else.
    a failure), an admin unblocking an account (`login.unblocked`), a change to the sign-in protection numbers or its
    switch (`settings.sign_in_changed`), the site timezone, the currency, the storage settings (every save, `storage.changed`, whose
    subject carries `origin`, and, for a save that needed confirmation, `confirmed_loss`; remembering a site
-   default is `storage.default_set`), assets, mappings,
+   default is `storage.default_set`), assets (create, edit, delete, and moving in the tree: one `asset.moved` entry per moved
+   asset, with its old and new parent, all sharing one request id), mappings,
    sources (create, edit, delete, test, test all, browse), tariffs, dashboards, asset kinds (a delete that moves assets records how many and
    where to; adding the starter kinds records which), scopes, scans (start and
    finish) and accepted discoveries. Never recorded: passwords and password hashes, source secrets and
