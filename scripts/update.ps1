@@ -20,7 +20,7 @@
 # (60, how often the wait for the api says how long it has been waiting).
 # Never, in any path: docker compose down, rm, kill or restart; docker volume, system or prune commands; --force-recreate,
 # --remove-orphans or -V on up; restore.ps1; alembic downgrade; git reset, clean, checkout, stash, rebase or pull (the code moves only
-# by git merge --ff-only); deleting a dump or any file under backups\.
+# by git merge --ff-only); deleting a dump or any file under backups\ (the one file it deletes is its own logs\update-anchor.txt, after a DONE).
 # Run it with powershell.exe -File (exit codes do not reach the caller under -Command). Windows PowerShell 5.1 and pure ASCII on
 # purpose: no && || ?? ?. and no ternary. A bash-style --yes or --force binds to its PowerShell twin (harmless, as in backup.ps1);
 # any other stray (--dry-run, --no-pull, --copy-to X, a typo) prints the usage line and exits 1, never a real run.
@@ -138,6 +138,11 @@ function Invoke-Git([string[]]$GitArgs, [switch]$Quiet) { return Invoke-Native "
 # Every compose call carries --profile dev once step 2 has found the simulator.
 function Invoke-Compose([string[]]$ComposeArgs, [switch]$Quiet) {
     return Invoke-Native "docker" (@("compose") + $script:ProfileArgs + $ComposeArgs) -Quiet:$Quiet
+}
+# logs\update-anchor.txt belongs to an update that did NOT finish: every DONE removes it, so that a later run never shows a stale
+# "this is what to go back to" (an old backup restored over weeks of readings). A failed delete is ignored; the file is the script's own.
+function Clear-AnchorNotes {
+    try { if (Test-Path -LiteralPath $AnchorFile -PathType Leaf) { [IO.File]::Delete($AnchorFile) } } catch { }
 }
 function Get-FirstLine($Result) {
     foreach ($Line in @($Result.Out)) { if ("$Line".Trim()) { return "$Line".Trim() } }
@@ -379,7 +384,8 @@ function Confirm-SiteHealthy([string]$ExpectedCommit = "", [string]$ExpectedId =
     if ($Port.Code -ne 0 -or (Get-FirstLine $Port) -notmatch '^(.*):(\d+)\s*$') { Stop-Check 4 "Docker did not say on which port web listens." @("api", "web") }
     $WebHost = $Matches[1].Trim()
     $WebPort = $Matches[2]
-    if (-not $WebHost -or $WebHost -in @("0.0.0.0", "[::]") -or $WebHost -notmatch '^[A-Za-z0-9.:\[\]-]+$') { $WebHost = "127.0.0.1" }
+    # Compose may print an IPv6 host without brackets (`:::80`): never build http://:::80. Every-interface forms and any bare IPv6 -> 127.0.0.1.
+    if (-not $WebHost -or $WebHost -in @("0.0.0.0", "[::]", "::") -or ($WebHost.Contains(":") -and -not $WebHost.StartsWith("[")) -or $WebHost -notmatch '^[A-Za-z0-9.:\[\]-]+$') { $WebHost = "127.0.0.1" }
     $Base = "http://${WebHost}:$WebPort"
     Say "The site is checked at $Base (the address Docker publishes for web)."
     $Index = Get-HttpAnswer "$Base/"
@@ -623,7 +629,7 @@ try {
         if (Test-Path -LiteralPath $AnchorFile -PathType Leaf) {
             $Notes = @([IO.File]::ReadAllLines($AnchorFile, $Utf8) | ForEach-Object { "$_".Trim() })
             if ($Notes.Count -ge 4 -and $Notes[1] -and $Notes[2] -and $Notes[3]) {
-                Say "Notes of an earlier update (logs\update-anchor.txt): old commit $($Notes[1]), old revision $($Notes[2]), backup $($Notes[3]) - if that update failed, this is what to go back to"
+                Say "Notes of an earlier update (logs\update-anchor.txt, written $($Notes[0])): old commit $($Notes[1]), old revision $($Notes[2]), backup $($Notes[3]) - if that update failed, this is what to go back to"
             }
         }
     } catch { }
@@ -711,12 +717,13 @@ try {
                 if ($Look -and $Look.Status -in @("created", "exited")) { $NotStarted += "$Service ($($Look.Status))" }
             }
             if ($NotStarted.Count -gt 0) {
-                Say "The api is healthy, but these services were never started or have stopped: $($NotStarted -join ', '). Starting them with docker compose$ProfileText up -d (nothing is rebuilt)."
+                # --no-recreate --no-build: start the containers as they are; no recreation from an edited .env, no image build.
+                Say "The api is healthy, but these services were never started or have stopped: $($NotStarted -join ', '). Starting them with docker compose$ProfileText up -d --no-recreate --no-build (nothing is rebuilt)."
                 if ($DryRun) {
-                    Say "Would run: docker compose$ProfileText up -d"
+                    Say "Would run: docker compose$ProfileText up -d --no-recreate --no-build"
                 } else {
                     $script:StartedByUp = $true
-                    $Up = Invoke-Compose @("up", "-d")
+                    $Up = Invoke-Compose @("up", "-d", "--no-recreate", "--no-build")
                     if ($Up.Code -ne 0) {
                         Stop-Check 4 "docker compose up -d exited $($Up.Code), so the rest of the site was not started." @("api", "web")
                     }
@@ -724,6 +731,7 @@ try {
             }
         }
         [void](Confirm-SiteHealthy)
+        if (-not $DryRun) { Clear-AnchorNotes }
         Say ""
         Say "Already up to date at $HeadLine"
         Say $LogLine
@@ -847,7 +855,7 @@ try {
         # Only the commit the person saw and confirmed (recorded at the fetch), and only as a fast-forward: it can never create a merge.
         $Merge = Invoke-Git @("merge", "--ff-only", $TargetSha)
         $HeadNow = Get-FirstLine (Invoke-Git @("rev-parse", "HEAD") -Quiet)
-        $TreeNow = @((Invoke-Git @("status", "--porcelain", "--untracked-files=no") -Quiet).Out | Where-Object { "$_".Trim() })
+        $TreeNow = @((Invoke-Git @("-c", "core.quotepath=off", "status", "--porcelain", "--untracked-files=no") -Quiet).Out | Where-Object { "$_".Trim() })
         $Kept = "The backup above is complete; nothing else was changed."
         if ($DbStartedByUs) { $Kept = "The backup above is complete; only the database container was started (it keeps running); nothing else was changed." }
         if ($Merge.Code -ne 0 -and $HeadNow -ne $HeadFull) {
@@ -967,6 +975,7 @@ try {
     Say "Backup: $BackupPath"
     Say "Settings now shows version: $BuildId"
     Say "To go back: $GoBack. You need commit $OldCommitText and revision $BackupSchema, and the backup above."
+    Clear-AnchorNotes
     Say $LogLine
     Say "DONE"
     exit 0

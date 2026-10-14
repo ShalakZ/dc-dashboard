@@ -237,7 +237,7 @@ ALLOWED_DOCKER = [re.compile(p) for p in (
     rf"^compose{PROFILE} config --no-interpolate$",
     rf"^compose{PROFILE} ps -a -q {SVC}$",
     rf"^compose{PROFILE} ps -a$",
-    rf"^compose{PROFILE} up -d( --no-recreate db)?$",
+    rf"^compose{PROFILE} up -d( --no-recreate db| --no-recreate --no-build)?$",
     rf"^compose{PROFILE} build api web$",
     rf"^compose{PROFILE} port web 80$",
     rf"^compose{PROFILE} logs --tail 80 (api|web|collector|simulator)$",
@@ -995,11 +995,18 @@ def _anchor_path(scene: Scene) -> Path:
     return scene.root.joinpath(*ANCHOR_FILE)
 
 
+def _unfinished_update(scene: Scene, args: str = "-Yes") -> Result:
+    """A run that backs up, builds and then ends in text (b) (the api never becomes healthy): the notes file must stay."""
+    scene.seq("inspect-apiid2.seq", "running starting 0")
+    return scene.run(args, env={"DCDASH_UPDATE_WAIT_SECONDS": "1"})
+
+
 def test_a_site_that_is_not_running_gives_a_best_guess_anchor_never_a_firm_one(scene, web):
     scene.at("c33")
     scene.stack(api=None)  # the api container does not run: the code it was built from is unknown
+    scene.seq("inspect-apiid2.seq", "running starting 0", "exited none 0")  # text (c); a finished update would remove the notes file
     res = scene.run("-Yes")
-    assert res.code == 0, res.said
+    assert res.code == 4, res.said
     guess = f"{scene.short('c33')} (best guess: the site is not running, so its build is unknown)"
     assert f"Old commit: {guess}" in res.said and f"You need commit {guess} and revision {OLD_REV}, and the backup above." in res.said, res.said
     assert "The site is not running, so the code it was last built from is unknown" in res.said
@@ -1011,10 +1018,10 @@ def test_the_anchor_notes_are_written_after_the_backup_and_shown_by_the_next_run
     note = _anchor_path(scene)
     note.parent.mkdir()
     note.write_bytes(b"2026-01-01 10:00:00\r\nabc1234\r\n0007\r\nC:\\backups\\old.dump\r\n")  # what an earlier run left
-    res = scene.run("-Yes")
-    assert res.code == 0, res.said
-    assert ("Notes of an earlier update (logs\\update-anchor.txt): old commit abc1234, old revision 0007, backup C:\\backups\\old.dump"
-            " - if that update failed, this is what to go back to") in res.said, res.said
+    res = _unfinished_update(scene)
+    assert res.code == 4, res.said
+    assert ("Notes of an earlier update (logs\\update-anchor.txt, written 2026-01-01 10:00:00): old commit abc1234, old revision 0007, "
+            "backup C:\\backups\\old.dump - if that update failed, this is what to go back to") in res.said, res.said  # the note's own time is shown
     assert res.said.index("Notes of an earlier update") < res.said.index("== 3/7")
     raw = note.read_bytes()
     assert not raw.startswith(b"\xef\xbb\xbf"), "UTF-8 without a BOM"
@@ -1031,8 +1038,8 @@ def test_an_anchor_that_is_only_a_guess_never_replaces_the_notes_of_an_earlier_u
     note.parent.mkdir()
     before = b"2026-01-01 10:00:00\r\nabc1234\r\n0007\r\nC:\\backups\\old.dump\r\n"
     note.write_bytes(before)
-    res = scene.run("-Yes")
-    assert res.code == 0 and "Notes of an earlier update" in res.said, res.said
+    res = _unfinished_update(scene)
+    assert res.code == 4 and "Notes of an earlier update" in res.said, res.said
     assert note.read_bytes() == before, "run 2 after a failed update only knows a guess: the firm anchor of run 1 stays"
     assert "The notes of the earlier update stay in logs\\update-anchor.txt" in res.said
 
@@ -1048,8 +1055,8 @@ def test_an_api_that_is_up_but_not_healthy_gives_only_a_guess_and_leaves_the_not
     res = scene.run("-Yes")
     assert res.code == 4 and "the api is not healthy" in res.said and "Notes of an earlier update" in res.said, res.said
     assert note.read_bytes() == before
-    res = scene.run("-Yes -Force")
-    assert res.code == 0, res.said
+    res = _unfinished_update(scene, "-Yes -Force")
+    assert res.code == 4, res.said
     assert f"Old commit: {scene.short()} (best guess: the api is not healthy, so this build may be a failed update)" in res.said, res.said
     assert note.read_bytes() == before and "The notes of the earlier update stay" in res.said
 
@@ -1069,10 +1076,41 @@ def test_a_run_with_nothing_incoming_points_at_the_notes_and_ignores_an_unreadab
     res = scene.run("-Yes")
     assert res.code == 0 and "Already up to date" in res.said and ANCHOR_HINT in res.said, res.said
     assert "Notes of an earlier update" not in res.said
-    note.unlink()
+    note.unlink(missing_ok=True)  # (a finished run removed it)
     note.mkdir()  # a folder where the file should be: cannot be read either
     res = scene.run("-Yes")
     assert res.code == 0 and ANCHOR_HINT in res.said and "Notes of an earlier update" not in res.said, res.said
+
+
+OLD_NOTE = b"2026-01-01 10:00:00\r\nabc1234\r\n0007\r\nC:\\backups\\old.dump\r\n"
+
+
+def test_a_finished_update_removes_the_anchor_notes_and_a_failed_one_keeps_them(scene, web):
+    """R2: the file belongs to an update that did NOT finish; a stale one would send a person back to a weeks-old backup."""
+    scene.at("c33")
+    note = _anchor_path(scene)
+    note.parent.mkdir()
+    note.write_bytes(OLD_NOTE)
+    failed = _unfinished_update(scene)
+    assert failed.code == 4 and note.exists() and note.read_bytes() != OLD_NOTE, "the failed run wrote ITS notes and kept them"
+    scene.seq("inspect-apiid2.seq", "running healthy 0")  # the rerun finds the site healthy (A1) and finishes
+    res = scene.run("-Yes")
+    assert res.code == 0 and "Already up to date" in res.said and "Notes of an earlier update" in res.said, res.said
+    assert not note.exists(), "the A1 DONE removes the notes"
+
+
+def test_a_successful_update_removes_the_anchor_notes_and_a_dry_run_does_not(scene, web):
+    scene.at("c33")
+    note = _anchor_path(scene)
+    note.parent.mkdir()
+    note.write_bytes(OLD_NOTE)
+    assert scene.run("-DryRun").code == 0 and note.read_bytes() == OLD_NOTE
+    res = scene.run("-Yes")
+    assert res.code == 0 and res.said.endswith("DONE") and "Notes of an earlier update" in res.said, res.said
+    assert not note.exists() and len(scene.dumps()) == 1
+    note.write_bytes(OLD_NOTE)  # the A1 path of a healthy, current site
+    assert scene.run("-DryRun").code == 0 and note.exists(), "a dry run changes nothing"
+    assert scene.run("-Yes").code == 0 and not note.exists()
 
 
 # ---- step 3: what is coming ---------------------------------------------------------------------------------------------------------
@@ -1400,7 +1438,8 @@ def _no_destructive_call(scene: Scene) -> None:
 
 
 def _full_ups(scene: Scene) -> list[str]:
-    return [c for c in scene.calls() if c in ("compose up -d", "compose --profile dev up -d")]
+    """Every `up -d` of the whole stack: the update's own, and the A1 path's start of created / exited services (--no-recreate --no-build)."""
+    return [c for c in scene.calls() if re.fullmatch(r"compose( --profile dev)? up -d( --no-recreate --no-build)?", c)]
 
 
 def _builds(scene: Scene) -> list[str]:
@@ -1476,6 +1515,17 @@ def test_the_web_checks_follow_the_address_docker_publishes_when_it_is_a_single_
     (scene.bin / "port-host.txt").write_bytes(b"0.0.0.0")
     res = scene.run("-Yes")
     assert res.code == 0 and f"The site is checked at http://127.0.0.1:{web.port}" in res.said, res.said
+
+
+@pytest.mark.parametrize("host, url_host", [("::", "127.0.0.1"), ("::1", "127.0.0.1"), ("[::1]", "[::1]")])
+def test_an_ipv6_host_from_compose_port_never_builds_an_invalid_url(scene, web, host, url_host):
+    """R3: Compose may print an IPv6 binding without brackets (`:::PORT`): the URL must not become http://:::PORT. A bare IPv6 host falls
+    back to 127.0.0.1 (where the stub listens, so the run succeeds); a bracketed one is used as it is (nothing listens on ::1 here)."""
+    (scene.bin / "port-host.txt").write_bytes(host.encode("ascii"))
+    res = scene.run("-Yes")
+    assert f"The site is checked at http://{url_host}:{web.port} " in res.said and "http://:::" not in res.said, res.said
+    if url_host == "127.0.0.1":
+        assert res.code == 0 and "ok: stream route" in res.said, res.said
 
 
 def test_no_pull_builds_what_is_checked_out_without_fetching_or_merging(scene, web):
@@ -1885,6 +1935,8 @@ def test_a1_starts_a_service_that_is_created_or_exited_once_and_lets_the_checks_
     res = scene.run("-Yes")
     assert res.code == 0 and "Already up to date" in res.said, res.said
     assert f"{service} ({state.split()[0]})" in res.said and len(_full_ups(scene)) == 1 and _builds(scene) == [], scene.calls()
+    # R4: start the containers as they are: no recreation (an edited .env or an override would recreate db and api) and no build
+    assert _full_ups(scene) == ["compose up -d --no-recreate --no-build"], scene.calls()
     assert scene.dumps() == [] and scene.head() == scene.sha("tip")
 
 
@@ -1917,7 +1969,7 @@ def test_a1_does_not_start_anything_when_the_api_is_not_healthy_or_runs_an_old_i
 def test_a_dry_run_of_a_rerun_only_says_it_would_start_the_stopped_services(scene, web):
     _stopped_service_that_up_starts(scene, "web", "created none 0")
     res = scene.run("-DryRun", env={"DCDASH_UPDATE_WAIT_SECONDS": "1"})
-    assert "Would run: docker compose up -d" in res.said and _full_ups(scene) == [], res.said
+    assert "Would run: docker compose up -d --no-recreate --no-build" in res.said and _full_ups(scene) == [], res.said
     assert res.code == 4 and "web is not healthy" in res.said, "the checks are real: web does not run"
     assert "This run made no backup and changed nothing." in res.said
 
@@ -2040,7 +2092,7 @@ def test_the_script_is_pure_ascii_and_windows_powershell_5_1_syntax():
     for token in ("&&", "||", "??", "?.", "Out-File", "-Parallel", "ForEach-Object -Parallel"):
         assert token not in code, f"{token!r} is not Windows PowerShell 5.1"
     assert not re.search(r"\$\w+\s*=\s*\(?[^'\"\n]*\s\?\s[^'\"\n]*\s:\s", code), "a ternary is PowerShell 7 syntax"
-    assert len(CODE_LINES) + sum(1 for _ in SCRIPT_TEXT.decode().splitlines() if _.lstrip().startswith("#")) <= 1000
+    assert len(CODE_LINES) + sum(1 for _ in SCRIPT_TEXT.decode().splitlines() if _.lstrip().startswith("#")) <= 1100
     assert SCRIPT_TEXT.count(b"\r\n") in (0, SCRIPT_TEXT.count(b"\n")), "one line ending style"
 
 
@@ -2057,4 +2109,7 @@ def test_no_native_call_the_script_makes_can_change_or_destroy_something_it_must
     # Messages may NAME restore.ps1, 'down -v', 'git checkout' or 'docker compose stop' (A11): the failure texts do. The scan above and
     # the runtime allow-list are the guards.
     code = "\n".join(CODE_LINES)
-    assert not re.search(r"Remove-Item|\[IO\.File\]::Delete|\[IO\.Directory\]::Delete", code), "the script deletes nothing"
+    assert not re.search(r"Remove-Item|\[IO\.Directory\]::Delete", code), "the script deletes nothing"
+    # ... except its own notes file after a finished update (R2): exactly one delete call, and it names $AnchorFile
+    deletes = [line for line in CODE_LINES if "[IO.File]::Delete" in line]
+    assert len(deletes) == 1 and "[IO.File]::Delete($AnchorFile)" in deletes[0], deletes
