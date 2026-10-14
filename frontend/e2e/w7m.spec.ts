@@ -17,7 +17,7 @@ import { rowAction, treeLink } from "./shell";
 //   5. Edit the kind to Server: the tree row, the header and quick find change, on the same page load (a marker on `window` survives).
 //   6. Rename the kind "W7m Pumps N": the asset page shows the new kind text, the row says "1 asset", the icon stays.
 //   7. The asset's own icon (Rack) wins over the kind's.
-//   8. The kind's Delete is refused while the asset uses it (dialog and API 409); /assets/kinds survives a reload.
+//   8. The kind's Delete asks where to move the asset (W7o; Cancel changes nothing) and the API refuses a plain delete (409); /assets/kinds survives a reload.
 //   9. Delete the asset, then the kind.
 //  10. Add asset with a NEW typed kind: it is registered with the suggested icon, and the next asset of that kind needs no choice.
 //  11. No horizontal scroll at 1440 and 1024 px, on the page and with the New kind dialog (and its grid) open.
@@ -206,8 +206,9 @@ test.describe.serial("W7m: asset kinds", () => {
     await expect(kindCount(page, KIND_SEEN)).toHaveText("No assets");
     await expect(page.getByRole("button", { name: "New kind", exact: true }), "a reader has no New kind").toHaveCount(0);
     await expect(page.getByRole("button", { name: /^Actions for / }), "and no row menu").toHaveCount(0);
+    await expect(page.getByText('Managing asset kinds needs the "Manage asset kinds" permission.', { exact: true }), "one line says what is missing (W7o)").toBeVisible();
 
-    const seen = (await kindsOf(page.request)).find((k) => k.name === KIND_SEEN);
+    const seen =(await kindsOf(page.request)).find((k) => k.name === KIND_SEEN);
     expect(seen, "the viewer reads the registry").toBeTruthy();
     for (const [what, response] of [
       ["POST", await page.request.post("/api/asset-kinds", { data: { name: `W7m refused ${RUN}` } })],
@@ -252,10 +253,10 @@ test.describe.serial("W7m: asset kinds", () => {
       await expect(form.hint).toHaveText("Suggested from the name");
     });
 
-    await test.step("the grid has the 28 icons and no Automatic cell; the references are read from it", async () => {
+    await test.step("the grid has the 48 icons and no Automatic cell; the references are read from it", async () => {
       await form.change.click();
       await expect(form.grid).toBeVisible();
-      await expect(form.grid.getByRole("radio"), "a kind always has an icon: no Automatic").toHaveCount(28);
+      await expect(form.grid.getByRole("radio"), "a kind always has an icon: no Automatic").toHaveCount(48);
       await expect(form.radio("Pump"), "the guess is checked").toBeChecked();
       await expect(form.radio("Pump")).toBeFocused();
       icons.pump = await form.cell("Pump").locator("svg").innerHTML();
@@ -413,7 +414,7 @@ test.describe.serial("W7m: asset kinds", () => {
     expect(asset!.kind, "and so is the kind").toBe(KIND_PUMPS);
   });
 
-  test("a kind in use cannot be deleted (dialog and API), and the page survives a reload", async ({ page }) => {
+  test("a kind in use asks where to move its assets (Cancel changes nothing), the API refuses a plain delete, and the page survives a reload", async ({ page }) => {
     test.setTimeout(120_000);
     expect(kindId, "the kind from the earlier tests").toBeGreaterThan(0);
     await signIn(page);
@@ -424,18 +425,25 @@ test.describe.serial("W7m: asset kinds", () => {
     await expect(kindCount(page, KIND_PUMPS)).toHaveText("1 asset");
     expect(await kindTile(page, KIND_PUMPS).innerHTML(), "the kind keeps its own icon, whatever the asset shows").toBe(icons.server);
 
+    // W7o: a kind in use is no longer refused in the dialog, it asks where its assets go (W7o's own spec walks the whole move). Other kinds
+    // exist here (KIND_SEEN), so this is the move form and not the blocked one.
     await (await rowAction(page, kindRow(page, KIND_PUMPS), "Delete")).click();
     const confirm = page.getByRole("dialog", { name: `Delete the kind "${KIND_PUMPS}"?`, exact: true });
     await expect(confirm).toBeVisible();
-    await expect(confirm.getByRole("alert")).toContainText("1 asset uses");
-    await expect(confirm.getByRole("button", { name: "Delete", exact: true }), "nothing to confirm: no Delete button at all").toHaveCount(0);
-    await expect(confirm.getByRole("button", { name: "Cancel", exact: true }), "Cancel reads Close").toHaveCount(0);
-    await confirm.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(confirm.locator(".confirm-body")).toContainText(`1 asset uses "${KIND_PUMPS}". Move it to another kind`);
+    const target = confirm.getByLabel("Move the assets to"); // a label that wraps the <select>: its text holds the option texts, so never `exact`
+    await expect(target, "no kind is chosen for the person").toHaveValue("");
+    await expect(target.locator("option", { hasText: KIND_SEEN }), "the other kinds are the choices").toHaveCount(1);
+    await expect(target.locator("option", { hasText: exactly(KIND_PUMPS) }), "the kind itself is not").toHaveCount(0);
+    await expect(confirm.getByRole("button", { name: "Delete", exact: true }), "Delete waits for a kind").toBeDisabled();
+    await expect(confirm.getByRole("alert"), "nothing is wrong yet").toHaveCount(0);
+    await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(confirm).toBeHidden();
     await expect(kindRow(page, KIND_PUMPS)).toBeVisible();
+    await expect(kindCount(page, KIND_PUMPS), "Cancel moved nothing").toHaveText("1 asset");
 
     const refused = await page.request.delete(`/api/asset-kinds/${kindId}`);
-    expect(refused.status(), "the API refuses too").toBe(409);
+    expect(refused.status(), "the API refuses a delete that names no kind to move to").toBe(409);
     const body = (await refused.json()) as { detail: string; assets: number };
     expect(body.detail).toContain("1 asset uses");
     expect(body.assets).toBe(1);
