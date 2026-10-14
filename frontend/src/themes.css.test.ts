@@ -88,7 +88,7 @@ describe.each(combos)("$id, $mode", ({ id, mode }) => {
     ["sidebar: group heading on the plain bar", () => tok("side-muted"), () => tok("side-bg")],
     ["sidebar: active item", () => tok("side-text-strong"), () => tok("side-bg-active")],
     ["sidebar: marker on the bar (focus ring, indicator)", () => tok("side-accent"), () => tok("side-bg")],
-    ["sidebar: the bar's colour on the marker (brand mark)", () => tok("side-bg"), () => tok("side-accent")],
+    ["sidebar: the bar's colour on the marker", () => tok("side-bg"), () => tok("side-accent")],
     ["sidebar: avatar", () => tok("side-avatar-text"), () => tok("side-avatar-bg")],
     ["tooltip", () => tok("tooltip-text"), () => tok("tooltip-bg")],
     ["top bar: strong text on the bar (brand, site time, user name)", () => tok("side-text-strong"), () => tok("top-bg")],
@@ -152,8 +152,29 @@ describe("the presets", () => {
   const PRESET_SET = sorted(colourTokens.filter((name) => /^(side|top|tooltip)-/.test(name)));
 
   it("sets exactly the colours of the sidebar, the top bar and the tooltip, the same set in every preset", () => {
-    expect(PRESET_SET).toHaveLength(20);
+    expect(PRESET_SET).toHaveLength(21);
     for (const { id } of THEMES) expect(sorted(customProperties(presetRule(id).body).keys()), id).toEqual(PRESET_SET);
+  });
+
+  // W7n: the owner's mark is a fixed gold image on the bar. Where the bar's colour is too close to it the square's edge would vanish
+  // (desert-gold's bar is 1.23:1 against it), so the bar draws a keyline in --top-brand-edge; the other bars need none, and their
+  // keyline is the bar's own colour (invisible).
+  describe("the brand mark's gold against each bar", () => {
+    const GOLD = "#D29E12";
+    it.each(THEMES.map((t) => t.id))("%s: the square reads at 3:1 on the bar, or its keyline does", (id) => {
+      const preset = customProperties(presetRule(id).body);
+      const bar = preset.get("top-bg")!;
+      expect(preset.get("top-brand-edge"), `--top-brand-edge of ${id}`).toMatch(HEX);
+      expect(contrast(GOLD, bar) >= NON_TEXT || contrast(preset.get("top-brand-edge")!, bar) >= NON_TEXT, `${id}: gold ${contrast(GOLD, bar).toFixed(2)}:1, keyline ${contrast(preset.get("top-brand-edge")!, bar).toFixed(2)}:1`).toBe(true);
+    });
+
+    it("desert-gold's keyline is #6e5700 and the other three equal their bar", () => {
+      expect(customProperties(presetRule("desert-gold").body).get("top-brand-edge")).toBe("#6e5700");
+      for (const id of ["navy-gold", "maroon-gold", "graphite"]) {
+        const preset = customProperties(presetRule(id).body);
+        expect(preset.get("top-brand-edge"), id).toBe(preset.get("top-bg"));
+      }
+    });
   });
 
   it("writes only hex colours", () => {

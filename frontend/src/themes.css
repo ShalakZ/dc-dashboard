@@ -5,14 +5,14 @@
    the theme, one block per theme and mode after the dark block; they are heavier than both, and no other block sets an accent token,
    so no two blocks ever compete for one. Contrast of every pair in every look: themes.css.test.ts. */
 
-/* Presets. Each sets the same twenty tokens (the bars, the avatar, the tooltip). The content accent comes from the look's own block below. */
+/* Presets. Each sets the same twenty-one tokens (the bars, the avatar, the tooltip). The content accent comes from the look's own block below. */
 :root[data-theme="navy-gold"] {
   --side-bg: #283354; --side-bg-hover: #313d63; --side-bg-active: #3a4772;
   --side-text: #b8c2dc; --side-text-strong: #ffffff; --side-muted: #9aa6c4; --side-rule: #3a4569;
   --side-accent: #deb406; --side-avatar-bg: #deb406; --side-avatar-text: #1d2540;
   --tooltip-bg: #172033; --tooltip-text: #ffffff;
   --top-bg: #283354; --top-find-bg: #313d63; --top-find-border: #7c88b4; --top-chip-border: #4a5682; --top-find-text: #ffffff; --top-find-ph: #b8c2dc;
-  --top-live: #6fdc9a; --top-stale: #ffc46b;
+  --top-brand-edge: #283354; --top-live: #6fdc9a; --top-stale: #ffc46b;
 }
 :root[data-theme="maroon-gold"] {
   --side-bg: #7d0849; --side-bg-hover: #8c1857; --side-bg-active: #9a2865;
@@ -20,7 +20,7 @@
   --side-accent: #deb406; --side-avatar-bg: #deb406; --side-avatar-text: #4a0329;
   --tooltip-bg: #3d0222; --tooltip-text: #ffffff;
   --top-bg: #7d0849; --top-find-bg: #8f1b5b; --top-find-border: #d88ab1; --top-chip-border: #a5467b; --top-find-text: #ffffff; --top-find-ph: #f3cddf;
-  --top-live: #86e8ac; --top-stale: #ffd27a;
+  --top-brand-edge: #7d0849; --top-live: #86e8ac; --top-stale: #ffd27a;
 }
 :root[data-theme="graphite"] {
   --side-bg: #2b2f36; --side-bg-hover: #353a42; --side-bg-active: #40464f;
@@ -28,7 +28,7 @@
   --side-accent: #8fb2ff; --side-avatar-bg: #40464f; --side-avatar-text: #e6e9ee;
   --tooltip-bg: #0f1216; --tooltip-text: #ffffff;
   --top-bg: #2b2f36; --top-find-bg: #353a42; --top-find-border: #7f8794; --top-chip-border: #4a5059; --top-find-text: #ffffff; --top-find-ph: #c3c8d0;
-  --top-live: #6fdc9a; --top-stale: #ffc46b;
+  --top-brand-edge: #2b2f36; --top-live: #6fdc9a; --top-stale: #ffc46b;
 }
 :root[data-theme="desert-gold"] {
   --side-bg: #deb406; --side-bg-hover: #e9c52c; --side-bg-active: #f2d660;
@@ -36,7 +36,7 @@
   --side-accent: #241c00; --side-avatar-bg: #241c00; --side-avatar-text: #deb406;
   --tooltip-bg: #241c00; --tooltip-text: #ffffff;
   --top-bg: #deb406; --top-find-bg: #f7e397; --top-find-border: #7a6100; --top-chip-border: #a8870a; --top-find-text: #241c00; --top-find-ph: #4a3b00;
-  --top-live: #0b5c2b; --top-stale: #6e3700;
+  --top-brand-edge: #6e5700; --top-live: #0b5c2b; --top-stale: #6e3700;
 }
 
 /* Dark mode: the neutral content tokens, deeper shadows, and dark scroll bars, date pickers and selects. The page is a dark grey, never

@@ -13,6 +13,7 @@
   /* top bar: the sidebar's navy carried across the page; the chip (and the quick find) sit on a lighter navy. Contrast: app.css.test.ts.
      The find field's border is a control boundary (3:1 on the bar and on the field ground); the chip's ring and the Ctrl K hint are decoration and keep the quiet one. */
   --bar-h: 52px; --top-bg: #283354; --top-find-bg: #313d63; --top-find-border: #7c88b4; --top-chip-border: #4a5682; --top-find-text: #ffffff; --top-find-ph: #b8c2dc;
+  --top-brand-edge: #283354;
   --top-live: #6fdc9a; --top-stale: #ffc46b;
   /* status: text / fill / border */
   --ok: #136c37;   --ok-tint: #e3f3e9;
@@ -91,8 +92,8 @@
   .brand { position: relative; flex: none; display: flex; align-items: center; gap: 10px; width: var(--side-w); height: 100%; padding: 0 20px; overflow: hidden; color: var(--side-text-strong); font-size: var(--fs-md); font-weight: 600; white-space: nowrap; }
   .shell.ready .brand { transition: width var(--motion); }
   .brand .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .brand-mark { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); background: var(--side-accent); }
-  .brand-mark svg { width: 16px; height: 16px; fill: none; stroke: var(--side-bg); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .brand-mark { flex: none; display: block; }
+  .brand .brand-mark { outline: 1px solid var(--top-brand-edge); } /* invisible (the bar's own colour) except on desert-gold, whose bar is the mark's gold */
   /* overflow-y auto in both states: on a short window the rail scrolls, the foot stays put */
   .nav-groups { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 16px 12px 12px; scrollbar-width: thin; scrollbar-color: var(--side-bg-active) transparent; }
   .nav-group + .nav-group { margin-top: 18px; }

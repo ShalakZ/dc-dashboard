@@ -5,7 +5,8 @@ import { useAuth } from "../auth/AuthProvider";
 import { APP_TITLE, pageTitle } from "../lib/pageTitle";
 import { initialSidebar, saveSidebar, type SidebarState } from "../lib/sidebarState";
 import { CertificateNotice } from "./CertificateNotice";
-import { Icon, ICONS } from "./Icon";
+import { BrandMark } from "./BrandMark";
+import { Icon } from "./Icon";
 import { DASHBOARDS_PATH, visibleGroups, type NavItem } from "./navItems";
 import { ProfileMenu } from "./ProfileMenu";
 import { QuickFind } from "./QuickFind";
@@ -130,7 +131,7 @@ export function Layout() {
       <div className="shell" data-sidebar={sidebar} ref={shellRef}>
         <header className="navbar">
           <div className="brand">
-            <span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24">{ICONS.brand}</svg></span>
+            <BrandMark size={28} />
             <span className="lbl">DC Dashboard</span>
           </div>
           <div className="bar-in">

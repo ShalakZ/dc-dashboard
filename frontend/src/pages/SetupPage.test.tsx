@@ -46,6 +46,15 @@ describe("SetupPage", () => {
     expect(router.state.location.pathname).toBe("/setup");
   });
 
+  it("has one auth-brand and the page's single h1 on the form", async () => {
+    server.setup = "needed";
+    mockFetch(routes());
+    const { container } = mount();
+    await screen.findByRole("heading", { level: 1, name: "First-run setup" });
+    expect(container.querySelectorAll(".auth-brand")).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
   it("leaves for the sign-in page when the server comes back and no first user is needed", async () => {
     mockFetch(routes());
     const { router } = mount();

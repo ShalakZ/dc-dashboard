@@ -18,6 +18,8 @@ describe("ServerUnreachable", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Can't reach the server");
     expect(screen.getByText("The server is not answering. It may be starting or restarting. This page tries again every few seconds.")).toBeInTheDocument();
     expect(container.querySelector("main.auth > .auth-card > .auth-brand")).toBeInTheDocument();
+    expect(container.querySelectorAll(".auth-brand")).toHaveLength(1);
+    expect(container.querySelector(".auth-brand img.auth-mark")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry now" })).toHaveClass("primary");
   });
 

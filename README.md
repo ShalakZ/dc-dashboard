@@ -602,6 +602,14 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 `docker compose run --rm -p 8000:8000 api` or add `ports: ["8000:8000"]` to a
 `compose.override.yaml` (ignored by git).
 
+### Brand assets
+
+The logo and the browser-tab icon are the owner's gold M. His original is `docs/brand/logo-original.svg`; `frontend/public/` holds what the app
+serves (`logo-mark.svg` for the top bar and the sign-in page, `favicon.svg`, `favicon.ico`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`).
+Run `make-brand-assets.mjs` (in the `frontend/scripts` folder) with `node` from `frontend/` to make them from the original: the SVGs copy its
+paths (nothing is redrawn) and Chromium, the one Playwright installs (or the executable in `CHROMIUM_PATH`), draws the PNGs and the ICO. The app
+names the logo in one place, `BRAND_MARK_SRC` in `frontend/src/components/BrandMark.tsx`.
+
 ### End-to-end test
 
 > **Data safety.** `docker compose down -v` on the normal project deletes the `dcdash_dbdata` volume:
@@ -610,7 +618,7 @@ For `npm run dev` to reach the API without Caddy, temporarily publish it:
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Twenty-one specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Twenty-six specs run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`frontend/e2e/playwright.config.ts` runs them in this order; each project depends on the one before):
 
 - `journey.spec.ts` drives a real browser through first-run setup, adding the simulator, mapping two
@@ -748,6 +756,13 @@ Twenty-one specs run in one `playwright test` run against the dev-profile stack 
   with the suggested icon, and the next asset of it needs no choice. No horizontal scroll at 1440 and 1024 px on the page and with the New
   kind dialog and its grid open. Every kind and asset it makes starts with `W7m` and carries the run suffix, and it makes a viewer account;
   it removes them all again.
+- `w7n.spec.ts` (its own project, after `w7m`, at 1600×1000) checks the gold M logo and the icons. The served HTML links the ICO, then the SVG,
+  then the touch icon, and each of them and `/logo-mark.svg` answers 200 as an image (never the app's HTML) with no `immutable` cache header.
+  In all eight looks (light and dark, the four theme colours) the pixel the browser paints in the top bar's mark is the owner's gold (read from
+  a screenshot of the image, so a filter, an opacity or a blend would show), and desert gold shows a dark keyline round it. The minimized rail
+  keeps the mark and the name, the sign-in page shows the mark at 58 by 56, and the static copy of the shell in `index.html` (only the app's
+  script is held) puts the mark where the real bar does. No request for an icon fails and no console message names one; with the logo blocked
+  the bar keeps the mark's 29 by 28 box and the name does not move. It creates and changes nothing.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

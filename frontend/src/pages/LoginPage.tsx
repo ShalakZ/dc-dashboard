@@ -1,15 +1,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { RETURN_KEY, useAuth } from "../auth/AuthProvider";
+import { BrandMark } from "../components/BrandMark";
 import { upperFirst } from "../lib/upperFirst";
 
 /** The brand above a Login/Setup card; a `p`, not a heading, so the page keeps its single h1. */
 export function AuthBrand() {
   return (
     <p className="auth-brand">
-      <span className="auth-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" /></svg>
-      </span>
+      <BrandMark size={56} className="auth-mark" />
       DC Dashboard
     </p>
   );
