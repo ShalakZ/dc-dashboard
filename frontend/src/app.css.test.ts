@@ -324,6 +324,14 @@ describe("the resizable asset tree column (W7a)", () => {
     expect(col.body).toMatch(/(?:^|[;\s])width:\s*var\(--w\)/);
   });
 
+  it("is 280px wide in a narrow window too: five header controls leave the title \"Assets Tree\" 104px, and a narrower column cuts it (W7m review I1)", () => {
+    expect(tokens.get("tree-w")).toBe("280px");
+    const narrow = rules.filter((r) => r.at.some((a) => /max-width:\s*1179\.98px/.test(a)));
+    for (const rule of narrow) {
+      for (const [, px] of rule.body.matchAll(/--tree-w:\s*(\d+)px/g)) expect(Number(px), `--tree-w in "${rule.selector}"`).toBeGreaterThanOrEqual(280);
+    }
+  });
+
   it("a window or sidebar that shrank after saving is guarded in the CSS: 220px at least, else half of the flex container, but leaving 560px to the pane", () => {
     expect(only(".tree-col").body).toMatch(/max-width:\s*max\(220px,\s*min\(50%,\s*calc\(100%\s*-\s*560px\)\)\)/);
     expect(only(".tree-col").body).not.toMatch(/50vw/); // the window is not the area right of the sidebar

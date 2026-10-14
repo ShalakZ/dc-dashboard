@@ -24,8 +24,11 @@ function powerNote({ counted, of }: FleetSummary["power"]): string {
   return of === 1 ? "The meter is not reporting" : `None of the ${of} meters is reporting`;
 }
 
-/** The kinds in use, one per `kindKey`: the most used spelling (ties: code-point order) and the number of assets, most first, then by kind. A blank kind is left out. */
-function kindCounts(assets: readonly Asset[]): { name: string; count: number }[] {
+/**
+ * The kinds in use, one per `kindKey`, and the number of assets, most first, then by kind. A blank kind is left out. A kind the registry has
+ * is named as the registry spells it (the same kind as the Asset kinds page and the tree); any other by its most used spelling (ties: code-point order).
+ */
+function kindCounts(assets: readonly Asset[], registry: readonly AssetKind[] = []): { name: string; count: number }[] {
   const groups = new Map<string, Map<string, number>>();
   for (const { kind } of assets) {
     const key = kindKey(kind);
@@ -38,7 +41,7 @@ function kindCounts(assets: readonly Asset[]): { name: string; count: number }[]
   return [...groups]
     .map(([key, spellings]) => ({
       key,
-      name: [...spellings].sort(([a, n], [b, m]) => m - n || compare(a, b))[0][0],
+      name: registry.find((kind) => kindKey(kind.name) === key)?.name ?? [...spellings].sort(([a, n], [b, m]) => m - n || compare(a, b))[0][0],
       count: [...spellings.values()].reduce((sum, n) => sum + n, 0),
     }))
     .sort((x, y) => y.count - x.count || compare(x.key, y.key));
@@ -104,7 +107,7 @@ function Fleet({ assets, kinds, fleet: { data, error }, timezone }: { assets: re
       </div>
       <h2 className="section-title">By kind</h2>
       <ul className="kind-list">
-        {kindCounts(assets).map(({ name, count }) => (
+        {kindCounts(assets, kinds).map(({ name, count }) => (
           <li key={name}><span className="kind-name"><Icon name={kindIconForName(name, kinds)} />{name}</span> <span className="kind-count">{count}</span></li>
         ))}
       </ul>

@@ -39,9 +39,9 @@ export function AssetForm({ assets, kinds, initial, excludeIds, onSubmit, onCanc
   const registryIcon = kinds.find((k) => kindKey(k.name) === kindKey(resolvedKind))?.icon ?? null;
   const automatic = assetIcon({ kind: resolvedKind, kind_icon: registryIcon });
   const caption = icon === null ? `Automatic (${iconLabelFor(automatic)})` : chosenLabel ?? `Unknown icon "${icon}"`;
-  // One answer for the note and for the page's registration. The note speaks of "this icon", which is the caption only while Automatic.
+  // One answer for the note and for the page's registration. The note is an addition to the Automatic caption, so it is shown only while the icon is Automatic.
   const registers = registersKind(resolvedKind, kinds, startKind);
-  const hint = registers && icon === null ? "A new kind: it is added to Asset kinds with this icon." : undefined;
+  const hint = registers && icon === null ? "New kind: added to Asset kinds." : undefined;
 
   async function submit(event: FormEvent) {
     event.preventDefault();

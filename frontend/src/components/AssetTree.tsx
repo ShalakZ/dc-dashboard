@@ -130,7 +130,7 @@ function useTreeWidth(column: RefObject<HTMLElement | null>) {
       observer?.disconnect();
     };
   }, [column]);
-  // The default width is a CSS token (248px in a narrow window), so it is read from the layout, also while the column animates.
+  // The default width is a CSS token, so it is read from the layout, also while the column animates.
   useEffect(() => {
     const el = column.current;
     if (!el) return;

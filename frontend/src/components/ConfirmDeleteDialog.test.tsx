@@ -203,6 +203,41 @@ describe("ConfirmDeleteDialog", () => {
     });
   });
 
+  describe("blocked (it can never be confirmed from here)", () => {
+    const props = { title: 'Delete the kind "Rack"?', message: "", onConfirm: async () => {}, onCancel: () => {}, loadError: '12 assets use "Rack", so it can\'t be deleted. Change their kind first.' };
+
+    it("has no confirm button at all, says why, and offers Close in place of Cancel", async () => {
+      const onCancel = vi.fn();
+      const onConfirm = vi.fn(async () => {});
+      render(<ConfirmDeleteDialog {...props} onConfirm={onConfirm} onCancel={onCancel} blocked />);
+      expect(screen.getByRole("alert")).toHaveTextContent('12 assets use "Rack", so it can\'t be deleted.');
+      expect(screen.queryByRole("button", { name: "Delete anyway" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+      expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Close"]);
+      expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      await userEvent.keyboard("{Escape}");
+      expect(onCancel).toHaveBeenCalledTimes(2);
+      expect(onConfirm).not.toHaveBeenCalled();
+    });
+
+    it("keeps the message text, and does not change a dialog that is not blocked", () => {
+      const { rerender } = render(<ConfirmDeleteDialog {...props} loadError={undefined} message="Nothing else uses it." blocked />);
+      expect(screen.getByText("Nothing else uses it.")).toBeInTheDocument();
+      rerender(<ConfirmDeleteDialog {...props} loadError={undefined} message="Nothing else uses it." />);
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Delete anyway" })).toBeEnabled();
+    });
+
+    it("moves the focus to Close when the dialog turns blocked while open (the confirm button it was on is gone)", () => {
+      const { rerender } = render(<ConfirmDeleteDialog {...props} loadError={undefined} message="m" />);
+      screen.getByRole("button", { name: "Delete anyway" }).focus();
+      rerender(<ConfirmDeleteDialog {...props} blocked />);
+      expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+    });
+  });
+
   it("gives the focus back to its opener even when the browser took it off already (a page disables its controls while a dialog is open)", async () => {
     function Page() {
       const [asked, setAsked] = useState(false);

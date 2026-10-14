@@ -207,8 +207,19 @@ describe("AssetsSummary", () => {
         const [server, fan, panel, site] = [iconHtml("kindServer"), iconHtml("kindFan"), iconHtml("kindPanel"), iconHtml("kindSite")]; // outside waitFor: drawing an icon changes the DOM, which would re-run the callback for ever
         show({ kinds: [kindRow(1, "RACK", "server"), kindRow(2, "Room", "fan")] });
         await ready();
-        await waitFor(() => expect(iconsByName()["Rack"]).toBe(server));
-        expect(iconsByName()).toEqual({ panel, Rack: server, Room: fan, Site: site });
+        await waitFor(() => expect(iconsByName()["RACK"]).toBe(server)); // named as the registry spells it (W7m review M5), not "Rack"
+        expect(iconsByName()).toEqual({ panel, RACK: server, Room: fan, Site: site });
+      });
+
+      it("names a kind as the registry spells it when the registry has its key, else by the most used spelling of the assets (W7m review M5)", async () => {
+        show({
+          list: [asset(1, "Site", "Site"), asset(2, "P1", "w7mrev racy"), asset(3, "P2", "w7mrev racy"), asset(4, "P3", " W7MREV  racy "), asset(5, "P4", "Odd one"), asset(6, "P5", "odd ONE")],
+          kinds: [kindRow(1, "W7mRev Racy", "server")],
+        });
+        await ready();
+        await waitFor(() => expect(listed().map(([name]) => name)).toContain("W7mRev Racy"));
+        // the registry's spelling for the registered key (3 assets, three spellings); the tie "Odd one" / "odd ONE" keeps code-point order, as before
+        expect(listed()).toEqual([["W7mRev Racy", "3"], ["Odd one", "2"], ["Site", "1"]]);
       });
 
       it("draws the generic icon for a registry icon this build lacks, not the keyword guess", async () => {

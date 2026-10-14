@@ -22,7 +22,7 @@ function open(assets: Asset[], initial?: Partial<AssetIn>, kinds: AssetKind[] = 
 const sent = (onSubmit: ReturnType<typeof open>["onSubmit"]) => onSubmit.mock.calls[0][0];
 /** Whether the save asked the page to add the kind to the registry (the second argument of onSubmit). */
 const registers = (onSubmit: ReturnType<typeof open>["onSubmit"]) => onSubmit.mock.calls[0][1];
-const NEW_KIND_NOTE = "A new kind: it is added to Asset kinds with this icon.";
+const NEW_KIND_NOTE = "New kind: added to Asset kinds.";
 const optionTexts = () => within(screen.getByLabelText("Kind")).getAllByRole("option").map((o) => o.textContent);
 
 describe("AssetForm Kind", () => {
@@ -474,7 +474,7 @@ describe("AssetForm and the registry", () => {
       expect(drawn()).toBe(iconHtml("kindRow"));
     });
 
-    it("drops the note while an icon of the asset's own is chosen: it speaks of the icon the kind is added with, and the caption names another", async () => {
+    it("drops the note while an icon of the asset's own is chosen: the note belongs to the Automatic caption, which the chosen icon replaces", async () => {
       open([]);
       await typeKind("Aisle");
       expect(field()).toHaveAccessibleDescription(expect.stringContaining(NEW_KIND_NOTE));

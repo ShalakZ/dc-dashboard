@@ -262,29 +262,70 @@ describe("Delete kind", () => {
   it.each([
     ["Rack", '12 assets use "Rack", so it can\'t be deleted. Change their kind first.'],
     ["Sensor", '1 asset uses "Sensor", so it can\'t be deleted. Change its kind first.'],
-  ])("a kind in use (%s) opens the same dialog, says why it cannot go, and has no way to confirm", async (name, why) => {
+  ])("a kind in use (%s) opens the same dialog, says why it cannot go, and has no way to confirm (no Delete button, Close in place of Cancel)", async (name, why) => {
     const { calls } = show();
     await screen.findByText(name, { selector: "td *" });
     await choose(name, "Delete");
     const ask = dialog(`Delete the kind "${name}"?`);
     expect(within(ask).getByRole("alert")).toHaveTextContent(why);
-    expect(within(ask).getByRole("button", { name: "Delete" })).toBeDisabled();
-    await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
+    expect(within(ask).queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(within(ask).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(within(ask).getByRole("button", { name: "Close" })).toHaveFocus();
+    await userEvent.click(within(ask).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
-    await userEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+  });
+
+  it.each([
+    ["3 assets", { detail: "3 assets use this kind. Change their kind first.", assets: 3 }, '3 assets use "Pump", so it can\'t be deleted. Change their kind first.'],
+    ["1 asset", { detail: "1 asset uses this kind. Change its kind first.", assets: 1 }, '1 asset uses "Pump", so it can\'t be deleted. Change its kind first.'],
+    ["no count in the answer", { detail: "Some assets use this kind." }, '1 asset uses "Pump", so it can\'t be deleted. Change its kind first.'],
+  ])("turns the open dialog into the blocked one when the server refuses because assets took the kind meanwhile (%s)", async (_case, body, why) => {
+    const { toasts, calls } = show({ over: { "DELETE /api/asset-kinds/2": { status: 409, body } } });
+    await screen.findByText("Pump", { selector: "td *" });
+    await choose("Pump", "Delete");
+    const ask = dialog('Delete the kind "Pump"?');
+    expect(within(ask).getByText("Assets that carry the name later get an automatic icon.")).toBeInTheDocument();
+    await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
+    expect(await within(ask).findByRole("alert")).toHaveTextContent(why);
+    expect(within(ask).queryByText("Assets that carry the name later get an automatic icon.")).not.toBeInTheDocument(); // the stale reassurance is gone
+    expect(within(ask).queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(within(ask).getAllByRole("alert")).toHaveLength(1); // the sentence once, not the server's wording on top of it
+    await waitFor(() => expect(within(ask).getByRole("button", { name: "Close" })).toHaveFocus());
+    expect(toasts.calls).toEqual([]);
+    expect(screen.getByText("Pump", { selector: "td *" })).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+    await userEvent.click(within(ask).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("shows the server's refusal inside the dialog when the count it was shown is out of date", async () => {
-    const stale = { status: 409, body: { detail: "3 assets use this kind. Change their kind first.", assets: 3 } };
-    const { toasts } = show({ over: { "DELETE /api/asset-kinds/2": stale } });
+  it("still shows any other refusal of the confirmed delete inside the dialog, which stays confirmable", async () => {
+    const { toasts } = show({ over: { "DELETE /api/asset-kinds/2": { status: 403, body: { detail: "insufficient permission" } } } });
     await screen.findByText("Pump", { selector: "td *" });
     await choose("Pump", "Delete");
     const ask = dialog('Delete the kind "Pump"?');
     await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
-    expect(await within(ask).findByRole("alert")).toHaveTextContent("3 assets use this kind. Change their kind first.");
+    expect(await within(ask).findByRole("alert")).toHaveTextContent("Your role does not allow this.");
+    expect(within(ask).getByRole("button", { name: "Delete" })).toBeEnabled();
     expect(toasts.calls).toEqual([]);
-    expect(screen.getByText("Pump", { selector: "td *" })).toBeInTheDocument();
+  });
+
+  it("puts the focus on New kind after a confirmed delete (the row and its menu are gone), not on the page body", async () => {
+    show();
+    await screen.findByText("Pump", { selector: "td *" });
+    await choose("Pump", "Delete");
+    await userEvent.click(within(dialog('Delete the kind "Pump"?')).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "New kind" })).toHaveFocus());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("does not pull the focus to New kind after Cancel (only a delete takes the opener away)", async () => {
+    show();
+    await screen.findByText("Pump", { selector: "td *" });
+    await choose("Pump", "Delete");
+    await userEvent.click(within(dialog('Delete the kind "Pump"?')).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "New kind" })).not.toHaveFocus();
   });
 
   it("does not let New kind start a second dialog while the confirmation is open", async () => {

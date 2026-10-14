@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ApiError } from "../api/client";
 import { useAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind } from "../api/queries";
 import type { AssetKind, AssetKindIn, AssetKindPatch } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
@@ -22,12 +23,19 @@ const renamedText = (n: number) => (n === 0 ? "Kind renamed" : n === 1 ? "Kind r
 const inUseText = ({ name, asset_count: n }: AssetKind) =>
   n === 1 ? `1 asset uses "${name}", so it can't be deleted. Change its kind first.` : `${n} assets use "${name}", so it can't be deleted. Change their kind first.`;
 
+/** How many assets the server's 409 for a delete says use the kind (`assets` in the body); 1 when the answer does not say, since it refused for at least one. */
+const assetsIn = (body: unknown): number => {
+  const n = (body as { assets?: unknown } | null | undefined)?.assets;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : 1;
+};
+
 /** The server's words with a capital (its 404 is written in lower case); the form and the confirmation show a thrown message as it is. */
+const reworded = (e: unknown) => (e instanceof Error ? new Error(upperFirst(e.message)) : e);
 async function worded<T>(request: Promise<T>): Promise<T> {
   try {
     return await request;
   } catch (e) {
-    throw e instanceof Error ? new Error(upperFirst(e.message)) : e;
+    throw reworded(e);
   }
 }
 
@@ -50,6 +58,14 @@ export function AssetKindsPage() {
   const [deleting, setDeleting] = useState<AssetKind | null>(null);
   const locked = deleting !== null; // no second dialog next to the confirmation (two would share Escape and the focus trap)
   const closeDialog = () => setDialog(null);
+  // After a confirmed delete the row and its menu are gone, so the dialog has nothing to give the focus back to: it goes to New kind (to the
+  // heading when this person can no longer add kinds), never to the body.
+  const newKindButton = useRef<HTMLButtonElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const [deletions, setDeletions] = useState(0);
+  useEffect(() => {
+    if (deletions > 0) (newKindButton.current ?? heading.current)?.focus();
+  }, [deletions]);
 
   const create = async (body: AssetKindIn) => {
     await worded(createKind.mutateAsync(body));
@@ -62,9 +78,19 @@ export function AssetKindsPage() {
     setDialog(null);
   };
   const removed = async (row: AssetKind) => {
-    await worded(deleteKind.mutateAsync(row.id));
+    try {
+      await deleteKind.mutateAsync(row.id);
+    } catch (e) {
+      // 409: assets took the kind since the list was read. The dialog it was asked in turns into the blocked one (no way to confirm) with the server's count.
+      if (e instanceof ApiError && e.status === 409) {
+        setDeleting({ ...row, asset_count: assetsIn(e.body) });
+        return;
+      }
+      throw reworded(e);
+    }
     toast.success(`Kind "${row.name}" deleted`);
     setDeleting(null);
+    setDeletions((n) => n + 1);
   };
 
   const header = (actions: ReactNode) => (
@@ -73,6 +99,7 @@ export function AssetKindsPage() {
       crumbs={CRUMBS}
       sub={<>The icon an asset shows when it has none of its own <InfoTip>An asset without an icon of its own shows its kind's icon. Change a kind's icon here and every asset of that kind follows.</InfoTip></>}
       actions={actions}
+      headingRef={heading}
     />
   );
 
@@ -94,7 +121,7 @@ export function AssetKindsPage() {
   ];
   return (
     <div className="kinds-page">
-      {header(canEdit ? <button type="button" className="primary" disabled={locked} onClick={() => setDialog({ kind: "new" })}>New kind</button> : undefined)}
+      {header(canEdit ? <button type="button" className="primary" ref={newKindButton} disabled={locked} onClick={() => setDialog({ kind: "new" })}>New kind</button> : undefined)}
       {error && <p className="error" role="alert">{error.message}</p>}
       {kinds.length === 0 ? (
         <EmptyNote icon="layers">No kinds yet.</EmptyNote>
@@ -134,6 +161,7 @@ export function AssetKindsPage() {
           title={`Delete the kind "${deleting.name}"?`}
           message={deleting.asset_count === 0 ? "Assets that carry the name later get an automatic icon." : ""}
           loadError={deleting.asset_count > 0 ? inUseText(deleting) : undefined}
+          blocked={deleting.asset_count > 0}
           confirmLabel="Delete"
           onConfirm={() => removed(deleting)}
           onCancel={() => setDeleting(null)}

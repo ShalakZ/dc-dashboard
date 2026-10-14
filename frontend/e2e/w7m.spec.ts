@@ -428,8 +428,9 @@ test.describe.serial("W7m: asset kinds", () => {
     const confirm = page.getByRole("dialog", { name: `Delete the kind "${KIND_PUMPS}"?`, exact: true });
     await expect(confirm).toBeVisible();
     await expect(confirm.getByRole("alert")).toContainText("1 asset uses");
-    await expect(confirm.getByRole("button", { name: "Delete", exact: true }), "nothing to confirm").toBeDisabled();
-    await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(confirm.getByRole("button", { name: "Delete", exact: true }), "nothing to confirm: no Delete button at all").toHaveCount(0);
+    await expect(confirm.getByRole("button", { name: "Cancel", exact: true }), "Cancel reads Close").toHaveCount(0);
+    await confirm.getByRole("button", { name: "Close", exact: true }).click();
     await expect(confirm).toBeHidden();
     await expect(kindRow(page, KIND_PUMPS)).toBeVisible();
 
@@ -459,6 +460,7 @@ test.describe.serial("W7m: asset kinds", () => {
     await expect(confirm).toBeHidden();
     await expect(toast(page, `Kind "${KIND_PUMPS}" deleted`)).toBeVisible();
     await expect(kindRow(page, KIND_PUMPS), "gone from the list").toHaveCount(0);
+    await expect(page.getByRole("button", { name: "New kind", exact: true }), "the focus did not fall to the page body").toBeFocused();
     expect((await kindsOf(page.request)).some((k) => k.id === kindId), "and from the server").toBe(false);
   });
 
