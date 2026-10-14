@@ -307,6 +307,29 @@ function roleUpdate(c: Context): string | null {
   return parts.length > 0 ? `Changed ${name ? `role ${shortName(name)}` : roleThing(c)}: ${parts.join("; ")}` : null;
 }
 
+const kindsPage = page("/assets/kinds", "Open Asset kinds");
+
+/** "asset kind Rack" (the name cut), else "an asset kind". The id is never part of it: a kind entry stores its name. */
+function kindThing(name: unknown): string {
+  const stored = text(name);
+  return stored ? `asset kind ${shortName(stored)}` : "an asset kind";
+}
+
+/** An icon id as people read it: the catalogue label, else the id as stored; null when there is none. */
+function iconText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return (typeof value === "string" ? assetIconLabel(value) : null) ?? formatValue(value);
+}
+
+/** The side of a before/after pair that an entry has, or null. */
+const sideValue = (c: Context, side: "before" | "after", key: string): unknown => (c.sides ? get(c.sides[side], key) : undefined);
+
+/** " (12 assets follow)" from the number of assets a rename rewrote; "" for none or for a value that is not a count. */
+function followers(value: unknown): string {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) return "";
+  return ` (${count(value, "asset")} ${value === 1 ? "follows" : "follow"})`;
+}
+
 const sourcesPage = page("/sources", "Open Sources");
 const scansPage = page("/scans", "Open Scans");
 const usersPage = page("/users", "Open Users & Roles");
@@ -401,6 +424,29 @@ const RULES: Record<string, Rule> = {
       return `Accepted discovery: added ${mappings ?? "mappings"} to ${asset}`;
     },
     link: assetOfDetail,
+  },
+
+  // The detail keeps the kind's name (kind_id is only there for the raw Details JSON): a rename stores it in before/after.
+  "kind.created": { summary: (c) => `Created ${kindThing(c.d.name)}`, link: kindsPage },
+  "kind.deleted": { summary: (c) => `Deleted ${kindThing(c.d.name)}` },
+  "kind.icon_changed": {
+    summary: (c) => {
+      const from = iconText(sideValue(c, "before", "icon"));
+      const to = iconText(sideValue(c, "after", "icon"));
+      const what = `Changed the icon of ${kindThing(c.d.name)}`;
+      return from && to ? `${what} from ${from} to ${to}` : to ? `${what} to ${to}` : what;
+    },
+    link: kindsPage,
+  },
+  "kind.renamed": {
+    summary: (c) => {
+      const from = text(sideValue(c, "before", "name"));
+      const to = text(sideValue(c, "after", "name"));
+      const was = kindThing(from);
+      const now = to ? ` to ${shortName(to)}` : "";
+      return `Renamed ${was}${now}${followers(c.d.assets)}`;
+    },
+    link: kindsPage,
   },
 
   // In these rows the User column is the account that was attacked (unknown when the name did not exist), not someone who acted.

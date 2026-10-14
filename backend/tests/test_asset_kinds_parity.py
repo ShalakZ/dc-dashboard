@@ -119,4 +119,4 @@ def test_a_name_with_invisible_or_control_characters_is_refused(raw):
     with pytest.raises(HTTPException) as refused:
         clean_kind_name(raw)
     assert refused.value.status_code == 422
-    assert "a kind name" in refused.value.detail
+    assert refused.value.detail.startswith("A kind name cannot contain")

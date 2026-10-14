@@ -4,7 +4,7 @@ export type AuditKind = "signin" | "problem" | "create" | "change" | "delete" | 
 const PROBLEMS = new Set(["login.failed", "login.locked", "password.change_failed"]);
 const SIGN_INS = new Set(["login.succeeded", "setup.completed"]);
 const SETTINGS_PREFIXES = ["settings.", "storage.", "billing."];
-const CHANGE_SUFFIXES = [".updated", ".changed", "_changed", ".unblocked", ".default_set"];
+const CHANGE_SUFFIXES = [".updated", ".changed", "_changed", ".unblocked", ".default_set", ".renamed"];
 
 /**
  * The first rule that matches wins: problem, signin, settings, delete, create, change; anything else (checks, scans, browsing,

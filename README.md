@@ -452,7 +452,7 @@ behave as they did before roles were made of permissions (the one change, in W9b
 | Area | Permission | What it allows |
 |---|---|---|
 | Assets Tree | `assets.view` | Open the Assets Tree, an asset's details and charts, and the fleet summary. |
-| | `assets.edit` | Add and edit assets, and map points to them. |
+| | `assets.edit` | Add and edit assets and asset kinds, and map points to them. |
 | | `assets.delete` | Delete an asset (its mappings go with it). |
 | Dashboards | `dashboards.view` | Open dashboards and their widgets, receive live values, and read the values of any point through a widget. |
 | | `dashboards.edit` | Create, edit and delete dashboards and their widgets. |

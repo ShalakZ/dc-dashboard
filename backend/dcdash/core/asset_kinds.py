@@ -8,8 +8,13 @@ backend/tests/test_asset_kinds_parity.py holds both to one file of answers (test
 
 import re
 import unicodedata
+from collections.abc import Mapping
 
 from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from dcdash.core.models import AssetKind
 
 MAX_NAME = 60  # characters (code points) of a name a person writes; a seeded name may be longer
 
@@ -34,5 +39,18 @@ def clean_kind_name(raw: str) -> str:
         raise HTTPException(422, "A kind needs a name")
     if len(name) > MAX_NAME:
         raise HTTPException(422, f"A kind name is at most {MAX_NAME} characters")
-    refuse_unseen_characters(name, "a kind name")
+    refuse_unseen_characters(name, "A kind name")
     return name
+
+
+async def kind_icons(db: AsyncSession) -> dict[str, str]:
+    """The whole registry as key -> icon: one query, however many assets a response then holds."""
+    return {key: icon for key, icon in (await db.execute(select(AssetKind.key, AssetKind.icon))).all()}
+
+
+def icon_for(kind: str, icons: Mapping[str, str], cache: dict[str, str | None]) -> str | None:
+    """The icon of the registry kind that `kind` (an asset's free text) names, None when none does. `cache` is one response's
+    own dict: a site has a handful of kinds and thousands of assets, so each distinct text is normalised once."""
+    if kind not in cache:
+        cache[kind] = icons.get(kind_key(kind))
+    return cache[kind]

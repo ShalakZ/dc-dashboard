@@ -7,6 +7,7 @@ const EXPECTED: Record<string, AuditKind> = {
   "billing.currency_changed": "settings",
   "dashboard.created": "create", "dashboard.updated": "change", "dashboard.deleted": "delete", "dashboard.default_changed": "change",
   "diagnostics.report": "other", "discovery.accepted": "other",
+  "kind.created": "create", "kind.deleted": "delete", "kind.icon_changed": "change", "kind.renamed": "change",
   "login.failed": "problem", "login.locked": "problem", "login.succeeded": "signin", "login.unblocked": "change",
   "mapping.created": "create", "mapping.updated": "change", "mapping.deleted": "delete",
   "password.change_failed": "problem", "password.changed": "change",
@@ -22,11 +23,11 @@ const EXPECTED: Record<string, AuditKind> = {
 };
 
 describe("auditKind", () => {
-  it("names the kind of every one of the 45 actions in the audit text table", () => {
+  it("names the kind of every one of the 49 actions in the audit text table", () => {
     const source = readFileSync("src/lib/auditText.ts", "utf8"); // vitest runs from the frontend directory
     const table = source.slice(source.indexOf("const RULES"), source.indexOf("function build("));
     const actions = [...table.matchAll(/^ {2}"([a-z_.]+)":/gm)].map((m) => m[1]);
-    expect(actions).toHaveLength(45);
+    expect(actions).toHaveLength(49);
     expect([...actions].sort()).toEqual(Object.keys(EXPECTED).sort());
     for (const action of actions) expect(auditKind(action), action).toBe(EXPECTED[action]);
   });
@@ -47,6 +48,7 @@ describe("auditKind", () => {
     expect(auditKind("password.change_failed")).toBe("problem"); // not change, although it starts like password.changed
     expect(auditKind("dashboard.default_changed")).toBe("change");
     expect(auditKind("login.unblocked")).toBe("change");
+    expect(auditKind("kind.renamed")).toBe("change"); // a rename is a change, not "other"
   });
 
   it("matches the whole string at its start or end, not a word inside it", () => {
