@@ -1135,6 +1135,65 @@ Starting an `api` container from a newer image runs `alembic upgrade head`, whic
 "start the stack on the new code" as "upgrade the database". Do these steps for every upgrade. **Never use `docker compose down -v`**:
 it deletes the database volume.
 
+**The quick way on Windows: `scripts\update.ps1`.** One command does the safe version of steps 1, 4 and 5 below and shows you the
+list of step 2. The manual steps below stay as the explanation and as the fallback (there is no shell twin for Linux yet, see the
+backlog).
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update.ps1
+```
+
+What it does, in this order (each step prints a heading `== N/7 ... ==`):
+
+1. **Checks this computer** and stops with the reason and the fix, before anything is touched, when: Docker does not answer, `.env`
+   is missing, a tracked file is changed, you are not on `main`, a merge is half done, less than 5 GB of disk is free, the update would
+   overwrite a file you copied in by hand, or another update is running.
+2. **Shows where you are**: the commit, the database revision and the build that runs now.
+3. **Shows what is coming**: it fetches, lists the new commits (the first 30), lists the new migration files with the sentence "This
+   update changes the database", points at the release notes, and asks `Continue? (y/N)`.
+4. **Backs up** with `backup.ps1`. If the backup fails, or `-CopyTo` could not copy it, nothing else is touched. It prints the commit,
+   the revision and the backup path to write down, and keeps them in `logs\update-anchor.txt`.
+5. **Brings the new code** with `git merge --ff-only`: never a merge commit.
+6. **Builds and starts** with the commit as the build id (Settings then shows the commit, not `dev`), and waits up to 10 minutes: a
+   migration can be long, the site is unavailable meanwhile and readings are not collected.
+7. **Checks** that every service runs the image just built, that `alembic current` is the newest revision the code knows, that the
+   collector keeps running and the four web checks of step 5 below, then prints a summary: old commit to new commit, old revision to
+   new revision, the backup, the version Settings now shows, and the way back (step 6 below, with your commit and revision).
+
+Every line is also written to `logs\update-<time>.log`. The script never runs `docker compose down`, a restore, a downgrade or a
+prune, never deletes a volume or a dump, and never changes the code except by `git merge --ff-only`. Run it again after a failure: it
+tells you what is wrong. "Already up to date" is printed only when every check passed; when the code is current but the containers
+were built by hand (Settings shows `dev`), it rebuilds.
+
+| Flag | Meaning |
+|---|---|
+| `-Branch main` | the branch to follow |
+| `-CopyTo DIR` | passed to `backup.ps1` (see "Scheduled backups") |
+| `-NoPull` | do not fetch or merge: back up, build and check the code that is checked out now (a detached HEAD is fine) |
+| `-Yes` | do not ask `Continue? (y/N)` |
+| `-DryRun` | the checks, the fetch and the lists are real; every other step is only printed; nothing is changed |
+| `-Force` | rebuild even when the code and the running site are already current |
+
+A bash-style `--dry-run`, `--no-pull` or `--copy-to` is refused with the usage line, never run for real (`--yes` and `--force` are
+accepted as `-Yes` and `-Force`).
+
+| Exit code | Meaning |
+|---|---|
+| 0 | done, or already current and healthy (also a finished `-DryRun`) |
+| 1 | a check refused, you answered no, bad arguments, or another update is running (`backup.ps1` uses 2 for bad arguments; here 2 is the backup) |
+| 2 | the backup failed or was not copied |
+| 3 | the new code could not be fetched or applied |
+| 4 | the build failed, or the stack did not start, become healthy or answer, or runs the wrong version |
+| 5 | the database revision does not match the code |
+
+**The first time:** the update that brings this script still uses the three commands, `.\scripts\backup.ps1`, `git pull` and
+`docker compose up -d --build` (set the build id first, see "Build id" below, or Settings says `dev`). Do not copy `update.ps1` in by
+hand before the pull: git then refuses to overwrite it, and the script refuses to start. From then on use the script.
+
+**If the window shows "Waiting" for more than 10 minutes,** press Ctrl+C: nothing is lost, the backup path is on the screen and in the
+log, and `docker compose logs api` says what the api is doing. On a development machine, `scripts/e2e.sh` re-tags the images the stack
+uses, so the first update after it reports that the api still runs the old version: run it again with `-Force`.
+
 1. **Back up first, and write down where you are.**
    - `scripts/backup.sh --copy-to <folder>` (Windows: `backup.ps1 -CopyTo <folder>`; the folder is explained under "Scheduled
      backups", and plain `scripts/backup.sh` does when you have none). The `db` container must be running.
