@@ -10,7 +10,7 @@ import { Modal } from "./Modal";
 const asset = (id: number, kind: string): Asset => ({ id, parent_id: null, name: `Asset ${id}`, kind, sort_order: 0 });
 
 /** A registry kind; the icon is the keyword guess unless given, as when the kind was created with the suggestion. */
-const kind = (name: string, icon = kindIconId(name), id = 1): AssetKind => ({ id, name, icon, asset_count: 0 });
+const kind = (name: string, icon = kindIconId(name), id = 1): AssetKind => ({ id, name, icon, asset_count: 0, starter: false });
 /** The registry as migration 0010 leaves it: the starter kinds and generic, each with the icon the guess gives. */
 const SEEDED: AssetKind[] = [...STARTER_KINDS, DEFAULT_KIND].map((name, i) => kind(name, kindIconId(name), i + 1));
 

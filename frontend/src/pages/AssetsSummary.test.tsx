@@ -35,7 +35,7 @@ function Workspace({ admin }: { admin: boolean }) {
   return <Outlet context={context} />;
 }
 
-const kindRow = (id: number, name: string, icon: string): AssetKind => ({ id, name, icon, asset_count: 0 });
+const kindRow = (id: number, name: string, icon: string): AssetKind => ({ id, name, icon, asset_count: 0, starter: false });
 
 function stub({ role = "viewer", list = assets, fleet = fleetOf(), fleetReply, kinds = [] }: {
   role?: BuiltinRole; list?: Asset[]; fleet?: FleetSummary; fleetReply?: { status: number; body: unknown }; kinds?: AssetKind[] | { status: number; body: unknown };

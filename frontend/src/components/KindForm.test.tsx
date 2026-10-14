@@ -6,7 +6,7 @@ import { pastSaveWindow, useSaveClock } from "../test/saveWindow";
 import { KindForm } from "./KindForm";
 import { Modal } from "./Modal";
 
-const kind = (id: number, name: string, icon: string, asset_count = 0): AssetKind => ({ id, name, icon, asset_count });
+const kind = (id: number, name: string, icon: string, asset_count = 0): AssetKind => ({ id, name, icon, asset_count, starter: false });
 const RACK = kind(1, "Rack", "rack", 3);
 const PUMP = kind(2, "Pump", "pump");
 

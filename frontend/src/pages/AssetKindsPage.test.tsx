@@ -13,7 +13,7 @@ import { spyToasts } from "../test/toasts";
 import { userFor, type BuiltinRole } from "../test/users";
 import { AssetKindsPage } from "./AssetKindsPage";
 
-const kind = (id: number, name: string, icon: string, asset_count = 0): AssetKind => ({ id, name, icon, asset_count });
+const kind = (id: number, name: string, icon: string, asset_count = 0): AssetKind => ({ id, name, icon, asset_count, starter: false });
 /** The line a reader sees in place of New kind and the row menu. */
 const REASON = 'Managing asset kinds needs the "Manage asset kinds" permission.';
 

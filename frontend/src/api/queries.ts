@@ -95,8 +95,12 @@ export const useDeleteAssetKind = () =>
     return api.del(`/api/asset-kinds/${id}${sent ? `?${sent}` : ""}`);
   });
 
-/** Adds the data-centre starter kinds the registry lacks (idempotent on the server); `mutateAsync()` takes no argument. */
-export const useAddStarterKinds = () => useKindMutation((_: void) => api.post<StarterPackResult>("/api/asset-kinds/starter-pack"));
+/**
+ * Adds the starter kinds the registry lacks (idempotent on the server); `mutateAsync()` takes no argument. `set` picks the pack: "common" is the
+ * server's default and sends no query, "all" sends `?set=all` for the whole catalogue.
+ */
+export const useAddStarterKinds = (set: "common" | "all" = "common") =>
+  useKindMutation((_: void) => api.post<StarterPackResult>(`/api/asset-kinds/starter-pack${set === "all" ? "?set=all" : ""}`));
 
 /**
  * The Assets Tree landing page: live power, today's energy and cost over the whole site, and the readings that need attention.
