@@ -1,11 +1,12 @@
 """scripts/update.ps1 (W8e) against a fake docker and the real Windows git: arguments, the checks, what is coming, the question and the
-backup (steps 1 to 4; Task 1b extends this file for steps 5 to 7).
+backup (steps 1 to 4), the new code, the build, the wait for the api, the step 7 checks (images, build id, database revision, collector,
+web, the four web lines) and the summary (steps 5 to 7, with the failure texts and the A1 verdict for a site that is already current).
 
 The script is Windows PowerShell 5.1, so these tests need `powershell.exe` and `git.exe` (reachable from WSL on the dev machine) and are
 skipped without them. Environment variables set in WSL do not reach PowerShell: every run is a driver.cmd (or driver.ps1) in the scene
 folder that sets PATH (the fake `docker.cmd` first), the variables and the working folder, then calls the script like a person would.
 
-The harness, so that 1b can extend it:
+The harness (the fake docker is a model of a stack: old containers and images before `build` and `up -d`, new ones after):
 - a module-scoped TEMPLATE: a bare `origin` and a clone made once with the real git.exe (history built with `git fast-import`: `pre`,
   `base` (adds update.ps1), c1..c33, `mig` (the newest REAL migration file), `tip`, plus side branches for diverged / ahead / CHANGELOG). Every test
   copies it (a SCENE) and moves the clone's HEAD and origin's main with one cheap git call.
@@ -13,14 +14,21 @@ The harness, so that 1b can extend it:
   the counter is `NAME.seq.n`), `*.flag` files switch a failure on. Every call is appended to calls.log. An unknown call exits 99
   and prints "FAKE DOCKER: unknown call", so a new real call cannot go unnoticed.
 - an autouse fixture applies the docker ALLOW-list to every scene's calls.log (and checks that no argument carries | & < > ^ %).
+- `build` moves the image tags (newtag-*) and records the build variables; a full `up -d` swaps each service to its NEW container
+  (ps-<service>.after) and copies the built id to what `printenv` answers, so a test makes a service stay old by editing one file.
+  `ctr-<id>.txt` / `tag-<tag>.txt` answer the two `inspect` forms of the image check, `alembic-current.seq` / `alembic-heads.seq`
+  the revision check, `port.txt` the published web port (a WebStub thread in this process answers on it; the `web` fixture FAILS a
+  test when powershell.exe cannot reach it). UPDATE_TEST_SHOW=1 pytest -s prints every run's screen.
 - `stdin` is DEVNULL for every run unless a test feeds an answer.
 """
+import http.server
 import os
 import re
 import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import NamedTuple
 
@@ -32,9 +40,6 @@ POWERSHELL = shutil.which("powershell.exe")
 GIT = shutil.which("git.exe")
 pytestmark = pytest.mark.skipif(POWERSHELL is None or GIT is None, reason="powershell.exe and git.exe are required (Windows from WSL)")
 
-STUB_EXIT = 4  # Task 1b replaces the stub after step 4: tests that run through it then expect the real end of the run
-STUB_TEXT = "steps 5 to 7 are not built yet"
-
 # The fake docker (cmd). %~dp0 is its own folder; see the module docstring for the files it reads.
 FAKE_DOCKER = [
     "@echo off",
@@ -45,6 +50,7 @@ FAKE_DOCKER = [
     'if "%A1%"=="info" goto info',
     'if "%A1%"=="volume" goto volume',
     'if "%A1%"=="inspect" goto inspect',
+    'if "%A1%"=="image" goto image',
     'if "%A1%"=="compose" goto compose',
     "goto unknown",
     ":info",
@@ -57,9 +63,21 @@ FAKE_DOCKER = [
     ":inspect",
     'if exist "%D%warn.flag" echo level=warning msg="a variable is not set" 1>&2',
     'for %%a in (%*) do set "LAST=%%~a"',
+    'if "%~3"=="{{.Image}} {{.Config.Image}}" goto inspectimage',
     'call :seq "inspect-!LAST!.seq"',
     "if errorlevel 1 (echo Error: No such object: !LAST! 1>&2& exit /b 1)",
     "echo !LINE!",
+    "exit /b 0",
+    ":inspectimage",  # the image a container runs and the tag it was made from: ctr-<id>.txt = "sha256:... tag"
+    'if not exist "%D%ctr-!LAST!.txt" (echo Error: No such object: !LAST! 1>&2& exit /b 1)',
+    'type "%D%ctr-!LAST!.txt"',
+    "exit /b 0",
+    ":image",  # docker image inspect -f {{.Id}} <tag>: tag-<tag with : and / as _>.txt
+    'for %%a in (%*) do set "LAST=%%~a"',
+    'set "K=!LAST::=_!"',
+    'set "K=!K:/=_!"',
+    'if not exist "%D%tag-!K!.txt" (echo Error: No such image: !LAST! 1>&2& exit /b 1)',
+    'type "%D%tag-!K!.txt"',
     "exit /b 0",
     ":compose",
     'if exist "%D%warn.flag" echo level=warning msg="a variable is not set" 1>&2',
@@ -71,6 +89,9 @@ FAKE_DOCKER = [
     'if "%SUB%"=="ps" goto cps',
     'if "%SUB%"=="exec" goto cexec',
     'if "%SUB%"=="up" goto cup',
+    'if "%SUB%"=="build" goto cbuild',
+    'if "%SUB%"=="port" goto cport',
+    'if "%SUB%"=="logs" goto clogs',
     "goto unknown",
     ":cversion",
     'if exist "%D%compose-fail.flag" exit /b 1',
@@ -78,14 +99,50 @@ FAKE_DOCKER = [
     "exit /b 0",
     ":cps",
     'for %%a in (%*) do set "LAST=%%~a"',
+    'if "!LAST!"=="-a" (echo FAKE-PS-TABLE& exit /b 0)',
     'call :seq "ps-!LAST!.seq"',
     "if errorlevel 1 exit /b 0",
     'if /i "!LINE!"=="NONE" exit /b 0',
     "echo !LINE!",
     "exit /b 0",
-    ":cup",
-    'if exist "%D%up-fail.flag" exit /b 1',
+    ":cbuild",  # records what the build saw; the tags move to newtag-<tag>.txt
+    'if exist "%D%build-fail.flag" (echo ERROR: failed to solve: fake build failure 1>&2& exit /b 1)',
+    '>"%D%build-env.txt" echo id=%DCDASH_BUILD_ID%',
+    '>>"%D%build-env.txt" echo time=%DCDASH_BUILD_TIME%',
+    '>>"%D%build-env.txt" echo attest=%BUILDX_NO_DEFAULT_ATTESTATIONS%',
+    '>"%D%built-id.txt" echo %DCDASH_BUILD_ID%',
+    'for %%f in ("%D%newtag-*.txt") do (',
+    '  set "N=%%~nxf"',
+    '  copy /y "%%~ff" "%D%!N:newtag-=tag-!" >nul',
+    ")",
     "exit /b 0",
+    ":cport",
+    'if exist "%D%port-v6.flag" (set /p PORT=<"%D%port.txt" & echo [::]:!PORT!& exit /b 0)',
+    'if not exist "%D%port.txt" (echo no port published 1>&2& exit /b 1)',
+    'set /p PORT=<"%D%port.txt"',
+    "echo 0.0.0.0:!PORT!",
+    "exit /b 0",
+    ":clogs",
+    "echo FAKE-LOG %~4 line one",
+    "echo FAKE-LOG %~4 line two",
+    "exit /b 0",
+    ":cup",  # up -d db only starts the database; a full up -d records its variables, takes its exit code from up.seq and swaps the containers
+    'if exist "%D%up-fail.flag" exit /b 1',
+    'if "%~3"=="db" exit /b 0',
+    '>>"%D%up-env.txt" echo id=%DCDASH_BUILD_ID% time=%DCDASH_BUILD_TIME% attest=%BUILDX_NO_DEFAULT_ATTESTATIONS%',
+    'set "UPCODE=0"',
+    'call :seq "up.seq"',
+    'if not errorlevel 1 set "UPCODE=!LINE!"',
+    'if not exist "%D%up-stale-build.flag" if exist "%D%built-id.txt" (',
+    '  copy /y "%D%built-id.txt" "%D%printenv.seq" >nul',
+    '  del "%D%printenv.seq.n" 2>nul',
+    ")",
+    'for %%f in ("%D%ps-*.after") do (',
+    '  set "N=%%~nxf"',
+    '  copy /y "%%~ff" "%D%!N:.after=.seq!" >nul',
+    '  del "%D%!N:.after=.seq!.n" 2>nul',
+    ")",
+    "exit /b !UPCODE!",
     ":cexec",
     "shift",
     'set "SVC=%~2"',
@@ -94,7 +151,18 @@ FAKE_DOCKER = [
     'if "%SVC%"=="db" if "%CMD%"=="pg_dump" goto pgdump',
     'if "%SVC%"=="db" if "%CMD%"=="pg_restore" goto pgrestore',
     'if "%SVC%"=="api" if "%CMD%"=="printenv" goto printenv',
+    'if "%SVC%"=="api" if "%CMD%"=="alembic" goto alembic',
     "goto unknown",
+    ":alembic",  # alembic-current.seq / alembic-heads.seq; NONE prints nothing; INFO lines go to stderr like the real ones
+    'set "SUBC=%~4"',
+    'if exist "%D%alembic-fail.flag" (echo alembic: fake failure 1>&2& exit /b 1)',
+    'if exist "%D%alembic-info.flag" echo INFO  [alembic.runtime.migration] Context impl PostgresqlImpl. 1>&2',
+    'if exist "%D%alembic-noise.flag" echo INFO  [alembic.runtime.migration] Will assume transactional DDL.',
+    'call :seq "alembic-!SUBC!.seq"',
+    "if errorlevel 1 exit /b 0",
+    'if /i "!LINE!"=="NONE" exit /b 0',
+    "echo !LINE!",
+    "exit /b 0",
     ":psql",
     'if exist "%D%psql-fail.flag" (echo service db is not running 1>&2& exit /b 1)',
     'call :seq "psql.seq"',
@@ -103,6 +171,7 @@ FAKE_DOCKER = [
     "exit /b 0",
     ":pgdump",
     'if exist "%D%pgdump-fail.flag" (echo pg_dump: error: fake failure 1>&2& exit /b 1)',
+    'if exist "%D%pgdump-lock.flag" type nul > ".git\\index.lock"',  # a real git failure later: the merge cannot take the index lock
     "echo FAKE-DUMP-BYTES",
     "exit /b 0",
     ":pgrestore",
@@ -132,18 +201,26 @@ FAKE_DOCKER = [
     "exit /b 0",
 ]
 
-# What the script may ask docker. Anything else in calls.log fails the test (A10). 1b adds build, port, image inspect, logs.
+# What the script may ask docker. Anything else in calls.log fails the test (A10).
 SVC = r"(db|api|collector|web|simulator)"
-INSPECT_FORMAT = r'"\{\{\.State\.Status\}\} \{\{if \.State\.Health\}\}\{\{\.State\.Health\.Status\}\}\{\{else\}\}none\{\{end\}\}"'
+INSPECT_FORMAT = (r'"\{\{\.State\.Status\}\} \{\{if \.State\.Health\}\}\{\{\.State\.Health\.Status\}\}\{\{else\}\}none\{\{end\}\} '
+                  r'\{\{\.RestartCount\}\}"')
 PROFILE = r"( --profile dev)?"
 ALLOWED_DOCKER = [re.compile(p) for p in (
     r"^info$",
     r"^volume ls -q --filter label=com\.docker\.compose\.project=\S+ --filter label=com\.docker\.compose\.volume=dbdata$",
     rf"^inspect -f {INSPECT_FORMAT} \S+$",
+    r'^inspect -f "\{\{\.Image\}\} \{\{\.Config\.Image\}\}" \S+$',
+    r"^image inspect -f \{\{\.Id\}\} \S+$",
     r"^compose version$",
     rf"^compose{PROFILE} config --no-interpolate$",
     rf"^compose{PROFILE} ps -a -q {SVC}$",
+    rf"^compose{PROFILE} ps -a$",
     rf"^compose{PROFILE} up -d( db)?$",
+    rf"^compose{PROFILE} build api web$",
+    rf"^compose{PROFILE} port web 80$",
+    rf"^compose{PROFILE} logs --tail 80 (api|web|collector|simulator)$",
+    rf"^compose{PROFILE} exec -T api alembic (current|heads)$",
     rf'^compose{PROFILE} exec -T db psql -U dcdash -d dcdash -tAc "SELECT version_num FROM alembic_version"$',
     rf"^compose{PROFILE} exec -T db pg_dump -U dcdash -d dcdash -Fc$",
     rf"^compose{PROFILE} exec -T db pg_restore -f /dev/null$",
@@ -305,6 +382,84 @@ def template(made_folders):
     return Template(folder, sha, {name: abbreviated[full] for name, full in sha.items()})
 
 
+# ---- the web stub: the four web checks of step 7 need a server the script can reach on 127.0.0.1 ---------------------------------------
+
+class WebStub:
+    """A tiny HTTP server in a thread of the test process, bound to 127.0.0.1 and reached from powershell.exe through WSL's localhost
+    forwarding. `mode` switches its answers: ok | health500 | stream200 | tls. `requests` lists the paths it was asked."""
+
+    def __init__(self) -> None:
+        stub = self
+        self.mode = "ok"
+        self.requests: list[str] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                stub.requests.append(self.path)
+                status, headers, body = stub.answer(self.path)
+                self.send_response(status)
+                for key, value in headers.items():
+                    self.send_header(key, value)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self._reach: str | None = None
+
+    def answer(self, path: str) -> tuple[int, dict[str, str], bytes]:
+        if self.mode == "tls":
+            return 301, {"Location": "https://localhost/"}, b""
+        if path in ("/", "/assets"):
+            return 200, {"Content-Type": "text/html"}, b'<!doctype html><html><body><div id="root"></div></body></html>'
+        if path == "/api/health":
+            if self.mode == "health500":
+                return 500, {"Content-Type": "application/json"}, b'{"detail":"boom"}'
+            return 200, {"Content-Type": "application/json"}, b'{"status":"ok"}'
+        if path == "/api/stream":
+            if self.mode == "stream200":
+                return 200, {"Content-Type": "text/event-stream"}, b"data: x\n\n"
+            return 401, {"Content-Type": "application/json"}, b'{"detail":"Not authenticated"}'
+        return 404, {}, b"not found"
+
+    def unreachable_reason(self) -> str:
+        """'' when powershell.exe reaches this server (asked once); otherwise why the web cases cannot run."""
+        if self._reach is None:
+            probe = (f"$r = [Net.HttpWebRequest]::Create('http://127.0.0.1:{self.port}/'); $r.Proxy = $null; $r.Timeout = 10000; "
+                     "$x = $r.GetResponse(); [int]$x.StatusCode")
+            done = subprocess.run([POWERSHELL, "-NoProfile", "-Command", probe], capture_output=True, text=True, timeout=60)
+            self._reach = "" if done.stdout.strip() == "200" else f"{done.stdout.strip()} {done.stderr.strip()}".strip() or "no answer"
+            self.requests.clear()
+        return self._reach
+
+
+_WEB: list[WebStub] = []
+
+
+def web_stub() -> WebStub:
+    if not _WEB:
+        _WEB.append(WebStub())
+    return _WEB[0]
+
+
+@pytest.fixture
+def web():
+    """The stub, answering well. A test that reaches the web lines asks for it, and FAILS (not skips) when Windows cannot reach it."""
+    stub = web_stub()
+    reason = stub.unreachable_reason()
+    if reason:
+        pytest.fail(f"powershell.exe cannot reach the test's web stub on 127.0.0.1:{stub.port} (WSL localhost forwarding?): {reason}")
+    stub.mode = "ok"
+    stub.requests.clear()
+    return stub
+
+
 # ---- a scene: one test's copy of the template, its fake docker and the way to run the script --------------------------------------
 
 class Result(NamedTuple):
@@ -321,7 +476,9 @@ def norm(text: str) -> str:
 
 _SCENES: list["Scene"] = []
 
-DEFAULT_ENV = {"DCDASH_UPDATE_POLL_SECONDS": "0.05", "DCDASH_UPDATE_WAIT_SECONDS": "3", "DCDASH_UPDATE_DB_WAIT_SECONDS": "3"}
+# A poll is several cmd.exe spawns: the wait is generous (a passing run returns at once); only the timeout tests shorten it.
+DEFAULT_ENV = {"DCDASH_UPDATE_POLL_SECONDS": "0.05", "DCDASH_UPDATE_WAIT_SECONDS": "20", "DCDASH_UPDATE_DB_WAIT_SECONDS": "3"}
+BACKEND_TAG, WEB_TAG = "dcdash-backend:local", "dcdash-web:local"
 
 
 class Scene:
@@ -402,7 +559,57 @@ class Scene:
                 self.seq(f"inspect-{cid}.seq", *state.split("/"))
         self.seq("psql.seq", revision)
         self.seq("printenv.seq", build)
-        self.drop("pgdump-fail.flag")
+        for flag in ("pgdump-fail.flag", "pgdump-lock.flag", "build-fail.flag", "up-stale-build.flag", "port-v6.flag", "alembic-fail.flag",
+                     "alembic-info.flag", "alembic-noise.flag"):
+            self.drop(flag)
+        for name in ("up.seq", "build-env.txt", "up-env.txt", "built-id.txt", "ps-simulator.seq", "ps-simulator.after"):
+            self.drop(name)
+        # The rest of the world, current as it stands. `build` moves the tags to the new images (newtag-*); the full `up -d` swaps every
+        # service to a NEW container (ps-<service>.after) that runs the new image, so a service can be left old by editing one file, and
+        # the new containers' inspect sequences start at their first line (the old ones were read in steps 1 to 4).
+        for service, cid, state in (("collector", "collid", "running none 0"), ("web", "webid", "running healthy 0")):
+            self.seq(f"ps-{service}.seq", cid)
+            self.seq(f"inspect-{cid}.seq", state)
+        for service, cid, state in (("api", "apiid2", "running healthy 0"), ("collector", "collid2", "running none 0"),
+                                    ("web", "webid2", "running healthy 0")):
+            self.seq(f"ps-{service}.after", cid)
+            self.seq(f"inspect-{cid}.seq", state)
+        for cid, tag, image in (("apiid", BACKEND_TAG, "old-backend"), ("collid", BACKEND_TAG, "old-backend"), ("webid", WEB_TAG, "old-web"),
+                                ("apiid2", BACKEND_TAG, "new-backend"), ("collid2", BACKEND_TAG, "new-backend"), ("webid2", WEB_TAG, "new-web")):
+            self.ctr(cid, image, tag)
+        for tag, old, new in ((BACKEND_TAG, "old-backend", "new-backend"), (WEB_TAG, "old-web", "new-web")):
+            key = tag.replace(":", "_")
+            (self.bin / f"tag-{key}.txt").write_bytes(f"sha256:{old}\r\n".encode("ascii"))
+            (self.bin / f"newtag-{key}.txt").write_bytes(f"sha256:{new}\r\n".encode("ascii"))
+        self.alembic(NEW_REV)
+        (self.bin / "port.txt").write_bytes(str(web_stub().port).encode("ascii"))
+
+    def ctr(self, cid: str, image: str, tag: str) -> None:
+        """The image id and tag the container `cid` runs, as `docker inspect -f {{.Image}} {{.Config.Image}}` says."""
+        (self.bin / f"ctr-{cid}.txt").write_bytes(f"sha256:{image} {tag}\r\n".encode("ascii"))
+
+    def alembic(self, current: str, heads: str = NEW_REV) -> None:
+        """What `alembic current` and `alembic heads` print in the api container (current = NONE prints nothing)."""
+        self.seq("alembic-current.seq", "NONE" if current == "NONE" else f"{current} (head)")
+        self.seq("alembic-heads.seq", f"{heads} (head)")
+
+    def simulator(self) -> None:
+        """Adds the dev-profile simulator to the world: its old container, the new one `up -d` makes, and the image they run."""
+        self.seq("ps-simulator.seq", "simid")
+        self.seq("inspect-simid.seq", "running none 0")
+        self.seq("ps-simulator.after", "simid2")
+        self.seq("inspect-simid2.seq", "running none 0")
+        self.ctr("simid", "old-backend", BACKEND_TAG)
+        self.ctr("simid2", "new-backend", BACKEND_TAG)
+
+    def build_env(self) -> dict[str, str]:
+        """What the fake's `build` saw: id, time, attest ({} when no build ran)."""
+        path = self.bin / "build-env.txt"
+        return dict(line.strip().split("=", 1) for line in path.read_text().splitlines() if "=" in line) if path.exists() else {}
+
+    def up_envs(self) -> list[str]:
+        path = self.bin / "up-env.txt"
+        return [line.strip() for line in path.read_text().splitlines()] if path.exists() else []
 
     def calls(self) -> list[str]:
         log = self.bin / "calls.log"
@@ -429,6 +636,8 @@ class Scene:
                               stdin=subprocess.DEVNULL if stdin is None else None, input=stdin, cwd=str(self.base))
         logs = sorted((self.root / "logs").glob("update-*.log")) if (self.root / "logs").exists() else []
         log = logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
+        if os.environ.get("UPDATE_TEST_SHOW"):  # debugging aid: UPDATE_TEST_SHOW=1 pytest -s ... prints every run's screen
+            print(f"\n----- exit {proc.returncode} -----\n{proc.stdout}\n----- stderr -----\n{proc.stderr}")
         return Result(proc.returncode, norm(proc.stdout + " " + proc.stderr), proc.stdout, proc.stderr, log)
 
     def run(self, args: str = "", *, env: dict[str, str] | None = None, stdin: str | None = None, timeout: int = 240) -> Result:
@@ -460,6 +669,8 @@ def scene(make_scene) -> Scene:
 def _docker_allow_list():
     """Every docker call of every scene must be on the ALLOW-list, and no argument may carry | & < > ^ % (A10, A13-7)."""
     _SCENES.clear()
+    if _WEB:
+        _WEB[0].mode = "ok"
     yield
     for s in _SCENES:
         for call in s.calls():
@@ -636,12 +847,12 @@ def test_a_normal_folder_says_nothing_about_onedrive(scene):
     assert "onedrive" not in scene.run().said.lower()
 
 
-def test_an_install_path_with_a_space_works_up_to_the_backup(make_scene):
+def test_an_install_path_with_a_space_works_from_start_to_finish(make_scene, web):
     scene = make_scene("my dc install")
     scene.at("c33")
     res = scene.run("-Yes")
-    assert res.code == STUB_EXIT and STUB_TEXT in res.said, res.said
-    assert "Backup written:" in res.said and len(scene.dumps()) == 1, res.said
+    assert res.code == 0 and res.said.endswith("DONE"), res.said
+    assert "Backup written:" in res.said and len(scene.dumps()) == 1 and scene.head() == scene.sha("tip"), res.said
 
 
 # ---- step 2: where you are ---------------------------------------------------------------------------------------------------------
@@ -653,14 +864,14 @@ def test_where_you_are_shows_the_commit_the_branch_the_revision_and_the_running_
     assert "Branch: main" in res.said and f"Database revision: {NEW_REV}" in res.said and f"Running build: {short}" in res.said
 
 
-def test_a_compose_warning_on_stderr_is_never_read_as_data(scene):
+def test_a_compose_warning_on_stderr_is_never_read_as_data(scene, web):
     scene.at("c33")
     scene.flag("warn.flag")
     res = scene.run("-Yes")
     short = scene.short()
     assert "level=warning" in res.said  # shown where it belongs (the log), not parsed
     assert f"Running build: {short}" in res.said and f"Database revision: {OLD_REV}" in res.said, res.said
-    assert res.code == STUB_EXIT and "Backup written:" in res.said and f"Old commit: {short}" in res.said, res.said
+    assert res.code == 0 and "Backup written:" in res.said and f"Old commit: {short}" in res.said and f"Commit: {short} -> " in res.said, res.said
 
 
 def test_nothing_running_is_said_plainly(scene):
@@ -669,22 +880,30 @@ def test_nothing_running_is_said_plainly(scene):
     assert "Database revision: not running" in res.said and "Running build: not running" in res.said, res.said
 
 
-def test_the_simulator_adds_the_dev_profile_to_every_compose_call_after_step_2(scene):
+def test_the_simulator_adds_the_dev_profile_to_every_compose_call_after_step_2(scene, web):
     scene.at("c33")
-    scene.seq("ps-simulator.seq", "simid")
+    scene.simulator()
     res = scene.run("-Yes")
     assert "The SCADA simulator is installed here, so every Compose command below uses --profile dev." in res.said, res.said
+    assert res.code == 0, res.said
     calls = scene.calls()
     assert calls.count("compose ps -a -q db") == 1, calls  # step 1 looks before the simulator is known
     for call in ("compose --profile dev ps -a -q db", "compose --profile dev ps -a -q api",
                  'compose --profile dev exec -T db psql -U dcdash -d dcdash -tAc "SELECT version_num FROM alembic_version"',
-                 "compose --profile dev exec -T api printenv DCDASH_BUILD_ID"):
+                 "compose --profile dev exec -T api printenv DCDASH_BUILD_ID", "compose --profile dev build api web",
+                 "compose --profile dev up -d", "compose --profile dev port web 80", "compose --profile dev exec -T api alembic current",
+                 "compose --profile dev exec -T api alembic heads", "compose --profile dev ps -a -q simulator"):
         assert call in calls, calls
+    # every compose call of steps 5 to 7 carries the profile (backup.ps1, a child process, makes its own calls without it)
+    later = [c for c in calls if any(word in f" {c} " for word in (" build ", " up ", " port ", " logs ", " alembic "))]
+    assert later and all(c.startswith("compose --profile dev ") for c in later), later
+    assert any(c.startswith("inspect") and "simid2" in c for c in calls), "the simulator's image is checked too"
 
 
-def test_without_a_simulator_only_the_detection_call_carries_the_profile(scene):
+def test_without_a_simulator_only_the_detection_call_carries_the_profile(scene, web):
     scene.at("c33")
-    scene.run("-Yes")
+    res = scene.run("-Yes")
+    assert res.code == 0, res.said
     with_profile = [c for c in scene.calls() if "--profile dev" in c]
     assert with_profile == ["compose --profile dev ps -a -q simulator"], with_profile
 
@@ -694,7 +913,7 @@ def test_without_a_simulator_only_the_detection_call_carries_the_profile(scene):
     ("dev", ("built by hand", "best guess")),
     ("c33-dirty", ("The site runs {id}; the code on disk is already at {tip}", "Old commit: {id}")),
 ])
-def test_the_going_back_anchor_is_the_running_build_not_the_disk(scene, running, expect):
+def test_the_going_back_anchor_is_the_running_build_not_the_disk(scene, web, running, expect):
     scene.at("tip")
     if running == "dev":
         build = "dev"
@@ -705,7 +924,7 @@ def test_the_going_back_anchor_is_the_running_build_not_the_disk(scene, running,
     scene.stack(build=build)
     res = scene.run("-Yes")
     values = {"id": build, "tip": scene.short("tip")}
-    assert res.code == STUB_EXIT, res.said
+    assert res.code == 0, res.said
     for phrase in expect:
         assert phrase.format(**values) in res.said, res.said
     if running != "dev":
@@ -812,11 +1031,15 @@ def test_local_commits_origin_does_not_have_are_a_warning_not_a_refusal(scene):
     assert "REFUSED" not in res.said.replace("REFUSED: No", "")
 
 
-def test_up_to_date_is_not_reported_as_healthy_until_task_1b(scene):
+def test_up_to_date_and_healthy_says_so_runs_the_checks_and_changes_nothing(scene, web):
     res = scene.run("-Yes")
-    assert f"Already up to date at {scene.short()}" in res.said, res.said
-    assert res.code == 4 and "the step 7 checks are not built yet" in res.said  # 1b: runs the health checks and exits 0 when they pass
-    _nothing_changed(scene)
+    assert res.code == 0 and f"Already up to date at {scene.short()}" in res.said and res.said.endswith("DONE"), res.said
+    for line in ("ok: api, collector, web run the newest images.", f"ok: the database is at revision {NEW_REV}", "ok: the collector is running.",
+                 "ok: web is healthy.", "ok: index", "ok: spa fallback", "ok: api proxy", "ok: stream route"):
+        assert line in res.said, res.said
+    assert "ok: the api runs build" not in res.said, "nothing was built, so there is no 'just built' id to compare"
+    assert res.said.index("== 7/7 Checking ==") < res.said.index("Already up to date"), "the verdict follows the checks"
+    _nothing_changed(scene, scene.sha("tip"))
 
 
 # ---- the question -------------------------------------------------------------------------------------------------------------------
@@ -836,10 +1059,10 @@ def test_anything_but_yes_stops_before_the_backup(scene, answer, phrase):
 
 
 @pytest.mark.parametrize("answer", ["y\r\n", "YES\r\n", " Yes \r\n"])
-def test_yes_continues_to_the_backup(scene, answer):
+def test_yes_continues_to_the_backup(scene, web, answer):
     scene.at("c33")
     res = scene.run(stdin=answer)
-    assert res.code == STUB_EXIT and "Backup written:" in res.said, res.said
+    assert res.code == 0 and "Backup written:" in res.said, res.said
     assert "Continue? (y/N) " + answer.strip() in res.log
 
 
@@ -854,11 +1077,22 @@ def test_dry_run_asks_nothing_changes_nothing_and_prints_what_it_would_run(scene
     scene.stack(db="exited/none")  # the database is stopped: still no up
     before = scene.head()
     res = scene.run("-DryRun")
-    assert res.code == STUB_EXIT and "Continue?" not in res.said and "Dry run: not asking." in res.said, res.said
+    assert res.code == 0 and "Continue?" not in res.said and "Dry run: not asking." in res.said, res.said
     assert "Would run: docker compose up -d db" in res.said and "Would run: scripts\\backup.ps1" in res.said, res.said
+    assert f"Would run: git merge --ff-only {scene.sha('tip')}" in res.said
+    assert "Would run: docker compose build api web" in res.said and "Would run: docker compose up -d" in res.said, res.said
+    assert "Would check: every service (api, collector, web)" in res.said and "Dry run finished: nothing was changed." in res.said, res.said
     assert "Incoming: 2 new commit(s)" in res.said  # the fetch and the list are real
+    assert res.said.endswith("DONE") and "Update finished" not in res.said
     _nothing_changed(scene, before)
     assert "Backup written" not in res.said
+    assert all(not c.startswith(("compose build", "compose up", "compose logs", "compose port", "compose exec -T api alembic")) for c in scene.calls())
+
+
+def test_a_dry_run_of_a_current_site_runs_only_the_read_only_checks(scene, web):
+    res = scene.run("-DryRun")
+    assert res.code == 0 and f"Already up to date at {scene.short()}" in res.said and "ok: stream route" in res.said, res.said
+    _nothing_changed(scene, scene.sha("tip"))
 
 
 # ---- step 4: the backup --------------------------------------------------------------------------------------------------------------
@@ -882,27 +1116,27 @@ def test_a_backup_that_was_made_but_not_copied_stops_the_update_and_names_the_lo
     assert scene.head() == scene.sha("c33") and [c for c in scene.calls() if " up " in f" {c} "] == []
 
 
-def test_copyto_is_normalized_so_a_trailing_backslash_and_a_space_do_not_break_the_copy(scene):
+def test_copyto_is_normalized_so_a_trailing_backslash_and_a_space_do_not_break_the_copy(scene, web):
     scene.at("c33")
     copy_dir = scene.base / "copy here"
     copy_dir.mkdir()
     (copy_dir / ".dcdash-backup-target").write_bytes(b"dcdash\r\n")
     res = scene.run_ps([f"& '{{script}}' -Yes -CopyTo '{_win(copy_dir)}\\'", "exit $LASTEXITCODE"])
-    assert res.code == STUB_EXIT and "Backup written:" in res.said and "copied to" in res.said, res.said
+    assert res.code == 0 and "Backup written:" in res.said and "copied to" in res.said, res.said
     assert len(list(copy_dir.glob("dcdash-*.dump"))) == 1 and len(list(copy_dir.glob("dcdash-*.dump.version"))) == 1
 
 
-def test_a_stopped_database_is_started_alone_and_waited_for_before_the_backup(scene):
+def test_a_stopped_database_is_started_alone_and_waited_for_before_the_backup(scene, web):
     scene.at("c33")
     scene.stack(db="exited/none")
     # one answer per look: step 2, step 4, then the wait polls
     scene.seq("inspect-dbid.seq", "exited none", "exited none", "running starting", "running healthy")
     res = scene.run("-Yes")
-    assert res.code == STUB_EXIT and "The database container is not running: starting only the database" in res.said, res.said
+    assert res.code == 0 and "The database container is not running: starting only the database" in res.said, res.said
     calls = scene.calls()
-    ups = [c for c in calls if " up " in f" {c} "]
-    assert ups == ["compose up -d db"], calls
-    assert calls.index("compose up -d db") < next(i for i, c in enumerate(calls) if "pg_dump" in c)
+    before_dump = calls[:next(i for i, c in enumerate(calls) if "pg_dump" in c)]
+    assert [c for c in before_dump if " up " in f" {c} "] == ["compose up -d db"], calls
+    assert "compose up -d" in calls[calls.index("compose up -d db") + 1:], "the full up comes after the backup"
     assert "Backup written:" in res.said
 
 
@@ -945,7 +1179,7 @@ def test_the_revision_is_checked_again_after_the_backup_when_the_database_was_no
     assert len(scene.dumps()) == 1
 
 
-def test_a_good_backup_prints_the_path_the_schema_and_the_anchors_and_the_files_exist(scene):
+def test_a_good_backup_prints_the_path_the_schema_and_the_anchors_before_the_code_moves(scene, web):
     scene.at("c33")
     res = scene.run("-Yes")
     dump = scene.dumps()[0]
@@ -953,14 +1187,13 @@ def test_a_good_backup_prints_the_path_the_schema_and_the_anchors_and_the_files_
     assert f"Backup written: {_win(dump)} (schema {OLD_REV})" in res.said, res.said
     assert "Write these down (they are also in the log):" in res.said
     assert f"Old commit: {scene.short('c33')}" in res.said and f"Old database revision: {OLD_REV}" in res.said and f"Backup: {_win(dump)}" in res.said
-    assert res.code == STUB_EXIT and STUB_TEXT in res.said
-    assert scene.head() == scene.sha("c33"), "the code does not move before step 5"
-    # the order of the screen: checks, where, coming, backup, anchors
-    order = [res.said.index(t) for t in ("== 1/7", "== 2/7", "== 3/7", "== 4/7", "Backup written:", "Write these down")]
+    assert res.code == 0
+    # the order of the screen: checks, where, coming, backup, anchors, and only then the new code
+    order = [res.said.index(t) for t in ("== 1/7", "== 2/7", "== 3/7", "== 4/7", "Backup written:", "Write these down", "== 5/7")]
     assert order == sorted(order)
 
 
-def test_the_log_file_holds_what_the_screen_showed(scene):
+def test_the_log_file_holds_what_the_screen_showed(scene, web):
     scene.at("c33")
     res = scene.run("-Yes")
     for phrase in ("DC Dashboard update", "== 4/7 Backing up the database ==", "Backup written:", "Incoming: 2 new commit(s)", "wrote "):
@@ -969,15 +1202,486 @@ def test_the_log_file_holds_what_the_screen_showed(scene):
     assert (scene.root / "logs" / ".update.lock").exists()
 
 
+# ---- steps 5 to 7: the new code, the build, the wait, the checks and the verdict -------------------------------------------------------
+
+DESTRUCTIVE = ("down", "rm", "kill", "restart", "stop", "start", "prune", "rmi", "downgrade", "--force-recreate", "--remove-orphans", "-v", "-V")
+
+
+def _no_destructive_call(scene: Scene) -> None:
+    for call in scene.calls():
+        words = call.split()
+        assert not any(word in words for word in DESTRUCTIVE), call
+        # pg_restore -f /dev/null is backup.ps1 verifying its own dump (read-only); a restore of data is the word `restore` or restore.*
+        assert not any(word.startswith("restore") for word in words) and "downgrade" not in call, call
+        assert "volume" not in words or words[:2] == ["volume", "ls"], call
+
+
+def _full_ups(scene: Scene) -> list[str]:
+    return [c for c in scene.calls() if c in ("compose up -d", "compose --profile dev up -d")]
+
+
+def _builds(scene: Scene) -> list[str]:
+    return [c for c in scene.calls() if " build " in f" {c} "]
+
+
+def _git_shim(scene: Scene, *lines: str) -> None:
+    """A git.cmd first on PATH: the real git.exe for everything, plus the given batch lines first. (cmd drops a caret in %*, so the
+    `<id>^{commit}` lookup of step 2 fails behind a shim and the run takes the 'built by hand' path: only for tests about steps 5 to 7.)"""
+    real = GIT.replace("/mnt/c", "C:").replace("/", chr(92))
+    (scene.bin / "git.cmd").write_bytes("\r\n".join(["@echo off", *lines, f'"{real}" %*', "exit /b %ERRORLEVEL%", ""]).encode("ascii"))
+
+
+def _failure_block(res: Result, scene: Scene, *logs: str) -> None:
+    """After the backup, every failure shows the backup, `docker compose ps -a`, the tail of the logs, and says the data is safe."""
+    dump = scene.dumps()[0]
+    assert f"Backup: {_win(dump)}" in res.said, res.said
+    assert "docker compose ps -a:" in res.said and "FAKE-PS-TABLE" in res.said, res.said
+    for service in logs:
+        assert f"docker compose logs --tail 80 {service}:" in res.said and f"FAKE-LOG {service} line one" in res.said, res.said
+        assert any(c.endswith(f"logs --tail 80 {service}") for c in scene.calls()), scene.calls()
+    assert "Nothing further was changed. The data is safe in the backup above." in res.said, res.said
+    _no_destructive_call(scene)
+
+
+def test_the_happy_path_ends_with_the_summary_the_way_back_and_done(scene, web):
+    scene.at("c33")
+    res = scene.run("-Yes")
+    old, new = scene.short("c33"), scene.short("tip")
+    dump = scene.dumps()[0]
+    assert res.code == 0 and res.said.endswith("DONE"), res.said
+    summary = [f"Commit: {old} -> {new}", f"Database revision: {OLD_REV} -> {NEW_REV}", f"Backup: {_win(dump)}",
+               f"Settings now shows version: {new}",
+               f'To go back: README, "Upgrading and going back", step 6. You need commit {old} and revision {OLD_REV}, and the backup above.']
+    positions = [res.said.rindex(line) for line in summary]
+    assert positions == sorted(positions), res.said
+    assert res.said.rindex("Log: ") > positions[-1] and re.search(r"Log: .*update-\d{8}-\d{6}\.log DONE$", res.said), res.said
+    assert "The site is unavailable while the database is migrated, and readings are not collected meanwhile." in res.said
+    assert scene.head() == scene.sha("tip") and "FAILED" not in res.said
+    calls = scene.calls()
+    assert calls.index("compose build api web") < calls.index("compose up -d"), calls
+    assert web.requests == ["/", "/assets", "/api/health", "/api/stream"], web.requests
+    assert res.log.rstrip().endswith("DONE") and "Settings now shows version" in res.log
+    _no_destructive_call(scene)
+
+
+def test_the_build_sees_the_new_commit_its_time_and_the_variables_stay_set_for_both_up_calls(scene, web):
+    scene.at("c33")
+    scene.seq("up.seq", "1", "0")  # the first up -d exits 1 (the api is still migrating); the second one succeeds
+    scene.seq("inspect-apiid2.seq", "running starting 0", "running starting 0", "running healthy 0")
+    res = scene.run("-Yes")
+    assert res.code == 0, res.said
+    new, committed = scene.short("tip"), scene.git("log", "-1", "--format=%cI", scene.sha("tip"))
+    assert scene.build_env() == {"id": new, "time": committed, "attest": "1"}
+    assert scene.up_envs() == [f"id={new} time={committed} attest=1"] * 2, scene.up_envs()
+    assert len(_full_ups(scene)) == 2 and "starting the rest" in res.said and "docker compose up -d exited 1" in res.said, res.said
+
+
+def test_the_web_port_is_read_from_either_address_form(scene, web):
+    scene.flag("port-v6.flag")  # `[::]:<port>` instead of `0.0.0.0:<port>`
+    res = scene.run("-Yes")
+    assert res.code == 0 and "ok: stream route" in res.said, res.said
+
+
+def test_no_pull_builds_what_is_checked_out_without_fetching_or_merging(scene, web):
+    scene.at("c33")
+    scene.alembic(OLD_REV, OLD_REV)
+    scene.seq("printenv.seq", scene.short("pre"))  # the site runs older code than the disk
+    scene.git("checkout", "-q", "--detach")
+    scene.origin_main("changelog")  # a fetch would move the clone's origin/main to this
+    res = scene.run("-NoPull -Yes")
+    assert res.code == 0, res.said
+    assert "-NoPull: not fetching" in res.said and "Fetching" not in res.said and "Incoming" not in res.said
+    assert "-NoPull: the code is not merged" in res.said
+    assert scene.head() == scene.sha("c33") and scene.git("rev-parse", "refs/remotes/origin/main") == scene.sha("tip")
+    assert scene.build_env()["id"] == scene.short("c33")
+    assert f"Commit: {scene.short('pre')} -> {scene.short('c33')}" in res.said and "Settings now shows version:" in res.said
+    assert len(scene.dumps()) == 1 and len(_builds(scene)) == 1
+
+
+def test_a_merge_that_fails_after_the_backup_exits_3_and_builds_nothing(scene):
+    scene.at("c33")
+    scene.flag("pgdump-lock.flag")  # the fake dump leaves .git\index.lock behind: a REAL git refusal when the merge runs
+    res = scene.run("-Yes")
+    _refused(res, "the new code could not be applied", "The code was not changed", "The backup above is complete; nothing else was changed.",
+             code=3, label="STOPPED")
+    assert scene.head() == scene.sha("c33") and len(scene.dumps()) == 1
+    assert _builds(scene) == [] and _full_ups(scene) == [], scene.calls()
+    assert "== 6/7" not in res.said
+
+
+def _database_stopped(scene: Scene) -> None:
+    """Nothing runs but the database container, which is stopped: step 4 starts only it (one answer per look: step 2, step 4, the wait)."""
+    scene.stack(db="exited/none", api=None)
+    scene.seq("inspect-dbid.seq", "exited none", "exited none", "running healthy")
+
+
+def test_a_merge_failure_after_starting_the_database_says_it_keeps_running(scene):
+    scene.at("c33")
+    _database_stopped(scene)
+    scene.flag("pgdump-lock.flag")
+    res = scene.run("-Yes")
+    _refused(res, "the new code could not be applied", "The code was not changed",
+             "only the database container was started (it keeps running); nothing else was changed.", code=3, label="STOPPED")
+    assert "nothing else was changed." in res.said and _builds(scene) == []
+
+
+def test_a_failed_build_when_nothing_was_running_does_not_claim_an_old_site_runs(scene, web):
+    scene.at("c33")
+    _database_stopped(scene)
+    scene.flag("build-fail.flag")
+    res = scene.run("-Yes")
+    assert res.code == 4 and "no site was running before this update" in res.said, res.said
+    assert "the old containers still run the old version" not in res.said
+
+
+def test_a_merge_that_moved_head_and_then_failed_says_the_code_was_partly_updated(scene):
+    scene.at("c33")
+    real = GIT.replace("/mnt/c", "C:").replace("/", chr(92))
+    # the merge really happens through the real git, and then the shim reports failure: HEAD moved, git said no
+    (scene.bin / "git.cmd").write_bytes("\r\n".join([
+        "@echo off",
+        'echo %* | findstr /B /C:"merge --ff-only" >nul',
+        f'if not errorlevel 1 ("{real}" %* & exit /b 1)',
+        f'"{real}" %*',
+        "exit /b %ERRORLEVEL%", ""]).encode("ascii"))
+    res = scene.run("-Yes")
+    _refused(res, "the code was partly updated, HEAD is " + scene.sha("tip"), "No image was built and no container was touched.",
+             code=3, label="STOPPED")
+    assert scene.head() == scene.sha("tip")
+    assert _builds(scene) == [] and _full_ups(scene) == [], scene.calls()
+
+
+def test_a_merge_that_says_it_worked_but_left_head_alone_is_exit_3(scene):
+    scene.at("c33")
+    real = GIT.replace("/mnt/c", "C:").replace("/", chr(92))
+    (scene.bin / "git.cmd").write_bytes("\r\n".join([
+        "@echo off",
+        'echo %* | findstr /B /C:"merge --ff-only" >nul',
+        "if not errorlevel 1 exit /b 0",  # reports success and does nothing
+        f'"{real}" %*',
+        "exit /b %ERRORLEVEL%", ""]).encode("ascii"))
+    res = scene.run("-Yes")
+    _refused(res, "git said the merge worked, but HEAD is " + scene.sha("c33"), "Do not build.", code=3, label="STOPPED")
+    assert scene.head() == scene.sha("c33") and _builds(scene) == [] and _full_ups(scene) == [], scene.calls()
+
+
+def test_no_pull_with_a_dry_run_prints_the_build_and_changes_nothing(scene):
+    scene.at("c33")
+    scene.alembic(OLD_REV, OLD_REV)
+    scene.seq("printenv.seq", scene.short("pre"))
+    scene.git("checkout", "-q", "--detach")
+    res = scene.run("-NoPull -DryRun")
+    assert res.code == 0 and "-NoPull: the code is not merged" in res.said and "Would run: docker compose build api web" in res.said, res.said
+    assert "Would run: git merge" not in res.said
+    _nothing_changed(scene, scene.sha("c33"))
+
+
+def test_a_failed_build_exits_4_with_text_a_and_starts_nothing(scene, web):
+    scene.at("c33")
+    scene.flag("build-fail.flag")
+    res = scene.run("-Yes")
+    assert res.code == 4 and "FAILED (exit 4)" in res.said, res.said
+    for phrase in ("the build failed (docker compose build exited 1)", "The running site and the database were not touched",
+                   "the old containers still run the old version", f"The code on disk is now at {scene.short('tip')} (it was {scene.short('c33')})",
+                   "run update again: it builds again. Going back is not needed."):
+        assert phrase in res.said, res.said
+    assert "To go back" not in res.said, "a failed build is not a going-back case"
+    assert _full_ups(scene) == [] and len(_builds(scene)) == 1
+    _failure_block(res, scene, "api")
+    assert scene.head() == scene.sha("tip")
+
+
+def test_an_api_that_is_unhealthy_for_a_while_and_then_healthy_succeeds(scene, web):
+    scene.at("c33")
+    scene.seq("inspect-apiid2.seq", "running starting 0", "running starting 0", "running unhealthy 0", "running unhealthy 0", "running healthy 0")
+    res = scene.run("-Yes")
+    assert res.code == 0 and "Waiting for the api to become healthy" in res.said, res.said
+    assert not any(word in res.said for word in ("STOPPED", "FAILED")), res.said
+
+
+def test_the_api_container_is_looked_up_again_on_every_poll_and_a_new_one_gets_its_own_restart_baseline(scene, web):
+    scene.at("c33")
+    scene.seq("ps-api.after", "apiid2", "apiid3")  # Compose recreated the container while the script was waiting
+    scene.seq("inspect-apiid2.seq", "running starting 0")
+    scene.seq("inspect-apiid3.seq", "running starting 5", "running healthy 5")  # a count of 5 is its first sight, not a restart loop
+    scene.ctr("apiid3", "new-backend", BACKEND_TAG)
+    res = scene.run("-Yes")
+    assert res.code == 0 and "restarting" not in res.said, res.said
+
+
+def test_an_api_that_stays_running_but_not_healthy_is_text_b_and_says_do_not_go_back_yet(scene, web):
+    scene.at("c33")
+    scene.seq("inspect-apiid2.seq", "running starting 0")
+    res = scene.run("-Yes", env={"DCDASH_UPDATE_WAIT_SECONDS": "1"})
+    assert res.code == 4, res.said
+    for phrase in ("the api did not become healthy within 1 seconds, but it is still running (running, health starting)",
+                   "A long database migration can outlast the wait", "Do NOT restore the backup or go back yet.",
+                   "docker compose logs -f api", "then run update again"):
+        assert phrase in res.said, res.said
+    assert "To go back:" not in res.said and "docker compose stop" not in res.said, "text (b) is not the going-back text"
+    _failure_block(res, scene, "api")
+
+
+@pytest.mark.parametrize("states", [
+    ("running starting 0", "exited none 0"),
+    ("running starting 0", "restarting none 1", "running starting 2", "restarting none 3"),
+])
+def test_an_api_that_stops_or_keeps_restarting_is_text_c_with_the_way_back(scene, web, states):
+    scene.at("c33")
+    scene.seq("inspect-apiid2.seq", *states)
+    res = scene.run("-Yes")
+    assert res.code == 4 and "FAILED (exit 4)" in res.said, res.said
+    for phrase in ("the api keeps restarting or has stopped", "No readings are being collected.", "restart: unless-stopped",
+                   "docker compose stop api collector", "Your data is in the backup",
+                   f'To go back: README, "Upgrading and going back", step 6. You need commit {scene.short("c33")} and revision {OLD_REV}, and the backup above.'):
+        assert phrase in res.said, res.said
+    _failure_block(res, scene, "api")
+    assert not any(c.split()[:2] == ["compose", "stop"] for c in scene.calls()), "the script only NAMES the stop command"
+
+
+@pytest.mark.parametrize("last", ["restarting none 1", None])
+def test_an_api_that_is_restarting_or_missing_when_the_wait_ends_is_text_c(scene, web, last):
+    scene.at("c33")
+    if last is None:
+        scene.seq("ps-api.after", "NONE")  # `up -d` made no api container at all
+    else:
+        scene.seq("inspect-apiid2.seq", last)
+    res = scene.run("-Yes", env={"DCDASH_UPDATE_WAIT_SECONDS": "1"})
+    assert res.code == 4 and "the api keeps restarting or has stopped" in res.said, res.said
+    assert ("it has no container" if last is None else "it is restarting") in res.said and "To go back:" in res.said, res.said
+    _failure_block(res, scene, "api")
+
+
+def test_a_second_up_that_fails_is_exit_4(scene, web):
+    scene.at("c33")
+    scene.seq("up.seq", "1", "1")
+    res = scene.run("-Yes")
+    assert res.code == 4 and "docker compose up -d failed again (exit 1)" in res.said, res.said
+    assert len(_full_ups(scene)) == 2
+    _failure_block(res, scene, "api", "web")
+
+
+@pytest.mark.parametrize("service, old_container", [("api", "apiid"), ("collector", "collid"), ("web", "webid")])
+def test_a_service_left_on_its_old_image_is_exit_4_and_named(scene, web, service, old_container):
+    scene.at("c33")
+    scene.seq(f"ps-{service}.after", old_container)  # `up -d` leaves the OLD container of this service in place
+    res = scene.run("-Yes")
+    assert res.code == 4 and f"{service} still runs the old version" in res.said, res.said
+    assert "ok: the api runs build" not in res.said, "the images are checked before the build id"
+    _failure_block(res, scene, "api", *([service] if service != "api" else []))
+
+
+def test_an_api_that_still_reports_the_old_build_id_is_exit_4(scene, web):
+    scene.at("c33")
+    scene.flag("up-stale-build.flag")  # the containers are new, but the api answers with the build id it had before
+    res = scene.run("-Yes")
+    assert res.code == 4, res.said
+    assert f"the api reports build {scene.short('c33')}, not the build just made ({scene.short('tip')}): it still runs the old version." in res.said
+    _failure_block(res, scene, "api")
+
+
+def test_build_ids_are_compared_as_commits_not_as_strings(scene, web):
+    scene.at("c33")
+    scene.flag("up-stale-build.flag")
+    scene.seq("printenv.seq", scene.sha("tip") + "-dirty")  # the same commit, written differently (full length, -dirty)
+    res = scene.run("-Yes")
+    assert res.code == 0 and f"ok: the api runs build {scene.sha('tip')}-dirty." in res.said, res.said
+
+
+@pytest.mark.parametrize("states, why", [
+    (("running none 0", "running none 1"), "restarted"),
+    (("exited none 0", "exited none 0"), "not running"),
+])
+def test_a_collector_that_restarts_or_is_not_running_is_exit_4(scene, web, states, why):
+    scene.at("c33")
+    scene.seq("inspect-collid2.seq", *states)
+    res = scene.run("-Yes")
+    assert res.code == 4 and "the collector is not running steadily (readings are not being collected)" in res.said, res.said
+    _failure_block(res, scene, "api", "collector")
+
+
+@pytest.mark.parametrize("current, heads, shown", [("0001", NEW_REV, "0001"), ("NONE", NEW_REV, "none"), (NEW_REV, "0099", NEW_REV)])
+def test_a_database_revision_that_is_not_the_head_is_exit_5_with_the_way_back(scene, web, current, heads, shown):
+    scene.at("c33")
+    scene.alembic(current, heads)
+    res = scene.run("-Yes")
+    assert res.code == 5 and "FAILED (exit 5)" in res.said, res.said
+    assert f"the database is at revision {shown} but this code's newest revision is '{heads}': they must be equal." in res.said, res.said
+    assert f"You need commit {scene.short('c33')} and revision {OLD_REV}, and the backup above." in res.said, res.said
+    assert "ok: the collector" not in res.said, "the checks stop at the first failure"
+    _failure_block(res, scene, "api")
+
+
+def test_alembic_that_cannot_run_is_exit_4_and_info_lines_are_never_a_revision(scene, web):
+    scene.at("c33")
+    scene.flag("alembic-fail.flag")
+    res = scene.run("-Yes")
+    assert res.code == 4 and "alembic could not be run inside the api container" in res.said, res.said
+    scene.flag("alembic-fail.flag", False)
+    scene.flag("alembic-info.flag")  # INFO lines on stderr and on stdout around the revision line
+    scene.flag("alembic-noise.flag")
+    scene.at("tip")
+    res = scene.run("-Yes")
+    assert res.code == 0 and f"ok: the database is at revision {NEW_REV}" in res.said, res.said
+
+
+def test_a_web_that_answers_500_is_exit_4_with_the_web_logs(scene, web):
+    scene.at("c33")
+    web.mode = "health500"
+    res = scene.run("-Yes")
+    assert res.code == 4 and "web check 'api proxy' failed: GET /api/health gave status 500, expected 200." in res.said, res.said
+    assert "ok: index" in res.said and "ok: spa fallback" in res.said and "ok: api proxy" not in res.said
+    _failure_block(res, scene, "api", "web")
+    assert "To go back:" not in res.said
+
+
+def test_a_stream_route_that_does_not_refuse_is_exit_4(scene, web):
+    web.mode = "stream200"
+    res = scene.run("-Yes")
+    assert res.code == 4 and "web check 'stream route' failed: GET /api/stream gave status 200, expected 401." in res.said, res.said
+
+
+def test_nothing_listening_on_the_web_port_is_exit_4(scene, web):
+    (scene.bin / "port.txt").write_bytes(b"1")  # 127.0.0.1:1 refuses at once
+    res = scene.run("-Yes")
+    assert res.code == 4 and "web check 'index' failed: GET / gave no answer" in res.said, res.said
+
+
+def test_a_web_port_docker_does_not_publish_is_exit_4(scene, web):
+    (scene.bin / "port.txt").unlink()
+    res = scene.run("-Yes")
+    assert res.code == 4 and "Docker did not say on which port web listens." in res.said, res.said
+
+
+@pytest.mark.parametrize("state, phrase", [("running starting 0", "state running, health starting"), ("exited none 0", "state exited, health none")])
+def test_a_web_that_never_becomes_healthy_is_exit_4(scene, web, state, phrase):
+    scene.at("c33")
+    scene.seq("inspect-webid2.seq", state)
+    res = scene.run("-Yes", env={"DCDASH_UPDATE_WAIT_SECONDS": "1"})
+    assert res.code == 4 and f"web is not healthy ({phrase})" in res.said, res.said
+    _failure_block(res, scene, "api", "web")
+
+
+def test_a_tls_redirect_skips_the_four_web_lines_with_one_sentence(scene, web):
+    scene.at("c33")
+    web.mode = "tls"
+    res = scene.run("-Yes")
+    assert res.code == 0, res.said
+    assert "The site redirects to https (TLS is on). The four web checks are skipped here; web's own health check stands in for them." in res.said
+    assert "ok: web is healthy." in res.said and "ok: index" not in res.said
+    assert web.requests == ["/"], web.requests
+
+
+# A1: "current" is a health verdict, never a label
+def test_a1_the_same_build_with_an_unhealthy_api_is_exit_4_and_never_up_to_date(scene, web):
+    scene.stack(api="running unhealthy 0")  # at the tip, the site runs the tip
+    res = scene.run("-Yes")
+    assert res.code == 4 and "the api is not healthy (state running, health unhealthy)." in res.said, res.said
+    assert "Already up to date" not in res.said and "This run made no backup and changed nothing." in res.said
+    assert "update.ps1 -Force rebuilds the site from the code on disk." in res.said
+    _nothing_changed(scene, scene.sha("tip"))
+    assert "To go back" not in res.said
+
+
+def test_a1_the_same_build_with_a_revision_mismatch_is_exit_5(scene, web):
+    scene.alembic("0001")
+    res = scene.run("-Yes")
+    assert res.code == 5 and "Already up to date" not in res.said and "To go back:" in res.said, res.said
+    _nothing_changed(scene, scene.sha("tip"))
+
+
+def test_a1_the_same_build_with_an_old_web_image_is_exit_4(scene, web):
+    scene.ctr("webid", "older-web", WEB_TAG)
+    res = scene.run("-Yes")
+    assert res.code == 4 and "web still runs the old version" in res.said and "Already up to date" not in res.said, res.said
+    _nothing_changed(scene, scene.sha("tip"))
+
+
+def test_a_rerun_after_a_failed_update_does_not_say_up_to_date(scene, web):
+    scene.at("c33")
+    scene.seq("inspect-apiid2.seq", "running starting 0")
+    first = scene.run("-Yes", env={"DCDASH_UPDATE_WAIT_SECONDS": "1"})
+    second = scene.run("-Yes")
+    assert first.code == 4 and second.code == 4, (first.said, second.said)
+    assert "Already up to date" not in first.said + second.said and "the api is not healthy" in second.said, second.said
+    assert len(scene.dumps()) == 1, "the rerun made no second backup"
+
+
+def test_force_rebuilds_a_current_site(scene, web):
+    res = scene.run("-Yes -Force")
+    assert res.code == 0 and "Nothing new, but -Force was given: the site will be rebuilt." in res.said, res.said
+    assert len(_builds(scene)) == 1 and "Already up to date" not in res.said and len(scene.dumps()) == 1
+
+
+def test_the_wait_reports_how_long_it_has_waited(scene, web):
+    scene.at("c33")
+    scene.seq("inspect-apiid2.seq", "running starting 0")
+    res = scene.run("-Yes", env={"DCDASH_UPDATE_WAIT_SECONDS": "2", "DCDASH_UPDATE_REPORT_SECONDS": "0.5"})
+    assert res.code == 4 and re.search(r"still waiting: \d+ seconds so far", res.said), res.said
+
+
+@pytest.mark.parametrize("outcome", ["done", "build-fails", "refused", "up-to-date"])
+def test_the_lock_is_free_again_after_every_outcome(scene, web, outcome):
+    args = "-Yes"
+    if outcome == "build-fails":
+        scene.at("c33")
+        scene.flag("build-fail.flag")
+    elif outcome == "done":
+        scene.at("c33")
+    elif outcome == "refused":
+        (scene.root / ".env").unlink()
+    lock = _win(scene.root / "logs" / ".update.lock")
+    res = scene.run_ps([f"& '{{script}}' {args}", "$code = $LASTEXITCODE", f"$fs = [IO.File]::Open('{lock}', 'Open', 'ReadWrite', 'None')",
+                        "$fs.Dispose()", "Write-Host 'the lock is free'", "exit $code"])
+    assert "the lock is free" in res.said, res.said
+    assert res.code == {"done": 0, "build-fails": 4, "refused": 1, "up-to-date": 0}[outcome], res.said
+
+
+def test_an_unexpected_error_after_the_backup_names_the_backup_and_the_way_back(scene, web):
+    scene.at("c33")
+    _git_shim(scene, 'echo %* | findstr /B /C:"describe" >nul && (echo fatal: no& exit /b 1)')
+    res = scene.run("-Yes")
+    dump = scene.dumps()[0]
+    assert res.code == 4 and "UNEXPECTED ERROR in step 6 (Building and starting)" in res.said and "FAILED (exit 4)" in res.said, res.said
+    assert f"The backup is {_win(dump)}." in res.said and "To go back:" in res.said, res.said
+    assert _builds(scene) == [] and _full_ups(scene) == []
+
+
 # ---- the caller's environment and unexpected errors -----------------------------------------------------------------------------
 
-def test_the_callers_build_variables_are_untouched_after_a_run(scene):
+SENTINEL = ["$env:DCDASH_BUILD_ID = 'mine'", "$env:DCDASH_BUILD_TIME = 'then'", "$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '0'"]
+SHOW = "Write-Host ('after: id=[' + $env:DCDASH_BUILD_ID + '] time=[' + $env:DCDASH_BUILD_TIME + '] attest=[' + $env:BUILDX_NO_DEFAULT_ATTESTATIONS + ']')"
+
+
+@pytest.mark.parametrize("outcome", ["done", "build-fails", "api-never-healthy", "refused"])
+def test_the_callers_build_variables_are_the_callers_again_after_every_outcome(scene, web, outcome):
     scene.at("c33")
-    sentinel = ["$env:DCDASH_BUILD_ID = 'mine'", "$env:DCDASH_BUILD_TIME = 'then'", "$env:BUILDX_NO_DEFAULT_ATTESTATIONS = '0'"]
-    show = "Write-Host ('after: id=[' + $env:DCDASH_BUILD_ID + '] time=[' + $env:DCDASH_BUILD_TIME + '] attest=[' + $env:BUILDX_NO_DEFAULT_ATTESTATIONS + ']')"
-    res = scene.run_ps([*sentinel, "& '{script}' -Yes", show])
-    assert "Backup written:" in res.said and "after: id=[mine] time=[then] attest=[0]" in res.said, res.said
-    res = scene.run_ps(["& '{script}' -NoPull -Yes -Branch ..", show])  # a refusal path: the variables are not set at all
+    args = "-Yes"
+    env = {}
+    if outcome == "build-fails":
+        scene.flag("build-fail.flag")
+    elif outcome == "api-never-healthy":
+        scene.seq("inspect-apiid2.seq", "running starting 0")
+        env = {"DCDASH_UPDATE_WAIT_SECONDS": "1"}
+    elif outcome == "refused":
+        args = "-NoPull -Yes -Branch .."  # a usage refusal: nothing is set at all
+    res = scene.run_ps([*SENTINEL, f"& '{{script}}' {args}", "$code = $LASTEXITCODE", SHOW, "exit $code"], env=env)
+    assert "after: id=[mine] time=[then] attest=[0]" in res.said, res.said
+    if outcome == "done":
+        # while it ran, the build and BOTH up calls (here one) saw the new commit, not the caller's values
+        assert res.code == 0
+        built = scene.build_env()
+        assert built["id"] == scene.short("tip") and built["attest"] == "1", built
+    elif outcome == "refused":
+        assert res.code == 1
+    else:
+        assert res.code == 4 and "FAILED (exit 4)" in res.said, res.said
+        assert scene.build_env().get("attest", "1") == "1"
+
+
+def test_the_callers_variables_start_unset_and_end_unset(scene, web):
+    scene.at("c33")
+    res = scene.run_ps(["& '{script}' -Yes", SHOW])
     assert "after: id=[] time=[] attest=[]" in res.said, res.said
 
 
@@ -1021,7 +1725,7 @@ def test_no_native_call_the_script_makes_can_change_or_destroy_something_it_must
         assert not forbidden.search(line), line
         assert not re.search(r'"volume"', line) or '"ls"' in line, line
         assert not re.search(r'"merge"', line) or '"--ff-only"' in line, line
-    # Messages may NAME restore.ps1, 'down -v' or 'git checkout' (A11): the going-back text of Task 1b does. The scan above and the
-    # runtime allow-list are the guards.
+    # Messages may NAME restore.ps1, 'down -v', 'git checkout' or 'docker compose stop' (A11): the failure texts do. The scan above and
+    # the runtime allow-list are the guards.
     code = "\n".join(CODE_LINES)
     assert not re.search(r"Remove-Item|\[IO\.File\]::Delete|\[IO\.Directory\]::Delete", code), "the script deletes nothing"
