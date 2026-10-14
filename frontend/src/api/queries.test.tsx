@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { NO_FILTERS } from "../lib/auditFilters";
+import { isStaleMove, moveRefusals } from "../lib/moveText";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
 import {
@@ -9,8 +10,10 @@ import {
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
+  loadMovePreview, useMoveAssets,
 } from "./queries";
-import type { RangePreset, WidgetConfig } from "./types";
+import { ApiError } from "./client";
+import type { MoveBody, RangePreset, WidgetConfig } from "./types";
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -822,5 +825,125 @@ describe("asset kind queries", () => {
     const mutation = route.startsWith("DELETE") ? result.current.del : route.endsWith("starter-pack") ? result.current.pack : result.current.patch;
     await act(async () => { await expect(run(mutation as never)).rejects.toThrow(message); });
     await waitFor(() => expect(count(calls, "/api/asset-kinds")).toBe(2));
+  });
+});
+
+describe("asset move queries", () => {
+  const answer = { request_id: "r-1", assets: 2, unchanged: [], moved: [], undo: { moves: [], expect: { assets: 2, parents: {} } } };
+  const body: MoveBody = { moves: [{ ids: [3], parent_id: 5, before_id: null }], expect: { assets: 2, parents: { "3": 2 }, rate_changes: false } };
+  /** The seven things a move makes stale, in the order the hook names them. */
+  const AFTER_A_MOVE = [keys.assets, keys.fleet, keys.billing, keys.widgetData, keys.tariffs, keys.auditAll, keys.graph];
+
+  /** A client of the test's own, so the calls to `invalidateQueries` can be read. */
+  function mounted() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidated = vi.spyOn(client, "invalidateQueries");
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    return { invalidated, wrapper, keysInvalidated: () => invalidated.mock.calls.map(([filters]) => filters?.queryKey) };
+  }
+
+  it("posts the body to the move route and hands back the answer", async () => {
+    const calls = mockFetch({ "POST /api/assets/move": { body: answer } });
+    const { wrapper } = mounted();
+    const { result } = renderHook(() => useMoveAssets(), { wrapper });
+    await act(async () => { await expect(result.current.mutateAsync(body)).resolves.toEqual(answer); });
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([["POST", "/api/assets/move", body]]);
+  });
+
+  it("sends an undo as the same route with undo_of", async () => {
+    const calls = mockFetch({ "POST /api/assets/move": { body: answer } });
+    const { wrapper } = mounted();
+    const { result } = renderHook(() => useMoveAssets(), { wrapper });
+    const undo: MoveBody = { moves: [{ ids: [3], parent_id: 2, before_id: 4 }], expect: { assets: 2, parents: { "3": 5 } }, undo_of: "r-1" };
+    await act(async () => { await result.current.mutateAsync(undo); });
+    expect(calls[0].body).toEqual(undo);
+  });
+
+  it("refetches the assets, fleet, billing, widget data, tariffs, audit log and graph after a move", async () => {
+    mockFetch({ "POST /api/assets/move": { body: answer } });
+    const { wrapper, keysInvalidated } = mounted();
+    const { result } = renderHook(() => useMoveAssets(), { wrapper });
+    await act(async () => { await result.current.mutateAsync(body); });
+    expect(keysInvalidated()).toEqual(AFTER_A_MOVE);
+  });
+
+  // A refused move (a rule said no, or someone moved something first) means the tree on screen is out of date, as for kinds and roles.
+  it.each([
+    ["a rule refusal (422)", 422, { detail: 'Row A would have two assets named "Pump 3".', refusals: [{ id: 3, name: "Pump 3", reason: 'Row A would have two assets named "Pump 3".', code: "name_clash" }] }],
+    ["a stale request (409)", 409, { detail: "an asset was deleted", stale: true }],
+    ["a place that is gone (404)", 404, { detail: "not found" }],
+  ])("still refetches all of them after %s", async (_name, status, reply) => {
+    mockFetch({ "POST /api/assets/move": { status, body: reply } });
+    const { wrapper, keysInvalidated } = mounted();
+    const { result } = renderHook(() => useMoveAssets(), { wrapper });
+    await act(async () => { await expect(result.current.mutateAsync(body)).rejects.toBeInstanceOf(ApiError); });
+    expect(keysInvalidated()).toEqual(AFTER_A_MOVE);
+  });
+
+  it("keeps the status and the parsed body of a 422, so the refusals can be read", async () => {
+    const refusal = { id: 3, name: "Pump 3", reason: 'Row A would have two assets named "Pump 3".', code: "name_clash" };
+    mockFetch({ "POST /api/assets/move": { status: 422, body: { detail: refusal.reason, refusals: [refusal] } } });
+    const { wrapper } = mounted();
+    const { result } = renderHook(() => useMoveAssets(), { wrapper });
+    let caught: unknown;
+    await act(async () => { await result.current.mutateAsync(body).catch((error) => { caught = error; }); });
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).status).toBe(422);
+    expect((caught as ApiError).message).toBe(refusal.reason);
+    expect(moveRefusals(caught)).toEqual([refusal]);
+    expect(isStaleMove(caught)).toBe(false);
+  });
+
+  it("tells a 409 stale from a 422, by the status and the stale flag in the body", async () => {
+    mockFetch({ "POST /api/assets/move": { status: 409, body: { detail: "a rate changed since you looked", stale: true } } });
+    const { wrapper } = mounted();
+    const { result } = renderHook(() => useMoveAssets(), { wrapper });
+    let caught: unknown;
+    await act(async () => { await result.current.mutateAsync(body).catch((error) => { caught = error; }); });
+    expect((caught as ApiError).status).toBe(409);
+    expect((caught as ApiError).body).toEqual({ detail: "a rate changed since you looked", stale: true });
+    expect(isStaleMove(caught)).toBe(true);
+    expect(moveRefusals(caught)).toBeNull();
+  });
+
+  // The keys are the real ones: readers of the lists a move makes stale ask again, after a move and after a refused move.
+  it.each([
+    ["a move", 200, answer],
+    ["a refused move", 422, { detail: "no", refusals: [] }],
+  ])("makes real readers of the lists fetch again after %s", async (_name, status, reply) => {
+    const calls = mockFetch({
+      "GET /api/assets": { body: [] }, "GET /api/fleet/summary": { body: {} }, "GET /api/tariffs": { body: [] }, "GET /api/discovery/graph": { body: {} },
+      "GET /api/audit/options": { body: { actions: [], users: [], unattributed: false } }, "GET /api/billing/costs": { body: {} },
+      "POST /api/assets/move": { status, body: reply },
+    });
+    const { wrapper } = mounted();
+    const { result } = renderHook(
+      () => ({ assets: useAssets(), fleet: useFleetSummary(), tariffs: useTariffs(), graph: useGraph(), options: useAuditOptions(), costs: useBillingCosts("2026-10"), move: useMoveAssets() }),
+      { wrapper },
+    );
+    const reads = () => ["/api/assets", "/api/fleet/summary", "/api/tariffs", "/api/discovery/graph", "/api/audit/options", "/api/billing/costs"]
+      .map((path) => calls.filter((c) => c.method === "GET" && c.path === path).length);
+    await waitFor(() => expect(reads()).toEqual([1, 1, 1, 1, 1, 1]));
+    await act(async () => { await result.current.move.mutateAsync(body).catch(() => undefined); });
+    await waitFor(() => expect(reads()).toEqual([2, 2, 2, 2, 2, 2]));
+  });
+
+  it("asks the preview route with the same body and writes nothing: no invalidation, no mutation", async () => {
+    const plan = {
+      assets: 2, unchanged: [], currency: "USD", rate_changes: true, roots: [],
+      expect: { assets: 2, parents: { "3": 2 }, rate_changes: true },
+    };
+    const calls = mockFetch({ "POST /api/assets/move-preview": { body: plan } });
+    const { invalidated } = mounted();
+    await expect(loadMovePreview(body)).resolves.toEqual(plan);
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([["POST", "/api/assets/move-preview", body]]);
+    expect(invalidated).not.toHaveBeenCalled();
+  });
+
+  it("lets a refused preview through with its refusals", async () => {
+    mockFetch({ "POST /api/assets/move-preview": { status: 422, body: { detail: "x", refusals: [{ id: 3, name: "Pump 3", reason: "x", code: "cycle" }] } } });
+    const error = await loadMovePreview(body).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(moveRefusals(error)).toEqual([{ id: 3, name: "Pump 3", reason: "x", code: "cycle" }]);
   });
 });

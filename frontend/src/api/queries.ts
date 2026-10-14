@@ -4,7 +4,7 @@ import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { ApiError, api } from "./client";
 import type {
   Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, StarterPackResult, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
-  FleetSummary, GeneralSettings, GraphModel, Metric, PermissionRow, PointRow, RangePreset, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
+  FleetSummary, GeneralSettings, GraphModel, Metric, MoveBody, MovePreview, MoveResult, PermissionRow, PointRow, RangePreset, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
@@ -129,6 +129,27 @@ export const useSources = () =>
 export const loadAssetImpact = (id: number) => api.get<AssetImpact>(`/api/assets/${id}/impact`);
 /** What deleting this source would take with it (read-only; see `loadAssetImpact`). */
 export const loadSourceImpact = (id: number) => api.get<SourceImpact>(`/api/sources/${id}/impact`);
+
+/**
+ * What a move would do, and the `expect` to send back with it (read-only: a POST because the plan is the body; nothing is written, audited
+ * or locked). Asked for at the moment of the drop or of "Move", so it is a plain function and not a cached hook. A 422 carries `refusals`.
+ */
+export const loadMovePreview = (body: MoveBody) => api.post<MovePreview>("/api/assets/move-preview", body);
+
+/**
+ * Moves assets (and reorders them), or undoes a move (the body then carries `undo_of`). Everything that follows the tree moves with it:
+ * the asset list (and the kinds and summaries under that prefix), the fleet figures, billing, widget data (their numbers add up per
+ * branch), the tariff table (its `asset_path`), the audit log and the discovery graph. `onSettled`, not `onSuccess`: a refused move
+ * (a 422, or a 409 `stale`) means the tree on screen is out of date. The error keeps `status` and the parsed `body` (`moveRefusals`,
+ * `isStaleMove` in lib/moveText.ts read them). Resolves after the lists are fetched again, so the moved rows are on screen by then.
+ */
+export function useMoveAssets() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: MoveBody) => api.post<MoveResult>("/api/assets/move", body),
+    onSettled: () => invalidate(keys.assets, keys.fleet, keys.billing, keys.widgetData, keys.tariffs, keys.auditAll, keys.graph),
+  });
+}
 
 export const useCollectorStatus = () =>
   useQuery({ queryKey: keys.collectorStatus, queryFn: () => api.get<CollectorStatus>("/api/collector/status"), refetchInterval: 10_000 });
