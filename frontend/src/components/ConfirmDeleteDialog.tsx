@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAction } from "../hooks/useAction";
 
@@ -18,6 +18,13 @@ interface Props {
   tone?: "danger" | "primary";
   /** The delete can never go ahead from here (something still depends on it): no confirm button at all, and Cancel reads "Close". The message and `loadError` stay to say why. */
   blocked?: boolean;
+  /**
+   * A choice the confirmation needs (where the assets of a deleted kind go): drawn between the message and the buttons, OUTSIDE the polite
+   * region (that region is the dialog's description, and a select inside it would be announced again with every change).
+   */
+  children?: ReactNode;
+  /** The confirm button is off until the choice in `children` is made. Native `disabled` is fine: the first focus is Cancel, and the one case where the focus was on the confirm button is handled below. */
+  confirmDisabled?: boolean;
 }
 
 const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -27,7 +34,7 @@ const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), button:not([di
  * Rendered into the body, like SignOutDialog, so a caller may keep it inside a form or a table row: the backdrop would be invalid markup in a
  * row, and the buttons (plain `type="button"`) would otherwise submit the form they sit in.
  */
-export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confirmLabel = "Delete anyway", loading = false, loadError, tone = "danger", blocked = false }: Props) {
+export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confirmLabel = "Delete anyway", loading = false, loadError, tone = "danger", blocked = false, children, confirmDisabled = false }: Props) {
   const { run, busy, error } = useAction();
   const dialog = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -56,6 +63,16 @@ export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confi
   useEffect(() => {
     if (blocked && !busy) cancel.current?.focus();
   }, [blocked, busy]);
+  // A dialog that turns into one that needs a choice while open (the server said "assets joined" to a confirmed delete) loses the confirm button the
+  // focus was on (it was off while the request ran, and is off again until the choice is made): once the request is over, the first control, the
+  // choice, takes it. Nothing happens while the focus is still on an enabled control inside, such as the choice somebody is using.
+  useEffect(() => {
+    if (!confirmDisabled || busy) return;
+    const root = dialog.current;
+    const at = document.activeElement;
+    const lost = !(at instanceof Node) || !root?.contains(at) || (at instanceof HTMLElement && at.matches(":disabled"));
+    if (lost) root?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  }, [confirmDisabled, busy]);
   // Tab and Shift+Tab wrap round inside the dialog, as in Modal. The dialog is the last thing in the body, so without this the browser would
   // take the focus on to its own chrome (and back in on the next Tab); keepFocus stays as the backstop for a click or a script. The controls
   // are read at each keypress, so a disabled confirm button is skipped and one that comes alive counts as the last.
@@ -96,11 +113,12 @@ export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confi
         <div id={bodyId} aria-live="polite" className="confirm-body">
           {loading ? <p className="confirm-checking">Checking what this deletes…</p> : message !== "" && <p>{message}</p>}
         </div>
+        {children}
         {loadError && <p className="error" role="alert">{loadError}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         <div className="row">
           <button type="button" ref={cancel} onClick={onCancel} disabled={busy}>{blocked ? "Close" : "Cancel"}</button>
-          {!blocked && <button type="button" className={tone} onClick={() => void run(onConfirm)} disabled={busy || loading || !!loadError}>{confirmLabel}</button>}
+          {!blocked && <button type="button" className={tone} onClick={() => void run(onConfirm)} disabled={busy || loading || !!loadError || confirmDisabled}>{confirmLabel}</button>}
         </div>
       </div>
     </div>,

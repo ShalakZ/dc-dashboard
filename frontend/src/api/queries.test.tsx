@@ -765,7 +765,7 @@ describe("asset kind queries", () => {
   it.each([
     ["creating a kind", () => useCreateAssetKind(), "POST /api/asset-kinds", { name: "Rack", icon: "rack" }, 201, (m: ReturnType<typeof useCreateAssetKind>) => m.mutateAsync({ name: "Rack", icon: "rack" })],
     ["renaming or re-iconing a kind", () => usePatchAssetKind(), "PATCH /api/asset-kinds/3", { name: "Racks" }, 200, (m: ReturnType<typeof usePatchAssetKind>) => m.mutateAsync({ id: 3, body: { name: "Racks" } })],
-    ["deleting a kind", () => useDeleteAssetKind(), "DELETE /api/asset-kinds/3", undefined, 204, (m: ReturnType<typeof useDeleteAssetKind>) => m.mutateAsync(3)],
+    ["deleting a kind", () => useDeleteAssetKind(), "DELETE /api/asset-kinds/3", undefined, 204, (m: ReturnType<typeof useDeleteAssetKind>) => m.mutateAsync({ id: 3 })],
     ["adding the data-centre kinds", () => useAddStarterKinds(), "POST /api/asset-kinds/starter-pack", undefined, 200, (m: ReturnType<typeof useAddStarterKinds>) => m.mutateAsync()],
   ] as const)("refetches the assets, the kinds, a summary, the fleet and the audit options after %s", async (_name, hook, route, sent, status, run) => {
     const calls = mockFetch({ ...reads, [route]: { status, body: status === 204 ? undefined : kind() } });
@@ -781,8 +781,21 @@ describe("asset kind queries", () => {
     const calls = mockFetch({ "PATCH /api/asset-kinds/9": { body: kind({ id: 9 }) }, "DELETE /api/asset-kinds/9": { status: 204 } });
     const { result } = renderHook(() => ({ patch: usePatchAssetKind(), del: useDeleteAssetKind() }), { wrapper: stableWrapper() });
     await act(async () => { await result.current.patch.mutateAsync({ id: 9, body: { icon: "server" } }); });
-    await act(async () => { await result.current.del.mutateAsync(9); });
+    await act(async () => { await result.current.del.mutateAsync({ id: 9 }); });
     expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([["PATCH", "/api/asset-kinds/9", { icon: "server" }], ["DELETE", "/api/asset-kinds/9", undefined]]);
+  });
+
+  it.each([
+    ["no choice: no query at all", { id: 3 }, "/api/asset-kinds/3"],
+    ["a target and the count the person saw", { id: 3, moveTo: 5, expectAssets: 12 }, "/api/asset-kinds/3?move_to=5&expect_assets=12"],
+    ["only a target", { id: 3, moveTo: 5 }, "/api/asset-kinds/3?move_to=5"],
+    ["a count of nothing is still a count", { id: 3, moveTo: 5, expectAssets: 0 }, "/api/asset-kinds/3?move_to=5&expect_assets=0"],
+  ])("deletes with %s", async (_name, variables, url) => {
+    const sent: string[] = [];
+    mockFetch({ "DELETE /api/asset-kinds/3": ({ url: u }) => { sent.push(u); return { status: 204 }; } });
+    const { result } = renderHook(() => useDeleteAssetKind(), { wrapper: stableWrapper() });
+    await act(async () => { await result.current.mutateAsync(variables); });
+    expect(sent).toEqual([url]);
   });
 
   it("posts the starter pack with no body and hands back what the server answered", async () => {
@@ -795,7 +808,7 @@ describe("asset kind queries", () => {
 
   // A refused change (the count moved, the key is taken, the kind is gone) means the list on screen is out of date, as for roles.
   it.each([
-    ["a delete refused because assets use the kind", "DELETE /api/asset-kinds/3", 409, { detail: "3 assets use this kind. Change their kind first.", assets: 3 }, (m: ReturnType<typeof useDeleteAssetKind>) => m.mutateAsync(3), "3 assets use this kind. Change their kind first."],
+    ["a delete refused because assets use the kind", "DELETE /api/asset-kinds/3", 409, { detail: "3 assets use this kind. Change their kind first.", assets: 3 }, (m: ReturnType<typeof useDeleteAssetKind>) => m.mutateAsync({ id: 3 }), "3 assets use this kind. Change their kind first."],
     ["a rename onto a taken name", "PATCH /api/asset-kinds/3", 409, { detail: 'A kind named "Racks" already exists' }, (m: ReturnType<typeof usePatchAssetKind>) => m.mutateAsync({ id: 3, body: { name: "Racks" } }), 'A kind named "Racks" already exists'],
     ["a change to a kind that is gone", "PATCH /api/asset-kinds/3", 404, { detail: "asset kind not found" }, (m: ReturnType<typeof usePatchAssetKind>) => m.mutateAsync({ id: 3, body: { icon: "pump" } }), "asset kind not found"],
     ["a starter pack the role may not add", "POST /api/asset-kinds/starter-pack", 403, { detail: "insufficient permission" }, (m: ReturnType<typeof useAddStarterKinds>) => m.mutateAsync(), "Your role does not allow this."],
