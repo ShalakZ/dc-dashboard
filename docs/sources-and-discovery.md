@@ -1,34 +1,51 @@
 # Sources and discovery
 
+This page is for the engineer who connects the platform to the field: the data sources it reads (OPC UA, Modbus TCP and the HTTP
+simulator), their settings, the OPC UA client certificate, and Discovery, which finds sources on the network and maps their points to
+assets. What gets recorded in the audit log is listed here too (item 8 of Discovery).
+
 ## Protocols
 
-Every connector is read-only toward the source; only `collector` opens connections. A source's
-`last_error` reads `<status>: <message>` with status `ok`, `auth_failed`, `timeout`, `unreachable`,
-`protocol_error` or `needs_profile`.
+Every connector is read-only toward the source; only `collector` opens connections. When a source fails, its
+`last_error` reads `<status>: <message>` with status `auth_failed`, `timeout`, `unreachable`,
+`protocol_error` or `needs_profile` (a source that answers is `online` and has no `last_error`).
+
+**HTTP simulator** (`simulator`): `url` (default `http://simulator:9000`) and `timeout_seconds` (5). The
+secret is sent as the simulator's API key; see [The simulator](install-and-run.md#the-simulator) for the dev
+profile and the key.
 
 **OPC UA** (`opcua`): `endpoint` (`opc.tcp://...`), `security_policy` (`none` or `basic256sha256`),
 optional `username` (the password is the source secret), `root_node` (default `i=85`, the Objects
-folder; browsing descends from here) and `timeout_seconds`. With `basic256sha256` the collector
+folder; browsing descends from here) and `timeout_seconds` (default 5, 0.5 to 60). With `basic256sha256` the collector
 signs and encrypts with a client certificate read from `client_cert` / `client_key` (default
-`/certs/opcua-client.pem` and `/certs/opcua-client-key.pem`; `./certs` is mounted read-only into
-the collector). Without the files the source reports `protocol_error: client certificate not
-found: <path>`. Generate a self-signed client certificate with:
+`/certs/opcua-client.pem` and `/certs/opcua-client-key.pem`), as described below.
 
-```sh
+### OPC UA client certificate
+
+`./certs` (the `certs/` folder of the install) is mounted read-only into the collector at `/certs`. Without the files the source
+reports `protocol_error: client certificate not found: <path>`. Generate a self-signed client certificate and key, from the install
+folder, with:
+
+```bash
 openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=dcdash" \
   -addext "subjectAltName=URI:urn:dcdash:collector" \
   -keyout certs/opcua-client-key.pem -out certs/opcua-client.pem
 ```
 
-Trust `certs/opcua-client.pem` on the OPC UA server afterwards.
+Then recreate the collector (`docker compose up -d --force-recreate collector`) and trust `certs/opcua-client.pem` on the OPC UA
+server. No secured session opens until the server trusts `certs/opcua-client.pem`. The collector announces the URI in the certificate's
+subjectAltName as its application URI, and it runs as user 10001, so both files must be readable by that user. The collector keeps no
+trust list of its own; the connection check on the Diagnostics page shows the certificate's thumbprint and at which step the server
+refused it ([Field debugging](field-debugging.md)).
 
-**Modbus TCP** (`modbus`): `host`, `port` (502), `unit_id` (1), `profile` (`auto` or the name of an
-installed profile) and `timeout_seconds`. Only function codes 3, 4 and 43/14 (device identification)
+**Modbus TCP** (`modbus`): `host`, `port` (502), `unit_id` (1, 0 to 247), `profile` (`auto` or the name of an
+installed profile) and `timeout_seconds` (default 3, 0.5 to 30). Only function codes 3, 4 and 43/14 (device identification)
 are ever sent. Point addresses are `fc:register`, e.g. `4:0` is input register 0. A profile is a
 YAML file in `backend/dcdash/profiles/` describing the register layout; `auto` matches the device's
 vendor/product from FC 43 against the installed profiles and fails with `needs_profile` when nothing
-matches (pick a profile on the source) or the chosen profile is not installed. Example
-(`generic_float32.yaml`):
+matches (pick a profile on the source) or the chosen profile is not installed. A block reads
+`function` 3 or 4, from `start`, `count` registers (1 to 125), with `word_order` `big` (the default) or
+`little`. Example (the installed `generic_float32.yaml`, with comments added):
 
 ```yaml
 name: generic_float32
@@ -46,7 +63,7 @@ blocks:
       - {name: Current, offset: 6, data_type: float32, unit: A}
 ```
 
-Each point takes `data_type` (`int16`, `uint16`, `int32`, `uint32`, `float32`, ...), an optional
+Each point takes `data_type` (one of `int16`, `uint16`, `int32`, `uint32`, `float32`; default `uint16`), an optional
 `unit` and an optional `scale` (default `1.0`) that the decoded register value is multiplied by, so
 an `int16` register holding `1234` with `scale: 0.1` reads as `123.4`. A device that accepts the
 TCP connection but never answers is reported as `timeout` after about twice `timeout_seconds`.
@@ -124,3 +141,8 @@ Scan limits: at most 64 TCP connects at a time and 200 attempts per second, a 1 
 timeout, a 3 second timeout per connector probe, 4 sources browsed at a time. Targets are IPv4 only.
 In the dev stack, a scope with targets `simulator` and ports `9000, 4840, 5020` finds all three
 simulator protocols.
+
+Who may scan, map and accept results is set by the `sources.*` and `discovery.*` permissions; see
+[Roles and permissions](roles-and-permissions.md).
+
+Related: [Assets and kinds](assets-and-kinds.md), [Storage](storage.md), [Install and run](install-and-run.md), [Field debugging](field-debugging.md), [Adding a connector](adding-a-connector.md)

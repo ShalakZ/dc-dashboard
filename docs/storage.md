@@ -1,5 +1,9 @@
 # Storage
 
+This page is for the administrator who sizes the database and decides how long readings are kept. Readings are stored in three tiers
+(raw, 1-minute and 1-hour); this page says what each holds and for how long, which tier a chart reads, and what the Storage page's
+controls do. Saving can delete data: read the paragraph on it below before shortening a retention.
+
 ## Storage tiers
 
 | Tier | Table | Contents | Kept for (default) |
@@ -33,3 +37,13 @@ saved values) and, for a confirmed save, `confirmed_loss`.
   projected days-until-full figure. Free disk space is not visible from the API container, so disk
   capacity is a setting: set it to the size of the volume holding the database. The page also edits
   raw retention, compression delay, 1-minute rollup retention and the warning threshold.
+- **Permissions.** `storage.view` opens the page; `storage.edit` turns on Save, Set as default and the Resets (without it the form
+  is read-only).
+- **Limits on the values.** Raw retention is at least 8 days (one more than the 7-day rollup refresh window), at most 3650, and at
+  least one day longer than the compression delay; the compression delay is 1 to 365 days; the 1-minute rollup retention is 30 to
+  36500 days and never shorter than raw retention; the warning threshold is 50 to 99 %; the disk capacity is above 0 and at most
+  1,000,000 GB.
+
+The hourly rollup is the only permanent copy of the energy data: back it up ([Backup and restore](backup-and-restore.md)).
+
+Related: [Sources and discovery](sources-and-discovery.md), [Dashboards and billing](dashboards-and-billing.md), [Backup and restore](backup-and-restore.md), [Screens](screens.md)
