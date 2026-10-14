@@ -1175,6 +1175,18 @@ describe("describeAudit: moved assets (W7p)", () => {
     expect(say({}).summary).toBe("Moved an asset");
   });
 
+  it("still reads a row whose sides kept only the changed keys (audit_change without always=True)", () => {
+    // A reorder inside one parent: sort_order on both sides, no parent to name.
+    expect(say(moved({ before: { sort_order: 0 }, after: { sort_order: 3 }, moved_with: 1 })).summary).toBe("Reordered Pump 3 together with 1 other");
+    expect(say(moved({ before: { sort_order: 0 }, after: { sort_order: 3 } })).summary).toBe("Reordered Pump 3");
+    // A move to a parent that has the same name as the old one: parent_name is equal, so it is on neither side; the lookup names both.
+    expect(say(moved({ before: { parent_id: 6, sort_order: 0 }, after: { parent_id: 7, sort_order: 2 } })).summary).toBe("Moved Pump 3 from Row A to Row B");
+    // Only one side kept parent_name.
+    expect(say(moved({ before: { parent_id: 6 }, after: side(7, "Row B", 2) }), { asset: { "5": "Pump 3" } }).summary).toBe("Moved Pump 3 from a deleted asset to Row B");
+    // Neither a parent nor a sort number: nothing to say beyond the move.
+    expect(say(moved({ before: {}, after: {} })).summary).toBe("Moved Pump 3");
+  });
+
   it("links to the asset while it exists, with the stored name, and not once it is gone", () => {
     expect(say(moved()).link).toEqual({ to: "/assets/5", label: "Open asset Pump 3" });
     expect(say(moved(), { asset: { "6": "Row A" } }).link).toBeNull();

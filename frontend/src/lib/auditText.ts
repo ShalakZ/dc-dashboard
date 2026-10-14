@@ -391,6 +391,8 @@ function assetMoved(c: Context): string {
   const together = togetherWith(c.d.moved_with);
   const sameParent = c.sides !== null && has(c.sides.before, "parent_id") && has(c.sides.after, "parent_id") && stable(get(c.sides.before, "parent_id")) === stable(get(c.sides.after, "parent_id"));
   if (sameParent) return `Reordered ${name} ${to.at === "asset" ? `within ${to.name}` : "at the top level"}${together}`;
+  // The sides of a row that was not written with always=True keep only the changed keys: a reorder then shows sort_order on both sides and no parent at all.
+  if (c.sides && !has(c.sides.before, "parent_id") && !has(c.sides.after, "parent_id") && (has(c.sides.before, "sort_order") || has(c.sides.after, "sort_order"))) return `Reordered ${name}${together}`;
   const origin = from.at === "top" ? " from the top level" : from.at === "asset" ? ` from ${from.name}` : "";
   const destination = to.at === "top" ? " to the top level" : to.at === "asset" ? ` to ${to.name}` : "";
   // A drop at the top level reads "to the top level" alone: where it came from is in the Before / After table.
