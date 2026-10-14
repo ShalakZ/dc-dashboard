@@ -109,7 +109,7 @@ def test_the_feature_lists_name_delete_unblock_the_sign_in_protection_and_what_i
 
 
 def test_the_release_specific_upgrade_sections_are_no_longer_top_level():
-    for text in (README, page("CHANGELOG")):  # they were `##` sections of the README once; they are `###` entries of the CHANGELOG now
+    for text in (README, page("CHANGELOG"), CORPUS):  # they were `##` sections of the README once; they are `###` entries of the CHANGELOG now
         assert not re.search(r"^## Upgrading an existing database to Phase 3", text, flags=re.M)
         assert not re.search(r"^## Upgrading to W1a", text, flags=re.M)
 
@@ -165,7 +165,7 @@ def test_the_runbook_says_the_first_start_after_the_pins_recreates_db():
     assert "The first `docker compose up -d` after the digests arrived recreates `db` as well as the other services, once" in runbook
     assert "The database is unavailable for a short while" in runbook
     assert "The data volume is kept" in runbook
-    assert 'Take a backup first, as for any upgrade (step 1 above, and "Backup and restore")' in runbook
+    assert "Take a backup first, as for any upgrade (step 1 above; the scripts are on [Backup and restore](backup-and-restore.md))" in runbook
     assert "`db` is kept after that first time" in runbook  # the BUILDX paragraph no longer promises that db is never recreated
 
 

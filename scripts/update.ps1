@@ -577,7 +577,7 @@ try {
         $OldRevision = Get-FirstLine $Psql
         if ($Psql.Code -ne 0 -or -not $OldRevision) { $OldRevision = "unknown (the database did not say)" }
         elseif ($OldRevision -notmatch '^[A-Za-z0-9_]+$') {
-            Refuse "the database reports the revision '$OldRevision', which does not look like a revision." "Look at the database by hand (docs/upgrading.md, step 6 (Going back)), then run this again."
+            Refuse "the database reports the revision '$OldRevision', which does not look like a revision." "Look at the database by hand (docs/upgrading.md), then run this again."
         }
     }
     Say "Database revision: $OldRevision"
