@@ -9,7 +9,7 @@ import {
   auditPageOptions, auditPosition, buildReport, useBuildReport, useStartCheck, useAudit, useAuditEntry, useAuditOptions, useBillingCosts, useCreateTariff, useCreateUser, useDashboard, useDashboards, useDeleteUser, useFleetSummary, useGraph, usePatchUser,
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
-  useAddStarterKinds, useAssetKinds, useAssets, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
+  useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
   loadMovePreview, useMoveAssets,
 } from "./queries";
 import { ApiError } from "./client";
@@ -825,6 +825,236 @@ describe("asset kind queries", () => {
     const mutation = route.startsWith("DELETE") ? result.current.del : route.endsWith("starter-pack") ? result.current.pack : result.current.patch;
     await act(async () => { await expect(run(mutation as never)).rejects.toThrow(message); });
     await waitFor(() => expect(count(calls, "/api/asset-kinds")).toBe(2));
+  });
+});
+
+describe("the starter pack's set", () => {
+  const sentTo = async (hook: () => ReturnType<typeof useAddStarterKinds>) => {
+    const urls: string[] = [];
+    mockFetch({ "POST /api/asset-kinds/starter-pack": ({ url }) => { urls.push(url); return { body: { added: [], already_there: 16 } }; } });
+    const { result } = renderHook(hook, { wrapper: stableWrapper() });
+    await act(async () => { await result.current.mutateAsync(); });
+    return urls;
+  };
+
+  it("sends no query for the common set (the server's default), explicit or not", async () => {
+    expect(await sentTo(() => useAddStarterKinds())).toEqual(["/api/asset-kinds/starter-pack"]);
+    expect(await sentTo(() => useAddStarterKinds("common"))).toEqual(["/api/asset-kinds/starter-pack"]);
+  });
+
+  it("asks for the whole catalogue with ?set=all", async () => {
+    expect(await sentTo(() => useAddStarterKinds("all"))).toEqual(["/api/asset-kinds/starter-pack?set=all"]);
+  });
+});
+
+describe("bulk delete of asset kinds", () => {
+  const item = (id: number, assetCount = 0) => ({ id, name: `Kind ${id}`, assetCount });
+  const UPS = { id: 90, name: "UPS" };
+  const ok = { status: 204 } as const;
+
+  /** A fake server for the deletions: `replies[id]` answers DELETE /api/asset-kinds/<id> (204 when not given); every url is recorded in order. */
+  function fakeServer(replies: Record<number, { status: number; body?: unknown } | (() => { status: number; body?: unknown })> = {}) {
+    const urls: string[] = [];
+    const routes: Record<string, (req: { url: string }) => { status: number; body?: unknown }> = {};
+    for (let id = 1; id <= 12; id += 1) {
+      routes[`DELETE /api/asset-kinds/${id}`] = ({ url }) => {
+        urls.push(url);
+        const reply = replies[id] ?? ok;
+        return typeof reply === "function" ? reply() : reply;
+      };
+    }
+    mockFetch(routes);
+    return urls;
+  }
+  const bulk = () => renderHook(() => useBulkDeleteAssetKinds(), { wrapper: stableWrapper() });
+  const run = async (variables: Parameters<ReturnType<typeof useBulkDeleteAssetKinds>["mutateAsync"]>[0]) => {
+    const { result } = bulk();
+    let answer!: Awaited<ReturnType<typeof result.current.mutateAsync>>;
+    await act(async () => { answer = await result.current.mutateAsync(variables); });
+    return answer;
+  };
+
+  it("deletes one kind at a time, in the order given, and says what went", async () => {
+    const urls = fakeServer();
+    const answer = await run({ items: [item(3), item(1), item(2)], moveTo: null });
+    expect(urls).toEqual(["/api/asset-kinds/3", "/api/asset-kinds/1", "/api/asset-kinds/2"]);
+    expect(answer).toEqual({ deleted: [3, 1, 2], gone: [], failed: [], notTried: [], moved: null });
+  });
+
+  it("waits for each request before it sends the next", async () => {
+    const order: string[] = [];
+    mockFetch({
+      "DELETE /api/asset-kinds/1": () => { order.push("1 sent"); return ok; },
+      "DELETE /api/asset-kinds/2": () => { order.push("2 sent"); return ok; },
+    });
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      const answer = await real(...args);
+      order.push("answered");
+      return answer;
+    }));
+    await run({ items: [item(1), item(2)], moveTo: null });
+    expect(order).toEqual(["1 sent", "answered", "2 sent", "answered"]);
+  });
+
+  it.each([
+    ["an unused kind goes with no query, with or without a target", [item(1, 0)], UPS, ["/api/asset-kinds/1"]],
+    ["a kind in use goes with the target and the count it was shown", [item(1, 12)], UPS, ["/api/asset-kinds/1?move_to=90&expect_assets=12"]],
+    ["each kind carries its own count, and only the ones in use a query", [item(1, 4), item(2, 0), item(3, 1)], UPS,
+      ["/api/asset-kinds/1?move_to=90&expect_assets=4", "/api/asset-kinds/2", "/api/asset-kinds/3?move_to=90&expect_assets=1"]],
+    ["a kind in use with no target goes plain (the server then refuses it)", [item(1, 3)], null, ["/api/asset-kinds/1"]],
+  ])("%s", async (_name, items, moveTo, expected) => {
+    const urls = fakeServer();
+    await run({ items, moveTo });
+    expect(urls).toEqual(expected);
+  });
+
+  it("counts the assets that moved with the kinds it deleted, and names where they went", async () => {
+    fakeServer({ 2: { status: 409, body: { detail: "x", assets: 9 } } });
+    const answer = await run({ items: [item(1, 4), item(2, 5), item(3, 0), item(4, 3)], moveTo: UPS });
+    expect(answer.deleted).toEqual([1, 3, 4]);
+    expect(answer.moved).toEqual({ assets: 7, to: "UPS" }); // 4 + 3: the refused kind's 5 did not move, the unused one had none
+  });
+
+  it("collects each refusal with its kind and goes on with the rest", async () => {
+    const urls = fakeServer({ 2: { status: 500, body: { detail: "database is locked" } }, 3: { status: 400, body: { detail: "bad request" } } });
+    const answer = await run({ items: [item(1), item(2), item(3), item(4)], moveTo: null });
+    expect(urls).toHaveLength(4);
+    expect(answer.deleted).toEqual([1, 4]);
+    expect(answer.failed).toEqual([
+      { id: 2, name: "Kind 2", reason: "Database is locked" },
+      { id: 3, name: "Kind 3", reason: "Bad request" },
+    ]);
+    expect(answer.notTried).toEqual([]);
+    expect(answer.stoppedBy).toBeUndefined();
+  });
+
+  it.each([
+    ["one asset", { detail: "1 asset uses this kind now. Check the new count and try again.", assets: 1 }, "1 asset uses it now."],
+    ["several assets", { detail: "14 assets use this kind now. Check the new count and try again.", assets: 14 }, "14 assets use it now."],
+    ["assets that joined a kind that was empty", { detail: "3 assets use this kind. Change their kind first.", assets: 3 }, "3 assets use it now."],
+    ["none left", { detail: "No assets use this kind now. Check the new count and try again.", assets: 0 }, "It has no assets now. Try again."],
+  ])("words a 409 (the count moved) as the new count: %s", async (_name, body, reason) => {
+    fakeServer({ 1: { status: 409, body } });
+    const answer = await run({ items: [item(1, 2)], moveTo: UPS });
+    expect(answer.failed).toEqual([{ id: 1, name: "Kind 1", reason }]);
+  });
+
+  it("falls back to the server's words for a 409 that carries no count", async () => {
+    fakeServer({ 1: { status: 409, body: { detail: "a kind named x already exists" } } });
+    expect((await run({ items: [item(1)], moveTo: null })).failed[0].reason).toBe("A kind named x already exists");
+  });
+
+  it("is not a failure when the server says the kind is gone: another tab deleted it", async () => {
+    const urls = fakeServer({ 2: { status: 404, body: { detail: "asset kind not found" } } });
+    const answer = await run({ items: [item(1), item(2, 5), item(3)], moveTo: UPS });
+    expect(urls).toHaveLength(3);
+    expect(answer).toEqual({ deleted: [1, 3], gone: [2], failed: [], notTried: [], moved: null }); // its 5 assets did not move here
+  });
+
+  it("rewords the 422 'That kind no longer exists.' with the name of the target the person chose", async () => {
+    fakeServer({ 1: { status: 422, body: { detail: "That kind no longer exists." } }, 2: { status: 422, body: { detail: "That kind no longer exists." } } });
+    const answer = await run({ items: [item(1, 2), item(2, 3), item(3, 0)], moveTo: UPS });
+    expect(answer.deleted).toEqual([3]); // an unused kind needs no target
+    expect(answer.failed.map((f) => f.reason)).toEqual(Array(2).fill('The kind chosen for their assets ("UPS") no longer exists.'));
+  });
+
+  it("shows any other 422 in the server's words with a capital", async () => {
+    fakeServer({ 1: { status: 422, body: { detail: "pick another kind to move the assets to." } } });
+    expect((await run({ items: [item(1, 2)], moveTo: UPS })).failed[0].reason).toBe("Pick another kind to move the assets to.");
+  });
+
+  // Each of these would answer the same to every later request, and a 401 or a 403 also makes the app check the account again each time.
+  it.each([
+    [401, "Your session has ended. Sign in again."],
+    [403, "Your role does not allow this."],
+    [502, "The server is not answering (status 502). It may be restarting; try again in a moment."],
+    [503, "The server is not answering (status 503). It may be restarting; try again in a moment."],
+    [504, "The server is not answering (status 504). It may be restarting; try again in a moment."],
+  ])("stops at the first %i and leaves the rest untried", async (status, reason) => {
+    const urls = fakeServer({ 3: { status, body: status === 403 ? { detail: "insufficient permission" } : { detail: "x" } } });
+    const answer = await run({ items: [item(1), item(2), item(3), item(4), item(5)], moveTo: null });
+    expect(urls).toHaveLength(3); // nothing was sent after the one that met the problem
+    expect(answer.deleted).toEqual([1, 2]);
+    expect(answer.notTried).toEqual([3, 4, 5]); // the kind whose request met it was not deleted either, and it did not fail by its own fault
+    expect(answer.failed).toEqual([]);
+    expect(answer.stoppedBy).toBe(reason);
+  });
+
+  it("stops when the network is gone (status 0)", async () => {
+    let sent = 0;
+    mockFetch({ "DELETE /api/asset-kinds/1": ok });
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      sent += 1;
+      if (sent === 2) throw new TypeError("Failed to fetch");
+      return real(...args);
+    }));
+    const answer = await run({ items: [item(1), item(1), item(1)], moveTo: null });
+    expect(sent).toBe(2);
+    expect(answer.deleted).toEqual([1]);
+    expect(answer.notTried).toEqual([1, 1]);
+    expect(answer.stoppedBy).toBe("Can't reach the server. Check the network and try again.");
+  });
+
+  it("keeps what failed before the stop as failed", async () => {
+    fakeServer({ 1: { status: 500, body: { detail: "boom" } }, 2: { status: 503, body: "<html>" } });
+    const answer = await run({ items: [item(1), item(2), item(3)], moveTo: null });
+    expect(answer.failed.map((f) => f.id)).toEqual([1]);
+    expect(answer.notTried).toEqual([2, 3]);
+    expect(answer.deleted).toEqual([]);
+  });
+
+  it("resolves even when every deletion failed: the caller reads the answer", async () => {
+    fakeServer({ 1: { status: 500, body: { detail: "boom" } }, 2: { status: 500, body: { detail: "boom" } } });
+    const answer = await run({ items: [item(1), item(2)], moveTo: null });
+    expect(answer.failed).toHaveLength(2);
+  });
+
+  describe("refetching", () => {
+    const AUDIT = { actions: [], users: [], unattributed: false };
+    /** What a kind change makes stale, each read through a hook that is on screen, plus a client whose `invalidateQueries` can be read. */
+    function mountReaders(kinds: () => unknown[]) {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const invalidated = vi.spyOn(client, "invalidateQueries");
+      const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+      const reads = {
+        "GET /api/assets": () => ({ body: [] }),
+        "GET /api/asset-kinds": () => ({ body: kinds() }),
+        "GET /api/fleet/summary": () => ({ body: {} }),
+        "GET /api/audit/options": () => ({ body: AUDIT }),
+      };
+      return { client, invalidated, wrapper, reads };
+    }
+    const reads = (calls: { method: string; path: string }[]) =>
+      ["/api/assets", "/api/asset-kinds", "/api/fleet/summary", "/api/audit/options"].map((path) => calls.filter((c) => c.method === "GET" && c.path === path).length);
+
+    it("refetches the assets, the kinds, the fleet and the audit log ONCE for the whole batch, not once per kind", async () => {
+      let rows = [1, 2, 3, 4].map((id) => ({ id }));
+      const { client, invalidated, wrapper, reads: readRoutes } = mountReaders(() => rows);
+      const deletes = Object.fromEntries([1, 2, 3, 4].map((id) => [`DELETE /api/asset-kinds/${id}`, () => { rows = rows.filter((r) => r.id !== id); return ok; }]));
+      const calls = mockFetch({ ...readRoutes, ...deletes });
+      const { result } = renderHook(() => ({ assets: useAssets(), kinds: useAssetKinds(), fleet: useFleetSummary(), options: useAuditOptions(), bulk: useBulkDeleteAssetKinds() }), { wrapper });
+      await waitFor(() => expect(result.current.options.data).toBeDefined());
+      await waitFor(() => expect(reads(calls)).toEqual([1, 1, 1, 1]));
+      invalidated.mockClear();
+      await act(async () => { await result.current.bulk.mutateAsync({ items: [item(1), item(2), item(3), item(4)], moveTo: null }); });
+      expect(invalidated.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([keys.assets, keys.fleet, keys.auditAll]);
+      expect(reads(calls)).toEqual([2, 2, 2, 2]);
+      // The refetch is awaited inside the mutation: the cache already holds the new list when mutateAsync resolves (the screen follows on its next render).
+      expect(client.getQueryData(keys.assetKinds)).toEqual([]);
+    });
+
+    it("refetches after a batch that was refused as well: the list on screen is out of date", async () => {
+      const { invalidated, wrapper, reads: readRoutes } = mountReaders(() => []);
+      const calls = mockFetch({ ...readRoutes, "DELETE /api/asset-kinds/1": () => ({ status: 500, body: { detail: "boom" } }), "DELETE /api/asset-kinds/2": () => ({ status: 503, body: "x" }) });
+      const { result } = renderHook(() => ({ kinds: useAssetKinds(), bulk: useBulkDeleteAssetKinds() }), { wrapper });
+      await waitFor(() => expect(result.current.kinds.data).toBeDefined());
+      invalidated.mockClear();
+      await act(async () => { await result.current.bulk.mutateAsync({ items: [item(1), item(2)], moveTo: null }); });
+      expect(invalidated.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([keys.assets, keys.fleet, keys.auditAll]);
+      expect(calls.filter((c) => c.method === "GET" && c.path === "/api/asset-kinds")).toHaveLength(2);
+    });
   });
 });
 
