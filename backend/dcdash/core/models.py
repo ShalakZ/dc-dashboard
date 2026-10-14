@@ -126,6 +126,18 @@ class Asset(Base):
     icon: Mapped[str | None]  # an id from core/asset_icons.py; NULL = Automatic (the icon follows the kind)
 
 
+class AssetKind(Base):
+    """A kind an administrator has set up and the icon its assets show unless they have one of their own. `assets.kind` stays
+    free text with no foreign key: an asset belongs to a registry row when kind_key(asset.kind) equals the row's key."""
+
+    __tablename__ = "asset_kinds"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    key: Mapped[str]  # core.asset_kinds.kind_key(name); unique, so "Rack" and " rack " are one kind
+    icon: Mapped[str] = mapped_column(default="generic", server_default="generic")  # an id from core/asset_icons.py
+    created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+
+
 class Mapping(Base):
     __tablename__ = "mappings"
     id: Mapped[int] = mapped_column(primary_key=True)
