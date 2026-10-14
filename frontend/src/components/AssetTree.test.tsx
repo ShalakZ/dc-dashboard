@@ -839,3 +839,56 @@ describe("AssetTree names", () => {
     for (const name of ["Site", arabic]) expect(link(name)).toHaveAttribute("dir", "auto");
   });
 });
+
+describe("AssetTree Asset kinds link", () => {
+  const kinds = () => screen.getByRole("link", { name: "Asset kinds" });
+  const head = () => screen.getByText("Assets Tree", { selector: ".tree-title" }).closest(".tree-head") as HTMLElement;
+
+  it("is a link in the header to /assets/kinds, named and titled Asset kinds, with a decorative icon", () => {
+    render(ui());
+    expect(kinds()).toHaveAttribute("href", "/assets/kinds");
+    expect(kinds()).toHaveAttribute("title", "Asset kinds");
+    expect(kinds()).toHaveClass("icon-btn");
+    expect(kinds().closest(".tree-head")).toBe(head());
+    expect(kinds().querySelector("svg.i")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("sits after Expand all and before the column toggle, so the tree's own controls keep their tab order", async () => {
+    render(ui({ onAddTop: vi.fn() }));
+    const order = Array.from(head().querySelectorAll("button, a")).map((el) => el.getAttribute("aria-label"));
+    expect(order).toEqual(["Add a top-level asset", "Collapse all", "Expand all", "Asset kinds", "Minimize asset tree"]);
+    for (let i = 0; i < 4; i++) await userEvent.tab(); // the skip link, Add, Collapse all, Expand all
+    expect(expandAll()).toHaveFocus();
+    await userEvent.tab();
+    expect(kinds()).toHaveFocus();
+  });
+
+  it("is there while the list loads, and is not a node of the tree", () => {
+    render(ui({ nodes: [], loading: true }));
+    expect(kinds()).toBeInTheDocument();
+    expect(kinds().closest("ul.tree")).toBeNull();
+  });
+
+  it("goes away with the other header controls when the column is minimized", () => {
+    localStorage.setItem("dcdash.assetTree", "minimized");
+    render(ui());
+    expect(screen.queryByRole("link", { name: "Asset kinds" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand asset tree" })).toBeInTheDocument();
+  });
+
+  it("marks itself as the current page on /assets/kinds, and not on an asset's page", () => {
+    const at = (route: string) => <MemoryRouter initialEntries={[route]}><AssetTree nodes={nodes()} selectedId={null} /></MemoryRouter>;
+    const { unmount } = render(at("/assets/kinds"));
+    expect(kinds()).toHaveAttribute("aria-current", "page");
+    unmount();
+    render(at("/assets/1"));
+    expect(kinds()).not.toHaveAttribute("aria-current");
+  });
+
+  it("stays when the filter matches no asset (it is not a row of the tree)", async () => {
+    render(ui());
+    await userEvent.type(screen.getByLabelText("Filter assets"), "kinds");
+    expect(screen.getByText("No assets match the filter.")).toBeInTheDocument();
+    expect(kinds()).toBeInTheDocument();
+  });
+});

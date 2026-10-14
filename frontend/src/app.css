@@ -272,6 +272,7 @@
   .icon-btn { flex: none; display: grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
   .icon-btn:hover:not(:disabled) { background: var(--accent-tint); color: var(--accent); }
   .icon-btn svg.i { width: 16px; height: 16px; }
+  .icon-btn[aria-current="page"] { background: var(--accent-tint); color: var(--accent); } /* a link styled as an icon button (the tree header's link to Asset kinds) on its own page */
 
   /* Row menu (RowActions), delete button (TrashButton), info tip (InfoTip). The menu panel is a portal on document.body, so it
      is styled from the root, not from its row; z-index 90 is above the top bar (45) and below the dialogs (1000). */
@@ -603,6 +604,7 @@
   .icon-field-label { font-size: var(--fs-sm); font-weight: 600; }
   .icon-field-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .icon-caption { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--text); }
+  .icon-hint { display: block; color: var(--text-2); font-size: var(--fs-xs); }
   .icon-field-row > button { flex: none; }
   .icon-grid { display: grid; grid-template-columns: repeat(10, 32px); gap: 4px; justify-content: start; } /* 29 cells in 3 rows: the open dialog still fits a 1024 x 640 window */
   .icon-grid[hidden] { display: none; }

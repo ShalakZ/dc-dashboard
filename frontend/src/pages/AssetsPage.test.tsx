@@ -418,7 +418,7 @@ describe("AssetsPage", () => {
       await show();
       await typeFilter("zzz");
       expect(screen.getByText("No assets match the filter.")).toBeInTheDocument();
-      expect(screen.queryAllByRole("link").map((l) => l.textContent)).toEqual(["Skip the tree"]); // no row is left, only the skip link
+      expect(screen.queryAllByRole("link").map((l) => l.textContent || l.getAttribute("aria-label"))).toEqual(["Skip the tree", "Asset kinds"]); // no row is left, only the skip link and the header's link to the kinds page
     });
 
     it("gives each name a title with the full name; the selected one (the asset in the URL) carries aria-current", async () => {

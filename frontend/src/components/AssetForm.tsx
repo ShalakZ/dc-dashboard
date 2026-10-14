@@ -1,10 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import type { Asset, AssetIn } from "../api/types";
-import { ASSET_ICONS, assetIcon, assetIconLabel, iconLabelFor } from "../lib/assetIcons";
+import { assetIcon, assetIconLabel, iconLabelFor } from "../lib/assetIcons";
 import { kindIcon } from "../lib/kindIcon";
 import { DEFAULT_KIND, kindKey, kindOptions, resolveKind } from "../lib/kinds";
 import { assetOptions } from "./dashboard/AssetPicker";
-import { Icon } from "./Icon";
+import { IconPicker } from "./IconPicker";
 import { useModalBusy } from "./Modal";
 
 export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
@@ -20,10 +20,6 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
   const [typed, setTyped] = useState("");
   const [startIcon] = useState<string | null>(initial?.icon || null); // at mount: a refetch while the dialog is open must not change what counts as edited; a blank stored value counts as Automatic
   const [icon, setIcon] = useState<string | null>(startIcon); // a catalogue id, null for Automatic; a stored id the catalogue lacks stays as it is until the user picks
-  const [picking, setPicking] = useState(false);
-  const grid = useRef<HTMLDivElement>(null);
-  const opener = useRef<HTMLButtonElement>(null);
-  const [labelId, captionId, gridId] = [useId(), useId(), useId()];
   const [sortOrder, setSortOrder] = useState(String(initial?.sort_order ?? 0));
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -33,12 +29,6 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
   const chosenLabel = icon === null ? null : assetIconLabel(icon);
   const automatic = kindIcon(resolvedKind);
   const caption = icon === null ? `Automatic (${iconLabelFor(automatic)})` : chosenLabel ?? `Unknown icon "${icon}"`;
-
-  useEffect(() => {
-    if (!picking) return;
-    const inputs = grid.current!;
-    (inputs.querySelector<HTMLInputElement>("input:checked") ?? inputs.querySelector<HTMLInputElement>("input"))?.focus();
-  }, [picking]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -74,31 +64,13 @@ export function AssetForm({ assets, initial, excludeIds, onSubmit, onCancel }: {
         </select>
       </label>
       {other && <label>New kind<input value={typed} onChange={(e) => setTyped(e.target.value)} /></label>}
-      <div role="group" aria-labelledby={labelId} aria-describedby={captionId} className="icon-field">
-        <span id={labelId} className="icon-field-label">Icon</span>
-        <div className="icon-field-row">
-          <span className="page-tile icon-preview" aria-hidden="true"><Icon name={assetIcon({ kind: resolvedKind, icon })} /></span>
-          <span id={captionId} className="icon-caption">{caption}</span>
-          <button type="button" ref={opener} aria-expanded={picking} aria-controls={gridId} onClick={() => setPicking((open) => !open)}>Change icon</button>
-        </div>
-        {/* Kept mounted and hidden, so aria-controls resolves; Enter would otherwise save the form while the user is only choosing.
-            Escape closes the grid only: the dialog and the typed name stay (a second Escape, from outside the grid, closes the dialog). */}
-        <div id={gridId} ref={grid} role="radiogroup" aria-label="Icon choices" className="icon-grid" hidden={!picking} onKeyDown={(e) => {
-          if (e.key === "Enter") e.preventDefault();
-          if (e.key === "Escape") { e.stopPropagation(); setPicking(false); opener.current?.focus(); }
-        }}>
-          <label className="icon-cell icon-cell-auto check" title={`Automatic: follows the kind (${iconLabelFor(automatic)})`}>
-            <input type="radio" name="asset-icon" checked={icon === null} onChange={() => setIcon(null)} />
-            <Icon name={automatic} /><span className="sr-only">Automatic</span>
-          </label>
-          {ASSET_ICONS.map((entry) => (
-            <label key={entry.id} className="icon-cell check" title={entry.label}>
-              <input type="radio" name="asset-icon" value={entry.id} checked={icon === entry.id} onChange={() => setIcon(entry.id)} />
-              <Icon name={entry.icon} /><span className="sr-only">{entry.label}</span>
-            </label>
-          ))}
-        </div>
-      </div>
+      <IconPicker
+        value={icon}
+        onChange={setIcon}
+        previewIcon={assetIcon({ kind: resolvedKind, icon })}
+        caption={caption}
+        automatic={{ icon: automatic, title: `Automatic: follows the kind (${iconLabelFor(automatic)})` }}
+      />
       <label>Sort order<input type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} /></label>
       {error && <p className="error" role="alert">{error}</p>}
       <div className="row"><button type="button" onClick={onCancel} disabled={submitting}>Cancel</button><button type="submit" className="primary" disabled={submitting}>Save</button></div>
