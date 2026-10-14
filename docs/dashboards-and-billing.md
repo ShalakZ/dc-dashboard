@@ -107,8 +107,8 @@ site default, else no rate. That means:
 - a room's override applies only from its own effective date; earlier days fall through to the next asset above that has a rate in
   effect, and then to the site default;
 - an old room's override stops applying, on every day, to an asset that left the room;
-- a move re-evaluates every past day, but a day only changes if the new place's rates were in effect on it (that is, if the rate the
-  new place gives on that day differs from the one the old place gave);
+- a move re-evaluates every past day, and a day changes only if the rate the new place gives on that day differs from the one the old
+  place gave (so after a move from a place on the site rate into a room whose override starts today, the earlier days stay as they were);
 - the asset's energy goes with it, so the energy and cost totals of both places (and of the assets above them) change for every past
   day, whether or not the rate changed. The exception is a place with its own meter: from that meter's first reading on, its figures come
   from the meter, so moving an asset in or out does not change them.
@@ -122,8 +122,8 @@ five earlier days did not change, and today's whole day did. The table shows the
 
 | Before the move, the asset's rate came from | The new room's rate | The asset's past days |
 |---|---|---|
-| the site default | an override that starts on or after the move date | unchanged, as long as no asset above the new room has a rate in effect on those days; from the override's date on, the days are priced at it (the move day included, all 24 hours) |
-| any place | an override that started before the asset's history | re-priced at the new room's rate, back to that rate's effective date |
+| the site default | an override that starts on or after the move date | unchanged, as long as no asset above the new room has a rate in effect on those days; from the override's date on, the days are priced at it (when it starts on the move day, that whole day, all 24 hours) |
+| the site default, or an asset above the old room | an override already in effect on past days | each day on which that override is in effect is re-priced at it (a rate on the moved asset itself, or on an asset between it and that room, still wins on the days it is in effect) |
 | an override on the old room | any | the old override no longer applies: each past day falls back to what the new place's chain gives (the new room's rate where it is in effect, else an asset above it, else the site default) |
 
 The Assets Tree warns before a move that changes a rate; see [Moving assets](assets-and-kinds.md#moving-assets).

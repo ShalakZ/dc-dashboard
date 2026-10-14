@@ -169,7 +169,7 @@ built-in names are shown and the server still refuses what is not allowed).
 
 ## Notes for sites upgraded from older releases
 
-- Sign-in protection used to be part of `settings.edit` and now has `settings.security` (W9b). **A role made through the API before W9b
+- Sign-in protection used to be part of `settings.edit` and now has `settings.security` (a change of the W9b release, see [CHANGELOG.md](../CHANGELOG.md)). **A role made through the API before that release
   that holds `settings.edit` lacks `settings.security` until someone ticks it** on the Roles tab (the Administrator has every
   permission and is unaffected).
 - The `permissions` column of the three built-in rows in the database is the snapshot migration `0009` wrote (28 ids, without

@@ -15,7 +15,7 @@ Create `backend/dcdash/connectors/<name>.py` with a subclass of `Connector` (`ba
 |---|---|---|
 | `type` | yes | the connector's name, stored in `sources.connector_type` |
 | `config_schema` | yes | a pydantic model of the source's settings |
-| `test()` | yes | connect and return a `ConnectionCheck` (`ok`, a `status` of `ok`, `auth_failed`, `timeout`, `unreachable` or `protocol_error`, the latency, a message) |
+| `test()` | yes | connect and return a `ConnectionCheck` (`ok`, a `status` of `ok`, `auth_failed`, `timeout`, `unreachable`, `protocol_error` or `needs_profile` (Modbus), the latency, a message) |
 | `browse()` | yes | the points the source offers, as `PointDescriptor`s (address, name, data type, unit hint) |
 | `read(addresses)` | yes | one `PointValue` per address (time, value or `None`, quality `GOOD` or `BAD`, an optional status) |
 | `default_ports` | no | the ports a network scan tries for this connector |

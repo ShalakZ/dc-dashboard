@@ -42,7 +42,7 @@ another synced folder). Run the setup script from the repository folder.
 Windows PowerShell:
 
 ```powershell
-scripts\setup.ps1 -Timezone Africa/Cairo
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1 -Timezone Africa/Cairo
 ```
 
 Linux or WSL:
@@ -86,7 +86,7 @@ docker compose up -d --build
 ```
 
 ```powershell
-.\scripts\backup.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup.ps1
 git pull
 docker compose up -d --build
 ```
@@ -101,7 +101,7 @@ name the old README sections; this is where each one is now:
 - "Scheduled backups": [docs/scheduled-backups.md](docs/scheduled-backups.md).
 - "Upgrading and going back" (steps 1 to 6, step 6 is going back): [docs/upgrading.md](docs/upgrading.md).
 - "Release notes": [CHANGELOG.md](CHANGELOG.md), newest first.
-- "Upgrading an existing database to Phase 3" (its steps 4 and 6): the Phase 3 entry near the bottom of [CHANGELOG.md](CHANGELOG.md).
+- "Upgrading an existing database to Phase 3" (its steps 4 and 6): the Phase 3 entry near the bottom of [CHANGELOG.md](CHANGELOG.md#upgrading-an-existing-database-to-phase-3).
 
 ## Where everything is
 

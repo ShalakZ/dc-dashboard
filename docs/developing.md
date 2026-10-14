@@ -14,7 +14,7 @@ uv run pytest
 
 The tests start their own TimescaleDB container (testcontainers, image `timescale/timescaledb:2.30.2-pg16`, pinned in
 `backend/tests/conftest.py`), so Docker must be running. `uv run pytest tests/<file>.py` runs one file; the doc-reading tests
-(`tests/test_readme_ops.py`, `tests/test_field_debugging_doc.py`) need no Docker.
+(`tests/test_readme_ops.py`, `tests/test_field_debugging_doc.py`, `tests/test_docs_links.py`) need no Docker.
 
 ## Frontend
 
@@ -63,7 +63,7 @@ For `npm run dev` to reach the API without Caddy, publish it for the time being:
 | `docs/` | these pages, `field-debugging.md`, the brand original and the project's planning history (`superpowers/`) |
 | `certs/` | empty in git; holds the HTTPS and OPC UA certificates of an installation |
 | `compose.yaml` | the stack: `db`, `api`, `collector`, `web` and the `dev`-profile `simulator` |
-| `.env.example` | an example `.env`: the database password, the secret key, the timezone and the simulator's settings |
+| `.env.example` | an example `.env`: the database password, the secret key, the timezone, the discovery limits, the TLS paths and the simulator's settings |
 
 ## Brand assets
 

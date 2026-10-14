@@ -99,11 +99,11 @@ dialog. Without that permission the tree is plain links: no picking, no draggabl
   on other days than today the sentence reads "changes the rate some periods are billed at", and for several assets it names the first and
   "and N more". Cancel moves nothing and keeps your picks. An asset's rate on a day is the nearest rate in effect on itself or on an asset
   above it (else the site default), so moving an asset into another branch can change which rate applies. The comparison covers today and
-  every date a rate starts, past and future, so a past day is flagged only if the new place's rates were in effect on it. A reorder inside
+  every date a rate starts, past and future, so a past day is flagged only if the rate the new place gives on it differs from the old one. A reorder inside
   one parent and a move between two places that bill at the same rate on every one of those dates never ask (nor does an asset whose own
   rate covers them all). The rules are in [Which rate applies to a day](dashboards-and-billing.md#which-rate-applies-to-a-day).
 - **Billing follows the tree.** Cost is worked out from the live tree on every request, so a move re-bills **past periods** at the new
-  place, not only from today. A past day's cost changes only if the new place's rates were in effect on that day; a rate in effect on the
+  place, not only from today. A past day's cost changes only if the rate the new place gives on that day differs from the one the old place gave; a rate in effect on the
   move day re-prices that whole day, the hours before the move included. The energy and cost totals of **both** branches change, with or
   without a warning (the warning is only about a changed rate), except for a place with its own meter, whose figures come from that meter.
   Nothing else is rewritten: dashboards, mappings, points and rates point at asset ids, which do not change, and the breadcrumbs, quick

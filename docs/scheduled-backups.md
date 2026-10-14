@@ -35,8 +35,8 @@ Register-ScheduledTask -TaskName dcdash_backup -Action $action -Trigger $trigger
   consider `New-ScheduledTaskSettingsSet -StartWhenAvailable` on the `Register-ScheduledTask` call so that a missed run starts as
   soon as the machine is back (not tried).
 - `-File` (not `-Command`) is what hands exit code 5 to Task Scheduler. `-ExecutionPolicy Bypass` applies to that process only and
-  changes nothing on the machine; without it the default policy, `RemoteSigned`, refuses a script that came over a share or a
-  download.
+  changes nothing on the machine; without it the default policy refuses the script (`Restricted` on Windows 10/11; `RemoteSigned` on Windows Server when it came over a
+  share or a download).
 - The task's environment has no `COMPOSE_PROJECT_NAME`, so it acts on the Compose project named in the `compose.yaml` next to the
   script it runs, unless a `.env` next to it sets `COMPOSE_PROJECT_NAME` (Compose reads that variable from `.env` too; the drill's
   `.env` did not set it).

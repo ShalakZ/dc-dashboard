@@ -17,7 +17,7 @@ Windows PowerShell (run them like this):
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restore.ps1 <dump> [--force] [--apply-retention]
 
 `-ExecutionPolicy Bypass` applies to that one process and changes nothing on the machine. It is there because the default
-policy, `RemoteSigned`, refuses a script that came over a share or a download. `-File` (not `-Command`) matters for
+policy refuses scripts: `Restricted` (Windows 10/11) refuses every script, `RemoteSigned` (Windows Server) one that came over a share or a download. `-File` (not `-Command`) matters for
 `backup.ps1`: Task Scheduler gets exit code 5 only when the script is started with `-File`. `-Keep` also accepts the bash spelling
 `--keep 3`; `--copy-to DIR` is refused with exit 2 (the PowerShell parameter is `-CopyTo`).
 

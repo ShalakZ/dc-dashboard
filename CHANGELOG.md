@@ -5,8 +5,9 @@ What each release (a merged wave) changed, newest first. Each section is headed 
 A release that needs an upgrade note carries it as a `###` entry: the schema revision it leads to when there is a migration, what
 changes and what you will notice, the pre-checks to run before it, how to verify it, whether its downgrade is lossless (which decides
 whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 17 releases have such an
-entry; 9 of them have no migration. The other releases changed no schema and need nothing beyond the usual steps of
-[Upgrading and going back](docs/upgrading.md); they have one or two lines here.
+entry; 9 of them have no migration. The other releases need nothing beyond the usual steps of
+[Upgrading and going back](docs/upgrading.md); they have one or two lines here. Phase 1A, Phase 1C and Phase 2 brought migrations 0001
+to 0003, from before the release notes (see [Migrations in order](docs/upgrading.md#migrations-in-order)).
 
 **Before you upgrade,** read every entry between the version you run and the new one, starting at the oldest of them (lower on
 this page) and working up. **To go back,** use the commit each entry names ("the code to go back to"): a wave's merge commit in a
@@ -47,10 +48,6 @@ The API gains two routes, both needing `assets.edit`; a client that uses neither
 4. **Going back.** Check out `823560b` and rebuild as in step 2. There is no database step. Moves already made stay made (they are ordinary
    parent and order changes), and their `asset.moved` entries stay in the audit log.
 
-## W8e (2026-10-14, 425aaf9)
-
-`scripts\update.ps1`, one safe command that backs up, fast-forwards the code, rebuilds with the build id and checks every service (see [Upgrading and going back](docs/upgrading.md)); scripts and docs only, a Linux twin is parked.
-
 ## W7o (2026-10-14, 823560b)
 
 ### Upgrading to W7o (migration 0011)
@@ -82,6 +79,10 @@ from the new image.
    permission to the custom roles holding `assets.edit` again, including a role that was made on W7o without it on purpose. A restart of
    the W7o `api` would run `alembic upgrade head` and apply `0011` again, so the W7o `api` must not be running once the schema is back
    at `0010`.
+
+## W8e (2026-10-14, 425aaf9)
+
+`scripts\update.ps1`, one safe command that backs up, fast-forwards the code, rebuilds with the build id and checks every service (see [Upgrading and going back](docs/upgrading.md)); scripts and docs only, a Linux twin is parked.
 
 ## W7n (2026-10-14, 365b5e6)
 

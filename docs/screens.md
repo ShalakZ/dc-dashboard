@@ -1,6 +1,6 @@
 # Screens
 
-This page lists every screen of the web app, what it is for and who can open it, in the order of the sidebar. It is for anyone
+This page lists every screen of the web app behind the sign-in, what it is for and who can open it, in the order of the sidebar. It is for anyone
 who uses the app or decides who may use which part of it. "Everyone", "operators" and "admins" mean the built-in Viewer,
 Operator and Admin roles; the permission ids in each entry are what a role of your own needs, and the full list is on
 [Roles and permissions](roles-and-permissions.md). The sidebar shows only the links a person may open, and a page their role

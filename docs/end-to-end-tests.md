@@ -237,10 +237,10 @@ keeps the volume until the next run, which starts with `down -v`;
 `docker compose -p dcdash_e2e --profile dev down -v` removes it right away.
 
 The isolated `-p dcdash_e2e` run builds the same `dcdash-backend:local` and `dcdash-web:local` images
-as the normal stack, so it re-tags them. If your database is still at an older schema, read "Upgrading
-and going back" before you start the normal stack again: because the image tag was
+as the normal stack, so it re-tags them. If your database is still at an older schema, read [Upgrading
+and going back](upgrading.md) before you start the normal stack again: because the image tag was
 replaced, any later `docker compose up -d` on the normal project (with or without `--build`) creates or
-recreates `api`, which then runs the database migrations (see [Upgrading and going back](upgrading.md)). Otherwise rebuild your normal stack afterwards
+recreates `api`, which then runs the database migrations. Otherwise rebuild your normal stack afterwards
 (`docker compose --profile dev up -d --build`) to be sure it runs your own code. Either way, check with
 `docker volume ls` that `dcdash_dbdata` is still listed.
 

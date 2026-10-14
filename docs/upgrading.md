@@ -63,7 +63,7 @@ accepted as `-Yes` and `-Force`). Five environment variables change its waits; a
 | 4 | the build failed, or the stack did not start, become healthy or answer, or runs the wrong version |
 | 5 | the database revision does not match the code |
 
-**The first time:** the update that brings this script still uses the three commands, `.\scripts\backup.ps1`, `git pull` and
+**The first time:** the update that brings this script still uses the three commands, `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup.ps1`, `git pull` and
 `docker compose up -d --build` (set the build id first, see [Build id](#build-id), or Settings says `dev`). Do not copy `update.ps1` in
 by hand before the pull: git then refuses to overwrite it, and the script refuses to start. From then on use the script.
 
@@ -176,8 +176,8 @@ malformed reference). Then rebuild, run the tests and commit the changed files. 
 
 The first `docker compose up -d` after the digests arrived recreates `db` as well as the other services, once: the `image:` line of
 `db` gained the digest, which changes its configuration although the image is the same. The database is unavailable for a short
-while, and `api` and `collector` restart too. The data volume is kept. Take a backup first, as for any upgrade (step 1 above, and
-"Backup and restore"); the scripts are on [Backup and restore](backup-and-restore.md).
+while, and `api` and `collector` restart too. The data volume is kept. Take a backup first, as for any upgrade (step 1 above; the scripts
+are on [Backup and restore](backup-and-restore.md)).
 
 `scripts/setup.sh` and `setup.ps1` set `BUILDX_NO_DEFAULT_ATTESTATIONS=1` before they build, so running them again when nothing changed
 keeps the running containers. A hand-typed `docker compose up -d --build` should set it first (bash:
