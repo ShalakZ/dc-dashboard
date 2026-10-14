@@ -820,7 +820,8 @@ test.describe("W7p: Undo and the audit log", () => {
 
     await undoOf(page, moved).click();
     await expect(toast(page, "Something moved since; the move could not be undone")).toBeVisible();
-    await expect(toast(page, "Undone"), "it was not undone").toHaveCount(0);
+    // `hasText` is a case-insensitive substring match and the refusal itself ends in "undone": match the success toast's whole text.
+    await expect(page.locator(".toast-stack .toast-text").getByText("Undone", { exact: true }), "it was not undone").toHaveCount(0);
     expect(await shapeOf(page.request, plant), "nothing is half restored: Rack C stayed in Hall B, Rack B stayed where the third party put it").toEqual({
       "Hall A": ROOT, "Rack Q": "Hall A", "Rack B": "Row C", "Rack C": "Hall B", "Hall B": ROOT, "Row C": ROOT,
     });
