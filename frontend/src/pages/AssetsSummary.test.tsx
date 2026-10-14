@@ -3,7 +3,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Outlet, Route, Routes } from "react-router";
 import { keys } from "../api/queries";
-import type { Asset, AttentionItem, FleetSummary } from "../api/types";
+import type { Asset, AssetKind, AttentionItem, FleetSummary } from "../api/types";
 import { authed } from "../test/dashboardFixtures";
 import { holdFetch } from "../test/holdFetch";
 import { mockFetch } from "../test/fetchMock";
@@ -35,20 +35,25 @@ function Workspace({ admin }: { admin: boolean }) {
   return <Outlet context={context} />;
 }
 
-function stub({ role = "viewer", list = assets, fleet = fleetOf(), fleetReply }: {
-  role?: BuiltinRole; list?: Asset[]; fleet?: FleetSummary; fleetReply?: { status: number; body: unknown };
+const kindRow = (id: number, name: string, icon: string): AssetKind => ({ id, name, icon, asset_count: 0 });
+
+function stub({ role = "viewer", list = assets, fleet = fleetOf(), fleetReply, kinds = [] }: {
+  role?: BuiltinRole; list?: Asset[]; fleet?: FleetSummary; fleetReply?: { status: number; body: unknown }; kinds?: AssetKind[] | { status: number; body: unknown };
 } = {}) {
   return mockFetch({
     ...authed(role),
     "GET /api/assets": { body: list },
     "GET /api/fleet/summary": fleetReply ?? { body: fleet },
+    "GET /api/asset-kinds": Array.isArray(kinds) ? { body: kinds } : kinds,
   });
 }
-/** Renders nothing; gives the tests a way to make the fleet query fetch again, as its 15 s poll does. */
+/** Renders nothing; gives the tests a way to make the fleet query fetch again, as its 15 s poll does, and to refresh what an asset or kind change refreshes. */
 let refetchFleet: () => void = () => {};
+let refetchAssets: () => void = () => {};
 function FleetRefetcher() {
   const client = useQueryClient();
   refetchFleet = () => void client.invalidateQueries({ queryKey: keys.fleet });
+  refetchAssets = () => void client.invalidateQueries({ queryKey: keys.assets });
   return null;
 }
 function mount(role: BuiltinRole) {
@@ -190,6 +195,67 @@ describe("AssetsSummary", () => {
       ]);
       expect(items[0].children[0]).toHaveClass("kind-name");
       expect(items[0].querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    });
+
+    describe("with the kinds registry", () => {
+      const iconsByName = () =>
+        Object.fromEntries(
+          within(document.querySelector("ul.kind-list") as HTMLElement).getAllByRole("listitem").map((li) => [li.children[0].textContent, li.children[0].querySelector("svg")?.innerHTML]),
+        );
+
+      it("draws a registered kind's icon, found by key whatever the spelling, over the keyword guess; an unregistered kind keeps the guess", async () => {
+        const [server, fan, panel, site] = [iconHtml("kindServer"), iconHtml("kindFan"), iconHtml("kindPanel"), iconHtml("kindSite")]; // outside waitFor: drawing an icon changes the DOM, which would re-run the callback for ever
+        show({ kinds: [kindRow(1, "RACK", "server"), kindRow(2, "Room", "fan")] });
+        await ready();
+        await waitFor(() => expect(iconsByName()["Rack"]).toBe(server));
+        expect(iconsByName()).toEqual({ panel, Rack: server, Room: fan, Site: site });
+      });
+
+      it("draws the generic icon for a registry icon this build lacks, not the keyword guess", async () => {
+        const generic = iconHtml("kindGeneric");
+        show({ kinds: [kindRow(1, "Rack", "zzz"), kindRow(2, "Room", "constructor")] });
+        await ready();
+        await waitFor(() => expect(iconsByName()["Rack"]).toBe(generic));
+        expect(iconsByName()["Room"]).toBe(generic);
+      });
+
+      it.each([
+        ["an empty registry", []],
+        ["a registry that failed to load", { status: 500, body: { detail: "boom" } }],
+      ] as const)("keeps the keyword guess for every kind with %s, and the page still shows", async (_name, kinds) => {
+        const [panel, rack, room, site] = [iconHtml("kindPanel"), iconHtml("kindRack"), iconHtml("kindRoom"), iconHtml("kindSite")];
+        const calls = show({ kinds: kinds as AssetKind[] | { status: number; body: unknown } });
+        await ready();
+        await waitFor(() => expect(calls.some((c) => c.path === "/api/asset-kinds")).toBe(true));
+        await new Promise((resolve) => setTimeout(resolve, 30)); // the reply (or the failure) has been handled
+        expect(iconsByName()).toEqual({ panel, Rack: rack, Room: room, Site: site });
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      });
+
+      it("changes an icon without a reload when the assets and kinds are refreshed", async () => {
+        let icon = "server";
+        const [server, pump] = [iconHtml("kindServer"), iconHtml("kindPump")];
+        mockFetch({
+          ...authed("viewer"),
+          "GET /api/assets": { body: assets },
+          "GET /api/fleet/summary": { body: fleetOf() },
+          "GET /api/asset-kinds": () => ({ body: [kindRow(1, "Rack", icon)] }),
+        });
+        mount("viewer");
+        await ready();
+        await waitFor(() => expect(iconsByName()["Rack"]).toBe(server));
+        icon = "pump";
+        act(() => refetchAssets());
+        await waitFor(() => expect(iconsByName()["Rack"]).toBe(pump));
+      });
+
+      it("asks for the registry only when there are assets to show (a site with none asks for no figures at all)", async () => {
+        const calls = show({ list: [] });
+        await screen.findByRole("heading", { level: 1 });
+        await waitFor(() => expect(calls.some((c) => c.path === "/api/assets")).toBe(true));
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(calls.filter((c) => c.path === "/api/asset-kinds")).toHaveLength(0);
+      });
     });
 
     it("is a plain list, not a list of links", async () => {

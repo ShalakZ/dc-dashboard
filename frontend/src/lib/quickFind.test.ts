@@ -77,12 +77,12 @@ describe("findHits matching", () => {
 describe("findHits shape", () => {
   it("describes an asset by its id, its name and the path above it", () => {
     const [hit] = findHits("meter", TREE, []);
-    expect(hit).toEqual({ kind: "asset", key: "asset:12", label: "Meter", detail: "Site / MV2", to: "/assets/12", assetKind: "panel", assetIcon: null });
+    expect(hit).toEqual({ kind: "asset", key: "asset:12", label: "Meter", detail: "Site / MV2", to: "/assets/12", assetKind: "panel", assetIcon: null, assetKindIcon: null });
   });
 
   it("gives a top-level asset no detail", () => {
     const [hit] = findHits("site", TREE, []);
-    expect(hit).toEqual({ kind: "asset", key: "asset:1", label: "Site", detail: null, to: "/assets/1", assetKind: "panel", assetIcon: null });
+    expect(hit).toEqual({ kind: "asset", key: "asset:1", label: "Site", detail: null, to: "/assets/1", assetKind: "panel", assetIcon: null, assetKindIcon: null });
   });
 
   it("describes a page by its route", () => {
@@ -104,6 +104,15 @@ describe("findHits shape", () => {
     expect(hits.map((h) => h.label)).toEqual(["Cooling unit", "Old unit", "Plain unit", "Settings"]);
     expect(hits.map((h) => h.assetIcon)).toEqual(["crac", "zzz", null, undefined]);
     expect(hits[3]).not.toHaveProperty("assetIcon");
+  });
+
+  it("carries the icon of the asset's kind in the registry as the server resolved it (null when the kind is not registered or the field is absent) and nothing of the sort on a page hit", () => {
+    const hits = findHits("i", [{ ...asset(1, "Cooling unit"), kind_icon: "crac" }, { ...asset(2, "Old unit"), kind_icon: "zzz" }, { ...asset(3, "Plain unit"), kind_icon: null }, asset(4, "Bare unit")], [
+      { label: "Settings", to: "/settings" },
+    ]);
+    expect(hits.map((h) => h.label)).toEqual(["Bare unit", "Cooling unit", "Old unit", "Plain unit", "Settings"]);
+    expect(hits.map((h) => h.assetKindIcon)).toEqual([null, "crac", "zzz", null, undefined]);
+    expect(hits[4]).not.toHaveProperty("assetKindIcon");
   });
 
   it("keeps a 46-character name whole (the ellipsis is the stylesheet's job)", () => {

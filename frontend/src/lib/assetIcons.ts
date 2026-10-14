@@ -50,8 +50,24 @@ export function iconLabelFor(name: IconName): string {
   return BY_ICON.get(name)?.label ?? "Generic";
 }
 
-/** The icon to draw for an asset: the one it was given when that is in the catalogue, else the one its kind suggests. Never throws. */
-export function assetIcon(asset: { kind: string; icon?: string | null }): IconName {
+/** The catalogue id of a `kind*` drawing ("kindPanel" -> "panel"); "generic" for any other icon. The id the server stores for a suggestion. */
+export function iconIdFor(name: IconName): string {
+  return BY_ICON.get(name)?.id ?? "generic";
+}
+
+/** The keyword guess for a kind text, as a catalogue id: what a new kind is offered as its icon. */
+export function kindIconId(kind: string): string {
+  return iconIdFor(kindIcon(kind));
+}
+
+/**
+ * The icon to draw for an asset, first match wins: (1) the one it was given, when that is in the catalogue; (2) the icon of its kind in
+ * the registry (`kind_icon`, resolved by the server; an id this build lacks draws the generic one, since the kind IS registered);
+ * (3) only when the kind is not in the registry (`kind_icon` null, or left out by an older response), the keyword guess. Never throws.
+ */
+export function assetIcon(asset: { kind: string; icon?: string | null; kind_icon?: string | null }): IconName {
   const chosen = typeof asset.icon === "string" ? BY_ID.get(asset.icon) : undefined;
-  return chosen ? chosen.icon : kindIcon(asset.kind);
+  if (chosen) return chosen.icon;
+  if (typeof asset.kind_icon === "string") return BY_ID.get(asset.kind_icon)?.icon ?? "kindGeneric";
+  return kindIcon(asset.kind);
 }

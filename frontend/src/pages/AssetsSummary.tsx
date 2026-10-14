@@ -1,15 +1,15 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { useAssets, useFleetSummary, useSite } from "../api/queries";
-import type { Asset, AttentionItem, FleetSummary } from "../api/types";
+import { useAssetKinds, useAssets, useFleetSummary, useSite } from "../api/queries";
+import type { Asset, AssetKind, AttentionItem, FleetSummary } from "../api/types";
+import { useAuth } from "../auth/AuthProvider";
 import { CostTile } from "../components/CostTile";
 import { EnergyTile } from "../components/EnergyTile";
 import { Icon } from "../components/Icon";
 import { fmt } from "../components/MetricsTable";
 import { PageHeader } from "../components/PageHeader";
 import { FleetSkeleton } from "../components/Skeleton";
-import { kindIcon } from "../lib/kindIcon";
-import { cleanKind, kindKey } from "../lib/kinds";
+import { cleanKind, kindIconForName, kindKey } from "../lib/kinds";
 import { formatSiteDateTime } from "../lib/siteTime";
 import { assetActions, useAssetsContext } from "./AssetsPage";
 
@@ -85,7 +85,7 @@ function Attention({ attention, timezone }: { attention: FleetSummary["attention
 }
 
 /** The body of the page for a site that has assets and whose figures are in or have failed: the four tiles, the kinds, the readings that need attention. */
-function Fleet({ assets, fleet: { data, error }, timezone }: { assets: readonly Asset[]; fleet: UseQueryResult<FleetSummary>; timezone: string | undefined }) {
+function Fleet({ assets, kinds, fleet: { data, error }, timezone }: { assets: readonly Asset[]; kinds: readonly AssetKind[] | undefined; fleet: UseQueryResult<FleetSummary>; timezone: string | undefined }) {
   if (error || !data) return <p className="error" role="alert">{error?.message ?? "The fleet summary is not available."}</p>;
   return (
     <>
@@ -105,7 +105,7 @@ function Fleet({ assets, fleet: { data, error }, timezone }: { assets: readonly 
       <h2 className="section-title">By kind</h2>
       <ul className="kind-list">
         {kindCounts(assets).map(({ name, count }) => (
-          <li key={name}><span className="kind-name"><Icon name={kindIcon(name)} />{name}</span> <span className="kind-count">{count}</span></li>
+          <li key={name}><span className="kind-name"><Icon name={kindIconForName(name, kinds)} />{name}</span> <span className="kind-count">{count}</span></li>
         ))}
       </ul>
       <Attention attention={data.attention} timezone={timezone} />
@@ -120,6 +120,9 @@ function Fleet({ assets, fleet: { data, error }, timezone }: { assets: readonly 
 export function AssetsSummary() {
   const { data: assets = [], isLoading } = useAssets();
   const fleet = useFleetSummary(assets.length > 0);
+  // Not part of `waiting`: a registry that is slow or failed must not hold the page. Until it is there (or when it is not) the list draws the keyword guess.
+  const { can } = useAuth();
+  const { data: kinds } = useAssetKinds(can("assets.view") && assets.length > 0);
   const site = useSite(); // asked for here, with the figures, not when they arrive: the time column should not show a dash while the zone follows them
   const ctx = useAssetsContext();
   const waiting = isLoading || (assets.length > 0 && fleet.isLoading);
@@ -135,7 +138,7 @@ export function AssetsSummary() {
           <p className="empty-title">No assets yet.</p>
         </div>
       ) : (
-        <Fleet assets={assets} fleet={fleet} timezone={site.data?.timezone} />
+        <Fleet assets={assets} kinds={kinds} fleet={fleet} timezone={site.data?.timezone} />
       )}
     </>
   );

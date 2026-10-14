@@ -718,6 +718,25 @@ describe("AssetTree kind icons", () => {
     for (const name of ["Unknown", "Proto", "Ctor", "Empty"]) expect(iconOf(name).innerHTML).toBe(iconHtml("kindRack"));
   });
 
+  it("draws the icon of the node's kind in the registry (kind_icon) over the keyword guess, the node's own icon over both, and generic for a registry icon this build lacks", () => {
+    const registered: Asset[] = [
+      { id: 1, parent_id: null, name: "Pump A", kind: "Pump", sort_order: 1, kind_icon: "server" },
+      { id: 2, parent_id: null, name: "Pump B", kind: "Pump", sort_order: 2, icon: "fan", kind_icon: "server" },
+      { id: 3, parent_id: null, name: "Pump C", kind: "Pump", sort_order: 3, kind_icon: null },
+      { id: 4, parent_id: null, name: "Pump D", kind: "Pump", sort_order: 4 },
+      { id: 5, parent_id: null, name: "Pump E", kind: "Pump", sort_order: 5, kind_icon: "zzz" },
+      { id: 6, parent_id: null, name: "Pump F", kind: "Pump", sort_order: 6, kind_icon: "" },
+      { id: 7, parent_id: null, name: "Pump G", kind: "Pump", sort_order: 7, kind_icon: "constructor" },
+      { id: 8, parent_id: null, name: "Pump H", kind: "Pump", sort_order: 8, icon: "zzz", kind_icon: "rack" },
+    ];
+    render(<MemoryRouter><AssetTree nodes={buildTree(registered)} selectedId={null} /></MemoryRouter>);
+    expect(iconOf("Pump A").innerHTML).toBe(iconHtml("kindServer"));
+    expect(iconOf("Pump B").innerHTML).toBe(iconHtml("kindFan"));
+    for (const name of ["Pump C", "Pump D"]) expect(iconOf(name).innerHTML).toBe(iconHtml("kindPump"));
+    for (const name of ["Pump E", "Pump F", "Pump G"]) expect(iconOf(name).innerHTML).toBe(iconHtml("kindGeneric"));
+    expect(iconOf("Pump H").innerHTML).toBe(iconHtml("kindRack"));
+  });
+
   it("leaves the link text and the accessible name as the asset's name (the icon is decoration beside the link, not inside it)", () => {
     showKinded();
     const link = screen.getByRole("link", { name: "Main" });

@@ -1,8 +1,11 @@
 import type { Asset } from "../api/types";
 
-/** `assetKind` and `assetIcon` are the asset's kind text and chosen icon id, set on asset hits only (the popup picks the row's icon from them). */
+/**
+ * `assetKind`, `assetIcon` and `assetKindIcon` are the asset's kind text, chosen icon id and the icon id of its kind in the registry, set on
+ * asset hits only (the popup picks the row's icon from them, with `assetIcon` in lib/assetIcons.ts).
+ */
 export interface FindHit {
-  kind: "asset" | "page"; key: string; label: string; detail: string | null; to: string; assetKind?: string; assetIcon?: string | null;
+  kind: "asset" | "page"; key: string; label: string; detail: string | null; to: string; assetKind?: string; assetIcon?: string | null; assetKindIcon?: string | null;
 }
 
 const SEPARATOR = " / ";
@@ -60,6 +63,7 @@ export function findHits(
     to: `/assets/${asset.id}`,
     assetKind: asset.kind,
     assetIcon: asset.icon ?? null,
+    assetKindIcon: asset.kind_icon ?? null,
   }));
 
   const pageHits: FindHit[] = pages
