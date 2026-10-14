@@ -150,9 +150,23 @@ UI screens, besides Assets Tree, Sources and Points:
   else the generic one; change a kind's icon here and every asset of that kind follows, and rename a kind and the assets that carry the
   name follow it. A kind that assets still use is deleted by moving them: the dialog shows how many assets use it and a "Move the assets
   to" choice (Delete stays off until a kind is chosen), and the assets, the delete and one audit row happen together or not at all; if the
-  count changed while the dialog was open the server refuses and the dialog shows the new count. **Add data-centre kinds** adds a starter
-  set of 39 (UPS, PDU, ATS, Chiller, CRAC and so on) once: a kind you already have, in any spelling and with any icon, is skipped and never
-  changed, and pressing it again says they are all there. The kind list in the Add and Edit asset dialogs comes from this page, and a new
+  count changed while the dialog was open the server refuses and the dialog shows the new count. Built-in kinds carry a small **Starter**
+  tag (the server decides, by the kind's name in any spelling: the ten the install starts with and the 39 of the data-centre set; every other
+  name is Yours, and the tag follows the name, so renaming a kind can add or remove it, and a kind you create by hand as "UPS" or "Pump" is
+  tagged), and four filters, **All**, **Starter**, **Yours** and **Unused**, each with its count, narrow the list. With `assets.kinds` the table has
+  checkboxes: a click ticks a kind, Shift+click or Shift+Space adds the range from the box last ticked on its own (a range never takes ticks away), Space toggles,
+  the header box ticks every kind shown, **Select all unused** adds the kinds with no assets, and Clear or Escape takes the ticks away
+  (choosing another filter does too, so a tick can never hide in a row the filter took away). The bar's **Delete** removes the ticked kinds
+  in one go: the dialog lists them, and when some are in use it asks for one kind to move their assets to (a kind that is being deleted is
+  not offered, and Delete stays off until one is chosen); each kind is its own delete with its own audit row, a kind that went is gone even
+  if a later one is refused, and a toast says how many went and names the first one that did not. Deleting no longer scrolls the page back
+  to the top: the focus goes to the next row's menu button, or to the filter in use after several. **Add common data-centre kinds** (the
+  header button) adds the 16 most common data-centre kinds (UPS, Battery, PDU, RPP, ATS, STS, Switchgear, Transformer, Generator, Chiller,
+  CRAC, Cooling tower, Server, Network switch, Sensor, Fire suppression), and the quiet **Add all 39 data-centre kinds** beside the filter
+  adds the whole set (Busway, Pump, Router, Data hall and so on as well); each adds only what is missing: a kind you already have, in any
+  spelling and with any icon, is skipped and never changed, and pressing it again says they are all there and writes no audit entry. The
+  route is `POST /api/asset-kinds/starter-pack`, which adds the common kinds by default and the whole set with `?set=all` (`?set=common`
+  is the default spelled out; any other value is a 422), and needs `assets.kinds`. The kind list in the Add and Edit asset dialogs comes from this page, and a new
   kind typed there under "Other…" is added here when the asset is saved **if you may manage asset kinds**; without that permission the
   dialog says so and the asset keeps the text. The 48 icons (an asset or a kind chooses one, or Automatic) are in six groups (Structure,
   Power, Cooling, IT and network, Monitoring and safety, Other) with a search box that finds an icon by its name, a keyword or its short
@@ -843,8 +857,9 @@ Twenty-eight specs run in one `playwright test` run against the dev-profile stac
   inside the window at 1440×900, 1024×640 and 800×600, and typing in the search moves nothing. A kind that three assets use opens the move dialog (the count, a
   "Move the assets to" choice of the other kinds, Delete off until one is chosen); an asset that joins while it is open turns the answer into
   the new count and keeps the choice; the assets follow (an icon of the asset's own stays), the kind is gone, and the toast and the audit
-  entry name the kind they moved to. Add data-centre kinds adds only what is missing, and a second press says they are all there and writes no
-  audit entry, and a starter kind that is already there under another spelling or icon is left alone. A custom role with Change assets but
+  entry name the kind they moved to. Since W7q the header's Add common data-centre kinds adds only the missing ones of the 16 common kinds,
+  and Add all 39 data-centre kinds (beside the filter) adds the rest; a second press of either says they are all there and writes no audit
+  entry, and a starter kind that is already there under another spelling or icon is left alone. A custom role with Change assets but
   not Manage asset kinds sees the list and one line saying what is missing (no New kind, no pack button, no row menu), the API answers 403
   to every write and changes nothing, and a new kind typed in Add asset keeps its text and registers nothing, with the note saying so (an
   administrator's typed kind is registered); the Roles editor offers to tick Change assets and See the Assets Tree with Manage asset kinds.
@@ -866,6 +881,21 @@ Twenty-eight specs run in one `playwright test` run against the dev-profile stac
   and no Selection line, M and Space do nothing, and both routes answer 403. At 1440 px and at 1024 px with the sidebar minimised and expanded
   the tree's title is there, the first pick moves no row, and the tree does not scroll sideways. Every name it makes starts with `W7p` or
   `w7p-` and is removed again.
+- `w7q.spec.ts` (its own project, after `w7p`, at 1600×1000) checks the Asset kinds page you can tell apart and tidy. The stack is shared, so
+  every kind it makes is named `W7q <run> ...`, an account and a role start `w7q-`, and it removes only those (and the starter kinds its pack
+  cases added that were not there before). In a 1024×640 window with a list at least 600 px longer than the window, deleting one kind through
+  the row menu leaves `scrollY` where it was (1 px, or the new end of the page when it got shorter), with the focus on the next row's menu
+  button, and so does deleting three through the bar, with the focus on the filter in use. `Rack` and a pack kind carry a Starter tag beside
+  their label, a W7q kind does not; the four filters carry the counts of the API and show that many rows, choosing another filter clears
+  the ticks and pressing the same one does not. Shift+click and Shift+Space add a range to what is ticked (a second range does not replace the
+  first), Space toggles, the header box is empty, indeterminate or ticked, Select all unused ticks as many kinds as the Unused filter says
+  (Delete is never pressed on it), Clear and Escape leave the focus on a named element. Three unused kinds go and no others, with the toast
+  `Deleted 3 kinds`; one kind in use plus two unused makes the dialog ask for a kind to move to (the selection is not offered, Delete is off
+  until one is chosen), the asset follows, and the audit log has a `kind.deleted` row per kind. The table's top does not move on the first
+  tick at 1440, 1024 and 800 px with the sidebar expanded and minimised, and at 1024 px with it expanded the title stays on one line. The
+  header's button adds exactly the common kinds that are missing and sends no query, Add all 39 adds the rest with `?set=all`, a second press
+  of either says they are all there and writes no audit entry, and `?set=bogus` is a 422. A custom role without Manage asset kinds sees
+  the tag and the filters and no checkbox, pack button or bar, and the API answers 403 for both packs and for a delete.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -1852,7 +1882,7 @@ from the new image.
 2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
    the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
 3. **Verify.** `docker compose exec api alembic current` prints `0011 (head)`; on the Roles tab a custom role that held Change assets now
-   shows Manage asset kinds ticked (in the sensitive group), and the Asset kinds page offers Add data-centre kinds to an administrator.
+   shows Manage asset kinds ticked (in the sensitive group), and the Asset kinds page offers Add data-centre kinds to an administrator (since W7q: Add common data-centre kinds).
 4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0010` and `<old commit>` = `425aaf9`. The
    `0011` downgrade removes `assets.kinds` from every custom role that also holds `assets.edit`; it cannot tell a role that was given it
    by the upgrade from one that had it ticked later, so it takes it from all of them (a role that held it without `assets.edit` keeps the
