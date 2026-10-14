@@ -63,16 +63,19 @@ export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confi
   useEffect(() => {
     if (blocked && !busy) cancel.current?.focus();
   }, [blocked, busy]);
-  // A dialog that turns into one that needs a choice while open (the server said "assets joined" to a confirmed delete) loses the confirm button the
-  // focus was on (it was off while the request ran, and is off again until the choice is made): once the request is over, the first control, the
-  // choice, takes it. Nothing happens while the focus is still on an enabled control inside, such as the choice somebody is using.
+  // A dialog with a choice (children) whose confirmed request was answered with a change of the question (the count moved, the target is gone, or
+  // assets joined) has lost the confirm button the focus was on: the browser drops the focus of a button that is disabled while the request runs,
+  // and the button is then either off again (nothing chosen) or enabled with the focus gone. Once the request is over, the first control, the
+  // choice, takes it. Nothing happens while the focus is still on an enabled control inside, such as the choice somebody is using, and a dialog
+  // without a choice keeps its old behaviour (blocked has its own rule above).
+  const hasChoice = Boolean(children);
   useEffect(() => {
-    if (!confirmDisabled || busy) return;
+    if (!(confirmDisabled || hasChoice) || busy || blocked) return;
     const root = dialog.current;
     const at = document.activeElement;
     const lost = !(at instanceof Node) || !root?.contains(at) || (at instanceof HTMLElement && at.matches(":disabled"));
     if (lost) root?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
-  }, [confirmDisabled, busy]);
+  }, [confirmDisabled, hasChoice, busy, blocked]);
   // Tab and Shift+Tab wrap round inside the dialog, as in Modal. The dialog is the last thing in the body, so without this the browser would
   // take the focus on to its own chrome (and back in on the next Tab); keepFocus stays as the backstop for a click or a script. The controls
   // are read at each keypress, so a disabled confirm button is skipped and one that comes alive counts as the last.

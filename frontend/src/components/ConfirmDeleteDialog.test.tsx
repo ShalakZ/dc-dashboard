@@ -318,6 +318,28 @@ describe("ConfirmDeleteDialog", () => {
       expect(document.activeElement).not.toBe(document.body);
     });
 
+    it("gives the focus back to the choice after a request that left the choice made and the confirm button enabled (a stale count, a 422): Chrome dropped it with the disabled button", async () => {
+      let finish!: () => void;
+      // What Chrome does to a focused button that becomes disabled: the focus is gone. jsdom ignores a blur on a disabled element, so the blur is done
+      // here, at the start of the request, while the button is still enabled in the DOM (React has not committed busy yet).
+      const onConfirm = vi.fn(() => { (document.activeElement as HTMLElement).blur(); return new Promise<void>((resolve) => { finish = resolve; }); });
+      render(<ConfirmDeleteDialog {...props} onConfirm={onConfirm}>{choice}</ConfirmDeleteDialog>);
+      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      expect(document.activeElement).toBe(document.body);
+      await act(async () => finish());
+      expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+      expect(screen.getByLabelText("Move the assets to")).toHaveFocus();
+    });
+
+    it("does not do that for a dialog without a choice: its focus rules are as they were", async () => {
+      let finish!: () => void;
+      const onConfirm = vi.fn(() => { (document.activeElement as HTMLElement).blur(); return new Promise<void>((resolve) => { finish = resolve; }); });
+      render(<ConfirmDeleteDialog {...props} onConfirm={onConfirm} />);
+      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+      await act(async () => finish());
+      expect(document.activeElement).toBe(document.body);
+    });
+
     it("leaves the focus alone when it is still inside and enabled (somebody tabbing through the choice is not pulled back)", async () => {
       render(<ConfirmDeleteDialog {...props} onConfirm={async () => {}} confirmDisabled>{choice}</ConfirmDeleteDialog>);
       screen.getByLabelText("Move the assets to").focus();
