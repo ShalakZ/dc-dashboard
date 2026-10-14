@@ -108,7 +108,7 @@ function MoveForm({ assets, index, roots, move, onCancel, onMoved }: {
   const [phase, setPhase] = useState<Phase>("idle");
   // The preview the person has seen for `choice` when it changes a rate: pressing the button again moves with ITS `expect`.
   const [warn, setWarn] = useState<{ choice: Choice; preview: MovePreview } | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useState<{ tone: "info" | "error"; text: string } | null>(null); // "already there" is a note, not an error
   useModalBusy(phase === "moving"); // Escape must not close the dialog on a move that is being written (a preview only reads: Escape may leave it)
 
   const alive = useRef(true);
@@ -157,12 +157,12 @@ function MoveForm({ assets, index, roots, move, onCancel, onMoved }: {
     const failure = moveFailure(error);
     setWarn(null);
     setPhase("idle");
-    if (failure.kind === "already") setNote(ALREADY_HERE);
+    if (failure.kind === "already") setNote({ tone: "info", text: ALREADY_HERE });
     else if (failure.kind === "stale") {
-      setNote(STALE_HERE);
+      setNote({ tone: "error", text: STALE_HERE });
       // A refused move has already refreshed the lists (the mutation settles that); a refused preview has not.
       if (from === "preview") void invalidate(keys.assets, keys.fleet);
-    } else setNote(failure.text);
+    } else setNote({ tone: "error", text: failure.text });
   };
 
   async function submit(event: FormEvent) {
@@ -190,7 +190,7 @@ function MoveForm({ assets, index, roots, move, onCancel, onMoved }: {
         }
         if (nothingChanges(preview, roots)) {
           setPhase("idle");
-          setNote(ALREADY_HERE);
+          setNote({ tone: "info", text: ALREADY_HERE });
           return;
         }
         if (preview.rate_changes) {
@@ -215,16 +215,15 @@ function MoveForm({ assets, index, roots, move, onCancel, onMoved }: {
 
   const message = warning
     ? { tone: "warn", text: rateWarning(warning.roots, (rate) => rateText(rate, warning.currency)).message }
-    : note !== null
-      ? { tone: "error", text: note }
-      : null;
+    : note;
   const topReason = reasonOf(TOP);
   const label = phase === "checking" ? "Checking..." : warning ? "Move anyway" : "Move";
 
   return (
     <form onSubmit={submit}>
       <label>Search places
-        <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" />
+        {/* Enter here must not move anything: a person refining the search who presses Enter would otherwise write the move to a place chosen earlier. */}
+        <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }} autoComplete="off" />
       </label>
       {/* A box of a FIXED height: a search that thins the list must not resize the dialog or move its buttons. */}
       <div className="place-list">

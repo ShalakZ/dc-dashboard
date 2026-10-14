@@ -25,6 +25,7 @@
      its text arriving moves nothing (a text of four lines grows it). */
   .place-message { min-height: calc(3lh + 14px); font-size: var(--fs-sm); overflow-wrap: anywhere; }
   .place-message[data-tone="warn"] { padding: 6px 10px; border: 1px solid var(--warn-line); border-radius: var(--radius); background: var(--warn-bg); color: var(--warn-ink); }
+  .place-message[data-tone="info"] { padding: 6px 10px; border: 1px solid var(--info-line); border-radius: var(--radius); background: var(--info-tint); color: var(--info-ink); }
   .place-message[data-tone="error"] { padding: 6px 10px; border: 1px solid var(--crit); border-radius: var(--radius); background: var(--crit-tint); color: var(--crit); font-weight: 600; }
 
   /* The one button whose face changes (Move, Checking..., Move anyway): wide enough for the longest, so the row of buttons stays put. Both

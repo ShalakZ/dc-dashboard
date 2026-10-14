@@ -154,7 +154,8 @@ export function useTreeMove({ assets, canEdit, locked }: { assets: Asset[]; canE
     }
     const active = document.activeElement;
     if (refocus.rowId !== undefined && (refocus.force || !active || active === document.body)) {
-      document.querySelector<HTMLElement>(`a[href="/assets/${refocus.rowId}"]`)?.focus();
+      // Inside the tree: the breadcrumbs and the attention list of the pane carry the same hrefs.
+      document.querySelector<HTMLElement>(`ul.tree a[href="/assets/${refocus.rowId}"]`)?.focus();
     }
   }, [refocus]);
 

@@ -60,11 +60,12 @@ describe("the Move to... dialog's own styles", () => {
     expect(rule(".place-row")).toContain("min(var(--depth, 0), 8)");
   });
 
-  it.each(combos)("$id, $mode: the warning, the refusal, the chosen place and the reason read at 4.5:1 on their own grounds", ({ id, mode }) => {
+  it.each(combos)("$id, $mode: the warning, the refusal, the note, the chosen place and the reason read at 4.5:1 on their own grounds", ({ id, mode }) => {
     const map = cascade(id, mode);
     const token = (name: string) => map.get(name)!;
     expect(contrast(token("warn-ink"), token("warn-bg")), "warning text").toBeGreaterThanOrEqual(AA);
     expect(contrast(token("crit"), token("crit-tint")), "refusal text").toBeGreaterThanOrEqual(AA);
+    expect(contrast(token("info-ink"), token("info-tint")), "'already there' note").toBeGreaterThanOrEqual(AA);
     expect(contrast(token("accent-ink"), token("accent-tint")), "chosen place").toBeGreaterThanOrEqual(AA);
     expect(contrast(token("text-2"), token("bg")), "reason and the unavailable place").toBeGreaterThanOrEqual(AA);
   });

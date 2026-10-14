@@ -62,7 +62,8 @@ function Harness({ canEdit = true, locked = false, blurOpener = false, capture }
     <div>
       <button type="button" onClick={() => void move?.onDrop([4], { parent_id: 7, before_id: null })}>drop</button>
       <button type="button" disabled={busy} onClick={(e) => { move?.onMoveTo([4], e.currentTarget); if (blurOpener) e.currentTarget.blur(); }}>open</button>
-      <a ref={link} href="/assets/4">Rack 1 link</a>
+      <a href="/assets/4">Rack 1 crumb</a>
+      <ul className="tree"><li><a ref={link} href="/assets/4">Rack 1 link</a></li></ul>
       <span data-testid="assets">{assets.length}</span>
       <span data-testid="busy">{String(busy)}</span>
       <span data-testid="moved">{move?.moved ? String(move.moved.firstId) : "none"}</span>

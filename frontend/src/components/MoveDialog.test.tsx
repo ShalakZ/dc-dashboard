@@ -181,6 +181,16 @@ describe("MoveDialog", () => {
     expect(posts(calls, "/api/assets/move")[0].body).toEqual({ moves: [{ ids: [4], parent_id: 7, before_id: null }], expect: previewFor().expect });
   });
 
+  it("Enter in the search box moves nothing, even when a place is chosen and still shown", async () => {
+    const { calls, onMoved } = setup({ routes: { "POST /api/assets/move-preview": { body: previewFor() }, "POST /api/assets/move": { body: MOVED } } });
+    await userEvent.click(radio("Yard"));
+    await userEvent.type(search(), "ya{Enter}");
+    expect(search()).toHaveValue("ya");
+    expect(radio("Yard")).toBeChecked();
+    expect(calls.filter((c) => c.method === "POST")).toEqual([]);
+    expect(onMoved).not.toHaveBeenCalled();
+  });
+
   it("Enter on a focused place submits the form", async () => {
     const { onMoved } = setup({ routes: { "POST /api/assets/move-preview": { body: previewFor() }, "POST /api/assets/move": { body: MOVED } } });
     await userEvent.click(radio("Yard"));
@@ -276,6 +286,7 @@ describe("MoveDialog", () => {
       await userEvent.click(radio("Yard"));
       await userEvent.click(primary());
       await waitFor(() => expect(slot()).toHaveTextContent('Yard already has an asset named "Rack 1".'));
+      expect(slot()).toHaveAttribute("data-tone", "error");
       expect(onMoved).not.toHaveBeenCalled();
       expect(onCancel).not.toHaveBeenCalled();
       expect(radio("Yard")).toBeChecked();
@@ -303,6 +314,7 @@ describe("MoveDialog", () => {
       await userEvent.click(radio("Yard"));
       await userEvent.click(primary());
       await waitFor(() => expect(slot()).toHaveTextContent("Already there. Choose another place."));
+      expect(slot()).toHaveAttribute("data-tone", "info"); // not the red of a refusal
     });
 
     it("a preview that finds nothing to move (200 with every root unchanged) reads the same", async () => {
@@ -310,6 +322,7 @@ describe("MoveDialog", () => {
       await userEvent.click(radio("Yard"));
       await userEvent.click(primary());
       await waitFor(() => expect(slot()).toHaveTextContent("Already there. Choose another place."));
+      expect(slot()).toHaveAttribute("data-tone", "info");
     });
 
     it("a network failure is told in the client's words, and the dialog stays", async () => {
