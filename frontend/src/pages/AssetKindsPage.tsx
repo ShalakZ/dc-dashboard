@@ -1,8 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ApiError } from "../api/client";
-import { useAddStarterKinds, useAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind } from "../api/queries";
+import { useAddStarterKinds, useAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, type BulkDeleteResult } from "../api/queries";
 import type { AssetKind, AssetKindIn, AssetKindPatch } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
+import { BulkDeleteKindsDialog } from "../components/BulkDeleteKindsDialog";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { EmptyNote } from "../components/EmptyNote";
 import { Icon } from "../components/Icon";
@@ -15,8 +16,9 @@ import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { assetIcon } from "../lib/assetIcons";
 import { kindKey } from "../lib/kinds";
-import { addRange, filterCounts, filterKinds, KIND_FILTERS, pickAll, pickUnused, type KindFilter } from "../lib/kindsView";
-import { clear, EMPTY_PICK, prune, toggle, type PickState } from "../lib/treeSelect";
+import { bulkToast, removedIds } from "../lib/kindsBulk";
+import { addRange, filterCounts, filterKinds, KIND_FILTERS, neighbourId, pickAll, pickUnused, type KindFilter } from "../lib/kindsView";
+import { clear, EMPTY_PICK, prune, toggle, unpick, type PickState } from "../lib/treeSelect";
 import { upperFirst } from "../lib/upperFirst";
 
 const CRUMBS = [{ label: "Assets Tree", to: "/assets" }, { label: "Asset kinds" }];
@@ -30,7 +32,9 @@ const NEED_KINDS = 'Managing asset kinds needs the "Manage asset kinds" permissi
 
 const countText = (n: number) => (n === 0 ? "No assets" : n === 1 ? "1 asset" : `${n} assets`);
 const renamedText = (n: number) => (n === 0 ? "Kind renamed" : n === 1 ? "Kind renamed, 1 asset follows" : `Kind renamed, ${n} assets follow`);
-const packText = (added: number) => (added === 0 ? "All the data-centre kinds are already there" : `Added ${added} ${added === 1 ? "kind" : "kinds"}`);
+type PackSet = "common" | "all";
+const packText = (added: number, set: PackSet) =>
+  added > 0 ? `Added ${added} ${added === 1 ? "kind" : "kinds"}` : set === "all" ? "All the data-centre kinds are already there" : "All the common data-centre kinds are already there";
 /** What the delete dialog says about a kind in use: the count, and what to do (`move` there is a kind to move to; otherwise one must be created first). */
 const usedText = ({ name, asset_count: n }: AssetKind, move: boolean) => {
   const uses = n === 1 ? `1 asset uses "${name}".` : `${n} assets use "${name}".`;
@@ -132,18 +136,19 @@ export function AssetKindsPage() {
   // What the server's last 409 said about the count: one line in the dialog, so a second press of Delete is a conscious one. Gone when the person
   // chooses another kind and when the next request starts.
   const [changed, setChanged] = useState<string | null>(null);
+  // The kinds the bar's Delete was pressed for: their ids as they were at that moment, not what is ticked now. The dialog is open exactly while this
+  // is set, so ticking or unticking never opens or closes it, and its rows are looked up in the CURRENT list (a refetch changes their counts).
+  const [bulk, setBulk] = useState<number[] | null>(null);
   const others = deleting ? movable(kinds, deleting.id) : [];
   const chosen = others.find((k) => k.id === target) ?? null;
-  const locked = deleting !== null; // no second dialog next to the confirmation (two would share Escape and the focus trap)
+  // No second dialog next to a confirmation (two would share Escape and the focus trap), and no pack button under a form either.
+  const locked = deleting !== null || bulk !== null || dialog !== null;
+  // New kind is the opener of its own form: natively disabled while that form is open, the browser would drop its focus before the form recorded it
+  // as the place to go back to. It is off for every other dialog.
+  const newKindLocked = deleting !== null || bulk !== null || dialog?.kind === "edit";
   const closeDialog = () => setDialog(null);
-  // After a confirmed delete the row and its menu are gone, so the dialog has nothing to give the focus back to: it goes to New kind (to the
-  // heading when this person can no longer add kinds), never to the body.
-  const newKindButton = useRef<HTMLButtonElement>(null);
-  const heading = useRef<HTMLHeadingElement>(null);
-  const [deletions, setDeletions] = useState(0);
-  useEffect(() => {
-    if (deletions > 0) (newKindButton.current ?? heading.current)?.focus();
-  }, [deletions]);
+  const closeBulk = useCallback(() => setBulk(null), []);
+  const bulkRows = bulk === null ? [] : bulk.flatMap((id) => kinds.find((k) => k.id === id) ?? []);
 
   // The list tools. `picks` is what the person ticked; what the page acts on is `picked`, the picks that are on screen: a kind that left the
   // shown rows (renamed, got an asset, a refetch) stops counting at once, and the effect below forgets it for good.
@@ -188,8 +193,7 @@ export function AssetKindsPage() {
 
   // Escape clears the picks, unless a layer of the page is open: that layer's own Escape comes first (a dialog is portaled but its key events
   // still bubble through the React tree to this root). A row menu needs no check here: usePopover stops its Escape in the capture phase.
-  // The bulk dialog (W7q T3b) joins this guard.
-  const modalOpen = dialog !== null || deleting !== null;
+  const modalOpen = dialog !== null || deleting !== null || bulk !== null;
   const onPageKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Escape" || modalOpen || picked.size === 0) return;
     setPicks((state) => clear(state));
@@ -211,6 +215,25 @@ export function AssetKindsPage() {
     (idleButton.current ?? activeFilter.current)?.focus({ preventScroll: true });
   }, [picked.size, canManage]);
 
+  // After a confirmed delete the row, its menu and the dialog's opener are gone, so the dialog has nothing to give the focus back to. It goes to a
+  // place that is named and already on screen: after one kind, the menu button of the row that moves up into its place (the next shown row, else the
+  // previous one: `neighbour`, read when Delete was chosen, because by now the list has changed); after several, or when no such row is left, the
+  // filter in use. Never the body and never New kind (the page must not jump to the top to reach it), and always preventScroll. Declared after the
+  // effect above and run in the commit that closes the dialog: React runs the dialog's cleanup first (it gives the focus back to an opener that
+  // still exists), so this one has the last word.
+  const table = useRef<HTMLTableElement>(null);
+  const neighbour = useRef<number | null>(null);
+  const [deletions, setDeletions] = useState(0);
+  const [bulkDeletions, setBulkDeletions] = useState(0);
+  useEffect(() => {
+    if (deletions === 0) return;
+    const next = neighbour.current === null ? null : table.current?.querySelector<HTMLElement>(`tr[data-kind-id="${neighbour.current}"] .row-menu-btn`);
+    (next ?? activeFilter.current)?.focus({ preventScroll: true });
+  }, [deletions]);
+  useEffect(() => {
+    if (bulkDeletions > 0) activeFilter.current?.focus({ preventScroll: true });
+  }, [bulkDeletions]);
+
   const create = async (body: AssetKindIn) => {
     await worded(createKind.mutateAsync(body));
     toast.success("Kind created");
@@ -224,11 +247,11 @@ export function AssetKindsPage() {
   // A failure is a toast, not a line under the header: a line that arrives late would push the table down. The button waits with aria-disabled and
   // a click guard, never the native attribute: the button has the focus, and a disabled one drops it to the page body.
   // `set`: the header's button adds the common kinds (the server's default), the toolbar's quiet one the whole catalogue.
-  const addPack = async (set: "common" | "all" = "common") => {
+  const addPack = async (set: PackSet) => {
     if (packPending) return;
     try {
       const { added } = await (set === "all" ? addAll : addCommon).mutateAsync();
-      toast.success(packText(added.length));
+      toast.success(packText(added.length, set));
     } catch (e) {
       toast.error(e instanceof Error ? upperFirst(e.message) : String(e));
     }
@@ -255,13 +278,28 @@ export function AssetKindsPage() {
     setDeletions((n) => n + 1);
   };
 
+  // The bar's Delete: the dialog gets the ids of this moment. aria-disabled with a guard here (never native `disabled`: the button has the focus, and
+  // the dialog goes back to it on Cancel).
+  const askBulk = () => {
+    if (locked || picked.size === 0) return;
+    setBulk(order.filter((id) => picked.has(id)));
+  };
+  // The dialog ran the deletions and at least one kind is gone: say what happened (an error toast when anything was refused or left untried), forget
+  // the kinds that left the registry, keep the others ticked so they can be tried again, and close. The focus move is the effect above.
+  const onBulkDone = (result: BulkDeleteResult) => {
+    const { tone, text } = bulkToast(result);
+    toast[tone](text);
+    setPicks((state) => unpick(state, removedIds(result)));
+    setBulk(null);
+    setBulkDeletions((n) => n + 1);
+  };
+
   const header = (actions: ReactNode) => (
     <PageHeader
       title="Asset kinds"
       crumbs={CRUMBS}
       sub={<>The icon an asset shows when it has none of its own <InfoTip>An asset without an icon of its own shows its kind's icon. Change a kind's icon here and every asset of that kind follows.</InfoTip></>}
       actions={actions}
-      headingRef={heading}
     />
   );
 
@@ -284,7 +322,7 @@ export function AssetKindsPage() {
   }
   const actionsOf = (row: AssetKind): RowAction[] => [
     { label: "Edit", disabled: locked, onSelect: () => setDialog({ kind: "edit", row }) },
-    { label: "Delete", tone: "danger", disabled: locked, onSelect: () => { setTarget(null); setChanged(null); setDeleting(row); } },
+    { label: "Delete", tone: "danger", disabled: locked, onSelect: () => { setTarget(null); setChanged(null); neighbour.current = neighbourId(order, row.id); setDeleting(row); } },
   ];
   // The toolbar is drawn once the list has loaded, empty or not, for somebody who manages kinds (Add all is then always within reach, and an empty answer
   // moves nothing); a reader gets it when there is something to filter.
@@ -293,8 +331,8 @@ export function AssetKindsPage() {
     <div className="kinds-page" onKeyDown={onPageKey}>
       {header(canManage ? (
         <>
-          <button type="button" aria-disabled={packPending || undefined} disabled={locked} onClick={() => void addPack()}>Add data-centre kinds</button>
-          <button type="button" className="primary" ref={newKindButton} disabled={locked} onClick={() => setDialog({ kind: "new" })}>New kind</button>
+          <button type="button" aria-disabled={packPending || undefined} disabled={locked} onClick={() => void addPack("common")}>Add common data-centre kinds</button>
+          <button type="button" className="primary" disabled={newKindLocked} onClick={() => setDialog({ kind: "new" })}>New kind</button>
         </>
       ) : undefined)}
       {needNote}
@@ -316,8 +354,7 @@ export function AssetKindsPage() {
               ) : (
                 <div className="kinds-bar">
                   <button type="button" className="quiet" aria-disabled={nothingUnused || undefined} onClick={pickUnusedRows}>Select all unused</button>
-                  {/* W7q T3b wires this to the bulk dialog; until then it is drawn and off. */}
-                  <button type="button" className="danger-quiet" aria-disabled="true">Delete</button>
+                  <button type="button" className="danger-quiet" aria-disabled={locked || undefined} onClick={askBulk}>Delete</button>
                   <button type="button" className="quiet" onClick={() => setPicks((state) => clear(state))}>Clear</button>
                 </div>
               )}
@@ -329,7 +366,7 @@ export function AssetKindsPage() {
         <EmptyNote icon="layers">No kinds yet.</EmptyNote>
       ) : (
         <div className="table-wrap">
-          <table className="kinds-table">
+          <table className="kinds-table" ref={table}>
             <thead>
               <tr>
                 {canManage && (
@@ -390,6 +427,7 @@ export function AssetKindsPage() {
           <KindForm initial={dialog.row} kinds={kinds} onSubmit={(body) => edit(dialog.row, body)} onCancel={closeDialog} />
         </Modal>
       )}
+      {bulk !== null && <BulkDeleteKindsDialog rows={bulkRows} all={kinds} onDone={onBulkDone} onCancel={closeBulk} />}
       {deleting && (
         <DeleteKindDialog row={deleting} others={others} target={chosen?.id ?? null} notice={changed} onTarget={(id) => { setChanged(null); setTarget(id); }} onConfirm={() => removed(deleting)} onCancel={() => setDeleting(null)} />
       )}

@@ -132,7 +132,7 @@ describe("the Asset kinds page", () => {
     await screen.findByText("Rack", { selector: "td *" });
     await accountKnown();
     expect(screen.queryByRole("button", { name: "New kind" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Add data-centre kinds" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add common data-centre kinds" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
     expect(screen.getByText(REASON)).toBeInTheDocument();
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Name", "Assets"]);
@@ -147,7 +147,7 @@ describe("Manage asset kinds (assets.kinds)", () => {
     await screen.findByText("Rack", { selector: "td *" });
     await accountKnown();
     expect(screen.queryByRole("button", { name: "New kind" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Add data-centre kinds" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add common data-centre kinds" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Name", "Assets"]);
     const note = screen.getByText(REASON);
@@ -159,7 +159,7 @@ describe("Manage asset kinds (assets.kinds)", () => {
   it("a role that holds Manage asset kinds gets New kind, the starter pack button and the row menu, and no reason line", async () => {
     show({ permissions: ["assets.view", "assets.kinds"] });
     expect(await newKind()).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Add data-centre kinds" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add common data-centre kinds" })).toBeEnabled();
     expect(within(rowOf("Rack")).getByRole("button", { name: "Actions for Rack" })).toBeInTheDocument();
     expect(screen.queryByText(REASON)).not.toBeInTheDocument();
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["", "Name", "Assets", ""]);
@@ -168,7 +168,7 @@ describe("Manage asset kinds (assets.kinds)", () => {
   it("an administrator holds it, and the reason line is gone once the account is known", async () => {
     show();
     expect(await newKind()).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Add data-centre kinds" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add common data-centre kinds" })).toBeEnabled();
     expect(screen.queryByText(REASON)).not.toBeInTheDocument();
   });
 
@@ -186,24 +186,27 @@ describe("Manage asset kinds (assets.kinds)", () => {
   it("offers the starter pack to somebody who may manage kinds when the list is empty", async () => {
     show({ kinds: [] });
     expect(await screen.findByText("No kinds yet.")).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "Add data-centre kinds" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Add common data-centre kinds" })).toBeEnabled();
   });
 });
 
 describe("the data-centre starter pack", () => {
   const pack = (reply: unknown) => ({ "POST /api/asset-kinds/starter-pack": reply });
-  const press = async () => userEvent.click(await screen.findByRole("button", { name: "Add data-centre kinds" }));
+  const press = async () => userEvent.click(await screen.findByRole("button", { name: "Add common data-centre kinds" }));
 
-  it("posts nothing but the click, says how many kinds it added, and the list shows them", async () => {
+  it("posts nothing but the click, with NO query (the server's default is the common set), says how many kinds it added, and the list shows them", async () => {
     const added = ["UPS", "Battery", "PDU"];
+    const sent: string[] = [];
     const { calls, toasts } = show({
-      over: (fake) => pack(() => {
+      over: (fake) => pack(({ url }: { url: string }) => {
+        sent.push(url); // mockFetch strips the query from `calls`, so the url is recorded here: "no query" would pass vacuously otherwise
         added.forEach((name, i) => fake.rows.push(kind(10 + i, name, name.toLowerCase())));
-        return { body: { added, already_there: 5 } };
+        return { body: { added, already_there: 13 } };
       }),
     });
     await press();
     await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "Added 3 kinds" }]));
+    expect(sent).toEqual(["/api/asset-kinds/starter-pack"]);
     expect(calls.filter((c) => c.method === "POST")).toEqual([{ method: "POST", path: "/api/asset-kinds/starter-pack", body: undefined }]);
     expect(await screen.findByText("Battery", { selector: "td *" })).toBeInTheDocument(); // the list was refetched
   });
@@ -214,24 +217,46 @@ describe("the data-centre starter pack", () => {
     await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "Added 1 kind" }]));
   });
 
-  it("says they are all there when the server added none, and still refreshes the list", async () => {
-    const { toasts, calls } = show({ over: pack({ body: { added: [], already_there: 39 } }) });
+  it("says the common kinds are all there when the server added none, and still refreshes the list", async () => {
+    const { toasts, calls } = show({ over: pack({ body: { added: [], already_there: 16 } }) });
     await press();
-    await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "All the data-centre kinds are already there" }]));
+    await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "All the common data-centre kinds are already there" }]));
     await waitFor(() => expect(calls.filter((c) => c.method === "GET" && c.path === "/api/asset-kinds")).toHaveLength(2));
+  });
+
+  it("the toolbar's button asks for the whole catalogue (?set=all) and has its own sentences: Added 1 kind, and all the data-centre kinds are already there", async () => {
+    const replies = [{ added: ["Valve"], already_there: 38 }, { added: [], already_there: 39 }];
+    const sent: string[] = [];
+    const { toasts } = show({ over: pack(({ url }: { url: string }) => { sent.push(url); return { body: replies.shift() }; }) });
+    const all = await screen.findByRole("button", { name: "Add all 39 data-centre kinds" });
+    await userEvent.click(all);
+    await waitFor(() => expect(toasts.calls).toHaveLength(1));
+    await waitFor(() => expect(all).not.toHaveAttribute("aria-disabled", "true"));
+    await userEvent.click(all);
+    await waitFor(() => expect(toasts.calls).toHaveLength(2));
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Added 1 kind" }, { kind: "success", text: "All the data-centre kinds are already there" }]);
+    expect(sent).toEqual(["/api/asset-kinds/starter-pack?set=all", "/api/asset-kinds/starter-pack?set=all"]);
+  });
+
+  it("is a plain button next to the primary New kind, and says common in its name", async () => {
+    show();
+    const button = await screen.findByRole("button", { name: "Add common data-centre kinds" });
+    expect(button).not.toHaveClass("primary");
+    expect(await newKind()).toHaveClass("primary");
+    expect(screen.queryByRole("button", { name: "Add data-centre kinds" })).not.toBeInTheDocument();
   });
 
   it("shows the server's refusal as an error toast, with no success toast and no change to the page", async () => {
     const { toasts } = show({ over: pack({ status: 403, body: { detail: "insufficient permission" } }) });
     await press();
     await waitFor(() => expect(toasts.calls).toEqual([{ kind: "error", text: "Your role does not allow this." }]));
-    expect(screen.getByRole("button", { name: "Add data-centre kinds" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add common data-centre kinds" })).toBeEnabled();
     expect(screen.getByText("Rack", { selector: "td *" })).toBeInTheDocument();
   });
 
   it("keeps the focus on the button while the request runs, and a second click sends nothing (aria-disabled, never the native attribute)", async () => {
     const { calls } = show({ over: pack({ body: { added: ["UPS"], already_there: 0 } }) });
-    const button = await screen.findByRole("button", { name: "Add data-centre kinds" });
+    const button = await screen.findByRole("button", { name: "Add common data-centre kinds" });
     const held = holdFetch((method, path) => method === "POST" && path === "/api/asset-kinds/starter-pack");
     await userEvent.click(button);
     await waitFor(() => expect(button).toHaveAttribute("aria-disabled", "true"));
@@ -248,7 +273,7 @@ describe("the data-centre starter pack", () => {
     show();
     await screen.findByText("Pump", { selector: "td *" });
     await choose("Pump", "Delete");
-    expect(screen.getByRole("button", { name: "Add data-centre kinds" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add common data-centre kinds" })).toBeDisabled();
   });
 });
 
@@ -441,7 +466,7 @@ describe("Delete kind", () => {
       expect(toasts.calls).toEqual([{ kind: "success", text: 'Kind "Rack" deleted, 12 assets moved to Sensor' }]);
       await waitFor(() => expect(screen.queryByText("Rack", { selector: "td *" })).not.toBeInTheDocument());
       expect(within(rowOf("Sensor")).getByText("13 assets")).toBeInTheDocument();
-      await waitFor(() => expect(screen.getByRole("button", { name: "New kind" })).toHaveFocus()); // the row and its menu are gone
+      await waitFor(() => expect(screen.getByRole("button", { name: "Actions for Pump" })).toHaveFocus()); // the row and its menu are gone: the row that moved up has it
     });
 
     it("toasts the singular for one asset", async () => {
@@ -707,21 +732,90 @@ describe("Delete kind", () => {
     expect(toasts.calls).toEqual([]);
   });
 
-  it("puts the focus on New kind after a confirmed delete (the row and its menu are gone), not on the page body", async () => {
-    show();
-    await screen.findByText("Pump", { selector: "td *" });
-    await choose("Pump", "Delete");
-    await userEvent.click(within(dialog('Delete the kind "Pump"?')).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.getByRole("button", { name: "New kind" })).toHaveFocus());
-    expect(document.activeElement).not.toBe(document.body);
+  describe("where the focus goes after a confirmed delete (the row and its menu are gone), without scrolling", () => {
+    /** Every focus() call of the test with the element and the options it was given. */
+    const focusCalls = () => {
+      const calls: { el: Element; options: FocusOptions | undefined }[] = [];
+      const real = HTMLElement.prototype.focus;
+      const spy = vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+        calls.push({ el: this, options });
+        real.call(this, options);
+      });
+      return { calls, restore: () => spy.mockRestore() };
+    };
+    const del = async (name: string) => {
+      await choose(name, "Delete");
+      await userEvent.click(within(dialog(`Delete the kind "${name}"?`)).getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    };
+    const FOUR = [kind(1, "Alpha", "rack"), kind(2, "Pump", "pump"), kind(3, "Hall", "hall"), kind(4, "Valve", "valve")];
+    const removingRow = (id: number) => (fake: Fake) => ({
+      [`DELETE /api/asset-kinds/${id}`]: () => { fake.rows.splice(fake.rows.findIndex((r) => r.id === id), 1); return { status: 204 }; },
+    });
+
+    it("is the menu button of the next row, with preventScroll, and never New kind or the page body", async () => {
+      const { calls, restore } = focusCalls();
+      try {
+        show({ kinds: FOUR, over: removingRow(2) });
+        await screen.findByText("Pump", { selector: "td *" });
+        await del("Pump");
+        await waitFor(() => expect(screen.getByRole("button", { name: "Actions for Hall" })).toHaveFocus());
+        expect(document.activeElement).not.toBe(document.body);
+        expect(screen.getByRole("button", { name: "New kind" })).not.toHaveFocus();
+        const last = calls.filter((c) => c.el === screen.getByRole("button", { name: "Actions for Hall" })).at(-1);
+        expect(last?.options).toEqual({ preventScroll: true });
+      } finally {
+        restore();
+      }
+    });
+
+    it("is the menu button of the previous row when the deleted one was the last", async () => {
+      show({ kinds: FOUR, over: removingRow(4) });
+      await screen.findByText("Valve", { selector: "td *" });
+      await del("Valve");
+      await waitFor(() => expect(screen.getByRole("button", { name: "Actions for Hall" })).toHaveFocus());
+    });
+
+    it("goes by the rows SHOWN: under a filter the neighbour is the next row of the filter, not of the whole list", async () => {
+      show({ kinds: [kind(1, "Alpha", "rack"), kind(2, "Pump", "pump"), kind(3, "Hall", "hall", 2), kind(4, "Valve", "valve")], over: removingRow(2) });
+      await screen.findByText("Pump", { selector: "td *" });
+      await userEvent.click(filterButton("Unused 3"));
+      await del("Pump"); // Hall is in use, so the filter hides it: the next shown row is Valve
+      await waitFor(() => expect(screen.getByRole("button", { name: "Actions for Valve" })).toHaveFocus());
+    });
+
+    it("is the filter in use, with preventScroll, when no row is left to take it", async () => {
+      const { calls, restore } = focusCalls();
+      try {
+        show({ kinds: [PUMP], over: removingRow(2) });
+        await screen.findByText("Pump", { selector: "td *" });
+        await del("Pump");
+        await waitFor(() => expect(screen.getByRole("button", { name: /^All 0$/ })).toHaveFocus());
+        expect(screen.getByRole("button", { name: "New kind" })).not.toHaveFocus();
+        expect(calls.filter((c) => c.el === screen.getByRole("button", { name: /^All 0$/ })).at(-1)?.options).toEqual({ preventScroll: true });
+      } finally {
+        restore();
+      }
+    });
+
+    it("is the filter in use when the neighbour left the list meanwhile (deleted elsewhere)", async () => {
+      const { rows } = show({ kinds: FOUR, over: removingRow(2) });
+      await screen.findByText("Pump", { selector: "td *" });
+      await choose("Pump", "Delete");
+      rows.splice(rows.findIndex((r) => r.id === 3), 1); // Hall, the neighbour, is gone when the list is read again
+      await userEvent.click(within(dialog('Delete the kind "Pump"?')).getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("button", { name: /^All 2$/ })).toHaveFocus());
+      expect(onTheBody()).toBe(false);
+    });
   });
 
-  it("does not pull the focus to New kind after Cancel (only a delete takes the opener away)", async () => {
+  it("gives the focus back to the menu button that opened it when the confirmation is cancelled, and never moves it to New kind", async () => {
     show();
     await screen.findByText("Pump", { selector: "td *" });
     await choose("Pump", "Delete");
     await userEvent.click(within(dialog('Delete the kind "Pump"?')).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Actions for Pump" })).toHaveFocus();
     expect(screen.getByRole("button", { name: "New kind" })).not.toHaveFocus();
   });
 
@@ -918,7 +1012,7 @@ describe("the toolbar", () => {
   it("the header's button still sends no query at all (the server's default pack)", async () => {
     const sent: string[] = [];
     show({ over: { "POST /api/asset-kinds/starter-pack": ({ url }: { url: string }) => { sent.push(url); return { body: { added: [], already_there: 16 } }; } } });
-    await userEvent.click(await screen.findByRole("button", { name: "Add data-centre kinds" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Add common data-centre kinds" }));
     await waitFor(() => expect(sent).toEqual(["/api/asset-kinds/starter-pack"]));
   });
 
@@ -973,7 +1067,7 @@ describe("picking kinds", () => {
     expect(document.querySelector(".kinds-slot")).toBe(slot); // the same element
     expect(within(slot).queryByRole("button", { name: "Add all 39 data-centre kinds" })).not.toBeInTheDocument();
     expect(within(slot).getAllByRole("button").map((b) => b.textContent)).toEqual(["Select all unused", "Delete", "Clear"]);
-    expect(within(slot).getByRole("button", { name: "Delete" })).toHaveAttribute("aria-disabled", "true"); // T3b wires it
+    expect(within(slot).getByRole("button", { name: "Delete" })).not.toHaveAttribute("aria-disabled"); // on while no dialog is open
   });
 
   describe("the header box", () => {
@@ -1262,6 +1356,332 @@ describe("picking kinds", () => {
       await waitFor(() => expect(screen.queryByText("Pump", { selector: "td *" })).not.toBeInTheDocument());
       expect(selected("1 selected")).toBeInTheDocument();
     });
+  });
+});
+
+describe("deleting several kinds", () => {
+  /** The server's DELETE for every kind of the fake: the kind goes, and with move_to its assets join the target. Every url is recorded as sent, query included; `reply` may refuse one. */
+  const deleting = (sent: string[], reply?: (id: number, fake: Fake) => { status: number; body?: unknown } | undefined) => (fake: Fake) =>
+    Object.fromEntries(fake.rows.map((r) => [`DELETE /api/asset-kinds/${r.id}`, ({ url }: { url: string }) => {
+      sent.push(url);
+      const refused = reply?.(r.id, fake);
+      if (refused) return refused;
+      const row = fake.rows.find((x) => x.id === r.id)!;
+      const target = fake.rows.find((x) => String(x.id) === new URL(url, "http://x").searchParams.get("move_to"));
+      if (target) target.asset_count += row.asset_count;
+      fake.rows.splice(fake.rows.indexOf(row), 1);
+      return { status: 204 };
+    }]));
+  const tick = async (...names: string[]) => { for (const name of names) await userEvent.click(box(name)); };
+  const press = async () => userEvent.click(screen.getByRole("button", { name: "Delete" }));
+  const bulkDialog = (title: string) => screen.getByRole("dialog", { name: title });
+  const confirm = async (title: string) => userEvent.click(within(bulkDialog(title)).getByRole("button", { name: "Delete" }));
+  const noDialog = () => waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  const deletesOf = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method === "DELETE").map((c) => c.path);
+  /** Every focus() call with its element and options (the real one still runs). */
+  const spyFocus = () => {
+    const calls: { el: Element; options: FocusOptions | undefined }[] = [];
+    const real = HTMLElement.prototype.focus;
+    const spy = vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      calls.push({ el: this, options });
+      real.call(this, options);
+    });
+    return { calls, restore: () => spy.mockRestore() };
+  };
+
+  it("asks first, with the names, deletes the ticked kinds one by one in list order with no query, and says so", async () => {
+    const sent: string[] = [];
+    const { calls, toasts } = show({ kinds: MIXED, over: deleting(sent) });
+    await screen.findByText("Rack", { selector: "td *" });
+    await tick("Valve", "Pump", "Hall"); // not in list order, on purpose
+    await press();
+    const ask = bulkDialog("Delete 3 kinds?");
+    expect(ask).toHaveAccessibleDescription("Pump, Hall, Valve. Assets that carry these names later get an automatic icon.");
+    expect(deletesOf(calls)).toEqual([]);
+    await confirm("Delete 3 kinds?");
+    await noDialog();
+    expect(sent).toEqual(["/api/asset-kinds/2", "/api/asset-kinds/5", "/api/asset-kinds/6"]);
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Deleted 3 kinds" }]);
+    await waitFor(() => expect(screen.queryByText("Hall", { selector: "td *" })).not.toBeInTheDocument());
+    expect(namesShown()).toEqual(["Rack", "Sensor", "Room"]);
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("checkbox").filter((b) => (b as HTMLInputElement).checked)).toHaveLength(0);
+    expect(calls.filter((c) => c.method === "GET" && c.path === "/api/asset-kinds")).toHaveLength(2); // the list is read again ONCE, not after each deletion
+  });
+
+  it("puts the focus on the filter in use, with preventScroll, after the dialog closes (the bar and its Delete are gone)", async () => {
+    const sent: string[] = [];
+    show({ kinds: MIXED, over: deleting(sent) });
+    await screen.findByText("Rack", { selector: "td *" });
+    await tick("Pump", "Hall");
+    await press();
+    const spy = spyFocus();
+    try {
+      await confirm("Delete 2 kinds?");
+      await noDialog();
+      await waitFor(() => expect(screen.getByRole("button", { name: /^All 4$/ })).toHaveFocus());
+      expect(onTheBody()).toBe(false);
+      expect(spy.calls.filter((c) => c.el === screen.getByRole("button", { name: /^All 4$/ })).at(-1)?.options).toEqual({ preventScroll: true });
+      expect(screen.getByRole("button", { name: "New kind" })).not.toHaveFocus();
+    } finally {
+      spy.restore();
+    }
+  });
+
+  it("works from Select all unused: the dialog lists every unused kind", async () => {
+    const sent: string[] = [];
+    show({ kinds: MIXED, over: deleting(sent) });
+    await screen.findByText("Rack", { selector: "td *" });
+    await userEvent.click(box("Sensor")); // in use, ticked by hand: it stays in the selection
+    await userEvent.click(screen.getByRole("button", { name: "Select all unused" }));
+    await press();
+    const ask = bulkDialog("Delete 5 kinds?");
+    expect(within(ask).getByRole("combobox", { name: "Move the assets to" })).toBeInTheDocument(); // Sensor has an asset
+    expect(within(ask).getAllByRole("option").map((o) => o.textContent)).toEqual(["Choose a kind…", "Rack"]); // the only kind outside the selection
+  });
+
+  it("one ticked kind opens the same dialog with its singular title", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await tick("Pump");
+    await press();
+    expect(bulkDialog("Delete 1 kind?")).toHaveAccessibleDescription("Pump. Assets that carry this name later get an automatic icon.");
+  });
+
+  describe("with kinds in use", () => {
+    it("asks where the assets go (a select that leaves out the selection), waits for a choice, then sends move_to and the counts with those that are in use only", async () => {
+      const sent: string[] = [];
+      const { toasts } = show({ kinds: MIXED, over: deleting(sent) });
+      await screen.findByText("Rack", { selector: "td *" });
+      await tick("Rack", "Pump", "Sensor");
+      await press();
+      const ask = bulkDialog("Delete 3 kinds?");
+      expect(ask).toHaveAccessibleDescription("2 of these kinds are used by 13 assets. Move those assets to another kind, then delete the 3.");
+      const select = within(ask).getByLabelText("Move the assets to") as HTMLSelectElement;
+      expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["Choose a kind…", "Hall", "Room", "Valve"]); // Rack, Pump and Sensor are not offered
+      expect(within(ask).getByRole("button", { name: "Delete" })).toBeDisabled();
+      await userEvent.selectOptions(select, "Room");
+      expect(within(ask).getByRole("button", { name: "Delete" })).toBeEnabled();
+      await userEvent.click(within(ask).getByRole("button", { name: "Delete" }));
+      await noDialog();
+      expect(sent).toEqual(["/api/asset-kinds/1?move_to=4&expect_assets=12", "/api/asset-kinds/2", "/api/asset-kinds/3?move_to=4&expect_assets=1"]);
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Deleted 3 kinds, 13 assets moved to Room" }]);
+      await waitFor(() => expect(within(rowOf("Room")).getByText("13 assets")).toBeInTheDocument());
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    });
+
+    it("is the blocked dialog when every kind is ticked and some are in use: why, and Close", async () => {
+      const sent: string[] = [];
+      const { calls } = show({ kinds: [RACK, PUMP], over: deleting(sent) });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(headerBox());
+      await press();
+      const ask = bulkDialog("Delete 2 kinds?");
+      expect(within(ask).getByRole("alert")).toHaveTextContent("Every kind is selected, and 12 assets use some of them. Keep at least one kind to move them to.");
+      expect(within(ask).queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+      await userEvent.click(within(ask).getByRole("button", { name: "Close" }));
+      await noDialog();
+      expect(deletesOf(calls)).toEqual([]);
+      expect(selected("2 selected")).toBeInTheDocument();
+    });
+  });
+
+  describe("when something is refused", () => {
+    it("a partial failure: the others go, an error toast names the kind and why, and the refused one stays ticked", async () => {
+      const sent: string[] = [];
+      const { toasts } = show({ kinds: MIXED, over: deleting(sent, (id, fake) => {
+        if (id !== 5) return undefined;
+        fake.rows.find((r) => r.id === 5)!.asset_count = 1; // an asset joined it meanwhile
+        return { status: 409, body: { detail: "1 asset uses this kind now. Check the new count and try again.", assets: 1 } };
+      }) });
+      await screen.findByText("Rack", { selector: "td *" });
+      await tick("Pump", "Hall", "Valve");
+      await press();
+      await confirm("Delete 3 kinds?");
+      await noDialog();
+      expect(sent).toEqual(["/api/asset-kinds/2", "/api/asset-kinds/5", "/api/asset-kinds/6"]); // the loop goes on after a refusal
+      expect(toasts.calls).toEqual([{ kind: "error", text: 'Deleted 2 kinds. "Hall" could not be deleted: 1 asset uses it now.' }]);
+      await waitFor(() => expect(namesShown()).toEqual(["Rack", "Sensor", "Room", "Hall"]));
+      expect(selected("1 selected")).toBeInTheDocument();
+      expect(box("Hall")).toBeChecked();
+      await waitFor(() => expect(screen.getByRole("button", { name: /^All 4$/ })).toHaveFocus());
+    });
+
+    it("a refused kind that left the shown rows meanwhile (Unused: an asset joined it) is no longer ticked, and the toast still names it", async () => {
+      const sent: string[] = [];
+      const { toasts } = show({ kinds: MIXED, over: deleting(sent, (id, fake) => {
+        if (id !== 5) return undefined;
+        fake.rows.find((r) => r.id === 5)!.asset_count = 2;
+        return { status: 409, body: { detail: "2 assets use this kind now.", assets: 2 } };
+      }) });
+      await screen.findByText("Rack", { selector: "td *" });
+      await userEvent.click(filterButton("Unused 4"));
+      await tick("Pump", "Hall");
+      await press();
+      await confirm("Delete 2 kinds?");
+      await noDialog();
+      expect(toasts.calls).toEqual([{ kind: "error", text: 'Deleted 1 kind. "Hall" could not be deleted: 2 assets use it now.' }]);
+      await waitFor(() => expect(namesShown()).toEqual(["Room", "Valve"]));
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    });
+
+    it("when every deletion fails the dialog stays open with the reason, nothing is toasted, and the kinds stay ticked", async () => {
+      const sent: string[] = [];
+      const { toasts } = show({ kinds: MIXED, over: deleting(sent, () => ({ status: 500, body: { detail: "database is down" } })) });
+      await screen.findByText("Rack", { selector: "td *" });
+      await tick("Pump", "Hall");
+      await press();
+      await confirm("Delete 2 kinds?");
+      const ask = bulkDialog("Delete 2 kinds?");
+      expect(await within(ask).findByRole("alert")).toHaveTextContent("Database is down");
+      expect(within(ask).getByRole("button", { name: "Delete" })).toBeEnabled();
+      expect(sent).toEqual(["/api/asset-kinds/2", "/api/asset-kinds/5"]);
+      expect(toasts.calls).toEqual([]);
+      expect(selected("2 selected")).toBeInTheDocument();
+      expect(screen.getByText("Pump", { selector: "td *" })).toBeInTheDocument();
+    });
+
+    it("stops at a refusal of the role (403): the rest are not tried, and the toast says so", async () => {
+      const sent: string[] = [];
+      const { toasts } = show({ kinds: MIXED, over: deleting(sent, (id) => (id === 5 ? { status: 403, body: { detail: "insufficient permission" } } : undefined)) });
+      await screen.findByText("Rack", { selector: "td *" });
+      await tick("Pump", "Hall", "Valve");
+      await press();
+      await confirm("Delete 3 kinds?");
+      await noDialog();
+      expect(sent).toEqual(["/api/asset-kinds/2", "/api/asset-kinds/5"]); // Valve was never asked
+      expect(toasts.calls).toEqual([{ kind: "error", text: "Deleted 1 kind. Stopped: Your role does not allow this. 2 were not tried." }]);
+      await waitFor(() => expect(namesShown()).toEqual(["Rack", "Sensor", "Room", "Hall", "Valve"]));
+      expect(selected("2 selected")).toBeInTheDocument(); // the two that were not deleted stay ticked
+    });
+
+    it("nothing deleted and the loop stopped (403 at once): the dialog stays open and says why", async () => {
+      const sent: string[] = [];
+      const { toasts } = show({ kinds: MIXED, over: deleting(sent, () => ({ status: 403, body: { detail: "insufficient permission" } })) });
+      await screen.findByText("Rack", { selector: "td *" });
+      await tick("Pump", "Hall");
+      await press();
+      await confirm("Delete 2 kinds?");
+      expect(await within(bulkDialog("Delete 2 kinds?")).findByRole("alert")).toHaveTextContent("Your role does not allow this.");
+      expect(sent).toEqual(["/api/asset-kinds/2"]);
+      expect(toasts.calls).toEqual([]);
+    });
+
+    it("a kind another tab deleted (404) counts as gone: no error, and it leaves the ticks", async () => {
+      const sent: string[] = [];
+      const { toasts } = show({ kinds: MIXED, over: deleting(sent, (id) => (id === 5 ? { status: 404, body: { detail: "kind not found" } } : undefined)) });
+      await screen.findByText("Rack", { selector: "td *" });
+      await tick("Pump", "Hall");
+      await press();
+      await confirm("Delete 2 kinds?");
+      await noDialog();
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Deleted 2 kinds" }]);
+      expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    });
+  });
+
+  // The dialog's own freeze (it shows the kinds as they were at the press if the list loses them before the request is over) is pinned in
+  // BulkDeleteKindsDialog.test.tsx with props: removing it there fails that test, but fails no page test, because here the mutation resolves
+  // before the list's observers render, so the in-between state never shows. What the page owes is that the dialog belongs to the press: open and titled until the request is over.
+  it("stays open with its own title while the request runs, and is never titled for fewer kinds, whatever the list does", async () => {
+    const sent: string[] = [];
+    const titles = new Set<string>();
+    const watcher = new MutationObserver(() => document.querySelectorAll('[role="dialog"]').forEach((d) => titles.add(d.getAttribute("aria-label") ?? "")));
+    const { toasts } = show({ kinds: MIXED, over: deleting(sent) });
+    await screen.findByText("Rack", { selector: "td *" });
+    await tick("Pump", "Hall");
+    await press();
+    watcher.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+    const held = holdFetch((method, path) => method === "GET" && path === "/api/asset-kinds"); // the refetch after the loop
+    try {
+      await confirm("Delete 2 kinds?");
+      await waitFor(() => expect(sent).toHaveLength(2));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(bulkDialog("Delete 2 kinds?")).toBeInTheDocument(); // busy, open, the list not yet read again
+      held.release();
+      await noDialog();
+      await waitFor(() => expect(toasts.calls).toEqual([{ kind: "success", text: "Deleted 2 kinds" }]));
+      expect([...titles]).toEqual(["Delete 2 kinds?"]); // never "Delete 0 kinds?", never closed early
+    } finally {
+      watcher.disconnect();
+    }
+  });
+
+  it("Cancel closes it and gives the focus back to the bar's Delete, with the ticks and no request", async () => {
+    const { calls } = show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await tick("Pump", "Hall");
+    await press();
+    expect(within(bulkDialog("Delete 2 kinds?")).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await userEvent.click(within(bulkDialog("Delete 2 kinds?")).getByRole("button", { name: "Cancel" }));
+    await noDialog();
+    expect(screen.getByRole("button", { name: "Delete" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "New kind" })).not.toHaveFocus();
+    expect(selected("2 selected")).toBeInTheDocument();
+    expect(deletesOf(calls)).toEqual([]);
+  });
+
+  it("Escape closes it and keeps the ticks: the dialog's Escape comes before the page's", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await tick("Pump", "Hall");
+    await press();
+    await userEvent.keyboard("{Escape}");
+    await noDialog();
+    expect(selected("2 selected")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}"); // now no layer is open: this one clears them
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+  });
+
+  it("turns the header buttons off while it is open, like the single-kind confirmation (two dialogs would share Escape and the focus trap)", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await tick("Pump");
+    await press();
+    expect(screen.getByRole("button", { name: "Add common data-centre kinds" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "New kind" })).toBeDisabled();
+  });
+
+  it("stays open when the ticks are cleared behind it (it belongs to the press, not to the ticks), and Add all stays off", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await tick("Pump", "Hall");
+    await press();
+    await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+    expect(bulkDialog("Delete 2 kinds?")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toBeDisabled();
+    await userEvent.click(within(bulkDialog("Delete 2 kinds?")).getByRole("button", { name: "Cancel" }));
+    await noDialog();
+  });
+
+  it("the bar's Delete does nothing while a dialog is open, and is not natively disabled", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await tick("Pump");
+    const bar = screen.getByRole("button", { name: "Delete" });
+    await userEvent.click(bar);
+    expect(bulkDialog("Delete 1 kind?")).toBeInTheDocument();
+    // the dialog has a Delete too: the one of the bar is the one outside it
+    const behind = screen.getAllByRole("button", { name: "Delete", hidden: true }).find((b) => b === bar)!;
+    expect(behind).toHaveAttribute("aria-disabled", "true");
+    expect(behind).not.toBeDisabled();
+    await userEvent.click(behind);
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("the header and the toolbar are also off while the Edit form is open, and New kind stays on while its own form is open (it is the form's opener)", async () => {
+    show({ kinds: MIXED });
+    await screen.findByText("Rack", { selector: "td *" });
+    await userEvent.click(await newKind());
+    expect(screen.getByRole("button", { name: "New kind" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add common data-centre kinds" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add all 39 data-centre kinds" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await newKind()).toHaveFocus(); // the form gave the focus back to its opener
+    await choose("Sensor", "Edit");
+    expect(screen.getByRole("button", { name: "New kind" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add common data-centre kinds" })).toBeDisabled();
   });
 });
 
