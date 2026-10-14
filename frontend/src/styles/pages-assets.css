@@ -71,16 +71,64 @@
   .kinds-page .kind-tile { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent); }
   .kinds-page .kind-tile svg.i { width: 20px; height: 20px; }
   .kinds-page .kind-label { min-width: 0; overflow-wrap: anywhere; color: var(--text); font-weight: 600; } /* a seeded name can be longer than anyone may type now: it wraps in its cell */
-  .kinds-page .kinds-table td:nth-child(2) { width: 16%; min-width: 7.5rem; white-space: nowrap; }
+  .kinds-page .kinds-table .kind-assets { width: 16%; min-width: 7.5rem; white-space: nowrap; } /* the Assets cell by its class: a checkbox column in front of Name moved it from the second cell to the third */
   .kinds-page .kinds-table .kind-actions { width: 1%; padding-top: 6px; padding-bottom: 6px; text-align: right; white-space: nowrap; }
   /* The header holds the title and two buttons. With the sidebar expanded in a narrow window the pane is about 300px, and beside the buttons (about 280px)
      the title and the trail would be squeezed to a column of single letters: below this width the buttons go under the title. The header is the container,
-     so the pane's own width decides, not the window's (the sidebar and the tree column take a changing share of it). */
+     so the pane's own width decides, not the window's (the sidebar and the tree column take a changing share of it).
+     Measured with the longer button "Add common data-centre kinds" (W7q; the two buttons are then 332px, 280px with the old "Add data-centre kinds"): the title
+     column is what is left after the buttons and the 16px gap, and "Asset kinds" and the trail ("Assets Tree / Asset kinds", 18px high) need about 176px on one
+     line each, so beside the buttons from 524px up; at 484px the title wrapped to two lines and at 504px the trail did. 530px leaves a margin. */
   .kinds-page .page-head { container-type: inline-size; }
-  @container (max-width: 480px) { .kinds-page .page-head > .actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 12px; } }
+  @container (max-width: 530px) { .kinds-page .page-head > .actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 12px; } }
   .kinds-page .kinds-note { margin: 0 0 14px; font-size: var(--fs-sm); } /* what a reader is missing, in place of the buttons; one line of muted text above the table */
   /* The starter pack button waits with aria-disabled while its request runs (a native disabled would drop the focus it has): the same two looks as
      button:disabled, and the base hover wash is taken back by naming the base colour. */
   .kinds-page .actions button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
   .kinds-page .actions button[aria-disabled="true"]:hover { background: var(--bg); }
+
+  /* W7q: the Starter tag, the toolbar (filter and one slot), the checkbox column. */
+  /* The tag is .role-badge (pages-admin.css: the outlined neutral "Built in" tag, radius 4px, never a pill). That rule gives it 8px at the left for a tag after
+     running text; here it is a flex item beside the label, and the cell's gap spaces it. It never shrinks or wraps, so a long name wraps and the tag stays whole. */
+  .kinds-page .kind-starter { flex: none; margin-left: 0; white-space: nowrap; }
+
+  /* The toolbar under the header: the filter at the left, ONE slot at the right. It is a container, so the pane's own width decides, not the window's (the
+     sidebar and the tree column take a changing share of it). It sticks under the top bar, with the page's own background (the 12px under it are its own
+     padding, not a margin, so that rows scrolling past do not show in the gap), and the bar of picked kinds stays in reach in a list of fifty. The skeleton
+     draws the same box, empty (.kinds-filter-room and an empty slot). */
+  .kinds-page .kinds-toolbar { container-type: inline-size; position: sticky; top: var(--bar-h); z-index: 3; display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 6px 16px; padding: 6px 0 12px; background: var(--bg); }
+  .kinds-page .kinds-filter-room { height: var(--btn-h); }
+  /* The filter is four buttons, about 336px. In a pane narrower than that it scrolls sideways inside its own box (never two lines of text in a button); the
+     3px of padding and the negative margin keep the focus ring of an end button from being clipped by the scroll box. */
+  .kinds-page .kinds-filter { max-width: calc(100% + 6px); margin: -3px; padding: 3px; overflow-x: auto; }
+  .kinds-page .kinds-filter > button { flex: none; white-space: nowrap; }
+  /* The slot has a fixed size: the same box holds the idle button and the bar, so picking a row changes its words and never the height of the toolbar. At the
+     right it sits beside the filter (336px + the gap + 360px fit from 712px up); below 720px of the toolbar's width it has its own line, in BOTH states. */
+  .kinds-page .kinds-slot { flex: 0 0 360px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0 8px; min-height: var(--btn-h); }
+  .kinds-page .kinds-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0 2px; }
+  .kinds-page .kinds-selected { font-size: var(--fs-sm); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 20px; }
+  .kinds-page .kinds-slot button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+  .kinds-page .kinds-slot button[aria-disabled="true"]:hover { background: none; }
+  @container (max-width: 720px) { .kinds-page .kinds-slot { flex-basis: 100%; justify-content: flex-start; } .kinds-page .kinds-bar { justify-content: flex-start; } }
+  /* The bar is the count (20px line) and three buttons (30px each): about 330px wide. Where that does not fit one line the buttons wrap under the count, two
+     lines of 20px + 30px; the slot then reserves them in the idle state too, or the first tick would push the table down by the difference. */
+  @container (max-width: 400px) { .kinds-page .kinds-slot { min-height: 50px; } }
+  @container (max-width: 260px) { .kinds-page .kinds-slot { min-height: 80px; } } /* three lines: the buttons themselves no longer fit one line (Select all unused, then Delete and Clear) */
+
+  /* A focused box or menu button that the browser scrolls up to the top edge (Firefox and Safari align to the nearest edge; Chromium centres) must not end up
+     under the sticky toolbar: the top bar is already kept clear by scroll-padding-top, and the toolbar is at most 108px (the bar wrapped to three lines). */
+  .kinds-page .kinds-table :is(input, button) { scroll-margin-top: 112px; }
+
+  /* The checkbox column: as narrow as its box. */
+  /* A table with a floor: in a pane of 300px (the sidebar open in a window of 800px) the name would get one letter a line; it scrolls in its frame instead. */
+  .kinds-page .kinds-table { min-width: 28rem; }
+  .kinds-page .kinds-table .kind-check { width: 1%; padding-right: 0; }
+  .kinds-page .kinds-table .kind-check input { display: block; width: 16px; height: 16px; margin: 0; cursor: pointer; }
+  .kinds-page .kinds-table .kind-check input[aria-disabled="true"] { cursor: not-allowed; }
+  /* A picked row: the accent tint on its cells. Named from the page and the table so that it outranks the global row hover (tbody tr:hover > td). The icon tile
+     is the same tint, so on a picked row it turns to the page colour with a hairline, and stays a tile. */
+  .kinds-page .kinds-table tr.is-picked > td { background: var(--accent-tint); }
+  .kinds-page .kinds-table tr.is-picked .kind-tile { background: var(--bg); box-shadow: inset 0 0 0 1px var(--border); }
+  /* The filter found nothing: one muted line under the header row, inside the frame. */
+  .kinds-page .kinds-none { margin: 0; padding: 18px var(--row-x); font-size: var(--fs-sm); }
 }

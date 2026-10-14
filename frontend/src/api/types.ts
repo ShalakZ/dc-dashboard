@@ -19,7 +19,11 @@ export interface Asset { id: number; parent_id: number | null; name: string; kin
 /** `icon`: a catalogue id, null to go back to Automatic, left out to leave it as it is (the server treats an absent key as unchanged). */
 export interface AssetIn { name: string; parent_id: number | null; kind: string; sort_order: number; icon?: string | null }
 /** One kind of the registry (GET /api/asset-kinds, sorted by key). `icon` is a catalogue id as stored; `asset_count` counts the assets whose kind text has this kind's key. */
-export interface AssetKind { id: number; name: string; icon: string; asset_count: number }
+export interface AssetKind {
+  id: number; name: string; icon: string; asset_count: number;
+  /** The server's word that this name is one of the built-in kinds (matched by key). */
+  starter: boolean;
+}
 /** `icon` left out = generic. */
 export interface AssetKindIn { name: string; icon?: string }
 /** A key left out is left as it is; neither may be null. */

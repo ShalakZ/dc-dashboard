@@ -188,6 +188,7 @@ describe("UsersPage: the shell of Users & Roles", () => {
   });
 
   it("after a user is deleted the h1 takes the focus (the row and its Delete button are gone)", async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
     open(ADMIN);
     const row = (await screen.findByText("ops", { selector: "td" })).closest("tr")!;
     await userEvent.click(within(row).getByRole("button", { name: "Delete ops" }));
@@ -196,6 +197,9 @@ describe("UsersPage: the shell of Users & Roles", () => {
     const heading = screen.getByRole("heading", { level: 1, name: "Users & Roles" });
     await waitFor(() => expect(document.activeElement).toBe(heading));
     expect(heading).toHaveAttribute("tabindex", "-1");
+    // Focusing the h1 must not scroll the page back to the top (the Asset kinds page jumped after each delete).
+    const onHeading = focus.mock.calls.filter((_, i) => focus.mock.contexts[i] === heading);
+    expect(onHeading).toEqual([[{ preventScroll: true }]]);
   });
 
   it("is one route for both tabs: the address /users/:tab? keeps one page instance, so switching tabs keeps the h1 element", async () => {

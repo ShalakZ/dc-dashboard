@@ -1,6 +1,7 @@
 import { hashKey, keepPreviousData, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiQuery, type AuditFilters } from "../lib/auditFilters";
 import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
+import { upperFirst } from "../lib/upperFirst";
 import { ApiError, api } from "./client";
 import type {
   Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, StarterPackResult, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
@@ -95,8 +96,90 @@ export const useDeleteAssetKind = () =>
     return api.del(`/api/asset-kinds/${id}${sent ? `?${sent}` : ""}`);
   });
 
-/** Adds the data-centre starter kinds the registry lacks (idempotent on the server); `mutateAsync()` takes no argument. */
-export const useAddStarterKinds = () => useKindMutation((_: void) => api.post<StarterPackResult>("/api/asset-kinds/starter-pack"));
+/**
+ * Adds the starter kinds the registry lacks (idempotent on the server); `mutateAsync()` takes no argument. `set` picks the pack: "common" is the
+ * server's default and sends no query, "all" sends `?set=all` for the whole catalogue.
+ */
+export const useAddStarterKinds = (set: "common" | "all" = "common") =>
+  useKindMutation((_: void) => api.post<StarterPackResult>(`/api/asset-kinds/starter-pack${set === "all" ? "?set=all" : ""}`));
+
+/** One kind to delete: `assetCount` is the number the person was shown (it is sent back as `expect_assets` when the kind is in use). */
+export interface BulkDeleteItem { id: number; name: string; assetCount: number }
+export interface BulkDeleteVariables {
+  items: readonly BulkDeleteItem[];
+  /** Where the assets of the kinds in use go (name: for the sentences). Never one of `items`. */
+  moveTo: { id: number; name: string } | null;
+}
+export interface BulkDeleteFailure { id: number; name: string; reason: string }
+export interface BulkDeleteResult {
+  /** The ids this call deleted. */
+  deleted: number[];
+  /** The ids the server said were gone already (a 404: another tab deleted them). They are not failures; the list loses them all the same. */
+  gone: number[];
+  /** Refused one by one (a 409 because the count moved, a 422, a 500...), in list order, with the reason as a sentence. */
+  failed: BulkDeleteFailure[];
+  /** Not deleted because the loop stopped: the kind whose request met the problem, and every kind after it. Empty unless `stoppedBy` is set. */
+  notTried: number[];
+  /** Why the loop stopped (no connection, the session ended, the role lost the permission, the server is not answering). */
+  stoppedBy?: string;
+  /** The assets that went to `to` with the kinds this call deleted; null when none moved. */
+  moved: { assets: number; to: string } | null;
+}
+
+/** A problem with the connection, the session or the role: every kind after it would meet the same one (and each 401 or 403 makes the app re-check the account). */
+const stopsTheLoop = (e: ApiError) => e.status === 0 || e.status === 401 || e.status === 403 || e.status === 502 || e.status === 503 || e.status === 504;
+const stopReason = (e: ApiError) => (e.status === 401 ? "Your session has ended. Sign in again." : upperFirst(e.message));
+const assetsUse = (n: number) => (n === 0 ? "It has no assets now. Try again." : n === 1 ? "1 asset uses it now." : `${n} assets use it now.`);
+const TARGET_GONE = "That kind no longer exists.";
+
+/** Why one kind was not deleted, as a sentence a toast can put after its name. */
+function failureReason(e: unknown, moveToName: string | undefined): string {
+  if (!(e instanceof ApiError)) return upperFirst(e instanceof Error ? e.message : String(e));
+  if (e.status === 409) {
+    const assets = (e.body as { assets?: unknown } | null | undefined)?.assets;
+    if (typeof assets === "number" && Number.isInteger(assets) && assets >= 0) return assetsUse(assets);
+  }
+  if (e.status === 422 && e.detail === TARGET_GONE && moveToName !== undefined) return `The kind chosen for their assets ("${moveToName}") no longer exists.`;
+  return upperFirst(e.message);
+}
+
+/**
+ * Deletes the kinds one at a time, in the order given, each with the route a single delete uses (a kind in use goes with `move_to` and the count
+ * it was shown; an unused one with no query). A refusal is collected and the loop goes on; only a problem every later request would share stops
+ * it. One at a time on purpose: each deletion is its own transaction with its own audit row and its own stale-count check on the server.
+ */
+async function deleteKindsOneByOne({ items, moveTo }: BulkDeleteVariables): Promise<BulkDeleteResult> {
+  const result: BulkDeleteResult = { deleted: [], gone: [], failed: [], notTried: [], moved: null };
+  let movedAssets = 0;
+  for (let at = 0; at < items.length; at += 1) {
+    const { id, name, assetCount } = items[at];
+    const target = assetCount > 0 ? moveTo : null;
+    try {
+      await api.del(`/api/asset-kinds/${id}${target ? `?move_to=${target.id}&expect_assets=${assetCount}` : ""}`);
+      result.deleted.push(id);
+      if (target) movedAssets += assetCount;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        result.gone.push(id);
+      } else if (e instanceof ApiError && stopsTheLoop(e)) {
+        result.stoppedBy = stopReason(e);
+        result.notTried = items.slice(at).map((item) => item.id);
+        break;
+      } else {
+        result.failed.push({ id, name, reason: failureReason(e, moveTo?.name) });
+      }
+    }
+  }
+  if (moveTo && movedAssets > 0) result.moved = { assets: movedAssets, to: moveTo.name };
+  return result;
+}
+
+/**
+ * Deletes several kinds, one request each (see `deleteKindsOneByOne`). It resolves with what happened to each, and rejects only for a failure
+ * of its own. The three lists a kind change makes stale are refetched ONCE at the end (`useKindMutation`'s `onSettled`, awaited before
+ * `mutateAsync` resolves), not after each request: twelve deletions would otherwise read the kinds, the fleet and the audit log twelve times.
+ */
+export const useBulkDeleteAssetKinds = () => useKindMutation(deleteKindsOneByOne);
 
 /**
  * The Assets Tree landing page: live power, today's energy and cost over the whole site, and the readings that need attention.

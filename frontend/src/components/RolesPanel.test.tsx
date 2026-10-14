@@ -254,6 +254,7 @@ describe("RolesPanel: Delete", () => {
   });
 
   it("asks first, deletes on confirmation, closes, and puts the focus on New role", async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
     let list = [...builtinRoles(), EXECUTIVE];
     const calls = show({ "DELETE /api/roles/7": () => { list = list.filter((r) => r.id !== 7); return { status: 204 }; } }, () => list);
     await table();
@@ -264,7 +265,12 @@ describe("RolesPanel: Delete", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/api/roles/7"]);
     await waitFor(() => expect(within(screen.getByRole("table", { name: "Roles" })).queryByRole("row", { name: /Executive/ })).toBeNull());
-    expect(screen.getByRole("button", { name: "New role" })).toHaveFocus();
+    const newRole = screen.getByRole("button", { name: "New role" });
+    expect(newRole).toHaveFocus();
+    // Focusing a far-away button must not scroll the page to it (the Asset kinds page jumped after each delete).
+    const onNewRole = focus.mock.calls.filter((_, i) => focus.mock.contexts[i] === newRole);
+    expect(onNewRole).toContainEqual([{ preventScroll: true }]);
+    expect(onNewRole.every((args) => args[0]?.preventScroll === true)).toBe(true);
     expect(toasts.calls).toEqual([{ kind: "success", text: 'Role "Executive" deleted' }]);
   });
 

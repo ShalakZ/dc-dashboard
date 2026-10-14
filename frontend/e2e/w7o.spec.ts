@@ -19,7 +19,8 @@ import { rowAction, treeLink, userBlock } from "./shell";
 //                        and drawn in the tree row and the header, Escape in layers, no sideways scroll and no shift while typing.
 //   delete and move      a kind of three assets: the move form, a fourth asset arriving (409 and the dialog's new count), the move, the audit entry.
 //                        THIS DESCRIBE IS THE DEFERRABLE PART (plan decision 1): drop it with T1b-2 and T4b if they are dropped.
-//   the starter pack     adds what is missing, skips a kind in another spelling without touching its icon, a second press adds nothing.
+//   the starter pack     since W7q the header's button adds the 16 common kinds that are missing (a kind in another spelling is skipped without
+//                        touching its icon, a second press adds nothing), and the toolbar's "Add all 39 data-centre kinds" adds the rest.
 //   the permission       a role with Change assets and without Manage asset kinds: read-only page, 403 on every write, typed kinds stay text;
 //                        an admin's typed kind is registered; the Roles editor offers the two permissions that Manage asset kinds needs.
 //
@@ -36,7 +37,12 @@ const EDITOR_ROLE = "w7o-editor-role"; // Change assets, not Manage asset kinds
 const EDITOR = { username: "w7o-editor", password: "w7o-editor-pass", role: EDITOR_ROLE };
 const DEFAULT_LOOK = { mode: "light", theme: "navy-gold" }; // what w7d leaves, used only when the account's own look cannot be read
 
-/** The data-centre starter kinds (core/asset_kinds.py STARTER_PACK, in its order). The count is 39 there too: a change of the pack changes this list. */
+/** The common data-centre kinds (core/asset_kinds.py COMMON_NAMES, W7q): what the header's button adds. All of them are in STARTER below. */
+const COMMON = [
+  "UPS", "Battery", "PDU", "RPP", "ATS", "STS", "Switchgear", "Transformer", "Generator", "Chiller", "CRAC", "Cooling tower", "Server",
+  "Network switch", "Sensor", "Fire suppression",
+];
+/** The data-centre starter kinds (core/asset_kinds.py STARTER_PACK, in its order): the full pack. The count is 39 there too: a change of the pack changes this list. */
 const STARTER = [
   "UPS", "Battery", "PDU", "RPP", "ATS", "STS", "Switchgear", "Busway", "Ring main unit", "Transformer", "Generator", "Fuel tank",
   "Chiller", "CRAC", "Air handling unit", "Cooling distribution unit", "Cooling tower", "Dry cooler", "Heat exchanger", "Pump", "Fan", "Valve",
@@ -134,7 +140,8 @@ const settled = (page: Page) => page.evaluate(() => new Promise<void>((done) => 
 
 /** A kind's row on the Asset kinds page, by its label as a whole ("W7o Source N" must not find "W7o Source N2"). */
 const kindRow = (page: Page, name: string) => page.getByRole("row").filter({ has: page.locator(".kind-label", { hasText: exactly(name) }) });
-const kindCount = (page: Page, name: string) => kindRow(page, name).getByRole("cell").nth(1);
+// By class, not by position: a manager's table has a checkbox cell first (W7q), so "the second cell" is the Name cell.
+const kindCount = (page: Page, name: string) => kindRow(page, name).locator("td.kind-assets");
 
 /** The <svg> of the asset's tree row, found by the row's own link (the same name can also be a crumb on the asset page). */
 const treeIcon = (page: Page, name: string) => tree(page).locator(".node").filter({ has: page.getByRole("link", { name, exact: true }) }).locator(".node-icon svg");
@@ -590,43 +597,48 @@ test.describe("W7o: delete a kind by moving its assets", () => {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 test.describe("W7o: the data-centre starter kinds", () => {
-  test("the button adds what is missing, skips a kind in another spelling without touching its icon, and a second press adds nothing and writes no audit entry", async ({ page }) => {
-    test.setTimeout(150_000);
+  test("the header's button adds the common kinds that are missing, skips a kind in another spelling without touching its icon; Add all 39 adds the rest; a second press of either adds nothing and writes no audit entry", async ({ page }) => {
+    test.setTimeout(180_000);
     await signIn(page);
 
-    // A starter kind in another spelling and with another icon, if the registry has none: the pack must not add its own beside it, nor change it.
-    const spelled = "router";
+    // A common kind in another spelling and with another icon, if the registry has none: the pack must not add its own beside it, nor change it.
+    const spelled = "chiller";
     if (!(await kindsOf(page.request)).some((k) => keyOf(k.name) === keyOf(spelled))) await makeKind(page.request, spelled, "generic");
 
     const before = await kindsOf(page.request);
     const have = new Set(before.map((k) => keyOf(k.name)));
-    const missing = STARTER.filter((name) => !have.has(keyOf(name)));
+    const missingCommon = COMMON.filter((name) => !have.has(keyOf(name)));
     const auditBefore = await auditCount(page.request, "kind.starter_pack_added");
 
     await page.goto("/assets/kinds");
     await expect(heading1(page, "Asset kinds")).toBeVisible();
-    const press = page.getByRole("button", { name: "Add data-centre kinds", exact: true });
-    await expect(press).toBeVisible();
-    const pressed = async (): Promise<StarterAnswer> => {
-      await expect(press).not.toHaveAttribute("aria-disabled", "true"); // the previous press has finished and the list is back
+    // Playwright matches a name by substring: "Add common data-centre kinds" is not "Add all 39 data-centre kinds", but both are `exact: true`.
+    const common = page.getByRole("button", { name: "Add common data-centre kinds", exact: true });
+    const all = page.getByRole("button", { name: "Add all 39 data-centre kinds", exact: true });
+    await expect(common).toBeVisible();
+    await expect(all, "the whole catalogue is the quiet button of the toolbar").toBeVisible();
+    // `query` is what the page sends: nothing for the common kinds (the server's default), `?set=all` for the whole catalogue.
+    const pressed = async (button: Locator, query: string): Promise<StarterAnswer> => {
+      await expect(button).not.toHaveAttribute("aria-disabled", "true"); // the previous press has finished and the list is back
       const answered = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/asset-kinds/starter-pack" && r.request().method() === "POST");
-      await press.click();
+      await button.click();
       const response = await answered;
       expect(response.status(), "the pack answers 200").toBe(200);
+      expect(new URL(response.url()).search, "the query the page sent").toBe(query);
       return (await response.json()) as StarterAnswer;
     };
 
-    await test.step("the first press adds exactly the missing kinds", async () => {
-      const first = await pressed();
-      expect([...first.added].sort(), "the kinds the server added are the ones the registry lacked").toEqual([...missing].sort());
-      expect(first.already_there, "and counts the rest").toBe(STARTER.length - missing.length);
-      await expect(toast(page, missing.length === 0 ? "All the data-centre kinds are already there" : `Added ${missing.length} ${missing.length === 1 ? "kind" : "kinds"}`).last()).toBeVisible();
+    await test.step("the header's first press adds exactly the common kinds that are missing", async () => {
+      const first = await pressed(common, "");
+      expect([...first.added].sort(), "the kinds the server added are the common ones the registry lacked").toEqual([...missingCommon].sort());
+      expect(first.already_there, "and counts the rest of the 16").toBe(COMMON.length - missingCommon.length);
+      await expect(toast(page, missingCommon.length === 0 ? "All the common data-centre kinds are already there" : `Added ${missingCommon.length} ${missingCommon.length === 1 ? "kind" : "kinds"}`).last()).toBeVisible();
       const after = await kindsOf(page.request);
-      expect(after.length, "the registry grew by what was added").toBe(before.length + missing.length);
+      expect(after.length, "the registry grew by what was added").toBe(before.length + missingCommon.length);
       const keys = new Set(after.map((k) => keyOf(k.name)));
-      for (const name of STARTER) expect(keys.has(keyOf(name)), `${name} is in the registry`).toBe(true);
-      await expect(kindRow(page, "Data hall"), "the page lists them without a reload").toBeVisible();
-      expect(await auditCount(page.request, "kind.starter_pack_added"), "one audit entry when something was added, none when not").toBe(auditBefore + (missing.length > 0 ? 1 : 0));
+      for (const name of COMMON) expect(keys.has(keyOf(name)), `${name} is in the registry`).toBe(true);
+      if (missingCommon.length > 0) await expect(kindRow(page, missingCommon[0]), "the page lists them without a reload").toBeVisible();
+      expect(await auditCount(page.request, "kind.starter_pack_added"), "one audit entry when something was added, none when not").toBe(auditBefore + (missingCommon.length > 0 ? 1 : 0));
     });
 
     await test.step("a kind in another spelling was skipped, and keeps its own name and icon", async () => {
@@ -635,15 +647,38 @@ test.describe("W7o: the data-centre starter kinds", () => {
       if (found[0].name === spelled) expect(found[0].icon, "the pack never overwrites an icon").toBe("generic"); // the one made above
     });
 
-    await test.step("the second press says they are all there, adds nothing and writes no audit entry", async () => {
+    await test.step("the header's second press says the common kinds are all there, adds nothing and writes no audit entry", async () => {
       const count = (await kindsOf(page.request)).length;
       const auditNow = await auditCount(page.request, "kind.starter_pack_added");
-      const second = await pressed();
+      const second = await pressed(common, "");
       expect(second.added, "nothing is added").toEqual([]);
-      expect(second.already_there, "every starter kind is there").toBe(STARTER.length);
-      await expect(toast(page, "All the data-centre kinds are already there").last()).toBeVisible();
+      expect(second.already_there, "every common kind is there").toBe(COMMON.length);
+      await expect(toast(page, "All the common data-centre kinds are already there").last()).toBeVisible();
       expect((await kindsOf(page.request)).length, "the registry did not grow").toBe(count);
       expect(await auditCount(page.request, "kind.starter_pack_added"), "a press that changes nothing leaves no trace").toBe(auditNow);
+    });
+
+    await test.step("Add all 39 adds the rest of the catalogue, and its second press says they are all there", async () => {
+      const haveNow = new Set((await kindsOf(page.request)).map((k) => keyOf(k.name)));
+      const rest = STARTER.filter((name) => !haveNow.has(keyOf(name)));
+      const countBefore = (await kindsOf(page.request)).length;
+      const auditNow = await auditCount(page.request, "kind.starter_pack_added");
+      const third = await pressed(all, "?set=all");
+      expect([...third.added].sort(), "the kinds the server added are the rest of the 39").toEqual([...rest].sort());
+      expect(third.already_there, "and counts the others").toBe(STARTER.length - rest.length);
+      await expect(toast(page, rest.length === 0 ? "All the data-centre kinds are already there" : `Added ${rest.length} ${rest.length === 1 ? "kind" : "kinds"}`).last()).toBeVisible();
+      const keys = new Set((await kindsOf(page.request)).map((k) => keyOf(k.name)));
+      for (const name of STARTER) expect(keys.has(keyOf(name)), `${name} is in the registry`).toBe(true);
+      expect((await kindsOf(page.request)).length, "the registry grew by what was added").toBe(countBefore + rest.length);
+      if (rest.includes("Data hall")) await expect(kindRow(page, "Data hall"), "the page lists them without a reload").toBeVisible();
+      expect(await auditCount(page.request, "kind.starter_pack_added"), "one audit entry when something was added, none when not").toBe(auditNow + (rest.length > 0 ? 1 : 0));
+
+      const auditAfter = await auditCount(page.request, "kind.starter_pack_added");
+      const fourth = await pressed(all, "?set=all");
+      expect(fourth.added, "nothing is added").toEqual([]);
+      expect(fourth.already_there, "every starter kind is there").toBe(STARTER.length);
+      await expect(toast(page, "All the data-centre kinds are already there").last()).toBeVisible();
+      expect(await auditCount(page.request, "kind.starter_pack_added"), "a press that changes nothing leaves no trace").toBe(auditAfter);
     });
   });
 });
@@ -677,7 +712,8 @@ test.describe("W7o: Manage asset kinds is its own permission", () => {
         ["PATCH /api/asset-kinds/{id}", await api.patch(`/api/asset-kinds/${seen.id}`, { data: { icon: "rack" } })],
         ["DELETE /api/asset-kinds/{id}", await api.delete(`/api/asset-kinds/${seen.id}`)],
         ["DELETE /api/asset-kinds/{id}?move_to=", await api.delete(`/api/asset-kinds/${seen.id}?move_to=${spare.id}&expect_assets=0`)],
-        ["POST /api/asset-kinds/starter-pack", await api.post("/api/asset-kinds/starter-pack")],
+        ["POST /api/asset-kinds/starter-pack", await api.post("/api/asset-kinds/starter-pack")], // no set: the common kinds
+        ["POST /api/asset-kinds/starter-pack?set=all", await api.post("/api/asset-kinds/starter-pack?set=all")],
       ] as const;
       for (const [what, response] of attempts) expect(response.status(), `${what} as a role without Manage asset kinds`).toBe(403);
     });
@@ -696,7 +732,8 @@ test.describe("W7o: Manage asset kinds is its own permission", () => {
     await expect(kindRow(page, seen.name), "the list is readable").toBeVisible();
     await expect(page.getByText('Managing asset kinds needs the "Manage asset kinds" permission.', { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "New kind", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Add data-centre kinds", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add common data-centre kinds", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add all 39 data-centre kinds", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /^Actions for / })).toHaveCount(0);
   });
 

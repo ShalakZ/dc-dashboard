@@ -6,7 +6,7 @@ import { AssetForm } from "./AssetForm";
 // W7o: registering a typed kind needs "Manage asset kinds". The form never asks the account (its tests render it with no provider): the page
 // tells it through `canRegister`, and the note under the icon and the answer it gives the page follow that one prop.
 
-const REGISTRY: AssetKind[] = [{ id: 1, name: "Room", icon: "room", asset_count: 0 }];
+const REGISTRY: AssetKind[] = [{ id: 1, name: "Room", icon: "room", asset_count: 0, starter: false }];
 const WITH = "New kind: added to Asset kinds.";
 const WITHOUT = "Not in Asset kinds yet. Only someone who manages kinds can add it; this asset keeps the text.";
 

@@ -68,7 +68,8 @@ export function RolesPanel() {
   const [deletions, setDeletions] = useState(0);
   const newButton = useRef<HTMLButtonElement>(null);
   // The deleted row and its bin are gone, so the dialog has nowhere to give the focus back to: it goes to the button above the list.
-  useEffect(() => { if (deletions > 0) newButton.current?.focus(); }, [deletions]);
+  // preventScroll: focusing an element far from the viewport scrolls the page to it; the owner saw the Asset kinds page jump to the top after each delete.
+  useEffect(() => { if (deletions > 0) newButton.current?.focus({ preventScroll: true }); }, [deletions]);
 
   const canOpen = permissions.data !== undefined; // the editor draws its grid from the server's catalogue
   const open = (role: RoleRow) => { setNotice(null); setEditor({ kind: "edit", role }); };
