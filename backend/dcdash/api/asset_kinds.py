@@ -7,8 +7,9 @@ every write assets.edit (a rename changes assets.kind, which assets.edit already
 
 No table lock: an asset saved with the old spelling while a rename runs, or created while a delete counts, leaves what a stale
 browser tab produces anyway (free text; an unregistered key falls back to the keyword guess), and a table lock would deadlock
-with delete_asset. What IS serialised is the kind row itself (SELECT ... FOR UPDATE, first) and the unique index on `key`,
-which is the final word on two requests that take one key at once.
+with delete_asset. What IS serialised is the kind row itself (SELECT ... FOR UPDATE, first in a PATCH and a DELETE, so that a name
+sent back as stored is compared with the stored one under the lock) and the unique index on `key`, which is the final word on two
+requests that take one key at once.
 """
 from collections import Counter
 from collections.abc import AsyncIterator
@@ -132,9 +133,11 @@ async def create_kind(body: KindIn, db: AsyncSession = Depends(get_db), user: Us
 async def update_kind(
     kind_id: int, body: KindPatch, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> KindOut:
-    name = clean_kind_name(body.name) if body.name is not None else None
-    kind = await locked_kind(db, kind_id)  # first: an unknown id is a 404 even with an empty body
+    kind = await locked_kind(db, kind_id)  # first: an unknown id is a 404 even with an empty body or a name the rules refuse
     old_name, old_key, old_icon = kind.name, kind.key, kind.icon
+    # A name exactly as stored is no rename, whatever the rules say of it: a seeded name can be longer than 60 or NFD, and a form
+    # that sends every field would otherwise be refused, or rename the kind to its NFC form. Only another name is cleaned and judged.
+    name = clean_kind_name(body.name) if body.name is not None and body.name != old_name else None
     new_name = old_name if name is None else name
     rewritten = 0
     if new_name != old_name:

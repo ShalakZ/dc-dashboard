@@ -1,4 +1,5 @@
 import json
+import unicodedata
 from pathlib import Path
 
 import asyncpg
@@ -243,6 +244,29 @@ async def test_the_name_is_the_most_used_spelling_a_tie_goes_to_the_first_by_cod
     assert seeded[chr(0xE9) + "clair"] == ("E" + ACUTE + "clair", "generic")
     assert seeded[long_name.lower()] == (long_name, "generic")
     assert seeded["pump room"] == ("Pump Room", "pump")
+
+
+async def test_a_kind_with_a_code_point_python_does_not_know_is_not_seeded_and_keeps_the_keyword_guess(db):
+    """Python 3.12 knows Unicode 15, a browser knows 16: the new letters below are unassigned here, so `[\\W_]` splits the word on
+    them (and the guess seeds ups, rack, pump) while the browser keeps one word (generic). The key is unsure, so it gets no row,
+    like a conflict, and its assets stay with the keyword guess that shows today. Not in kind_samples.json: that file holds both
+    languages to one answer. Built with chr(), as no editor shows these."""
+    unknown = [("UPS" + chr(0x1C89), 2), ("ups" + chr(0x1C89), 1), ("Rack" + chr(0xA7CB), 1), ("Pump" + chr(0x10D50), 1)]
+    assert all(unicodedata.category(kind[-1]) == "Cn" for kind, _ in unknown), "assigned in this Python: pick newer ones"
+    try:
+        await downgrade_to_0009(db)
+        await add_assets(db, [*unknown, ("Fan", 1)])  # the Fan beside them is seeded as usual
+        assets_before = await rows(db, ASSETS)
+        await upgrade_to_0010()
+        seeded = await registry(db)
+        assert await rows(db, ASSETS) == assets_before
+    finally:
+        run_alembic("upgrade", "head")
+    keys = {key for _, _, key, _ in seeded}
+    assert not any(kind_key(kind) in keys for kind, _ in unknown)  # no row: the matcher decides, as it does today
+    assert not any(key.startswith(("ups", "pump")) for key in keys)
+    assert "rack" in keys  # the starter, whose key no asset uses: the lookalike has another key
+    assert {key: (name, icon) for _, name, key, icon in seeded}["fan"] == ("Fan", "fan")
 
 
 async def test_every_kind_of_the_sample_file_seeds_the_icon_the_typescript_gave(db):

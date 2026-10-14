@@ -447,9 +447,45 @@ async def test_a_save_that_changes_nothing_is_a_200_with_no_audit_row_and_no_rew
     assert await audit_rows(db) == []
 
 
-@pytest.mark.parametrize("body", [{}, {"name": "Fan"}, {"icon": "fan"}, {"name": "Fan", "icon": "fan"}], ids=repr)
-async def test_an_unknown_id_is_a_404_for_every_valid_body_even_an_empty_one(client, db, body):
-    # (an INVALID body is a 422 first: the name is cleaned before the row is looked up)
+LONG_SEEDED = "Long kind " * 8 + "ten chars!"  # 90 characters: the migration keeps a name as written, the API allows 60
+NFD_SEEDED = "E" + ACUTE + "clair"  # decomposed: the migration keeps it as written, the API stores NFC
+
+
+@pytest.mark.parametrize("name", [LONG_SEEDED, NFD_SEEDED], ids=["longer than 60", "NFD"])
+async def test_a_seeded_name_that_breaks_the_name_rules_is_no_rename_when_sent_back_as_stored_with_an_icon_change(client, db, name):
+    """The edit form may send every field. A name exactly as stored is unchanged, whatever the rules say of it: no 422 for the
+    length, no rename to the NFC form, no rewrite of the assets, no kind.renamed row."""
+    await login_as(client, db)
+    kind = await make_kind(db, name, "generic")
+    await make_kind_asset(db, "a", name)
+    response = await client.patch(f"{URL}/{kind}", json={"name": name, "icon": "fan"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"id": kind, "name": name, "icon": "fan", "asset_count": 1}
+    assert await kind_rows(db) == [(kind, name, kind_key(name), "fan")]
+    assert await asset_kinds_stored(db) == {"a": name}
+    assert await audit_rows(db) == [
+        ("kind.icon_changed", {"kind_id": kind, "name": name, "before": {"icon": "generic"}, "after": {"icon": "fan"}})
+    ]
+
+
+@pytest.mark.parametrize("stored", [LONG_SEEDED, NFD_SEEDED], ids=["longer than 60", "NFD"])
+async def test_another_name_is_still_cleaned_and_judged_when_the_stored_one_breaks_the_rules(client, db, stored):
+    await login_as(client, db)
+    kind = await make_kind(db, stored, "generic")
+    await make_kind_asset(db, "a", stored)
+    for typed in (stored + ZWSP, LONG_SEEDED[:-1] + "?", "x" * 61, ZWSP, "   "):  # none is the stored name
+        response = await client.patch(f"{URL}/{kind}", json={"name": typed, "icon": "fan"})
+        assert response.status_code == 422, (typed, response.text)
+    assert await kind_rows(db) == [(kind, stored, kind_key(stored), "generic")]
+    assert await asset_kinds_stored(db) == {"a": stored}
+    assert await audit_rows(db) == []
+
+
+@pytest.mark.parametrize(
+    "body", [{}, {"name": "Fan"}, {"icon": "fan"}, {"name": "Fan", "icon": "fan"}, {"name": "x" * 61}, {"name": ZWSP}], ids=repr
+)
+async def test_an_unknown_id_is_a_404_for_every_body_that_passes_the_type_checks_even_an_empty_one(client, db, body):
+    # (a body of the wrong type is a 422 first; the name rules are judged after the kind row is found and locked)
     await login_as(client, db)
     assert (await client.patch(f"{URL}/999999", json=body)).status_code == 404
     assert (await client.delete(f"{URL}/999999")).status_code == 404

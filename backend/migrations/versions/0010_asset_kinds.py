@@ -10,11 +10,12 @@ belongs to a registry row when the normalised kind text (the `key`, see kind_key
 
 Up, in one transaction: creates the table with a UNIQUE index on `key`, then seeds it so that every existing asset keeps the
 icon it shows today (its own icon, else the keyword guess on its kind text). A key is registered when every spelling of it in
-`assets.kind` is at most 200 UTF-16 code units (the guess reads no further) and the guess gives ALL its spellings the same
-icon; the row is named after the most used spelling (ties: the spelling that sorts first by code point), tidied the way the
-front end's cleanKind does, and takes that icon. A key that cannot be registered without changing some asset's icon ("LVPanel"
-guesses panel and "lvpanel" guesses generic; a blank kind; an over-long kind) gets no row and stays with the keyword guess until
-an administrator registers it. Then the starter kinds (Site, Building, Room, Row, Rack, Panel, Meter, Circuit, Other equipment
+`assets.kind` is at most 200 UTF-16 code units (the guess reads no further), none holds a code point this Python has no
+character for (Unicode 15; a browser knows newer letters, so this guess could differ from the one shown today) and the guess
+gives ALL its spellings the same icon; the row is named after the most used spelling (ties: the spelling that sorts first by
+code point), tidied the way the front end's cleanKind does, and takes that icon. A key that cannot be registered without
+possibly changing some asset's icon ("LVPanel" guesses panel and "lvpanel" guesses generic; a blank kind; an over-long kind; a
+kind with an unassigned code point) gets no row and stays with the keyword guess until an administrator registers it. Then the starter kinds (Site, Building, Room, Row, Rack, Panel, Meter, Circuit, Other equipment
 and generic) are added for every key no asset uses. Rows are inserted in key order, so the ids are the same on every run. No
 other table is touched and no value of `assets` changes.
 
@@ -151,6 +152,10 @@ def seed_rows(counts: dict[str, int]) -> list[tuple[str, str, str]]:
     rows: dict[str, tuple[str, str]] = {}
     for key, found in spellings.items():
         if any(utf16_units(spelling) > MAX_KIND_UNITS for spelling in found):
+            continue
+        # Python 3.12 knows Unicode 15 and a browser 16: a letter added since is unassigned (Cn) here, so `[\W_]` would split
+        # the word where the browser keeps it, and the row would seed another icon than the one shown today. Unsure, so not seeded.
+        if any(unicodedata.category(char) == "Cn" for spelling in found for char in spelling):
             continue
         if len({suggest_icon(spelling) for spelling in found}) != 1:
             continue
