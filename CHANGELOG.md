@@ -15,6 +15,10 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## W10 (2026-10-15, 7c3d2b8)
+
+Documentation only: the README is a short front door, each topic has its own page under [docs/](docs/), and the release notes moved here from the README. No migration and no change to how the stack runs, so there is nothing to do when you update. Older messages that name README sections ("README, Upgrading and going back, step 6", migration 0004's "Upgrading an existing database to Phase 3") still lead somewhere: the README index lists each old name with its new page. The messages of `scripts\update.ps1`, `setup.ps1`, `setup.sh`, `e2e.sh`, `check_tls.sh` and the OPC UA certificate hint of the connection check now name the new pages (they reach a running stack with its next rebuild).
+
 ## W7q (2026-10-15, 50228b7)
 
 Asset kinds you can tell apart and tidy: a Starter tag, filters (All, Starter, Yours, Unused), ticking and deleting several kinds with one move target, and a starter pack that adds the 16 common data-centre kinds ("Add all 39" adds the rest); no migration.
