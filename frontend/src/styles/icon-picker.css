@@ -1,0 +1,4 @@
+@layer w6 {
+  /* W7o: the icon picker's groups, search box and scroll box (components/IconPicker.tsx). Tokens only; every rule is scoped by a class this
+     piece owns. The older .icon-field / .icon-grid / .icon-cell rules stay in app.css. */
+}
