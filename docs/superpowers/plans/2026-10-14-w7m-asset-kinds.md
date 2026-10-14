@@ -163,7 +163,7 @@
 
 ## Part C: controller steps (not delegated)
 
-- [ ] C1 migration rehearsal on a restored copy of the dev database in a guarded scratch project `dcdash_e2e_w7m_mig` (template `.superpowers/sdd/2026-10-12-w7d-appearance-theme/mig-drill.sh`): upgrade; compare every asset's effective icon before (the TypeScript matcher over the assets' kinds, run with node) and after (`icon` else `kind_icon` from the API); downgrade and compare every other table's fingerprint; upgrade again. After Task 1 and its Opus review.
+- [x] C1 (PASS, mig-drill.log, 24 assets incl. 16 synthetic: 0 icons change, lossless downgrade, same registry on re-upgrade) migration rehearsal on a restored copy of the dev database in a guarded scratch project `dcdash_e2e_w7m_mig` (template `.superpowers/sdd/2026-10-12-w7d-appearance-theme/mig-drill.sh`): upgrade; compare every asset's effective icon before (the TypeScript matcher over the assets' kinds, run with node) and after (`icon` else `kind_icon` from the API); downgrade and compare every other table's fingerprint; upgrade again. After Task 1 and its Opus review.
 - [ ] C2 contact sheet of the kinds page and both dialogs on a scratch build before the whole-wave review.
 - [ ] C3 full backend suite (a migration), full frontend suite, typecheck, build, the isolated Playwright run on a build of the final commit (project `dcdash_e2e_w7m_vis`, ports 18205 and 18559; the run lists `w7m`).
 - [ ] C4 whole-wave Opus review (browser, 1920/1440/1024, light and dark, at least two presets, the kinds page and both dialogs by mouse and keyboard, the asset dialog's two paths, a viewer), ONE fix wave, one scoped re-review.
