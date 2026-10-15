@@ -23,7 +23,7 @@ const press = (action: () => void) => (event: MouseEvent) => {
 function Toggle({ id, name, expanded, onToggle }: { id: string; name: string; expanded: boolean; onToggle?: NodeActions["onToggle"] }) {
   if (!onToggle) return null;
   return (
-    <button className="nodrag" aria-label={`${expanded ? "Collapse" : "Expand"} ${name}`} onClick={press(() => onToggle(id))}>
+    <button type="button" className="nodrag" aria-label={`${expanded ? "Collapse" : "Expand"} ${name}`} onClick={press(() => onToggle(id))}>
       {expanded ? "−" : "+"}
     </button>
   );
@@ -33,14 +33,14 @@ function MapButtons({ id, name, onMap, onNewAsset }: { id: string; name: string 
   if (!onMap && !onNewAsset) return null;
   return (
     <div className="row">
-      {onMap && <button className="nodrag" aria-label={`Map ${name} to asset…`} onClick={press(() => onMap(id))}>Map…</button>}
-      {onNewAsset && <button className="nodrag" aria-label={`New asset from ${name}…`} onClick={press(() => onNewAsset(id))}>New asset…</button>}
+      {onMap && <button type="button" className="nodrag" aria-label={`Map ${name} to asset…`} onClick={press(() => onMap(id))}>Map…</button>}
+      {onNewAsset && <button type="button" className="nodrag" aria-label={`New asset from ${name}…`} onClick={press(() => onNewAsset(id))}>New asset…</button>}
     </div>
   );
 }
 
 function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
-  const { source, expanded, onToggle, onSelect } = data;
+  const { source, expanded, onToggle, onSelect, onCreateAssets, onRemove, groups = 0, seen } = data;
   return (
     <div className={`gnode gnode-source ${source.origin}`}>
       <Handles>
@@ -48,10 +48,22 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
           <div className="node-title">{source.name}</div>
           <Toggle id={id} name={source.name} expanded={expanded} onToggle={onToggle} />
         </div>
-        {onSelect && (
-          <button className="nodrag" aria-label={`Details for ${source.name}`} onClick={press(() => onSelect(id))}>Details</button>
+        {/* One row that wraps: three buttons do not always fit the 220 px node, and a second line is better than a clipped one. Keyboard order is the order here. */}
+        {(onSelect || onCreateAssets || onRemove) && (
+          <div className="row gnode-actions">
+            {onSelect && (
+              <button type="button" className="nodrag" aria-label={`Details for ${source.name}`} onClick={press(() => onSelect(id))}>Details</button>
+            )}
+            {onCreateAssets && (
+              <button type="button" className="nodrag" aria-label={`Create assets for ${groups} ${groups === 1 ? "group" : "groups"} of ${source.name}`} onClick={press(() => onCreateAssets(id))}>Create assets…</button>
+            )}
+            {onRemove && (
+              <button type="button" className="nodrag quiet gnode-remove" aria-label={`Remove ${source.name} from Discovery`} onClick={press(() => onRemove(id))}>Remove</button>
+            )}
+          </div>
         )}
         <div className="muted">{source.connector_type} · {source.origin} · {source.status} · {source.point_count} points</div>
+        {seen && <div className="muted gnode-seen" title={seen}>{seen}</div>}
         {source.needs_credentials && <span className="badge">needs credentials</span>}
       </Handles>
     </div>

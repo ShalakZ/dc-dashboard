@@ -1,13 +1,23 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { GraphModel, GraphPoint } from "../api/types";
+import type { GraphModel, GraphPoint, GraphSource } from "../api/types";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
+import { spyToasts } from "../test/toasts";
 import { accountKnown, SignedIn } from "../test/signedIn";
 import { userFor } from "../test/users";
 import type { PermissionId } from "../lib/permissions";
 import { DiscoveryPage } from "./DiscoveryPage";
+
+// The bulk-create dialog is another piece (its own tests): here it only has to be mounted with the right props and closed through onClose.
+const bulk = vi.hoisted(() => ({ props: [] as { model: GraphModel; source: GraphSource; onClose: () => void }[] }));
+vi.mock("../components/graph/BulkCreateDialog", () => ({
+  BulkCreateDialog: (props: { model: GraphModel; source: GraphSource; onClose: () => void }) => {
+    bulk.props.push(props);
+    return <div role="dialog" aria-label="Create assets stub"><button type="button" onClick={props.onClose}>Close stub</button></div>;
+  },
+}));
 
 // What React Flow reports as overlapping the dropped node; set per test.
 const flow = vi.hoisted(() => {
@@ -648,5 +658,404 @@ describe("DiscoveryPage controls follow the permissions of the role (a custom ro
     await drop("cluster:1:LVP02", []);
     await waitFor(() => expect(puts(calls)).toHaveLength(1));
     expect(await screen.findByRole("status")).toBeInTheDocument();
+  });
+});
+
+// ---- W7r: remove and clear unmapped discovered sources, last seen, the click path to create assets ----
+
+const HINT = "Dashed nodes were discovered; solid nodes are assets. Press New asset… on a group, or drag it onto an asset. Drag other nodes to arrange them.";
+const kw = (id: number, name: string, extra: Partial<GraphPoint> = {}) =>
+  point(id, name, { suggestion: { metric: "active_power_kw", scale: 1, interval_seconds: 5, custom_unit: null }, ...extra });
+const srcOf = (id: number, name: string, over: Partial<GraphSource> = {}): GraphSource => ({
+  id, name, connector_type: "modbus", config: {}, origin: "discovered", enabled: false, status: "unknown", last_error: null, has_secret: false,
+  needs_credentials: false, point_count: 2, clusters: [{ key: `${name} A`, points: [kw(id * 10, `${name} kW`)] }], ungrouped: [], ...over,
+});
+const mappedSource = (id: number, name: string) =>
+  srcOf(id, name, { clusters: [{ key: `${name} A`, points: [kw(id * 10, `${name} kW`, { asset_id: 10, mapping_id: id, mapped_metric: "active_power_kw" })] }] });
+const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+const world = (sources: GraphSource[], over: Partial<GraphModel> = {}): GraphModel => ({
+  sources, unidentified: [], assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }], layout: {}, ...over,
+});
+/** A page that lets the test change the server's graph and answers the remove route the way the server does (only unmapped discovered sources go). */
+function serverWith(role: string, initial: GraphSource[], over: Partial<GraphModel> = {}, extra: Record<string, unknown> = {}) {
+  const state = { sources: initial, over };
+  const calls = mockFetch({
+    ...routes(role, () => world(state.sources, state.over)),
+    "GET /api/site": { body: { timezone: "UTC", currency: null } },
+    "POST /api/discovery/sources/remove": ({ body }) => {
+      const ids = (body as { source_ids: number[] }).source_ids;
+      const removed: { id: number; name: string }[] = [];
+      const skipped: { id: number; name: string | null; reason: "mapped" | "manual" | "gone" }[] = [];
+      for (const id of ids) {
+        const s = state.sources.find((x) => x.id === id);
+        if (!s) skipped.push({ id, name: null, reason: "gone" });
+        else if (s.origin !== "discovered") skipped.push({ id, name: s.name, reason: "manual" });
+        else if (s.clusters.some((c) => c.points.some((p) => p.mapping_id !== null))) skipped.push({ id, name: s.name, reason: "mapped" });
+        else removed.push({ id, name: s.name });
+      }
+      state.sources = state.sources.filter((s) => !removed.some((r) => r.id === s.id));
+      return { body: { removed, skipped } };
+    },
+    ...extra,
+  });
+  return { state, calls };
+}
+const openToasts = (route = "/discovery") => {
+  const toasts = spyToasts();
+  const view = renderWithProviders(<><main id="main" tabIndex={-1} /><DiscoveryPage /><SignedIn /></>, { route, path: "/discovery", toasts: toasts.api });
+  return { ...view, toasts };
+};
+const removeButton = (name: string) => screen.findByRole("button", { name: `Remove ${name} from Discovery` });
+const clearButton = (n: number) => screen.getByRole("button", { name: `Clear unmapped (${n})` });
+const confirmDialog = (name: string) => screen.findByRole("dialog", { name });
+const removeCalls = (calls: { method: string; path: string; body?: unknown }[]) => calls.filter((c) => c.method === "POST" && c.path === "/api/discovery/sources/remove");
+
+describe("DiscoveryPage hint and last seen (W7r)", () => {
+  it("the sub line says to press New asset… on a group, or drag it onto an asset", async () => {
+    serverWith("operator", [srcOf(1, "Plant OPC")]);
+    openToasts();
+    await screen.findByText("Plant OPC");
+    expect(screen.getByText(/Dashed nodes were discovered/)).toHaveTextContent(HINT);
+  });
+
+  it("every source says when it was last seen: the scan and how long ago, added by hand, or not seen yet", async () => {
+    serverWith("operator", [
+      srcOf(1, "Plant OPC", { last_scan: { scan_id: 6, at: minutesAgo(10) } }),
+      srcOf(2, "Bench", { origin: "manual", last_scan: { scan_id: 6, at: minutesAgo(10) } }),
+      srcOf(3, "Rack 7", { last_scan: null }),
+      srcOf(4, "Old", { last_scan: { scan_id: 2, at: "2026-01-01T00:00:00Z" } }),
+    ]);
+    openToasts();
+    await screen.findByText("Plant OPC");
+    expect(within(node("src:1")).getByText("Seen in scan #6, 10 min ago")).toHaveClass("gnode-seen");
+    expect(within(node("src:2")).getByText("Added by hand")).toBeInTheDocument();
+    expect(within(node("src:3")).getByText("Not seen in a scan yet")).toBeInTheDocument();
+    expect(within(node("src:4")).getByText("Seen in scan #2")).toBeInTheDocument(); // over two weeks: the scan, no ago part
+  });
+
+  it("the source panel shows the same line", async () => {
+    serverWith("operator", [srcOf(1, "Plant OPC", { last_scan: { scan_id: 6, at: minutesAgo(10) } })]);
+    openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Details for Plant OPC" }));
+    const panel = await screen.findByRole("complementary", { name: "Source details" });
+    expect(within(panel).getByText("Seen in scan #6, 10 min ago")).toBeInTheDocument();
+  });
+
+  it("counts the time on the site's clock (a time zone the site was set to)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-15T00:10:00Z"));
+    try {
+      mockFetch({ ...routes("operator", world([srcOf(1, "Plant OPC", { last_scan: { scan_id: 6, at: "2026-10-14T23:50:00Z" } })])), "GET /api/site": { body: { timezone: "Asia/Dubai", currency: null } } });
+      openToasts();
+      // 23:50 UTC is 03:50 on the 15th in Dubai and 00:10 UTC is 04:10 the same day: 20 minutes, not "yesterday"
+      expect(await screen.findByText("Seen in scan #6, 20 min ago")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("DiscoveryPage Remove (W7r)", () => {
+  const two = () => [srcOf(1, "Plant OPC"), srcOf(2, "Rack 7")];
+
+  it("a role that may edit the graph sees Remove on a discovered source with nothing mapped, and no one else does", async () => {
+    serverWith("admin", [srcOf(1, "Plant OPC"), mappedSource(2, "Lab"), srcOf(3, "Bench", { origin: "manual" })]);
+    openToasts();
+    expect(await removeButton("Plant OPC")).toHaveTextContent("Remove");
+    expect(screen.queryByRole("button", { name: "Remove Lab from Discovery" })).not.toBeInTheDocument(); // something is mapped
+    expect(screen.queryByRole("button", { name: "Remove Bench from Discovery" })).not.toBeInTheDocument(); // added by hand
+  });
+
+  it.each([
+    ["operator (discovery.view)", "operator", undefined],
+    ["discovery.accept alone", "custom", ["discovery.view", "discovery.accept"] as PermissionId[]],
+    ["sources.edit alone", "custom", ["discovery.view", "sources.edit"] as PermissionId[]],
+  ])("%s sees neither Remove nor Clear unmapped", async (_name, role, permissions) => {
+    mockFetch({
+      ...routes(role, world([srcOf(1, "Plant OPC")])),
+      ...(permissions ? { "GET /api/me": { body: userFor(role, { permissions }) } } : {}),
+      "GET /api/site": { body: { timezone: "UTC", currency: null } },
+    });
+    openToasts();
+    await screen.findByText("Plant OPC");
+    await accountKnown();
+    expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Clear unmapped/ })).not.toBeInTheDocument();
+  });
+
+  it("discovery.edit alone sees Remove and Clear unmapped, but not Create assets", async () => {
+    mockFetch({
+      ...routes("custom", world([srcOf(1, "Plant OPC")])),
+      "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view", "discovery.edit"] }) },
+      "GET /api/site": { body: { timezone: "UTC", currency: null } },
+    });
+    openToasts();
+    expect(await removeButton("Plant OPC")).toBeInTheDocument();
+    expect(clearButton(1)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument();
+  });
+
+  it("asks first, in the delete dialog: what it takes, that nothing depends on it, and that a scan can find it again", async () => {
+    const { calls } = serverWith("admin", two());
+    openToasts();
+    await userEvent.click(await removeButton("Plant OPC"));
+    const dialog = await confirmDialog('Remove "Plant OPC" from Discovery?');
+    expect(dialog).toHaveTextContent("It has nothing mapped, so no asset, billing figure or dashboard depends on it. A scan can find it again.");
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(removeCalls(calls)).toHaveLength(0);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(removeCalls(calls)).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Remove Plant OPC from Discovery" })).toHaveFocus(); // Cancel hands the focus back to the button
+  });
+
+  it("confirming sends the one id, takes the node away, toasts, closes the dialog and puts the focus on Refresh", async () => {
+    const { calls } = serverWith("admin", two());
+    const { toasts } = openToasts();
+    await userEvent.click(await removeButton("Plant OPC"));
+    await userEvent.click(within(await confirmDialog('Remove "Plant OPC" from Discovery?')).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(removeCalls(calls)[0].body).toEqual({ source_ids: [1] });
+    expect(screen.queryByText("Plant OPC")).not.toBeInTheDocument();
+    expect(screen.getByText("Rack 7")).toBeInTheDocument();
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Removed 1 source" }]);
+    expect(screen.getByRole("button", { name: "Refresh" })).toHaveFocus();
+    // the graph, the sources list and the audit log were read again (the graph at least: the node is gone)
+    expect(calls.filter((c) => c.method === "GET" && c.path === "/api/discovery/graph")).toHaveLength(2);
+  });
+
+  it("a removed source closes its open panel", async () => {
+    serverWith("admin", two());
+    openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Details for Plant OPC" }));
+    expect(await screen.findByRole("complementary", { name: "Source details" })).toBeInTheDocument();
+    await userEvent.click(await removeButton("Plant OPC"));
+    await userEvent.click(within(await confirmDialog('Remove "Plant OPC" from Discovery?')).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(screen.queryByRole("complementary")).not.toBeInTheDocument());
+  });
+
+  it("Escape closes only the dialog: the source panel behind it stays open", async () => {
+    serverWith("admin", two());
+    openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Details for Plant OPC" }));
+    await screen.findByRole("complementary", { name: "Source details" });
+    await userEvent.click(await removeButton("Plant OPC"));
+    await confirmDialog('Remove "Plant OPC" from Discovery?');
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Source details" })).toBeInTheDocument();
+  });
+
+  it("a source that gained a mapping meanwhile is kept: the dialog closes with an error toast that says why", async () => {
+    const { state } = serverWith("admin", [srcOf(1, "Plant OPC")]);
+    const { toasts } = openToasts();
+    await userEvent.click(await removeButton("Plant OPC"));
+    const dialog = await confirmDialog('Remove "Plant OPC" from Discovery?');
+    state.sources = [mappedSource(1, "Plant OPC"), srcOf(2, "Rack 7")]; // the other tab mapped it, and a second source is there now
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    // nothing was removed: the dialog stays open and says so as its error, with no toast
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Nothing was removed. 1 was kept: it has a mapped point now.");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(toasts.calls).toEqual([]);
+    expect(screen.getByText("Rack 7")).toBeInTheDocument();
+  });
+
+  it("a running scan (409) is the dialog's error line, and nothing is removed", async () => {
+    const { state } = serverWith("admin", two(), {}, {
+      "POST /api/discovery/sources/remove": { status: 409, body: { detail: "A scan is running. Remove discovered sources when it has finished." } },
+    });
+    const { toasts } = openToasts();
+    await userEvent.click(await removeButton("Plant OPC"));
+    const dialog = await confirmDialog('Remove "Plant OPC" from Discovery?');
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("A scan is running. Remove discovered sources when it has finished.");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(toasts.calls).toEqual([]);
+    expect(state.sources).toHaveLength(2);
+    expect(screen.getByText("Plant OPC")).toBeInTheDocument();
+  });
+});
+
+describe("DiscoveryPage Clear unmapped (W7r)", () => {
+  const some = () => [srcOf(1, "Plant OPC"), srcOf(2, "Rack 7"), mappedSource(3, "Lab"), srcOf(4, "Bench", { origin: "manual" })];
+
+  it("sits beside Refresh in the header and counts the sources it would remove", async () => {
+    serverWith("admin", some());
+    openToasts();
+    await screen.findByText("Plant OPC");
+    const actions = document.querySelector(".page-head .actions") as HTMLElement;
+    expect(within(actions).getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+    expect(within(actions).getByRole("button", { name: "Clear unmapped (2)" })).toHaveAttribute("type", "button");
+  });
+
+  it("with nothing to clear it keeps its place, is aria-disabled with a title, never natively disabled, and opens nothing", async () => {
+    serverWith("admin", [mappedSource(3, "Lab")]);
+    openToasts();
+    await screen.findByText("Lab");
+    const clear = clearButton(0);
+    expect(clear).toHaveAttribute("aria-disabled", "true");
+    expect(clear).toHaveAttribute("title", "Nothing to clear");
+    expect(clear).not.toBeDisabled();
+    await userEvent.click(clear);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    clear.focus();
+    expect(clear).toHaveFocus();
+  });
+
+  it("lists the first five names and the rest as a count, and says that mapped sources are never touched", async () => {
+    const seven = Array.from({ length: 7 }, (_, i) => srcOf(i + 1, `Unit ${i + 1}`));
+    serverWith("admin", seven);
+    openToasts();
+    await screen.findByText("Unit 1");
+    await userEvent.click(clearButton(7));
+    const dialog = await confirmDialog("Remove 7 unmapped sources?");
+    expect(dialog).toHaveTextContent("Unit 1, Unit 2, Unit 3, Unit 4, Unit 5 and 2 more.");
+    expect(dialog).toHaveTextContent("Sources with a mapped point are never touched. A scan can find these again.");
+    expect(dialog).not.toHaveTextContent("Unit 6");
+  });
+
+  it("two sources are named in full", async () => {
+    serverWith("admin", [srcOf(1, "Plant OPC"), srcOf(2, "Rack 7")]);
+    openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (2)" }));
+    expect(await confirmDialog("Remove 2 unmapped sources?")).toHaveTextContent("Plant OPC and Rack 7.");
+  });
+
+  it("sends the ids it listed when the dialog opened: a source a scan adds afterwards is never in the request", async () => {
+    const { state, calls } = serverWith("admin", [srcOf(1, "Plant OPC"), srcOf(2, "Rack 7")]);
+    openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (2)" }));
+    const dialog = await confirmDialog("Remove 2 unmapped sources?");
+    state.sources = [...state.sources, srcOf(9, "Found later")];
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" })); // the graph is read again behind the dialog
+    await screen.findByText("Found later");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(removeCalls(calls)[0].body).toEqual({ source_ids: [1, 2] });
+    expect(screen.getByText("Found later")).toBeInTheDocument();
+  });
+
+  it("removes them, says how many, and hands the focus back to the Clear button (now aria-disabled)", async () => {
+    const { calls } = serverWith("admin", some());
+    const { toasts } = openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (2)" }));
+    await userEvent.click(within(await confirmDialog("Remove 2 unmapped sources?")).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(removeCalls(calls)[0].body).toEqual({ source_ids: [1, 2] });
+    expect(toasts.calls).toEqual([{ kind: "success", text: "Removed 2 sources" }]);
+    expect(screen.queryByText("Plant OPC")).not.toBeInTheDocument();
+    expect(screen.getByText("Lab")).toBeInTheDocument();
+    const clear = clearButton(0);
+    expect(clear).toHaveAttribute("aria-disabled", "true");
+    expect(clear).toHaveFocus();
+  });
+
+  it("when one of them gained a mapping meanwhile, the rest go, and an error toast says why one stayed", async () => {
+    const { state } = serverWith("admin", [srcOf(1, "Plant OPC"), srcOf(2, "Rack 7")]);
+    const { toasts } = openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (2)" }));
+    const dialog = await confirmDialog("Remove 2 unmapped sources?");
+    state.sources = [mappedSource(1, "Plant OPC"), srcOf(2, "Rack 7")];
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(toasts.calls).toEqual([{ kind: "error", text: "Removed 1 source. 1 was kept: it has a mapped point now." }]);
+    expect(screen.queryByText("Rack 7")).not.toBeInTheDocument();
+    expect(screen.getByText("Plant OPC")).toBeInTheDocument();
+  });
+
+  it("Escape and Cancel remove nothing", async () => {
+    const { calls } = serverWith("admin", some());
+    openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (2)" }));
+    await confirmDialog("Remove 2 unmapped sources?");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(removeCalls(calls)).toHaveLength(0);
+    expect(clearButton(2)).toHaveFocus();
+  });
+
+  it("a clear that empties the graph leaves the empty page, and the focus goes to the main area without scrolling", async () => {
+    serverWith("admin", [srcOf(1, "Plant OPC")]);
+    openToasts();
+    const main = document.getElementById("main") as HTMLElement;
+    const focus = vi.spyOn(main, "focus");
+    await userEvent.click(await screen.findByRole("button", { name: "Clear unmapped (1)" }));
+    await userEvent.click(within(await confirmDialog('Remove "Plant OPC" from Discovery?')).getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText(/Nothing discovered yet/)).toBeInTheDocument();
+    await waitFor(() => expect(main).toHaveFocus());
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("does not move the focus to the main area when the page was empty from the start", async () => {
+    serverWith("admin", []);
+    openToasts();
+    expect(await screen.findByText(/Nothing discovered yet/)).toBeInTheDocument();
+    expect(document.getElementById("main")).not.toHaveFocus();
+  });
+});
+
+describe("DiscoveryPage Create assets (W7r)", () => {
+  const three = () => srcOf(1, "Plant OPC", { clusters: [
+    { key: "LVP01", points: [kw(11, "LVP01 kW")] }, { key: "LVP02", points: [kw(12, "LVP02 kW")] }, { key: "LVP03", points: [kw(13, "LVP03 kW")] },
+  ] });
+  beforeEach(() => { bulk.props.length = 0; });
+
+  it("a collapsed source offers Create assets… with its number of groups, and it opens the dialog for that source", async () => {
+    serverWith("admin", [three()]);
+    openToasts();
+    const button = await screen.findByRole("button", { name: "Create assets for 3 groups of Plant OPC" });
+    expect(button).toHaveTextContent("Create assets…");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await userEvent.click(button);
+    expect(await screen.findByRole("dialog", { name: "Create assets stub" })).toBeInTheDocument();
+    const props = bulk.props[bulk.props.length - 1];
+    expect(props.source.id).toBe(1);
+    expect(props.source.clusters.map((c) => c.key)).toEqual(["LVP01", "LVP02", "LVP03"]);
+    expect(props.model.sources.map((s) => s.id)).toEqual([1]);
+  });
+
+  it("is not offered to a role without discovery.accept, even for a source with groups to map", async () => {
+    mockFetch({
+      ...routes("custom", world([three()])),
+      "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view", "discovery.edit"] }) },
+      "GET /api/site": { body: { timezone: "UTC", currency: null } },
+    });
+    openToasts();
+    await screen.findByText("Plant OPC");
+    await accountKnown();
+    expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument();
+  });
+
+  it("is not offered when no group is left to map (Ungrouped only, a custom guess with no unit, or everything mapped)", async () => {
+    serverWith("admin", [
+      srcOf(1, "Ungrouped only", { clusters: [], ungrouped: [kw(21, "loose kW")] }),
+      srcOf(2, "No unit", { clusters: [{ key: "G", points: [point(22, "G a")] }] }), // custom, no unit: the dialog would refuse the whole group
+      mappedSource(3, "Lab"),
+    ]);
+    openToasts();
+    await screen.findByText("Ungrouped only");
+    expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument();
+  });
+
+  it("closing the dialog puts the focus back on the Create assets… button", async () => {
+    serverWith("admin", [three()]);
+    openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Create assets for 3 groups of Plant OPC" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "Create assets stub" })).getByRole("button", { name: "Close stub" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create assets for 3 groups of Plant OPC" })).toHaveFocus();
+  });
+
+  it("when every group has been made into an asset the button is gone, and the focus goes to the node's Details button", async () => {
+    const { state } = serverWith("admin", [three()]);
+    openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Create assets for 3 groups of Plant OPC" }));
+    const dialog = await screen.findByRole("dialog", { name: "Create assets stub" });
+    state.sources = [srcOf(1, "Plant OPC", { clusters: three().clusters.map((c) => ({ key: c.key, points: c.points.map((p) => ({ ...p, asset_id: 10, mapping_id: p.id, mapped_metric: "active_power_kw" as const })) })) })];
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument());
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close stub" }));
+    expect(screen.getByRole("button", { name: "Details for Plant OPC" })).toHaveFocus();
   });
 });

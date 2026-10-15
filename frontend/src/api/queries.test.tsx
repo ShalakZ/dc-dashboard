@@ -10,7 +10,7 @@ import {
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
-  loadMovePreview, useMoveAssets,
+  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources,
 } from "./queries";
 import { ApiError } from "./client";
 import type { MoveBody, RangePreset, WidgetConfig } from "./types";
@@ -1175,5 +1175,57 @@ describe("asset move queries", () => {
     const error = await loadMovePreview(body).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ApiError);
     expect(moveRefusals(error)).toEqual([{ id: 3, name: "Pump 3", reason: "x", code: "cycle" }]);
+  });
+});
+
+describe("removing discovered sources (W7r)", () => {
+  const answer = { removed: [{ id: 3, name: "Plant OPC" }], skipped: [{ id: 4, name: "Lab", reason: "mapped" as const }] };
+
+  /** A client of the test's own, so the calls to `invalidateQueries` can be read. */
+  function mounted() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidated = vi.spyOn(client, "invalidateQueries");
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    return { client, wrapper, keysInvalidated: () => invalidated.mock.calls.map(([filters]) => filters?.queryKey) };
+  }
+
+  it("posts the listed ids to the remove route and hands back what was removed and what was kept", async () => {
+    const calls = mockFetch({ "POST /api/discovery/sources/remove": { body: answer } });
+    const { wrapper } = mounted();
+    const { result } = renderHook(() => useRemoveDiscoveredSources(), { wrapper });
+    await act(async () => { await expect(result.current.mutateAsync([3, 4])).resolves.toEqual(answer); });
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([["POST", "/api/discovery/sources/remove", { source_ids: [3, 4] }]]);
+  });
+
+  it("refetches the graph, the sources and the audit log once each", async () => {
+    mockFetch({ "POST /api/discovery/sources/remove": { body: answer } });
+    const { wrapper, keysInvalidated } = mounted();
+    const { result } = renderHook(() => useRemoveDiscoveredSources(), { wrapper });
+    await act(async () => { await result.current.mutateAsync([3, 4]); });
+    expect(keysInvalidated()).toEqual([keys.graph, keys.sources, keys.auditAll]);
+  });
+
+  it("still refetches after a refusal (a running scan, 409), and the error keeps the server's words", async () => {
+    mockFetch({ "POST /api/discovery/sources/remove": { status: 409, body: { detail: "A scan is running. Remove discovered sources when it has finished." } } });
+    const { wrapper, keysInvalidated } = mounted();
+    const { result } = renderHook(() => useRemoveDiscoveredSources(), { wrapper });
+    let caught: unknown;
+    await act(async () => { await result.current.mutateAsync([3]).catch((error) => { caught = error; }); });
+    expect((caught as ApiError).message).toBe("A scan is running. Remove discovered sources when it has finished.");
+    expect(keysInvalidated()).toEqual([keys.graph, keys.sources, keys.auditAll]);
+  });
+
+  it("resolves only after the lists are fetched again, so the removed nodes are gone when the caller goes on", async () => {
+    let sources = [{ id: 3 }];
+    mockFetch({
+      "GET /api/discovery/graph": () => ({ body: { sources, unidentified: [], assets: [], layout: {} } }),
+      "POST /api/discovery/sources/remove": () => { sources = []; return { body: { removed: [{ id: 3, name: "Plant OPC" }], skipped: [] } }; },
+    });
+    const { client, wrapper } = mounted();
+    const { result } = renderHook(() => ({ graph: useGraph(), remove: useRemoveDiscoveredSources() }), { wrapper });
+    await waitFor(() => expect(result.current.graph.data?.sources).toHaveLength(1));
+    await act(async () => { await result.current.remove.mutateAsync([3]); });
+    // Read from the cache at the moment the call resolved: the refetch had already landed.
+    expect((client.getQueryData(keys.graph) as { sources: unknown[] }).sources).toEqual([]);
   });
 });

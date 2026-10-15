@@ -1,4 +1,5 @@
-import { UNGROUPED, buildGraph, nodeId, type OpenState } from "./graph";
+import type { RemoveSourcesResult } from "../api/types";
+import { BLOCK_GAP, SOURCE_H, UNGROUPED, buildGraph, isRemovable, nodeId, removalDialogText, removalOutcome, seenLine, type OpenState } from "./graph";
 import { model, point, source } from "../test/graphFixtures";
 
 const none: OpenState = { sources: new Set(), clusters: new Set() };
@@ -151,5 +152,126 @@ describe("buildGraph", () => {
     const started = performance.now();
     expect(buildGraph(big, { sources: new Set([1]), clusters: new Set() }).nodes.length).toBe(1000 + 1 + 2);
     expect(performance.now() - started).toBeLessThan(500);
+  });
+});
+
+describe("buildGraph: room for a source node (W7r)", () => {
+  const sourceY = (nodes: { id: string; position: { y: number } }[], id: string) => nodes.find((n) => n.id === id)!.position.y;
+
+  it("the next source starts at least a source node plus the gap below the first, collapsed", () => {
+    const { nodes } = buildGraph(model(), none);
+    expect(sourceY(nodes, "src:2") - sourceY(nodes, "src:1")).toBeGreaterThanOrEqual(SOURCE_H + BLOCK_GAP);
+  });
+
+  it("the first group sits a whole source node below its source, and the next source clears the last group", () => {
+    const open = { sources: new Set([1]), clusters: new Set<string>() };
+    const { nodes } = buildGraph(model(), open);
+    const clusters = nodes.filter((n) => n.type === "cluster").map((n) => n.position.y).sort((a, b) => a - b);
+    expect(clusters[0] - sourceY(nodes, "src:1")).toBeGreaterThanOrEqual(SOURCE_H);
+    expect(sourceY(nodes, "src:2") - clusters[clusters.length - 1]).toBeGreaterThan(0);
+    // a group node is 64 px apart from the next, as before
+    expect(clusters[1] - clusters[0]).toBe(64);
+  });
+});
+
+describe("isRemovable", () => {
+  const mapped = point(9, "M kW", { asset_id: 10, mapping_id: 3, mapped_metric: "active_power_kw" });
+
+  it("a discovered source with nothing mapped can be removed, with or without points", () => {
+    expect(isRemovable(source(1, { clusters: [{ key: "A", points: [point(1, "a")] }], ungrouped: [point(2, "b")] }))).toBe(true);
+    expect(isRemovable(source(1))).toBe(true);
+  });
+
+  it("a mapped point anywhere, in a group or in the Ungrouped bag, keeps the source", () => {
+    expect(isRemovable(source(1, { clusters: [{ key: "A", points: [point(1, "a"), mapped] }] }))).toBe(false);
+    expect(isRemovable(source(1, { ungrouped: [mapped] }))).toBe(false);
+    expect(isRemovable(source(1, { ungrouped: [point(2, "b", { asset_id: 10 })] }))).toBe(false); // an asset without a mapping id is still a mapping
+  });
+
+  it("a source added by hand is never offered for removal", () => {
+    expect(isRemovable(source(1, { origin: "manual" }))).toBe(false);
+  });
+});
+
+describe("seenLine", () => {
+  const now = new Date("2026-10-15T12:00:00Z");
+  const found = (at: string, scan_id = 6) => source(1, { last_scan: { scan_id, at } });
+
+  it("says which scan found a discovered source, and how long ago", () => {
+    expect(seenLine(found("2026-10-15T11:50:00Z"), now, "UTC")).toBe("Seen in scan #6, 10 min ago");
+    expect(seenLine(found("2026-10-14T09:00:00Z", 3), now, "UTC")).toBe("Seen in scan #3, yesterday");
+  });
+
+  it("drops the ago part for a time over two weeks old, or one that cannot be read", () => {
+    expect(seenLine(found("2026-09-01T09:00:00Z"), now, "UTC")).toBe("Seen in scan #6");
+    expect(seenLine(found("not a time"), now, "UTC")).toBe("Seen in scan #6");
+  });
+
+  it("a source added by hand says so, whatever its findings", () => {
+    expect(seenLine(source(1, { origin: "manual" }), now, "UTC")).toBe("Added by hand");
+    expect(seenLine(source(1, { origin: "manual", last_scan: { scan_id: 6, at: "2026-10-15T11:50:00Z" } }), now, "UTC")).toBe("Added by hand");
+  });
+
+  it("a discovered source no scan has found yet says so (null, or a server that does not send the field)", () => {
+    expect(seenLine(source(1, { last_scan: null }), now, "UTC")).toBe("Not seen in a scan yet");
+    expect(seenLine(source(1), now, "UTC")).toBe("Not seen in a scan yet");
+  });
+});
+
+describe("removalOutcome", () => {
+  const result = (removed: number[], skipped: RemoveSourcesResult["skipped"] = []): RemoveSourcesResult => ({
+    removed: removed.map((id) => ({ id, name: `s${id}` })), skipped,
+  });
+  const kept = (id: number, reason: RemoveSourcesResult["skipped"][number]["reason"]) => ({ id, name: reason === "gone" ? null : `s${id}`, reason });
+
+  it("everything removed is a plain success, singular or plural", () => {
+    expect(removalOutcome(result([1]))).toEqual({ kind: "done", text: "Removed 1 source" });
+    expect(removalOutcome(result([1, 2, 3]))).toEqual({ kind: "done", text: "Removed 3 sources" });
+  });
+
+  it("some removed and one kept says why in words", () => {
+    expect(removalOutcome(result([1, 2], [kept(3, "mapped")]))).toEqual({ kind: "partial", text: "Removed 2 sources. 1 was kept: it has a mapped point now." });
+    expect(removalOutcome(result([1], [kept(3, "manual")]))).toEqual({ kind: "partial", text: "Removed 1 source. 1 was kept: it was added by hand." });
+  });
+
+  it("several kept are counted by reason", () => {
+    expect(removalOutcome(result([1], [kept(2, "mapped"), kept(3, "mapped"), kept(4, "manual")])).text)
+      .toBe("Removed 1 source. 3 were kept: 2 have a mapped point now, 1 was added by hand.");
+    expect(removalOutcome(result([1], [kept(2, "mapped"), kept(3, "mapped")])).text).toBe("Removed 1 source. 2 were kept: 2 have a mapped point now.");
+  });
+
+  it("a source that was already gone is not a kept one", () => {
+    expect(removalOutcome(result([1], [kept(2, "gone")]))).toEqual({ kind: "partial", text: "Removed 1 source. 1 was already gone." });
+    expect(removalOutcome(result([1], [kept(2, "gone"), kept(3, "gone")])).text).toBe("Removed 1 source. 2 were already gone.");
+  });
+
+  it("nothing removed because something was kept is a refusal (the dialog stays open)", () => {
+    expect(removalOutcome(result([], [kept(3, "mapped")]))).toEqual({ kind: "none", text: "Nothing was removed. 1 was kept: it has a mapped point now." });
+    expect(removalOutcome(result([], [kept(3, "mapped"), kept(4, "gone")])).text).toBe("Nothing was removed. 1 was kept: it has a mapped point now. 1 was already gone.");
+  });
+
+  it("nothing removed because every one was already gone is not a refusal (nothing is left to do)", () => {
+    expect(removalOutcome(result([], [kept(3, "gone")]))).toEqual({ kind: "gone", text: "Nothing was removed. 1 was already gone." });
+  });
+});
+
+describe("removalDialogText", () => {
+  it("one source: its name in the title, and what it means for assets, billing and dashboards", () => {
+    expect(removalDialogText(["Plant OPC"])).toEqual({
+      title: 'Remove "Plant OPC" from Discovery?',
+      message: "It has nothing mapped, so no asset, billing figure or dashboard depends on it. A scan can find it again.",
+    });
+  });
+
+  it.each([
+    [["A", "B"], "A and B."],
+    [["A", "B", "C"], "A, B and C."],
+    [["A", "B", "C", "D", "E"], "A, B, C, D and E."],
+    [["A", "B", "C", "D", "E", "F"], "A, B, C, D, E and 1 more."],
+    [["A", "B", "C", "D", "E", "F", "G", "H"], "A, B, C, D, E and 3 more."],
+  ])("several (%j): the first five names, then a count, then the promise", (names, list) => {
+    const { title, message } = removalDialogText(names);
+    expect(title).toBe(`Remove ${names.length} unmapped sources?`);
+    expect(message).toBe(`${list} Sources with a mapped point are never touched. A scan can find these again.`);
   });
 });

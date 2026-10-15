@@ -11,11 +11,13 @@ interface Props {
   source: GraphSource;
   /** Whoever holds sources.edit: saving credentials and browsing change the source. */
   canEdit: boolean;
+  /** When a scan last found the source, worded by the page (`seenLine`): the time needs the site's clock, and the node shows the same line. */
+  seen: string;
   onClose: () => void;
 }
 
 /** Facts about one source, and, for someone who may edit sources, the way to give it credentials (or browse it again). Never shows a stored secret. */
-export function SourcePanel({ source, canEdit, onClose }: Props) {
+export function SourcePanel({ source, canEdit, seen, onClose }: Props) {
   const queryClient = useQueryClient();
   const { run, busy, error } = useAction();
   const heading = useRef<HTMLHeadingElement>(null);
@@ -61,6 +63,7 @@ export function SourcePanel({ source, canEdit, onClose }: Props) {
         <button className="quiet" onClick={onClose}>Close</button>
       </div>
       <p className="muted">{source.connector_type} · {source.origin} · {source.status} · {source.point_count} points</p>
+      <p className="muted">{seen}</p>
       {source.last_error && <p className="error">Last error: {source.last_error}</p>}
       {source.needs_credentials && <p>This source needs credentials.</p>}
       {canEdit && source.needs_credentials && (

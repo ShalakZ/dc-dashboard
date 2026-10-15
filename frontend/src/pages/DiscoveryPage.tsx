@@ -6,22 +6,26 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
-import { keys, useGraph, useInvalidate } from "../api/queries";
-import type { GraphModel } from "../api/types";
+import { keys, useGraph, useInvalidate, useRemoveDiscoveredSources, useSite } from "../api/queries";
+import type { GraphModel, GraphSource } from "../api/types";
 import { useAppearance } from "../auth/AppearanceProvider";
 import { useAuth } from "../auth/AuthProvider";
+import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { BulkCreateDialog } from "../components/graph/BulkCreateDialog";
 import { nodeTypes } from "../components/graph/nodes";
 import { ReviewDialog, type InitialTarget } from "../components/graph/ReviewDialog";
 import { SourcePanel } from "../components/graph/SourcePanel";
 import { PageHeader } from "../components/PageHeader";
 import { ActionsSpace, CanvasSkeleton } from "../components/Skeleton";
+import { useToast } from "../components/Toasts";
 import { useAction } from "../hooks/useAction";
-import { dropPayload, pickDropTarget, type DropPayload } from "../lib/drop";
+import { dropPayload, mappableClusters, pickDropTarget, type DropPayload } from "../lib/drop";
 import {
-  buildGraph, type ClusterNodeData, type OpenState, type PointNodeData, type SourceNodeData,
+  buildGraph, isRemovable, removalDialogText, removalOutcome, seenLine,
+  type ClusterNodeData, type OpenState, type PointNodeData, type SourceNodeData,
 } from "../lib/graph";
 
-const HINT = "Dashed nodes were discovered; solid nodes are assets. Drag nodes to arrange them.";
+const HINT = "Dashed nodes were discovered; solid nodes are assets. Press New asset… on a group, or drag it onto an asset. Drag other nodes to arrange them.";
 
 /** The server rejects a longer layout node id (a cluster id embeds device-reported names, so it can be long). */
 const MAX_LAYOUT_ID = 512;
@@ -34,17 +38,33 @@ const toggled = <T,>(set: ReadonlySet<T>, value: T): Set<T> => {
 
 type Callbacks = {
   onToggle: (id: string) => void; onSelect: (id: string) => void; onMap: (id: string) => void; onNewAsset: (id: string) => void;
+  onCreateAssets: (id: string) => void; onRemove: (id: string) => void;
 };
+
+/** What the page works out about a source once per graph, so a toggle or a drag does not do it again for every node. */
+interface SourceFacts { seen: string; groups: number; removable: boolean }
 
 /**
  * The callbacks a node gets in its data (it renders a button only for a callback it has). Sources and clusters toggle and
  * sources open their details;
  * for someone who may accept scan results (`canAccept`), a cluster with something left to map offers both mapping buttons and an
- * unmapped point offers "Map".
+ * unmapped point offers "Map", and a source with at least one group to turn into an asset offers "Create assets" (`facts.groups`, 0 for
+ * a role that may not accept). A source offers "Remove" only when it is removable and the person may change the graph (`canRemove`).
  * The conditions mirror what `dropPayload` accepts, so a button is never shown for something that could not be mapped.
  */
-function nodeData(node: Node, canAccept: boolean, { onToggle, onSelect, onMap, onNewAsset }: Callbacks): Node["data"] {
-  if (node.type === "source") return { ...node.data, onToggle, onSelect };
+function nodeData(
+  node: Node, canAccept: boolean, canRemove: boolean, facts: ReadonlyMap<number, SourceFacts>,
+  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove }: Callbacks,
+): Node["data"] {
+  if (node.type === "source") {
+    const data = node.data as SourceNodeData;
+    const fact = facts.get(data.source.id);
+    return {
+      ...data, onToggle, onSelect, seen: fact?.seen,
+      ...(fact && fact.groups > 0 ? { onCreateAssets, groups: fact.groups } : {}),
+      ...(canRemove && fact?.removable ? { onRemove } : {}),
+    };
+  }
   if (node.type === "cluster") {
     const cluster = node.data as ClusterNodeData;
     const mappable = canAccept && !cluster.ungrouped && cluster.mappedCount < cluster.count;
@@ -58,9 +78,13 @@ function Canvas({ model }: { model: GraphModel }) {
   const { can } = useAuth();
   const canAccept = can("discovery.accept"); // map and accept: the buttons on the nodes, a drop onto an asset, the offer and the review
   const canLayout = can("discovery.edit"); // the shared layout
+  const canRemove = canLayout; // Remove and Clear unmapped ride on the same permission (it is the remove route's)
   const canEditSource = can("sources.edit"); // the source panel's credentials and Browse again
   const invalidate = useInvalidate();
+  const toast = useToast();
+  const removeSources = useRemoveDiscoveredSources();
   const { run, error: saveError } = useAction();
+  const timezone = useSite().data?.timezone ?? "UTC"; // the "10 min ago" of a source counts on the site's clock; UTC until it is read
   const [open, setOpen] = useState<OpenState>({ sources: new Set(), clusters: new Set() });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Where the user has dragged nodes this session. A rebuild (expand, collapse, refresh) puts these back instead of
@@ -73,6 +97,15 @@ function Canvas({ model }: { model: GraphModel }) {
   const [review, setReview] = useState<{ key: number; payload: DropPayload; initialTarget: InitialTarget } | null>(null);
   const reviewCount = useRef(0);
   const [offer, setOffer] = useState<{ nodeId: string; label: string } | null>(null);
+  // The sources a Remove or a Clear unmapped is asking about, FROZEN when the dialog opens: the request carries these ids and no others, so a source
+  // a scan adds meanwhile is never touched. `fromNode`: the Remove button of a node opened it (that node is gone afterwards; Clear keeps its button).
+  const [removal, setRemoval] = useState<{ sources: { id: number; name: string }[]; fromNode: boolean } | null>(null);
+  const refreshRef = useRef<HTMLButtonElement>(null);
+  const focusRefresh = useRef(false);
+  // The source whose bulk-create dialog is open, as it was when the button was pressed (like the review dialog's payload, so the dialog's own
+  // rows do not shift under it when the graph is read again after each asset). `focusAfterCreate`: the source whose node takes the focus back.
+  const [createFor, setCreateFor] = useState<GraphSource | null>(null);
+  const focusAfterCreate = useRef<number | null>(null);
 
   // The offer has no timer (WCAG 2.2.1): it stays until it is dismissed, used, replaced by a newer one, or another drag starts.
   const openReview = useCallback((payload: DropPayload, initialTarget: InitialTarget) => {
@@ -105,15 +138,40 @@ function Canvas({ model }: { model: GraphModel }) {
       : { ...prev, clusters: toggled(prev.clusters, id) });
   }, []);
 
+  const sourceOf = useCallback((id: string) => model.sources.find((s) => s.id === Number(id.slice("src:".length))), [model]);
+  const onCreateAssets = useCallback((id: string) => {
+    const source = sourceOf(id);
+    if (source) setCreateFor(source);
+  }, [sourceOf]);
+  const closeCreate = useCallback(() => {
+    focusAfterCreate.current = createFor?.id ?? null;
+    setCreateFor(null);
+  }, [createFor]);
+  const onRemove = useCallback((id: string) => {
+    const source = sourceOf(id);
+    if (source && isRemovable(source)) setRemoval({ sources: [{ id: source.id, name: source.name }], fromNode: true });
+  }, [sourceOf]);
+  const removable = useMemo(() => model.sources.filter(isRemovable), [model]);
+  const clearUnmapped = () => {
+    if (removable.length > 0) setRemoval({ sources: removable.map((s) => ({ id: s.id, name: s.name })), fromNode: false });
+  };
+
+  // What the page works out about each source once per graph: the muted last-seen line, how many groups "Create assets" would turn into
+  // assets (a role that may not accept has none) and whether it is removable. `asOf` moves with each read of the graph: the "ago" is as old as the data.
+  const asOf = useMemo(() => new Date(), [model]);
+  const facts = useMemo(() => new Map<number, SourceFacts>(model.sources.map((s) => [s.id, {
+    seen: seenLine(s, asOf, timezone), groups: canAccept ? mappableClusters(s).length : 0, removable: isRemovable(s),
+  }])), [model, asOf, timezone, canAccept]);
+
   const seeded = useMemo(() => {
     const built = buildGraph(model, open);
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
       position: moved.current.get(n.id) ?? n.position,
-      data: nodeData(n, canAccept, { onToggle, onSelect, onMap, onNewAsset }),
+      data: nodeData(n, canAccept, canRemove, facts, { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, canAccept, onToggle, onSelect, onMap, onNewAsset]);
+  }, [model, open, canAccept, canRemove, facts, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
@@ -157,12 +215,54 @@ function Canvas({ model }: { model: GraphModel }) {
   // The panel reads the source from the current model, so it follows a refresh instead of showing stale facts.
   const selected = selectedId === null ? undefined : model.sources.find((s) => s.id === selectedId);
 
+  const confirmRemoval = async () => {
+    if (!removal) return;
+    // The call resolves after the graph is read again, so the removed nodes are already gone when the dialog closes below.
+    const outcome = removalOutcome(await removeSources.mutateAsync(removal.sources.map((s) => s.id)));
+    if (outcome.kind === "none") throw new Error(outcome.text); // nothing went: the dialog stays open and says why as its error line
+    if (outcome.kind === "done") toast.success(outcome.text);
+    else if (outcome.kind === "partial") toast.error(outcome.text);
+    else toast.info(outcome.text);
+    focusRefresh.current = removal.fromNode;
+    setRemoval(null);
+  };
+  // After the dialog has gone (a PARENT effect runs after the dialog's own cleanup has put the focus back on the node's Remove button, which the
+  // refreshed graph has taken away): the focus lands on Refresh. A Clear unmapped keeps its own button, and the dialog hands the focus back to it.
+  useEffect(() => {
+    if (removal === null && focusRefresh.current) {
+      focusRefresh.current = false;
+      refreshRef.current?.focus();
+    }
+  }, [removal]);
+  // The bulk-create dialog does not restore focus itself (the page decides): its Create assets… button, or, when every group has become an asset
+  // and the button is gone, the node's Details button.
+  useEffect(() => {
+    if (createFor !== null || focusAfterCreate.current === null) return;
+    const node = canvas.current?.querySelector(`[data-id="src:${focusAfterCreate.current}"]`);
+    focusAfterCreate.current = null;
+    (node?.querySelector<HTMLElement>('button[aria-label^="Create assets for"]') ?? node?.querySelector<HTMLElement>('button[aria-label^="Details for"]'))?.focus();
+  }, [createFor]);
+
   return (
     <>
       <PageHeader
         title="Discovery"
         sub={HINT}
-        actions={<button onClick={() => invalidate(keys.graph)}>Refresh</button>}
+        actions={
+          <>
+            <button type="button" ref={refreshRef} onClick={() => invalidate(keys.graph)}>Refresh</button>
+            {/* Always drawn for a role that may use it (never a slot that comes and goes); with nothing to clear it is aria-disabled, not disabled, so it keeps the focus it may hold. */}
+            {canRemove && (
+              <button
+                type="button"
+                className="discovery-clear"
+                aria-disabled={removable.length === 0 || undefined}
+                title={removable.length === 0 ? "Nothing to clear" : undefined}
+                onClick={clearUnmapped}
+              >{`Clear unmapped (${removable.length})`}</button>
+            )}
+          </>
+        }
       />
       {saveError && <p className="error" role="alert">{saveError}</p>}
       <div className="graph-layout">
@@ -197,10 +297,19 @@ function Canvas({ model }: { model: GraphModel }) {
             </div>
           )}
         </div>
-        {selected && <SourcePanel key={selected.id} source={selected} canEdit={canEditSource} onClose={closePanel} />}
+        {selected && <SourcePanel key={selected.id} source={selected} canEdit={canEditSource} seen={facts.get(selected.id)?.seen ?? ""} onClose={closePanel} />}
       </div>
       {canAccept && review && (
         <ReviewDialog key={review.key} model={model} payload={review.payload} initialTarget={review.initialTarget} onClose={closeReview} />
+      )}
+      {canAccept && createFor && <BulkCreateDialog model={model} source={createFor} onClose={closeCreate} />}
+      {removal && (
+        <ConfirmDeleteDialog
+          {...removalDialogText(removal.sources.map((s) => s.name))}
+          confirmLabel="Remove"
+          onConfirm={confirmRemoval}
+          onCancel={() => setRemoval(null)}
+        />
       )}
     </>
   );
@@ -209,6 +318,18 @@ function Canvas({ model }: { model: GraphModel }) {
 export function DiscoveryPage() {
   const { loading } = useAuth();
   const { data: model, error, isLoading } = useGraph();
+  const empty = !model || (model.sources.length === 0 && model.unidentified.length === 0);
+  // A Clear unmapped that takes the last source away leaves the empty page: the canvas, with the dialog and the button that had the focus, is
+  // gone. The main area takes the focus (without scrolling), as the drawer does when its opener has no row to go back to.
+  const wasShown = useRef(false);
+  useEffect(() => {
+    if (!model) return;
+    if (!empty) wasShown.current = true;
+    else if (wasShown.current) {
+      wasShown.current = false;
+      document.getElementById("main")?.focus({ preventScroll: true });
+    }
+  }, [model, empty]);
   if (loading || isLoading) {
     // Inside .graph-page from the first paint: the shell's one-window-tall rules key on it, and the canvas takes what the header leaves.
     return (
@@ -219,7 +340,7 @@ export function DiscoveryPage() {
     );
   }
   if (error) return <p className="error" role="alert">{error.message}</p>;
-  if (!model || (model.sources.length === 0 && model.unidentified.length === 0)) {
+  if (!model || empty) {
     return (
       <>
         <PageHeader title="Discovery" />
