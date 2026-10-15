@@ -57,7 +57,8 @@ export interface ExpandResult {
 /**
  * Expand all, within a budget of NEW nodes (what is already open costs nothing). Sources open in the model's order while their groups fit,
  * then the groups of every open source in the model's order while their points fit; one that does not fit stays closed and a later, smaller
- * one may still fit. A source with no group costs nothing. Ids already open stay open, known to the model or not.
+ * one may still fit. A source with no group costs nothing. Opening a closed source costs its groups plus the points of those of its groups that
+ * are already open (it draws them all). Ids already open stay open, known to the model or not.
  */
 export function expandAll(model: GraphModel, open: OpenState, budget: number = EXPAND_NODE_BUDGET): ExpandResult {
   const sources = new Set(open.sources);
@@ -66,7 +67,10 @@ export function expandAll(model: GraphModel, open: OpenState, budget: number = E
   let [openedSources, openedGroups, keptSources, keptGroups] = [0, 0, 0, 0];
   for (const source of model.sources) {
     if (sources.has(source.id)) continue;
-    const cost = groupsOf(source).length;
+    // A closed source keeps its open groups in `open.clusters`, and opening the source draws all of their points as well: charge them now.
+    const groups = groupsOf(source);
+    let cost = groups.length;
+    for (const group of groups) if (clusters.has(nodeId.cluster(source.id, group.key))) cost += group.points.length;
     if (used + cost <= budget) { sources.add(source.id); used += cost; openedSources++; } else keptSources++;
   }
   for (const source of model.sources) {

@@ -16,7 +16,7 @@ import { nodeTypes } from "../components/graph/nodes";
 import { ReviewDialog, type InitialTarget } from "../components/graph/ReviewDialog";
 import { SourcePanel } from "../components/graph/SourcePanel";
 import { PageHeader } from "../components/PageHeader";
-import { ActionsSpace, CanvasSkeleton, GraphBarSpace } from "../components/Skeleton";
+import { CanvasSkeleton, GraphBarSpace } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { useAction } from "../hooks/useAction";
 import { useConfirm } from "../hooks/useConfirm";
@@ -433,6 +433,7 @@ function Canvas({ model }: { model: GraphModel }) {
             onNodeDragStop={onNodeDragStop}
             colorMode={dark ? "dark" : "light"}
             nodesConnectable={false}
+            nodesDraggable={!tidying} // a drag while Tidy runs would put the old places back after the wipe, for everyone
             edgesFocusable={false} // an edge is a Tab stop with no visible ring; the nodes stay focusable
             deleteKeyCode={null}
             fitView
@@ -473,8 +474,22 @@ function Canvas({ model }: { model: GraphModel }) {
   );
 }
 
+/**
+ * The header's actions while the graph loads: the words of the real buttons (Refresh, and Clear unmapped for a role that has it), hidden. The actions
+ * column takes its width from them, so the hint beside it wraps onto the same number of lines as it will beside the real buttons and the canvas does not
+ * drop when the graph arrives (a bare gap, `ActionsSpace`, holds the height but not the width). Not focusable and not read out.
+ */
+function LoadingActions({ withClear }: { withClear: boolean }) {
+  return (
+    <span className="graph-actions-space" aria-hidden="true">
+      <button type="button" tabIndex={-1}>Refresh</button>
+      {withClear && <button type="button" tabIndex={-1} className="discovery-clear">Clear unmapped (0)</button>}
+    </span>
+  );
+}
+
 export function DiscoveryPage() {
-  const { loading } = useAuth();
+  const { loading, can } = useAuth();
   const { data: model, error, isLoading } = useGraph();
   const empty = !model || (model.sources.length === 0 && model.unidentified.length === 0);
   // A Clear unmapped that takes the last source away leaves the empty page: the canvas, with the dialog and the button that had the focus, is
@@ -492,7 +507,7 @@ export function DiscoveryPage() {
     // Inside .graph-page from the first paint: the shell's one-window-tall rules key on it, and the canvas takes what the header leaves.
     return (
       <div className="graph-page">
-        <PageHeader title="Discovery" sub={HINT} actions={<ActionsSpace />} />
+        <PageHeader title="Discovery" sub={HINT} actions={<LoadingActions withClear={can("discovery.edit")} />} />
         <GraphBarSpace />
         <CanvasSkeleton label="Loading the graph" />
       </div>

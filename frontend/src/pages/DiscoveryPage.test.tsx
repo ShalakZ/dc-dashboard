@@ -37,10 +37,10 @@ vi.mock("@xyflow/react", async (importOriginal) => {
     ...actual,
     Handle: () => null,
     useReactFlow: () => ({ getIntersectingNodes: flow.getIntersectingNodes, getNodes: flow.getNodes, fitView: flow.fitView }),
-    ReactFlow: ({ nodes, nodeTypes, colorMode, edgesFocusable, onNodeClick, onNodeDragStart, onNodeDrag, onNodeDragStop, onNodesChange }: any) => {
+    ReactFlow: ({ nodes, nodeTypes, colorMode, edgesFocusable, nodesDraggable, onNodeClick, onNodeDragStart, onNodeDrag, onNodeDragStop, onNodesChange }: any) => {
       flow.state.nodes = nodes;
       return (
-        <div data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)}>
+        <div data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)} data-nodes-draggable={String(nodesDraggable)}>
           {nodes.map((n: any) => {
             const Node = nodeTypes[n.type];
             const dropped = () => ({ ...n, position: flow.state.dropAt });
@@ -587,6 +587,40 @@ describe("DiscoveryPage while the graph loads", () => {
     expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
     expect(document.querySelector(".sk-region")).toBeNull();
     expect(document.querySelector(".graph-page")).not.toBeNull();
+  });
+
+  it("holds the header's actions column at its real width: the words of the real buttons, hidden, not focusable, not read out, gone when the graph is in", async () => {
+    const page = openHeld({}); // an operator has no discovery.edit: Refresh only
+    const space = document.querySelector(".page-head .actions .graph-actions-space") as HTMLElement;
+    expect(space).not.toBeNull();
+    expect(space).toHaveAttribute("aria-hidden", "true");
+    expect([...space.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Refresh"]);
+    expect([...space.querySelectorAll("button")].every((b) => b.tabIndex === -1)).toBe(true);
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
+    page.release();
+    await screen.findByText("Plant OPC");
+    expect(document.querySelector(".graph-actions-space")).toBeNull();
+  });
+
+  it("with discovery.edit the placeholder holds Clear unmapped's words too", async () => {
+    mockFetch(routes("admin"));
+    const held = holdFetch((_method, path) => path === "/api/discovery/graph");
+    open();
+    await waitFor(() => { // the permissions arrive while the graph is still held
+      const space = document.querySelector(".graph-actions-space") as HTMLElement;
+      expect([...space.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Refresh", "Clear unmapped (0)"]);
+    });
+    held.release();
+    await screen.findByText("Plant OPC");
+  });
+
+  it("the placeholder is invisible and takes no focus (visibility hidden), so its buttons never show", () => {
+    const css = readFileSync("src/styles/discovery-tidy.css", "utf8");
+    const rule = /\.graph-actions-space\s*\{([^}]*)\}/.exec(css);
+    expect(rule, "a rule for the placeholder").not.toBeNull();
+    expect(rule![1]).toMatch(/visibility:\s*hidden/);
+    expect(rule![1]).toMatch(/display:\s*flex/);
+    expect(rule![1]).toMatch(/gap:\s*8px/);
   });
 
   it("ends in the error, no region left, when the graph cannot be loaded", async () => {
@@ -1308,6 +1342,35 @@ describe("DiscoveryPage Tidy layout, the bar, collapse and expand all (W7t)", ()
     await screen.findByRole("dialog");
     expect(tidyButton()).toHaveAttribute("aria-disabled", "true");
     expect(tidyButton()).not.toBeDisabled();
+  });
+
+  it("nothing can be dragged while a Tidy runs (the question open, the DELETE in flight), and it can again afterwards", async () => {
+    const calls = mockFetch({ ...routes("admin", placed()), "DELETE /api/discovery/layout": { status: 204 } });
+    const draggable = () => screen.getByTestId("flow").dataset.nodesDraggable;
+    open();
+    await screen.findByText("Plant OPC");
+    expect(draggable()).toBe("true");
+    const held = holdFetch((method, path) => method === "DELETE" && path === "/api/discovery/layout");
+    await userEvent.click(tidyButton());
+    const dialog = await screen.findByRole("dialog", { name: "Tidy the layout for everyone?" });
+    expect(draggable()).toBe("false"); // the question is open
+    await userEvent.click(within(dialog).getByRole("button", { name: "Tidy for everyone" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls_of(calls, "DELETE")).toHaveLength(0); // the DELETE is held: in flight
+    expect(draggable()).toBe("false");
+    held.release();
+    await waitFor(() => expect(flow.fitView).toHaveBeenCalled());
+    await waitFor(() => expect(draggable()).toBe("true"));
+    expect(calls_of(calls, "DELETE")).toHaveLength(1);
+  });
+
+  it("a Cancel on the question gives the drag back too", async () => {
+    mockFetch(routes("admin", placed()));
+    open();
+    await screen.findByText("Plant OPC");
+    await userEvent.click(tidyButton());
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.getByTestId("flow").dataset.nodesDraggable).toBe("true"));
   });
 
   it("waits for the drag still being saved: the DELETE reaches the server after the PUT", async () => {

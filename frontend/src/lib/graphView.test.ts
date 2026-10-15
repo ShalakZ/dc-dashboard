@@ -139,6 +139,35 @@ describe("expandAll", () => {
     expect(r).toMatchObject({ openedSources: 1, openedGroups: 1, keptSources: 0, keptGroups: 2 });
   });
 
+  it("a closed source whose group is already open costs its groups AND that group's points: it stays closed when they would not fit, and is counted in keptSources", () => {
+    // S1 was closed with its big group left open (the page keeps open groups when a source closes). Opening S1 would draw the 700 points.
+    const m = model({ sources: [withGroups(1, [700, 1]), withGroups(2, [2])] });
+    const open = { sources: new Set<number>(), clusters: new Set([g(1, 0)]) };
+    const r = expandAll(m, open);
+    expect(sorted(r.open.sources)).toEqual([2]);
+    expect(r.open.clusters.has(g(2, 0))).toBe(true);
+    expect(r.open.clusters.has(g(1, 0))).toBe(true);
+    expect(r).toMatchObject({ openedSources: 1, openedGroups: 1, keptSources: 1, keptGroups: 0 });
+    expect(expandNote(r)).toContain("1 source stays closed");
+  });
+
+  it("a closed source with a small open group opens when both fit, and the open group's points are charged before the later groups", () => {
+    // S1 costs 2 groups + 3 points of its open group = 5 of 6; S2 then costs 1 group = 6; S2's group (2 points) would make 8: closed.
+    const m = model({ sources: [withGroups(1, [3, 1]), withGroups(2, [2])] });
+    const open = { sources: new Set<number>(), clusters: new Set([g(1, 0)]) };
+    const r = expandAll(m, open, 6);
+    expect(sorted(r.open.sources)).toEqual([1, 2]);
+    expect(r.open.clusters.has(g(2, 0))).toBe(false);
+    expect(r).toMatchObject({ openedSources: 2, openedGroups: 0, keptSources: 0, keptGroups: 2 });
+  });
+
+  it("a source that is already open charges nothing for its open groups (they are on the canvas already)", () => {
+    const m = model({ sources: [withGroups(1, [700, 1])] });
+    const open = { sources: new Set([1]), clusters: new Set([g(1, 0)]) };
+    const r = expandAll(m, open);
+    expect(r).toMatchObject({ openedSources: 0, openedGroups: 1, keptSources: 0, keptGroups: 0 });
+  });
+
   it("a source without groups opens at no cost, even with nothing left of the budget", () => {
     const r = expandAll(model({ sources: [source(1), withGroups(2, [3])] }), none, 0);
     expect(sorted(r.open.sources)).toEqual([1]);

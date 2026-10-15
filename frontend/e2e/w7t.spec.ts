@@ -43,6 +43,8 @@ import { rowAction, treeLink, userBlock } from "./shell";
 //               Collapse all closes it, and each is aria-disabled when there is nothing to do.
 //   layout      at 1440 and at 1024 x 640: no sideways overflow, the bar and its three buttons whole, the hint short, the source node's Details, Create assets...
 //               and bin on ONE row inside the node, and (the w7r check, with the bar) the first source's title and Create assets button inside the canvas.
+//   canvas drop with the graph response held for 1.5 s, the canvas row (`.graph-layout`) starts at the same height (0.5 px) in the loading branch and once the graph is
+//               in, at 1440 x 900, 1024 x 640 and 800 x 600 (the header's actions hold their real width while loading, so the hint wraps the same way).
 //   scope form  4080 warns with `4840 (OPC UA)`, 4840 and 4080 together still save (the Ports cell names 4840), 80 and 8080 do not warn, the Edit form warns too, and
 //               the form does not move under the typing.
 //   scan again  Recent scans: Scan again opens the preview and confirmation of the same scope, the panel is in view at 1024 x 640 after a scroll that had left it
@@ -1047,6 +1049,39 @@ test.describe("W7t: the Discovery bar", () => {
           if (!checked) test.info().annotations.push({ type: "note", description: "none of the first three sources has a Create assets button on this stack" });
         }
       });
+    }
+  });
+
+  test("the canvas does not drop when the graph arrives: with the graph held for 1.5 s, .graph-layout starts at the same height in the loading branch and once loaded, at 1440 x 900, 1024 x 640 and 800 x 600", async ({ page }) => {
+    test.setTimeout(240_000);
+    await signIn(page);
+    await page.route("**/api/discovery/graph", async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return route.continue();
+    });
+    try {
+      for (const [width, height] of [[1440, 900], [1024, 640], [800, 600]] as const) {
+        await test.step(`${width} x ${height}`, async () => {
+          await page.setViewportSize({ width, height });
+          await page.goto("/discovery");
+          // The loading branch: the place held for the bar is there (and the bar is not), the canvas is the skeleton region.
+          await expect(page.locator(".graph-bar-space")).toBeVisible({ timeout: 30_000 });
+          await expect(bar(page)).toHaveCount(0);
+          await page.evaluate(() => document.fonts.ready);
+          const loadingTop = (await boxOf(page.locator(".graph-layout"), "the canvas row while loading")).y;
+          // The graph arrives: the bar is drawn and the placeholder is gone.
+          await expect(bar(page)).toBeVisible({ timeout: 30_000 });
+          await expect(page.locator(".graph-bar-space")).toHaveCount(0);
+          await expect(page.locator(".graph-canvas")).toBeVisible();
+          await page.evaluate(() => document.fonts.ready);
+          const loadedTop = (await boxOf(page.locator(".graph-layout"), "the canvas row once loaded")).y;
+          test.info().annotations.push({ type: "measure", description: `${width} x ${height}: .graph-layout top ${loadingTop.toFixed(1)} while loading, ${loadedTop.toFixed(1)} loaded` });
+          expect.soft(Math.abs(loadedTop - loadingTop), `the canvas row starts at ${loadingTop} while loading and at ${loadedTop} once the graph is in (a drop of ${(loadedTop - loadingTop).toFixed(1)}px)`).toBeLessThanOrEqual(0.5);
+        });
+      }
+    } finally {
+      await page.unroute("**/api/discovery/graph");
     }
   });
 });

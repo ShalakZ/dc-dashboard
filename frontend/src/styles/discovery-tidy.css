@@ -18,6 +18,10 @@
   /* W7t: Remove on a source node is the bin alone (its name is the aria-label, its tooltip the title): Details, Create assets… and the bin share one row of the 220px node. 14px keeps the row as tall as its text buttons. */
   .gnode-remove svg.i { width: 14px; height: 14px; }
 
+  /* W7t: the header's actions while the graph loads are the real buttons' words, hidden (visibility keeps their width and takes them out of the tab order and the accessibility tree): the same width
+     as the real Refresh and Clear unmapped, so the hint beside them wraps onto the same lines and the canvas does not drop when the graph arrives. */
+  .graph-actions-space { display: flex; gap: 8px; visibility: hidden; }
+
   /* W7t: the bar between the header and the canvas (the summary on the left, Collapse all, Expand all and Tidy layout on the right). One rule gives the bar and the place held for it while the graph loads
      the same height and the same gap, so the canvas does not drop when the bar arrives (the page is exactly one window tall). */
   .graph-bar, .graph-bar-space { flex: none; box-sizing: border-box; height: 36px; margin-bottom: 8px; }
