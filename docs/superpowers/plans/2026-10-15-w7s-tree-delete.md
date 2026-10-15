@@ -159,7 +159,7 @@ Files: `e2e/w7s.spec.ts`, `e2e/playwright.config.ts` (project `w7s`, last in the
 
 ### Close-out (controller)
 
-- [ ] Per-task Opus review of T1+T2 (read-only, effort high), fixes. [ ] Full frontend suite, typecheck, build, e2e type-check. [ ] `vis-rebuild.sh` Playwright on a build of the final commit (project `dcdash_e2e_w7s_vis`, ports 18212/18566), summary line read. [ ] Gallery. [ ] ONE whole-wave Opus review in a real browser (1440, 1024, 800; light and dark; keyboard; a role without `assets.delete`). [ ] ONE fix wave, reruns. [ ] Backlog AR, roadmap O-37, CHANGELOG merge commit, this plan's log. [ ] Merge gate, backup, rebuild, push, delete the branch, markers.
+- [x] Per-task Opus review of T1+T2 (read-only, effort high), fixes. [x] Full frontend suite, typecheck, build, e2e type-check. [x] `vis-rebuild.sh` Playwright on a build of the final commit (project `dcdash_e2e_w7s_vis`, ports 18212/18566), summary line read. [x] Gallery. [x] ONE whole-wave Opus review in a real browser (1440, 1024, 800; light and dark; keyboard; a role without `assets.delete`). [x] ONE fix wave, reruns. [x] Backlog AR, roadmap O-37, CHANGELOG merge commit, this plan's log. [x] Merge gate, backup, rebuild, push, delete the branch, markers.
 
 ## Execution log
 
@@ -171,4 +171,4 @@ Times are the controller's own. All commits are on `w7s-tree-delete`.
 - ONE Opus review of T1+T2 (`t12-review-report.md`: 0 Critical, 1 Important, 6 Minor): I1 the dialog's picture came from the cached tree and nothing checked it against the server; fix wave 1 (080d1b0) re-reads the asset list while the dialog loads and blocks on drift, plus M1 (double press), M2 (a second navigation), M3 (the focus recheck expires), M5 (toast after unmount).
 - Gates: full frontend suite 5985 passed (192 files; one removeflow race fixed in c613ba6), typecheck, build, e2e type-check. Isolated Playwright (`dcdash_e2e_w7s_vis`, ports 18212/18566) on c613ba6: 222 passed, 0 failed, the 10 new w7s cases green at the first run.
 - Gallery in `.superpowers/sdd/overnight-w7/gallery/W7s/`; ONE whole-wave Opus browser review (`review-wave-report.md`): 0 Critical, 0 Important, 5 Minor; fix wave 2 (509786d) for M3 only (the billing warning in its own paragraph); M1, M2, M4 parked in backlog AR, M5 documented.
-- Final gates on 509786d: frontend 5987 passed, typecheck, build, e2e type-check, doc tests 59 passed; the isolated Playwright run is repeated on the branch head before the merge.
+- Final gates: the Opus scoped re-review of fix wave 1 (0 Critical, 0 Important, 3 Minor; m1 fixed in 8e88866 with a set comparison), frontend 5988 passed twice, typecheck, build, e2e type-check, the doc-reading backend tests (198) passed; the isolated Playwright run on the branch head 2cb574f: 222 passed, 0 failed. Merged as 239952d.

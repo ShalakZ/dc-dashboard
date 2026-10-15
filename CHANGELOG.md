@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## W7s (2026-10-15, <merge commit>)
+## W7s (2026-10-15, 239952d)
 
 The Assets Tree can delete several assets at once: pick them as for a move and press **Delete** in the pick bar (for people who hold both Change assets and Delete assets). One dialog lists the picks and what else goes with them, each top-level asset is then deleted by its own request, and the first one that cannot be deleted stops the rest and is named, with the failed and untried assets left picked. The open asset's row no longer looks like a pick: it keeps its bar and bold name and loses the tint, which only picked rows have. No migration, no new permission and nothing to do when you update (rebuild as in [Upgrading and going back](docs/upgrading.md)); the schema stays `0011`. See [Deleting several assets](docs/assets-and-kinds.md#deleting-several-assets).
 
