@@ -67,13 +67,14 @@ function CurrencyForm({ canEdit }: { canEdit: boolean }) {
     if (code !== "" && !/^[A-Z]{3}$/.test(code)) return setProblem("Use a three-letter currency code, for example QAR.");
     setProblem(null);
     const next = code === "" ? null : code;
-    // Past figures are recalculated, never converted: a new code only changes the label on every one of them.
+    // Past figures are recalculated, never converted: a new code only changes the label on every one of them, except in closed months (W11),
+    // which keep the currency they were closed with.
     if (stored !== null && next !== stored) {
       const change = next === null ? `Remove the currency ${stored}? Costs will show without a unit.` : `Change the currency from ${stored} to ${next}?`;
       // Nothing is destroyed, so the button is the primary one, not the red one. The Save button's green is this change's own feedback: no toast.
       const confirmed = await ask({
         title: next === null ? "Remove the currency?" : "Change the currency?",
-        message: `${change} This relabels all past figures; no conversion is applied.`,
+        message: `${change} This relabels all past figures except in closed months, which keep their own currency; no conversion is applied.`,
         confirmLabel: next === null ? "Remove currency" : "Change currency",
         tone: "primary",
       });
