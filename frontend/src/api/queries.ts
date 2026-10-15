@@ -5,7 +5,7 @@ import { upperFirst } from "../lib/upperFirst";
 import { ApiError, api } from "./client";
 import type {
   Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, StarterPackResult, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
-  FleetSummary, GeneralSettings, GraphModel, Metric, MoveBody, MovePreview, MoveResult, PermissionRow, PointRow, RangePreset, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
+  FleetSummary, GeneralSettings, GraphModel, Metric, MoveBody, MovePreview, MoveResult, PermissionRow, PointRow, RangePreset, RemoveSourcesResult, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
 } from "./types";
@@ -431,6 +431,33 @@ export const useScan = (scanId: number | null) =>
 
 /** The discovery graph. No polling: refresh it by invalidating `keys.graph`. */
 export const useGraph = () => useQuery({ queryKey: keys.graph, queryFn: () => api.get<GraphModel>("/api/discovery/graph") });
+
+/** The most ids one `POST /api/discovery/sources/remove` takes (`RemoveIn` in api/discovery.py): a longer list goes in several calls. */
+const REMOVE_BATCH = 500;
+
+/**
+ * Removes discovered sources that have nothing mapped (`discovery.edit`). The ids are the ones the person was shown, and the
+ * answer says which went and which were kept (a mapping appeared meanwhile, the source was added by hand, or it was already gone); a running
+ * scan is a 409 with nothing removed. The graph, the sources list and the audit log are refetched once, in `onSettled` (a refusal also means
+ * the page is out of date), and the call resolves after that, so the removed nodes are gone when the caller closes its dialog.
+ * More than 500 ids are sent in calls of 500, one after the other, and the answers are joined; a refusal part-way rejects (what the
+ * earlier calls removed stays removed, and the refetch shows it).
+ */
+export function useRemoveDiscoveredSources() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (ids: readonly number[]) => {
+      const joined: RemoveSourcesResult = { removed: [], skipped: [] };
+      for (let from = 0; from === 0 || from < ids.length; from += REMOVE_BATCH) {
+        const part = await api.post<RemoveSourcesResult>("/api/discovery/sources/remove", { source_ids: ids.slice(from, from + REMOVE_BATCH) });
+        joined.removed.push(...part.removed);
+        joined.skipped.push(...part.skipped);
+      }
+      return joined;
+    },
+    onSettled: () => invalidate(keys.graph, keys.sources, keys.auditAll),
+  });
+}
 
 /**
  * One page of the filtered audit log, as a query. `useAudit` and the drawer's Previous/Next (`queryClient.fetchQuery`, to look into the

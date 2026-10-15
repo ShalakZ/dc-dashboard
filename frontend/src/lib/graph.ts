@@ -1,5 +1,6 @@
-import type { Edge, Node } from "@xyflow/react";
-import type { Asset, GraphModel, GraphPoint, GraphSource } from "../api/types";
+import type { Edge, FitViewOptions, Node } from "@xyflow/react";
+import type { Asset, GraphModel, GraphPoint, GraphSource, RemoveSourcesResult } from "../api/types";
+import { relativeTime } from "./relativeTime";
 
 /** Key of the pseudo-cluster that holds a source's points that have no cluster of their own. */
 export const UNGROUPED = "__ungrouped__";
@@ -25,9 +26,19 @@ export type NodeActions = {
   onNewAsset?: (nodeId: string) => void;
   /** Open the details panel of a source: the keyboard path, since React Flow's Enter/Space on a node is not a click. */
   onSelect?: (nodeId: string) => void;
+  /** Open the bulk dialog that makes one asset per group of a source (discovery.accept, and only while the source has a group to map). */
+  onCreateAssets?: (nodeId: string) => void;
+  /** Ask to remove a discovered source that has nothing mapped (discovery.edit). */
+  onRemove?: (nodeId: string) => void;
 };
 // These are `type`s, not interfaces: React Flow requires node data to be assignable to Record<string, unknown>.
-export type SourceNodeData = NodeActions & { source: GraphSource; expanded: boolean };
+export type SourceNodeData = NodeActions & {
+  source: GraphSource; expanded: boolean;
+  /** The muted line saying when a scan last found the source (`seenLine`); the page words it, since the time needs the site's clock. */
+  seen?: string;
+  /** How many groups "Create assets" would turn into assets: it is in the button's name. */
+  groups?: number;
+};
 export type ClusterNodeData = NodeActions & {
   sourceId: number; key: string; label: string; count: number; mappedCount: number; expanded: boolean; ungrouped: boolean;
 };
@@ -38,7 +49,15 @@ export type UnidentifiedNodeData = NodeActions & { host: string; port: number };
 const X = { source: 0, cluster: 360, point: 720, asset: 1200 } as const;
 const ASSET_INDENT = 220;
 const ROW = 64;
-const BLOCK_GAP = 40;
+export const BLOCK_GAP = 40;
+/**
+ * The room a source node takes: its title, one wrapping row of buttons (Details, Create assets, Remove), the facts line, the last-seen line
+ * and the credentials badge. The first group sits this far below its source, and the next source clears the block by the gap, so a taller
+ * source node (W7r) never lies over what comes after it. Measured in Chromium at the 220px node: 119px for a one-line name with the buttons on
+ * two rows, 153px with a two-line name and the badge, 173px for a three-line name with the badge and a two-line facts line (the most seen), so
+ * the first source of a collapsed graph is cleared by SOURCE_H + BLOCK_GAP = 176px.
+ */
+export const SOURCE_H = 136;
 const DASHED = { strokeDasharray: "6 4" };
 
 interface Group { key: string; label: string; ungrouped: boolean; points: GraphPoint[] }
@@ -96,7 +115,7 @@ export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[];
         const counts = countMapped(group.points, assetIds);
         let mappedCount = 0;
         for (const p of group.points) if (p.asset_id !== null) mappedCount++;
-        add(cid, "cluster", X.cluster, cursor + rows * ROW, {
+        add(cid, "cluster", X.cluster, cursor + SOURCE_H + (rows - 1) * ROW, {
           sourceId: source.id, key: group.key, label: group.label, count: group.points.length, mappedCount,
           expanded: clusterOpen, ungrouped: group.ungrouped,
         } satisfies ClusterNodeData);
@@ -105,7 +124,7 @@ export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[];
         if (clusterOpen) {
           for (const p of group.points) {
             const pid = nodeId.point(p.id);
-            add(pid, "point", X.point, cursor + rows * ROW, { sourceId: source.id, clusterKey: group.key, point: p } satisfies PointNodeData);
+            add(pid, "point", X.point, cursor + SOURCE_H + (rows - 1) * ROW, { sourceId: source.id, clusterKey: group.key, point: p } satisfies PointNodeData);
             link(cid, pid);
             if (p.asset_id !== null && assetIds.has(p.asset_id)) mappedLinks(pid, new Map([[p.asset_id, 1]]));
             rows++;
@@ -117,7 +136,7 @@ export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[];
     } else {
       mappedLinks(sid, countMapped(groups.flatMap((g) => g.points), assetIds));
     }
-    cursor += rows * ROW + BLOCK_GAP;
+    cursor += SOURCE_H + (rows - 1) * ROW + BLOCK_GAP;
   }
 
   // Unidentified services wait in the source column below the last source.
@@ -156,4 +175,122 @@ export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[];
   model.assets.forEach((asset) => { if (!visited.has(asset.id)) walk(asset); }); // pure parent cycles have no root
 
   return { nodes, edges };
+}
+
+const OPENING_SOURCES = 3;
+/** The part of the graph, in graph pixels, that still opens readable on a 1024x640 canvas at zoom 0.75 (the opening zoom's floor). */
+const OPENING_BOX = { w: 900, h: 560 } as const;
+/** A source node's width on the canvas (`.gnode` is 220px wide). */
+const SOURCE_W = 220;
+
+/**
+ * How the Discovery canvas opens: on the first few sources, large enough to read, instead of fitting the whole graph. The assets stand in a column
+ * far to the right of the sources, so a tall asset column made the fit-all zoom out to React Flow's floor and push the sources, the only
+ * nodes with Create assets and Remove, off the edge at a laptop's width (and render their text at 6 px at 1440). The zoom is held between 0.75
+ * and 1, so the sources may fill the view and the assets lie outside it; the Controls' fit-view button shows everything (the canvas may zoom out
+ * far enough for that).
+ * The saved layout is shared, and an admin may have dragged sources far apart: fitting three sources 3000px apart at zoom 0.75 would centre the
+ * view on the empty space between them. So the first source is always framed, and each next one only while it still lies within OPENING_BOX of
+ * those already framed (a source with no saved position stands where `buildGraph` puts a collapsed one).
+ * `undefined` with no source at all: the old fit-all (unidentified services only).
+ */
+export function initialView(model: GraphModel): FitViewOptions | undefined {
+  if (model.sources.length === 0) return undefined;
+  const at = (s: GraphSource, index: number) => {
+    const saved = Object.hasOwn(model.layout, nodeId.source(s.id)) ? model.layout[nodeId.source(s.id)] : undefined;
+    return saved ?? { x: X.source, y: index * (SOURCE_H + BLOCK_GAP) };
+  };
+  const framed = [model.sources[0]];
+  const start = at(model.sources[0], 0);
+  let [minX, maxX, minY, maxY] = [start.x, start.x, start.y, start.y];
+  for (let i = 1; i < Math.min(OPENING_SOURCES, model.sources.length); i++) {
+    const p = at(model.sources[i], i);
+    const [nx0, nx1, ny0, ny1] = [Math.min(minX, p.x), Math.max(maxX, p.x), Math.min(minY, p.y), Math.max(maxY, p.y)];
+    if (nx1 - nx0 + SOURCE_W > OPENING_BOX.w || ny1 - ny0 + SOURCE_H > OPENING_BOX.h) break;
+    [minX, maxX, minY, maxY] = [nx0, nx1, ny0, ny1];
+    framed.push(model.sources[i]);
+  }
+  return { nodes: framed.map((s) => ({ id: nodeId.source(s.id) })), minZoom: 0.75, maxZoom: 1, padding: 0.2 };
+}
+
+/** The points of a source, groups and the Ungrouped bag alike. */
+const pointsOf = (source: GraphSource): GraphPoint[] => [...source.ungrouped, ...source.clusters.flatMap((c) => c.points)];
+
+/**
+ * Whether Remove and Clear unmapped may offer this source: it was found by a scan (never one added by hand) and no point of it is mapped. A point
+ * with an asset counts as mapped even if its mapping id were missing. The server decides again on its own data, whatever this says.
+ */
+export function isRemovable(source: GraphSource): boolean {
+  return source.origin === "discovered" && !pointsOf(source).some((p) => p.mapping_id !== null || p.asset_id !== null);
+}
+
+/** The muted line of a source node and its panel: when a scan last found it. `now` and the site's time zone are passed in (the "ago" part counts on the site's clock). */
+export function seenLine(source: GraphSource, now: Date, timezone: string): string {
+  if (source.origin === "manual") return "Added by hand"; // a scan that meets it only reports "existing source": there is no time worth showing
+  const scan = source.last_scan;
+  if (!scan) return "Not seen in a scan yet";
+  const ago = relativeTime(scan.at, now, timezone);
+  return ago ? `Seen in scan #${scan.scan_id}, ${ago}` : `Seen in scan #${scan.scan_id}`;
+}
+
+const sourcesWord = (n: number) => `${n} ${n === 1 ? "source" : "sources"}`;
+const were = (n: number) => (n === 1 ? "was" : "were");
+
+/** Why a source was left alone, for `n` of them: "it has a mapped point now" for one, "2 have a mapped point now" for several. */
+const keptReason = (reason: "mapped" | "manual", n: number, alone: boolean): string => {
+  if (reason === "mapped") return alone ? "it has a mapped point now" : `${n} ${n === 1 ? "has" : "have"} a mapped point now`;
+  return alone ? "it was added by hand" : `${n} ${were(n)} added by hand`;
+};
+
+export type RemovalOutcome =
+  /** Everything that was asked is removed. */
+  | { kind: "done"; text: string }
+  /** Some are removed and some were kept or already gone. */
+  | { kind: "partial"; text: string }
+  /** Nothing is removed because something was kept: the dialog stays open and says so. */
+  | { kind: "none"; text: string }
+  /** Nothing is removed because every one was already gone: there is nothing left to do. */
+  | { kind: "gone"; text: string };
+
+/** What the answer of the remove route means for the person: the words, and which of the four cases it is. */
+export function removalOutcome({ removed, skipped }: RemoveSourcesResult): RemovalOutcome {
+  const kept = skipped.filter((s) => s.reason !== "gone");
+  const gone = skipped.length - kept.length;
+  if (skipped.length === 0) return { kind: "done", text: `Removed ${sourcesWord(removed.length)}` };
+  const parts: string[] = [];
+  if (kept.length > 0) {
+    const reasons = (["mapped", "manual"] as const)
+      .map((reason) => [reason, kept.filter((s) => s.reason === reason).length] as const)
+      .filter(([, n]) => n > 0)
+      .map(([reason, n]) => keptReason(reason, n, kept.length === 1));
+    parts.push(`${kept.length} ${were(kept.length)} kept: ${reasons.join(", ")}.`);
+  }
+  if (gone > 0) parts.push(`${gone} ${were(gone)} already gone.`);
+  const lead = removed.length > 0 ? `Removed ${sourcesWord(removed.length)}.` : "Nothing was removed.";
+  const text = [lead, ...parts].join(" ");
+  if (removed.length > 0) return { kind: "partial", text };
+  return { kind: kept.length > 0 ? "none" : "gone", text };
+}
+
+const NAMED = 5;
+
+/** "A and B", "A, B and C", and past five "A, B, C, D, E and 2 more": the names a Clear unmapped lists. */
+function nameList(names: readonly string[]): string {
+  if (names.length > NAMED) return `${names.slice(0, NAMED).join(", ")} and ${names.length - NAMED} more`;
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** The title and the sentence of the delete dialog for Remove (one source) and Clear unmapped (several). The list is the one the person was shown. */
+export function removalDialogText(names: readonly string[]): { title: string; message: string } {
+  if (names.length === 1) {
+    return {
+      title: `Remove "${names[0]}" from Discovery?`,
+      message: "It has nothing mapped, so no asset, billing figure or dashboard depends on it. A scan can find it again.",
+    };
+  }
+  return {
+    title: `Remove ${names.length} unmapped sources?`,
+    message: `${nameList(names)}. Sources with a mapped point are never touched. A scan can find these again.`,
+  };
 }

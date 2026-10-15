@@ -48,20 +48,13 @@
   .th-sort svg.i { width: 14px; height: 14px; }
   .sort-mark.desc { transform: rotate(180deg); }
 
-  /* Scans: the confirmation, the scan in view and the section titles */
+  /* Scans: the scope form card and the confirmation (the scan in view is the drawer, scans-drawer.css) */
   .scope-card { margin: 0 0 24px; padding: 18px 20px; border: 1px solid var(--border); border-radius: var(--radius); }
   .scope-card form { margin: 0; }
   .scope-card > p { margin: 0 0 12px; }
   .confirm-scan { max-width: 520px; margin: 0 0 20px; padding: 14px 16px; }
   .confirm-scan p { margin: 0; }
   .confirm-title { font-weight: 600; }
-  .scan-detail { margin: 24px 0 8px; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius); }
-  .scan-detail > .section-title { margin-top: 0; }
-  .scan-detail p { margin: 0 0 12px; }
-  .scan-detail .table-wrap { margin-bottom: 12px; }
-  .scan-detail > :last-child { margin-bottom: 0; }
-  .scan-stats { gap: 8px; }
-  .scan-stats span { padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 
   /* Discovery: the page header stays slim so the canvas keeps the height (the page is exactly one window tall) */
   .graph-page > .page-head { flex: none; margin-bottom: 12px; padding: 14px 0 12px; }

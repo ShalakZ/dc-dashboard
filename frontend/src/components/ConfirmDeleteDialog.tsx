@@ -69,19 +69,18 @@ export function ConfirmDeleteDialog({ title, message, onConfirm, onCancel, confi
   useEffect(() => {
     if (blocked && !busy) cancel.current?.focus();
   }, [blocked, busy]);
-  // A dialog with a choice (children) whose confirmed request was answered with a change of the question (the count moved, the target is gone, or
-  // assets joined) has lost the confirm button the focus was on: the browser drops the focus of a button that is disabled while the request runs,
-  // and the button is then either off again (nothing chosen) or enabled with the focus gone. Once the request is over, the first control, the
-  // choice, takes it. Nothing happens while the focus is still on an enabled control inside, such as the choice somebody is using, and a dialog
-  // without a choice keeps its old behaviour (blocked has its own rule above).
-  const hasChoice = Boolean(children);
+  // The browser drops the focus of a button that is disabled while the request runs (Chrome: to the body). A request the server refused (409, a
+  // stale count, a 422, every listed item kept) leaves the dialog open, the confirm button either enabled again or off, and the focus nowhere; so does a
+  // dialog with a choice whose question changed under it (the count moved, the target is gone, assets joined). Once the request is over, the first
+  // control takes the focus: Cancel, or the choice when there is one. This is for every dialog, with a choice or without. Nothing happens while the
+  // focus is still on an enabled control inside, such as the choice somebody is using (blocked has its own rule above).
   useEffect(() => {
-    if (!(confirmDisabled || hasChoice) || busy || blocked) return;
+    if (busy || blocked) return;
     const root = dialog.current;
     const at = document.activeElement;
     const lost = !(at instanceof Node) || !root?.contains(at) || (at instanceof HTMLElement && at.matches(":disabled"));
     if (lost) root?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
-  }, [confirmDisabled, hasChoice, busy, blocked]);
+  }, [confirmDisabled, loading, loadError, busy, blocked]);
   // Tab and Shift+Tab wrap round inside the dialog, as in Modal. The dialog is the last thing in the body, so without this the browser would
   // take the focus on to its own chrome (and back in on the next Tab); keepFocus stays as the backstop for a click or a script. The controls
   // are read at each keypress, so a disabled confirm button is skipped and one that comes alive counts as the last.

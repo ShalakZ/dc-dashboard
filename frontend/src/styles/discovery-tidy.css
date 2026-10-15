@@ -1,0 +1,17 @@
+@layer w6 {
+  /* W7r: the Discovery graph's node lines and buttons (Remove, Create assets, last seen) and the header's Clear unmapped. Tokens only; every rule is scoped by a class this piece owns. */
+
+  /* A source node holds Details, Create assets… and Remove: three buttons do not always fit the 220px node (app.css gives .gnode .row nowrap and space-between), so the
+     row wraps and starts at the left. The extra specificity is on purpose: app.css loads first and names the same two properties. */
+  .gnode .row.gnode-actions { flex-wrap: wrap; justify-content: flex-start; gap: 2px 4px; margin-top: 2px; }
+  /* Remove keeps to the right end of the row it is on (alone on the second row when the three do not fit), away from Details, the button that is pressed far more often. */
+  .gnode-remove { margin-left: auto; }
+
+  /* The last-seen line is ONE line, so a node never changes height when the graph is read again and the time text changes ("Seen in scan #6, 9 min ago" -> "10 min ago"); the whole text is in its title. */
+  .gnode-seen { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Clear unmapped waits with aria-disabled, never disabled (a disabled button drops the focus it holds, and the dialog hands the focus back to it): the looks of button:disabled,
+     with the base hover wash taken back by naming the base colour. */
+  .discovery-clear[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+  .discovery-clear[aria-disabled="true"]:hover { background: var(--bg); }
+}

@@ -33,7 +33,7 @@ those, the page or the control shows nothing. The server does not enforce these 
 | | `sources.edit` | Change sources | change | Add, edit and delete data sources and browse their points. | `sources.view` |
 | | `sources.test` | Test source connections | change | Make the server try to reach a source (Test and Test all). | `sources.view` |
 | | `discovery.view` | See scans and the graph | see | Open the Scans and Discovery pages. | |
-| | `discovery.edit` | Change scan scopes and the graph layout | change | Add, edit and delete scan scopes; save the graph layout. | `discovery.view` |
+| | `discovery.edit` | Change scan scopes and the graph layout | change | Add, edit and delete scan scopes; save the graph layout; remove discovered sources that have nothing mapped. | `discovery.view` |
 | | `discovery.scan` | Run network scans | risky | Start a scan of a scope (it probes a network). | `discovery.view` |
 | | `discovery.accept` | Accept scan results | risky | Turn scan results into sources, assets and mappings. | `discovery.view` |
 | Storage and settings | `storage.view` | See storage | see | Open the Storage page. | |

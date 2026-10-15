@@ -5,14 +5,14 @@ import type { Scope, ScopePreview } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
-import { ScanProgress } from "../components/ScanProgress";
+import { ScanDrawer } from "../components/ScanDrawer";
 import { ScopeForm } from "../components/ScopeForm";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { useConfirm } from "../hooks/useConfirm";
-import { claimedCount } from "../lib/scanText";
+import { recognisedText, scopeDetail, sourcesAndPoints } from "../lib/scanText";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 type FormState = "new" | Scope | null;
@@ -115,7 +115,7 @@ export function ScansPage() {
       {pending && (
         <div className="panel confirm-scan">
           <p className="confirm-title">Scan "{pending.scope.name}"?</p>
-          <p>{`${pending.preview.hosts} hosts × ${pending.preview.ports} ports (${pending.preview.pairs} probes)`}</p>
+          <p>{`${pending.preview.hosts} hosts × ${pending.preview.ports} ports (${pending.preview.pairs} checks)`}</p>
           <div className="row">
             <button onClick={() => setPending(null)} disabled={busy}>Cancel</button>
             <button className="primary" onClick={startScan} disabled={busy}>Start scan</button>
@@ -152,7 +152,15 @@ export function ScansPage() {
           </table>
         </div>
       )}
-      {activeScan !== null && <ScanProgress scanId={activeScan} />}
+      {activeScan !== null && (
+        <ScanDrawer
+          key={activeScan}
+          scanId={activeScan}
+          onClose={() => setActiveScan(null)}
+          // This scan's Details button, asked for when the drawer goes away. If the row is not in the list (a scan older than the list shows), the drawer falls back to the page.
+          returnFocus={() => document.querySelector<HTMLElement>(`[data-scan-details="${activeScan}"]`)}
+        />
+      )}
       <h2 className="section-title">Recent scans</h2>
       {scansLoading && <TableSkeleton columns={5} rows={3} label="Loading recent scans" />}
       {scansError && <p className="error" role="alert">{scansError.message}</p>}
@@ -162,17 +170,25 @@ export function ScansPage() {
       {!scansLoading && !scansError && scans.length > 0 && (
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Scope</th><th>Status</th><th>Started</th><th className="num">Claimed / points</th><th className="row-actions"></th></tr></thead>
+            <thead><tr><th>Scope</th><th>Status</th><th>Started</th><th className="num scan-figures">Sources / points</th><th className="row-actions"></th></tr></thead>
             <tbody>
-              {scans.map((scan) => (
-                <tr key={scan.id}>
-                  <td><span className="cell-name" title={scan.scope_name}>{scan.scope_name}</span></td>
-                  <td><span className={`chip ${SCAN_CHIP[scan.status] ?? "chip-stale"}`}>{scan.status}</span></td>
-                  <td className="nowrap">{site.data ? formatSiteDateTime(scan.created_at, site.data.timezone) : "—"}</td>
-                  <td className="num nowrap">{claimedCount(scan.progress)} / {scan.progress.points ?? 0}</td>
-                  <td className="row-actions"><button className="quiet" onClick={() => setActiveScan(scan.id)}>Details</button></td>
-                </tr>
-              ))}
+              {scans.map((scan) => {
+                const detail = scopeDetail(scan.targets ?? [], scan.ports ?? []);
+                return (
+                  <tr key={scan.id}>
+                    <td>
+                      <span className="cell-name" title={scan.scope_name}>{scan.scope_name}</span>
+                      {detail && <>{" "}<span className="cell-sub" title={detail}>{detail}</span></>}
+                    </td>
+                    <td><span className={`chip ${SCAN_CHIP[scan.status] ?? "chip-stale"}`}>{scan.status}</span></td>
+                    <td className="nowrap">{site.data ? formatSiteDateTime(scan.created_at, site.data.timezone) : "—"}</td>
+                    <td className="num scan-figures" title={recognisedText(scan.progress)}>{sourcesAndPoints(scan.progress)}</td>
+                    <td className="row-actions">
+                      <button type="button" className="quiet" data-scan-details={scan.id} onClick={() => setActiveScan(scan.id)}>Details</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -223,6 +223,65 @@ async def test_a_hand_added_source_addressed_by_name_is_reused_not_duplicated(db
     assert await db.fetchval("SELECT count(*) FROM points") == 0  # a hand-added source is not browsed
 
 
+def modbus_config(simulator_network, host="localhost"):
+    return {"host": host, "port": simulator_network["modbus"], "unit_id": 1, "profile": "auto"}
+
+
+async def scan_modbus(db, simulator_network) -> int:
+    scan = await make_scan(db, ["127.0.0.1"], [simulator_network["modbus"]])
+    await run_scan(db, scan)
+    return scan
+
+
+async def test_a_hand_added_source_added_after_a_discovered_duplicate_wins_the_next_scan(db, simulator_network):
+    await scan_modbus(db, simulator_network)
+    discovered = await db.fetchval("SELECT id FROM sources")
+    manual = await make_source(db, "plc", "modbus", modbus_config(simulator_network))  # same device, a higher id
+    assert manual > discovered and await db.fetchval("SELECT count(*) FROM points WHERE source_id = $1", discovered) == 60
+    before = await db.fetchrow("SELECT * FROM sources WHERE id = $1", discovered)
+    scan = await scan_modbus(db, simulator_network)
+    finding = await db.fetchrow("SELECT source_id, outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
+    assert dict(finding) == {"source_id": manual, "outcome": "claimed", "detail": "existing source"}
+    assert (await db.fetchval("SELECT progress FROM scans WHERE id = $1", scan))["points"] == 0  # nothing was browsed
+    # Nothing is merged, moved or deleted: both sources and the duplicate's points are as they were.
+    assert await db.fetchval("SELECT count(*) FROM sources") == 2
+    assert await db.fetchrow("SELECT * FROM sources WHERE id = $1", discovered) == before
+    assert await db.fetchval("SELECT count(*) FROM points WHERE source_id = $1", discovered) == 60
+    assert await db.fetchval("SELECT count(*) FROM points WHERE source_id = $1", manual) == 0
+    assert await db.fetchval("SELECT origin FROM sources WHERE id = $1", manual) == "manual"
+
+
+async def test_two_discovered_sources_at_one_endpoint_still_resolve_to_the_oldest(db, simulator_network):
+    await scan_modbus(db, simulator_network)
+    oldest = await db.fetchval("SELECT id FROM sources")
+    newer = await make_source(db, "later duplicate", "modbus", modbus_config(simulator_network))
+    await db.execute("UPDATE sources SET origin = 'discovered', enabled = false WHERE id = $1", newer)
+    scan = await scan_modbus(db, simulator_network)
+    finding = await db.fetchrow("SELECT source_id, outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
+    assert dict(finding) == {"source_id": oldest, "outcome": "claimed", "detail": "60 points"}
+    assert await db.fetchval("SELECT count(*) FROM points WHERE source_id = $1", newer) == 0  # only the oldest was browsed
+
+
+async def test_two_hand_added_sources_at_one_endpoint_still_resolve_to_the_oldest(db, simulator_network):
+    first = await make_source(db, "plc one", "modbus", modbus_config(simulator_network))
+    await make_source(db, "plc two", "modbus", modbus_config(simulator_network, "127.0.0.1"))
+    scan = await scan_modbus(db, simulator_network)
+    finding = await db.fetchrow("SELECT source_id, outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
+    assert dict(finding) == {"source_id": first, "outcome": "claimed", "detail": "existing source"}
+    assert await db.fetchval("SELECT count(*) FROM sources") == 2
+
+
+async def test_a_hand_added_source_at_another_endpoint_changes_nothing_for_a_discovered_one(db, simulator_network):
+    await scan_modbus(db, simulator_network)
+    discovered = await db.fetchval("SELECT id FROM sources")
+    other = {**modbus_config(simulator_network), "port": free_port()}
+    await make_source(db, "somewhere else", "modbus", other)
+    scan = await scan_modbus(db, simulator_network)
+    finding = await db.fetchrow("SELECT source_id, outcome, detail FROM scan_findings WHERE scan_id = $1", scan)
+    assert dict(finding) == {"source_id": discovered, "outcome": "claimed", "detail": "60 points"}  # browsed again
+    assert await db.fetchval("SELECT count(*) FROM sources") == 2
+
+
 async def test_one_device_reached_by_name_and_by_address_becomes_one_source(db, simulator_network):
     port = simulator_network["modbus"]
     await run_scan(db, await make_scan(db, ["127.0.0.1", "localhost"], [port]))

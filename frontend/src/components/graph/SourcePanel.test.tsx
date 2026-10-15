@@ -24,8 +24,8 @@ function GraphProbe() {
   useGraph();
   return null;
 }
-const open = (s: GraphSource, canEdit: boolean, onClose = () => {}) =>
-  renderWithProviders(<><GraphProbe /><SourcePanel source={s} canEdit={canEdit} onClose={onClose} /></>, { route: "/discovery", path: "/discovery" });
+const open = (s: GraphSource, canEdit: boolean, onClose = () => {}, seen = "Not seen in a scan yet") =>
+  renderWithProviders(<><GraphProbe /><SourcePanel source={s} canEdit={canEdit} seen={seen} onClose={onClose} /></>, { route: "/discovery", path: "/discovery" });
 
 describe("SourcePanel", () => {
   it("shows the source facts including the last error", async () => {
@@ -36,6 +36,13 @@ describe("SourcePanel", () => {
     expect(within(panel).getByText(/opcua/)).toBeInTheDocument();
     expect(within(panel).getByText(/12 points/)).toBeInTheDocument();
     expect(within(panel).getByText(/connection refused/)).toBeInTheDocument();
+  });
+
+  it("says when a scan last found the source, in the words the page gives it (W7r)", () => {
+    mockFetch({ ...base, "GET /api/discovery/graph": { body: graph } });
+    open(source(), false, () => {}, "Seen in scan #6, 10 min ago");
+    const panel = screen.getByRole("complementary", { name: "Source details" });
+    expect(within(panel).getByText("Seen in scan #6, 10 min ago")).toHaveClass("muted");
   });
 
   it("moves focus to its heading when it opens", () => {

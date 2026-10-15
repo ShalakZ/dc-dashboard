@@ -219,10 +219,16 @@ async def _adopt(
     """One finding per open endpoint, plus the discovered sources to browse (each once, in order)."""
     rows = await pool.fetch("SELECT id, connector_type, config, origin FROM sources ORDER BY id")
     keys = await asyncio.gather(*(_source_key(types, row["connector_type"], row["config"]) for row in rows))
-    index: dict[SourceKey, tuple[int, str]] = {}  # key -> (source id, origin); the first source wins
+    # key -> (source id, origin). The oldest source wins, except that a hand-added source beats a discovered one at the same
+    # endpoint whichever is older: the admin added it on purpose, so a scan reports it as "existing source" and no longer
+    # browses the discovered duplicate (which keeps its points and stays on Discovery until it is cleared).
+    index: dict[SourceKey, tuple[int, str]] = {}
     for row, key in zip(rows, keys):
-        if key is not None:
-            index.setdefault(key, (row["id"], row["origin"]))
+        if key is None:
+            continue
+        held = index.get(key)
+        if held is None or (held[1] == "discovered" and row["origin"] == "manual"):
+            index[key] = (row["id"], row["origin"])
     findings: list[_Finding] = []
     to_browse: dict[int, None] = {}
     for host, port, claim in endpoints:

@@ -212,6 +212,20 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   header's button adds exactly the common kinds that are missing and sends no query, Add all 39 adds the rest with `?set=all`, a second press
   of either says they are all there and writes no audit entry, and `?set=bogus` is a 422. A custom role without Manage asset kinds sees
   the tag and the filters and no checkbox, pack button or bar, and the API answers 403 for both packs and for a delete.
+- `w7r.spec.ts` (its own project, last in the list, after `w7q`, at 1600×1000) checks the Scan details drawer and the Discovery clean-up. It runs
+  about fourteen scans of the simulator on the shared stack and removes what it made (assets, hand-added sources and scopes named `W7r <run> ...`,
+  accounts and roles `w7r-`); it runs last because Clear unmapped removes every unmapped discovered source of the stack. Details opens a dialog
+  named `Scan #N — done` with the scope line (`<scope>: simulator, ports 9000, 5020`) and a stats line that says `checks`, never `ports checked`;
+  Escape, the x and a click outside close it and the focus goes back to that row's Details button; Recent scans reads `N source(s), M points` with the
+  targets and ports under the scope name (a scan started from a scope with the mistyped port 4080 shows 4080). Every discovered node says
+  `Seen in scan #N`, a hand-added one `Added by hand`. Remove (one node) and Clear unmapped (the count and first names in the dialog) take away only
+  discovered sources with nothing mapped, each with an audit row `Deleted source <name>`, a rescan brings them back, a source with a mapped point
+  has no Remove and the API answers `skipped: mapped`, and the route answers 409 while a scan is running. A hand-added Modbus source added after
+  a scan wins over the discovered one at the same address (`existing source`, the duplicate is not browsed). A role with only `discovery.view`
+  sees no Remove, Clear unmapped or Create assets and gets 403; a role with `discovery.edit` but not `discovery.accept` can remove but not
+  create. Create assets on the collapsed source node opens one dialog with a row per group and creates one asset each under the chosen parent.
+  At 1440 and 1024 px neither Scans nor Discovery scrolls sideways and the drawer fits, and a fresh load of Discovery at 1024×640 opens on the first
+  sources (the first Create assets button is inside the canvas and the node text is at least 9 px at the opening zoom).
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

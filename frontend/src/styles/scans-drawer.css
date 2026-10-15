@@ -1,0 +1,30 @@
+@layer w6 {
+  /* W7r: the Scan details drawer on the Scans page (components/ScanDrawer.tsx) and the muted scope line in Recent scans. Tokens only; every rule is scoped by a class this piece owns. */
+
+  /* The body: scope line, the row of figures, then the findings (or their skeleton). A column with a gap, so the hidden live line and the
+     skeleton's label (both absolutely placed) add no space, and the figures sit where they do whatever arrives below them. */
+  .scan-drawer-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .scan-drawer-body > * { margin: 0; }
+  .scan-drawer-body .scan-scope { font-weight: 600; overflow-wrap: anywhere; }
+  .scan-drawer-body .scan-stats > span { padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+  /* The findings table sits in a 480px column: the small text size and tighter cells (the skeleton's table too), a port, a type and an outcome
+     that never break in the middle, a host that may (cut at 22 characters, never under 11) and a detail that wraps at its spaces. */
+  .scan-drawer-body table { font-size: var(--fs-sm); }
+  .scan-drawer-body :is(th, td) { padding-inline: 8px; }
+  .scan-drawer-body td:first-child { min-width: 11ch; max-width: 22ch; overflow-wrap: anywhere; }
+  .scan-drawer-body td:nth-child(n+2):nth-child(-n+4) { white-space: nowrap; }
+
+  /* The footer is always drawn (it is a fixed height), so a failing poll's line and the link to the graph never move the body. The line is
+     cut at two lines; its text is the whole message in the dialog's alert. */
+  .scan-drawer-foot { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; }
+  .scan-drawer-foot > .error { margin: 0; min-width: 0; font-size: var(--fs-sm); line-height: 1.3; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .scan-drawer-foot > a { margin-left: auto; white-space: nowrap; }
+
+  /* Recent scans: the figures column. Its header may wrap ("Sources / points" on two lines) so the table keeps fitting a 800px window; the cell wraps
+     at its comma when it must. */
+  th.scan-figures { white-space: normal; }
+
+  /* Recent scans: the targets and ports under the scope's name. One line with an ellipsis (the cell's title keeps all of it). */
+  .cell-sub { display: block; max-width: 260px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: var(--fs-xs); font-weight: 400; }
+  @media (max-width: 1099.98px) { .cell-sub { max-width: 180px; } } /* the width of the name above it, so a narrow window does not make the table scroll */
+}

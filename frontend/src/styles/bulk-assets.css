@@ -1,0 +1,37 @@
+@layer w6 {
+  /* W7r: the dialog that creates one asset per group of a source (components/graph/BulkCreateDialog.tsx). Tokens only; every rule is scoped by a class this piece owns
+     (bulk-*). It never names .dialog or .dialog-rows (they are bare in other page files and app.css.test.ts refuses that): the dialog carries both its own class and theirs. */
+
+  /* A column, not the dialog's grid: the list of groups is the one box that scrolls, so with ten groups in an 800x600 window the note, the status line and
+     the buttons stay in sight. The list keeps a few rows at least (8rem); below that the dialog itself scrolls, as every dialog does. */
+  .bulk-dialog { display: flex; flex-direction: column; gap: 12px; width: min(1040px, 100%); }
+  .bulk-dialog > * { flex: none; }
+  .bulk-dialog > .bulk-rows { flex: 1 1 auto; min-height: 8rem; max-height: none; }
+
+  .bulk-rows td { vertical-align: top; }
+  .bulk-rows td:first-child { width: 1%; }
+  .bulk-rows td > input[type="checkbox"] { margin: 9px 0 0; }
+  /* The text beside a 34px name box sits on that box's middle line, not at the top of the cell. */
+  .bulk-group, .bulk-count { padding-top: 13px; }
+  .bulk-group { min-width: 5rem; font-weight: 600; overflow-wrap: break-word; }
+  .bulk-count { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .bulk-name { width: 100%; min-width: 11rem; }
+  /* The slot under the name is always one line tall: a clash that is found, or the server's refusal, fills it and moves no row. A longer text wraps. */
+  .bulk-name-note { display: block; min-height: 1lh; margin-top: 2px; color: var(--crit); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+
+  /* What the scan guessed: every point that will be mapped (metric and scale), then every point that stays out, in words. */
+  .bulk-list { display: grid; gap: 2px; margin: 0; padding: 4px 0 0; list-style: none; font-size: var(--fs-sm); overflow-wrap: break-word; }
+  .bulk-unit { color: var(--text-2); }
+  .bulk-skip { color: var(--warn-ink); }
+
+  .bulk-notes { display: grid; gap: 4px; }
+  .bulk-notes p { font-size: var(--fs-sm); }
+  /* The status line (creating 2 of 5, the reason the button waits, what a failed batch left): a FIXED two lines, so that a long name in a reason never moves the buttons
+     (a longer text scrolls inside it, as the Move dialog's message slot does). */
+  .bulk-status { height: 2lh; overflow: auto; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+
+  /* Create waits with aria-disabled, not disabled (the person may be on it when a batch fails): it looks the way a disabled primary does and does nothing. */
+  .bulk-go { min-width: 9rem; }
+  .bulk-go[aria-disabled="true"], .bulk-go[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
+  .bulk-cancel[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+}

@@ -74,6 +74,70 @@ describe("graph nodes", () => {
     expect(onSelect).toHaveBeenCalledTimes(2);
   });
 
+  describe("a source node's buttons and last-seen line (W7r)", () => {
+    const all = { source, expanded: false, onToggle: vi.fn(), onSelect: vi.fn(), onCreateAssets: vi.fn(), onRemove: vi.fn(), groups: 3, seen: "Seen in scan #6, 10 min ago" };
+
+    it("Remove and Create assets… render only when their callback is injected, and report the node id", async () => {
+      const view = renderNode("source", "src:1", { source, expanded: false, onSelect: vi.fn(), groups: 3 });
+      expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument();
+      view.unmount();
+      const [onRemove, onCreateAssets] = [vi.fn(), vi.fn()];
+      renderNode("source", "src:1", { ...all, onRemove, onCreateAssets });
+      const remove = screen.getByRole("button", { name: "Remove Plant OPC from Discovery" });
+      const create = screen.getByRole("button", { name: "Create assets for 3 groups of Plant OPC" });
+      expect(remove).toHaveTextContent("Remove");
+      expect(create).toHaveTextContent("Create assets…");
+      expect(remove).toHaveClass("nodrag");
+      expect(create).toHaveClass("nodrag");
+      await userEvent.click(remove);
+      await userEvent.click(create);
+      expect(onRemove).toHaveBeenCalledWith("src:1");
+      expect(onCreateAssets).toHaveBeenCalledWith("src:1");
+    });
+
+    it("the Create assets name counts its groups, one group included", () => {
+      renderNode("source", "src:1", { ...all, groups: 1 });
+      expect(screen.getByRole("button", { name: "Create assets for 1 group of Plant OPC" })).toBeInTheDocument();
+    });
+
+    it("keyboard order is Toggle, Details, Create assets, Remove", async () => {
+      renderNode("source", "src:1", all);
+      const order: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        await userEvent.tab();
+        order.push(document.activeElement?.getAttribute("aria-label") ?? "");
+      }
+      expect(order).toEqual(["Expand Plant OPC", "Details for Plant OPC", "Create assets for 3 groups of Plant OPC", "Remove Plant OPC from Discovery"]);
+    });
+
+    it("Details, Create assets and Remove share ONE row that may wrap, apart from the title row with the toggle", () => {
+      renderNode("source", "src:1", all);
+      const row = screen.getByRole("button", { name: "Details for Plant OPC" }).parentElement!;
+      expect(row).toHaveClass("row", "gnode-actions");
+      expect(row).toContainElement(screen.getByRole("button", { name: /^Create assets/ }));
+      expect(row).toContainElement(screen.getByRole("button", { name: /^Remove / }));
+      expect(row).not.toContainElement(screen.getByRole("button", { name: "Expand Plant OPC" }));
+    });
+
+    it("every button is type=button, so none submits a form around the graph", () => {
+      renderNode("source", "src:1", all);
+      for (const button of screen.getAllByRole("button")) expect(button).toHaveAttribute("type", "button");
+    });
+
+    it("shows the last-seen line as one muted line with the whole text in its title", () => {
+      renderNode("source", "src:1", all);
+      const line = screen.getByText("Seen in scan #6, 10 min ago");
+      expect(line).toHaveClass("muted", "gnode-seen");
+      expect(line).toHaveAttribute("title", "Seen in scan #6, 10 min ago");
+    });
+
+    it("draws no action row at all when the node has no button", () => {
+      renderNode("source", "src:1", { source, expanded: false });
+      expect(document.querySelector(".gnode-actions")).toBeNull();
+    });
+  });
+
   it("a cluster shows label (count) and its mapped count, with a toggle only when injected", async () => {
     const onToggle = vi.fn();
     renderNode("cluster", "cluster:1:LVP01", { ...cluster, onToggle });

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 
 import pytest
 
@@ -131,6 +132,80 @@ async def test_needs_credentials_clears_once_points_exist_or_a_later_scan_found_
     await finding(db, empty, "claimed")  # a later scan browsed it fine
     flags = {s["id"]: s["needs_credentials"] for s in (await client.get("/api/discovery/graph")).json()["sources"]}
     assert flags[empty] is False
+
+
+async def scan_with_finding(db, source, outcome="claimed", finished_at=None, created_at="2026-03-01 10:00:00+00"):
+    """A scan (done, with the given times) and one finding of `source` in it; returns (scan id, finding id)."""
+    scan = await db.fetchval(
+        "INSERT INTO scans (scope_snapshot, status, created_at, finished_at) VALUES ('{}', 'done', $1, $2) RETURNING id",
+        datetime.fromisoformat(created_at), None if finished_at is None else datetime.fromisoformat(finished_at),
+    )
+    found = await db.fetchval(
+        "INSERT INTO scan_findings (scan_id, host, port, source_id, outcome) VALUES ($1, 'h', 9000, $2, $3) RETURNING id",
+        scan, source, outcome,
+    )
+    return scan, found
+
+
+async def test_a_source_that_no_scan_found_has_no_last_scan(client, db):
+    await login_as(client, db, "admin")
+    await seed_source(db)
+    [src] = (await client.get("/api/discovery/graph")).json()["sources"]
+    assert src["last_scan"] is None
+
+
+async def test_last_scan_is_the_newest_finding_of_the_source_and_its_finish_time(client, db):
+    await login_as(client, db, "admin")
+    source, _ = await seed_source(db)
+    other, _ = await seed_source(db, "other", panels=())
+    await scan_with_finding(db, source, finished_at="2026-03-01 10:05:00+00")
+    newest, _ = await scan_with_finding(
+        db, source, created_at="2026-03-02 09:00:00+00", finished_at="2026-03-02 09:07:30+00"
+    )
+    await scan_with_finding(db, other, created_at="2026-02-01 00:00:00+00", finished_at="2026-02-01 00:01:00+00")
+    by_id = {s["id"]: s for s in (await client.get("/api/discovery/graph")).json()["sources"]}
+    last = by_id[source]["last_scan"]
+    assert set(last) == {"scan_id", "at"} and last["scan_id"] == newest
+    assert last["at"].startswith("2026-03-02T09:07:30")  # finished_at, not created_at
+    assert by_id[other]["last_scan"]["at"].startswith("2026-02-01T00:01:00")  # each source has its own
+
+
+async def test_last_scan_time_falls_back_to_the_start_of_a_scan_that_has_not_finished(client, db):
+    await login_as(client, db, "admin")
+    source, _ = await seed_source(db)
+    running, _ = await scan_with_finding(db, source, created_at="2026-03-03 12:00:00+00")
+    await db.execute("UPDATE scans SET status = 'running' WHERE id = $1", running)
+    [src] = (await client.get("/api/discovery/graph")).json()["sources"]
+    assert src["last_scan"]["scan_id"] == running and src["last_scan"]["at"].startswith("2026-03-03T12:00:00")
+
+
+async def test_a_hand_added_source_that_a_scan_reported_as_existing_has_a_last_scan_too(client, db):
+    await login_as(client, db, "admin")
+    manual, _ = await seed_source(db, "hand", ("LVP01",), enabled=True, origin="manual")
+    scan, _ = await scan_with_finding(db, manual, finished_at="2026-03-01 10:05:00+00")
+    await db.execute("UPDATE scan_findings SET detail = 'existing source' WHERE scan_id = $1", scan)
+    [src] = (await client.get("/api/discovery/graph")).json()["sources"]
+    assert src["origin"] == "manual" and src["last_scan"]["scan_id"] == scan
+
+
+async def test_last_scan_does_not_change_what_decides_needs_credentials(client, db):
+    await login_as(client, db, "admin")
+    source = await make_source(db, "locked", "simulator", {"url": "http://h:9000"})
+    await db.execute("UPDATE sources SET origin = 'discovered', enabled = false WHERE id = $1", source)
+    await scan_with_finding(db, source, "claimed", finished_at="2026-03-01 10:00:00+00")
+    newest, _ = await scan_with_finding(
+        db, source, "needs_credentials", created_at="2026-03-02 10:00:00+00", finished_at="2026-03-02 10:01:00+00"
+    )
+    [src] = (await client.get("/api/discovery/graph")).json()["sources"]
+    assert src["needs_credentials"] is True and src["last_scan"]["scan_id"] == newest
+
+
+async def test_the_graph_stays_free_of_secrets_with_a_last_scan(client, db):
+    await login_as(client, db, "admin")
+    source, _ = await seed_source(db, secret="hunter2-secret")
+    await scan_with_finding(db, source, finished_at="2026-03-01 10:05:00+00")
+    response = await client.get("/api/discovery/graph")
+    assert response.json()["sources"][0]["last_scan"] is not None and "hunter2-secret" not in response.text
 
 
 async def test_unidentified_services_come_from_the_latest_finished_scan_only(client, db):

@@ -77,6 +77,10 @@ def scan_summary(scan: Scan) -> dict[str, Any]:
         "id": scan.id,
         "scope_id": scan.scope_id,
         "scope_name": scan.scope_snapshot.get("scope_name"),  # from the snapshot, so it outlives the scope
+        # What was scanned, also from the snapshot. start_scan always stores lists (and expand_targets refuses URLs with
+        # credentials, so targets carry none); an older or hand-made snapshot without them reads as empty.
+        "targets": scan.scope_snapshot.get("targets") or [],
+        "ports": scan.scope_snapshot.get("ports") or [],
         "status": scan.status,
         "stage": scan.stage,
         "progress": scan.progress,

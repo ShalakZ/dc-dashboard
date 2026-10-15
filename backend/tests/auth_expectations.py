@@ -93,6 +93,9 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     _any(("discovery.edit", "discovery.scan"), "GET /api/scopes/{scope_id}/preview"),
     _all("discovery.scan", "POST /api/scopes/{scope_id}/scan"),
     _all("discovery.accept", "POST /api/discovery/accept"),
+    # Added in W7r (removing discovered sources that have nothing mapped): after the freeze, so not in auth_matrix_pre_w9a.json;
+    # the gate and isolation tests cover it.
+    _all("discovery.edit", "POST /api/discovery/sources/remove"),
     _all("storage.view", "GET /api/storage", "GET /api/storage/rows-per-day", "GET /api/settings/storage"),
     _all("storage.edit", "PUT /api/settings/storage", "PUT /api/settings/storage/default"),
     _all("settings.view", "GET /api/settings/general", "GET /api/settings/sign-in", "GET /api/tls/status"),
