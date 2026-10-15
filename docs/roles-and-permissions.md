@@ -49,7 +49,8 @@ those, the page or the control shows nothing. The server does not enforce these 
 | Diagnostics | `diagnostics.view` | See diagnostics | see | Open the Diagnostics page and build a report, which includes settings, retention, the audit tail and each source's security settings. | `sources.view` |
 | | `diagnostics.run` | Run the connection check | change | Run the step-by-step connection check of a source. | `sources.view` |
 
-`assets.edit` also lets a person move assets in the Assets Tree ([Moving assets](assets-and-kinds.md#moving-assets)).
+`assets.edit` also lets a person move assets in the Assets Tree ([Moving assets](assets-and-kinds.md#moving-assets)); deleting the picked
+assets from the tree's pick bar needs `assets.delete` as well ([Deleting several assets](assets-and-kinds.md#deleting-several-assets)).
 
 ## Built-in roles
 

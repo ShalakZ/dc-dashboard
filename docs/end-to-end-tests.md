@@ -9,7 +9,7 @@ spec guards, and the two scratch-stack self-tests. The unit tests are on [Develo
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Twenty-nine specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Thirty-one specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`E2E_BASE_URL` changes it). `frontend/e2e/playwright.config.ts` makes each spec its own project and runs them one at a time in the
 order below, each depending on the one before; all but `journey` use a 1600×1000 window unless a spec sets its own sizes. Its
 `global-setup.ts` waits up to 120 s for the stack and refuses a database that already has users.
@@ -63,8 +63,8 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   same browser gets its own; Match my device following the device only while it is chosen; the keyboard walk of the two selects; dark mode
   (a widget frame stays white, no sideways scroll at 1440 and 1024 px); and `theme-init.js` served as JavaScript and loaded without a
   Content-Security-Policy violation. It puts the admin's choice back to Light and Navy and gold.
-- `w7e.spec.ts` (after `w7d`, at 1600×1000) checks the theme polish: buttons, links, hover and the selected row taking the theme's colour
-  in all four presets, light and dark; the dropdowns from the keyboard (Esc, arrows then Esc, Enter, the choice kept across a reload); a
+- `w7e.spec.ts` (after `w7d`, at 1600×1000) checks the theme polish: buttons, links, hover and the open row taking the theme's colour
+  for its bar and its name, with no tint, in all four presets, light and dark; the dropdowns from the keyboard (Esc, arrows then Esc, Enter, the choice kept across a reload); a
   refused save putting the dropdown and the page back and saying so; the loading bar along the top edge in the theme's marker colour
   (all four presets, a full line under reduced motion, never on a poll, never blocking a click); a kind icon on every tree row and in
   the asset header; the dashboard widgets keeping their light blue accent in all eight looks; and no sideways scroll at 1024 px in any
@@ -212,9 +212,10 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   header's button adds exactly the common kinds that are missing and sends no query, Add all 39 adds the rest with `?set=all`, a second press
   of either says they are all there and writes no audit entry, and `?set=bogus` is a 422. A custom role without Manage asset kinds sees
   the tag and the filters and no checkbox, pack button or bar, and the API answers 403 for both packs and for a delete.
-- `w7r.spec.ts` (its own project, last in the list, after `w7q`, at 1600×1000) checks the Scan details drawer and the Discovery clean-up. It runs
+- `w7r.spec.ts` (its own project, after `w7q`, at 1600×1000) checks the Scan details drawer and the Discovery clean-up. It runs
   about fourteen scans of the simulator on the shared stack and removes what it made (assets, hand-added sources and scopes named `W7r <run> ...`,
-  accounts and roles `w7r-`); it runs last because Clear unmapped removes every unmapped discovered source of the stack. Details opens a dialog
+  accounts and roles `w7r-`); it runs near the end because Clear unmapped removes every unmapped discovered source of the stack (`w7s`, which follows,
+  uses no source). Details opens a dialog
   named `Scan #N — done` with the scope line (`<scope>: simulator, ports 9000, 5020`) and a stats line that says `checks`, never `ports checked`;
   Escape, the x and a click outside close it and the focus goes back to that row's Details button; Recent scans reads `N source(s), M points` with the
   targets and ports under the scope name (a scan started from a scope with the mistyped port 4080 shows 4080). Every discovered node says
@@ -226,6 +227,23 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   create. Create assets on the collapsed source node opens one dialog with a row per group and creates one asset each under the chosen parent.
   At 1440 and 1024 px neither Scans nor Discovery scrolls sideways and the drawer fits, and a fresh load of Discovery at 1024×640 opens on the first
   sources (the first Create assets button is inside the canvas and the node text is at least 9 px at the opening zoom).
+- `w7s.spec.ts` (its own project, last in the list, after `w7r`, at 1440×900 unless a case sets its own size) checks deleting several assets
+  from the Assets Tree and telling the open asset from the picked ones. Each case builds its own small tree through the API, named `W7s <run> ...`
+  (accounts and roles `w7s-`), and removes what it made. With two leaves picked and a third open, the open row is not on the tint and the picked
+  rows are, the bar says `2 picked` and its count carries the "open asset is not counted" tooltip; Delete opens a dialog that lists both names,
+  says "This can't be undone" and has a plain `Delete` button; confirming removes both, shows the toast `Deleted 2 assets`, clears the picks,
+  leaves the focus on a named element and does not move `scrollY`. A picked parent with a picked child shows the "is inside ... so it goes with
+  it" note, the totals count the whole branch, and the audit log has one `asset.deleted` row for the parent. A child added to a picked leaf
+  after the dialog loaded makes the confirm show the new numbers and the "delete again to confirm" sentence with nothing deleted, and the
+  second confirm deletes the leaf with its child; a pick that someone else deleted before the dialog opened blocks it (only Close) and the
+  tree refreshes, dropping the vanished pick from the bar. With two picks and a child added to the second, the first is deleted and the
+  second refused: an error toast `Deleted 1 asset. "<name>" could not be deleted: ...`, `1 picked` remains and Delete is still in the bar.
+  Deleting the open asset moves the page to its parent's. A custom role with only `assets.view` and `assets.edit` can pick and Move to... but
+  has no Delete, and the API answers 403 to a delete from it. From the keyboard, Tab reaches Delete, Enter opens the dialog with the focus on
+  Cancel, Escape closes it and the focus is back on Delete. At 1440, 1024 and 800 px the bar is whole and does not change height on the first
+  pick; with the stored tree width 220 its buttons lie inside the bar, and the bar is 32 px high in a column of 277 px and 64 px in one of 276 px
+  or less for the admin, but 32 px at every width for the role without Delete. The browser prints its own console lines for the refusals the app
+  handles on purpose (the 404s of a vanished pick, the 409s of a grown branch, the 403 of a role that lost the permission); they are not app errors.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

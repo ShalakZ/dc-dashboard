@@ -7,4 +7,6 @@
   .confirm-checking { color: var(--text-2); }
   /* Nothing to say (the preview failed and the error line speaks): no empty row and no gap in the dialog's grid. */
   .confirm-body:empty { display: none; }
+  /* A message may hold a blank line between its paragraphs (the assets delete puts the billing warning in its own): keep the newline, collapse the rest. */
+  .confirm-body p { white-space: pre-line; }
 }

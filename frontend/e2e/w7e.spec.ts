@@ -257,13 +257,12 @@ test.describe.serial("W7e: theme colours, dropdowns, loading bar, icons", () => 
         await chooseLook(page, look);
         const accent = await tokenColour(page, "--accent");
         const hover = await tokenColour(page, "--accent-hover");
-        const tint = await tokenColour(page, "--accent-tint");
         const ink = await tokenColour(page, "--accent-ink");
         if (look.theme !== "graphite" || look.mode !== "light") expect(accent, "no longer the blue every look had before").not.toBe(OLD_BLUE);
 
         await expect(add, "the page's primary button is the accent").toHaveCSS("background-color", accent);
         await expect(crumb, "a link is the accent").toHaveCSS("color", accent);
-        await expect(row, "the selected row is on the tint").toHaveCSS("background-color", tint);
+        await expect(row, "the open row has no tint, only the bar").toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
         await expect(row.getByRole("link"), "its name is the ink").toHaveCSS("color", ink);
         await expect.poll(() => row.evaluate((el) => getComputedStyle(el).boxShadow), { message: "its marker is the accent" }).toContain(accent);
 

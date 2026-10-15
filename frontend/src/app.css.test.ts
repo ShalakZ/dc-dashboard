@@ -481,6 +481,31 @@ describe("a deep row of the asset tree keeps a readable name (review M-1)", () =
   });
 });
 
+describe("the open row of the asset tree is told apart from a pick (W7s)", () => {
+  // A pick has a tint and a frame (styles/tree-move.css); the open asset has the 3px bar and a bold ink name, and no tint of its own.
+  const open = () => {
+    const found = rules.filter((r) => r.selector === ".node.is-selected");
+    expect(found, 'exactly one rule for ".node.is-selected"').toHaveLength(1);
+    return found[0];
+  };
+
+  it("declares the accent bar and no background", () => {
+    expect(inLayer(open())).toBe(true);
+    expect(open().body).toMatch(/box-shadow:\s*inset\s+3px\s+0\s+0\s+var\(--accent\)/);
+    expect(open().body).not.toMatch(/background/);
+  });
+
+  it("keeps the bold ink name and the accent kind icon", () => {
+    expect(rules.find((r) => r.selector === ".node.is-selected a")?.body).toMatch(/color:\s*var\(--accent-ink\)[^}]*font-weight:\s*600/);
+    expect(rules.find((r) => r.selector === ".node.is-selected .node-icon")?.body).toMatch(/color:\s*var\(--accent\)/);
+  });
+
+  it("an open row takes the hover ground (--surface), and the column's ground is --bg", () => {
+    expect(rules.find((r) => r.selector === ".node:hover")?.body).toMatch(/background:\s*var\(--surface\)/);
+    expect(rules.find((r) => r.selector === ".tree-col")?.body).toMatch(/background:\s*var\(--bg\)/);
+  });
+});
+
 describe("long asset names wrap, figures do not", () => {
   /** The selector list of the rule that sets `overflow-wrap: anywhere` in the widget block. */
   const wrapping = [...css.matchAll(/([^{}]+)\{([^{}]*overflow-wrap:\s*anywhere[^{}]*)\}/g)].map((m) => m[1].trim()).join(" | ");

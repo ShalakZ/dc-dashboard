@@ -371,7 +371,7 @@
   .node .add { flex: none; display: grid; place-items: center; width: 24px; height: 24px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-2); }
   .node .add:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg); color: var(--accent); }
   .node .add svg.i { width: 14px; height: 14px; }
-  .node.is-selected { background: var(--accent-tint); box-shadow: inset 3px 0 0 var(--accent); }
+  .node.is-selected { box-shadow: inset 3px 0 0 var(--accent); } /* the open asset: the bar, a bold name and the accent icon, no tint (a pick has the tint and a frame: styles/tree-move.css) */
   .node.is-selected a { color: var(--accent-ink); font-weight: 600; }
 
   /* Breadcrumb trail (Crumbs): links in the accent, the current page bold, a "/" between; a long label wraps instead of widening the page */

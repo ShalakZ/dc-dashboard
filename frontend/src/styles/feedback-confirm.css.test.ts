@@ -24,10 +24,14 @@ function cascade(themeId: string, mode: "light" | "dark") {
 const combos = THEMES.flatMap((t) => (["light", "dark"] as const).map((mode) => ({ id: t.id, mode })));
 
 describe("the delete confirmation's own styles", () => {
-  it("style the checking line and the empty body, nothing else, and only with tokens", () => {
-    expect(confirm.map((r) => r.selector).sort()).toEqual([".confirm-body:empty", ".confirm-checking"]);
+  it("style the checking line, the empty body and the message's newlines, nothing else, and only with tokens", () => {
+    expect(confirm.map((r) => r.selector).sort()).toEqual([".confirm-body p", ".confirm-body:empty", ".confirm-checking"]);
     for (const rule of confirm) expect(rule.body, rule.selector).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
     expect(confirm.find((r) => r.selector.endsWith(".confirm-checking"))!.body).toContain("color: var(--text-2)");
+  });
+
+  it("keeps the newlines of a message (the assets delete puts its billing warning in a paragraph of its own)", () => {
+    expect(confirm.find((r) => r.selector === ".confirm-body p")!.body).toContain("white-space: pre-line");
   });
 
   it.each(combos)("$id, $mode: the checking line (--text-2) reads on the dialog's page colour at 4.5:1", ({ id, mode }) => {
