@@ -240,7 +240,7 @@ export interface ScopeIn { name: string; targets: string[]; ports: number[] }
 export interface ScopePreview { hosts: number; ports: number; pairs: number; digest: string }
 export interface ScopeSuggestions { targets: string[]; ports: number[] }
 export interface Finding { host: string; port: number; source_id: number | null; connector_type: string | null; outcome: "claimed" | "needs_credentials" | "unclaimed"; detail: string }
-export interface ScanSummary { id: number; scope_id: number | null; scope_name: string; status: ScanStatus; stage: "sweep" | "probe" | "browse" | null; progress: ScanCounters; created_at: string; finished_at: string | null; error: string | null }
+export interface ScanSummary { id: number; scope_id: number | null; scope_name: string; /** What the scan covered, from its snapshot (so it outlives a deleted scope); absent in old fixtures. */ targets?: string[]; ports?: number[]; status: ScanStatus; stage: "sweep" | "probe" | "browse" | null; progress: ScanCounters; created_at: string; finished_at: string | null; error: string | null }
 export interface ScanDetail extends ScanSummary { scope_snapshot: Record<string, unknown>; findings: Finding[] }
 export interface Suggestion { metric: Metric; scale: number; interval_seconds: number; custom_unit: string | null }
 export interface GraphPoint { id: number; address: string; name: string; unit_hint: string | null; mapping_id: number | null; asset_id: number | null; mapped_metric: Metric | null; suggestion: Suggestion }
@@ -249,6 +249,8 @@ export interface GraphSource {
   id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";
   enabled: boolean; status: string; last_error: string | null; has_secret: boolean; needs_credentials: boolean;
   point_count: number; clusters: GraphCluster[]; ungrouped: GraphPoint[];
+  /** The newest scan that found this source; null = never found by a scan; absent in old fixtures. */
+  last_seen?: { scan_id: number; at: string } | null;
 }
 export interface GraphModel {
   sources: GraphSource[];
@@ -375,3 +377,8 @@ export interface ReportReply {
   legend: { alias: string; original: string }[]; // empty unless mask; for the screen only, never in the text
 }
 export interface ReportParams { detail: ReportDetail; mask: boolean; source: number | null }
+/** POST /api/discovery/sources/remove: what it removed and what it kept (and why). */
+export interface RemoveSourcesResult {
+  removed: { id: number; name: string }[];
+  skipped: { id: number; name: string | null; reason: "mapped" | "manual" | "gone" }[];
+}
