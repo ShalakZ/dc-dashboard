@@ -22,8 +22,9 @@ import { treeLink, userBlock } from "./shell";
 //              the closed figures and CSV equal what the open month gave a moment before. The reference copy of the figures and of the CSV is kept here.
 //   frozen     the world changes one write at a time through the API (Panel B moved under Panel A, a new rate for "Seeded demo", Panel C unmapped): after
 //              each, the costs body minus `live` and the CSV bytes are byte-identical to the kept ones, the file is billing-<month>-closed.csv, and
-//              `live.differs` says so; the page shows the line "Today's tree and rates would give ...".
-//   reopen     Reopen month... needs a reason of 5 characters (4 keeps the button inert), then the banner and the chip are gone and the figures are the
+//              `live.differs` says so; the page shows the line "Today's tree and rates give the same figures." at first and "Today's tree and rates would give ..." after.
+//   reopen     Reopen month... says that the closed figures stay stored but are not shown again, and how far today is from the bill; it needs a reason of
+//              5 characters (4 keeps the button inert; 501 does too), then the banner and the chip are gone and the figures are the
 //              live ones; the audit log has billing.closed and billing.reopened in words, in the API and on the Audit page.
 //   permission a role with billing.view and billing.export but not billing.close, an Operator and a Viewer see no Close/Reopen control and get 403 from
 //              both routes; a role WITH billing.close sees the control.
@@ -588,6 +589,12 @@ test.describe("W11: close month", () => {
       expect(costs.live?.differs, "nothing differs yet").toBe(false);
     });
 
+    await test.step("the page has the line all the same, saying the figures are the same", async () => {
+      await openBilling(page, month);
+      await expect(chip(page)).toHaveText("Closed");
+      await expect(deltaLine(page)).toHaveText("Today's tree and rates give the same figures.");
+    });
+
     await test.step(`${PANEL_B} moves under ${PANEL_A}`, async () => {
       await moveBUnderA(page.request);
       const costs = await expectKept(page.request, kept, "after the move");
@@ -645,8 +652,18 @@ test.describe("W11: close month", () => {
       if (request.method() === "POST" && request.url().includes("/reopen")) posted.push(request.url());
     });
 
-    await test.step("a reason of 4 characters leaves the button inert; a click sends nothing", async () => {
+    await test.step("the dialog says the closed figures stay stored but are not shown again, and by how far today's figures are from the billed ones", async () => {
+      const line = (await deltaLine(page).innerText()).trim();
+      expect(line, "the page's line says how today differs (ensureDifference)").toMatch(/^Today's tree and rates would give /);
       await reopenButton(page).click();
+      await expect(form.dialog).toBeVisible();
+      await expect(form.dialog).toContainText("The page will show today's figures again.");
+      await expect(form.dialog).toContainText("The closed figures stay stored, but the app does not show them once the month is reopened, so download the CSV first if you need them.");
+      await expect(form.dialog).not.toContainText("are kept");
+      await expect(form.dialog.locator(".month-extra"), "the same sentence as the line behind the dialog").toHaveText(line);
+    });
+
+    await test.step("a reason of 4 characters leaves the button inert; a click sends nothing", async () => {
       await expect(form.dialog).toBeVisible();
       await expect(form.note).toBeFocused();
       await form.note.fill("abcd");
@@ -666,6 +683,19 @@ test.describe("W11: close month", () => {
       await form.note.fill("abcde");
       await expect(form.count).toHaveText("5/500");
       await expect(form.go).not.toHaveAttribute("aria-disabled", "true");
+    });
+
+    await test.step("500 characters are fine; the 501st is kept, counted 501/500, and holds the button back", async () => {
+      await form.note.fill("x".repeat(500));
+      await expect(form.count).toHaveText("500/500");
+      await expect(form.go).not.toHaveAttribute("aria-disabled", "true");
+      await form.note.fill("x".repeat(501));
+      await expect(form.count).toHaveText("501/500");
+      await expect(form.count).toHaveClass(/month-over/);
+      await expect(form.go).toHaveAttribute("aria-disabled", "true");
+      await form.go.click({ force: true });
+      expect(posted, "nothing was sent").toEqual([]);
+      await expect(form.dialog).toBeVisible();
     });
 
     await test.step("with the reason, Reopen month takes the banner and the chip away", async () => {

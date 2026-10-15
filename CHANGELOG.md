@@ -21,10 +21,11 @@ W11 (close month) lets an administrator freeze a finished billing month, so that
 administrator now sees **Close month…** in the page header on a month that is over (it takes an optional note), and the month then
 carries a **Closed** chip, a banner ("Closed by <name> on <date>") and the figures exactly as they stood, per asset and per day.
 Moving assets, mapping or unmapping points, editing tariffs and deleting assets or sources no longer change that month; dashboards and
-widgets stay live. When today's tree and rates would give other figures, a quiet line says so ("Today's tree and rates would give ...",
-and it counts assets that moved or changed even when the total is the same); readings that arrive late show up only there. The Billing CSV of a
+widgets stay live. A quiet line on a closed month always says how today's tree and rates compare ("Today's tree and rates would give ...",
+counting assets that moved or changed even when the total is the same, or "... give the same figures."); readings that arrive late show up only there. The Billing CSV of a
 closed month is the file it had when closed, named `billing-YYYY-MM-closed.csv`. **Reopen month…** asks for a reason of at least 5
-characters and goes back to live figures; the old snapshot is kept and a new close stores a new one. The move and delete warnings now say that
+characters and goes back to today's figures; the old snapshot stays stored but the app does not show it again (the dialog says so and tells you
+to download the CSV first), and a new close stores a new one. The move and delete warnings now say that
 closed months keep their billed figures. The Audit log gains `billing.closed` and `billing.reopened`. See
 [Closing a month](docs/dashboards-and-billing.md#closing-a-month). Closing is a new permission, **Close and reopen billing months**
 (`billing.close`, in the Sensitive actions of the Roles tab, 31 permissions in all) that migration `0012` gives to **no role**: the

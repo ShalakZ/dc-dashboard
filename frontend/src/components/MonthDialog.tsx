@@ -12,10 +12,14 @@ const noteLength = (note: string) => [...note.trim()].length;
  * The confirming button and Cancel wait with `aria-disabled` and a guard, never native `disabled`: the button has the focus, and a disabled
  * one drops it to the page behind (a 409 would leave the person nowhere). The guard is a ref, because state arrives a render after the
  * first click and a double click would send two requests. The count and the error line have fixed rooms, so nothing moves while typing.
+ * The field has no `maxLength`: the browser would count UTF-16 units of the untrimmed text, the server counts trimmed characters. A note over `maxNote`
+ * is typed and pasted in full, the count reads e.g. 501/500 in the error colour, and the confirming button waits.
+ * `extra` is a second paragraph under the intro (null or missing: none); the caller fixes it before the dialog opens, so nothing moves under the person.
  */
-export function MonthDialog({ title, intro, noteLabel, minNote, maxNote = 500, confirmLabel, onConfirm, onCancel }: {
+export function MonthDialog({ title, intro, extra, noteLabel, minNote, maxNote = 500, confirmLabel, onConfirm, onCancel }: {
   title: string;
   intro: string;
+  extra?: string | null;
   noteLabel: string;
   minNote: number;
   maxNote?: number;
@@ -32,7 +36,8 @@ export function MonthDialog({ title, intro, noteLabel, minNote, maxNote = 500, c
   useModalBusy(pending); // Escape must not close the dialog on a request that is still running
 
   const length = noteLength(note);
-  const ready = length >= minNote;
+  const tooLong = length > maxNote;
+  const ready = length >= minNote && !tooLong;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -55,13 +60,14 @@ export function MonthDialog({ title, intro, noteLabel, minNote, maxNote = 500, c
     <Modal title={title} onClose={cancel}>
       <form className="month-dialog" onSubmit={submit} noValidate>
         <p>{intro}</p>
+        {extra && <p className="month-extra">{extra}</p>}
         <div className="field">
           <label htmlFor={noteId}>{noteLabel}</label>
           <textarea
-            id={noteId} rows={3} maxLength={maxNote} value={note} aria-required={minNote > 0 || undefined} aria-describedby={countId}
+            id={noteId} rows={3} value={note} aria-required={minNote > 0 || undefined} aria-invalid={tooLong || undefined} aria-describedby={countId}
             onChange={(e) => setNote(e.target.value)}
           />
-          <div id={countId} className="muted month-count">{length}/{ready ? maxNote : minNote}</div>
+          <div id={countId} className={tooLong ? "month-count month-over" : "muted month-count"}>{length}/{length < minNote ? minNote : maxNote}</div>
         </div>
         <div className="month-slot">{error && <p className="error" role="alert">{error}</p>}</div>
         <div className="row">

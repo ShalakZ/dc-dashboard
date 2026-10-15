@@ -12,7 +12,7 @@ import { ReopenMonthDialog } from "../components/ReopenMonthDialog";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import {
-  clampMonth, closedOnText, depthsByAsset, fmtCost, fmtKwh, fmtRate, liveDeltaText, MONTH_NAMES, monthLabel, monthsOfYear, shiftMonth, yearsBetween,
+  clampMonth, closedOnText, depthsByAsset, fmtCost, fmtKwh, fmtRate, liveDeltaText, MONTH_NAMES, monthLabel, monthsOfYear, SAME_FIGURES_TEXT, shiftMonth, yearsBetween,
 } from "../lib/billing";
 import { downloadCsv } from "../lib/download";
 import { formatSiteDay, siteMonth } from "../lib/siteTime";
@@ -133,10 +133,15 @@ function BillingTable({ costs, canSetRates }: { costs: BillingCosts; canSetRates
 
 /**
  * What a closed month says about itself, above its table: who closed it and when (the date on the site's wall clock) and the note on its own line,
- * then, quieter, what today's tree and rates would give when that differs. Plain text with no role: the page's one status is the missing-rate banner.
+ * then, quieter, what today's tree and rates would give. The line is always there, so its room never appears or goes when the minute poll brings
+ * another answer: "the same figures" when nothing differs, the difference when something does, and an empty line that keeps its height when today's
+ * tree cannot be priced (it never claims "the same" then). Plain text with no role: the page's one status is the missing-rate banner.
+ * `currency` is the one the month was closed in.
  */
-function ClosedNotice({ closed, live, timezone }: { closed: BillingClosed; live: BillingLive | null | undefined; timezone: string }) {
-  const delta = liveDeltaText(live, closed);
+function ClosedNotice({ closed, live, currency, timezone }: {
+  closed: BillingClosed; live: BillingLive | null | undefined; currency: string | null; timezone: string;
+}) {
+  const delta = live?.differs === false ? SAME_FIGURES_TEXT : liveDeltaText(live, closed, currency) ?? "";
   return (
     <div className="closed-box">
       <div className="banner banner-info">
@@ -146,7 +151,7 @@ function ClosedNotice({ closed, live, timezone }: { closed: BillingClosed; live:
           {closed.note !== "" && <span className="closed-line closed-note">{closed.note}</span>}
         </span>
       </div>
-      {delta !== null && <p className="muted live-delta">{delta}</p>}
+      <p className="muted live-delta">{delta}</p>
     </div>
   );
 }
@@ -191,7 +196,11 @@ export function BillingPage() {
   const [picked, setPicked] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<{ kind: "close" | "reopen"; month: string } | null>(null);
+  // The Reopen dialog takes a copy of what the page says about the closed month at the click (its figures, today's difference, its currency): it
+  // keeps saying that while the 60-second poll moves the page behind it, and still has it after the reopen refetch turns the month open.
+  const [dialog, setDialog] = useState<
+    { kind: "close"; month: string } | { kind: "reopen"; month: string; closed: BillingClosed; live: BillingLive | null | undefined; currency: string | null } | null
+  >(null);
   const heading = useRef<HTMLHeadingElement>(null);
   // "This month" is decided on the site's wall clock: near a month end it differs from the browser's and from UTC.
   const current = site.data ? siteMonth(new Date(), site.data.timezone) : null;
@@ -204,9 +213,11 @@ export function BillingPage() {
   // The month's own button, from the server's answer (it is the real judge): Reopen for a closed month, Close for a finished open one. Neither while the costs load.
   // Each has its own key: React would otherwise keep one element and only change its words, and the focus would stay on a button that now means the opposite.
   const closed = costs.data?.closed ?? null;
+  const live = costs.data?.live;
+  const frozenCurrency = costs.data?.currency ?? null; // for a closed month, the currency it was closed in
   const finished = month !== null && current !== null && month < current;
   const monthAction = !canClose || month === null || !costs.data ? null : closed !== null ? (
-    <button key="reopen" type="button" aria-haspopup="dialog" onClick={() => setDialog({ kind: "reopen", month })}>Reopen month…</button>
+    <button key="reopen" type="button" aria-haspopup="dialog" onClick={() => setDialog({ kind: "reopen", month, closed, live, currency: frozenCurrency })}>Reopen month…</button>
   ) : finished ? (
     <button key="close" type="button" aria-haspopup="dialog" onClick={() => setDialog({ kind: "close", month })}>Close month…</button>
   ) : null;
@@ -276,12 +287,16 @@ export function BillingPage() {
       {costs.data && (
         // One render with the table: the banner never turns up after it.
         <>
-          {costs.data.closed && <ClosedNotice closed={costs.data.closed} live={costs.data.live} timezone={site.data?.timezone ?? costs.data.timezone} />}
+          {costs.data.closed && (
+            <ClosedNotice closed={costs.data.closed} live={costs.data.live} currency={costs.data.currency} timezone={site.data?.timezone ?? costs.data.timezone} />
+          )}
           <BillingTable costs={costs.data} canSetRates={can("tariffs.edit") && meets(PAGE_NEED.tariffs, can)} />
         </>
       )}
       {dialog?.kind === "close" && <CloseMonthDialog month={dialog.month} onClose={() => setDialog(null)} />}
-      {dialog?.kind === "reopen" && <ReopenMonthDialog month={dialog.month} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "reopen" && (
+        <ReopenMonthDialog month={dialog.month} closed={dialog.closed} live={dialog.live} currency={dialog.currency} onClose={() => setDialog(null)} />
+      )}
     </section>
   );
 }

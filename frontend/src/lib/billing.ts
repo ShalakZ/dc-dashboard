@@ -68,20 +68,31 @@ export function fmtSignedKwh(value: number): string {
 /** `1 asset differs`, `3 assets differ`. */
 const assetsDiffer = (n: number) => (n === 1 ? "1 asset differs" : `${n} assets differ`);
 
+/** What the line under a closed month's banner says when nothing differs, and (in the Reopen dialog) when today's tree cannot be priced. */
+export const SAME_FIGURES_TEXT = "Today's tree and rates give the same figures.";
+export const UNPRICED_TEXT = "Today's tree and rates cannot be priced right now.";
+
 /**
- * The quiet line under a closed month's banner: what today's tree and rates would give, as the server's `live` says. Null when there is nothing to say
- * (`live` is null or null-like, or `differs` is false). `closed` supplies the frozen cost, because `live.delta_cost` is null both when one side has no
- * cost and when neither has one, and the two read differently. The totals are the roots' sums (R4), so a move or an unmap under a metered parent
- * leaves them alone: `changed_assets` says how many assets' own figures or place changed.
+ * The quiet line under a closed month's banner: what today's tree and rates would give, as the server's `live` says. Null when there is nothing to
+ * say (`live` is null or null-like, or `differs` is false: the page words those two itself). `closed` supplies the frozen cost, because
+ * `live.delta_cost` is null both when one side has no cost and when neither has one, and the two read differently. `frozenCurrency` is the currency the
+ * month was closed in (`costs.currency` of a closed month is the stored one): when today's differs (a null is "no currency"), the two amounts are in
+ * different units, so the line gives today's total with both currencies and no signed change. The totals are the roots' sums (R4), so a move or an
+ * unmap under a metered parent leaves them alone: `changed_assets` says how many assets' own figures or place changed.
  */
-export function liveDeltaText(live: BillingLive | null | undefined, closed: Pick<BillingClosed, "total_cost">): string | null {
+export function liveDeltaText(
+  live: BillingLive | null | undefined, closed: Pick<BillingClosed, "total_cost">, frozenCurrency: string | null,
+): string | null {
   if (!live?.differs) return null;
   const unit = live.currency ? ` ${live.currency}` : "";
   const assets = live.changed_assets > 0 ? assetsDiffer(live.changed_assets) : null;
   const costDelta = live.total_cost !== null && closed.total_cost !== null ? live.delta_cost : null;
   const kwhDiffers = Math.round(live.delta_kwh * 1000) !== 0;
+  const otherCurrency = (live.currency ?? null) !== (frozenCurrency ?? null);
   let total: string | null = null;
-  if (live.total_cost === null && closed.total_cost !== null) {
+  if (otherCurrency && live.total_cost !== null && closed.total_cost !== null) {
+    total = `${fmtCost(live.total_cost)}${unit} (closed ${frozenCurrency ? `in ${frozenCurrency}` : "with no currency"})`; // two units: no signed change
+  } else if (live.total_cost === null && closed.total_cost !== null) {
     total = "no cost, because there is no rate today"; // the frozen month had a cost; today there is no rate to price it with
   } else if (costDelta !== null && Math.round(costDelta * 100) !== 0) {
     total = `${fmtCost(live.total_cost!)}${unit} (${fmtSigned(costDelta, 2)})`;

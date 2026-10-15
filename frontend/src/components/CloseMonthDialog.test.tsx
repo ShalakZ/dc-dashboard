@@ -107,13 +107,68 @@ describe("CloseMonthDialog", () => {
     expect(posts(calls).map((c) => c.body)).toEqual([{ note: "" }]);
   });
 
-  it("limits the note to 500 characters and counts them without moving anything", async () => {
+  it("counts the note against 500 without moving anything", async () => {
     await open();
-    expect(note()).toHaveAttribute("maxlength", "500");
     expect(screen.getByText("0/500")).toBeInTheDocument();
     await userEvent.type(note(), "abc");
     expect(screen.getByText("3/500")).toBeInTheDocument();
     expect(screen.getByText("3/500")).not.toHaveAttribute("aria-live"); // the count is not an announcer
+  });
+
+  describe("the 500-character limit counts what the server counts (trimmed characters), not what the browser would", () => {
+    const count = () => document.querySelector(".month-count")!;
+
+    it("takes exactly 500 characters and sends them", async () => {
+      const { calls } = await open();
+      expect(note()).not.toHaveAttribute("maxlength");
+      await userEvent.click(note());
+      await userEvent.paste("a".repeat(500));
+      expect(count()).toHaveTextContent("500/500");
+      expect(count()).not.toHaveClass("month-over");
+      expect(confirm()).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(confirm());
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(posts(calls).map((c) => c.body)).toEqual([{ note: "a".repeat(500) }]);
+    });
+
+    it("keeps the 501st character, shows 501/500 in the error colour and holds the button back", async () => {
+      const { calls } = await open();
+      await userEvent.click(note());
+      await userEvent.paste("a".repeat(501));
+      expect((note() as HTMLTextAreaElement).value).toHaveLength(501); // nothing was cut off
+      expect(count()).toHaveTextContent("501/500");
+      expect(count()).toHaveClass("month-over");
+      expect(count()).not.toHaveClass("muted");
+      expect(note()).toHaveAttribute("aria-invalid", "true");
+      expect(confirm()).toHaveAttribute("aria-disabled", "true");
+      expect(confirm()).not.toBeDisabled();
+      await userEvent.click(confirm());
+      expect(posts(calls)).toHaveLength(0);
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      await userEvent.type(note(), "{Backspace}"); // back to 500: allowed again (the focus was on the button)
+      expect(count()).toHaveTextContent("500/500");
+      expect(note()).not.toHaveAttribute("aria-invalid");
+      expect(confirm()).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("counts an emoji as one character, so 500 emoji fit (1000 UTF-16 units) and the 501st does not", async () => {
+      await open();
+      await userEvent.click(note());
+      await userEvent.paste("😀".repeat(500));
+      expect(count()).toHaveTextContent("500/500");
+      expect(confirm()).not.toHaveAttribute("aria-disabled");
+      await userEvent.paste("😀");
+      expect(count()).toHaveTextContent("501/500");
+      expect(confirm()).toHaveAttribute("aria-disabled", "true");
+    });
+
+    it("does not count the blanks at the ends: 500 characters between spaces are 500", async () => {
+      await open();
+      await userEvent.click(note());
+      await userEvent.paste(`   ${"a".repeat(500)}   `);
+      expect(count()).toHaveTextContent("500/500");
+      expect(confirm()).not.toHaveAttribute("aria-disabled");
+    });
   });
 
   it("shows the server's refusal inside the dialog, keeps the dialog and the focus, and a second try works", async () => {

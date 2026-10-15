@@ -98,7 +98,8 @@ describe("liveDeltaText (the quiet line under a closed month)", () => {
   const WITH_COST = { total_cost: 100 };
   const NO_COST = { total_cost: null };
 
-  it.each<[string, BillingLive | null | undefined, { total_cost: number | null }, string | null]>([
+  // The fifth column is the currency the month was closed in; it is QAR (the fixtures' own) unless a row says otherwise.
+  it.each<[string, BillingLive | null | undefined, { total_cost: number | null }, string | null, (string | null)?]>([
     ["live is null (today's tree could not be priced)", null, WITH_COST, null],
     ["live is missing (an older server)", undefined, WITH_COST, null],
     ["nothing differs", live({ differs: false }), WITH_COST, null],
@@ -110,7 +111,7 @@ describe("liveDeltaText (the quiet line under a closed month)", () => {
     ["today there is no rate, so no cost", live({ total_cost: null, delta_cost: null, delta_kwh: 0 }), WITH_COST, "Today's tree and rates would give no cost, because there is no rate today."],
     ["the frozen month had no cost and today there is a rate (delta_cost is null)", live({ total_cost: 55, delta_cost: null, delta_kwh: 0 }), NO_COST, "Today's tree and rates would give 55.00 QAR (the closed figures have no cost)."],
     ["neither side has a cost and the kWh differs", live({ total_cost: null, delta_cost: null, delta_kwh: -4 , total_kwh: 96 }), NO_COST, "Today's tree and rates would give 96.0 kWh (-4)."],
-    ["no currency: the amount has no unit", live({ total_cost: 130.5, delta_cost: 30.5, currency: null }), WITH_COST, "Today's tree and rates would give 130.50 (+30.50)."],
+    ["no currency then and now: the amount has no unit", live({ total_cost: 130.5, delta_cost: 30.5, currency: null }), WITH_COST, "Today's tree and rates would give 130.50 (+30.50).", null],
     ["the totals differ and one asset differs", live({ total_cost: 130.5, delta_cost: 30.5, changed_assets: 1 }), WITH_COST, "Today's tree and rates would give 130.50 QAR (+30.50), 1 asset differs."],
     ["the totals differ and three assets differ", live({ total_cost: 90, delta_cost: -10, changed_assets: 3 }), WITH_COST, "Today's tree and rates would give 90.00 QAR (-10.00), 3 assets differ."],
     ["no cost today and two assets differ", live({ total_cost: null, delta_cost: null, changed_assets: 2 }), WITH_COST, "Today's tree and rates would give no cost, because there is no rate today, 2 assets differ."],
@@ -119,8 +120,15 @@ describe("liveDeltaText (the quiet line under a closed month)", () => {
     ["the totals agree to the cent and the thousandth", live({ delta_cost: 0.004, delta_kwh: 0.0004, changed_assets: 2 }), WITH_COST, "Today's tree and rates give the same total, but 2 assets differ."],
     ["neither side has a cost, the kWh agree and an asset differs", live({ total_cost: null, delta_cost: null, changed_assets: 1 }), NO_COST, "Today's tree and rates give the same total, but 1 asset differs."],
     ["differs is true but nothing says why", live({ delta_cost: 0 }), WITH_COST, "Today's tree and rates would give different figures."],
-  ])("%s", (_name, value, closed, expected) => {
-    expect(liveDeltaText(value, closed)).toBe(expected);
+    // The currency changed after the close (M2): the server answers delta_cost null, and the line gives today's total in both currencies, no signed change.
+    ["the currency changed alone", live({ total_cost: 130.5, delta_cost: null, currency: "EUR" }), WITH_COST, "Today's tree and rates would give 130.50 EUR (closed in QAR).", "QAR"],
+    ["the currency changed and assets differ too", live({ total_cost: 130.5, delta_cost: null, currency: "EUR", changed_assets: 2 }), WITH_COST, "Today's tree and rates would give 130.50 EUR (closed in QAR), 2 assets differ.", "QAR"],
+    ["the month was closed with no currency and there is one now", live({ total_cost: 130.5, delta_cost: null, currency: "QAR" }), WITH_COST, "Today's tree and rates would give 130.50 QAR (closed with no currency).", null],
+    ["the currency changed and the kWh moved: still no signed change", live({ total_cost: 130.5, delta_cost: null, delta_kwh: 40, currency: "EUR" }), WITH_COST, "Today's tree and rates would give 130.50 EUR (closed in QAR).", "QAR"],
+    ["the currency changed but today has no rate: the missing rate is what is said", live({ total_cost: null, delta_cost: null, currency: "EUR" }), WITH_COST, "Today's tree and rates would give no cost, because there is no rate today.", "QAR"],
+    ["the currency changed but the closed month had no cost: its own sentence", live({ total_cost: 55, delta_cost: null, currency: "EUR" }), NO_COST, "Today's tree and rates would give 55.00 EUR (the closed figures have no cost).", "QAR"],
+  ])("%s", (_name, value, closed, expected, frozen = "QAR") => {
+    expect(liveDeltaText(value, closed, frozen)).toBe(expected);
   });
 });
 

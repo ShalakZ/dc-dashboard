@@ -1,6 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
+import type { BillingLive } from "../api/types";
 import { mockFetch, type Routes } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
@@ -10,13 +11,17 @@ import { ReopenMonthDialog } from "./ReopenMonthDialog";
 
 const PATH = "/api/billing/months/2026-09/reopen";
 
-function Host({ onClose }: { onClose?: () => void }) {
+/** Today's tree and rates give the billed figures (what the page's line says "the same figures" for). */
+const SAME: BillingLive = { total_kwh: 50, total_cost: 6, delta_kwh: 0, delta_cost: 0, differs: false, changed_assets: 0, currency: "QAR" };
+const CLOSED = { total_cost: 6 };
+
+function Host({ onClose, live = SAME, currency = "QAR" }: { onClose?: () => void; live?: BillingLive | null; currency?: string | null }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <button type="button">before</button>
       <button type="button" onClick={() => setOpen(true)}>Reopen month…</button>
-      {open && <ReopenMonthDialog month="2026-09" onClose={() => { onClose?.(); setOpen(false); }} />}
+      {open && <ReopenMonthDialog month="2026-09" closed={CLOSED} live={live} currency={currency} onClose={() => { onClose?.(); setOpen(false); }} />}
       <button type="button">after</button>
     </>
   );
@@ -28,10 +33,10 @@ const base: Routes = {
   [`POST ${PATH}`]: { body: { month: "2026-09", reopened_at: "2026-10-15T10:00:00Z" } },
 };
 
-async function open(routes: Routes = {}, onClose?: () => void) {
+async function open(routes: Routes = {}, onClose?: () => void, hostProps: { live?: BillingLive | null; currency?: string | null } = {}) {
   const calls = mockFetch({ ...base, ...routes });
   const toasts = spyToasts();
-  renderWithProviders(<Host onClose={onClose} />, { toasts: toasts.api });
+  renderWithProviders(<Host onClose={onClose} {...hostProps} />, { toasts: toasts.api });
   const opener = screen.getByRole("button", { name: "Reopen month…" });
   await userEvent.click(opener);
   return { calls, toasts, opener };
@@ -47,12 +52,43 @@ describe("ReopenMonthDialog", () => {
     const dialog = screen.getByRole("dialog", { name: "Reopen September 2026" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(dialog).toHaveTextContent(
-      "Reopen September 2026? The page will show live figures again. The closed figures are kept and the reason is recorded in the audit log.",
+      "Reopen September 2026? The page will show today's figures again. The closed figures stay stored, but the app does not show them once the month is reopened, " +
+      "so download the CSV first if you need them. The reason is recorded in the audit log.",
     );
+    expect(dialog).not.toHaveTextContent("are kept");
     expect(reason()).toHaveFocus();
     expect(reason()).toHaveAttribute("aria-required", "true");
-    expect(reason()).toHaveAttribute("maxlength", "500");
+    expect(reason()).not.toHaveAttribute("maxlength"); // the count turns into a refusal instead (see below)
     expect(confirm()).toHaveClass("primary");
+  });
+
+  describe("how far today's figures are from the billed ones, said before the click", () => {
+    const extra = () => document.querySelector(".month-extra");
+    const live = (over: Partial<BillingLive>): BillingLive => ({ ...SAME, differs: true, ...over });
+
+    it("gives the page's own sentence as a second paragraph when they differ", async () => {
+      await open({}, undefined, { live: live({ total_kwh: 80, total_cost: 16.5, delta_kwh: 30, delta_cost: 10.5, changed_assets: 4 }) });
+      expect(extra()).toHaveTextContent("Today's tree and rates would give 16.50 QAR (+10.50), 4 assets differ.");
+      expect(extra()!.tagName).toBe("P");
+      expect(extra()!.previousElementSibling!.tagName).toBe("P"); // the intro, then this one
+      expect(extra()!.previousElementSibling).toHaveTextContent("Reopen September 2026?");
+    });
+
+    it("says it cannot be priced when the server could not price today's tree (live is null)", async () => {
+      await open({}, undefined, { live: null });
+      expect(extra()).toHaveTextContent("Today's tree and rates cannot be priced right now.");
+    });
+
+    it("words a currency change with both currencies and no signed change", async () => {
+      await open({}, undefined, { live: live({ total_cost: 130.5, delta_cost: null, currency: "EUR" }), currency: "QAR" });
+      expect(extra()).toHaveTextContent("Today's tree and rates would give 130.50 EUR (closed in QAR).");
+    });
+
+    it("adds no paragraph when nothing differs", async () => {
+      await open();
+      expect(extra()).toBeNull();
+      expect(screen.getByRole("dialog").querySelectorAll("form > p")).toHaveLength(1);
+    });
   });
 
   it("waits with aria-disabled (never native disabled) until the reason has 5 characters, and a click before that sends nothing", async () => {
@@ -99,6 +135,17 @@ describe("ReopenMonthDialog", () => {
     await userEvent.type(reason(), "😀");
     expect(document.querySelector(".month-count")).toHaveTextContent("5/500");
     expect(confirm()).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("a reason over 500 characters is kept as typed, counted 501/500 in the error colour, and cannot be sent", async () => {
+    const { calls } = await open();
+    await userEvent.click(reason());
+    await userEvent.paste("b".repeat(501));
+    expect(document.querySelector(".month-count")).toHaveTextContent("501/500");
+    expect(document.querySelector(".month-count")).toHaveClass("month-over");
+    expect(confirm()).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(confirm());
+    expect(posts(calls)).toHaveLength(0);
   });
 
   it("sends the trimmed reason, says so with a toast, closes, and gives the focus back to the opener", async () => {

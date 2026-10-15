@@ -94,18 +94,26 @@ can **close** it: the Billing page stores the figures it shows for that month an
   assets, mappings or rates will not change the figures and takes an optional note of up to 500 characters; its button reads **Close
   month**. Closing takes a few seconds.
 - **What a closed month shows.** The **Closed** chip beside the month name and a banner above the table, "Closed by <name> on Thu 15 Oct
-  2026." (the date is the site's calendar date; the note, if any, is on the next line). The table is the stored one. When today's tree
-  and rates would give other figures, a quiet line under the banner says so, for example "Today's tree and rates would give 1234.50
-  USD (+12.50), 3 assets differ." The line also notices assets that moved or whose own figures differ when the total is the same
-  ("Today's tree and rates give the same total, but 3 assets differ."), and it is left out when nothing differs. It tells you that
+  2026." (the date is the site's calendar date; the note, if any, is on the next line). The table is the stored one. A quiet line
+  under the banner is always there on a closed month, so the table does not move when it changes: when today's tree and rates would
+  give other figures it says so, for example "Today's tree and rates would give 1234.50 USD (+12.50), 3 assets differ."; it also
+  notices assets that moved or whose own figures differ when the total is the same ("Today's tree and rates give the same total, but
+  3 assets differ."); when nothing differs it reads "Today's tree and rates give the same figures."; and when today's tree cannot be
+  priced right now it stays empty (it never claims "the same" then). If the site's currency changed after the close, the line gives
+  today's total in both currencies and no signed change ("Today's tree and rates would give 1234.50 EUR (closed in USD)"), because the
+  two amounts are in different units; a closed month keeps the currency it was closed in. The line tells you that
   something changed since the bill; it does not change the bill. If some consumption has no rate, the usual notice says that this
   month is closed, so a rate set now changes it only if the month is reopened. The CSV of a closed month is the file the month had when
   it was closed, named `billing-YYYY-MM-closed.csv` (an open month's is `billing-YYYY-MM.csv`). The name of the person who closed it
   stays even if their account is deleted.
 - **Reopening.** On a closed month **Reopen month…** (with `billing.close`) takes the place of Close month…. Its dialog, **Reopen <Month
-  Year>**, asks for a **Reason** of 5 to 500 characters (a live count shows how many are still needed); its button reads **Reopen
-  month**. The month then shows live figures again at once. The old snapshot is kept, with who reopened it and why, but the app shows it
-  nowhere; closing the month again freezes today's figures as a new record.
+  Year>**, asks for a **Reason** of 5 to 500 characters (a live count shows how many are still needed; past 500 it reads, for example,
+  501/500 in red and the button waits); its button reads **Reopen month**. Before you click, the dialog tells you that the page will
+  show today's figures again, that the closed figures stay stored but the app does not show them once the month is reopened (so
+  **download the CSV first** if you need them), and, when today's figures are not the billed ones, by how far (the same sentence as
+  the line under the banner; "Today's tree and rates cannot be priced right now." when they cannot be priced). The month then shows
+  live figures again at once. The old snapshot stays in the database, with who reopened it and why, but the app shows it nowhere;
+  closing the month again freezes today's figures as a new record.
 - **What changes a closed month: nothing.** Moving assets, mapping or unmapping points, editing or deleting tariffs, changing a
   mapping's scale, and deleting assets or sources do not change it; the move and delete warnings now say that closed
   months keep their billed figures. Readings that reach the database late do not change it either; they only show up in the "Today's tree and rates would

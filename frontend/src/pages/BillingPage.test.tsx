@@ -774,14 +774,53 @@ describe("BillingPage closed months and the Close and Reopen controls", () => {
         expect(delta()).toHaveTextContent("Today's tree and rates would give 62.5 kWh (+12.5).");
       });
 
+      it("says the figures are the same when nothing differs, so the line is there either way", async () => {
+        await showWith(SAME);
+        expect(delta()).toHaveTextContent("Today's tree and rates give the same figures.");
+        expect(delta()).toHaveClass("muted");
+        expect(delta()).not.toHaveAttribute("role");
+        expect(screen.getAllByRole("status")).toHaveLength(1); // still only the missing-rate banner
+      });
+
       it.each([
-        ["nothing differs", SAME],
         ["today's tree could not be priced (live is null)", null],
         ["the server sent no live part", undefined],
-      ])("has no line when %s", async (_why, live) => {
+      ])("keeps an empty line, never 'the same figures', when %s", async (_why, live) => {
         await showWith(live);
-        expect(delta()).toBeNull();
+        expect(delta()).not.toBeNull();
+        expect(delta()!.textContent).toBe(""); // its room is the CSS min-height of 1lh
+        expect(delta()!.previousElementSibling).toHaveClass("banner");
+        expect(screen.queryByText(/same figures/)).not.toBeInTheDocument();
         expect(screen.getByText(/Closed by Dana/)).toBeInTheDocument();
+      });
+
+      it("keeps the one line in the page (same element, same place) when a later answer changes its words", async () => {
+        let live: BillingLive | null = SAME;
+        await show(userFor("viewer"), {}, {
+          "GET /api/billing/costs": ({ url }) => {
+            const month = new URL(url, "http://x").searchParams.get("month")!;
+            return { body: month === "2026-09" ? closedSeptember({ live }) : costs };
+          },
+        });
+        await toSeptember();
+        const line = delta()!;
+        const box = line.parentElement!;
+        expect(line).toHaveTextContent("give the same figures");
+        live = { ...SAME, total_kwh: 80, total_cost: 16.5, delta_kwh: 30, delta_cost: 10.5, differs: true };
+        act(() => { document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); }); // a refetch, as the 60 s poll would make
+        await waitFor(() => expect(delta()).toHaveTextContent("would give 16.50 QAR (+10.50)"));
+        expect(delta()).toBe(line);
+        expect(line.parentElement).toBe(box);
+        expect(box.children).toHaveLength(2); // the banner and the line: nothing was added or taken away
+        live = null;
+        act(() => { document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); }); // a refetch, as the 60 s poll would make
+        await waitFor(() => expect(delta()!.textContent).toBe(""));
+        expect(box.children).toHaveLength(2);
+      });
+
+      it("words a currency change after the close with both currencies and no signed change (the page's currency is the one it was closed in)", async () => {
+        await showWith({ ...SAME, total_cost: 14.5, delta_cost: null, differs: true, changed_assets: 3, currency: "EUR" });
+        expect(delta()).toHaveTextContent("Today's tree and rates would give 14.50 EUR (closed in QAR), 3 assets differ.");
       });
 
       it("has no line on an open month", async () => {
@@ -842,6 +881,59 @@ describe("BillingPage closed months and the Close and Reopen controls", () => {
       expect(screen.queryByText(/Closed by/)).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Close month…" })).toBeInTheDocument();
       expect(heading()).toHaveFocus();
+    });
+
+    describe("the Reopen dialog says how far today's figures are from the billed ones, with the page's own sentence", () => {
+      const DIFFERS: BillingLive = { ...SAME, total_kwh: 80, total_cost: 16.5, delta_kwh: 30, delta_cost: 10.5, differs: true, changed_assets: 2 };
+      const openDialog = async (live: BillingLive | null, currency: string | null = "QAR") => {
+        await show(userFor("admin"), { "2026-09": closedSeptember({ live, currency }) });
+        await toSeptember();
+        await userEvent.click(await screen.findByRole("button", { name: "Reopen month…" }));
+        return screen.getByRole("dialog", { name: "Reopen September 2026" });
+      };
+
+      it("shows the difference in a second paragraph, the same words as the line behind it", async () => {
+        const dialog = await openDialog(DIFFERS);
+        const sentence = "Today's tree and rates would give 16.50 QAR (+10.50), 2 assets differ.";
+        expect(within(dialog).getByText(sentence)).toHaveClass("month-extra");
+        expect(document.querySelector(".live-delta")).toHaveTextContent(sentence);
+        expect(dialog).toHaveTextContent("download the CSV first if you need them");
+      });
+
+      it("says today's tree cannot be priced when the server could not", async () => {
+        const dialog = await openDialog(null);
+        expect(within(dialog).getByText("Today's tree and rates cannot be priced right now.")).toHaveClass("month-extra");
+      });
+
+      it("uses the currency the month was closed in for a currency change", async () => {
+        const dialog = await openDialog({ ...DIFFERS, delta_cost: null, currency: "EUR", changed_assets: 0 });
+        expect(within(dialog).getByText("Today's tree and rates would give 16.50 EUR (closed in QAR).")).toBeInTheDocument();
+      });
+
+      it("adds nothing when the figures are the same", async () => {
+        const dialog = await openDialog(SAME);
+        expect(dialog.querySelector(".month-extra")).toBeNull();
+      });
+
+      it("keeps what it said at the click when the page behind refetches, and while the reopen turns the month open", async () => {
+        let live: BillingLive | null = DIFFERS;
+        await show(userFor("admin"), {}, {
+          "GET /api/billing/costs": ({ url }) => {
+            const month = new URL(url, "http://x").searchParams.get("month")!;
+            return { body: month === "2026-09" ? closedSeptember({ live }) : costs };
+          },
+        });
+        await toSeptember();
+        await userEvent.click(await screen.findByRole("button", { name: "Reopen month…" }));
+        const dialog = screen.getByRole("dialog");
+        const extra = dialog.querySelector(".month-extra")!;
+        expect(extra).toHaveTextContent("16.50 QAR (+10.50)");
+        live = SAME;
+        act(() => { document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); });
+        await waitFor(() => expect(document.querySelector(".live-delta")).toHaveTextContent("give the same figures"));
+        expect(dialog.querySelector(".month-extra")).toBe(extra); // not removed, not reworded: the dialog does not move under the person
+        expect(extra).toHaveTextContent("16.50 QAR (+10.50)");
+      });
     });
 
     it("a refusal stays in the dialog; Cancel then gives the focus back to the opener, which is still there", async () => {

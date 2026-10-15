@@ -84,3 +84,17 @@ describe("the message slots of Settings and Storage (W7l)", () => {
     expect(px(app.find((r) => r.selector === "body")!.body, "font")).toMatch(/^14px\/1\.4\b/);
   });
 });
+
+describe("the closed month's line about today's figures (W11)", () => {
+  it("keeps one line of its own size when it is empty, so a poll answer that fills or empties it moves nothing", () => {
+    const body = plain(billing, ".billing-page .live-delta");
+    expect(px(body, "min-height")).toBe("1lh");
+    expect(px(body, "font-size")).toBe("var(--fs-sm)"); // the 1lh is measured at the size the sentence is set in
+    expect(px(body, "line-height")).toBeUndefined();
+  });
+
+  it("the count of the note turns into the error colour when it is over the limit, and keeps its place", () => {
+    expect(px(plain(billing, ".month-dialog .month-over"), "color")).toBe("var(--crit)");
+    expect(px(plain(billing, ".month-dialog .month-count"), "min-height")).toBe("1lh");
+  });
+});
