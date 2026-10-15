@@ -10,6 +10,7 @@ import { ImpactDeleteDialog } from "../components/ImpactDeleteDialog";
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
+import { useTreeDelete } from "../hooks/useTreeDelete";
 import { useTreeMove } from "../hooks/useTreeMove";
 import { kindIconId } from "../lib/assetIcons";
 import { assetDeletePath, assetImpact, assetLoss } from "../lib/impact";
@@ -92,8 +93,11 @@ export function AssetsPage() {
   const baseLocked = deleting !== null || isLoading || kindsLoading;
   // Moving assets (W7p): a drop, a Move to... dialog, its warning and an Undo. Nothing starts while the page is locked or an Add/Edit dialog is open;
   // and while a move is in flight (or its dialog is open) no Add/Edit/+ may open beside it, so `busy` joins the lock.
-  const { move, dialogs, busy } = useTreeMove({ assets, canEdit, locked: baseLocked || dialog !== null });
-  const locked = baseLocked || busy;
+  // Deleting the picked assets (W7s) is declared first so that its confirmation joins the lock of the move and of the forms. The lock is asymmetric on
+  // purpose: the move's `busy` is not in the delete's lock, the pick bar's Delete is off while the page is locked, and nothing else starts a delete.
+  const del = useTreeDelete({ assets, selectedId, canDelete: can("assets.delete"), locked: baseLocked || dialog !== null });
+  const { move, dialogs, busy } = useTreeMove({ assets, canEdit, locked: baseLocked || dialog !== null || del.busy });
+  const locked = baseLocked || busy || del.busy;
   const openAdd = (parentId: number | null) => { if (!locked) setDialog({ kind: "add", parentId }); };
   const openEdit = () => { if (!locked) setDialog({ kind: "edit" }); };
 
@@ -147,6 +151,7 @@ export function AssetsPage() {
           disabled={locked}
           loading={isLoading}
           move={move}
+          remove={del.remove}
         />
         <div className="assets-detail" id="asset-detail" tabIndex={-1}>
           <Outlet context={context} />
@@ -166,6 +171,7 @@ export function AssetsPage() {
         />
       )}
       {dialogs}
+      {del.dialog}
       {dialog?.kind === "add" && (
         <Modal title="Add asset" onClose={closeDialog}>
           <AssetForm key={dialog.parentId ?? "none"} assets={assets} kinds={kinds} initial={{ parent_id: dialog.parentId }} excludeIds={new Set()} canRegister={canRegister} onSubmit={create} onCancel={closeDialog} />
