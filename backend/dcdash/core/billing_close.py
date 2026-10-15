@@ -53,9 +53,11 @@ def _has_figure(key: tuple[Any, ...]) -> bool:
 
 def _changed_assets(frozen: dict[str, Any], live: dict[str, Any]) -> int:
     """How many assets differ between two figures: a changed parent (a move) or a changed total (energy, cost, or having a
-    cost at all). A rename changes no billed number and does not count. An id on one side only counts when it carries a figure
-    (a deleted metered asset, a newly metered one); an empty folder added or an unmetered asset deleted changes nothing that
-    is billed, so it does not."""
+    cost at all), counted only when at least one of the two sides carries a billed figure (an energy or a cost that is not zero
+    after rounding). A rename changes no billed number and does not count. An asset with no figure on either side changes
+    nothing that is billed, so it does not count however it changed: an empty folder added, moved or deleted, an empty meter
+    mapped to an empty panel, a zero cost that loses its rate. A deleted metered asset, a newly metered one, and a metered asset
+    that moved do count."""
     before = {asset["asset_id"]: _asset_key(asset) for asset in frozen["assets"]}
     now = {asset["asset_id"]: _asset_key(asset) for asset in live["assets"]}
     changed = 0
@@ -63,9 +65,8 @@ def _changed_assets(frozen: dict[str, Any], live: dict[str, Any]) -> int:
         old, new = before.get(asset_id), now.get(asset_id)
         if old == new:
             continue
-        if old is None or new is None:
-            if not _has_figure(new if old is None else old):
-                continue
+        if not any(key is not None and _has_figure(key) for key in (old, new)):
+            continue  # nothing billed on either side
         changed += 1
     return changed
 
@@ -80,8 +81,9 @@ def live_delta(frozen: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
     `total_kwh` / `total_cost` are the live root sums, `delta_*` live minus frozen (kWh to 3 decimals, cost to 2). The cost
     delta is None when exactly one side has a cost, and when the site currency has changed since the close (a difference
     between two currencies is not a money figure); `differs` is true then, unless neither side has a cost. `changed_assets` is
-    the number of assets whose parent or total differ, or that carry a figure on one side only (root sums are blind to a move
-    between two roots, and to a change under a metered parent; a rename and an empty asset added or deleted do not count).
+    the number of assets whose parent or total differ and that carry a billed figure on at least one side (root sums are blind
+    to a move between two roots, and to a change under a metered parent; a rename, and anything that happens to an asset with
+    no figure on either side, do not count).
     `differs` is true when the totals differ at those precisions, one side has no cost, the currency changed under a cost, or
     any asset differs."""
     frozen_kwh, frozen_cost = root_totals(frozen)

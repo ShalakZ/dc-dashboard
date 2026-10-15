@@ -21,7 +21,7 @@ W11 (close month) lets an administrator freeze a finished billing month, so that
 administrator now sees **Close month…** in the page header on a month that is over (it takes an optional note), and the month then
 carries a **Closed** chip, a banner ("Closed by <name> on <date>") and the figures exactly as they stood, per asset and per day.
 Moving assets, mapping or unmapping points, editing tariffs and deleting assets or sources no longer change that month; dashboards and
-widgets stay live. A quiet line on a closed month always says how today's tree and rates compare ("Today's tree and rates would give ...",
+widgets stay live. A quiet line on a closed month is always there and says how today's tree and rates compare (it is empty when today's tree cannot be priced) ("Today's tree and rates would give ...",
 counting assets that moved or changed even when the total is the same, or "... give the same figures."); readings that arrive late show up only there. The Billing CSV of a
 closed month is the file it had when closed, named `billing-YYYY-MM-closed.csv`. **Reopen month…** asks for a reason of at least 5
 characters and goes back to today's figures; the old snapshot stays stored but the app does not show it again (the dialog says so and tells you
@@ -44,7 +44,7 @@ Migration `0012` creates one table, `billing_closes` (one row per close: the mon
 the totals and the stored figures as JSON, and the reopening). It writes no row and touches no other table, runs in a moment and needs
 no pre-check. A big site's snapshot is about 5 MB (2,000 assets, 31 days). The API gains `POST /api/billing/months/{month}/close` and
 `POST /api/billing/months/{month}/reopen` (both `billing.close`); `GET /api/billing/costs` gains `closed` (null for an open month)
-and, for a closed month, `live`; `GET /api/billing/months` counts a closed month when it names the first month. A client that does
+and, for a closed month, `live`; `GET /api/billing/months` counts a month that was ever closed (also after a reopen) when it names the first month. A client that does
 not use them sees an open month as before, with one more key (`closed: null`). The `api` container applies the migration the first time it starts from the new image.
 
 1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0011`).

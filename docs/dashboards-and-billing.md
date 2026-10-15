@@ -97,7 +97,7 @@ can **close** it: the Billing page stores the figures it shows for that month an
   2026." (the date is the site's calendar date; the note, if any, is on the next line). The table is the stored one. A quiet line
   under the banner is always there on a closed month, so the table does not move when it changes: when today's tree and rates would
   give other figures it says so, for example "Today's tree and rates would give 1234.50 USD (+12.50), 3 assets differ."; it also
-  notices assets that moved or whose own figures differ when the total is the same ("Today's tree and rates give the same total, but
+  notices assets with figures that moved or whose own figures differ when the total is the same ("Today's tree and rates give the same total, but
   3 assets differ."); when nothing differs it reads "Today's tree and rates give the same figures."; and when today's tree cannot be
   priced right now it stays empty (it never claims "the same" then). If the site's currency changed after the close, the line gives
   today's total in both currencies and no signed change ("Today's tree and rates would give 1234.50 EUR (closed in USD)"), because the
@@ -107,18 +107,18 @@ can **close** it: the Billing page stores the figures it shows for that month an
   it was closed, named `billing-YYYY-MM-closed.csv` (an open month's is `billing-YYYY-MM.csv`). The name of the person who closed it
   stays even if their account is deleted.
 - **Reopening.** On a closed month **Reopen month…** (with `billing.close`) takes the place of Close month…. Its dialog, **Reopen <Month
-  Year>**, asks for a **Reason** of 5 to 500 characters (a live count shows how many are still needed; past 500 it reads, for example,
+  Year>**, asks for a **Reason** of 5 to 500 characters (a live count such as 4/5; past 500 it reads, for example,
   501/500 in red and the button waits); its button reads **Reopen month**. Before you click, the dialog tells you that the page will
   show today's figures again, that the closed figures stay stored but the app does not show them once the month is reopened (so
   **download the CSV first** if you need them), and, when today's figures are not the billed ones, by how far (the same sentence as
   the line under the banner; "Today's tree and rates cannot be priced right now." when they cannot be priced). The month then shows
   live figures again at once. The old snapshot stays in the database, with who reopened it and why, but the app shows it nowhere;
-  closing the month again freezes today's figures as a new record.
+  closing the month again freezes today's figures as a new record (if its data is gone, for example a deleted source, the month stays reachable but cannot be closed again).
 - **What changes a closed month: nothing.** Moving assets, mapping or unmapping points, editing or deleting tariffs, changing a
   mapping's scale, and deleting assets or sources do not change it; the move and delete warnings now say that closed
   months keep their billed figures. Readings that reach the database late do not change it either; they only show up in the "Today's tree and rates would
   give" line. A closed month stays reachable from **Previous month** and the Year and Month selects even after its meters are replaced
-  or its source is deleted: the first month the selects offer is the first month with data or the first closed month, whichever is
+  or its source is deleted: the first month the selects offer is the first month with data or the first month that was ever closed (also after a reopen), whichever is
   earlier. There is no list of closed months yet: open a month and look for the chip.
 - **Size.** A snapshot holds every asset and every day of the month as JSON: about 5 MB for a big site (2,000 assets, 31 days),
   stored once per close and compressed by the database. There is no cap, and a reopened snapshot stays in the database.

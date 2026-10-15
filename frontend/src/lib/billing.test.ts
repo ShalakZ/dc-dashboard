@@ -121,6 +121,7 @@ describe("liveDeltaText (the quiet line under a closed month)", () => {
     ["neither side has a cost, the kWh agree and an asset differs", live({ total_cost: null, delta_cost: null, changed_assets: 1 }), NO_COST, "Today's tree and rates give the same total, but 1 asset differs."],
     ["differs is true but nothing says why", live({ delta_cost: 0 }), WITH_COST, "Today's tree and rates would give different figures."],
     // The currency changed after the close (M2): the server answers delta_cost null, and the line gives today's total in both currencies, no signed change.
+    ["the currency was removed after the close: today's amount is said with words, not as a bare number", live({ total_cost: 130.5, delta_cost: null, currency: null }), WITH_COST, "Today's tree and rates would give 130.50 with no currency (closed in QAR).", "QAR"],
     ["the currency changed alone", live({ total_cost: 130.5, delta_cost: null, currency: "EUR" }), WITH_COST, "Today's tree and rates would give 130.50 EUR (closed in QAR).", "QAR"],
     ["the currency changed and assets differ too", live({ total_cost: 130.5, delta_cost: null, currency: "EUR", changed_assets: 2 }), WITH_COST, "Today's tree and rates would give 130.50 EUR (closed in QAR), 2 assets differ.", "QAR"],
     ["the month was closed with no currency and there is one now", live({ total_cost: 130.5, delta_cost: null, currency: "QAR" }), WITH_COST, "Today's tree and rates would give 130.50 QAR (closed with no currency).", null],

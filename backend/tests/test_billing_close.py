@@ -209,8 +209,25 @@ def test_a_missing_total_and_a_zero_total_are_the_same_kwh_but_a_cost_of_zero_is
         figures(asset(1, None, "Site")), figures(asset(1, None, "Site", 0.0, None)), figures(asset(1, None, "Site", 0.0, 0.0)),
     )
     assert live_delta(nothing, zero_without_cost)["changed_assets"] == 0
-    assert live_delta(nothing, zero_priced)["changed_assets"] == 1  # "has a cost" differs
+    # "has a cost" differs at the root (None against 0.00), which is what makes the month differ; no asset carries a figure on either side
+    assert live_delta(nothing, zero_priced)["changed_assets"] == 0
     assert live_delta(nothing, zero_priced)["differs"] is True
+
+
+def test_an_asset_with_no_figure_on_either_side_never_counts_however_it_changed():
+    """Re-review I1: moving an empty room, mapping an empty meter to an empty panel, and a zero cost that loses its rate bill nothing."""
+    frozen = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, None, "Hall", 0.0, 0.0), asset(3, 1, "Site > Rack", 10.0, 1.0))
+    moved_empty = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Hall", 0.0, 0.0), asset(3, 1, "Site > Rack", 10.0, 1.0))
+    unpriced_zero = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, None, "Hall", 0.0, None), asset(3, 1, "Site > Rack", 10.0, 1.0))
+    for live in (moved_empty, unpriced_zero):
+        result = live_delta(frozen, live)
+        assert result["changed_assets"] == 0 and result["differs"] is False, live
+
+
+def test_a_metered_asset_that_moved_still_counts_beside_an_empty_one_that_moved():
+    frozen = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, None, "Hall", 0.0, 0.0), asset(3, 1, "Site > Rack", 10.0, 1.0))
+    live = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Hall", 0.0, 0.0), asset(3, 2, "Site > Hall > Rack", 10.0, 1.0))
+    assert live_delta(frozen, live)["changed_assets"] == 1 and live_delta(frozen, live)["differs"] is True
 
 
 def test_the_live_totals_are_reported_beside_the_deltas():

@@ -91,7 +91,8 @@ export function liveDeltaText(
   const otherCurrency = (live.currency ?? null) !== (frozenCurrency ?? null);
   let total: string | null = null;
   if (otherCurrency && live.total_cost !== null && closed.total_cost !== null) {
-    total = `${fmtCost(live.total_cost)}${unit} (closed ${frozenCurrency ? `in ${frozenCurrency}` : "with no currency"})`; // two units: no signed change
+    // Two units, so no signed change; a bare number beside "closed in USD" would read as dollars, so a removed currency is said in words.
+    total = `${fmtCost(live.total_cost)}${live.currency ? ` ${live.currency}` : " with no currency"} (closed ${frozenCurrency ? `in ${frozenCurrency}` : "with no currency"})`;
   } else if (live.total_cost === null && closed.total_cost !== null) {
     total = "no cost, because there is no rate today"; // the frozen month had a cost; today there is no rate to price it with
   } else if (costDelta !== null && Math.round(costDelta * 100) !== 0) {
