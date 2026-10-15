@@ -316,7 +316,23 @@ export interface BillingAssetRow {
   asset_id: number; parent_id: number | null; name: string; path: string; rate_per_kwh: number | null;
   days: (CostFigure | null)[]; total: CostFigure | null;
 }
-export interface BillingCosts { month: string; timezone: string; currency: string | null; days: string[]; assets: BillingAssetRow[] }
+/** A closed month's record (billing.close): who froze it and when, the reason typed then, and the two header totals of the stored figures (the sum of the root assets). */
+export interface BillingClosed { id: number; closed_name: string; closed_at: string; note: string; total_kwh: number; total_cost: number | null }
+/**
+ * What today's tree and rates would give for a closed month, beside the frozen figures. `delta_*` is live minus closed; `delta_cost` is null when only one side
+ * has a cost. `changed_assets` counts the assets whose own figures or place differ, which the root totals cannot show. `currency` is today's.
+ */
+export interface BillingLive {
+  total_kwh: number; total_cost: number | null; delta_kwh: number; delta_cost: number | null;
+  differs: boolean; changed_assets: number; currency: string | null;
+}
+/** `closed` is null for an open month; for a closed one the rest of the body is the stored snapshot and `live` says what today's data would give (null when it cannot be priced). */
+export interface BillingCosts {
+  month: string; timezone: string; currency: string | null; days: string[]; assets: BillingAssetRow[];
+  closed: BillingClosed | null; live?: BillingLive | null;
+}
+/** The answer to reopening a month. */
+export interface BillingReopened { month: string; reopened_at: string }
 
 export const WIDGET_TYPES = ["timeseries", "bar", "stat", "gauge", "table"] as const;
 export type WidgetType = (typeof WIDGET_TYPES)[number];

@@ -1,16 +1,18 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { useBillingCosts, useBillingMonths, useSite } from "../api/queries";
-import type { BillingCosts, CostFigure } from "../api/types";
+import type { BillingClosed, BillingCosts, BillingLive, CostFigure } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { meets } from "../auth/need";
+import { CloseMonthDialog } from "../components/CloseMonthDialog";
 import { ESTIMATED_TIP, Figure, PARTIAL_TIP } from "../components/Figure";
 import { PAGE_NEED } from "../components/navItems";
 import { PageHeader } from "../components/PageHeader";
+import { ReopenMonthDialog } from "../components/ReopenMonthDialog";
 import { ActionsSpace, TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import {
-  clampMonth, depthsByAsset, fmtCost, fmtKwh, fmtRate, MONTH_NAMES, monthLabel, monthsOfYear, shiftMonth, yearsBetween,
+  clampMonth, closedOnText, depthsByAsset, fmtCost, fmtKwh, fmtRate, liveDeltaText, MONTH_NAMES, monthLabel, monthsOfYear, shiftMonth, yearsBetween,
 } from "../lib/billing";
 import { downloadCsv } from "../lib/download";
 import { formatSiteDay, siteMonth } from "../lib/siteTime";
@@ -24,6 +26,9 @@ const ReceiptIcon = () => (
 );
 const ChevronIcon = ({ dir }: { dir: "left" | "right" }) => (
   <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d={dir === "left" ? "m14.5 6-6 6 6 6" : "m9.5 6 6 6-6 6"} /></svg>
+);
+const LockIcon = () => (
+  <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
 );
 const DownloadIcon = () => (
   <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14" /></svg>
@@ -76,7 +81,12 @@ function BillingTable({ costs, canSetRates }: { costs: BillingCosts; canSetRates
   const missingRate = costs.assets.some((a) => a.total !== null && a.total.kwh > 0 && (a.total.cost === null || a.total.partial));
   return (
     <>
-      {missingRate && (canSetRates ? (
+      {missingRate && (costs.closed ? (
+        <div role="status" className="banner banner-warn">
+          <WarnIcon />
+          <span>Some consumption has no rate (shown as — or *). This month is closed, so a rate set now changes it only if the month is reopened.</span>
+        </div>
+      ) : canSetRates ? (
         <div role="status" className="banner banner-warn">
           <WarnIcon />
           <span>Some consumption has no rate (shown as — or *). <Link to="/tariffs">Set a rate on the Tariffs page</Link>.</span>
@@ -122,6 +132,26 @@ function BillingTable({ costs, canSetRates }: { costs: BillingCosts; canSetRates
 }
 
 /**
+ * What a closed month says about itself, above its table: who closed it and when (the date on the site's wall clock) and the note on its own line,
+ * then, quieter, what today's tree and rates would give when that differs. Plain text with no role: the page's one status is the missing-rate banner.
+ */
+function ClosedNotice({ closed, live, timezone }: { closed: BillingClosed; live: BillingLive | null | undefined; timezone: string }) {
+  const delta = liveDeltaText(live, closed);
+  return (
+    <div className="closed-box">
+      <div className="banner banner-info">
+        <LockIcon />
+        <span>
+          <span className="closed-line">Closed by {closed.closed_name} on {closedOnText(closed.closed_at, timezone)}.</span>
+          {closed.note !== "" && <span className="closed-line closed-note">{closed.note}</span>}
+        </span>
+      </div>
+      {delta !== null && <p className="muted live-delta">{delta}</p>}
+    </div>
+  );
+}
+
+/**
  * The Year and Month selects. Their bounds widen to the month on screen, so they always hold it even when a time-zone change
  * leaves it outside [first month with data, current month]; picking clamps into those same bounds.
  */
@@ -161,6 +191,8 @@ export function BillingPage() {
   const [picked, setPicked] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<{ kind: "close" | "reopen"; month: string } | null>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
   // "This month" is decided on the site's wall clock: near a month end it differs from the browser's and from UTC.
   const current = site.data ? siteMonth(new Date(), site.data.timezone) : null;
   const month = picked ?? current;
@@ -168,7 +200,34 @@ export function BillingPage() {
   // The first month with data only narrows what Previous and the selects offer; while it is unknown (pending, failed, none) nothing is limited.
   const firstMonth = useBillingMonths().data?.first_month ?? null;
 
-  const exportCsv = async () => {
+  const canClose = can("billing.close");
+  // The month's own button, from the server's answer (it is the real judge): Reopen for a closed month, Close for a finished open one. Neither while the costs load.
+  // Each has its own key: React would otherwise keep one element and only change its words, and the focus would stay on a button that now means the opposite.
+  const closed = costs.data?.closed ?? null;
+  const finished = month !== null && current !== null && month < current;
+  const monthAction = !canClose || month === null || !costs.data ? null : closed !== null ? (
+    <button key="reopen" type="button" aria-haspopup="dialog" onClick={() => setDialog({ kind: "reopen", month })}>Reopen month…</button>
+  ) : finished ? (
+    <button key="close" type="button" aria-haspopup="dialog" onClick={() => setDialog({ kind: "close", month })}>Close month…</button>
+  ) : null;
+  const download = canExport && month !== null ? (
+    <button type="button" className="primary" onClick={exportCsv} disabled={exporting}><DownloadIcon />Download CSV</button>
+  ) : null;
+
+  const holdsSpace = canClose ? site.isPending || month !== null : canExport && site.isPending;
+
+  // After a dialog is gone the focus goes back to its opener (the dialog does that itself); when the opener is gone too (closing a month swaps
+  // Close for Reopen) the page heading takes it, so the focus never falls to the body.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (dialog !== null) { wasOpen.current = true; return; }
+    if (!wasOpen.current) return;
+    wasOpen.current = false;
+    const at = document.activeElement;
+    if (!at || at === document.body) heading.current?.focus();
+  }, [dialog]);
+
+  async function exportCsv() {
     if (month === null) return;
     setExporting(true);
     setExportError(null);
@@ -180,15 +239,17 @@ export function BillingPage() {
     } finally {
       setExporting(false);
     }
-  };
+  }
 
   return (
     <section className="billing-page">
       <PageHeader
         title="Billing"
-        actions={!canExport ? undefined : month !== null ? (
-          <button type="button" className="primary" onClick={exportCsv} disabled={exporting}><DownloadIcon />Download CSV</button>
-        ) : site.isPending ? <ActionsSpace /> : undefined /* the button waits for the site's month; its height does not */}
+        headingRef={heading}
+        // Close or Reopen sits left of Download CSV, so the download button keeps its place whatever the month. A person who may close but not export
+        // has no other button to give the header its height: the space stays, even on a month with nothing to close.
+        actions={monthAction || download ? <>{monthAction}{download}</>
+          : holdsSpace ? <ActionsSpace /> /* the buttons wait for the site's month and the costs; their height does not */ : undefined}
       />
       {site.isError && <p className="error" role="alert">{site.error.message}</p>}
       {month === null && site.isPending && <div className="row billing-bar" aria-hidden="true"><ActionsSpace height={38} /></div>}
@@ -198,6 +259,8 @@ export function BillingPage() {
             <ChevronIcon dir="left" />Previous month
           </button>
           <strong className="month-label" aria-live="polite">{monthLabel(month)}</strong>
+          {/* The chip's room is always there, so Next and the selects keep their place when a closed month is paged to. */}
+          <span className="month-state">{closed !== null && <span className="chip closed-chip">Closed</span>}</span>
           <button type="button" onClick={() => setPicked(shiftMonth(month, 1))} disabled={current !== null && month >= current}>
             Next month<ChevronIcon dir="right" />
           </button>
@@ -210,7 +273,15 @@ export function BillingPage() {
         costs.errorUpdateCount === 0 ? <TableSkeleton columns={7} rows={5} label="Loading billing" caption /> : <p className="muted">loading…</p>
       )}
       {costs.isError && <p className="error" role="alert">{costs.error.message}</p>}
-      {costs.data && <BillingTable costs={costs.data} canSetRates={can("tariffs.edit") && meets(PAGE_NEED.tariffs, can)} />}
+      {costs.data && (
+        // One render with the table: the banner never turns up after it.
+        <>
+          {costs.data.closed && <ClosedNotice closed={costs.data.closed} live={costs.data.live} timezone={site.data?.timezone ?? costs.data.timezone} />}
+          <BillingTable costs={costs.data} canSetRates={can("tariffs.edit") && meets(PAGE_NEED.tariffs, can)} />
+        </>
+      )}
+      {dialog?.kind === "close" && <CloseMonthDialog month={dialog.month} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "reopen" && <ReopenMonthDialog month={dialog.month} onClose={() => setDialog(null)} />}
     </section>
   );
 }

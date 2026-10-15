@@ -13,6 +13,27 @@
   .billing-page .banner a { color: inherit; font-weight: 600; text-decoration: underline; }
   .billing-page .empty { margin-top: 8px; }
 
+  /* A closed month (W11). The chip's room is always there (paging to a closed month moves nothing); it fits the chip, 6 + 6 + "Closed" in 12px + 16 of padding. */
+  .billing-page .month-state { display: inline-flex; align-items: center; min-width: 5rem; }
+  .billing-page .closed-chip { background: var(--info-tint); color: var(--info-ink); }
+  /* The banner over the table and the quiet line about today's figures under it travel together; the box carries the gap to the table. */
+  .billing-page .closed-box { margin: 0 0 16px; }
+  .billing-page .closed-box .banner { margin: 0; }
+  .billing-page .closed-line { display: block; }
+  .billing-page .closed-note { margin-top: 2px; font-weight: 400; white-space: pre-wrap; overflow-wrap: anywhere; } /* the reason, as typed: its line breaks stay */
+  .billing-page .live-delta { margin: 8px 0 0; font-size: var(--fs-sm); }
+
+  /* The Close month and Reopen month dialogs (components/MonthDialog.tsx; Modal is not portaled, so they sit inside the page, but nothing here relies on it).
+     The count is right-aligned in the field's own width and the error has two lines of room, so typing or a refusal moves nothing. */
+  .month-dialog textarea { resize: vertical; }
+  .month-dialog .month-count { min-height: 1lh; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; text-align: right; }
+  .month-dialog .month-slot { min-height: 2lh; font-size: var(--fs-sm); line-height: 1.4; }
+  .month-dialog .month-slot p { font-size: inherit; font-weight: 600; }
+  /* Both buttons wait with aria-disabled, never disabled (the person may be on one when a refusal comes): the looks of a disabled primary, and nothing happens on a click. */
+  .month-dialog .month-go { min-width: 9rem; }
+  .month-dialog .month-go[aria-disabled="true"], .month-dialog .month-go[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
+  .month-dialog .month-cancel[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
   /* The day table scrolls sideways inside main (.table-scroll on the wrap), never the page. The caption is the how-to-read line;
      the sticky first column and its header corner stay while the days scroll under them. The loading skeleton's caption is the same box. */
   table.billing caption, .sk-table caption { caption-side: top; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: var(--fs-xs); text-align: left; }
