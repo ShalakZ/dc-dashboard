@@ -43,6 +43,8 @@ CATALOGUE: tuple[Permission, ...] = (
     _p("dashboards.default", "Dashboards", "risky", "Choose the default dashboard", "Choose the dashboard everybody lands on."),
     _p("billing.view", "Billing and tariffs", "see", "See billing", "Open the Billing page: energy and cost per asset and month."),
     _p("billing.export", "Billing and tariffs", "risky", "Export billing as CSV", "Download the billing table as a CSV file."),
+    _p("billing.close", "Billing and tariffs", "risky", "Close and reopen billing months",
+       "Freeze a finished month's billing figures so later changes to assets, mappings or rates cannot alter them, and reopen it with a reason."),
     _p("tariffs.view", "Billing and tariffs", "see", "See tariffs",
        "Open the Tariffs page, read-only (it also needs See the Assets Tree)."),
     _p("tariffs.edit", "Billing and tariffs", "change", "Change tariffs", "Set the currency, the site rate and per-asset rates."),

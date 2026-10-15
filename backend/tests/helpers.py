@@ -129,7 +129,7 @@ async def make_role(db, name: str, permissions: Iterable[str] = (), description:
 # built-in row is that migration's snapshot: never refreshed, no migration for it, and it grants nothing (a built-in role's
 # permissions come from BUILTIN in code). So the Admin row below is the live catalogue MINUS these ids, which is what the
 # 0009 seed wrote; add an id here whenever the catalogue grows, or test_schema_roles.py fails on the seed comparison.
-ADDED_AFTER_0009: frozenset[str] = frozenset({"settings.security", "assets.kinds"})
+ADDED_AFTER_0009: frozenset[str] = frozenset({"settings.security", "assets.kinds", "billing.close"})
 
 # The three rows migration 0009 seeds, as (id, name, description, permissions). The permissions are the mirror of
 # permissions.BUILTIN in catalogue order as of 0009; test_schema_roles.py checks that the migration seeds exactly these.

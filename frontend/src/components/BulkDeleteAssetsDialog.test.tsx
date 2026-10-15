@@ -114,7 +114,7 @@ describe("BulkDeleteAssetsDialog", () => {
     open(plan(2, 4), { [impactPath(2)]: { body: impact(3) } });
     const box = await dialog("Delete 2 assets?");
     await ready("Delete anyway"); // Hall A has a Rack 2 nobody picked
-    expect(box).toHaveTextContent("Hall A, Rack 1. Rack 1 is inside Hall A, which is also picked, so it goes with it. 3 assets, 0 mappings and 0 tariffs will be deleted; their past energy and cost figures disappear from Billing and dashboards. This can't be undone.");
+    expect(box).toHaveTextContent("Hall A, Rack 1. Rack 1 is inside Hall A, which is also picked, so it goes with it. 3 assets, 0 mappings and 0 tariffs will be deleted; their past energy and cost figures disappear from Billing and dashboards, except in closed months, which keep their billed figures. This can't be undone.");
   });
 
   it("is plain when the sub-assets are all picked, and Delete anyway when one is not or something is attached", async () => {
@@ -133,7 +133,7 @@ describe("BulkDeleteAssetsDialog", () => {
     const box = await dialog("Delete 1 asset?");
     await ready("Delete anyway");
     expect(box).toHaveTextContent(sentence);
-    expect(box).toHaveTextContent("their past energy and cost figures disappear from Billing and dashboards. This can't be undone.");
+    expect(box).toHaveTextContent("their past energy and cost figures disappear from Billing and dashboards, except in closed months, which keep their billed figures. This can't be undone.");
   });
 
   it("adds the numbers of all the roots up", async () => {

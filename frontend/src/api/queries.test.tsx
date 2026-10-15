@@ -10,7 +10,7 @@ import {
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
-  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout,
+  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout, useBillingMonths, useCloseBillingMonth, useReopenBillingMonth,
 } from "./queries";
 import { ApiError } from "./client";
 import type { MoveBody, RangePreset, WidgetConfig } from "./types";
@@ -1294,5 +1294,44 @@ describe("tidying the layout (W7t)", () => {
     expect((caught as ApiError).message).toBe("You may not change the layout.");
     expect(onDeleted).not.toHaveBeenCalled();
     expect(keysInvalidated()).toEqual([keys.graph]);
+  });
+});
+
+describe("closing and reopening a billing month (W11)", () => {
+  const closedBody = { month: "2026-09", timezone: "UTC", currency: null, days: [], assets: [], closed: null };
+
+  it.each([
+    ["a close", "close", useCloseBillingMonth, 201, { closed: { id: 1 } }],
+    ["a reopen", "reopen", useReopenBillingMonth, 200, { month: "2026-09", reopened_at: "2026-10-15T10:00:00Z" }],
+    ["a refused close", "close", useCloseBillingMonth, 409, { detail: "that month is already closed" }],
+    ["a refused reopen", "reopen", useReopenBillingMonth, 409, { detail: "that month is not closed" }],
+  ] as const)("posts the note to the month's route, and after %s the costs, the months list and the audit log are read again", async (_name, action, hook, status, reply) => {
+    const calls = mockFetch({
+      "GET /api/billing/costs": { body: closedBody },
+      "GET /api/billing/months": { body: { first_month: "2026-09" } },
+      "GET /api/audit/options": { body: { actions: [], users: [], unattributed: false } },
+      [`POST /api/billing/months/2026-09/${action}`]: { status, body: reply },
+    });
+    const { result } = renderHook(
+      () => ({ costs: useBillingCosts("2026-09"), months: useBillingMonths(), options: useAuditOptions(), write: hook() }),
+      { wrapper: stableWrapper() },
+    );
+    const reads = () => ["/api/billing/costs", "/api/billing/months", "/api/audit/options"].map((path) => calls.filter((c) => c.method === "GET" && c.path === path).length);
+    await waitFor(() => expect(reads()).toEqual([1, 1, 1]));
+    await act(async () => { await result.current.write.mutateAsync({ month: "2026-09", note: "  a reason " }).catch(() => undefined); });
+    expect(calls.filter((c) => c.method === "POST").map((c) => [c.path, c.body])).toEqual([[`/api/billing/months/2026-09/${action}`, { note: "  a reason " }]]);
+    await waitFor(() => expect(reads()).toEqual([2, 2, 2])); // onSettled, not onSuccess: a refusal means the page on screen is out of date
+  });
+
+  it("resolves only after the month has been read again, so a dialog that closes then finds the page in its new state", async () => {
+    let costsAnswered = 0;
+    mockFetch({
+      "GET /api/billing/costs": () => { costsAnswered += 1; return { body: closedBody }; },
+      "POST /api/billing/months/2026-09/close": { status: 201, body: {} },
+    });
+    const { result } = renderHook(() => ({ costs: useBillingCosts("2026-09"), close: useCloseBillingMonth() }), { wrapper: stableWrapper() });
+    await waitFor(() => expect(costsAnswered).toBe(1));
+    await act(async () => { await result.current.close.mutateAsync({ month: "2026-09", note: "" }); });
+    expect(costsAnswered).toBe(2);
   });
 });

@@ -74,6 +74,8 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     _all("dashboards.default", "PUT /api/dashboards/default"),
     _all("billing.view", "GET /api/billing/costs", "GET /api/billing/months"),
     _all("billing.export", "GET /api/billing/costs.csv"),
+    # Added in W11 (close month): after the freeze, so not in auth_matrix_pre_w9a.json; the gate and isolation tests cover them.
+    _all("billing.close", "POST /api/billing/months/{month}/close", "POST /api/billing/months/{month}/reopen"),
     # The currency read moved from tariffs.edit to tariffs.view in W9b (the read-only Tariffs page shows it): the one cell of
     # the frozen matrix that differs on purpose, named in test_auth_matrix.py (CHANGED_AFTER_FREEZE).
     _all("tariffs.view", "GET /api/tariffs", "GET /api/settings/billing"),

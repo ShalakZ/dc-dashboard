@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "../api/client";
-import type { BillingCosts, CostFigure } from "../api/types";
+import type { BillingClosed, BillingCosts, BillingLive, CostFigure, User } from "../api/types";
 import { ESTIMATED_TIP, PARTIAL_TIP } from "../components/Figure";
 import { downloadCsv } from "../lib/download";
 import { mockFetch, type Routes } from "../test/fetchMock";
@@ -26,6 +26,7 @@ const fig = (kwh: number, cost: number | null, over: Partial<CostFigure> = {}): 
  * pre-rate day 1; Annex has no tariff at all, so it has no rate and every cost is a dash.
  */
 const costs: BillingCosts = {
+  closed: null,
   month: "2026-10", timezone: "Asia/Qatar", currency: "QAR",
   days: ["2026-10-01", "2026-10-02", "2026-10-03"],
   assets: [
@@ -558,5 +559,409 @@ describe("BillingPage controls follow the permissions of the role (a custom role
     await show(BUILTIN_PERMISSIONS.operator);
     expect(screen.queryByRole("link", { name: /Tariffs/ })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Some consumption has no rate (shown as — or *). Ask an administrator to set one.");
+  });
+});
+
+describe("BillingPage closed months and the Close and Reopen controls", () => {
+  const CLOSED: BillingClosed = { id: 7, closed_name: "Dana", closed_at: "2026-10-14T21:30:00Z", note: "First official bill", total_kwh: 50, total_cost: 6 }; // 00:30 on 15 October in Doha
+  const SAME: BillingLive = { total_kwh: 50, total_cost: 6, delta_kwh: 0, delta_cost: 0, differs: false, changed_assets: 0, currency: "QAR" };
+  const september: BillingCosts = { ...costs, month: "2026-09", closed: null };
+  const closedSeptember = (over: Partial<BillingCosts> = {}): BillingCosts => ({ ...september, closed: CLOSED, live: SAME, ...over });
+  const customUser = (...permissions: PermissionId[]) => userFor("custom", { permissions: ["billing.view", ...permissions] });
+
+  /** The page on October 2026 (the current month) for `user`, with `bodies` as the answers per month; the account is known when this returns. */
+  async function show(user: User, bodies: Record<string, unknown> = {}, extra: Routes = {}, hold?: (method: string, path: string) => boolean, toasts?: ToastApi) {
+    const calls = mockFetch({
+      "GET /api/setup": { body: { needed: false } },
+      "GET /api/me": { body: user },
+      "GET /api/site": { body: { timezone: "Asia/Qatar", currency: "QAR" } },
+      "GET /api/billing/months": { body: { first_month: null } },
+      "GET /api/billing/costs": ({ url }) => {
+        const month = new URL(url, "http://x").searchParams.get("month")!;
+        return { body: bodies[month] ?? (month === "2026-09" ? september : costs) };
+      },
+      ...extra,
+    });
+    const held = hold ? holdFetch(hold) : { release: () => {} };
+    renderWithProviders(<><BillingPage /><SignedIn /></>, { route: "/billing", path: "/billing", toasts });
+    await accountKnown();
+    return { calls, held };
+  }
+  const toSeptember = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: "Previous month" }));
+    await screen.findByText("September 2026");
+    await screen.findByRole("rowheader", { name: "Site" });
+  };
+  const actions = () => document.querySelector("header.page-head > .actions");
+  const closeButton = () => screen.queryByRole("button", { name: "Close month…" });
+  const reopenButton = () => screen.queryByRole("button", { name: "Reopen month…" });
+
+  describe("the header buttons", () => {
+    it("offers Close month… on a finished open month, left of Download CSV, so the download button keeps its place; the page keeps one primary button", async () => {
+      await show(userFor("admin"));
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(closeButton()).not.toBeInTheDocument(); // October is the current month
+      await toSeptember();
+      const names = Array.from(actions()!.children).map((el) => el.textContent);
+      expect(names).toEqual(["Close month…", "Download CSV"]);
+      expect(screen.getByRole("button", { name: "Close month…" })).toHaveAttribute("type", "button");
+      expect(document.querySelectorAll(".primary")).toHaveLength(1);
+      expect(reopenButton()).not.toBeInTheDocument();
+    });
+
+    it("never offers Close month… for the current month, however late in it", async () => {
+      vi.setSystemTime(new Date("2026-10-31T20:59:00Z")); // 23:59 on 31 October in Doha
+      await show(userFor("admin"));
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(closeButton()).not.toBeInTheDocument();
+      expect(reopenButton()).not.toBeInTheDocument();
+    });
+
+    it("offers Close month… for the previous month in the first minutes of the new one, by the site's clock and not UTC", async () => {
+      vi.setSystemTime(new Date("2026-10-31T21:05:00Z")); // 00:05 on 1 November in Doha
+      await show(userFor("admin"));
+      expect(await screen.findByText("November 2026")).toBeInTheDocument();
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(closeButton()).not.toBeInTheDocument(); // the site is already in November
+      await userEvent.click(screen.getByRole("button", { name: "Previous month" }));
+      expect(await screen.findByText("October 2026")).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Close month…" })).toBeInTheDocument();
+    });
+
+    it.each([
+      ["a viewer", userFor("viewer")],
+      ["a role with billing.view and billing.export only", customUser("billing.export")],
+      ["a role with billing.view only", customUser()],
+    ])("shows neither Close nor Reopen to %s, on an open month or a closed one", async (_who, user) => {
+      await show(user, { "2026-09": september });
+      await toSeptember();
+      expect(closeButton()).not.toBeInTheDocument();
+      expect(reopenButton()).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Previous month" }));
+      await screen.findByText("August 2026");
+    });
+
+    it("shows neither to a role that cannot close when the month is closed", async () => {
+      await show(userFor("viewer"), { "2026-09": closedSeptember() });
+      await toSeptember();
+      expect(await screen.findByText(/Closed by Dana/)).toBeInTheDocument();
+      expect(closeButton()).not.toBeInTheDocument();
+      expect(reopenButton()).not.toBeInTheDocument();
+    });
+
+    it("offers Reopen month… instead of Close month… on a closed month", async () => {
+      await show(userFor("admin"), { "2026-09": closedSeptember() });
+      await toSeptember();
+      expect(await screen.findByRole("button", { name: "Reopen month…" })).toHaveAttribute("type", "button");
+      expect(closeButton()).not.toBeInTheDocument();
+      expect(Array.from(actions()!.children).map((el) => el.textContent)).toEqual(["Reopen month…", "Download CSV"]);
+      expect(document.querySelectorAll(".primary")).toHaveLength(1);
+    });
+
+    it("offers Reopen month… even for the current month, if the server says it is closed", async () => {
+      await show(userFor("admin"), { "2026-10": { ...costs, closed: CLOSED, live: SAME } });
+      expect(await screen.findByRole("button", { name: "Reopen month…" })).toBeInTheDocument();
+    });
+
+    it("shows neither while the costs load, and the header keeps its height for a role that may close but not export", async () => {
+      const { held } = await show(customUser("billing.close"), {}, {}, (_method, path) => path === "/api/billing/costs");
+      await screen.findByText("October 2026");
+      expect(closeButton()).not.toBeInTheDocument();
+      expect(reopenButton()).not.toBeInTheDocument();
+      expect(actions()!.children).toHaveLength(1);
+      expect(actions()!.firstElementChild).toHaveAttribute("aria-hidden", "true"); // the room of a button
+      held.release();
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(actions()!.firstElementChild).toHaveAttribute("aria-hidden", "true"); // the current month has nothing to close: the room stays, the header does not jump
+      await toSeptember();
+      expect(Array.from(actions()!.children).map((el) => el.textContent)).toEqual(["Close month…"]);
+    });
+
+    it("gives a role with neither permission no actions at all", async () => {
+      await show(customUser());
+      await screen.findByRole("rowheader", { name: "Site" });
+      expect(actions()).toBeNull();
+    });
+  });
+
+  describe("a closed month on screen", () => {
+    it("shows the chip beside the month name, in a room that is there for open months too", async () => {
+      await show(userFor("admin"), { "2026-09": closedSeptember() });
+      await screen.findByRole("rowheader", { name: "Site" });
+      const label = document.querySelector(".month-label")!;
+      const room = label.nextElementSibling!;
+      expect(room).toHaveClass("month-state");
+      expect(room.textContent).toBe(""); // October is open
+      expect(room.querySelector(".chip")).toBeNull();
+      await toSeptember();
+      expect(label.nextElementSibling).toBe(room);
+      expect(within(room as HTMLElement).getByText("Closed")).toHaveClass("chip");
+      expect(label).toHaveTextContent("September 2026"); // the chip is not part of the announced month
+      expect(label).not.toHaveTextContent("Closed");
+    });
+
+    it("says who closed it and on what day (the site's wall clock, not UTC), with the note on its own line, in the same render as the table", async () => {
+      await show(userFor("admin"), { "2026-09": closedSeptember() });
+      await toSeptember();
+      // (toSeptember returned once the table was there: the banner is already in the page, not on its way)
+      const banner = screen.getByText("Closed by Dana on Thu 15 Oct 2026.").closest(".banner")!;
+      expect(banner).toHaveClass("banner-info");
+      expect(banner.compareDocumentPosition(screen.getByRole("table")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy(); // above the table
+      const note = screen.getByText("First official bill");
+      expect(note.closest(".banner")).toBe(banner);
+      expect(note.previousElementSibling).toHaveTextContent("Closed by Dana");
+      expect(banner.getAttribute("role")).toBeNull();
+      expect(banner.closest("[role]")).toBeNull();
+    });
+
+    it("leaves the note line out when there is none", async () => {
+      await show(userFor("admin"), { "2026-09": closedSeptember({ closed: { ...CLOSED, note: "" } }) });
+      await toSeptember();
+      const banner = screen.getByText(/Closed by Dana on/).closest(".banner")!;
+      expect(banner.querySelectorAll(".closed-line")).toHaveLength(1);
+    });
+
+    it("adds no second status: the missing-rate banner stays the page's one, and for a closed month it does not send anyone to Tariffs", async () => {
+      await show(userFor("admin"), { "2026-09": closedSeptember() });
+      await toSeptember();
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+      expect(screen.getByRole("status")).toHaveTextContent("Some consumption has no rate (shown as — or *). This month is closed, so a rate set now changes it only if the month is reopened.");
+      expect(screen.queryByRole("link", { name: /Tariffs/ })).not.toBeInTheDocument();
+    });
+
+    it("shows nothing about closing for an open month", async () => {
+      await show(userFor("admin"));
+      await toSeptember();
+      expect(screen.queryByText(/Closed by/)).not.toBeInTheDocument();
+      expect(document.querySelector(".chip")).toBeNull();
+      expect(screen.getByRole("link", { name: /Set a rate on the Tariffs page/ })).toBeInTheDocument();
+    });
+
+    it("downloads the closed month through the same URL (the server names the file)", async () => {
+      await show(userFor("admin"), { "2026-09": closedSeptember() });
+      await toSeptember();
+      await userEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+      expect(downloadCsv).toHaveBeenCalledWith("/api/billing/costs.csv?month=2026-09");
+    });
+
+    describe("the line about today's figures", () => {
+      const delta = () => document.querySelector(".live-delta");
+      const showWith = async (live: BillingLive | null | undefined, closed: BillingClosed = CLOSED) => {
+        await show(userFor("viewer"), { "2026-09": closedSeptember({ closed, live }) });
+        await toSeptember();
+      };
+
+      it("is quiet and muted under the banner, with what today would give and the change", async () => {
+        await showWith({ ...SAME, total_kwh: 80, total_cost: 16.5, delta_kwh: 30, delta_cost: 10.5, differs: true });
+        expect(delta()).toHaveTextContent("Today's tree and rates would give 16.50 QAR (+10.50).");
+        expect(delta()).toHaveClass("muted");
+        expect(delta()).not.toHaveAttribute("role");
+        expect(delta()!.previousElementSibling).toHaveClass("banner");
+      });
+
+      it("names the assets that differ when the totals agree", async () => {
+        await showWith({ ...SAME, changed_assets: 2, differs: true });
+        expect(delta()).toHaveTextContent("Today's tree and rates give the same total, but 2 assets differ.");
+      });
+
+      it("says there is no cost when today has no rate", async () => {
+        await showWith({ ...SAME, total_cost: null, delta_cost: null, differs: true });
+        expect(delta()).toHaveTextContent("Today's tree and rates would give no cost, because there is no rate today.");
+      });
+
+      it("says the kWh when only they differ", async () => {
+        await showWith({ ...SAME, total_kwh: 62.5, delta_kwh: 12.5, differs: true });
+        expect(delta()).toHaveTextContent("Today's tree and rates would give 62.5 kWh (+12.5).");
+      });
+
+      it("says the figures are the same when nothing differs, so the line is there either way", async () => {
+        await showWith(SAME);
+        expect(delta()).toHaveTextContent("Today's tree and rates give the same figures.");
+        expect(delta()).toHaveClass("muted");
+        expect(delta()).not.toHaveAttribute("role");
+        expect(screen.getAllByRole("status")).toHaveLength(1); // still only the missing-rate banner
+      });
+
+      it.each([
+        ["today's tree could not be priced (live is null)", null],
+        ["the server sent no live part", undefined],
+      ])("keeps an empty line, never 'the same figures', when %s", async (_why, live) => {
+        await showWith(live);
+        expect(delta()).not.toBeNull();
+        expect(delta()!.textContent).toBe(""); // its room is the CSS min-height of 1lh
+        expect(delta()!.previousElementSibling).toHaveClass("banner");
+        expect(screen.queryByText(/same figures/)).not.toBeInTheDocument();
+        expect(screen.getByText(/Closed by Dana/)).toBeInTheDocument();
+      });
+
+      it("keeps the one line in the page (same element, same place) when a later answer changes its words", async () => {
+        let live: BillingLive | null = SAME;
+        await show(userFor("viewer"), {}, {
+          "GET /api/billing/costs": ({ url }) => {
+            const month = new URL(url, "http://x").searchParams.get("month")!;
+            return { body: month === "2026-09" ? closedSeptember({ live }) : costs };
+          },
+        });
+        await toSeptember();
+        const line = delta()!;
+        const box = line.parentElement!;
+        expect(line).toHaveTextContent("give the same figures");
+        live = { ...SAME, total_kwh: 80, total_cost: 16.5, delta_kwh: 30, delta_cost: 10.5, differs: true };
+        act(() => { document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); }); // a refetch, as the 60 s poll would make
+        await waitFor(() => expect(delta()).toHaveTextContent("would give 16.50 QAR (+10.50)"));
+        expect(delta()).toBe(line);
+        expect(line.parentElement).toBe(box);
+        expect(box.children).toHaveLength(2); // the banner and the line: nothing was added or taken away
+        live = null;
+        act(() => { document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); }); // a refetch, as the 60 s poll would make
+        await waitFor(() => expect(delta()!.textContent).toBe(""));
+        expect(box.children).toHaveLength(2);
+      });
+
+      it("words a currency change after the close with both currencies and no signed change (the page's currency is the one it was closed in)", async () => {
+        await showWith({ ...SAME, total_cost: 14.5, delta_cost: null, differs: true, changed_assets: 3, currency: "EUR" });
+        expect(delta()).toHaveTextContent("Today's tree and rates would give 14.50 EUR (closed in QAR), 3 assets differ.");
+      });
+
+      it("has no line on an open month", async () => {
+        await show(userFor("viewer"));
+        await toSeptember();
+        expect(delta()).toBeNull();
+      });
+    });
+  });
+
+  describe("closing and reopening", () => {
+    /** The server's side of a close and a reopen for September: the costs answer follows what was posted. */
+    function server() {
+      const state = { closed: false, note: "" };
+      const routes: Routes = {
+        "GET /api/billing/costs": ({ url }) => {
+          const month = new URL(url, "http://x").searchParams.get("month")!;
+          if (month !== "2026-09") return { body: costs };
+          return { body: state.closed ? closedSeptember({ closed: { ...CLOSED, note: state.note } }) : september };
+        },
+        "POST /api/billing/months/2026-09/close": ({ body }) => { state.closed = true; state.note = (body as { note: string }).note; return { status: 201, body: {} }; },
+        "POST /api/billing/months/2026-09/reopen": () => { state.closed = false; return { body: { month: "2026-09", reopened_at: "2026-10-15T10:00:00Z" } }; },
+      };
+      return { state, routes };
+    }
+    const heading = () => screen.getByRole("heading", { level: 1, name: "Billing" });
+
+    it("Close month… opens the dialog; confirming posts the note, toasts, shows the closed month, and puts the focus on the page heading because the opener is gone", async () => {
+      const { routes } = server();
+      const toasts = spyToasts();
+      const { calls } = await show(userFor("admin"), {}, routes, undefined, toasts.api);
+      await toSeptember();
+      await userEvent.click(screen.getByRole("button", { name: "Close month…" }));
+      expect(screen.getByRole("dialog", { name: "Close September 2026" })).toBeInTheDocument();
+      await userEvent.type(screen.getByRole("textbox", { name: "Note (optional)" }), "First official bill");
+      await userEvent.click(screen.getByRole("button", { name: "Close month" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(calls.filter((c) => c.method === "POST").map((c) => [c.path, c.body])).toEqual([["/api/billing/months/2026-09/close", { note: "First official bill" }]]);
+      expect(toasts.calls).toEqual([{ kind: "success", text: "September 2026 closed" }]);
+      expect(screen.getByText("Closed by Dana on Thu 15 Oct 2026.")).toBeInTheDocument(); // already read again when the dialog went
+      expect(screen.getByRole("button", { name: "Reopen month…" })).toBeInTheDocument();
+      expect(closeButton()).not.toBeInTheDocument();
+      expect(heading()).toHaveFocus();
+    });
+
+    it("Reopen month… needs a reason, posts it, shows live figures again and puts the focus on the heading", async () => {
+      const { routes, state } = server();
+      state.closed = true;
+      const toasts = spyToasts();
+      const { calls } = await show(userFor("admin"), {}, routes, undefined, toasts.api);
+      await toSeptember();
+      await userEvent.click(await screen.findByRole("button", { name: "Reopen month…" }));
+      await userEvent.type(screen.getByRole("textbox", { name: "Reason" }), "Meter fixed");
+      await userEvent.click(screen.getByRole("button", { name: "Reopen month" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(calls.filter((c) => c.method === "POST").map((c) => [c.path, c.body])).toEqual([["/api/billing/months/2026-09/reopen", { note: "Meter fixed" }]]);
+      expect(toasts.calls).toEqual([{ kind: "success", text: "September 2026 reopened" }]);
+      expect(screen.queryByText(/Closed by/)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Close month…" })).toBeInTheDocument();
+      expect(heading()).toHaveFocus();
+    });
+
+    describe("the Reopen dialog says how far today's figures are from the billed ones, with the page's own sentence", () => {
+      const DIFFERS: BillingLive = { ...SAME, total_kwh: 80, total_cost: 16.5, delta_kwh: 30, delta_cost: 10.5, differs: true, changed_assets: 2 };
+      const openDialog = async (live: BillingLive | null, currency: string | null = "QAR") => {
+        await show(userFor("admin"), { "2026-09": closedSeptember({ live, currency }) });
+        await toSeptember();
+        await userEvent.click(await screen.findByRole("button", { name: "Reopen month…" }));
+        return screen.getByRole("dialog", { name: "Reopen September 2026" });
+      };
+
+      it("shows the difference in a second paragraph, the same words as the line behind it", async () => {
+        const dialog = await openDialog(DIFFERS);
+        const sentence = "Today's tree and rates would give 16.50 QAR (+10.50), 2 assets differ.";
+        expect(within(dialog).getByText(sentence)).toHaveClass("month-extra");
+        expect(document.querySelector(".live-delta")).toHaveTextContent(sentence);
+        expect(dialog).toHaveTextContent("download the CSV first if you need them");
+      });
+
+      it("says today's tree cannot be priced when the server could not", async () => {
+        const dialog = await openDialog(null);
+        expect(within(dialog).getByText("Today's tree and rates cannot be priced right now.")).toHaveClass("month-extra");
+      });
+
+      it("uses the currency the month was closed in for a currency change", async () => {
+        const dialog = await openDialog({ ...DIFFERS, delta_cost: null, currency: "EUR", changed_assets: 0 });
+        expect(within(dialog).getByText("Today's tree and rates would give 16.50 EUR (closed in QAR).")).toBeInTheDocument();
+      });
+
+      it("adds nothing when the figures are the same", async () => {
+        const dialog = await openDialog(SAME);
+        expect(dialog.querySelector(".month-extra")).toBeNull();
+      });
+
+      it("keeps what it said at the click when the page behind refetches, and while the reopen turns the month open", async () => {
+        let live: BillingLive | null = DIFFERS;
+        await show(userFor("admin"), {}, {
+          "GET /api/billing/costs": ({ url }) => {
+            const month = new URL(url, "http://x").searchParams.get("month")!;
+            return { body: month === "2026-09" ? closedSeptember({ live }) : costs };
+          },
+        });
+        await toSeptember();
+        await userEvent.click(await screen.findByRole("button", { name: "Reopen month…" }));
+        const dialog = screen.getByRole("dialog");
+        const extra = dialog.querySelector(".month-extra")!;
+        expect(extra).toHaveTextContent("16.50 QAR (+10.50)");
+        live = SAME;
+        act(() => { document.dispatchEvent(new Event("visibilitychange", { bubbles: true })); });
+        await waitFor(() => expect(document.querySelector(".live-delta")).toHaveTextContent("give the same figures"));
+        expect(dialog.querySelector(".month-extra")).toBe(extra); // not removed, not reworded: the dialog does not move under the person
+        expect(extra).toHaveTextContent("16.50 QAR (+10.50)");
+      });
+    });
+
+    it("a refusal stays in the dialog; Cancel then gives the focus back to the opener, which is still there", async () => {
+      const { routes } = server();
+      await show(userFor("admin"), {}, {
+        ...routes, "POST /api/billing/months/2026-09/close": { status: 409, body: { detail: "that month is not over yet" } },
+      });
+      await toSeptember();
+      const opener = screen.getByRole("button", { name: "Close month…" });
+      await userEvent.click(opener);
+      await userEvent.click(screen.getByRole("button", { name: "Close month" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("that month is not over yet");
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(opener).toHaveFocus();
+      expect(heading()).not.toHaveFocus();
+    });
+
+    it("Escape closes the dialog only, and the focus goes back to the opener", async () => {
+      const { routes } = server();
+      await show(userFor("admin"), {}, routes);
+      await toSeptember();
+      const opener = screen.getByRole("button", { name: "Close month…" });
+      await userEvent.click(opener);
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.getByText("September 2026")).toBeInTheDocument();
+      expect(opener).toHaveFocus();
+    });
   });
 });

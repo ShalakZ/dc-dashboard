@@ -30,10 +30,10 @@ describe("sourceImpact", () => {
 describe("loss texts", () => {
   it("name every count and say the history disappears", () => {
     expect(assetLoss({ assets: 4, mappings: 3, tariffs: 2 })).toBe(
-      "4 assets, 3 mappings and 2 tariffs will be deleted; their past energy and cost figures disappear from Billing and dashboards.",
+      "4 assets, 3 mappings and 2 tariffs will be deleted; their past energy and cost figures disappear from Billing and dashboards, except in closed months, which keep their billed figures.",
     );
     expect(sourceLoss({ points: 2, mappings: 2 })).toBe(
-      "2 mapped points and 2 mappings will be deleted; the past energy and cost figures that depend on them disappear from Billing and dashboards.",
+      "2 mapped points and 2 mappings will be deleted; the past energy and cost figures that depend on them disappear from Billing and dashboards, except in closed months, which keep their billed figures.",
     );
   });
   it("uses the singular for one", () => {

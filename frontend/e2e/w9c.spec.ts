@@ -711,6 +711,9 @@ test.describe("W9c: the Roles editor offers what a permission needs", () => {
       const offer = card(dialog, "Change users also needs See users to show anything.");
       await expect(offer).toBeVisible();
       await dialog.locator(".role-editor-body").evaluate((body) => { body.scrollTop = body.scrollHeight; });
+      // W11 put one more row in the Sensitive actions group at the end of the list, so at the very end this label can sit just above the visible
+      // body: bring it to the nearest edge (the card is still placed against the scrolled body's end).
+      await labelOf(changeUsers).evaluate((label) => label.scrollIntoView({ block: "nearest" }));
       await settled(page);
       await expectClearOfBox(page, dialog, offer, changeUsers, "800 x 600, Change users with the body scrolled to its end");
     }, SMALL);

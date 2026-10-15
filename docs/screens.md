@@ -19,7 +19,12 @@ lacks says "No access".
   Shared dashboards of widgets. An admin (`dashboards.default`) can mark one as the default, and the sidebar entry and the
   first page after signing in then open it. See [Dashboards and billing](dashboards-and-billing.md).
 - **Billing** (everyone): needs `billing.view`. Energy and cost per asset per day and per month, picked with the Year and Month
-  selects, with a CSV export (`billing.export`). See [Dashboards and billing](dashboards-and-billing.md).
+  selects, with a CSV export (`billing.export`). An admin (`billing.close`) can **Close month…** on a finished month with data, which
+  freezes its figures and CSV as they stand: the month then carries a **Closed** chip and a banner, "Closed by <name> on <date>", with
+  the note given; a quiet line, "Today's tree and rates would give ..." (or "... give the same figures."), says how today's tree and rates
+  compare; and **Reopen month…** (a reason of at least 5 characters; download the CSV first, the app does not show the closed figures
+  again) goes back to today's figures. See
+  [Closing a month](dashboards-and-billing.md#closing-a-month) and [Dashboards and billing](dashboards-and-billing.md).
 
 ## Operate
 

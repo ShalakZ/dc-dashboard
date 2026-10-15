@@ -121,7 +121,7 @@ uses, so the first update after it reports that the api still runs the old versi
      5. `docker compose up -d --build` (add `--profile dev` on a stack that has the simulator). The new `api` runs
         `alembic upgrade head` on the old code, where `<previous>` is the head: nothing to do.
      6. `docker compose exec api alembic current` prints `<previous> (head)`.
-   - **Option b, restore the dump from step 1.** It works for every release, and everything collected since that dump is lost. Do it
+   - **Option b, restore the dump from step 1.** It works for every release, and everything collected since that dump is lost (a billing month closed since the dump is open again). Do it
      with the old code and with no new container left to be restarted. Restoring the dump on the new image would not undo the
      upgrade: the last step of `restore.sh` starts the existing `api` and `collector` containers, and they run the migration again.
      1. `docker compose --profile dev rm --stop --force api collector web simulator` removes the new containers (containers only:
@@ -146,7 +146,7 @@ message appeared as described), and lost what came after the dump.
 
 ## Migrations in order
 
-The files are in `backend/migrations/versions/`; each revises the one before it, and `0011` is the head. The release-note entry of a
+The files are in `backend/migrations/versions/`; each revises the one before it, and `0012` is the head. The release-note entry of a
 migration says how to apply it, how to verify it and the commit to go back to.
 
 | Revision | What it does | Downgrade | Release note |
@@ -162,6 +162,7 @@ migration says how to apply it, how to verify it and the commit to go back to.
 | `0009` | roles and permissions: the `roles` table, `users.role_id` in place of `users.role` | lossless for accounts that hold Viewer, Operator or Admin; custom roles are lost and their accounts come back as Viewers | [W9a](../CHANGELOG.md#upgrading-to-w9a-migration-0009) |
 | `0010` | the asset kinds registry (`asset_kinds`), seeded from the kinds assets already use | lossless except the registry (icons go back to the keyword guess) | [W7m](../CHANGELOG.md#upgrading-to-w7m-migration-0010) |
 | `0011` | data only: the permission Manage asset kinds (`assets.kinds`) for the custom roles that could change kinds | lossless for the data; only which permissions a custom role lists changes | [W7o](../CHANGELOG.md#upgrading-to-w7o-migration-0011) |
+| `0012` | close month: the `billing_closes` table (a closed billing month's stored figures) | lossless for everything that existed before; a downgrade drops the closed months (and a restore of an older dump brings back the older set) | [W11](../CHANGELOG.md#upgrading-to-w11-migration-0012) |
 
 Waves without a migration also have entries in the CHANGELOG (for example W7p, no migration): read them too, they can name checks.
 

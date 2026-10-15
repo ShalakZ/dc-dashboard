@@ -12,7 +12,7 @@ import { ImpactDeleteDialog } from "./ImpactDeleteDialog";
 
 const leaf: AssetImpact = { assets: 1, mappings: 0, tariffs: 0 };
 const branch: AssetImpact = { assets: 3, mappings: 2, tariffs: 1 };
-const BRANCH_TEXT = "3 assets, 2 mappings and 1 tariff will be deleted; their past energy and cost figures disappear from Billing and dashboards.";
+const BRANCH_TEXT = "3 assets, 2 mappings and 1 tariff will be deleted; their past energy and cost figures disappear from Billing and dashboards, except in closed months, which keep their billed figures.";
 const impactRoute = (body: unknown, status = 200) => ({ "GET /api/assets/5/impact": { status, body } });
 const gets = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method === "GET" && c.path === "/api/assets/5/impact").length;
 

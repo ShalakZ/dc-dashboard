@@ -67,13 +67,14 @@ function CurrencyForm({ canEdit }: { canEdit: boolean }) {
     if (code !== "" && !/^[A-Z]{3}$/.test(code)) return setProblem("Use a three-letter currency code, for example QAR.");
     setProblem(null);
     const next = code === "" ? null : code;
-    // Past figures are recalculated, never converted: a new code only changes the label on every one of them.
+    // Past figures are recalculated, never converted: a new code only changes the label on every one of them, except in closed months (W11),
+    // which keep the currency they were closed with.
     if (stored !== null && next !== stored) {
       const change = next === null ? `Remove the currency ${stored}? Costs will show without a unit.` : `Change the currency from ${stored} to ${next}?`;
       // Nothing is destroyed, so the button is the primary one, not the red one. The Save button's green is this change's own feedback: no toast.
       const confirmed = await ask({
         title: next === null ? "Remove the currency?" : "Change the currency?",
-        message: `${change} This relabels all past figures; no conversion is applied.`,
+        message: `${change} This relabels all past figures except in closed months, which keep their own currency; no conversion is applied.`,
         confirmLabel: next === null ? "Remove currency" : "Change currency",
         tone: "primary",
       });
@@ -334,7 +335,7 @@ export function TariffsPage() {
     <section className="tariffs-page">
       <PageHeader
         title="Tariffs"
-        sub="A rate applies from its effective date (a site-local date) until the next one. An asset's override replaces the site default from its own effective date. Editing a past rate recalculates history."
+        sub="A rate applies from its effective date (a site-local date) until the next one. An asset's override replaces the site default from its own effective date. Editing a past rate recalculates the months that are not closed; closed months keep their billed figures."
       />
       <div className="page-grid">
         {!canEdit && <div className="span-all"><ReadOnlyNote /></div>}

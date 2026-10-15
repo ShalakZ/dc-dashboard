@@ -615,7 +615,7 @@ describe("AssetsPage", () => {
   describe("deleting", () => {
     const branch = { assets: 2, mappings: 3, tariffs: 1 };
     const leaf = { assets: 1, mappings: 0, tariffs: 0 };
-    const BRANCH_TEXT = "2 assets, 3 mappings and 1 tariff will be deleted; their past energy and cost figures disappear from Billing and dashboards.";
+    const BRANCH_TEXT = "2 assets, 3 mappings and 1 tariff will be deleted; their past energy and cost figures disappear from Billing and dashboards, except in closed months, which keep their billed figures.";
     const SEEN_BRANCH = "/api/assets/2?confirm=true&expect_assets=2&expect_mappings=3&expect_tariffs=1";
     const SEEN_LEAF = "/api/assets/2?confirm=true&expect_assets=1&expect_mappings=0&expect_tariffs=0";
     /**

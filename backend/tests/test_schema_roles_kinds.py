@@ -1,8 +1,7 @@
 """Migration 0011 (W7o): data only. The new permission `assets.kinds` ("Manage asset kinds") is appended to every custom role that
 holds `assets.edit`, because until now `assets.edit` was what allowed every change to the asset kinds list.
 
-The head is pinned here, by the newest migration's test (test_schema_roles.py and test_schema_asset_kinds.py pin only that their
-own migration follows its predecessor)."""
+This test pins only that 0011 follows 0010; the head is pinned by the newest migration's test (test_schema_billing_closes.py)."""
 import importlib.util
 from pathlib import Path
 
@@ -72,11 +71,8 @@ async def a_busy_database(db) -> None:
 
 # ---- the head ---------------------------------------------------------------------------------------------------------------
 
-def test_the_migration_follows_0010_and_is_the_only_head():
+def test_the_migration_follows_0010():
     assert "0010 -> 0011" in run_alembic("history", "-r", "0010:0011").stdout
-    heads = run_alembic("heads")
-    assert heads.returncode == 0, heads.stderr
-    assert [line.split()[0] for line in heads.stdout.splitlines() if line.strip()] == ["0011"]
 
 
 async def test_0011_changes_no_table_column_index_constraint_or_trigger(db):

@@ -274,7 +274,7 @@ describe("treeDrift: does the server's tree still match the picture the dialog w
 
 describe("deleteMessage", () => {
   const LOSS =(a: number, m: number, t: number) =>
-    `${a} ${a === 1 ? "asset" : "assets"}, ${m} ${m === 1 ? "mapping" : "mappings"} and ${t} ${t === 1 ? "tariff" : "tariffs"} will be deleted; their past energy and cost figures disappear from Billing and dashboards.`;
+    `${a} ${a === 1 ? "asset" : "assets"}, ${m} ${m === 1 ? "mapping" : "mappings"} and ${t} ${t === 1 ? "tariff" : "tariffs"} will be deleted; their past energy and cost figures disappear from Billing and dashboards, except in closed months, which keep their billed figures.`;
   const LAST = "This can't be undone.";
   const BREAK = "\n\n";
 

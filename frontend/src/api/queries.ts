@@ -4,7 +4,7 @@ import { rangeToQuery, trendRefetchMs, type Range } from "../lib/timeRange";
 import { upperFirst } from "../lib/upperFirst";
 import { ApiError, api } from "./client";
 import type {
-  Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, StarterPackResult, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
+  Asset, AssetImpact, AssetKind, AssetKindIn, AssetKindPatch, StarterPackResult, AuditEntry, AuditList, AuditOptions, AuditPosition, BillingCosts, BillingMonths, BillingReopened, BillingSettings, Connector, Dashboard, DashboardIn, DashboardListItem, DashboardSave, DefaultDashboard,
   FleetSummary, GeneralSettings, GraphModel, Metric, MoveBody, MovePreview, MoveResult, PermissionRow, PointRow, RangePreset, RemoveSourcesResult, RoleRow, ScanDetail, ScanSummary, Scope, ScopeSuggestions,
   RowsPerDayRange, Series, SignInPolicy, SignInValues, Site, Source, SourceImpact, StorageSettings, StorageSettingsOut, StorageStats, Summary, Tariff, TariffIn, TariffPatch, UserRow, WidgetConfig,
   WidgetData, WidgetType, CollectorStatus, LiveStatus, ReportParams, ReportReply, SecretKeyStatus, TlsStatus, VersionInfo,
@@ -559,6 +559,26 @@ export const useBillingCosts = (month: string | null) =>
     refetchInterval: 60_000,
     queryFn: () => api.get<BillingCosts>(`/api/billing/costs?${new URLSearchParams({ month: month! })}`),
   });
+
+/**
+ * Closing or reopening a month moves what Billing shows for it (the costs, and the months list whose first month now counts the closed ones) and
+ * writes an audit row. `onSettled`, not `onSuccess`: a refused request (409 already closed, not closed) means the page on screen is out of date.
+ * The returned promise lets `mutateAsync` resolve once the month has been read again, so a caller that closes its dialog then finds the page in
+ * its new state. Not `COST_DEPENDENT`: widgets read live figures, which a close does not change.
+ */
+function useBillingCloseMutation<Result>(action: "close" | "reopen") {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: ({ month, note }: { month: string; note: string }) => api.post<Result>(`/api/billing/months/${month}/${action}`, { note }),
+    onSettled: () => invalidate(keys.billing, keys.auditAll),
+  });
+}
+
+/** Freeze a finished month as it is now. `note` is optional (empty string for none). The answer is not used: the month is read again. */
+export const useCloseBillingMonth = () => useBillingCloseMutation<unknown>("close");
+
+/** Go back to live figures for a closed month. `note` is the reason and is required by the server (5 to 500 characters once trimmed). */
+export const useReopenBillingMonth = () => useBillingCloseMutation<BillingReopened>("reopen");
 
 export const useDashboards = () =>
   useQuery({ queryKey: keys.dashboardList, queryFn: () => api.get<DashboardListItem[]>("/api/dashboards") });

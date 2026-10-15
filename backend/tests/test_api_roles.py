@@ -54,7 +54,7 @@ async def test_the_catalogue_is_served_in_catalogue_order_to_a_role_manager(clie
     assert response.status_code == 200
     rows = response.json()
     assert [row["id"] for row in rows] == [p.id for p in CATALOGUE]
-    assert len(rows) == 30
+    assert len(rows) == 31
     assert all(set(row) == {"id", "area", "label", "description", "kind"} for row in rows)
     first = rows[0]
     assert (first["area"], first["kind"], first["label"]) == ("Assets Tree", "see", "See the Assets Tree")
@@ -85,7 +85,7 @@ async def test_the_list_shows_the_three_built_in_roles_first_with_what_they_gran
     for row in rows:
         assert set(row) == {"id", "name", "description", "builtin", "user_count", "assignable", "permissions"}
         assert row["permissions"] == sorted(BUILTIN[row["name"]])
-    assert len(rows[2]["permissions"]) == 30
+    assert len(rows[2]["permissions"]) == 31
 
 
 async def test_the_list_counts_the_accounts_of_each_role_active_or_not(client, db):
@@ -590,7 +590,7 @@ async def test_a_duplicate_of_admin_holds_everything_except_roles_manage(client,
     assert body["name"] == "Copy of admin"
     assert body["permissions"] == sorted(ALL_IDS - {"roles.manage"})
     assert "roles.manage" not in await stored_permissions(db, body["id"])
-    assert len(await stored_permissions(db, body["id"])) == 29
+    assert len(await stored_permissions(db, body["id"])) == 30
 
 
 async def test_a_duplicate_of_admin_does_not_claim_the_permission_it_leaves_out(client, db):
@@ -693,13 +693,13 @@ async def test_me_of_a_custom_role_account_lists_exactly_its_permissions(app, db
     assert me["permissions"] == ["assets.view", "billing.export", "billing.view"]
 
 
-async def test_me_of_the_built_in_roles_lists_their_permissions_and_admin_lists_all_29(app, db):
+async def test_me_of_the_built_in_roles_lists_their_permissions_and_admin_lists_all_31(app, db):
     for role in ("viewer", "operator", "admin"):
         async with signed_in(app, db, role, f"a {role}") as other:
             me = (await other.get("/api/me")).json()
         assert me["role"] == role
         assert me["permissions"] == sorted(BUILTIN[role])
-    assert len(me["permissions"]) == 30
+    assert len(me["permissions"]) == 31
 
 
 async def test_me_does_not_list_an_unknown_stored_id_and_the_account_still_works(app, db):

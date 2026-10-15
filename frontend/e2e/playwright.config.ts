@@ -215,5 +215,15 @@ export default defineConfig({
       dependencies: ["w7t"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // The LAST project, on purpose: it seeds a month of history into the stack (`docker compose exec ... python -m dcdash.seed.history`, so it runs only
+    // when COMPOSE_PROJECT_NAME starts with dcdash_e2e_ and skips itself otherwise), closes and reopens the previous month, and in afterAll deletes the
+    // seed again and puts the month back to open. Nothing may come after it that does not expect a stack that has just held a closed month. It measures
+    // 1440 x 900 first and 1024 x 640 by itself.
+    {
+      name: "w11",
+      testMatch: "w11.spec.ts",
+      dependencies: ["w7u"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });

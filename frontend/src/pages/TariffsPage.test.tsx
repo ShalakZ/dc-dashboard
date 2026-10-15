@@ -333,7 +333,7 @@ describe("TariffsPage", () => {
     pastSaveWindow();
     await userEvent.click(save);
     const dialog = await confirmation("Remove the currency?"); // removing an existing currency is a change too
-    expect(dialog).toHaveTextContent("Remove the currency QAR? Costs will show without a unit. This relabels all past figures; no conversion is applied.");
+    expect(dialog).toHaveTextContent("Remove the currency QAR? Costs will show without a unit. This relabels all past figures except in closed months, which keep their own currency; no conversion is applied.");
     expect(calls.some((c) => c.method === "PUT")).toBe(false); // not before the button is pressed
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove currency" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ currency: null }));
@@ -352,7 +352,7 @@ describe("TariffsPage", () => {
     const first = await confirmation("Change the currency?");
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(first).toHaveTextContent(/QAR.*USD/);
-    expect(first).toHaveTextContent("This relabels all past figures; no conversion is applied.");
+    expect(first).toHaveTextContent("This relabels all past figures except in closed months, which keep their own currency; no conversion is applied.");
     const confirmButton = within(first).getByRole("button", { name: "Change currency" });
     expect(confirmButton).toHaveClass("primary");
     expect(confirmButton).not.toHaveClass("danger");

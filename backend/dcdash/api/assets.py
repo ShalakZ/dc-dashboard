@@ -214,7 +214,8 @@ async def delete_asset(
         else:
             detail = (
                 f'Deleting "{asset.name}" deletes {lost}, and their past energy and cost figures disappear '
-                "from billing and dashboards. Repeat the request with confirm=true to go ahead."
+                "from billing and dashboards, except in closed months, which keep their billed figures. "
+                "Repeat the request with confirm=true to go ahead."
             )
         return JSONResponse(status_code=409, content={"detail": detail, **impact})
     await db.delete(asset)

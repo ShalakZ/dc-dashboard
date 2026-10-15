@@ -222,6 +222,29 @@ class Tariff(Base):
     created_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
 
 
+class BillingClose(Base):
+    """A closed billing month: the exact output of month_costs() at close time, kept in `figures`. A reopened row is kept (the
+    reopened_* columns are set together); a re-close inserts a new row. At most one row per month is open (a partial unique
+    index on `month` where `reopened_at IS NULL`)."""
+
+    __tablename__ = "billing_closes"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    month: Mapped[str]  # 'YYYY-MM', the API's own month format (a CHECK in migration 0012)
+    closed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    closed_name: Mapped[str]  # the name shown when the month was closed; it outlives the account
+    closed_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now())
+    note: Mapped[str] = mapped_column(default="", server_default="")
+    timezone: Mapped[str]
+    currency: Mapped[str | None]
+    total_kwh: Mapped[float]
+    total_cost: Mapped[float | None]
+    figures: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    reopened_at: Mapped[datetime | None] = mapped_column(TZ)
+    reopened_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    reopened_name: Mapped[str | None]
+    reopen_note: Mapped[str | None]
+
+
 class Dashboard(Base):
     __tablename__ = "dashboards"
     id: Mapped[int] = mapped_column(primary_key=True)

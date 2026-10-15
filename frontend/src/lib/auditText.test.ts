@@ -8,7 +8,7 @@ const entry = (action: string, detail: unknown, extra: Partial<AuditEntry> = {})
 
 // Every action the backend writes (the Python parity test keeps this list and the table in step).
 const ALL_ACTIONS = [
-  "asset.created", "asset.updated", "asset.deleted", "asset.moved", "billing.currency_changed",
+  "asset.created", "asset.updated", "asset.deleted", "asset.moved", "billing.closed", "billing.currency_changed", "billing.reopened",
   "dashboard.created", "dashboard.updated", "dashboard.deleted", "dashboard.default_changed", "diagnostics.report", "discovery.accepted",
   "kind.created", "kind.deleted", "kind.icon_changed", "kind.renamed", "kind.starter_pack_added",
   "login.failed", "login.locked", "login.succeeded", "login.unblocked", "mapping.created", "mapping.updated", "mapping.deleted",
@@ -141,6 +141,60 @@ describe("describeAudit: updates with before and after", () => {
     );
     expect(zone.summary).toBe("Changed the site time zone from UTC to Asia/Qatar");
     expect(zone.link).toEqual({ to: "/settings", label: "Open Settings" });
+  });
+
+  it("says a billing close with the month in words and the stored totals, and links to Billing", () => {
+    const closed = describeAudit(
+      entry("billing.closed", { month: "2026-10", close_id: 4, total_kwh: 1234.5, total_cost: 456.78, currency: "USD", note: "" }),
+    );
+    expect(closed.summary).toBe("Closed billing for October 2026 (1,234.5 kWh, 456.78 USD)");
+    expect(closed.link).toEqual({ to: "/billing", label: "Open Billing" });
+    expect(closed.changes).toEqual([]);
+  });
+
+  it("writes the totals with fixed decimals, thousands separators and no cost part when the month had no cost", () => {
+    const close = (detail: Record<string, unknown>) => describeAudit(entry("billing.closed", { month: "2026-01", close_id: 1, ...detail })).summary;
+    expect(close({ total_kwh: 1234567, total_cost: 1000, currency: "QAR" })).toBe("Closed billing for January 2026 (1,234,567.0 kWh, 1,000.00 QAR)");
+    expect(close({ total_kwh: 12.54, total_cost: 0.5, currency: "QAR" })).toBe("Closed billing for January 2026 (12.5 kWh, 0.50 QAR)");
+    expect(close({ total_kwh: 12.5, total_cost: null, currency: "QAR" })).toBe("Closed billing for January 2026 (12.5 kWh)");
+    expect(close({ total_kwh: 12.5, total_cost: 3, currency: null })).toBe("Closed billing for January 2026 (12.5 kWh, 3.00)");
+    expect(close({ total_kwh: 0, total_cost: 0, currency: "USD" })).toBe("Closed billing for January 2026 (0.0 kWh, 0.00 USD)");
+    expect(close({ total_kwh: null, total_cost: null, currency: "USD" })).toBe("Closed billing for January 2026");
+    expect(close({ total_kwh: "12.5", total_cost: Number.NaN })).toBe("Closed billing for January 2026");
+  });
+
+  it("leaves the month out of a billing sentence when the stored month is missing or not a month", () => {
+    for (const month of [undefined, null, "", "October", "2026-13", "2026-00", "2026-1", " 2026-10", 202610]) {
+      expect(describeAudit(entry("billing.closed", { month, total_kwh: 1, total_cost: null })).summary, String(month)).toBe("Closed billing (1.0 kWh)");
+      expect(describeAudit(entry("billing.reopened", { month, note: "Wrong meter" })).summary, String(month)).toBe("Reopened billing: Wrong meter");
+    }
+  });
+
+  it("says a billing reopen with the month and the reason given, and links to Billing", () => {
+    const reopened = describeAudit(
+      entry("billing.reopened", {
+        month: "2025-12", close_id: 4, closed_name: "robert", closed_at: "2026-01-02T08:00:00Z", total_kwh: 10, total_cost: 2, currency: "USD", note: "  A meter was corrected  ",
+      }),
+    );
+    expect(reopened.summary).toBe("Reopened billing for December 2025: A meter was corrected");
+    expect(reopened.link).toEqual({ to: "/billing", label: "Open Billing" });
+    expect(reopened.changes).toEqual([]);
+    expect(describeAudit(entry("billing.reopened", { month: "2025-12", note: "" })).summary).toBe("Reopened billing for December 2025");
+    expect(describeAudit(entry("billing.reopened", { month: "2025-12" })).summary).toBe("Reopened billing for December 2025");
+  });
+
+  it("keeps a long reopen reason whole and reads a stored reason as text, never as markup", () => {
+    const long = "x".repeat(500);
+    expect(describeAudit(entry("billing.reopened", { month: "2026-10", note: long })).summary).toBe(`Reopened billing for October 2026: ${long}`);
+    expect(describeAudit(entry("billing.reopened", { month: "2026-10", note: "<b>no</b>" })).summary).toBe("Reopened billing for October 2026: <b>no</b>");
+  });
+
+  it("does not need a name lookup for the billing entries: the same sentence with no refs, empty refs and full refs", () => {
+    for (const refs of [undefined, {}, { user: { "3": "robert" } }]) {
+      expect(describeAudit(entry("billing.closed", { month: "2026-10", close_id: 4, total_kwh: 1, total_cost: 2, currency: "USD" }, { refs })).summary).toBe(
+        "Closed billing for October 2026 (1.0 kWh, 2.00 USD)",
+      );
+    }
   });
 
   it("names the sign-in protection fields that changed and links to Settings", () => {
@@ -828,7 +882,7 @@ describe("describeAudit: old, odd and unknown rows", () => {
   });
 
   it("has a sentence of its own for every action the backend writes", () => {
-    expect(ALL_ACTIONS).toHaveLength(51);
+    expect(ALL_ACTIONS).toHaveLength(53);
     for (const action of ALL_ACTIONS) {
       expect(describeAudit(entry(action, {})).summary, action).not.toBe(humanise(action));
     }
@@ -1227,7 +1281,7 @@ describe("describeAudit: moved assets (W7p)", () => {
 describe("describeAudit: no sentence shows an id", () => {
   // Distinctive ids, so a leaked one is found by its digits: a plain "7" would pass a /#\d+/ check.
   const A = 90001, PARENT = 90002, USER = 90003, SRC = 90004, DASH = 90005, POINT = 90006, MAPPING = 90007, TARIFF = 90008;
-  const ROLE = 90009, SCOPE = 90010, JOB = 90011, SCAN = 90012, A2 = 90013, A3 = 90014, DASH2 = 90015, KIND = 90016;
+  const ROLE = 90009, SCOPE = 90010, JOB = 90011, SCAN = 90012, A2 = 90013, A3 = 90014, DASH2 = 90015, KIND = 90016, CLOSE = 90017;
   const connection = { via: "login", client: "10.0.0.5" };
 
   // The shape each backend writer stores (see the audit calls in backend/dcdash/api).
@@ -1239,7 +1293,12 @@ describe("describeAudit: no sentence shows an id", () => {
       asset_id: A, name: "Rack 1", request_id: "8f14e45f-ceea-467a-9575-1e9b4b7d3c1a", moved_with: 2, subtree_assets: 4, undo_of: "0c1b8f3e-6f0a-4d2e-9a43-5d6e7f8a9b0c",
       before: { parent_id: A2, parent_name: "Hall 2", sort_order: 0 }, after: { parent_id: A3, parent_name: "Hall 3", sort_order: 1 },
     },
+    "billing.closed": { month: "2026-10", close_id: CLOSE, total_kwh: 1234.5, total_cost: 456.78, currency: "USD", note: "Signed off" },
     "billing.currency_changed": { before: { currency: "QAR" }, after: { currency: "USD" } },
+    "billing.reopened": {
+      month: "2026-10", close_id: CLOSE, closed_name: "robert", closed_at: "2026-11-01T08:00:00Z", total_kwh: 1234.5, total_cost: 456.78, currency: "USD",
+      note: "A meter was corrected",
+    },
     "dashboard.created": { dashboard_id: DASH, name: "Ops", widgets: 0 },
     "dashboard.updated": { dashboard_id: DASH, name: "Ops", before: { name: "O", widgets: 1 }, after: { name: "Ops", widgets: 2 } },
     "dashboard.deleted": { dashboard_id: DASH, name: "Ops", widgets: 2, was_default: true },
@@ -1311,7 +1370,7 @@ describe("describeAudit: no sentence shows an id", () => {
     expect(Object.keys(FIXTURES).sort()).toEqual([...ALL_ACTIONS].sort());
   });
 
-  it("shows none of the 16 distinctive ids in a sentence, a link label or a Before/After cell, with every lookup state and with or without stored names", () => {
+  it("shows none of the 17 distinctive ids in a sentence, a link label or a Before/After cell, with every lookup state and with or without stored names", () => {
     for (const action of ALL_ACTIONS) {
       for (const detail of [FIXTURES[action], withoutNames(FIXTURES[action])]) {
         for (const refs of [present, {}, undefined]) {

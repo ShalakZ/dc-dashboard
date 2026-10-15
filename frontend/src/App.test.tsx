@@ -24,7 +24,7 @@ const routes = (role: string) => ({
   "GET /api/permissions": { body: catalogue() },
   "GET /api/diagnostics/report": { body: { format: "DCDASH-REPORT v1", build_id: "t", detail: "summary", mask: false, checksum: "c", parts: [], legend: [] } },
   "GET /api/sources/4/points": { body: [] },
-  "GET /api/billing/costs": { body: { month: "2026-10", timezone: "Asia/Qatar", currency: "QAR", days: [], assets: [] } },
+  "GET /api/billing/costs": { body: { month: "2026-10", timezone: "Asia/Qatar", currency: "QAR", days: [], assets: [], closed: null } },
   "GET /api/dashboards": { body: [] },
   "GET /api/dashboards/3": { body: dashboard({ widgets: [widget(5, "table", { title: "Assets", config: config({ assets: [5, 6] }) })] }) },
   "POST /api/widget-data": widgetDataRoute,

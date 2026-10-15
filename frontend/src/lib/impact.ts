@@ -30,7 +30,7 @@ export const sourceDeletePath = (id: number, seen: SourceImpact) =>
   `/api/sources/${id}?confirm=true&expect_points=${seen.points}&expect_mappings=${seen.mappings}`;
 
 const counted = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
-const HISTORY = "disappear from Billing and dashboards.";
+const HISTORY = "disappear from Billing and dashboards, except in closed months, which keep their billed figures.";
 
 export const assetLoss = (i: AssetImpact) =>
   `${counted(i.assets, "asset")}, ${counted(i.mappings, "mapping")} and ${counted(i.tariffs, "tariff")} will be deleted; their past energy and cost figures ${HISTORY}`;
