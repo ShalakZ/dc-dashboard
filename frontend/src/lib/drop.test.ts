@@ -1,4 +1,4 @@
-import { MAX_UNIT_LENGTH, acceptBody, assetChoices, dropPayload, metricConflicts, missingUnits, pickDropTarget, reviewRows, takenMetrics, withMetric, type ReviewRow } from "./drop";
+import { MAX_UNIT_LENGTH, acceptBody, assetChoices, bulkGroups, mappableClusters, dropPayload, metricConflicts, missingUnits, pickDropTarget, reviewRows, takenMetrics, withMetric, type ReviewRow } from "./drop";
 import { nodeId, UNGROUPED } from "./graph";
 import { model, point } from "../test/graphFixtures";
 
@@ -174,5 +174,51 @@ describe("custom units", () => {
   });
   it("the unit limit matches the server's", () => {
     expect(MAX_UNIT_LENGTH).toBe(20);
+  });
+});
+
+describe("bulkGroups and mappableClusters (W7r: the one rule for which groups an asset can be created from)", () => {
+  const power = { metric: "active_power_kw" as const, scale: 1, interval_seconds: 5, custom_unit: null };
+  const volts = { metric: "voltage_v" as const, scale: 1, interval_seconds: 5, custom_unit: null };
+  const unitless = { metric: "custom" as const, scale: 1, interval_seconds: 5, custom_unit: null };
+  const withUnit = { metric: "custom" as const, scale: 1, interval_seconds: 5, custom_unit: "degC" };
+  const src = (clusters: { key: string; points: ReturnType<typeof point>[] }[], ungrouped: ReturnType<typeof point>[] = []) =>
+    ({ ...model().sources[0], clusters, ungrouped });
+
+  it("lists the groups with an unmapped point, in order, never the Ungrouped bag, and leaves a fully mapped group out", () => {
+    const s = src(
+      [{ key: "A", points: [point(1, "A kW", { suggestion: power })] },
+       { key: "B", points: [point(2, "B kW", { suggestion: power, asset_id: 10, mapping_id: 1 })] },
+       { key: "C", points: [point(3, "C V", { suggestion: volts })] }],
+      [point(4, "Status", { suggestion: power })],
+    );
+    expect(bulkGroups(s).map((g) => g.key)).toEqual(["A", "C"]);
+    expect(mappableClusters(s).map((g) => g.key)).toEqual(["A", "C"]);
+  });
+
+  it("a group keeps only its unmapped points and starts the rows from the scan's guesses", () => {
+    const s = src([{ key: "A", points: [point(1, "A kW", { suggestion: power }), point(2, "A V", { suggestion: volts, asset_id: 10, mapping_id: 3 })] }]);
+    const [g] = bulkGroups(s);
+    expect(g.points.map((p) => p.id)).toEqual([1]);
+    expect(g.rows.map((r) => [r.pointId, r.metric, r.checked])).toEqual([[1, "active_power_kw", true]]);
+    expect(g.mapped).toBe(1);
+  });
+
+  it("a repeated metric leaves the second row unchecked and the group still counts", () => {
+    const [g] = bulkGroups(src([{ key: "A", points: [point(1, "A kW", { suggestion: power }), point(2, "A kW2", { suggestion: power })] }]));
+    expect(g.rows.map((r) => r.checked)).toEqual([true, false]);
+    expect(g.mapped).toBe(1);
+  });
+
+  it("a custom guess with no unit starts unchecked with a note; with a unit (or a unit hint) it is checked", () => {
+    const [g] = bulkGroups(src([{ key: "A", points: [
+      point(1, "T a", { suggestion: unitless }), point(2, "T b", { suggestion: withUnit }), point(3, "T c", { suggestion: unitless, unit_hint: "degC" })] }]));
+    expect(g.rows.map((r) => [r.checked, r.note])).toEqual([[false, "Needs a unit."], [true, null], [true, null]]);
+  });
+
+  it("a group where nothing can be mapped is listed by bulkGroups but is not mappable", () => {
+    const s = src([{ key: "A", points: [point(1, "T a", { suggestion: unitless })] }, { key: "B", points: [point(2, "B kW", { suggestion: power })] }]);
+    expect(bulkGroups(s).map((g) => [g.key, g.mapped])).toEqual([["A", 0], ["B", 1]]);
+    expect(mappableClusters(s).map((g) => g.key)).toEqual(["B"]);
   });
 });

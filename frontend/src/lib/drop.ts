@@ -167,3 +167,34 @@ export function assetChoices(assets: readonly Pick<Asset, "id" | "parent_id" | "
   assets.forEach((a) => { if (!seen.has(a.id)) walk(a); }); // a pure parent cycle has no root
   return out;
 }
+
+/** One group of a source that the bulk-create dialog can turn into an asset (W7r). */
+export interface BulkGroup {
+  key: string;
+  /** The group's points that are not mapped yet. */
+  points: GraphPoint[];
+  /** The scan's guesses. A row that cannot be sent as it stands (a repeated metric, a custom metric with no unit) starts unchecked, with a note. */
+  rows: ReviewRow[];
+  /** How many rows start checked: 0 = nothing in this group can be mapped without a decision. */
+  mapped: number;
+}
+
+/**
+ * The groups of a source (never the Ungrouped bag) with at least one unmapped point, each with the rows the dialog starts from. The ONE place
+ * that decides what "a group to create an asset from" is: the button's count and the dialog's rows both read it. A custom guess with no unit
+ * would be refused by the server for the whole request, so it starts unchecked here.
+ */
+export function bulkGroups(source: GraphSource): BulkGroup[] {
+  const groups: BulkGroup[] = [];
+  for (const cluster of source.clusters) {
+    const points = cluster.points.filter((p) => p.asset_id === null);
+    if (points.length === 0) continue;
+    const rows = reviewRows(points, new Set<Metric>()).map((r) =>
+      r.checked && r.metric === "custom" && (r.customUnit ?? "").trim() === "" ? { ...r, checked: false, note: "Needs a unit." } : r);
+    groups.push({ key: cluster.key, points, rows, mapped: rows.filter((r) => r.checked).length });
+  }
+  return groups;
+}
+
+/** The groups an asset can be created from without any decision: at least one point would be mapped. */
+export const mappableClusters = (source: GraphSource): BulkGroup[] => bulkGroups(source).filter((g) => g.mapped > 0);

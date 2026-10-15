@@ -249,8 +249,8 @@ export interface GraphSource {
   id: number; name: string; connector_type: string; config: Record<string, unknown>; origin: "manual" | "discovered";
   enabled: boolean; status: string; last_error: string | null; has_secret: boolean; needs_credentials: boolean;
   point_count: number; clusters: GraphCluster[]; ungrouped: GraphPoint[];
-  /** The newest scan that found this source; null = never found by a scan; absent in old fixtures. */
-  last_seen?: { scan_id: number; at: string } | null;
+  /** The newest scan that found this source (named last_scan: `last_seen` on a source is its last successful poll); null = never found by a scan; absent in old fixtures. */
+  last_scan?: { scan_id: number; at: string } | null;
 }
 export interface GraphModel {
   sources: GraphSource[];
