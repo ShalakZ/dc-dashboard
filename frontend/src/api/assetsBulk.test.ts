@@ -78,15 +78,12 @@ describe("loadImpacts", () => {
     });
     const ids = Array.from({ length: 15 }, (_, i) => i + 1);
     const done = loadImpacts(ids);
-    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-    await settle();
-    expect(held).toHaveLength(6); // six asked for, nine waiting
+    await vi.waitFor(() => expect(held).toHaveLength(6)); // six asked for, nine waiting
     let released = 0;
     while (released < ids.length) {
       held[released]();
       released += 1;
-      await settle();
-      expect(inFlight).toBe(Math.min(6, ids.length - released)); // the pool refills as one answers
+      await vi.waitFor(() => expect(inFlight).toBe(Math.min(6, ids.length - released))); // the pool refills as one answers
     }
     const answer = await done;
     expect(peak).toBe(6);
