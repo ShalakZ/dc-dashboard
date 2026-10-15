@@ -381,6 +381,12 @@
   .crumbs a { color: var(--accent); }
   .crumbs [aria-current="page"] { color: var(--text); font-weight: 600; }
   .crumbs .sep { flex: none; color: var(--text-2); }
+  /* A crumb with an icon (W7t): the icon sits inside the link or the current-page span, before the label. The slot is one line high (1lh) and
+     pinned to the first line, so the row is as tall as a trail without icons and a wrapping name keeps its icon beside its first line;
+     the text stays the baseline item, so the separator still lines up with it. */
+  .crumbs .with-icon { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; }
+  .crumbs .crumb-icon { flex: none; align-self: flex-start; display: grid; place-items: center; width: 1em; height: 1lh; color: currentColor; }
+  .crumbs .crumb-icon svg.i { width: 1em; height: 1em; }
   main > .crumbs { margin: 18px 0 4px; } /* the trail of a page without a page header (Dashboards) */
 
   /* Page header: crumbs, the one h1, a sub line and the actions on the right */

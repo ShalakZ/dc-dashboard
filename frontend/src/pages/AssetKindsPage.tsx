@@ -5,6 +5,7 @@ import type { AssetKind, AssetKindIn, AssetKindPatch } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { BulkDeleteKindsDialog } from "../components/BulkDeleteKindsDialog";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import type { Crumb } from "../components/Crumbs";
 import { EmptyNote } from "../components/EmptyNote";
 import { Icon } from "../components/Icon";
 import { InfoTip } from "../components/InfoTip";
@@ -21,7 +22,7 @@ import { addRange, filterCounts, filterKinds, KIND_FILTERS, neighbourId, pickAll
 import { clear, EMPTY_PICK, prune, toggle, unpick, type PickState } from "../lib/treeSelect";
 import { upperFirst } from "../lib/upperFirst";
 
-const CRUMBS = [{ label: "Assets Tree", to: "/assets" }, { label: "Asset kinds" }];
+const CRUMBS: Crumb[] = [{ label: "Assets Tree", to: "/assets", icon: "assets" }, { label: "Asset kinds" }];
 
 const FILTER_LABEL: Record<KindFilter, string> = { all: "All", starter: "Starter", yours: "Yours", unused: "Unused" };
 const NO_KINDS: AssetKind[] = []; // one array for "no answer yet", so the memos below keep their identity between renders

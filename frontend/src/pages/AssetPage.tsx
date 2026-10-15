@@ -62,9 +62,9 @@ function AssetView({ id }: { id: number }) {
   const buttons = assetActions(workspace, data.asset);
   // The ancestors come from the cached list. Until the list has the asset (just created, or not loaded) the trail is Assets Tree / the asset, which the page always knows.
   const crumbs: Crumb[] = [
-    { label: "Assets Tree", to: "/assets" },
-    ...trail.slice(0, -1).map((a) => ({ label: a.name, to: `/assets/${a.id}` })),
-    { label: data.asset.name },
+    { label: "Assets Tree", to: "/assets", icon: "assets" },
+    ...trail.slice(0, -1).map((a) => ({ label: a.name, to: `/assets/${a.id}`, icon: assetIcon(a) })),
+    { label: data.asset.name, icon: assetIcon(data.asset) },
   ];
   // The direct sub-assets are counted only when the list has the asset: a count taken from a list that lacks it would be a guess.
   const subCount = assets && trail.length > 0 ? assets.filter((a) => a.parent_id === id).length : null;

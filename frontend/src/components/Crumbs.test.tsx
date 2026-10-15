@@ -93,4 +93,62 @@ describe("Crumbs", () => {
     expect(container.querySelectorAll("a .sep")).toHaveLength(0);
     expect(screen.getByRole("link", { name: "MV2" })).toBeInTheDocument();
   });
+
+  describe("icons (W7t)", () => {
+    it("draws no icon slot for a crumb without one, so an existing trail is the markup it was", () => {
+      const { container } = show([{ label: "Assets", to: "/assets" }, { label: "MV2" }]);
+      expect(container.querySelectorAll(".crumb-icon")).toHaveLength(0);
+      expect(container.querySelectorAll("svg")).toHaveLength(0);
+      expect(container.querySelectorAll(".with-icon")).toHaveLength(0);
+    });
+
+    it("draws an aria-hidden icon inside the link, before the label, and keeps the link's name and text", () => {
+      const { container } = show([{ label: "Assets Tree", to: "/assets", icon: "assets" }, { label: "MV2", to: "/assets/3", icon: "kindPanel" }, { label: "Room-1", icon: "kindRoom" }]);
+      const link = screen.getByRole("link", { name: "Assets Tree" });
+      expect(link.textContent).toBe("Assets Tree");
+      expect(link.firstElementChild).toHaveClass("crumb-icon");
+      expect(link.firstElementChild).toHaveAttribute("aria-hidden", "true");
+      expect(link.firstElementChild!.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+      expect(link).toHaveClass("with-icon");
+      expect(link.getAttribute("href")).toBe("/assets");
+      // the icon is inside the item's link, never beside it, so it cannot become a stray list child
+      expect(container.querySelectorAll("li > .crumb-icon")).toHaveLength(0);
+      expect(container.querySelectorAll(".crumb-icon")).toHaveLength(3);
+      expect(screen.getByRole("link", { name: "MV2" })).toHaveAttribute("href", "/assets/3");
+    });
+
+    it("puts the icon of the current page inside its span, which keeps aria-current and its text", () => {
+      show([{ label: "Assets Tree", to: "/assets", icon: "assets" }, { label: "Panel 1", icon: "kindPanel" }]);
+      const current = screen.getByText("Panel 1");
+      expect(current.tagName).toBe("SPAN");
+      expect(current).toHaveAttribute("aria-current", "page");
+      expect(current).toHaveClass("with-icon");
+      expect(current.firstElementChild).toHaveClass("crumb-icon");
+      expect(current.textContent).toBe("Panel 1");
+      expect(screen.queryByRole("link", { name: "Panel 1" })).not.toBeInTheDocument();
+    });
+
+    it("draws the icon of a plain-text crumb that has none of its own destination", () => {
+      show([{ label: "Sources", icon: "assets" }, { label: "sim" }]);
+      const plain = screen.getByText("Sources");
+      expect(plain.tagName).toBe("SPAN");
+      expect(plain).not.toHaveAttribute("aria-current");
+      expect(plain.querySelector(".crumb-icon")).not.toBeNull();
+    });
+
+    it("keeps the separator first in its item and outside the icon slot", () => {
+      const { container } = show([{ label: "Assets", to: "/assets", icon: "assets" }, { label: "MV2", to: "/assets/3", icon: "kindPanel" }, { label: "Room-1", icon: "kindRoom" }]);
+      const items = Array.from(container.querySelectorAll("li"));
+      expect(items[0].querySelector(".sep")).toBeNull();
+      for (const li of items.slice(1)) expect(li.firstElementChild).toHaveClass("sep");
+      expect(container.querySelectorAll(".crumb-icon .sep, a .sep")).toHaveLength(0);
+      expect(Array.from(container.querySelectorAll("li > :not(.sep)")).map((el) => el.textContent)).toEqual(["Assets", "MV2", "Room-1"]);
+    });
+
+    it("mixes crumbs with and without icons in one trail", () => {
+      const { container } = show([{ label: "Assets Tree", to: "/assets", icon: "assets" }, { label: "Asset kinds" }]);
+      expect(container.querySelectorAll(".crumb-icon")).toHaveLength(1);
+      expect(screen.getByText("Asset kinds")).not.toHaveClass("with-icon");
+    });
+  });
 });
