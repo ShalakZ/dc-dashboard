@@ -43,6 +43,8 @@ describe("AlignGuides", () => {
     expect(svg).toHaveAttribute("aria-hidden", "true");
     expect(svg).toHaveClass("graph-guides");
     expect(svg.style.overflow).toBe("visible");
+    // At the origin of the portal, not on a text baseline (an inline svg sits a line-height too low, and the error grows with the zoom).
+    expect([svg.style.position, svg.style.left, svg.style.top]).toEqual(["absolute", "0px", "0px"]);
     expect(svg.style.pointerEvents).toBe("none");
     expect(svg).toHaveAttribute("width", "0");
     expect(svg).toHaveAttribute("height", "0");

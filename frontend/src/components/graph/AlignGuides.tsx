@@ -8,7 +8,7 @@ export interface AlignGuidesHandle { set(guides: Guides | null): void }
 /**
  * The thin alignment guides shown while a node is dragged, in the canvas's own coordinates (they follow pan and zoom). Visual only.
  * The guides live in THIS component's state and the page reaches it through `handleRef`, so a drag frame re-renders these few lines and
- * not the whole canvas a second time. One `svg` of 0x0 at the origin whose lines overflow it; `vector-effect: non-scaling-stroke` keeps
+ * not the whole canvas a second time. One `svg` of 0x0 at the origin (absolute: an inline svg would sit on the text baseline, a line-height too low) whose lines overflow it; `vector-effect: non-scaling-stroke` keeps
  * them 1px thick at every zoom. Nothing is drawn without guides.
  */
 export function AlignGuides({ handleRef }: { handleRef: { current: AlignGuidesHandle | null } }) {
@@ -22,7 +22,7 @@ export function AlignGuides({ handleRef }: { handleRef: { current: AlignGuidesHa
   if (!guides || (guides.vertical.length === 0 && guides.horizontal.length === 0)) return null;
   return (
     <ViewportPortal>
-      <svg className="graph-guides" width={0} height={0} aria-hidden="true" style={{ overflow: "visible", pointerEvents: "none" }}>
+      <svg className="graph-guides" width={0} height={0} aria-hidden="true" style={{ position: "absolute", left: 0, top: 0, overflow: "visible", pointerEvents: "none" }}>
         {guides.vertical.map((g, i) => (
           <line key={`v${i}`} x1={g.at} y1={g.from} x2={g.at} y2={g.to} vectorEffect="non-scaling-stroke" />
         ))}
