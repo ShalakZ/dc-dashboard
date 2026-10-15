@@ -669,3 +669,246 @@ describe("ScansPage scan drawer and readable numbers (W7r)", () => {
     expect(within(row).getByText("1 source, 120 points")).toHaveAttribute("title", "1 source recognised, 120 points found");
   });
 });
+
+describe("ScansPage port names, the typo guard and Scan again (W7t)", () => {
+  const preview = { "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } } };
+  const note = () => document.getElementById("scope-ports-note")!;
+  const newScope = async (over: Record<string, unknown> = {}, role = "admin") => {
+    const calls = mockFetch({ ...base(role), "POST /api/scopes": { status: 201, body: scope }, ...over });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "New scope" }));
+    await screen.findByLabelText("Targets");
+    return calls;
+  };
+
+  it("says '1 host', '1 port' and '1 check' in the confirmation, and keeps the plurals for more", async () => {
+    mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 1, ports: 1, pairs: 1, digest: "d1g3st" } } });
+    open();
+    await pick("Scan");
+    expect(await screen.findByText("1 host × 1 port (1 check)")).toBeInTheDocument();
+    expect(screen.queryByText(/1 hosts|1 ports|1 checks/)).not.toBeInTheDocument();
+  });
+
+  it("names the known ports in the Scopes table and leaves a typo as the bare number", async () => {
+    mockFetch({ ...base("operator"), "GET /api/scopes": { body: [{ ...scope, ports: [9000, 4840, 4080] }] } });
+    open();
+    const row = await screen.findByRole("row", { name: /^lab simulator / });
+    expect(within(row).getByText("9000 (simulator), 4840 (OPC UA), 4080")).toBeInTheDocument();
+  });
+
+  it("reads the Ports field back with the names, in one reserved slot that the field points to", async () => {
+    await newScope();
+    expect(note()).toHaveClass("scope-ports-note");
+    expect(note()).toHaveTextContent("502 (Modbus), 4840 (OPC UA), 9000 (simulator)");
+    expect(screen.getByLabelText("Ports")).toHaveAttribute("aria-describedby", "scope-ports-hint scope-ports-note");
+    expect(screen.getByLabelText("Ports")).toHaveAccessibleDescription(/502 \(Modbus\)/);
+    expect(note().querySelector("[role]")).toBeNull(); // no live region: it would chatter on every key
+    await userEvent.clear(screen.getByLabelText("Ports"));
+    expect(note()).toBeEmptyDOMElement(); // the slot stays, empty
+    await userEvent.type(screen.getByLabelText("Ports"), "4080");
+    expect(note()).not.toHaveTextContent("Reads as"); // the warning has the slot
+    await userEvent.clear(screen.getByLabelText("Ports"));
+    await userEvent.type(screen.getByLabelText("Ports"), "80 8080");
+    expect(note()).toBeEmptyDOMElement(); // nothing here has a name and nothing looks like a typo: nothing to say
+    await userEvent.clear(screen.getByLabelText("Ports"));
+    await userEvent.type(screen.getByLabelText("Ports"), "4840 80");
+    expect(note()).toHaveTextContent("Reads as 4840 (OPC UA), 80"); // a named port: the readout is back
+    expect(note().querySelector(".scope-ports-readout")).toHaveClass("muted");
+  });
+
+  it("warns about a port that looks like a typo, names the likely one, and never blocks the save", async () => {
+    const calls = await newScope();
+    await userEvent.type(screen.getByLabelText("Name"), "lab");
+    await userEvent.clear(screen.getByLabelText("Ports"));
+    await userEvent.type(screen.getByLabelText("Ports"), "4840 4080");
+    expect(note()).toHaveTextContent("4080 is not a port any connector uses; did you mean 4840 (OPC UA)?");
+    expect(note()).not.toHaveTextContent("Reads as"); // one slot: the warning has it, the readout would be a third line
+    expect(note().querySelectorAll("p")).toHaveLength(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(); // a note, not an error
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes")?.body).toEqual({ name: "lab", targets: ["172.18.0.0/24"], ports: [4840, 4080] });
+  });
+
+  it("does not warn about 80, 8080, 443 or the ports it names, and keeps quiet while a port is half typed", async () => {
+    await newScope();
+    const ports = screen.getByLabelText("Ports");
+    await userEvent.clear(ports);
+    await userEvent.type(ports, "80 8080 443 502 4840 5020 9000");
+    expect(note()).not.toHaveTextContent("did you mean");
+    await userEvent.clear(ports);
+    await userEvent.type(ports, "48");
+    expect(note()).not.toHaveTextContent("did you mean");
+  });
+
+  it("lists at most three warnings and counts the rest", async () => {
+    await newScope();
+    await userEvent.clear(screen.getByLabelText("Ports"));
+    await userEvent.type(screen.getByLabelText("Ports"), "4080 4048 4804 503 5022");
+    expect(note().querySelectorAll("p")).toHaveLength(3 + 1); // three warnings and "and 2 more" (no port here has a name, so no readout)
+    expect(note()).toHaveTextContent("and 2 more");
+  });
+
+  it("still guards from the static names when the suggestions cannot be read", async () => {
+    await newScope({ "GET /api/scopes/suggestions": { status: 500, body: { detail: "suggestions are down" } } });
+    expect(screen.getByText(/Could not load suggestions/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Name"), "x");
+    await userEvent.type(screen.getByLabelText("Ports"), "4080");
+    expect(note()).toHaveTextContent("did you mean 4840 (OPC UA)?");
+  });
+
+  it("also guards the edit form, reads the suggestions for it and compares with them", async () => {
+    const calls = mockFetch({ ...base("admin"), "GET /api/scopes/suggestions": { body: { targets: ["172.18.0.0/24"], ports: [20000, 502] } } });
+    open();
+    await pick("Edit");
+    expect(screen.getByLabelText("Ports")).toHaveValue("9000, 4840, 5020");
+    expect(note()).toHaveTextContent("9000 (simulator), 4840 (OPC UA), 5020 (Modbus, simulator)");
+    await userEvent.type(screen.getByLabelText("Ports"), ", 20001");
+    await waitFor(() => expect(note()).toHaveTextContent("20001 is not a port any connector uses; did you mean 20000?"));
+    expect(calls.some((c) => c.path === "/api/scopes/suggestions")).toBe(true);
+  });
+
+  it("shows the typo of a saved scope the moment its edit form opens", async () => {
+    mockFetch({ ...base("admin"), "GET /api/scopes": { body: [{ ...scope, ports: [9000, 4080] }] } });
+    open();
+    await pick("Edit");
+    expect(note()).toHaveTextContent("4080 is not a port any connector uses; did you mean 4840 (OPC UA)?");
+  });
+
+  describe("Scan again", () => {
+    afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; }); // jsdom has none: a test that spies puts it there
+    const again = (name = "Scan again") => screen.findByRole("button", { name });
+    const startable = { ...preview, "POST /api/scopes/3/scan": { status: 202, body: { scan_id: 8, job_id: 1 } }, "GET /api/scans/8": { body: { ...done, id: 8 } } };
+
+    it("previews the scope of that scan, and starts it only after the confirmation; the focus stays on the pressed button", async () => {
+      const reveal = vi.fn();
+      Element.prototype.scrollIntoView = reveal;
+      const calls = mockFetch({ ...base("admin"), ...startable });
+      open();
+      const button = await again();
+      expect(button).toHaveAttribute("data-scan-again", "7");
+      expect(button).toHaveAttribute("type", "button");
+      expect(button).not.toHaveAttribute("aria-disabled");
+      button.focus();
+      await userEvent.click(button);
+      expect(await screen.findByText("2 hosts × 3 ports (6 checks)")).toBeInTheDocument();
+      expect(calls.some((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")).toBe(false); // the preview first, as the menu's Scan does
+      expect(button).toHaveFocus();
+      await waitFor(() => expect(reveal).toHaveBeenCalledWith({ block: "nearest", behavior: "auto" })); // the panel is above the table, often off screen
+      expect(reveal.mock.contexts[0]).toBe(document.querySelector(".confirm-scan"));
+      await userEvent.click(screen.getByRole("button", { name: "Start scan" }));
+      expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({ confirm_host_count: 2, digest: "d1g3st" });
+    });
+
+    it("does not scroll for the menu's Scan, which has its own place in view", async () => {
+      const reveal = vi.fn();
+      Element.prototype.scrollIntoView = reveal;
+      mockFetch({ ...base("admin"), ...preview });
+      open();
+      await pick("Scan");
+      await screen.findByText("2 hosts × 3 ports (6 checks)");
+      expect(reveal).not.toHaveBeenCalled();
+    });
+
+    it("sits beside Details in every row and keeps its name, so the Details button is still found by its own name", async () => {
+      mockFetch({ ...base("admin"), "GET /api/scans": { body: [{ ...done, findings: undefined }, { ...done, id: 8, findings: undefined }] } });
+      open();
+      const rows = (await screen.findAllByRole("row", { name: /^lab .*done/ }));
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        const cell = within(row).getByRole("button", { name: "Details" }).closest("td")!;
+        expect([...cell.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Scan again", "Details"]);
+      }
+    });
+
+    it("is drawn for a role that cannot scan, aria-disabled with the reason, and does nothing when pressed", async () => {
+      const calls = mockFetch({ ...base("operator"), ...preview });
+      open();
+      const button = await again();
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      expect(button).not.toBeDisabled(); // never native: a button that has the focus keeps it
+      expect(button).toHaveAttribute("title", "Your role may not start scans.");
+      expect(button).toHaveAccessibleDescription("Your role may not start scans.");
+      await userEvent.click(button);
+      expect(calls.some((c) => c.path.endsWith("/preview"))).toBe(false);
+      expect(screen.queryByText(/hosts ×/)).not.toBeInTheDocument();
+    });
+
+    it("is aria-disabled with the reason when the scope was deleted (no scope id, or one that is no longer in the list)", async () => {
+      const calls = mockFetch({
+        ...base("admin"),
+        "GET /api/scans": { body: [{ ...done, scope_id: null, findings: undefined }, { ...done, id: 8, scope_id: 99, findings: undefined }] },
+      });
+      open();
+      await screen.findAllByRole("row", { name: /^lab .*done/ });
+      const buttons = await screen.findAllByRole("button", { name: "Scan again" });
+      expect(buttons).toHaveLength(2);
+      for (const button of buttons) {
+        expect(button).toHaveAttribute("aria-disabled", "true");
+        expect(button).toHaveAttribute("title", "The scope was deleted.");
+        await userEvent.click(button);
+      }
+      expect(calls.some((c) => c.path.endsWith("/preview"))).toBe(false);
+    });
+
+    it("waits while a request is in flight: a second press sends nothing, and the reason says why", async () => {
+      const calls = mockFetch({ ...base("admin"), ...preview });
+      const held = holdFetch((_method, path) => path === "/api/scopes/3/preview");
+      open();
+      const button = await again();
+      await userEvent.click(button);
+      await waitFor(() => expect(button).toHaveAttribute("aria-disabled", "true"));
+      expect(button).toHaveAttribute("title", "Another request is in progress.");
+      await userEvent.click(button);
+      held.release();
+      await screen.findByText("2 hosts × 3 ports (6 checks)");
+      expect(calls.filter((c) => c.path === "/api/scopes/3/preview")).toHaveLength(1);
+      expect(button).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("previews the scope as it is now, not as the scan saw it", async () => {
+      let ports = 3;
+      mockFetch({
+        ...base("admin"),
+        "GET /api/scopes/3/preview": () => ({ body: { hosts: 2, ports, pairs: 2 * ports, digest: `d${ports}` } }),
+        "PATCH /api/scopes/3": ({ body }) => { ports = (body as { ports: number[] }).ports.length; return { body: scope }; },
+      });
+      open();
+      await pick("Edit");
+      await userEvent.clear(screen.getByLabelText("Ports"));
+      await userEvent.type(screen.getByLabelText("Ports"), "1 2");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
+      await userEvent.click(await again());
+      expect(await screen.findByText("2 hosts × 2 ports (4 checks)")).toBeInTheDocument();
+    });
+
+    it("is there for a custom role that holds discovery.scan, and not enabled for one that holds only discovery.view", async () => {
+      mockFetch({ ...base("custom"), "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view", "discovery.scan"] }) }, ...preview });
+      renderWithProviders(<><ScansPage /><SignedIn /></>, { route: "/scans", path: "/scans" });
+      await screen.findAllByText("lab");
+      await accountKnown();
+      expect(await again()).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("keeps the Details focus return working (its button carries data-scan-details and no other button does)", async () => {
+      mockFetch({ ...base("operator"), "GET /api/scans/7": { body: done } });
+      open();
+      await userEvent.click(await screen.findByRole("button", { name: "Details" }));
+      await screen.findByRole("dialog", { name: "Scan #7 — done" });
+      await userEvent.keyboard("{Escape}");
+      expect(screen.getByRole("button", { name: "Details" })).toHaveFocus();
+      expect(document.querySelectorAll("[data-scan-details]")).toHaveLength(1);
+    });
+  });
+});
+
+describe("ScansPage Recent scans table hooks (W7t)", () => {
+  it("is the container whose width decides when the two buttons stack, and its actions cell carries the class that may", async () => {
+    mockFetch(base("admin"));
+    open();
+    const row = await screen.findByRole("row", { name: /^lab .*done/ });
+    expect(row.closest(".table-wrap")).toHaveClass("scans-recent");
+    expect(within(row).getByRole("button", { name: "Details" }).closest("td")).toHaveClass("row-actions", "scan-actions");
+    expect(document.querySelectorAll(".scans-recent")).toHaveLength(1); // the Scopes table keeps its plain frame
+  });
+});

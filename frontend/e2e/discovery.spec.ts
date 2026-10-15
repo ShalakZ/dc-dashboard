@@ -80,7 +80,7 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
   await expect(page.getByRole("cell", { name: "sim", exact: true })).toBeVisible();
   const scopeRow = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "sim", exact: true }) });
   await (await rowAction(page, scopeRow, "Scan")).click();
-  await expect(page.getByText("1 hosts × 3 ports (3 checks)")).toBeVisible();
+  await expect(page.getByText("1 host × 3 ports (3 checks)")).toBeVisible();
   await page.getByRole("button", { name: "Start scan" }).click();
   const findings = page.getByRole("table").filter({ has: page.getByRole("columnheader", { name: "Outcome" }) });
   await expect(findings.locator("tbody tr")).toHaveCount(3, { timeout: 90_000 });

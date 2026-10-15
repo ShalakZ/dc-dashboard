@@ -33,7 +33,7 @@ describe("ScanDrawer", () => {
     open();
     expect(await screen.findByRole("dialog", { name: "Scan #7 — done" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Scan #7 — done" })).toBeInTheDocument();
-    expect(dialog()).toHaveTextContent("lab: simulator, ports 9000, 4840, 5020");
+    expect(dialog()).toHaveTextContent("lab: simulator, ports 9000 (simulator), 4840 (OPC UA), 5020 (Modbus, simulator)");
   });
 
   it("counts the checks, the open ports, the sources recognised and the rest in plain words", async () => {
@@ -48,7 +48,7 @@ describe("ScanDrawer", () => {
     mockFetch({ ...base, "GET /api/scans/7": { body: { ...done, scope_id: null } } });
     open();
     await screen.findByRole("dialog", { name: "Scan #7 — done" });
-    expect(dialog()).toHaveTextContent("lab: simulator, ports 9000, 4840, 5020");
+    expect(dialog()).toHaveTextContent("lab: simulator, ports 9000 (simulator), 4840 (OPC UA), 5020 (Modbus, simulator)");
   });
 
   it("shows every target and port of a long scope, never cut to 'and N more'", async () => {
@@ -58,7 +58,7 @@ describe("ScanDrawer", () => {
     open();
     await screen.findByRole("dialog", { name: "Scan #7 — done" });
     const line = dialog().querySelector(".scan-scope")!.textContent!;
-    expect(line).toBe(`lab: ${targets.join(", ")}, ports ${ports.join(", ")}`);
+    expect(line).toBe(`lab: ${targets.join(", ")}, ports 502 (Modbus), 4840 (OPC UA), 5020 (Modbus, simulator), 9000 (simulator), 20000, 20001, 20002, 20003, 20004, 20005`);
     expect(line).not.toMatch(/more/);
   });
 
