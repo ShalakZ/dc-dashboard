@@ -264,6 +264,98 @@ describe("graph nodes", () => {
     expect(screen.getByText(/active_power_kw/)).toBeInTheDocument();
   });
 
+  describe("the mapping menu button on a mapped point and a mapped group (W12a)", () => {
+    const mappedPoint = { ...point, asset_id: 10, mapping_id: 1, mapped_metric: "active_power_kw" as const };
+    const menuName = (name: string) => `Mapping actions for ${name}`;
+
+    it("is drawn only when the page gives the node an onMenu (a role without assets.edit, or a node with nothing mapped, gets none)", () => {
+      const view = renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point: mappedPoint });
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+      view.unmount();
+      renderNode("cluster", "cluster:1:LVP01", { ...cluster, onToggle: vi.fn() });
+      expect(screen.queryByRole("button", { name: /^Mapping actions/ })).not.toBeInTheDocument();
+    });
+
+    it("a point's button is named for the point, opens a menu (aria-haspopup), never selects the node or starts a drag, and hands its own element to onMenu", async () => {
+      const onMenu = vi.fn();
+      const outer = vi.fn();
+      const Node = nodeTypes.point as unknown as (props: { id: string; data: object }) => React.ReactElement;
+      render(<div onClick={outer}><Node id="point:3" data={{ sourceId: 1, clusterKey: "LVP01", point: mappedPoint, onMenu, onUnmap: vi.fn(), onMove: vi.fn() }} /></div>);
+      const button = screen.getByRole("button", { name: menuName("LVP01 kW") });
+      expect(button).toHaveAttribute("type", "button");
+      expect(button).toHaveAttribute("aria-haspopup", "menu");
+      // nodrag: a press on it is not a drag; nokey: Enter, Space and the arrows on it are not the node's keys (React Flow's own opt-out class).
+      expect(button).toHaveClass("nodrag", "nokey");
+      expect(button.textContent).toBe(""); // an icon: the name is the aria-label
+      expect(button.querySelector("svg.i")).toHaveAttribute("aria-hidden", "true");
+      await userEvent.click(button);
+      expect(onMenu).toHaveBeenCalledTimes(1);
+      expect(onMenu).toHaveBeenCalledWith(button);
+      expect(outer).not.toHaveBeenCalled(); // stopPropagation: the click does not also select the node
+    });
+
+    it("is reached by the keyboard and opens with Enter and Space", async () => {
+      const onMenu = vi.fn();
+      renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point: mappedPoint, onMenu });
+      await userEvent.tab();
+      expect(screen.getByRole("button", { name: menuName("LVP01 kW") })).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      await userEvent.keyboard(" ");
+      expect(onMenu).toHaveBeenCalledTimes(2);
+    });
+
+    it("adds no row and no wrapper: the point's title and metric line are what they were, and the node marks itself so the title leaves room for the button", () => {
+      renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point: mappedPoint, onMenu: vi.fn() });
+      const title = screen.getByText("LVP01 kW");
+      expect(title).toHaveClass("node-title");
+      expect(title.parentElement).toHaveClass("gnode", "gnode-point", "gnode-hasmenu");
+      expect(screen.getByText(/active_power_kw/)).toHaveClass("muted");
+      expect(screen.getByRole("button", { name: menuName("LVP01 kW") }).parentElement).toBe(title.parentElement); // a direct child of the node, positioned by the stylesheet
+    });
+
+    it("a group's button is named for the group and sits between its toggle and its Map buttons in the keyboard order", async () => {
+      const [onMenu, onToggle, onMap, onNewAsset] = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+      renderNode("cluster", "cluster:1:LVP01", { ...cluster, onToggle, onMap, onNewAsset, onMenu });
+      const order: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        await userEvent.tab();
+        order.push(document.activeElement?.getAttribute("aria-label") ?? "");
+      }
+      expect(order).toEqual(["Expand LVP01", menuName("LVP01"), "Map LVP01 to asset…", "New asset from LVP01…"]);
+      const button = screen.getByRole("button", { name: menuName("LVP01") });
+      expect(button).toHaveClass("nodrag", "nokey");
+      await userEvent.click(button);
+      expect(onMenu).toHaveBeenCalledWith(button);
+      expect(onToggle).not.toHaveBeenCalled();
+    });
+
+    it("on a group the title row keeps its toggle at the end and leaves room for the button; the progress strip is still there", () => {
+      renderNode("cluster", "cluster:1:LVP01", { ...cluster, onToggle: vi.fn(), onMenu: vi.fn() });
+      const head = screen.getByText("LVP01 (3)").parentElement!;
+      expect(head).toHaveClass("row", "gnode-head");
+      expect(head).toContainElement(screen.getByRole("button", { name: "Expand LVP01" }));
+      expect(head).not.toContainElement(screen.getByRole("button", { name: menuName("LVP01") }));
+      expect(head.parentElement).toHaveClass("gnode", "gnode-cluster", "gprogress-host", "gnode-hasmenu");
+      expect(document.querySelector(".gprogress")).not.toBeNull();
+    });
+
+    it("a node without the button keeps the exact classes it had", () => {
+      renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point });
+      expect(document.querySelector(".gnode")!.className).toBe("gnode gnode-point");
+      cleanup();
+      renderNode("cluster", "cluster:1:LVP01", { ...cluster, onToggle: vi.fn() });
+      expect(document.querySelector(".gnode")!.className).toBe("gnode gnode-cluster gprogress-host");
+      expect(screen.getByText("LVP01 (3)").parentElement!.className).toBe("row");
+    });
+
+    it("an asset node, a source and an unidentified service draw no such button even if the data carried the callbacks", () => {
+      renderNode("asset", "asset:10", { asset: { id: 10, parent_id: null, name: "Site", kind: "generic" }, depth: 0, mapped: [{ sourceId: 1, sourceName: "Plant", count: 2 }], onUnmapSource: vi.fn() });
+      renderNode("source", "src:1", { source, expanded: false });
+      renderNode("unidentified", "unid:10.0.0.9:8080", { host: "10.0.0.9", port: 8080 });
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    });
+  });
+
   it("an asset shows its name and an unidentified service its host and port", () => {
     const asset = renderNode("asset", "asset:10", { asset: { id: 10, parent_id: null, name: "Site", kind: "generic" }, depth: 0 });
     expect(screen.getByText("Site")).toHaveClass("node-title");

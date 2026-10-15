@@ -84,6 +84,19 @@ describe("the Discovery node styles (W7u)", () => {
     expect(rule(".gprogress-host")).toMatch(/position:\s*relative/);
   });
 
+  it("the mapping menu button (W12a) is 20px and absolutely placed at the top right of a positioned node, and the first line leaves room for it: the node is no taller", () => {
+    const button = rule(".gnode-hasmenu .gnode-menu-btn");
+    expect(button).toMatch(/position:\s*absolute/);
+    expect(button).toMatch(/width:\s*20px/);
+    expect(button).toMatch(/height:\s*20px/);
+    expect(button).toMatch(/top:\s*\d+px/);
+    expect(button).toMatch(/right:\s*\d+px/);
+    expect(rule(".gnode-hasmenu")).toMatch(/position:\s*relative/);
+    // a point's title is a direct child of the node; a group's title shares a row with its toggle, so the row leaves the room and the toggle stands left of the button
+    expect(rule(".gnode-hasmenu > .node-title, .gnode-hasmenu > .gnode-head")).toMatch(/padding-right:\s*24px/);
+    expect(rule(".gnode-hasmenu .gnode-menu-btn svg.i")).toMatch(/width:\s*14px/);
+  });
+
   it("a lit path leaves the nodes and edges that are on it alone and dims the rest, the edges more", () => {
     expect(rule(".graph-canvas.has-focus .react-flow__node:not(.lit)")).toMatch(/opacity:\s*0\.35/);
     expect(rule(".graph-canvas.has-focus .react-flow__edge:not(.lit)")).toMatch(/opacity:\s*0\.25/);

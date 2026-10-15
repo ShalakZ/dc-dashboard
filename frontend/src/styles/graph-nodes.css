@@ -18,6 +18,14 @@
   .gprogress-host { position: relative; }
   .gprogress { position: absolute; left: 0; bottom: 0; height: 3px; max-width: 100%; background: var(--accent); }
 
+  /* W12a: the mapping menu button of a mapped point or group. Absolutely placed at the node's top right (20px square), so the node is no taller; the host is positioned, and the first
+     line leaves 24px for it at the right (a point's title directly, a group's title row, whose toggle then stands left of the button). The two-class selectors beat app.css's
+     `.gnode button` (padding 0 6px) and `.icon-btn` (28px, 16px icon), which name the same properties. */
+  .gnode-hasmenu { position: relative; }
+  .gnode-hasmenu > .node-title, .gnode-hasmenu > .gnode-head { padding-right: 24px; }
+  .gnode-hasmenu .gnode-menu-btn { position: absolute; top: 5px; right: 6px; width: 20px; height: 20px; padding: 0; }
+  .gnode-hasmenu .gnode-menu-btn svg.i { width: 14px; height: 14px; }
+
   /* Path highlight. The wrapper gets has-focus while a path is lit (one DOM change), and only the nodes and edges of the path get lit (the rest keep their identity, so 2,000 nodes do not re-render).
      The dimming is immediate, with no opacity transition: a 120 ms fade ran on ~2,280 layers at once and made every hover 5-6 slow frames at 2,286 nodes (whole-wave review, finding 1). `.graph-canvas` is never the FIRST compound of a selector here (the clash guard in app.css.test.ts would call the class "bare" in this file and fail graph-tools.css for naming it): every rule carries a second class. */
   .graph-canvas.has-focus .react-flow__node:not(.lit) { opacity: 0.35; }

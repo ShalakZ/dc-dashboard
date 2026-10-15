@@ -17,9 +17,9 @@ function Handles({ children }: { children: React.ReactNode }) {
 }
 
 // `nodrag` keeps a click on a button from starting a drag; stopPropagation keeps it from also selecting the node.
-const press = (action: () => void) => (event: MouseEvent) => {
+const press = (action: (event: MouseEvent<HTMLElement>) => void) => (event: MouseEvent<HTMLElement>) => {
   event.stopPropagation();
-  action();
+  action(event);
 };
 
 function Toggle({ id, name, expanded, onToggle }: { id: string; name: string; expanded: boolean; onToggle?: NodeActions["onToggle"] }) {
@@ -27,6 +27,24 @@ function Toggle({ id, name, expanded, onToggle }: { id: string; name: string; ex
   return (
     <button type="button" className="nodrag" aria-label={`${expanded ? "Collapse" : "Expand"} ${name}`} onClick={press(() => onToggle(id))}>
       {expanded ? "−" : "+"}
+    </button>
+  );
+}
+
+/**
+ * W12a: the small menu button of a mapped point or group. It is NOT a row menu: a menu inside a React Flow node would leak its arrow, Enter and
+ * Space keys, its hover and its focus into the node and the canvas, so the button only reports its own element (`onMenu`) and the page opens the
+ * node's context menu, outside the canvas, next to it. `nokey` is React Flow's own opt-out of the node's key handling. 20px and absolutely placed
+ * by the stylesheet (`gnode-menu-btn`), so the node is no taller; the host node carries `gnode-hasmenu`, which leaves the title room for it.
+ */
+function MenuButton({ name, onMenu }: { name: string; onMenu?: NodeActions["onMenu"] }) {
+  if (!onMenu) return null;
+  return (
+    <button
+      type="button" className="nodrag nokey icon-btn gnode-menu-btn" aria-label={`Mapping actions for ${name}`} aria-haspopup="menu"
+      onClick={press((event) => onMenu(event.currentTarget))}
+    >
+      <Icon name="more" />
     </button>
   );
 }
@@ -79,15 +97,16 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
 }
 
 function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) {
-  const { label, count, mappedCount, expanded, onToggle, onMap, onNewAsset } = data;
+  const { label, count, mappedCount, expanded, onToggle, onMap, onNewAsset, onMenu } = data;
   const share = count > 0 ? Math.min(100, Math.round((mappedCount / count) * 100)) : 0;
   return (
-    <div className="gnode gnode-cluster gprogress-host">
+    <div className={onMenu ? "gnode gnode-cluster gprogress-host gnode-hasmenu" : "gnode gnode-cluster gprogress-host"}>
       <Handles>
-        <div className="row">
+        <div className={onMenu ? "row gnode-head" : "row"}>
           <div className="node-title">{`${label} (${count})`}</div>
           <Toggle id={id} name={label} expanded={expanded} onToggle={onToggle} />
         </div>
+        <MenuButton name={label} onMenu={onMenu} />
         <div className="muted">{mappedCount} mapped</div>
         <MapButtons id={id} name={label} onMap={onMap} onNewAsset={onNewAsset} />
         {/* The share of mapped points as a 3px strip on the bottom edge: absolutely placed, so it adds no height. The words stay in the line above. */}
@@ -98,12 +117,13 @@ function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) 
 }
 
 function PointNode({ id, data }: NodeProps<Node<PointNodeData, "point">>) {
-  const { point, onMap, onNewAsset } = data;
+  const { point, onMap, onNewAsset, onMenu } = data;
   const detail = [point.unit_hint, point.mapped_metric && `→ ${point.mapped_metric}`].filter(Boolean).join(" ");
   return (
-    <div className="gnode gnode-point">
+    <div className={onMenu ? "gnode gnode-point gnode-hasmenu" : "gnode gnode-point"}>
       <Handles>
         <div className="node-title">{point.name}</div>
+        <MenuButton name={point.name} onMenu={onMenu} />
         {detail && <div className="muted">{detail}</div>}
         <MapButtons id={id} name={point.name} onMap={onMap} onNewAsset={onNewAsset} />
       </Handles>

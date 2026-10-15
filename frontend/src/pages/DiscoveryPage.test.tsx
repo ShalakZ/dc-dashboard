@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GraphModel, GraphPoint, GraphSource } from "../api/types";
+import type { MappedInfo } from "../hooks/useMappingActions";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
@@ -12,9 +13,9 @@ import type { PermissionId } from "../lib/permissions";
 import { DiscoveryPage } from "./DiscoveryPage";
 
 // The bulk-create dialog is another piece (its own tests): here it only has to be mounted with the right props and closed through onClose.
-const bulk = vi.hoisted(() => ({ props: [] as { model: GraphModel; source: GraphSource; onClose: () => void }[] }));
+const bulk = vi.hoisted(() => ({ props: [] as { model: GraphModel; source: GraphSource; onClose: () => void; onMapped: (info: MappedInfo) => void }[] }));
 vi.mock("../components/graph/BulkCreateDialog", () => ({
-  BulkCreateDialog: (props: { model: GraphModel; source: GraphSource; onClose: () => void }) => {
+  BulkCreateDialog: (props: { model: GraphModel; source: GraphSource; onClose: () => void; onMapped: (info: MappedInfo) => void }) => {
     bulk.props.push(props);
     return <div role="dialog" aria-label="Create assets stub"><button type="button" onClick={props.onClose}>Close stub</button></div>;
   },
@@ -2210,6 +2211,370 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       held.release();
       await screen.findByText("Plant OPC");
       expect(screen.getAllByRole("button", { name: TIP })).toHaveLength(1);
+    });
+  });
+});
+
+// ---- W12a: unmap and move from the nodes and the menu, the Undo after mapping, the note about a room ----
+
+describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
+  type M = { id: number; point_id: number; asset_id: number; metric: GraphPoint["mapped_metric"] & string; scale: number; interval_seconds: number | null; custom_unit: string | null };
+  const mapping = (id: number, point_id: number, asset_id: number, metric: M["metric"], over: Partial<M> = {}): M =>
+    ({ id, point_id, asset_id, metric, scale: 1, interval_seconds: 5, custom_unit: null, ...over });
+  // Mapping 21: LVP01 kW on Panel 1 (11), at scale 0.001 and interval 1 (what an Undo must put back); 22: LVP01 V on Site (10); 23: Atrium's M kW on Site.
+  const KW_ON_PANEL = mapping(21, 1, 11, "active_power_kw", { scale: 0.001, interval_seconds: 1 });
+  const V_ON_SITE = mapping(22, 2, 10, "voltage_v");
+  const M_ON_SITE = mapping(23, 8, 10, "active_power_kw");
+  const KINDS = [{ id: 1, name: "room", icon: "room", asset_count: 1, starter: true }, { id: 2, name: "panel", icon: "panel", asset_count: 1, starter: true }];
+
+  /** A server that keeps the mappings, builds the graph from them and answers the mapping routes the way the API does. `dropSource1`: the first source is gone from the next graph. */
+  function server(initial: M[], extra: Record<string, unknown> = {}, permissions: PermissionId[] | "admin" = "admin") {
+    const state = { mappings: new Map(initial.map((m) => [m.id, { ...m }])) /* copies: a PATCH changes the stored mapping */, next: 900, dropSource1: false };
+    const p = (id: number, name: string, extra: Partial<GraphPoint> = {}) => {
+      const m = [...state.mappings.values()].find((x) => x.point_id === id);
+      return point(id, name, { ...extra, ...(m ? { asset_id: m.asset_id, mapping_id: m.id, mapped_metric: m.metric } : {}) });
+    };
+    const kwh = { suggestion: { metric: "energy_kwh" as const, scale: 0.001, interval_seconds: 60, custom_unit: null } };
+    const graphNow = (): GraphModel => ({
+      sources: [
+        ...(state.dropSource1 ? [] : [srcOf(1, "Plant OPC", { clusters: [{ key: "LVP01", points: [p(1, "LVP01 kW"), p(2, "LVP01 V"), p(3, "LVP01 kWh", kwh)] }] })]),
+        srcOf(2, "Atrium", { origin: "manual", clusters: [{ key: "M", points: [p(8, "M kW")] }] }),
+      ],
+      unidentified: [],
+      assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }, { id: 11, parent_id: 10, name: "Panel 1", kind: "panel" }, { id: 12, parent_id: 10, name: "Room 1", kind: "room" }],
+      layout: {},
+    });
+    const missing = { status: 404, body: { detail: "mapping not found" } };
+    const routes_: Record<string, unknown> = {};
+    for (const id of [...Array.from({ length: 30 }, (_, i) => i + 1), 900, 901, 902]) { // the ids the store hands out to new mappings start at 900
+      routes_[`GET /api/mappings/${id}`] = () => (state.mappings.has(id) ? { body: state.mappings.get(id) } : missing);
+      routes_[`DELETE /api/mappings/${id}`] = () => {
+        if (!state.mappings.delete(id)) return missing;
+        return { status: 204 };
+      };
+      routes_[`PATCH /api/mappings/${id}`] = ({ body }: { body: unknown }) => {
+        const m = state.mappings.get(id);
+        if (!m) return missing;
+        Object.assign(m, body);
+        return { body: m };
+      };
+    }
+    const user = permissions === "admin" ? routes("admin") : { ...routes("custom"), "GET /api/me": { body: userFor("custom", { permissions }) } };
+    const calls = mockFetch({
+      ...user,
+      "GET /api/discovery/graph": () => ({ body: graphNow() }),
+      "GET /api/asset-kinds": { body: KINDS },
+      ...routes_,
+      "POST /api/mappings": ({ body }: { body: unknown }) => {
+        const made = { id: state.next++, ...(body as Omit<M, "id">) };
+        state.mappings.set(made.id, made);
+        return { status: 201, body: made };
+      },
+      "POST /api/discovery/accept": ({ body }: { body: unknown }) => {
+        const b = body as { asset_id: number; points: { point_id: number; metric: M["metric"]; scale: number; interval_seconds: number | null; custom_unit: string | null }[] };
+        const ids = b.points.map((x) => { const made = mapping(state.next++, x.point_id, b.asset_id, x.metric, x); state.mappings.set(made.id, made); return made.id; });
+        return { status: 201, body: { asset_id: b.asset_id, mapping_ids: ids } };
+      },
+      ...extra,
+    });
+    return { state, calls };
+  }
+  const writes = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method !== "GET" && c.path.startsWith("/api/mappings")).map((c) => `${c.method} ${c.path}`);
+  const mappingCalls = (calls: { method: string; path: string }[]) => calls.filter((c) => c.path.startsWith("/api/mappings")).map((c) => `${c.method} ${c.path}`);
+  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+  const rightClick = (id: string) => fireEvent.contextMenu(node(id));
+  const menuButton = (name: string) => screen.findByRole("button", { name: `Mapping actions for ${name}` });
+  const undoOf = (toasts: ReturnType<typeof spyToasts>, at: number) => {
+    const action = toasts.calls[at].options?.action;
+    expect(action, `toast ${at} has an Undo`).toBeDefined();
+    return () => act(() => action!.onAction());
+  };
+
+  /** The page with Plant OPC and LVP01 open and the account known. */
+  async function start(initial: M[], permissions: PermissionId[] | "admin" = "admin", extra: Record<string, unknown> = {}) {
+    const s = server(initial, extra, permissions);
+    const { toasts } = openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Expand Plant OPC" }));
+    await userEvent.click(screen.getByRole("button", { name: "Expand LVP01" }));
+    await accountKnown();
+    return { ...s, toasts };
+  }
+  beforeEach(() => { bulk.props.length = 0; });
+
+  describe("the menu button and the menu", () => {
+    it("a mapped point has one small button that opens the same menu as the right-click, outside the node, and Escape gives the focus back to it", async () => {
+      await start([KW_ON_PANEL]);
+      const button = await menuButton("LVP01 kW");
+      expect(button).toHaveAttribute("aria-haspopup", "menu");
+      expect(button).toHaveClass("nodrag", "nokey");
+      expect(node("point:1")).toContainElement(button);
+      await userEvent.click(button);
+      const menu = await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+      expect(node("point:1")).not.toContainElement(menu); // a menu inside the node would leak its keys into the canvas
+      expect(labelsOf(menu)).toEqual(["Unmap…", "Move to another asset…"]);
+      expect(within(menu).getByRole("menuitem", { name: "Unmap…" })).toHaveClass("danger-item");
+      expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(button).toHaveFocus();
+      rightClick("point:1");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Unmap…", "Move to another asset…"]);
+    });
+
+    it("only a mapped point has it: an unmapped point gets Map… and no button (and the cluster's New asset… stays on the cluster)", async () => {
+      await start([KW_ON_PANEL]);
+      await menuButton("LVP01 kW");
+      expect(screen.queryByRole("button", { name: "Mapping actions for LVP01 kWh" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Map LVP01 kWh to asset…" })).toBeInTheDocument();
+      rightClick("point:3");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kWh" }))).toEqual(["Map…"]);
+    });
+
+    it("a group with something mapped has the button too, and its menu adds the group's two items after the old ones", async () => {
+      await start([KW_ON_PANEL, V_ON_SITE]);
+      const button = await menuButton("LVP01");
+      expect(node("cluster:1:LVP01")).toContainElement(button);
+      await userEvent.click(button);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual([
+        "Collapse", "Map…", "New asset…", "Unmap this group…", "Move this group's mappings…",
+      ]);
+    });
+
+    it("a group with nothing mapped has no button, and the old menu", async () => {
+      await start([]);
+      await screen.findByRole("button", { name: "Map LVP01 to asset…" });
+      expect(screen.queryByRole("button", { name: /^Mapping actions/ })).not.toBeInTheDocument();
+      rightClick("cluster:1:LVP01");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
+    });
+
+    it("an asset's menu has one item per source with mappings on it, by name, and nothing for an asset with none (that keeps the canvas menu)", async () => {
+      await start([KW_ON_PANEL, V_ON_SITE, M_ON_SITE]);
+      await menuButton("LVP01 kW");
+      rightClick("asset:10");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Site" }))).toEqual(["Unmap everything from Atrium…", "Unmap everything from Plant OPC…"]);
+      await userEvent.keyboard("{Escape}");
+      rightClick("asset:11");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Panel 1" }))).toEqual(["Unmap everything from Plant OPC…"]);
+      await userEvent.keyboard("{Escape}");
+      rightClick("asset:12");
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+    });
+  });
+
+  describe("unmap", () => {
+    it("asks first in words that do not lie about billing; Cancel sends nothing", async () => {
+      const { calls } = await start([KW_ON_PANEL]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Unmap…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Unmap "LVP01 kW" from Panel 1?' });
+      expect(dialog).toHaveTextContent("Billing for months that are still open is recalculated without it; closed months keep their billed figures.");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(mappingCalls(calls)).toEqual([]);
+    });
+
+    it("reads the mapping, deletes it, toasts with an Undo, reads the graph again and puts the focus on the node", async () => {
+      const { calls, toasts, state } = await start([KW_ON_PANEL]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Unmap…" }));
+      await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(mappingCalls(calls)).toEqual(["GET /api/mappings/21", "DELETE /api/mappings/21"]);
+      expect(toasts.calls[0]).toMatchObject({ kind: "success", text: "Unmapped 1 point from Panel 1.", options: { durationMs: 10_000, action: { label: "Undo" } } });
+      expect(state.mappings.size).toBe(0);
+      await waitFor(() => expect(node("point:1")).toHaveFocus());
+      expect(screen.queryByRole("button", { name: "Mapping actions for LVP01 kW" })).not.toBeInTheDocument(); // it is unmapped now: Map… instead
+      expect(await screen.findByRole("button", { name: "Map LVP01 kW to asset…" })).toBeInTheDocument();
+    });
+
+    it("Undo puts the mapping back with the values that were read (scale 0.001, interval 1), and the node shows it mapped again", async () => {
+      const { calls, toasts } = await start([KW_ON_PANEL]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Unmap…" }));
+      await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      undoOf(toasts, 0)();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      expect(toasts.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+      expect(calls.filter((c) => c.method === "POST" && c.path === "/api/mappings").map((c) => c.body)).toEqual([
+        { point_id: 1, asset_id: 11, metric: "active_power_kw", scale: 0.001, interval_seconds: 1, custom_unit: null },
+      ]);
+      expect(await menuButton("LVP01 kW")).toBeInTheDocument();
+    });
+
+    it("a group's Unmap this group… takes every mapped point of the group off, naming the group and the assets", async () => {
+      const { calls, toasts } = await start([KW_ON_PANEL, V_ON_SITE]);
+      await userEvent.click(await menuButton("LVP01"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Unmap this group…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Unmap the group "LVP01" from 2 assets?' });
+      await userEvent.click(within(dialog).getByRole("button", { name: "Unmap" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(writes(calls)).toEqual(["DELETE /api/mappings/21", "DELETE /api/mappings/22"]);
+      expect(toasts.calls[0].text).toBe("Unmapped 2 points from 2 assets.");
+      await waitFor(() => expect(node("cluster:1:LVP01")).toHaveFocus());
+    });
+
+    it("an asset's Unmap everything from <source>… takes off only that source's points on that asset", async () => {
+      const { calls, toasts } = await start([KW_ON_PANEL, V_ON_SITE, M_ON_SITE]);
+      await menuButton("LVP01 kW");
+      rightClick("asset:10");
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Site" })).getByRole("menuitem", { name: "Unmap everything from Plant OPC…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Unmap the point of source "Plant OPC" from Site?' });
+      await userEvent.click(within(dialog).getByRole("button", { name: "Unmap" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(writes(calls)).toEqual(["DELETE /api/mappings/22"]); // not 23 (Atrium's) and not 21 (Panel 1's)
+      expect(toasts.calls[0].text).toBe("Unmapped 1 point from Site.");
+      await waitFor(() => expect(node("asset:10")).toHaveFocus());
+    });
+
+    it("when the node is gone after the change the focus goes to the main area", async () => {
+      const { state } = await start([KW_ON_PANEL], "admin", {
+        "DELETE /api/mappings/21": () => { state.mappings.delete(21); state.dropSource1 = true; return { status: 204 }; },
+      });
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Unmap…" }));
+      await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
+      await waitFor(() => expect(node("point:1")).toBeNull());
+      await waitFor(() => expect(document.getElementById("main")).toHaveFocus());
+    });
+  });
+
+  describe("move", () => {
+    it("a group's Move this group's mappings… moves what is not on the chosen asset already, and says the rest was there", async () => {
+      const { calls, toasts } = await start([KW_ON_PANEL, V_ON_SITE]);
+      await userEvent.click(await menuButton("LVP01"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Move this group's mappings…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Move the group "LVP01" to another asset' });
+      await userEvent.selectOptions(within(dialog).getByLabelText("Move to"), "10");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(writes(calls)).toEqual(["PATCH /api/mappings/21"]); // 22 is on Site already
+      expect(calls.find((c) => c.method === "PATCH")!.body).toEqual({ asset_id: 10 });
+      expect(toasts.calls[0]).toMatchObject({ kind: "success", text: "Moved 1 point to Site. 1 was already there.", options: { action: { label: "Undo" } } });
+      await waitFor(() => expect(node("cluster:1:LVP01")).toHaveFocus());
+    });
+
+    it("a point's Move to another asset… and its Undo send it back where it came from", async () => {
+      const { calls, toasts, state } = await start([KW_ON_PANEL]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Move to another asset…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Move "LVP01 kW" to another asset' });
+      expect(within(dialog.querySelector("select")!).queryByRole("option", { name: /Panel 1/ })).not.toBeInTheDocument(); // it is on Panel 1 already
+      await userEvent.selectOptions(within(dialog).getByLabelText("Move to"), "12");
+      expect(dialog).toHaveTextContent("Room 1 is a room; meters usually belong to a Panel or Rack. Move here anyway?");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(toasts.calls[0].text).toBe("Moved 1 point to Room 1.");
+      expect(state.mappings.get(21)!.asset_id).toBe(12);
+      undoOf(toasts, 0)();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      expect(toasts.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+      expect(state.mappings.get(21)!.asset_id).toBe(11);
+      expect(writes(calls).filter((w) => w.startsWith("PATCH"))).toEqual(["PATCH /api/mappings/21", "PATCH /api/mappings/21"]);
+    });
+
+    it("keeps Move off and says which point would clash when the chosen asset has the metric already (read from the graph)", async () => {
+      const { calls } = await start([KW_ON_PANEL, M_ON_SITE]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Move to another asset…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Move "LVP01 kW" to another asset' });
+      await userEvent.selectOptions(within(dialog).getByLabelText("Move to"), "10");
+      expect(within(dialog).getByRole("alert")).toHaveTextContent('"LVP01 kW" would clash: Site already has that metric.');
+      expect(within(dialog).getByRole("button", { name: "Move" })).toBeDisabled();
+      expect(writes(calls)).toEqual([]);
+    });
+  });
+
+  describe("who gets what", () => {
+    it("discovery.accept alone (no assets.edit): no button, no unmap or move item anywhere, and the old menus", async () => {
+      await start([KW_ON_PANEL, V_ON_SITE], ["discovery.view", "discovery.accept", "assets.view"]);
+      await screen.findByRole("button", { name: "Map LVP01 kWh to asset…" });
+      expect(screen.queryByRole("button", { name: /^Mapping actions/ })).not.toBeInTheDocument();
+      rightClick("point:1");
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      rightClick("cluster:1:LVP01");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
+      await userEvent.keyboard("{Escape}");
+      rightClick("asset:10");
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+    });
+
+    it("assets.edit alone (no discovery.accept) still gets the button and the items: the two permissions are independent", async () => {
+      await start([KW_ON_PANEL], ["discovery.view", "assets.view", "assets.edit"]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Unmap…", "Move to another asset…"]);
+      expect(screen.queryByRole("button", { name: /^Map LVP01/ })).not.toBeInTheDocument();
+    });
+
+    it("a role that may only view Discovery sees none of it", async () => {
+      await start([KW_ON_PANEL], ["discovery.view"]);
+      await screen.findByText("LVP01 kW");
+      expect(screen.queryByRole("button", { name: /^Mapping actions/ })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("the toast after mapping", () => {
+    /** The Review on the unmapped LVP01 kWh (energy_kwh) mapped to Panel 1. */
+    async function mapKwh() {
+      await userEvent.click(await screen.findByRole("button", { name: "Map LVP01 kWh to asset…" }));
+      const review = await screen.findByRole("dialog", { name: "Review mappings" });
+      await userEvent.selectOptions(within(review).getByLabelText("Asset"), "11");
+      await userEvent.click(within(review).getByRole("button", { name: "Create mappings" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument());
+    }
+
+    it("with assets.edit it says what was mapped and carries an Undo that deletes only what it made, after reading it", async () => {
+      const { calls, toasts, state } = await start([KW_ON_PANEL]);
+      await mapKwh();
+      expect(toasts.calls).toHaveLength(1);
+      expect(toasts.calls[0]).toMatchObject({ kind: "success", text: "Mapped 1 point to Panel 1.", options: { durationMs: 10_000, action: { label: "Undo" } } });
+      expect(state.mappings.has(900)).toBe(true);
+      undoOf(toasts, 0)();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      expect(mappingCalls(calls)).toEqual(["GET /api/mappings/900", "DELETE /api/mappings/900"]);
+      expect(toasts.calls[1]).toEqual({ kind: "success", text: "Unmapped 1 point." });
+      expect(state.mappings.has(900)).toBe(false);
+      expect(state.mappings.has(21)).toBe(true); // what was there before is untouched
+    });
+
+    it("with discovery.accept alone it says the same, with no Undo", async () => {
+      const { toasts } = await start([KW_ON_PANEL], ["discovery.view", "discovery.accept", "assets.view"]);
+      await mapKwh();
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Mapped 1 point to Panel 1." }]);
+    });
+
+    it("the bulk create hands its own sentence and what it made to the same toast", async () => {
+      const { toasts } = await start([KW_ON_PANEL]);
+      await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
+      await screen.findByRole("dialog", { name: "Create assets stub" });
+      const info = { text: "Created 2 of 3 assets", kind: "error" as const, mappings: [{ id: 5, assetId: 30, name: "a" }], newAssets: ["LVP01"] };
+      act(() => bulk.props[bulk.props.length - 1].onMapped(info));
+      expect(toasts.calls).toHaveLength(1);
+      expect(toasts.calls[0]).toMatchObject({ kind: "error", text: "Created 2 of 3 assets", options: { action: { label: "Undo" } } });
+    });
+
+    it("the bulk create's toast has no Undo for discovery.accept alone", async () => {
+      const { toasts } = await start([KW_ON_PANEL], ["discovery.view", "discovery.accept", "assets.view"]);
+      await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
+      await screen.findByRole("dialog", { name: "Create assets stub" });
+      act(() => bulk.props[bulk.props.length - 1].onMapped({ text: "Created 1 asset", kind: "success", mappings: [{ id: 5, assetId: 30 }], newAssets: ["LVP01"] }));
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Created 1 asset" }]);
+    });
+  });
+
+  describe("the note about a room", () => {
+    it("choosing a room in the Review shows the note in its reserved slot and leaves Create mappings enabled", async () => {
+      await start([KW_ON_PANEL]);
+      await userEvent.click(await screen.findByRole("button", { name: "Map LVP01 kWh to asset…" }));
+      const review = await screen.findByRole("dialog", { name: "Review mappings" });
+      const select = within(review).getByLabelText("Asset");
+      await userEvent.selectOptions(select, "12");
+      await waitFor(() => expect(review).toHaveTextContent("Room 1 is a room; meters usually belong to a Panel or Rack. Map here anyway?"));
+      expect(select).toHaveAccessibleDescription(/Room 1 is a room/);
+      expect(within(review).getByRole("button", { name: "Create mappings" })).toBeEnabled();
+      await userEvent.selectOptions(select, "11"); // a panel: no note
+      expect(select).not.toHaveAccessibleDescription();
     });
   });
 });

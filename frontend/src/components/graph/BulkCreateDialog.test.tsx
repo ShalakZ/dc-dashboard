@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import { keys, useAssets, useGraph, useSources } from "../../api/queries";
 import type { GraphModel, Metric } from "../../api/types";
 import { useAuth } from "../../auth/AuthProvider";
+import type { MappedInfo } from "../../hooks/useMappingActions";
 import { mockFetch } from "../../test/fetchMock";
 import { model, point, source } from "../../test/graphFixtures";
 import { renderWithProviders } from "../../test/render";
@@ -53,8 +54,17 @@ const routes = (accept: Accept = created(), assets?: GraphModel["assets"]) => ({
   "POST /api/discovery/accept": accept,
 });
 
+/**
+ * The page's side of the dialog: `maps.mappedToast`, which raises the toast (with its Undo only for assets.edit). Here it records the info the dialog
+ * handed over and raises the plain toast with the dialog's own text and kind, so the texts this file pinned before the Undo existed stay pinned.
+ */
+function pageOf(toasts: ReturnType<typeof spyToasts>) {
+  const onMapped = vi.fn((info: MappedInfo) => { toasts.api[info.kind ?? "success"](info.text); });
+  return onMapped;
+}
+
 /** Mounts the graph query next to the dialog, as the page does, so the refetch after the batch is observable. */
-function Harness({ onClose }: { onClose: () => void }) {
+function Harness({ onClose, onMapped }: { onClose: () => void; onMapped: (info: MappedInfo) => void }) {
   const { loading } = useAuth();
   const { data } = useGraph();
   useAssets();
@@ -62,16 +72,17 @@ function Harness({ onClose }: { onClose: () => void }) {
   useQuery({ queryKey: keys.fleet, queryFn: () => api.get("/api/fleet/summary") }); // the Assets Tree landing figures and the audit log are open elsewhere
   useQuery({ queryKey: [...keys.auditAll, "actions"], queryFn: () => api.get("/api/audit/actions") });
   if (loading || !data) return null;
-  return <BulkCreateDialog model={data} source={data.sources[0]} onClose={onClose} />;
+  return <BulkCreateDialog model={data} source={data.sources[0]} onClose={onClose} onMapped={onMapped} />;
 }
 
 async function open(accept?: Accept, assets?: GraphModel["assets"]) {
   const toasts = spyToasts();
   const calls = mockFetch(routes(accept, assets));
   const onClose = vi.fn();
-  const view = renderWithProviders(<Harness onClose={onClose} />, { toasts: toasts.api });
+  const onMapped = pageOf(toasts);
+  const view = renderWithProviders(<Harness onClose={onClose} onMapped={onMapped} />, { toasts: toasts.api });
   const dialog = await screen.findByRole("dialog", { name: "Create an asset for each group" });
-  return { calls, onClose, dialog, toasts: toasts.calls, ...view };
+  return { calls, onClose, onMapped, dialog, toasts: toasts.calls, ...view };
 }
 const accepts = (calls: { method: string; path: string; body: unknown }[]) => calls.filter((c) => c.method === "POST" && c.path === "/api/discovery/accept");
 const gets = (calls: { method: string; path: string }[], path: string) => calls.filter((c) => c.method === "GET" && c.path === path).length;
@@ -237,7 +248,7 @@ describe("BulkCreateDialog", () => {
         ...routes(() => { accepted += 1; return accepted === 2 ? { status: 409, body: { detail: "already exists" } } : created(20 + accepted); }),
         "GET /api/discovery/graph": () => ({ body: graph(accepted >= 2 ? [clash] : undefined) }),
       });
-      const view = renderWithProviders(<Harness onClose={vi.fn()} />, { toasts: toasts.api });
+      const view = renderWithProviders(<Harness onClose={vi.fn()} onMapped={pageOf(toasts)} />, { toasts: toasts.api });
       const dialog = await screen.findByRole("dialog", { name: "Create an asset for each group" });
       const status = () => dialog.querySelector(".bulk-status")!;
       await userEvent.click(go("Create 3 assets"));
@@ -380,6 +391,102 @@ describe("BulkCreateDialog", () => {
     expect(parent).toHaveFocus();
     unmount();
     expect(document.activeElement).toBe(document.body); // the page decides where focus goes (the dialog must not pull it back to a stale opener)
+  });
+
+  describe("tells the page what it made, for the one toast with the Undo (W12a)", () => {
+    // Each accept makes a new asset (20 + the call's number) and one mapping per point sent (n * 100 + i).
+    const serial = () => {
+      let n = 0;
+      return ({ body }: { body: unknown }) => {
+        n += 1;
+        const count = (body as { points: unknown[] }).points.length;
+        return { status: 201, body: { asset_id: 20 + n, mapping_ids: Array.from({ length: count }, (_, i) => n * 100 + i) } };
+      };
+    };
+
+    it("after a clean batch: its own text, every group's mappings under the asset made for the group (named by the point), and the names of the assets", async () => {
+      const user = userEvent.setup();
+      const { onMapped, onClose, toasts } = await open(serial());
+      await user.click(go("Create 3 assets"));
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(onMapped).toHaveBeenCalledTimes(1);
+      expect(onMapped).toHaveBeenCalledWith({
+        text: "Created 3 assets",
+        kind: "success",
+        mappings: [
+          { id: 100, assetId: 21, name: "LVP01 kW" }, { id: 101, assetId: 21, name: "LVP01 kWh" }, { id: 102, assetId: 21, name: "LVP01 V" },
+          { id: 200, assetId: 22, name: "LVP02 kW" }, { id: 201, assetId: 22, name: "LVP02 V" },
+          { id: 300, assetId: 23, name: "T a" },
+        ],
+        newAssets: ["LVP01", "LVP02", "TEMPS"],
+      });
+      expect(toasts).toEqual([{ kind: "success", text: "Created 3 assets" }]); // ONE toast: the dialog raises none of its own
+    });
+
+    it("uses the names it sent (the edited, trimmed ones) for the assets that stay", async () => {
+      const user = userEvent.setup();
+      const { onMapped, onClose } = await open(serial());
+      await user.click(box("LVP02"));
+      const input = nameInput("TEMPS");
+      await user.clear(input);
+      await user.type(input, "  Cold   aisle  ");
+      await user.click(go("Create 2 assets"));
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(onMapped).toHaveBeenCalledWith(expect.objectContaining({ text: "Created 2 assets", newAssets: ["LVP01", "Cold   aisle"] }));
+    });
+
+    it("after a partial batch: kind error with its own text, and still what was made, so its Undo covers it", async () => {
+      const user = userEvent.setup();
+      const answer = serial();
+      let calls = 0;
+      const { onMapped, onClose, toasts } = await open((request) => {
+        calls += 1;
+        return calls === 2 ? { status: 409, body: { detail: "already exists" } } : answer(request);
+      });
+      await user.click(go("Create 3 assets"));
+      await waitFor(() => expect(onMapped).toHaveBeenCalledTimes(1));
+      expect(onMapped).toHaveBeenCalledWith({
+        text: "Created 2 of 3 assets",
+        kind: "error",
+        // the second call failed, so the third made the second asset of the batch
+        mappings: [
+          { id: 100, assetId: 21, name: "LVP01 kW" }, { id: 101, assetId: 21, name: "LVP01 kWh" }, { id: 102, assetId: 21, name: "LVP01 V" },
+          { id: 200, assetId: 22, name: "T a" },
+        ],
+        newAssets: ["LVP01", "TEMPS"],
+      });
+      expect(toasts).toEqual([{ kind: "error", text: "Created 2 of 3 assets" }]);
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("when nothing was made the page is still told, with nothing to undo", async () => {
+      const user = userEvent.setup();
+      const { onMapped } = await open({ status: 500, body: { detail: "boom" } });
+      await user.click(go("Create 3 assets"));
+      await waitFor(() => expect(onMapped).toHaveBeenCalledTimes(1));
+      expect(onMapped).toHaveBeenCalledWith({ text: "Created 0 of 3 assets", kind: "error", mappings: [], newAssets: [] });
+    });
+
+    it("a second press after a partial batch tells the page only about what that press made", async () => {
+      const user = userEvent.setup();
+      const answer = serial();
+      let calls = 0;
+      const { onMapped, onClose } = await open((request) => {
+        calls += 1;
+        return calls === 2 ? { status: 409, body: { detail: "already exists" } } : answer(request);
+      });
+      await user.click(go("Create 3 assets"));
+      await waitFor(() => expect(onMapped).toHaveBeenCalledTimes(1));
+      const input = nameInput("LVP02");
+      await user.clear(input);
+      await user.type(input, "LVP02 b");
+      await user.click(go("Create 1 asset"));
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(onMapped).toHaveBeenCalledTimes(2);
+      expect(onMapped).toHaveBeenLastCalledWith({
+        text: "Created 1 asset", kind: "success", mappings: [{ id: 300, assetId: 23, name: "LVP02 kW" }, { id: 301, assetId: 23, name: "LVP02 V" }], newAssets: ["LVP02 b"],
+      });
+    });
   });
 
   it("does not take focus back to what had it before it opened", async () => {

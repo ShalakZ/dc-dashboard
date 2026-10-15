@@ -10,6 +10,7 @@ import { mockFetch } from "../../test/fetchMock";
 import { model, point, source } from "../../test/graphFixtures";
 import { renderWithProviders } from "../../test/render";
 import { userFor } from "../../test/users";
+import type { MappedInfo } from "../../hooks/useMappingActions";
 import { ReviewDialog } from "./ReviewDialog";
 
 const suggest = (metric: Metric, over: { scale?: number; interval_seconds?: number; custom_unit?: string | null } = {}) =>
@@ -45,9 +46,9 @@ const routes = (accept: object = created) => ({
 });
 const posts = (calls: { method: string; path: string; body: unknown }[]) => calls.filter((c) => c.method === "POST");
 
-/** Mounts a graph query next to the dialog, as the page does, so the refetch after a commit is observable. */
-function Harness({ cluster = "LVP01", initialTarget, onClose, observe = false }: {
-  cluster?: string; initialTarget: Initial; onClose: () => void; observe?: boolean;
+/** Mounts a graph query next to the dialog, as the page does, so the refetch after a commit is observable. `onMapped` is the page's `maps.mappedToast`. */
+function Harness({ cluster = "LVP01", initialTarget, onClose, onMapped = () => undefined, kinds, observe = false }: {
+  cluster?: string; initialTarget: Initial; onClose: () => void; onMapped?: (info: MappedInfo) => void; kinds?: React.ComponentProps<typeof ReviewDialog>["kinds"]; observe?: boolean;
 }) {
   const { loading } = useAuth();
   const { data } = useGraph();
@@ -57,7 +58,7 @@ function Harness({ cluster = "LVP01", initialTarget, onClose, observe = false }:
   return (
     <>
       {observe && <Observers />}
-      <ReviewDialog model={data} payload={payload.current!} initialTarget={initialTarget} onClose={onClose} />
+      <ReviewDialog model={data} payload={payload.current!} initialTarget={initialTarget} kinds={kinds} onClose={onClose} onMapped={onMapped} />
     </>
   );
 }
@@ -71,9 +72,10 @@ function Observers() {
 async function open(initialTarget: Initial, accept?: object, cluster?: string) {
   const calls = mockFetch(routes(accept));
   const onClose = vi.fn();
-  renderWithProviders(<Harness initialTarget={initialTarget} onClose={onClose} cluster={cluster} />);
+  const onMapped = vi.fn();
+  renderWithProviders(<Harness initialTarget={initialTarget} onClose={onClose} onMapped={onMapped} cluster={cluster} />);
   const dialog = await screen.findByRole("dialog", { name: "Review mappings" });
-  return { calls, onClose, dialog };
+  return { calls, onClose, onMapped, dialog };
 }
 const existing = (assetId: number | null): Initial => ({ kind: "existing", assetId });
 const create = () => screen.getByRole("button", { name: "Create mappings" });
@@ -450,5 +452,129 @@ describe("ReviewDialog look (W6)", () => {
     expect(cancel).not.toHaveClass("primary");
     expect(cancel.compareDocumentPosition(create()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(create().closest(".row")).toBe(cancel.closest(".row")); // the last row of the dialog (right-aligned by the CSS)
+  });
+});
+
+describe("ReviewDialog tells the page what it made (W12a)", () => {
+  it("after the accept it hands the page the sentence, each new mapping with the asset it is on and the point's name, and no new asset for an existing one", async () => {
+    const { onMapped, onClose } = await open(existing(11));
+    await userEvent.click(create());
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onMapped).toHaveBeenCalledTimes(1);
+    expect(onMapped).toHaveBeenCalledWith({
+      text: "Mapped 3 points to Panel 1.",
+      mappings: [{ id: 1, assetId: 11, name: "LVP01 kW" }, { id: 2, assetId: 11, name: "LVP01 kWh" }, { id: 3, assetId: 11, name: "LVP01 V" }],
+      newAssets: [],
+    });
+  });
+
+  it("says 1 point, not 1 points, and names only the rows that were checked (the ids come back in that order)", async () => {
+    const { onMapped, onClose } = await open(existing(11), { status: 201, body: { asset_id: 11, mapping_ids: [9] } });
+    await userEvent.click(box("LVP01 kW"));
+    await userEvent.click(box("LVP01 V"));
+    await userEvent.click(create());
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onMapped).toHaveBeenCalledWith({ text: "Mapped 1 point to Panel 1.", mappings: [{ id: 9, assetId: 11, name: "LVP01 kWh" }], newAssets: [] });
+  });
+
+  it("a new asset is named in the sentence and in newAssets (the Undo then says it stays), under the id the server made", async () => {
+    const { onMapped, onClose } = await open({ kind: "new", name: "  Room 7 ", parentId: null }, { status: 201, body: { asset_id: 31, mapping_ids: [4, 5, 6] } });
+    await userEvent.click(create());
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onMapped).toHaveBeenCalledWith({
+      text: "Mapped 3 points to Room 7.",
+      mappings: [{ id: 4, assetId: 31, name: "LVP01 kW" }, { id: 5, assetId: 31, name: "LVP01 kWh" }, { id: 6, assetId: 31, name: "LVP01 V" }],
+      newAssets: ["Room 7"],
+    });
+  });
+
+  it("the toast comes after the accept and before the dialog closes, once; the dialog still reads the lists again", async () => {
+    const order: string[] = [];
+    const calls = mockFetch(routes());
+    const onClose = vi.fn(() => { order.push("close"); });
+    const onMapped = vi.fn(() => { order.push("mapped"); });
+    renderWithProviders(<Harness initialTarget={existing(11)} onClose={onClose} onMapped={onMapped} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Create mappings" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(order).toEqual(["mapped", "close"]);
+    await waitFor(() => expect(calls.filter((c) => c.method === "GET" && c.path === "/api/discovery/graph")).toHaveLength(2));
+  });
+
+  it("a refused accept tells the page nothing", async () => {
+    const { onMapped } = await open(existing(11), { status: 409, body: { detail: "clash" } });
+    await userEvent.click(create());
+    expect(await screen.findByRole("alert")).toHaveTextContent("clash");
+    expect(onMapped).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReviewDialog container note (W12a, A4)", () => {
+  const ROOM = { id: 12, parent_id: 10, name: "Room 1", kind: "room" };
+  const KINDS = [{ id: 1, name: "room", icon: "room", asset_count: 1, starter: true }, { id: 2, name: "panel", icon: "panel", asset_count: 1, starter: true }];
+  const NOTE = "Room 1 is a room; meters usually belong to a Panel or Rack. Map here anyway?";
+  async function openWithRoom(initialTarget: Initial, kinds: typeof KINDS | undefined = KINDS, accept?: object) {
+    const calls = mockFetch({ ...routes(accept), "GET /api/discovery/graph": { body: { ...graph(), assets: [...graph().assets, ROOM] } } });
+    const onClose = vi.fn();
+    const onMapped = vi.fn();
+    renderWithProviders(<Harness initialTarget={initialTarget} onClose={onClose} onMapped={onMapped} kinds={kinds} />);
+    const dialog = await screen.findByRole("dialog", { name: "Review mappings" });
+    return { calls, onClose, onMapped, dialog };
+  }
+  const slot = (dialog: HTMLElement) => dialog.querySelector(".mapmove-slot") as HTMLElement;
+
+  it("choosing a room shows the note in the slot under the select, the select is described by it, and Create mappings stays enabled", async () => {
+    const { dialog } = await openWithRoom(existing(null));
+    const select = screen.getByLabelText("Asset");
+    expect(slot(dialog)).toBeEmptyDOMElement();
+    expect(select).not.toHaveAccessibleDescription();
+    await userEvent.selectOptions(select, "12");
+    expect(slot(dialog)).toHaveTextContent(NOTE);
+    expect(select).toHaveAccessibleDescription(NOTE);
+    expect(slot(dialog).closest(".field")).toContainElement(select); // under the select, in its own field
+    expect(create()).toBeEnabled();
+    expect(create()).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("is not an announcer: no role on the slot or the note (the select's description is read when it is reached)", async () => {
+    const { dialog } = await openWithRoom(existing(12));
+    expect(slot(dialog)).toHaveTextContent(NOTE);
+    expect(slot(dialog).querySelector("[role]")).toBeNull();
+    expect(slot(dialog)).not.toHaveAttribute("role");
+    expect(dialog.querySelectorAll('[role="status"], [role="alert"]')).toHaveLength(0);
+  });
+
+  it("the slot is always there in existing mode, with the same reserved height rule, so the note arriving moves nothing", async () => {
+    const { dialog } = await openWithRoom(existing(11));
+    expect(slot(dialog)).toBeInTheDocument();
+    expect(slot(dialog)).toBeEmptyDOMElement();
+    await userEvent.selectOptions(screen.getByLabelText("Asset"), "12");
+    expect(slot(dialog)).toHaveTextContent(NOTE);
+    await userEvent.selectOptions(screen.getByLabelText("Asset"), "11"); // a panel: the note goes, the slot stays
+    expect(slot(dialog)).toBeInTheDocument();
+    expect(slot(dialog)).toBeEmptyDOMElement();
+  });
+
+  it("a panel, an unchosen asset and a registry that has not loaded give no note; a new asset has no slot", async () => {
+    const first = await openWithRoom(existing(11));
+    expect(slot(first.dialog)).toBeEmptyDOMElement();
+    cleanup();
+    const second = await openWithRoom(existing(null));
+    expect(slot(second.dialog)).toBeEmptyDOMElement();
+    cleanup();
+    const third = await openWithRoom({ kind: "new", name: "X", parentId: null });
+    expect(slot(third.dialog)).toBeNull();
+  });
+
+  it("with no kinds list the keyword guess still finds a room (the same rule that draws the node)", async () => {
+    const { dialog } = await openWithRoom(existing(12), undefined);
+    expect(slot(dialog)).toHaveTextContent(NOTE);
+  });
+
+  it("the room can still be mapped to: the accept goes out and the page is told", async () => {
+    const { calls, onMapped, onClose } = await openWithRoom(existing(12), KINDS, { status: 201, body: { asset_id: 12, mapping_ids: [1, 2, 3] } });
+    await userEvent.click(create());
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(calls.filter((c) => c.method === "POST")[0].body).toMatchObject({ source_id: 1, asset_id: 12 });
+    expect(onMapped).toHaveBeenCalledWith(expect.objectContaining({ text: "Mapped 3 points to Room 1." }));
   });
 });

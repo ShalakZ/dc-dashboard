@@ -6,7 +6,7 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
-import { keys, useGraph, useInvalidate, useRemoveDiscoveredSources, useSite, useTidyLayout } from "../api/queries";
+import { keys, useAssetKinds, useGraph, useInvalidate, useRemoveDiscoveredSources, useSite, useTidyLayout } from "../api/queries";
 import type { GraphModel, GraphSource } from "../api/types";
 import { useAppearance } from "../auth/AppearanceProvider";
 import { useAuth } from "../auth/AuthProvider";
@@ -29,17 +29,19 @@ import { useCanvasKeys } from "../hooks/useCanvasKeys";
 import { useCanvasMenu } from "../hooks/useCanvasMenu";
 import { useConfirm } from "../hooks/useConfirm";
 import { useGraphHighlight } from "../hooks/useGraphHighlight";
+import { useMappingActions } from "../hooks/useMappingActions";
 import { reducedMotion, useReducedMotion } from "../hooks/useReducedMotion";
-import { dropPayload, mappableClusters, pickDropTarget, type DropPayload } from "../lib/drop";
+import { dropPayload, mappableClusters, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
   buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches, ownPlaces, removalDialogText, removalOutcome, seenLine,
-  shiftedPlaces, type ClusterNodeData, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
+  shiftedPlaces, type AssetNodeData, type ClusterNodeData, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
 import { cameraMs, keepInView, unionRect } from "../lib/graphCamera";
 import { buildFindIndex, findMatches, findPlan, type FindEntry } from "../lib/graphFind";
 import { alignGuides, type Rect } from "../lib/graphGuides";
 import { readSnap, SNAP_GRID, writeSnap } from "../lib/graphPrefs";
 import { canCollapse, canExpand, collapseAll, expandAll, expandNote, graphSummary } from "../lib/graphView";
+import { mappedRefs, mappedSourcesByAsset, mappingsWhat } from "../lib/mappedRefs";
 
 /** One line under the title; the rest of what the canvas can do is in the tip beside it (the same line in the loading branch, so nothing moves when the graph arrives). */
 const HINT = "Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset…";
@@ -107,7 +109,10 @@ const toggled = <T,>(set: ReadonlySet<T>, value: T): Set<T> => {
 type Callbacks = {
   onToggle: (id: string) => void; onSelect: (id: string) => void; onMap: (id: string) => void; onNewAsset: (id: string) => void;
   onCreateAssets: (id: string) => void; onRemove: (id: string) => void;
+  onMenu: (button: HTMLElement) => void; onUnmap: (id: string) => void; onMove: (id: string) => void; onUnmapSource: (id: string, sourceId: number) => void;
 };
+
+const NO_MAPPED: ReadonlyMap<number, MappedSource[]> = new Map();
 
 /** What the page works out about a source once per graph, so a toggle or a drag does not do it again for every node. */
 interface SourceFacts { seen: string; groups: number; removable: boolean }
@@ -119,10 +124,13 @@ interface SourceFacts { seen: string; groups: number; removable: boolean }
  * unmapped point offers "Map", and a source with at least one group to turn into an asset offers "Create assets" (`facts.groups`, 0 for
  * a role that may not accept). A source offers "Remove" only when it is removable and the person may change the graph (`canRemove`).
  * The conditions mirror what `dropPayload` accepts, so a button is never shown for something that could not be mapped.
+ *
+ * For a role with assets.edit (`canEdit`), a mapped point and a group with something mapped also get the menu button and the unmap and move
+ * callbacks (W12a), and an asset node gets the sources that have mappings on it (`mappedBy`) with the callback that takes all of one source's off.
  */
 function nodeData(
-  node: Node, canAccept: boolean, canRemove: boolean, facts: ReadonlyMap<number, SourceFacts>,
-  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove }: Callbacks,
+  node: Node, canAccept: boolean, canRemove: boolean, canEdit: boolean, facts: ReadonlyMap<number, SourceFacts>, mappedBy: ReadonlyMap<number, MappedSource[]>,
+  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource }: Callbacks,
 ): Node["data"] {
   if (node.type === "source") {
     const data = node.data as SourceNodeData;
@@ -136,9 +144,17 @@ function nodeData(
   if (node.type === "cluster") {
     const cluster = node.data as ClusterNodeData;
     const mappable = canAccept && !cluster.ungrouped && cluster.mappedCount < cluster.count;
-    return { ...cluster, onToggle, ...(mappable ? { onMap, onNewAsset } : {}) };
+    return { ...cluster, onToggle, ...(mappable ? { onMap, onNewAsset } : {}), ...(canEdit && cluster.mappedCount > 0 ? { onMenu, onUnmap, onMove } : {}) };
   }
-  if (node.type === "point" && canAccept && (node.data as PointNodeData).point.asset_id === null) return { ...node.data, onMap };
+  if (node.type === "point") {
+    const point = (node.data as PointNodeData).point;
+    if (canAccept && point.asset_id === null) return { ...node.data, onMap };
+    if (canEdit && point.mapping_id !== null) return { ...node.data, onMenu, onUnmap, onMove };
+  }
+  if (node.type === "asset" && canEdit) {
+    const mapped = mappedBy.get((node.data as AssetNodeData).asset.id);
+    if (mapped) return { ...node.data, mapped, onUnmapSource };
+  }
   return node.data;
 }
 
@@ -220,6 +236,8 @@ function Canvas({ model }: { model: GraphModel }) {
   }, [model, openReview]);
 
   const canvas = useRef<HTMLDivElement>(null);
+  // The right-click menu's state is up here because a mapped node's own menu button opens it (`onMenu`), and the nodes are built below.
+  const { menu, openNode, openPane, openSelection, openFromKey, close: closeMenu } = useCanvasMenu({ model, canvas });
   // Where the canvas opens (the first sources, readable). Taken once, when the canvas mounts: a refresh never moves the view, and the Controls'
   // fit-view button (it passes no options) still fits everything, so a drop onto an asset that lies out of view is a click away.
   const [opening] = useState(() => initialView(model));
@@ -296,14 +314,45 @@ function Canvas({ model }: { model: GraphModel }) {
     seen: seenLine(s, asOf, timezone), groups: canAccept ? mappableClusters(s).length : 0, removable: isRemovable(s),
   }])), [model, asOf, timezone, canAccept]);
 
+  // ---- Unmap and move (W12a): the module's confirmation, Move dialog, toasts and Undo; the page names the mappings and where the focus goes afterwards ----
+  const kinds = useAssetKinds(can("assets.view")).data; // for the note about a room or a hall (the Move dialog's and the Review's)
+  const maps = useMappingActions({ assets: model.assets, kinds, takenFor: (assetId) => takenMetrics(model, assetId) });
+  // The hook's object is new on every render and the node callbacks below must not be (they sit in the memo that builds every node), so they reach it through a ref.
+  const mapsRef = useRef(maps);
+  mapsRef.current = maps;
+  const canEditAssets = maps.canEdit;
+  const mappedBy = useMemo(() => (canEditAssets ? mappedSourcesByAsset(model) : NO_MAPPED), [model, canEditAssets]);
+  /**
+   * After an unmap or a move, once the lists are read again: the focus goes to the node the action was about (the button or menu that opened it has
+   * closed, and a point that is unmapped has no menu button any more), else to the main area when the node has gone.
+   */
+  const focusNode = useCallback(async (id: string) => {
+    await afterPaint(); // the refreshed nodes are in React Flow's store and drawn
+    if (!mounted.current) return;
+    const element = canvas.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectorId(id)}"]`);
+    (element ?? document.getElementById("main"))?.focus({ preventScroll: true });
+  }, []);
+  const onMenu = useCallback((button: HTMLElement) => openFromKey(button), [openFromKey]);
+  const onUnmap = useCallback((id: string) => {
+    mapsRef.current.unmap(mappedRefs(model, id), { what: mappingsWhat(model, id), after: () => void focusNode(id) });
+  }, [model, focusNode]);
+  const onMove = useCallback((id: string) => {
+    mapsRef.current.move(mappedRefs(model, id), { what: mappingsWhat(model, id), after: () => void focusNode(id) });
+  }, [model, focusNode]);
+  const onUnmapSource = useCallback((id: string, sourceId: number) => {
+    mapsRef.current.unmap(mappedRefs(model, id, sourceId), { what: mappingsWhat(model, id, sourceId), after: () => void focusNode(id) });
+  }, [model, focusNode]);
+
   const seeded = useMemo(() => {
     const built = buildGraph(model, open, { moved: moved.current, ignoreSaved: tidyRuns > 0, animate: !reduced });
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
-      data: nodeData(n, canAccept, canRemove, facts, { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove }),
+      data: nodeData(n, canAccept, canRemove, canEditAssets, facts, mappedBy, {
+        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource,
+      }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, tidyRuns, reduced, canAccept, canRemove, facts, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove]);
+  }, [model, open, tidyRuns, reduced, canAccept, canRemove, canEditAssets, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
@@ -544,7 +593,6 @@ function Canvas({ model }: { model: GraphModel }) {
     element.focus({ preventScroll: true });
   }, [toast, getNodes, getZoom, setCenter]);
 
-  const { menu, openNode, openPane, openSelection, openFromKey, close: closeMenu } = useCanvasMenu({ model, canvas });
   const clearSelection = useCallback(() => {
     setNodes((current) => (current.some((n) => n.selected) ? current.map((n) => (n.selected ? { ...n, selected: false } : n)) : current));
   }, [setNodes]);
@@ -552,7 +600,8 @@ function Canvas({ model }: { model: GraphModel }) {
 
   // The menu's items come from the node's own callbacks (the ones its buttons use), so a role sees exactly the actions it has buttons for.
   const nodeActions = (node: Node): RowAction[] => {
-    const d = node.data as NodeActions & { expanded?: boolean };
+    const d = node.data as NodeActions & Pick<AssetNodeData, "mapped" | "onUnmapSource"> & { expanded?: boolean };
+    const group = node.type === "cluster";
     const items: RowAction[] = [];
     if (d.onSelect) items.push({ label: "Details", onSelect: () => d.onSelect?.(node.id) });
     if (d.onToggle) items.push({ label: d.expanded ? "Collapse" : "Expand", onSelect: () => d.onToggle?.(node.id) });
@@ -560,11 +609,15 @@ function Canvas({ model }: { model: GraphModel }) {
     if (d.onMap) items.push({ label: "Map…", onSelect: () => d.onMap?.(node.id) });
     if (d.onNewAsset) items.push({ label: "New asset…", onSelect: () => d.onNewAsset?.(node.id) });
     if (d.onRemove) items.push({ label: "Remove", tone: "danger", onSelect: () => d.onRemove?.(node.id) });
+    // W12a, after the rest: what takes a mapping off an asset or moves it (only with assets.edit: the callbacks are not given otherwise).
+    if (d.onUnmap) items.push({ label: group ? "Unmap this group…" : "Unmap…", tone: "danger", onSelect: () => d.onUnmap?.(node.id) });
+    if (d.onMove) items.push({ label: group ? "Move this group's mappings…" : "Move to another asset…", onSelect: () => d.onMove?.(node.id) });
+    for (const m of d.mapped ?? []) items.push({ label: `Unmap everything from ${m.sourceName}…`, tone: "danger", onSelect: () => d.onUnmapSource?.(node.id, m.sourceId) });
     return items;
   };
   const nodeName = (node: Node): string => {
-    const d = node.data as Partial<SourceNodeData & ClusterNodeData & PointNodeData>;
-    return d.source?.name ?? d.label ?? d.point?.name ?? "this node";
+    const d = node.data as Partial<SourceNodeData & ClusterNodeData & PointNodeData & AssetNodeData>;
+    return d.source?.name ?? d.label ?? d.point?.name ?? d.asset?.name ?? "this node";
   };
   /** The same four actions as the bar above the canvas (a button with nothing to do is aria-disabled there and here) and the Controls' fit-view button. */
   const canvasActions = (): RowAction[] => [
@@ -573,7 +626,7 @@ function Canvas({ model }: { model: GraphModel }) {
     { label: "Tidy layout", disabled: tidying, onSelect: () => void onTidy() },
     { label: "Fit view", onSelect: () => void fitView({ duration: cameraMs(reducedMotion()) }) },
   ];
-  // A node with no actions of its own (an asset, an unidentified service) and a box selection get the canvas's menu.
+  // A node with no actions of its own (an asset with nothing mapped on it, an unidentified service) and a box selection get the canvas's menu.
   let menuItems: RowAction[] = [];
   let menuLabel = "Canvas actions";
   if (menu) {
@@ -688,10 +741,11 @@ function Canvas({ model }: { model: GraphModel }) {
         {selected && <SourcePanel key={selected.id} source={selected} canEdit={canEditSource} seen={facts.get(selected.id)?.seen ?? ""} onClose={closePanel} />}
       </div>
       {canAccept && review && (
-        <ReviewDialog key={review.key} model={model} payload={review.payload} initialTarget={review.initialTarget} onClose={closeReview} />
+        <ReviewDialog key={review.key} model={model} payload={review.payload} initialTarget={review.initialTarget} kinds={kinds} onMapped={maps.mappedToast} onClose={closeReview} />
       )}
-      {canAccept && createFor && <BulkCreateDialog model={model} source={createFor} onClose={closeCreate} />}
+      {canAccept && createFor && <BulkCreateDialog model={model} source={createFor} onMapped={maps.mappedToast} onClose={closeCreate} />}
       {askDialog}
+      {maps.dialogs}
       {/* Outside the canvas on purpose: React passes the events of a portal up to its parents, and the canvas's focus and key handlers must not hear the menu. */}
       {menu && <GraphContextMenu key={menu.id} at={menu.at} items={menuItems} label={menuLabel} returnFocus={menu.returnFocus} onClose={closeMenu} />}
       {removal && (
