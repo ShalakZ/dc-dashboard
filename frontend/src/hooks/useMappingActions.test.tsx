@@ -72,6 +72,10 @@ function mappingRoutes(store: Map<number, Mapping>, inject: (method: string, pat
   routes["POST /api/mappings"] = ({ body }) => {
     const injected = inject("POST", "/api/mappings");
     if (injected) return injected;
+    // The database's `point_id UNIQUE`: a point that is still mapped is refused, which is what makes the Undo of an unknown unmap safe.
+    if ([...store.values()].some((m) => m.point_id === (body as Mapping).point_id)) {
+      return { status: 409, body: { detail: "this point is already mapped, or the asset already has this metric" } };
+    }
     const made = { id: nextId++, ...(body as Omit<Mapping, "id">) };
     store.set(made.id, made);
     return { status: 201, body: made };
@@ -325,9 +329,10 @@ describe("useMappingActions: a write whose outcome is unknown", () => {
     ]);
   });
 
-  it("when the check fails too the toast says 'may or may not' and still offers the Undo (which checks before it writes)", async () => {
+  it("when the check fails too the toast says 'may or may not' and still offers the Undo; pressed on a mapping that was never deleted, it says so and doubles nothing", async () => {
     let reads = 0;
-    const { calls, actions, spy } = setup(store(mapping(1)), {
+    const s = store(mapping(1));
+    const { calls, actions, spy } = setup(s, {
       inject: (method, path) => {
         if (path !== "/api/mappings/1") return undefined;
         if (method === "DELETE") return down;
@@ -342,6 +347,48 @@ describe("useMappingActions: a write whose outcome is unknown", () => {
     expect(spy.calls[0]).toMatchObject({
       kind: "error", text: `"kW" may or may not have been unmapped: ${NOT_ANSWERING}`, options: { durationMs: 10_000, action: { label: "Undo" } },
     });
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    // The database refused the second mapping of point 1001 (the POST mock models its UNIQUE): nothing was needed, which is not an error.
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect([...s.values()].map((m) => m.point_id)).toEqual([1001]);
+    expect(spy.calls[1]).toEqual({ kind: "info", text: '"kW" was still mapped, so nothing was put back for it.' });
+  });
+
+  it("a DELETE that gets no answer while the row is still there (the api may commit later) is unknown, not a refusal; its Undo restores it once it did", async () => {
+    const s = store(mapping(1, { scale: 0.5 }));
+    const { calls, actions, spy } = setup(s, { inject: (method, path) => (method === "DELETE" && path === "/api/mappings/1" ? down : undefined) });
+    await ready(actions, calls);
+    act(() => actions().unmap([ref(1, "kW")]));
+    await confirm("Unmap");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toMatchObject({
+      kind: "error", text: `"kW" may or may not have been unmapped: ${NOT_ANSWERING}`, options: { durationMs: 10_000, action: { label: "Undo" } },
+    });
+    s.delete(1); // the transaction that was waiting on a lock goes through after the check
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(spy.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+    expect([...s.values()].map((m) => [m.point_id, m.scale])).toEqual([[1001, 0.5]]);
+  });
+
+  it("a PATCH that gets no answer while the old asset is still shown is unknown; its Undo, finding the mapping where it started, says so and writes nothing", async () => {
+    const s = store(mapping(1, { asset_id: 2 }));
+    const { calls, actions, spy } = setup(s, { inject: (method, path) => (method === "PATCH" && path === "/api/mappings/1" ? down : undefined) });
+    await ready(actions, calls);
+    act(() => actions().move([refM(1, "active_power_kw", 2, "kW")]));
+    await screen.findByRole("dialog");
+    await chooseAsset(3);
+    await confirm("Move");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toMatchObject({
+      kind: "error", text: `"kW" may or may not have been moved: ${NOT_ANSWERING}`, options: { action: { label: "Undo" } },
+    });
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(spy.calls[1]).toEqual({ kind: "info", text: '"kW" was already back where it was.' });
+    expect(writes(calls)).toEqual(["PATCH /api/mappings/1"]); // the move's own, lost, request only
+    expect(s.get(1)!.asset_id).toBe(2);
   });
 
   it("a move that cannot be checked is 'may or may not have been moved', and its Undo moves back only what is still where the move put it", async () => {

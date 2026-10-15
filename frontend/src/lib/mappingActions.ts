@@ -6,9 +6,9 @@ import { upperFirst } from "./upperFirst";
 
 /**
  * Taking a mapping off an asset, moving it to another asset, and putting either back (W12a). These requests change what billing figures are
- * made of, so every runner here works ONE request at a time, in the order given, reads a mapping before it writes it, and STOPS at the first
- * request that fails: what was done, what failed (with a sentence for a person) and how many were not tried are all in the result, and nothing is
- * ever half-moved. No React in this file: hooks/useMappingActions.tsx raises the dialogs and toasts and calls these.
+ * made of, so every runner here works ONE request at a time, in the order given, reads a mapping before it changes it (a restore is guarded by the
+ * database instead: see `Failure`), and STOPS at the first request that fails: what was done, what failed (with a sentence for a person) and how
+ * many were not tried are all in the result, and nothing is ever half-moved. No React in this file: hooks/useMappingActions.tsx raises the dialogs and toasts and calls these.
  */
 
 /** How long an Undo toast stays. */
@@ -19,8 +19,11 @@ export const GONE_TEXT = "Those mappings were already gone.";
 /** One mapping a person acted on. `name` is what a sentence calls it (a point's name, or a metric); `assetId` is where the page believes it is. */
 export interface MappingRef { id: number; name: string; assetId: number }
 /**
- * `reason` is a full sentence ending in a full stop. `unknown`: the write got no answer (or only a proxy's) and could not be checked afterwards,
- * so it may have gone through; the item is in the Undo list all the same (the Undo runners check before they write).
+ * `reason` is a full sentence ending in a full stop. `unknown`: the write got no answer (or only a proxy's) and nothing afterwards showed that it
+ * went through (the check failed, or it still showed the old row: the api may be inside its transaction), so it may yet have; the item is in the
+ * Undo list all the same. That is safe because the Undo of such an item changes nothing that did not change: `moveBack` writes only if the mapping
+ * is on the asset the move put it on, and `restoreMappings` relies on the database's `point_id UNIQUE` (migrations 0001_initial.py:66) to refuse
+ * a second mapping of a point that is still mapped. It does not read before it writes: keep that constraint, or check first.
  */
 export interface Failure { name: string; reason: string; status?: number; unknown?: true }
 interface Stop { failed: Failure | null; notTried: number }
@@ -30,8 +33,12 @@ export interface UnmapResult extends Stop { removed: Mapping[]; skipped: string[
 export interface MovedOne { id: number; name: string; from: number; to: number }
 /** `moved` includes the mapping of an `unknown` failure (it is the last one). */
 export interface MoveResult extends Stop { moved: MovedOne[]; unchanged: number; gone: number }
-/** The result of an Undo. `skipped` are the names of mappings that were changed since, so nothing was undone for them. */
-export interface PutBackResult extends Stop { done: number; skipped: string[]; gone: number }
+/**
+ * The result of an Undo. `skipped` are the names of mappings that were changed since, so nothing was undone for them. `untouched` (absent when
+ * there are none) are the names of mappings that turned out never to have changed (the item of an unknown outcome whose write did not land):
+ * nothing was needed for them, which is not an error and not "changed since".
+ */
+export interface PutBackResult extends Stop { done: number; skipped: string[]; gone: number; untouched?: string[] }
 
 // ---- one queue for everything -------------------------------------------------------------------------------------------------------
 
@@ -125,9 +132,10 @@ const readOne = (id: number) => api.get<Mapping>(`/api/mappings/${id}`);
 
 /**
  * One write on mapping `id`: "gone" when the server says it is not there (`isGone`), else "done". A write that got no answer, or only a proxy's
- * (502/503/504), may have gone through all the same, so the mapping is read once: `went(now)` (null = not there) says whether it shows the
- * write's end state, and then the write counts as done; if not it failed as it said. A read that fails too leaves the outcome unknown: `keep()`
- * puts the item in the Undo list (the Undo runners check before they write) and `Unsure` ends the item. Any other error is a refusal.
+ * (502/503/504), may have gone through all the same (the client stopped waiting; the api may be inside its transaction, behind a lock), so the
+ * mapping is read once: `went(now)` (null = not there) says whether it shows the write's end state, and only THEN does the write count as done.
+ * A read that does not show it, or fails, proves nothing: the outcome is unknown, `keep()` puts the item in the Undo list (see `Failure.unknown`
+ * for why that is safe) and `Unsure` ends the item. Any other error is a refusal and is never re-read.
  */
 async function write(
   call: () => Promise<unknown>,
@@ -138,15 +146,15 @@ async function write(
     return (await attempt(call, isGone)) === null ? "gone" : "done";
   } catch (error) {
     if (!isUnreachable(error)) throw error;
-    let now: Mapping | null;
+    let shown = false;
     try {
-      now = (await attempt(() => readOne(id)))?.value ?? null;
+      shown = went((await attempt(() => readOne(id)))?.value ?? null);
     } catch {
-      keep();
-      throw new Unsure(error);
+      // the read failed too: nothing shows that it went
     }
-    if (went(now)) return "done";
-    throw error;
+    if (shown) return "done";
+    keep();
+    throw new Unsure(error);
   }
 }
 
@@ -173,22 +181,28 @@ export async function unmapMappings(refs: readonly MappingRef[]): Promise<UnmapR
 }
 
 /**
- * Undo of an unmap: creates each mapping again with exactly the values read before it was deleted (the id is a new one). A POST that got no answer
- * cannot be read back (the new mapping has no id we know), so it stops as unknown and the sentence tells the person to look.
+ * Undo of an unmap: creates each mapping again with exactly the values read before it was deleted (the id is a new one). It does NOT read before it
+ * writes: a point that is still mapped is refused by `mappings.point_id UNIQUE` (a 409), so a mapping whose delete did not land cannot be doubled.
+ * `unsureId` is the id of the mapping whose delete had an unknown outcome (the last of `removed`): its 409 means "it was still there", so it is
+ * named in `untouched` and the batch goes on; every other 409 is a clash and stops, as ever. A POST that got no answer cannot be read back (the
+ * new mapping has no id we know), so it stops as unknown and the sentence tells the person to look.
  */
-export async function restoreMappings(removed: readonly Mapping[], nameOf: (m: Mapping) => string): Promise<PutBackResult> {
+export async function restoreMappings(removed: readonly Mapping[], nameOf: (m: Mapping) => string, unsureId?: number): Promise<PutBackResult> {
   let done = 0;
+  const untouched: string[] = [];
   const stop = await eachOne(removed, nameOf, "create", async (m) => {
     try {
       await api.post<Mapping>("/api/mappings", {
         point_id: m.point_id, asset_id: m.asset_id, metric: m.metric, scale: m.scale, interval_seconds: m.interval_seconds, custom_unit: m.custom_unit,
       });
     } catch (error) {
-      throw isUnreachable(error) ? new Unsure(error) : error;
+      if (isUnreachable(error)) throw new Unsure(error);
+      if (m.id === unsureId && error instanceof ApiError && error.status === 409) { untouched.push(nameOf(m)); return; }
+      throw error;
     }
     done += 1;
   });
-  return { done, skipped: [], gone: 0, ...stop };
+  return { done, skipped: [], gone: 0, ...(untouched.length > 0 ? { untouched } : {}), ...stop };
 }
 
 /**
@@ -214,14 +228,19 @@ export async function moveMappings(refs: readonly MappingRef[], toAssetId: numbe
   return { moved, unchanged, gone, ...stop };
 }
 
-/** Undo of a move: a mapping goes back only if it is still on the asset the move put it on; one that has changed since is named and left alone. */
+/**
+ * Undo of a move: a mapping goes back only if it is still on the asset the move put it on; one that has changed since is named and left alone. One
+ * that is on the asset it came from never moved (the move of an unknown outcome did not land): nothing is written, it is named in `untouched`.
+ */
 export async function moveBack(moved: readonly MovedOne[]): Promise<PutBackResult> {
   let done = 0;
   let gone = 0;
   const skipped: string[] = [];
+  const untouched: string[] = [];
   const stop = await eachOne(moved, (m) => m.name, "move", async (item) => {
     const read = await attempt(() => readOne(item.id));
     if (read === null) { gone += 1; return; }
+    if (read.value.asset_id === item.from) { untouched.push(item.name); return; }
     if (read.value.asset_id !== item.to) { skipped.push(item.name); return; }
     const outcome = await write(() => api.patch<Mapping>(`/api/mappings/${item.id}`, { asset_id: item.from }), item.id, {
       went: (now) => now?.asset_id === item.from, isGone: mappingGone,
@@ -229,7 +248,7 @@ export async function moveBack(moved: readonly MovedOne[]): Promise<PutBackResul
     if (outcome === "gone") gone += 1;
     else done += 1;
   });
-  return { done, skipped, gone, ...stop };
+  return { done, skipped, gone, ...(untouched.length > 0 ? { untouched } : {}), ...stop };
 }
 
 /**
@@ -412,11 +431,21 @@ const changedSince = (names: readonly string[]) =>
 
 export type UndoKind = "restore" | "moveBack" | "deleteMade";
 
+/** Mappings an Undo found never changed: a move that did not land is already back; an unmap that did not land is still mapped. */
+const untouchedText = (kind: UndoKind, names: readonly string[]) => {
+  if (names.length === 0) return "";
+  const many = names.length > 1;
+  return kind === "restore"
+    ? ` ${quoted(names)} ${wasWere(names.length)} still mapped, so nothing was put back for ${many ? "them" : "it"}.`
+    : ` ${quoted(names)} ${wasWere(names.length)} already back where ${many ? "they were" : "it was"}.`;
+};
+
 /** What an Undo's toast says: the honest count (`total` is how many it was asked to undo), the one that failed with its reason, the ones changed since. */
 export function undoOutcome(kind: UndoKind, result: PutBackResult, total: number, newAssets: readonly string[] = []): Outcome {
   const unmapping = kind === "deleteMade";
   const head = (n: number) => (unmapping ? `Unmapped ${points(n)}` : `Put back ${n} mapping${n === 1 ? "" : "s"}`);
-  const tail = `${changedSince(result.skipped)}${goneText(result.gone)}`;
+  const untouched = result.untouched ?? [];
+  const tail = `${changedSince(result.skipped)}${untouchedText(kind, untouched)}${goneText(result.gone)}`;
   // Only an unmap leaves assets behind, and they stay whatever else happened (a failure, nothing done), so the person is always told.
   const stays = unmapping && newAssets.length > 0 ? ` ${staysText(newAssets)}` : "";
   if (result.failed) {
@@ -424,7 +453,8 @@ export function undoOutcome(kind: UndoKind, result: PutBackResult, total: number
     const lead = result.done > 0 ? `${unmapping ? "Unmapped" : "Put back"} ${result.done} of ${total}. ` : "";
     return { kind: "error", text: `${lead}${stoppedText(result.failed, verbed, kind === "restore")}${notTriedText(result.notTried)}${stays}${tail}` };
   }
-  if (result.done > 0) return { kind: result.skipped.length > 0 ? "info" : "success", text: `${head(result.done)}.${stays}${tail}` };
-  if (result.skipped.length > 0) return { kind: "info", text: `${stays}${tail}`.trim() };
+  const leftAlone = result.skipped.length > 0 || untouched.length > 0; // the person is told about each, so it is not a plain success
+  if (result.done > 0) return { kind: leftAlone ? "info" : "success", text: `${head(result.done)}.${stays}${tail}` };
+  if (leftAlone) return { kind: "info", text: `${stays}${tail}`.trim() };
   return { kind: "info", text: `${GONE_TEXT}${stays}` };
 }

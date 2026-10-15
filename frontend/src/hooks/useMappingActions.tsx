@@ -120,7 +120,9 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
       const names = new Map(refs.map((r) => [r.id, r.name]));
       const nameOf = (m: Mapping) => names.get(m.id) ?? "a mapping";
       await execute(() => unmapMappings(refs), (result) => {
-        const putBack = () => { void execute(() => restoreMappings(result.removed, nameOf), (put) => say(undoOutcome("restore", put, result.removed.length))); };
+        // A delete of unknown outcome keeps its mapping as the LAST of `removed`: the Undo needs to know it, to read a 409 for it as "still mapped".
+        const unsureId = result.failed?.unknown ? result.removed[result.removed.length - 1]?.id : undefined;
+        const putBack = () => { void execute(() => restoreMappings(result.removed, nameOf, unsureId), (put) => say(undoOutcome("restore", put, result.removed.length))); };
         say(unmapOutcome(result, where.text, refs.length), result.removed.length > 0 ? undoOptions(putBack) : undefined);
       }, opts.after);
     })();

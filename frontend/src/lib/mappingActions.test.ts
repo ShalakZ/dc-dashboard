@@ -30,6 +30,8 @@ function server(initial: Mapping[], fail: (call: Call) => Response | undefined =
     if (injected) return injected;
     if (call.method === "POST" && call.path === "/api/mappings") {
       const body = call.body as Omit<Mapping, "id">;
+      // The database's `point_id UNIQUE`: a point that is mapped still cannot be mapped again, which is what makes the Undo of an unmap safe.
+      if ([...store.values()].some((m) => m.point_id === body.point_id)) return reply(409, { detail: "this point is already mapped, or the asset already has this metric" });
       const made = { id: nextId++, ...body };
       store.set(made.id, made);
       return reply(201, made);
@@ -173,6 +175,26 @@ describe("restoreMappings", () => {
     expect(s.calls).toHaveLength(2);
   });
 
+  it("the item of an unknown unmap that is still mapped is refused by the database (409): it is untouched, not a failure, and nothing is doubled", async () => {
+    const s = server([mapping(2)]); // 2 was never deleted; 1 was
+    const result = await restoreMappings([mapping(1), mapping(2)], nameOf, 2);
+    expect(result).toEqual({ done: 1, skipped: [], gone: 0, untouched: ["P2"], failed: null, notTried: 0 });
+    expect([...s.store.values()].map((m) => m.point_id).sort()).toEqual([1001, 1002]); // point 1002 once
+  });
+
+  it("a 409 on any other item is still a failure that stops the batch, with the plain words", async () => {
+    server([mapping(1)]);
+    const result = await restoreMappings([mapping(1), mapping(2)], nameOf, 2);
+    expect(result.failed).toEqual({ name: "P1", reason: "It is mapped again, or the asset already has that metric.", status: 409 });
+    expect(result.untouched).toBeUndefined();
+    expect(result.notTried).toBe(1);
+  });
+
+  it("the unknown item's other failures (a 404, a 500) are failures as ever", async () => {
+    server([], status(500, "database is busy")(is("POST", "/api/mappings")));
+    expect((await restoreMappings([mapping(1)], nameOf, 1)).failed).toEqual({ name: "P1", reason: "Database is busy.", status: 500 });
+  });
+
   it("a point or an asset that is gone (404) stops with a sentence for that", async () => {
     server([], status(404, "asset not found")(is("POST", "/api/mappings")));
     const result = await restoreMappings([mapping(1)], nameOf);
@@ -259,6 +281,13 @@ describe("moveBack", () => {
     expect(s.store.get(2)!.asset_id).toBe(5);
   });
 
+  it("a mapping that is still on the asset it came from never changed: nothing is written, it is named as untouched, not as changed since", async () => {
+    const s = server([mapping(1, { asset_id: 1 }), mapping(2, { asset_id: 9 }), mapping(3, { asset_id: 5 })]);
+    const result = await moveBack(moved);
+    expect(s.writes()).toEqual(["PATCH /api/mappings/2"]);
+    expect(result).toEqual({ done: 1, skipped: ["C"], gone: 0, untouched: ["A"], failed: null, notTried: 0 });
+  });
+
   it("a mapping that is gone is counted; a 409 stops and says so", async () => {
     server([mapping(2, { asset_id: 9 }), mapping(3, { asset_id: 9 })], status(409, "this point is already mapped, or the asset already has this metric")(is("PATCH", "/api/mappings/3")));
     const result = await moveBack(moved);
@@ -306,12 +335,23 @@ describe("a write whose outcome is unknown (no answer, or a proxy's 502/503/504)
     expect(result).toEqual({ removed: [mapping(1, { scale: 0.5 }), mapping(2)], skipped: [], gone: 0, failed: null, notTried: 0 });
   });
 
-  it("DELETE lost and the mapping is still there: the write failed as it said, nothing is kept for the Undo", async () => {
-    server([mapping(1), mapping(2)], status(504, "gateway timeout")(is("DELETE", "/api/mappings/1")));
+  it("DELETE lost and the re-read still returns the mapping: only a re-read that shows the change is conclusive, so it is unknown and kept for the Undo", async () => {
+    const s = server([mapping(1, { scale: 0.5, interval_seconds: 1 }), mapping(2)], status(502, "bad gateway")(is("DELETE", "/api/mappings/1")));
     const result = await unmapMappings([ref(1, "A"), ref(2, "B")]);
-    expect(result.removed).toEqual([]);
-    expect(result.failed).toEqual({ name: "A", reason: sentence, status: 504 });
+    expect(result.removed).toEqual([mapping(1, { scale: 0.5, interval_seconds: 1 })]); // the values as read
+    expect(result.failed).toEqual({ name: "A", reason: "The server is not answering (status 502). It may be restarting; try again in a moment.", status: 502, unknown: true });
     expect(result.notTried).toBe(1);
+    expect(s.calls.some((c) => c.path === "/api/mappings/2")).toBe(false);
+  });
+
+  it("DELETE lost, the re-read shows the old row, and the api commits a moment later: the Undo restores it", async () => {
+    const s = server([mapping(1, { scale: 0.5 })], status(504, "gateway timeout")(is("DELETE", "/api/mappings/1")));
+    const result = await unmapMappings([ref(1, "A")]);
+    expect(result.failed?.unknown).toBe(true);
+    s.store.delete(1); // the transaction that was waiting on a lock goes through, after the check
+    const back = await restoreMappings(result.removed, (m) => `P${m.id}`, 1);
+    expect(back).toEqual({ done: 1, skipped: [], gone: 0, failed: null, notTried: 0 });
+    expect([...s.store.values()].map((m) => [m.point_id, m.scale])).toEqual([[1001, 0.5]]);
   });
 
   it("DELETE lost and the re-read fails too: the mapping is kept for the Undo, the batch stops, and the failure is marked unknown", async () => {
@@ -360,15 +400,44 @@ describe("a write whose outcome is unknown (no answer, or a proxy's 502/503/504)
     expect([...s.store.values()].map((m) => m.asset_id)).toEqual([1, 1, 1]);
   });
 
-  it("PATCH lost and the mapping did not move: the write failed as it said, only the earlier ones are in moved", async () => {
-    server([mapping(1), mapping(2), mapping(3)], status(504, "gateway timeout")(is("PATCH", "/api/mappings/2")));
-    const result = await moveMappings([ref(1, "A"), ref(2, "B"), ref(3, "C")], 9);
-    expect(result.moved.map((m) => m.id)).toEqual([1]);
-    expect(result.failed).toEqual({ name: "B", reason: sentence, status: 504 });
-    expect(result.notTried).toBe(1);
+  it("a request that never completes and a re-read that still shows the row is unknown too", async () => {
+    const s = server([mapping(1)], (call) => {
+      if (is("DELETE", "/api/mappings/1")(call)) throw new TypeError("failed to fetch");
+      return undefined;
+    });
+    const result = await unmapMappings([ref(1, "A"), ref(2, "B")]);
+    expect(s.calls.filter((c) => c.method === "GET")).toHaveLength(2); // the read before, and the check
+    expect(result.removed).toEqual([mapping(1)]);
+    expect(result.failed).toEqual({ name: "A", reason: "Can't reach the server. Check the network and try again.", status: 0, unknown: true });
   });
 
-  it("PATCH lost and the re-read fails too: kept in moved for the Undo (which checks before it writes), failure marked unknown", async () => {
+  it("PATCH lost and the re-read still shows the OLD asset: unknown, so it is in moved (for the Undo) and the failure says so", async () => {
+    const s = server([mapping(1), mapping(2), mapping(3)], status(504, "gateway timeout")(is("PATCH", "/api/mappings/2")));
+    const result = await moveMappings([ref(1, "A"), ref(2, "B"), ref(3, "C")], 9);
+    expect(result.moved).toEqual([{ id: 1, name: "A", from: 1, to: 9 }, { id: 2, name: "B", from: 1, to: 9 }]);
+    expect(result.failed).toEqual({ name: "B", reason: sentence, status: 504, unknown: true });
+    expect(result.notTried).toBe(1);
+    expect(s.store.get(2)!.asset_id).toBe(1);
+  });
+
+  it("PATCH lost, old asset still shown, and the api commits later: the Undo moves it back; had it never gone, the Undo says it was already back", async () => {
+    let first = true; // only the move loses its answer, not the Undo
+    const s = server([mapping(1)], (call) => {
+      if (!first || !is("PATCH", "/api/mappings/1")(call)) return undefined;
+      first = false;
+      return lost();
+    });
+    const result = await moveMappings([ref(1, "A")], 9);
+    expect(result.failed?.unknown).toBe(true);
+    // Never went: the mapping is on `from` still, so the Undo writes nothing and says nothing is wrong.
+    expect(await moveBack(result.moved)).toEqual({ done: 0, skipped: [], gone: 0, untouched: ["A"], failed: null, notTried: 0 });
+    expect(s.writes()).toEqual(["PATCH /api/mappings/1"]); // only the move's own, lost, request
+    s.store.get(1)!.asset_id = 9; // the move commits after all
+    expect(await moveBack(result.moved)).toEqual({ done: 1, skipped: [], gone: 0, failed: null, notTried: 0 });
+    expect(s.store.get(1)!.asset_id).toBe(1);
+  });
+
+  it("PATCH lost and the re-read fails too: kept in moved for the Undo (moveBack looks at where the mapping is first), failure marked unknown", async () => {
     let reads = 0;
     let first = true;
     const s = server([mapping(1), mapping(2)], (call) => {
@@ -435,8 +504,9 @@ describe("moveConflicts and moveConflictText", () => {
     // A third row with the same metric as the one already there does clash.
     const more = [...rows, row(3, "V2", "voltage_v", 1)];
     expect(moveConflicts(more, taken, 9)).toEqual(["V2"]);
-    // Two rows that share a metric only count when both would move.
-    expect(moveConflicts([row(1, "V1", "voltage_v", 9), row(2, "V2", "voltage_v", 1)], new Set(), 9)).toEqual([]);
+    // V1 is on the target already, so the target has the metric (`taken`) and V2, which would move, clashes with it. Without the target filter V1
+    // would be named too, and a V1 that does not move would be refused for a clash it does not have.
+    expect(moveConflicts([row(1, "V1", "voltage_v", 9), row(2, "V2", "voltage_v", 1)], new Set<Metric>(["voltage_v"]), 9)).toEqual(["V2"]);
   });
 
   it("says why in a sentence: the target has it, or two of the rows map the same metric", () => {
@@ -663,6 +733,23 @@ describe("the words", () => {
     expect(undoOutcome("deleteMade", { done: 0, ...clean, gone: 2 }, 2, [])).toEqual({ kind: "info", text: GONE_TEXT });
     // Only an unmap leaves assets behind: the other two Undos say nothing about them.
     expect(undoOutcome("moveBack", { done: 1, ...clean }, 1, ["Room 1"]).text).toBe("Put back 1 mapping.");
+  });
+
+  it("Undo results: a mapping that never changed is said so honestly (info, not an error and not 'changed since')", () => {
+    const clean = { skipped: [], gone: 0, failed: null, notTried: 0 };
+    expect(undoOutcome("moveBack", { done: 0, ...clean, untouched: ["B"] }, 1)).toEqual({ kind: "info", text: '"B" was already back where it was.' });
+    expect(undoOutcome("moveBack", { done: 1, ...clean, untouched: ["A", "B"] }, 3)).toEqual({
+      kind: "info", text: 'Put back 1 mapping. "A", "B" were already back where they were.',
+    });
+    expect(undoOutcome("moveBack", { done: 0, ...clean, skipped: ["C"], untouched: ["B"] }, 2).text).toBe(
+      '"C" was changed since, so nothing was undone for it. "B" was already back where it was.',
+    );
+    expect(undoOutcome("restore", { done: 0, ...clean, untouched: ["B"] }, 1)).toEqual({ kind: "info", text: '"B" was still mapped, so nothing was put back for it.' });
+    expect(undoOutcome("restore", { done: 2, ...clean, untouched: ["B"] }, 3)).toEqual({
+      kind: "info", text: 'Put back 2 mappings. "B" was still mapped, so nothing was put back for it.',
+    });
+    // With nothing else to report, "already gone" must not be the sentence.
+    expect(undoOutcome("restore", { done: 0, ...clean, gone: 1, untouched: ["B"] }, 2).text).toBe('"B" was still mapped, so nothing was put back for it. 1 was already gone.');
   });
 
   it("Undo results: a write of unknown outcome is 'may or may not'; a restore (nothing to read back) tells the person to look", () => {
