@@ -1,5 +1,5 @@
 import type { AssetImpact } from "./types";
-import { deleteAssetsOneByOne, loadImpacts, type RemoveItem } from "./assetsBulk";
+import { deleteAssetsOneByOne, loadAssetList, loadImpacts, type RemoveItem } from "./assetsBulk";
 import { ApiError } from "./client";
 
 interface Reply { status: number; body?: unknown }
@@ -61,10 +61,19 @@ describe("loadImpacts", () => {
     await expect(loadImpacts([1, 2, 3])).rejects.toBeInstanceOf(ApiError);
   });
 
-  it("starts no more requests once one has failed", async () => {
-    const { urls } = stubServer(({ id }) => (id === 2 ? { status: 500, body: { detail: "boom" } } : { status: 200, body: impact(1) }));
-    await expect(loadImpacts(Array.from({ length: 40 }, (_, i) => i + 1))).rejects.toMatchObject({ status: 500 });
-    expect(urls.length).toBeLessThanOrEqual(12); // the six that were in flight, and at most a handful more before the failure was noticed
+  it("starts no more requests once one has failed: exactly the six that were in flight", async () => {
+    // Every request is held, so the order in which the answers come back cannot change the count: six go out, the second one fails first, and
+    // the other five are answered afterwards (fine) without a single new request being started behind them.
+    const held = new Map<number, (r: Reply) => void>();
+    const { urls } = stubServer(({ id }) => new Promise<Reply>((resolve) => held.set(id, resolve)));
+    const rejected = expect(loadImpacts(Array.from({ length: 40 }, (_, i) => i + 1))).rejects.toMatchObject({ status: 500 });
+    await vi.waitFor(() => expect(held.size).toBe(6));
+    held.get(2)!({ status: 500, body: { detail: "boom" } });
+    await rejected;
+    for (const id of [1, 3, 4, 5, 6]) held.get(id)!({ status: 200, body: impact(1) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(urls).toHaveLength(6);
+    expect(held.size).toBe(6);
   });
 
   it("has at most six requests in flight, and keeps six going until the roots run out", async () => {
@@ -96,6 +105,21 @@ describe("loadImpacts", () => {
     stubServer(() => { inFlight += 1; peak = Math.max(peak, inFlight); return later({ status: 200, body: impact(1) }).then((r) => { inFlight -= 1; return r; }); });
     await loadImpacts([1, 2, 3]);
     expect(peak).toBe(3);
+  });
+});
+
+describe("loadAssetList", () => {
+  it("reads the whole list from the server every time it is asked: nothing is cached", async () => {
+    let served = 0;
+    const { urls } = stubServer(() => { served += 1; return { status: 200, body: Array.from({ length: served }, (_, i) => ({ id: i + 1, parent_id: null, name: `A${i + 1}`, kind: "room", sort_order: 0 })) }; });
+    expect((await loadAssetList()).map((a) => a.id)).toEqual([1]);
+    expect((await loadAssetList()).map((a) => a.id)).toEqual([1, 2]); // the second read is a second request, not the first answer again
+    expect(urls).toEqual(["GET /api/assets", "GET /api/assets"]);
+  });
+
+  it("rejects with the error when the server refuses", async () => {
+    stubServer(() => ({ status: 500, body: { detail: "database is locked" } }));
+    await expect(loadAssetList()).rejects.toMatchObject({ status: 500, message: "database is locked" });
   });
 });
 

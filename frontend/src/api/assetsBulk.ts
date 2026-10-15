@@ -2,7 +2,7 @@ import { assetDeletePath, assetImpact } from "../lib/impact";
 import { failureReason, type RemoveResult } from "../lib/assetsBulk";
 import { api, ApiError } from "./client";
 import { loadAssetImpact } from "./queries";
-import type { AssetImpact } from "./types";
+import type { Asset, AssetImpact } from "./types";
 
 /** How many impact requests are on their way at once: enough to open the dialog quickly, few enough not to crowd the server with a hundred. */
 const IMPACT_POOL = 6;
@@ -34,6 +34,13 @@ export async function loadImpacts(rootIds: readonly number[]): Promise<Map<numbe
   await Promise.all(Array.from({ length: Math.min(IMPACT_POOL, rootIds.length) }, worker));
   return new Map(rootIds.map((id) => [id, found.get(id) ?? null]));
 }
+
+/**
+ * The asset list as the server has it right now, the same `GET /api/assets` that `useAssets` reads, but straight from the network: it never
+ * goes through the query cache (a cached list is the very thing the delete dialog checks against), and it is not under the `["assets"]` key, so
+ * a refresh of the page's own list cannot re-ask it.
+ */
+export const loadAssetList = () => api.get<Asset[]>("/api/assets");
 
 /** One root to delete: `seen` is what its dialog showed, sent back as the `expect_*` counts so a child added meanwhile is refused instead of deleted unseen. */
 export interface RemoveItem { id: number; name: string; seen: AssetImpact }

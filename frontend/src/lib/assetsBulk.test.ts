@@ -2,9 +2,9 @@ import { ApiError } from "../api/client";
 import type { Asset, AssetImpact } from "../api/types";
 import {
   MAX_ROOTS, bulkRemoveToast, capMessage, deleteConfirmLabel, deleteMessage, deleteTitle, failureReason, focusAfterDelete, isPlainDelete, leaveTo,
-  planDelete, sumImpacts, type DeletePlan, type PlanItem, type RemoveResult,
+  planDelete, sumImpacts, treeDrift, type DeletePlan, type PlanItem, type RemoveResult,
 } from "./assetsBulk";
-import { buildTree } from "./tree";
+import { buildTree, descendantIds } from "./tree";
 import { indexTree } from "./treeMove";
 
 const asset = (id: number, parent_id: number | null, name: string, sort_order = 0): Asset => ({ id, parent_id, name, kind: "generic", sort_order });
@@ -36,8 +36,8 @@ describe("planDelete", () => {
     const p = plan(1, 4, 3, 8);
     expect(p.roots.map((x) => x.id)).toEqual([1, 8]);
     expect(p.inside).toEqual([
-      { id: 3, name: "LVP01", rootName: "Hall" },
-      { id: 4, name: "LVP02", rootName: "Hall" },
+      { id: 3, name: "LVP01", rootName: "Hall", rootId: 1 },
+      { id: 4, name: "LVP02", rootName: "Hall", rootId: 1 },
     ]);
   });
 
@@ -45,8 +45,8 @@ describe("planDelete", () => {
     const p = plan(1, 2, 3);
     expect(p.roots.map((x) => x.id)).toEqual([1]);
     expect(p.inside).toEqual([
-      { id: 2, name: "Rack A", rootName: "Hall" },
-      { id: 3, name: "LVP01", rootName: "Hall" },
+      { id: 2, name: "Rack A", rootName: "Hall", rootId: 1 },
+      { id: 3, name: "LVP01", rootName: "Hall", rootId: 1 },
     ]);
   });
 
@@ -121,8 +121,150 @@ describe("isPlainDelete and the confirm label", () => {
   });
 });
 
+describe("treeDrift: does the server's tree still match the picture the dialog was built from", () => {
+  const sizeIn = (list: Asset[], id: number) => descendantIds(buildTree(list), id).size;
+  /** What the server would answer for each root of `p` on the tree `list`. */
+  const countsOf = (list: Asset[], p: DeletePlan): Map<number, AssetImpact | null> => new Map(p.roots.map((r) => [r.id, impact(sizeIn(list, r.id))]));
+  const drift = (p: DeletePlan, list: Asset[], impacts: Map<number, AssetImpact | null> = countsOf(list, p)) => treeDrift(p, list, impacts);
+  const without = (...ids: number[]) => ASSETS.filter((a) => !ids.includes(a.id));
+  const moved = (id: number, parent: number | null) => ASSETS.map((a) => (a.id === id ? { ...a, parent_id: parent } : a));
+
+  // The review's scenarios: the cached list shows Rack A > (LVP01, LVP02), the person picks Rack A and LVP01.
+  const SMALL = [asset(1, null, "Hall"), asset(2, 1, "Rack A"), asset(3, 2, "LVP01")];
+  const smallPlan = planDelete([2, 3], indexTree(buildTree(SMALL)), (id) => SMALL.find((a) => a.id === id)?.name ?? "?");
+
+  it.each([
+    ["leaves", plan(3, 4, 7)],
+    ["a branch picked whole", plan(1, 2, 3, 4)],
+    ["a branch and a leaf of another", plan(1, 7)],
+    ["a pick inside another pick", plan(1, 3)],
+  ])("is null when the list is the one the picture was built from, and the counts are the subtrees: %s", (_name, p) => {
+    expect(drift(p, ASSETS)).toBeNull();
+  });
+
+  it("is null when the subtree holds more than was picked, as long as the list shows it (the dialog counts those)", () => {
+    expect(drift(plan(2), ASSETS)).toBeNull(); // Rack A's two LVPs are not picked: the message says so
+  });
+
+  it("is null when only the order of the picks differs from the order of the roots", () => {
+    expect(drift(plan(7, 3, 1), ASSETS)).toBeNull();
+  });
+
+  it("is null on the empty plan with no roots", () => {
+    expect(treeDrift({ picked: [], roots: [], inside: [] }, ASSETS, new Map())).toBeNull();
+  });
+
+  describe("a pick that is not in the fresh list any more", () => {
+    it("a leaf", () => {
+      expect(drift(plan(3, 7), without(3))).toMatch(/no longer in the list/);
+    });
+
+    it("the review's scenario (a): A and B picked, B deleted on the server, the server counts A's subtree as 2 (the old rule calls it plain)", () => {
+      // Rack A (2) > LVP01 (3), LVP02 (4); Rack A and LVP01 picked; LVP01 was deleted by someone else, so Rack A holds 2 assets: Rack A and LVP02.
+      const p = plan(2, 3);
+      const serverSays = new Map<number, AssetImpact | null>([[2, impact(2)]]);
+      expect(isPlainDelete(p, impact(2))).toBe(true); // 2 picks, 2 assets: the count alone would let it through, and delete LVP02 unseen
+      expect(drift(p, without(3), serverSays)).toMatch(/no longer in the list/);
+    });
+
+    it("a root", () => {
+      expect(drift(plan(1, 7), without(7))).toMatch(/no longer in the list/);
+    });
+  });
+
+  describe("the top-level picks changed", () => {
+    it("the review's scenario (b), a net-zero swap: LVP01 moved out of Rack A and LVP09 added under it; the count still equals the pick count", () => {
+      const fresh = [asset(1, null, "Hall"), asset(2, 1, "Rack A"), asset(3, 1, "LVP01"), asset(9, 2, "LVP09")];
+      const serverSays = new Map<number, AssetImpact | null>([[2, impact(2)]]); // Rack A + LVP09
+      expect(isPlainDelete(smallPlan, impact(2))).toBe(true); // 2 picks, 2 assets: plain by the count alone, and LVP09 would go unseen
+      expect(treeDrift(smallPlan, fresh, serverSays)).toMatch(/top-level picks changed/);
+    });
+
+    it("a pick moved out of its root becomes a root of its own", () => {
+      expect(drift(plan(1, 3), moved(3, 8))).toMatch(/top-level picks changed/);
+    });
+
+    it("a pick moved inside another pick is no longer a root", () => {
+      expect(drift(plan(3, 6), moved(3, 6))).toMatch(/top-level picks changed/);
+    });
+
+    it("a root moved inside an unpicked asset is still a root: no change there", () => {
+      expect(drift(plan(6), moved(6, 8))).toBeNull(); // Yard under Shed: Yard is still the top of what is picked, and its subtree is the same
+    });
+
+    it("the roots come in another order (a sibling was reordered)", () => {
+      const reordered = ASSETS.map((a) => (a.id === 1 ? { ...a, sort_order: 5 } : a)); // Hall now sorts after Yard and Shed
+      expect(drift(plan(1, 6), reordered)).toMatch(/top-level picks changed/);
+    });
+  });
+
+  describe("a pick inside a root moved to a different root", () => {
+    it("is caught by the map from pick to root, though the roots, the counts and the picks are the same", () => {
+      // LVP01 (3) was inside Hall (1) through Rack A; now it hangs under Yard (6). Both Hall and Yard are still roots.
+      const p = plan(1, 3, 6);
+      const fresh = moved(3, 6);
+      expect(p.inside).toEqual([{ id: 3, name: "LVP01", rootName: "Hall", rootId: 1 }]);
+      expect(drift(p, fresh)).toMatch(/moved to another/);
+    });
+
+    it("tells two roots with the same name apart", () => {
+      // two racks both called "Rack": the pick moves from the first to the second, and the names say nothing changed
+      const list = [asset(1, null, "Rack"), asset(2, null, "Rack", 1), asset(3, 1, "Sled")];
+      const p = planDelete([1, 2, 3], indexTree(buildTree(list)), (id) => list.find((a) => a.id === id)?.name ?? "?");
+      expect(p.inside).toEqual([{ id: 3, name: "Sled", rootName: "Rack", rootId: 1 }]);
+      expect(treeDrift(p, list.map((a) => (a.id === 3 ? { ...a, parent_id: 2 } : a)), new Map([[1, impact(1)], [2, impact(2)]]))).toMatch(/moved to another/);
+    });
+  });
+
+  describe("the server's count of a root against the fresh list's subtree", () => {
+    it("the server counts more than the list shows", () => {
+      expect(drift(plan(1), ASSETS, new Map([[1, impact(7)]]))).toMatch(/counts/);
+    });
+
+    it("the server counts fewer than the list shows", () => {
+      expect(drift(plan(1), ASSETS, new Map([[1, impact(4)]]))).toMatch(/counts/);
+    });
+
+    it("counts the root and every level below it in the fresh list", () => {
+      // Hall > Rack A > LVP01, LVP02 and Hall > Rack B: 5 assets with the root
+      expect(drift(plan(1), ASSETS, new Map([[1, impact(5)]]))).toBeNull();
+      expect(drift(plan(1), ASSETS, new Map([[1, impact(4)]]))).not.toBeNull();
+      expect(drift(plan(1), ASSETS, new Map([[1, impact(1)]]))).not.toBeNull();
+    });
+
+    it("takes the size from the FRESH list, not from the list the plan was built from", () => {
+      // LVP02 was deleted on the server: the old list says 5, the fresh one 4, and so does the server
+      expect(drift(plan(1), without(4), new Map([[1, impact(4)]]))).toBeNull();
+      expect(drift(plan(1), without(4), new Map([[1, impact(5)]]))).toMatch(/counts/);
+    });
+
+    it("a root that gained an asset nobody saw: the list and the server agree, so the dialog will count it", () => {
+      const grown = [...ASSETS, asset(9, 7, "Pump")];
+      expect(drift(plan(6), grown, new Map([[6, impact(3)]]))).toBeNull(); // Yard, Tank, Pump
+    });
+
+    it("checks every root, not only the first", () => {
+      expect(drift(plan(1, 6), ASSETS, new Map([[1, impact(5)], [6, impact(3)]]))).toMatch(/counts/);
+    });
+
+    it("mappings and tariffs are not compared, they are the server's alone", () => {
+      expect(drift(plan(7), ASSETS, new Map([[7, impact(1, 4, 2)]]))).toBeNull();
+    });
+  });
+
+  describe("a root the server does not know", () => {
+    it("a null impact (it answered 404) is a drift whatever the list says", () => {
+      expect(drift(plan(3, 7), ASSETS, new Map([[3, impact(1)], [7, null]]))).toMatch(/already deleted/);
+    });
+
+    it("an impact that was never asked for is a drift too", () => {
+      expect(drift(plan(3, 7), ASSETS, new Map([[3, impact(1)]]))).toMatch(/already deleted/);
+    });
+  });
+});
+
 describe("deleteMessage", () => {
-  const LOSS = (a: number, m: number, t: number) =>
+  const LOSS =(a: number, m: number, t: number) =>
     `${a} ${a === 1 ? "asset" : "assets"}, ${m} ${m === 1 ? "mapping" : "mappings"} and ${t} ${t === 1 ? "tariff" : "tariffs"} will be deleted; their past energy and cost figures disappear from Billing and dashboards.`;
   const LAST = "This can't be undone.";
 
@@ -146,12 +288,12 @@ describe("deleteMessage", () => {
   });
 
   it("says, for a pick inside another pick, that it goes with it", () => {
-    const p = fake([item(1, "Data_Hall_1"), item(2, "LVP02")], [{ id: 2, name: "LVP02", rootName: "Data_Hall_1" }]);
+    const p = fake([item(1, "Data_Hall_1"), item(2, "LVP02")], [{ id: 2, name: "LVP02", rootName: "Data_Hall_1", rootId: 1 }]);
     expect(deleteMessage(p, impact(2))).toBe(`Data_Hall_1, LVP02. LVP02 is inside Data_Hall_1, which is also picked, so it goes with it. ${LAST}`);
   });
 
   it("says it for the first three, then counts the rest", () => {
-    const inside = (n: number) => Array.from({ length: n }, (_, i) => ({ id: 10 + i, name: `C${i + 1}`, rootName: "Hall" }));
+    const inside = (n: number) => Array.from({ length: n }, (_, i) => ({ id: 10 + i, name: `C${i + 1}`, rootName: "Hall", rootId: 1 }));
     const picked = (n: number) => [item(1, "Hall"), ...inside(n).map((c) => item(c.id, c.name))];
     const three = deleteMessage(fake(picked(3), inside(3)), impact(4));
     expect(three).toContain("C1 is inside Hall, which is also picked, so it goes with it. C2 is inside Hall, which is also picked, so it goes with it. C3 is inside Hall, which is also picked, so it goes with it. This can't be undone.");
@@ -164,7 +306,7 @@ describe("deleteMessage", () => {
   });
 
   it("puts the notes before the billing warning", () => {
-    const p = fake([item(1, "Hall"), item(2, "Rack")], [{ id: 2, name: "Rack", rootName: "Hall" }]);
+    const p = fake([item(1, "Hall"), item(2, "Rack")], [{ id: 2, name: "Rack", rootName: "Hall", rootId: 1 }]);
     expect(deleteMessage(p, impact(6, 1, 0))).toBe(`Hall, Rack. Rack is inside Hall, which is also picked, so it goes with it. ${LOSS(6, 1, 0)} ${LAST}`);
   });
 

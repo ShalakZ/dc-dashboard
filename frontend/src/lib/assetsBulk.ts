@@ -1,10 +1,10 @@
 import { ApiError } from "../api/client";
-import type { AssetImpact } from "../api/types";
+import type { Asset, AssetImpact } from "../api/types";
 import { assetLoss } from "./impact";
 import { namesLine } from "./kindsBulk";
 import { sentence } from "./sentence";
-import type { TreeNode } from "./tree";
-import { toRoots, type TreeIndex } from "./treeMove";
+import { buildTree, type TreeNode } from "./tree";
+import { indexTree, toRoots, type TreeIndex } from "./treeMove";
 import { visibleOrder } from "./treeSelect";
 
 /**
@@ -19,8 +19,8 @@ export const MAX_ROOTS = 100;
 export const capMessage = (roots: number) => `Up to ${MAX_ROOTS} assets can be deleted at once (you picked ${roots} top-level ones). Pick fewer.`;
 
 export interface PlanItem { id: number; name: string }
-/** A pick that sits inside another pick: it is not sent, it goes with `rootName`. */
-export interface InsideItem { id: number; name: string; rootName: string }
+/** A pick that sits inside another pick: it is not sent, it goes with the root `rootId` (called `rootName`). */
+export interface InsideItem { id: number; name: string; rootName: string; rootId: number }
 export interface DeletePlan {
   /** Every pick that is in the tree, in tree order. */
   picked: PlanItem[];
@@ -53,8 +53,39 @@ export function planDelete(ids: Iterable<number>, index: TreeIndex, nameOf: (id:
   return {
     picked,
     roots: roots.map(item),
-    inside: picked.filter((p) => !rootSet.has(p.id)).map((p) => ({ ...p, rootName: nameOf(rootAbove(p.id)) })),
+    inside: picked.filter((p) => !rootSet.has(p.id)).map((p) => {
+      const rootId = rootAbove(p.id);
+      return { ...p, rootName: nameOf(rootId), rootId };
+    }),
   };
+}
+
+/**
+ * Does the tree the server has NOW still match the picture the dialog was built from? `plan` was made from a list that may be minutes old;
+ * `fresh` is the list read when the dialog opened, and `impacts` the server's count for each root, read at the same time. Returns why not, or
+ * null when the picture holds: every pick is still there, the same assets are the top-level picks and each other pick is still inside the same
+ * one, and each root's count from the server is the size of that root's subtree in the fresh list (a count that is higher OR lower is a drift:
+ * the dialog's "these are the assets that go" would be wrong). It is a reason for the code, not a sentence for the person. A null impact is a
+ * root the server no longer has. Mappings and tariffs are the server's alone and are not compared.
+ */
+export function treeDrift(plan: DeletePlan, fresh: Asset[], impacts: ReadonlyMap<number, AssetImpact | null>): string | null {
+  for (const root of plan.roots) if ((impacts.get(root.id) ?? null) === null) return "A picked asset was already deleted on the server.";
+  const nodes = buildTree(fresh);
+  const index = indexTree(nodes);
+  if (plan.picked.some((p) => !index.has(p.id))) return "A picked asset is no longer in the list.";
+  const now = planDelete(plan.picked.map((p) => p.id), index, (id) => index.nameOf(id) ?? "");
+  if (now.roots.length !== plan.roots.length || now.roots.some((root, at) => root.id !== plan.roots[at].id)) return "The top-level picks changed.";
+  const rootNow = new Map(now.inside.map((i) => [i.id, i.rootId]));
+  if (plan.inside.some((i) => rootNow.get(i.id) !== i.rootId)) return "A pick moved to another branch.";
+  const sizes = new Map<number, number>(); // every asset, the asset itself included: the server counts a subtree that way
+  const size = (node: TreeNode): number => {
+    const n = node.children.reduce((sum, child) => sum + size(child), 1);
+    sizes.set(node.id, n);
+    return n;
+  };
+  nodes.forEach(size);
+  if (plan.roots.some((root) => (impacts.get(root.id) as AssetImpact).assets !== sizes.get(root.id))) return "The server's counts do not match the tree.";
+  return null;
 }
 
 /** What all the roots take with them: the counts added up (each root's subtree counted once, since only roots are asked). */

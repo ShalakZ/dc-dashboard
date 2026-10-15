@@ -7,6 +7,7 @@ import type { AssetTreeRemove } from "../components/AssetTree";
 import { BulkDeleteAssetsDialog } from "../components/BulkDeleteAssetsDialog";
 import { useToast } from "../components/Toasts";
 import { MAX_ROOTS, bulkRemoveToast, capMessage, leaveTo, planDelete, type DeletePlan, type RemoveResult } from "../lib/assetsBulk";
+import type { Timers } from "../lib/progress";
 import { buildTree } from "../lib/tree";
 import { indexTree, type TreeIndex } from "../lib/treeMove";
 
@@ -14,6 +15,14 @@ import { indexTree, type TreeIndex } from "../lib/treeMove";
 interface Open { plan: DeletePlan; opener: HTMLElement | null; focusAfter: number | null; index: TreeIndex }
 /** Where the focus goes once the dialog has left. */
 interface Refocus { opener: HTMLElement | null; focusAfter: number | null }
+
+/** How long the one-shot check after a refocus waits for the next list of assets: past this, a list that lands later is not about the refocus. */
+export const FOCUS_CHECK_MS = 3000;
+
+const realTimers: Timers = {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 
 /** Takes the focus without scrolling the page (an unscrolled `focus()` jumped the page to the top); true when it took it. */
 function take(el: HTMLElement | null): boolean {
@@ -40,9 +49,10 @@ function focusChain({ opener, focusAfter }: Refocus) {
  *
  * Delete in the bar -> `onDelete` -> the dialog (which asks the server what the top-level picks take with it) -> `run`: the roots are deleted one
  * after the other with the route a single delete uses. The page leaves the open asset as soon as the root that holds it is gone, the lists are
- * refreshed once at the end (also after a failure), and the focus ends on a named element whichever way the dialog ends.
+ * refreshed once at the end (also after a failure), and the focus ends on a named element whichever way the dialog ends. `timers` is the clock of
+ * the focus check's expiry (tests hand in a manual one).
  */
-export function useTreeDelete({ assets, selectedId, canDelete, locked }: { assets: Asset[]; selectedId: number | null; canDelete: boolean; locked: boolean }): {
+export function useTreeDelete({ assets, selectedId, canDelete, locked, timers = realTimers }: { assets: Asset[]; selectedId: number | null; canDelete: boolean; locked: boolean; timers?: Timers }): {
   remove: AssetTreeRemove | undefined;
   dialog: ReactNode;
   busy: boolean;
@@ -58,10 +68,43 @@ export function useTreeDelete({ assets, selectedId, canDelete, locked }: { asset
   const mounted = useRef(true);
   /** Set when the focus was placed: the next list of assets (or a change of permission) checks that it did not fall to the body. `undefined` = not armed. */
   const armed = useRef<number | null | undefined>(undefined);
+  /** Stops watching for a click or a focus move and clears the expiry timer; set while the check is armed. */
+  const unwatch = useRef<(() => void) | null>(null);
+  /** The result `run` already toasted because the page had left: the dialog's own report of it (it keeps running) must not toast it again. */
+  const reported = useRef<RemoveResult | null>(null);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+      disarm();
+    };
   }, []);
+
+  /** Ends the one-shot check: no more waiting for a list, no listeners, no timer. */
+  function disarm() {
+    armed.current = undefined;
+    unwatch.current?.();
+    unwatch.current = null;
+  }
+
+  /**
+   * Arms the one-shot check after a refocus. It ends at the next list of assets, at the first click or focus move anywhere (the person has
+   * taken over, and a list that lands later must not move the focus), or after FOCUS_CHECK_MS. Called AFTER the focus was placed: the focus
+   * event of that very call must not end the watch.
+   */
+  function arm(focusAfter: number | null) {
+    disarm();
+    armed.current = focusAfter;
+    const end = () => disarm();
+    document.addEventListener("pointerdown", end, true);
+    document.addEventListener("focusin", end, true);
+    const timer = timers.set(end, FOCUS_CHECK_MS);
+    unwatch.current = () => {
+      document.removeEventListener("pointerdown", end, true);
+      document.removeEventListener("focusin", end, true);
+      timers.clear(timer);
+    };
+  }
 
   function openDialog(ids: number[], opener: HTMLElement | null, focusAfter: number | null) {
     if (!canDelete || locked || open !== null) return;
@@ -79,18 +122,24 @@ export function useTreeDelete({ assets, selectedId, canDelete, locked }: { asset
     if (running.current) return running.current;
     // The tree as it was when Delete was pressed: a refresh in the middle of the loop must not make the deleted roots unknown.
     const frozen = latest.current.open?.index ?? index;
-    let left = false;
+    const names = new Map(items.map((item) => [item.id, item.name]));
     const onRemoved = (id: number) => {
-      if (left || !mounted.current) return; // a 401 or Back can have taken the page away while the loop runs
+      if (!mounted.current) return; // a 401 or Back can have taken the page away while the loop runs
+      // Every time, not once: the roots are disjoint and the parent of a root lies inside none of them, so leaving one root cannot land in another.
       const to = leaveTo({ openId: latest.current.selectedId, removed: [id], index: frozen });
-      if (to === null) return;
-      left = true;
       // At once, not after the loop: the open asset's pages poll, and a poll for a deleted asset would show "not found" behind the dialog.
-      latest.current.navigate(to);
+      if (to !== null) latest.current.navigate(to);
     };
     const job = (async () => {
       try {
-        return await deleteAssetsOneByOne(items, { onRemoved });
+        const result = await deleteAssetsOneByOne(items, { onRemoved });
+        if (mounted.current) {
+          // Back or Forward may have put the page on an asset that went earlier in this loop (no later root fires for it). Before the refresh below,
+          // which would ask the server for it. `replace`: the id that was read may be a render behind, and the same place twice must stay one entry.
+          const to = leaveTo({ openId: latest.current.selectedId, removed: [...result.deleted, ...result.gone], index: frozen });
+          if (to !== null) latest.current.navigate(to, { replace: true });
+        }
+        return result;
       } finally {
         try {
           // The set a move refreshes, plus the sources: a point row carries its mapping, and the mappings went with the assets.
@@ -100,7 +149,16 @@ export function useTreeDelete({ assets, selectedId, canDelete, locked }: { asset
         }
         running.current = null;
       }
-    })();
+    })().then((result) => {
+      if (!mounted.current) {
+        // The page left while the loop ran, and the dialog went with it: its report (a refusal with nothing deleted is only thrown into it) would
+        // never be seen. Whoever confirmed is told here, for every result; `done` skips this one.
+        reported.current = result;
+        const { tone, text } = bulkRemoveToast(result, (id) => names.get(id) ?? "");
+        toast[tone](text);
+      }
+      return result;
+    });
     running.current = job;
     return job;
   }
@@ -112,10 +170,12 @@ export function useTreeDelete({ assets, selectedId, canDelete, locked }: { asset
 
   function done(result: RemoveResult) {
     const current = latest.current.open;
-    const names = new Map((current?.plan.roots ?? []).map((root) => [root.id, root.name]));
-    // The names come from the plan: by now the assets are gone from the list.
-    const { tone, text } = bulkRemoveToast(result, (id) => names.get(id) ?? "");
-    toast[tone](text);
+    if (reported.current !== result) {
+      const names = new Map((current?.plan.roots ?? []).map((root) => [root.id, root.name]));
+      // The names come from the plan: by now the assets are gone from the list.
+      const { tone, text } = bulkRemoveToast(result, (id) => names.get(id) ?? "");
+      toast[tone](text);
+    }
     if (!mounted.current) return;
     // After a full success every pick is gone and so is the Delete button; after a partial result the failed and untried picks remain, and so does the button.
     setRefocus({ opener: result.failed === null ? null : current?.opener ?? null, focusAfter: current?.focusAfter ?? null });
@@ -142,7 +202,7 @@ export function useTreeDelete({ assets, selectedId, canDelete, locked }: { asset
   useEffect(() => {
     if (armed.current === undefined) return;
     const focusAfter = armed.current;
-    armed.current = undefined;
+    disarm();
     const active = document.activeElement;
     if (!active || active === document.body) focusChain({ opener: null, focusAfter });
   }, [assets, canDelete]);
@@ -153,7 +213,7 @@ export function useTreeDelete({ assets, selectedId, canDelete, locked }: { asset
     setRefocus(null);
     if (!mounted.current) return;
     focusChain(refocus);
-    armed.current = refocus.focusAfter;
+    arm(refocus.focusAfter);
   }, [refocus]);
 
   const remove = useMemo<AssetTreeRemove | undefined>(() => (canDelete ? { onDelete } : undefined), [canDelete, onDelete]);
