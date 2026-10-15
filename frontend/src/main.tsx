@@ -23,6 +23,8 @@ import "./styles/scans-drawer.css";
 import "./styles/discovery-tidy.css";
 import "./styles/bulk-assets.css";
 import "./styles/scans-polish.css";
+import "./styles/graph-nodes.css";
+import "./styles/graph-tools.css";
 import { App } from "./App";
 import { AppearanceProvider } from "./auth/AppearanceProvider";
 import { AuthProvider } from "./auth/AuthProvider";
