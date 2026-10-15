@@ -17,12 +17,6 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 ## W11 (2026-10-15, merge commit <MERGE>)
 
-### Upgrading to W11 (migration 0012)
-
-Schema `0011` to `0012`. Downgrade: **lossless** for everything that existed before the upgrade (it only drops the new table of closed
-months, described below), so option a is open. The code to go back to is `e9c1a5e` (the W7u merge; `main` before W11 differs from it
-only in documentation).
-
 W11 (close month) lets an administrator freeze a finished billing month, so that the bill for it stops moving. On Billing, an
 administrator now sees **Close month…** in the page header on a month that is over (it takes an optional note), and the month then
 carries a **Closed** chip, a banner ("Closed by <name> on <date>") and the figures exactly as they stood, per asset and per day.
@@ -30,14 +24,20 @@ Moving assets, mapping or unmapping points, editing tariffs and deleting assets 
 widgets stay live. When today's tree and rates would give other figures, a quiet line says so ("Today's tree and rates would give ...",
 and it counts assets that moved or changed even when the total is the same); readings that arrive late show up only there. The Billing CSV of a
 closed month is the file it had when closed, named `billing-YYYY-MM-closed.csv`. **Reopen month…** asks for a reason of at least 5
-characters and goes back to live figures; the old snapshot is kept and a new close stores a new one. The move and delete warnings gain
-"Closed months keep their billed figures." The Audit log gains `billing.closed` and `billing.reopened`. See
+characters and goes back to live figures; the old snapshot is kept and a new close stores a new one. The move and delete warnings now say that
+closed months keep their billed figures. The Audit log gains `billing.closed` and `billing.reopened`. See
 [Closing a month](docs/dashboards-and-billing.md#closing-a-month). Closing is a new permission, **Close and reopen billing months**
-(`billing.close`, in the Sensitive actions of the Roles tab, 31 permissions in all) that the migration gives to **no role**: the
+(`billing.close`, in the Sensitive actions of the Roles tab, 31 permissions in all) that migration `0012` gives to **no role**: the
 built-in Admin holds it from the code, and nobody else until an administrator ticks it (it needs See billing). Also new, for developers:
 `python -m dcdash.seed.history` makes a month of made-up readings on a development or scratch stack; it ships in the `api` image but
 writes nothing unless it is given `--yes` and `DCDASH_ALLOW_SEED_HISTORY=1`, so a real installation never runs it (see
 [Developing](docs/developing.md#seeding-a-month-of-history)).
+
+### Upgrading to W11 (migration 0012)
+
+Schema `0011` to `0012`. Downgrade: **lossless** for everything that existed before the upgrade (it only drops the new table of closed
+months, described below), so option a is open. The code to go back to is `e9c1a5e` (the W7u merge; `main` before W11 differs from it
+only in documentation).
 
 Migration `0012` creates one table, `billing_closes` (one row per close: the month, who and when, the note, the currency and time zone,
 the totals and the stored figures as JSON, and the reopening). It writes no row and touches no other table, runs in a moment and needs

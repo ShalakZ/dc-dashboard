@@ -62,7 +62,7 @@ default range, and `--seed N` changes the small random jitter (the default seed 
   near zero once in the middle of the range. Readings are every 5 minutes along a daily load curve of about 20 to 80 kW, written the way
   the collector writes them, and the two rollups are then refreshed over the range. It adds no other row and writes no audit entry.
 - **The range, and why it is short.** It starts at the beginning of the previous month, but never earlier than the raw retention
-  allows (30 days by default, read from the Storage settings): a rollup refresh recomputes from the raw readings, and a window that
+  allows, also with `--days N` (30 days by default, read from the Storage settings): a rollup refresh recomputes from the raw readings, and a window that
   holds data the retention has already dropped would erase real rollup history. So it writes only inside the raw retention, and it
   refuses (exit 1) on a stack whose rollups outlive their raw data. On most days of the month the previous month therefore holds only
   its last days, which is enough to close it; in the last days of a month the default range would keep less than a day of the previous

@@ -107,8 +107,8 @@ can **close** it: the Billing page stores the figures it shows for that month an
   month**. The month then shows live figures again at once. The old snapshot is kept, with who reopened it and why, but the app shows it
   nowhere; closing the month again freezes today's figures as a new record.
 - **What changes a closed month: nothing.** Moving assets, mapping or unmapping points, editing or deleting tariffs, changing a
-  mapping's scale, and deleting assets or sources do not change it; the move and delete warnings say so ("Closed months keep their billed
-  figures"). Readings that reach the database late do not change it either; they only show up in the "Today's tree and rates would
+  mapping's scale, and deleting assets or sources do not change it; the move and delete warnings now say that closed
+  months keep their billed figures. Readings that reach the database late do not change it either; they only show up in the "Today's tree and rates would
   give" line. A closed month stays reachable from **Previous month** and the Year and Month selects even after its meters are replaced
   or its source is deleted: the first month the selects offer is the first month with data or the first closed month, whichever is
   earlier. There is no list of closed months yet: open a month and look for the chip.
