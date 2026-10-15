@@ -20,7 +20,7 @@ import {
 //   nodes       the status dot (class, aria-hidden, title), the protocol badge (a plain rectangle), the facts words, the mapped strip of a group, and a source node no taller than SOURCE_H.
 //   highlight   hovering a point lights exactly its path (the nodes and edges the DOM edges say) after a short rest, dims the rest to about .35, clears when the pointer
 //               leaves, shows nothing during a drag, and a sweep across the pane between two lit nodes never clears (a MutationObserver on the wrapper's class watches it).
-//   live edges  only the online source's dashed edges and the mapped links under it flow (a mapped link keeps a mostly solid `8 2` dash), never an asset-to-asset edge;
+//   live edges  only the online source's source-to-group edges and the mapped links under it flow (a mapped link keeps a mostly solid `8 2` dash), never a group-to-point or an asset-to-asset edge;
 //               under reduced motion nothing flows and the status dot stops pulsing.
 //   minimap     named `Overview of the whole graph`, drawn when the canvas is 700 px wide or more, not over the attribution link.
 //   snap        the toggle (aria-pressed, remembered over a reload) and the dragged place: a multiple of 8 on, free off.
@@ -33,7 +33,7 @@ import {
 //   hint        the short line and the tip that lists the keys, also while the graph loads.
 //   placement   at 1440 x 900, 1024 x 640 and 800 x 600 with the offer shown AND the source panel open: the offer, the tools and the Find card do not overlap and stay in the canvas.
 //   perf        (about 2,000 nodes) the frames of a 3 s drag with guides, without the minimap and with snap off; hover to the lit path and the frames during the opacity
-//               transition; the keystroke-to-results time of Find at 6,000 points; the idle cost of 300 flowing edges against the same graph without motion. The numbers go to
+//               transition; the keystroke-to-results time of Find at 6,000 points; the idle cost of 100 flowing edges against the same graph without motion. The numbers go to
 //               .superpowers/sdd/2026-10-15-w7u-discovery-premium/measure.json and into each case's `measure` annotation (a test title is fixed before the run, so it cannot hold them);
 //               the assertions are generous on purpose, the controller reads the numbers.
 //
@@ -477,7 +477,7 @@ test.describe("W7u: the flowing edges", () => {
     };
   })();
 
-  test("only the online source's dashed edges and the mapped links under it flow; a mapped link keeps a mostly solid dash and an asset-to-asset edge never moves", async ({ page }) => {
+  test("only the online source's source-to-group edges and the mapped links under it flow; a group-to-point edge stays dashed and still, a mapped link keeps a mostly solid dash and an asset-to-asset edge never moves", async ({ page }) => {
     test.setTimeout(120_000);
     await arrive(page, smallModel());
     await expandSmall(page);
@@ -486,15 +486,16 @@ test.describe("W7u: the flowing edges", () => {
     expect(edges.filter((e) => e.id.startsWith("m:")).length, "the mapped links: 4 mapped points").toBe(4);
     expect(edges.filter((e) => e.id.startsWith("a:")).length, "the asset-to-asset edge").toBe(1);
 
-    const mustFlow = edges.filter((e) => !e.id.startsWith("a:") && ownerOf(e.from) === SMALL.alpha).map((e) => e.id).sort();
-    expect(mustFlow.length, "the online source owns 2 + 9 discovered edges and 4 mapped links").toBe(15);
-    expect(edges.filter((e) => e.animated).map((e) => e.id).sort(), "exactly the online source's edges flow").toEqual(mustFlow);
+    const mustFlow = edges.filter((e) => !e.id.startsWith("a:") && !e.id.startsWith("e:cluster:") && ownerOf(e.from) === SMALL.alpha).map((e) => e.id).sort();
+    expect(mustFlow.length, "the online source owns 2 source-to-group edges (9 group-to-point edges never flow) and 4 mapped links").toBe(6);
+    expect(edges.filter((e) => e.animated).map((e) => e.id).sort(), "exactly the online source's source-to-group edges and mapped links flow").toEqual(mustFlow);
     for (const e of edges) {
       const flows = mustFlow.includes(e.id);
       if (e.id.startsWith("e:")) expect(e.dash, `${e.id} stays dashed`).toBe("6 4");
       if (e.id.startsWith("m:")) expect(e.dash, `${e.id}: ${flows ? "mostly solid, with a small gap that flows" : "solid"}`).toBe(flows ? "8 2" : "none");
       if (e.id.startsWith("a:")) expect(e.dash, `${e.id} stays solid`).toBe("none");
       if (flows) expect(e.animation, `${e.id} is animated`).not.toBe("none");
+      else expect(e.animation, `${e.id} stands still`).toBe("none");
     }
     // The dot pulses (its animation is named); the node is not tied to the edges, so look at it here too.
     expect(await nodeEl(page, nid.source(SMALL.alpha)).locator(".gdot").evaluate((el) => getComputedStyle(el).animationName), "the online dot pulses").not.toBe("none");
@@ -1126,6 +1127,25 @@ async function measureDrag(page: Page, dx: number, seconds: number): Promise<{ i
   return { id, stats: frameStats(frames.gap.slice(1), frames.long), guideLines };
 }
 
+/**
+ * Gallery runs only: a point is taken and held mid-drag (the mouse stays down) until a guide line shows, then the screenshot is taken, so the picture proves
+ * the guides really draw (the measurements below only count their lines). The mouse is released afterwards.
+ */
+async function guidesShot(page: Page): Promise<void> {
+  const { box } = await visiblePoint(page);
+  const grab = { x: box.x + 8, y: box.y + 4 };
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(grab.x + 3, grab.y + 3, { steps: 3 }); // past the drag threshold
+    await page.mouse.move(grab.x, grab.y + 40, { steps: 4 }); // along the column, so the node lines up with its neighbours
+    await expect.poll(() => page.locator(".graph-guides line").count(), { message: "a guide line shows while the node is held" }).toBeGreaterThan(0);
+    await shot(page, "guides-1440");
+  } finally {
+    await page.mouse.up();
+  }
+}
+
 test.describe("W7u: measurements (about 2,000 nodes)", () => {
   test("a 3 s drag: the frames with the guides on (as shipped), without the minimap, and with snap off", async ({ page }) => {
     test.setTimeout(300_000);
@@ -1141,6 +1161,7 @@ test.describe("W7u: measurements (about 2,000 nodes)", () => {
     expect(shipped.stats.frames, "the frame sampler ran").toBeGreaterThan(10);
     expect(shipped.guideLines, "the guides were drawn during the drag").toBeGreaterThan(0);
     expect(shipped.stats.worstMs, "generous: the controller reads the numbers").toBeLessThan(3000);
+    if (process.env.W7U_GALLERY === "1") await guidesShot(page); // after the measured drag: a screenshot costs a long frame
 
     const hideMap = await page.addStyleTag({ content: ".react-flow__minimap { display: none !important; }" });
     const noMap = await measureDrag(page, 0, 3);
@@ -1200,7 +1221,7 @@ test.describe("W7u: measurements (about 2,000 nodes)", () => {
     expect(stats.mouseenterToClassMs, "generous: the controller reads the number").toBeLessThan(5000);
   });
 
-  test("idle: 300 flowing edges cost the main thread how much more than the same graph without motion", async ({ page }) => {
+  test("idle: 100 flowing edges cost the main thread how much more than the same graph without motion", async ({ page }) => {
     test.setTimeout(300_000);
     /** The main thread's busy share over `seconds` of doing nothing, from the browser's own task time, and the frames and long tasks in the same time. */
     const idle = async (seconds: number) => {
@@ -1220,16 +1241,16 @@ test.describe("W7u: measurements (about 2,000 nodes)", () => {
     };
     const open = async () => {
       await barButton(page, "Expand all").click();
-      await expect(page.locator(".react-flow__node")).toHaveCount(301); // the source, 30 groups, 270 points
+      await expect(page.locator(".react-flow__node")).toHaveCount(301); // the source, 100 groups, 200 points
       await fitViewNow(page);
     };
 
     await arrive(page, bigModel(LIVE_SHAPES, 0), { fit: false });
     await open();
-    await expect(page.locator(".react-flow__edge.animated"), "300 dashed edges flow: exactly the page's limit").toHaveCount(300);
+    await expect(page.locator(".react-flow__edge.animated"), "100 source to group edges flow (the group to point ones never do): exactly the page's limit").toHaveCount(100);
     const live = await idle(5);
-    record("idle.live300", live);
-    measured("5 s idle, 300 flowing edges", live);
+    record("idle.live100", live);
+    measured("5 s idle, 100 flowing edges", live);
 
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.reload();

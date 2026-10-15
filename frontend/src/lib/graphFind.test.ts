@@ -318,6 +318,16 @@ describe("findPlan", () => {
       expect(result.note).toContain("open groups were closed");
     });
 
+    it("KNOWN LIMIT: the budget counts points, not a source's own group count, so a closed source with more groups than the budget still opens for a group target (Expand all would refuse); change this on purpose, not by accident", () => {
+      const wide = sized(Object.fromEntries(Array.from({ length: EXPAND_NODE_BUDGET + 100 }, (_v, i) => [`G${i}`, 1])));
+      const entry = buildFindIndex(wide).find((e) => e.id === nodeId.cluster(1, "G5"))!;
+      const result = findPlan(wide, closed(), entry);
+      expect([...result.open.sources]).toEqual([1]); // opened, drawing 700 groups
+      expect(result.open.clusters.size).toBe(0);
+      expect(result.targetId).toBe(entry.id);
+      expect(result.note).toBeNull(); // and no note: nothing is held back
+    });
+
     it("both at once: the open groups are closed and the target group is still too big", () => {
       const three = sized({ A: 400, BIG: 900 });
       const open = openOf([], [nodeId.cluster(1, "A")]);

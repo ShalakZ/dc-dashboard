@@ -8,7 +8,9 @@ import { useCallback, type KeyboardEvent as ReactKeyboardEvent, type RefObject }
  * keeps Ctrl+K from reaching it: on the canvas the key is Find's, anywhere else on the page it stays the quick find's.
  *
  * It acts only when `canvas` contains the target in the DOM (React also delivers the keys of a portal, the context menu, to this
- * handler), never inside the tools panel (the Find box has its own keys) and never behind a modal dialog (the same test as QuickFind).
+ * handler), never inside the Find card or the menu (they have their own keys) and never behind a modal dialog (the same test as QuickFind).
+ * The tools panel's buttons (Find, Snap to grid) are the canvas's like any other element: Ctrl/Cmd+K there opens Find (the Find button advertises
+ * it, and Escape in the Find card puts the focus back on that button).
  */
 export function useCanvasKeys({ canvas, openFind, openMenuFor, onEscape }: {
   canvas: RefObject<HTMLElement | null>;
@@ -19,7 +21,7 @@ export function useCanvasKeys({ canvas, openFind, openMenuFor, onEscape }: {
   const onKeyDown = useCallback((event: ReactKeyboardEvent) => {
     const target = event.target;
     if (!(target instanceof Element) || !canvas.current?.contains(target)) return;
-    if (target.closest(".graph-tools, .graph-menu")) return;
+    if (target.closest(".graph-find, .graph-menu")) return;
     if (document.querySelector('[aria-modal="true"]')) return;
 
     const key = event.key ?? ""; // autofill sends keydown events without a key

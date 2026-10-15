@@ -14,7 +14,10 @@ function Host({ portal }: { portal?: HTMLElement }) {
       <button type="button">outside</button>
       <div ref={canvas} data-testid="canvas" tabIndex={-1} onKeyDown={onKeyDown}>
         <div className="react-flow__node" data-id="src:1" tabIndex={0}>node</div>
-        <div className="graph-tools"><input aria-label="in tools" /></div>
+        <div className="graph-tools">
+          <button type="button">Find button</button>
+          <div className="graph-find"><input aria-label="in find" /></div>
+        </div>
         {portal && createPortal(<div className="graph-menu"><button type="button">in menu</button></div>, portal)}
       </div>
     </div>
@@ -67,11 +70,29 @@ describe("useCanvasKeys", () => {
     expect(heard).toHaveBeenCalledWith("k");
   });
 
-  it("a keydown inside the tools panel does nothing: the Find box has its own keys", () => {
+  it("Ctrl+K with the focus on a button of the tools panel (Find, Snap to grid) opens the canvas Find: the button advertises that shortcut", () => {
     render(<Host />);
-    press(screen.getByLabelText("in tools"), { key: "k", ctrlKey: true });
-    press(screen.getByLabelText("in tools"), { key: "Escape" });
-    press(screen.getByLabelText("in tools"), { key: "F10", shiftKey: true });
+    const event = new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true, cancelable: true });
+    screen.getByRole("button", { name: "Find button" }).dispatchEvent(event);
+    expect(calls.openFind).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+    expect(heard).not.toHaveBeenCalled(); // the top bar's quick find never sees it
+  });
+
+  it("the other canvas keys work from a tools panel button too: Escape clears the selection, Shift+F10 opens the canvas menu for it", () => {
+    render(<Host />);
+    const button = screen.getByRole("button", { name: "Find button" });
+    press(button, { key: "Escape" });
+    press(button, { key: "F10", shiftKey: true });
+    expect(calls.onEscape).toHaveBeenCalledTimes(1);
+    expect(calls.openMenuFor).toHaveBeenCalledWith(button);
+  });
+
+  it("a keydown inside the Find card does nothing for the wrapper: the card handles (and stops) its own keys", () => {
+    render(<Host />);
+    press(screen.getByLabelText("in find"), { key: "k", ctrlKey: true });
+    press(screen.getByLabelText("in find"), { key: "Escape" });
+    press(screen.getByLabelText("in find"), { key: "F10", shiftKey: true });
     expect(calls.openFind).not.toHaveBeenCalled();
     expect(calls.onEscape).not.toHaveBeenCalled();
     expect(calls.openMenuFor).not.toHaveBeenCalled();

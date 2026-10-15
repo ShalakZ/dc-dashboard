@@ -73,9 +73,13 @@ export function pathEdgeIds(edges: readonly { id: string; source: string; target
   return lit;
 }
 
-/** What to light from: the hovered node, else the keyboard-focused one, else the selection. */
+/**
+ * What to light from: the hovered node, else the keyboard-focused one, else the selection. A selection lights only when it holds two or more nodes
+ * (a box or a Ctrl selection is a deliberate "show me these"): a click, a right-click or a drag selects ONE node, and dimming the rest of the canvas
+ * for it reads as "everything else is disabled" until the next click on the pane.
+ */
 export function focusIds(state: { hover: string | null; focused: string | null; selected: readonly string[] }): string[] {
   if (state.hover) return [state.hover];
   if (state.focused) return [state.focused];
-  return [...state.selected];
+  return state.selected.length >= 2 ? [...state.selected] : [];
 }

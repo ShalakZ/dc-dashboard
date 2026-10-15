@@ -70,8 +70,11 @@ const DASHED = { strokeDasharray: "6 4" };
  * Without this the library's own `.animated path { stroke-dasharray: 5 }` would turn the solid links dashed.
  */
 const LIVE_SOLID = { strokeDasharray: "8 2" };
-/** More animated edges than this and none are: every animated dash is repainted each frame, over a remote desktop that is screen traffic. */
-export const LIVE_EDGE_LIMIT = 300;
+/**
+ * More animated edges than this and none are: every animated dash is repainted each frame, over a remote desktop that is screen traffic
+ * (measured: 300 animated edges kept 14% of a core busy while idle, 100 about 7%).
+ */
+export const LIVE_EDGE_LIMIT = 100;
 
 export interface Group { key: string; label: string; ungrouped: boolean; points: GraphPoint[] }
 
@@ -97,8 +100,9 @@ export interface BuildOptions {
   /** Leave the shared layout out (Tidy layout, until the graph has been read again). The places in `moved` still count. */
   ignoreSaved?: boolean;
   /**
-   * Let the edges of live sources flow (`isLive`: enabled and online): their dashed edges and the solid links leaving their nodes get
-   * `animated`. Never the asset to sub-asset edges, and none at all past `LIVE_EDGE_LIMIT`. The page passes false under reduced motion.
+   * Let the edges of live sources flow (`isLive`: enabled and online): their source to group edges and the solid links leaving their nodes get
+   * `animated`. Never the group to point edges (hundreds of them, and they add little alive signal) nor the asset to sub-asset edges, and none at
+   * all past `LIVE_EDGE_LIMIT`. The page passes false under reduced motion.
    */
   animate?: boolean;
 }
@@ -189,7 +193,7 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
           for (const p of group.points) {
             const pid = nodeId.point(p.id);
             add(pid, "point", X.point, cursor + SOURCE_H + (rows - 1) * ROW, { sourceId: source.id, clusterKey: group.key, point: p } satisfies PointNodeData, clusterShift);
-            link(cid, pid, flow);
+            link(cid, pid, false); // a group's point edges are dashed but never flow: they are the bulk of a big graph's edges
             if (p.asset_id !== null && assetIds.has(p.asset_id)) mappedLinks(pid, new Map([[p.asset_id, 1]]), flow);
             rows++;
           }

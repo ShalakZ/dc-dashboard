@@ -335,11 +335,18 @@ describe("buildGraph: live edges (W7u)", () => {
     expect(buildGraph(m, open, { animate: false })).toEqual(buildGraph(m, open));
   });
 
-  it("a live source: its dashed edges flow and keep the 6 4 dashes (period 10, the library's loop is seamless)", () => {
+  it("a live source: its source to group edges flow and keep the 6 4 dashes (period 10, the library's loop is seamless)", () => {
     const m = three();
     const { edges } = buildGraph(m, everything(m), { animate: true });
-    for (const id of ["e:src:1>cluster:1:A", "e:cluster:1:A>point:1", "e:cluster:1:A>point:2"]) {
-      expect(edgeOf(edges, id), id).toMatchObject({ animated: true, style: { strokeDasharray: "6 4" } });
+    expect(edgeOf(edges, "e:src:1>cluster:1:A")).toMatchObject({ animated: true, style: { strokeDasharray: "6 4" } });
+  });
+
+  it("a live source: its group to point edges do not flow (hundreds of them, little alive signal) and stay dashed", () => {
+    const m = three();
+    const { edges } = buildGraph(m, everything(m), { animate: true });
+    for (const id of ["e:cluster:1:A>point:1", "e:cluster:1:A>point:2"]) {
+      expect(edgeOf(edges, id).animated, id).toBeUndefined();
+      expect(edgeOf(edges, id).style, id).toEqual({ strokeDasharray: "6 4" });
     }
   });
 
@@ -380,49 +387,60 @@ describe("buildGraph: live edges (W7u)", () => {
     expect(edge.style).toBeUndefined();
   });
 
-  it("a live source with no point mapped has only its dashed edges flowing", () => {
+  it("a live source with no point mapped has only its source to group edges flowing", () => {
     const m = model({ assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }], sources: [live(1, { clusters: [{ key: "A", points: [point(1, "p1")] }] })] });
     const { edges } = buildGraph(m, everything(m), { animate: true });
     expect(edges.map((e) => e.id).sort()).toEqual(["e:cluster:1:A>point:1", "e:src:1>cluster:1:A"]);
-    expect(edges.every((e) => e.animated === true)).toBe(true);
+    expect(edges.filter((e) => e.animated === true).map((e) => e.id)).toEqual(["e:src:1>cluster:1:A"]);
   });
 
   describe("the limit (LIVE_EDGE_LIMIT, counted over the animated edges)", () => {
-    // One live source, one open group, `n` points; the first `mappedN` of them are mapped to asset 10.
-    const big = (n: number, mappedN: number) => model({ sources: [live(1, { clusters: [{ key: "A", points: Array.from({ length: n }, (_, i) => (i < mappedN ? mapped(i + 1, `p${i}`) : point(i + 1, `p${i}`))) }] })] });
+    // One live source with `groups` groups of one point each; the first `mappedN` points are mapped to asset 10. Everything open, so the animated
+    // edges are the `groups` source to group edges plus the `mappedN` links (the group to point edges never flow).
+    const wide = (groups: number, mappedN: number) => model({ sources: [live(1, { clusters: Array.from({ length: groups }, (_, i) => ({ key: `G${i}`, points: [i < mappedN ? mapped(i + 1, `p${i}`) : point(i + 1, `p${i}`)] })) })] });
+    // One live source with one open group of `n` points, none mapped.
+    const tall = (n: number) => model({ sources: [live(1, { clusters: [{ key: "A", points: Array.from({ length: n }, (_, i) => point(i + 1, `p${i}`)) }] })] });
     const animatedCount = (m: ReturnType<typeof model>) => buildGraph(m, everything(m), { animate: true }).edges.filter((e) => e.animated).length;
 
-    it("is 300", () => {
-      expect(LIVE_EDGE_LIMIT).toBe(300);
+    it("is 100", () => {
+      expect(LIVE_EDGE_LIMIT).toBe(100);
     });
 
-    it("exactly 300 animated edges all flow (source to group is one, the rest are group to point)", () => {
-      expect(animatedCount(big(LIVE_EDGE_LIMIT - 1, 0))).toBe(LIVE_EDGE_LIMIT);
+    it("exactly 100 animated edges all flow", () => {
+      expect(animatedCount(wide(LIVE_EDGE_LIMIT, 0))).toBe(LIVE_EDGE_LIMIT);
     });
 
     it("one more and none flows: the edges go back to what they were without the option, solid links included", () => {
-      const m = big(LIVE_EDGE_LIMIT, 5);
+      const m = wide(LIVE_EDGE_LIMIT - 1, 2); // 99 + 2 = 101
       const { edges } = buildGraph(m, everything(m), { animate: true });
       expect(edges.filter((e) => e.animated)).toHaveLength(0);
       expect(edges).toEqual(buildGraph(m, everything(m)).edges);
       const link = edgeOf(edges, "m:point:1>asset:10");
       expect(link.style).toBeUndefined(); // no 8 2 dashes left on a link that no longer flows
-      expect(edgeOf(edges, "e:cluster:1:A>point:1")).toMatchObject({ style: { strokeDasharray: "6 4" } });
+      expect(edgeOf(edges, "e:src:1>cluster:1:G0")).toMatchObject({ style: { strokeDasharray: "6 4" } });
     });
 
     it("the limit counts mapped links too, not just the dashed ones", () => {
-      expect(animatedCount(big(LIVE_EDGE_LIMIT - 10, 0))).toBe(LIVE_EDGE_LIMIT - 9);
-      expect(animatedCount(big(LIVE_EDGE_LIMIT - 10, 20))).toBe(0); // 1 + 290 + 20 = 311
+      expect(animatedCount(wide(LIVE_EDGE_LIMIT - 10, 0))).toBe(LIVE_EDGE_LIMIT - 10);
+      expect(animatedCount(wide(LIVE_EDGE_LIMIT - 10, 10))).toBe(LIVE_EDGE_LIMIT); // 90 + 10, exactly the limit
+      expect(animatedCount(wide(LIVE_EDGE_LIMIT - 10, 11))).toBe(0); // 90 + 11 = 101
+    });
+
+    it("the points of one open group do not count: hundreds of group to point edges never flow, so only the source to group edge does", () => {
+      const m = tall(LIVE_EDGE_LIMIT * 3);
+      const { edges } = buildGraph(m, everything(m), { animate: true });
+      expect(edges.filter((e) => e.animated).map((e) => e.id)).toEqual(["e:src:1>cluster:1:A"]);
+      expect(edges.filter((e) => e.id.startsWith("e:cluster:")).every((e) => e.animated === undefined)).toBe(true);
     });
 
     it("an offline source's edges are not counted (only animated edges are)", () => {
-      const m = model({ sources: [live(1, { clusters: [{ key: "A", points: [point(1, "p1")] }] }), source(2, { enabled: true, status: "offline", clusters: [{ key: "B", points: Array.from({ length: 400 }, (_, i) => point(i + 10, `q${i}`)) }] })] });
+      const m = model({ sources: [live(1, { clusters: [{ key: "A", points: [point(1, "p1")] }] }), source(2, { enabled: true, status: "offline", clusters: Array.from({ length: 400 }, (_, i) => ({ key: `Q${i}`, points: [point(i + 10, `q${i}`)] })) })] });
       const { edges } = buildGraph(m, everything(m), { animate: true });
-      expect(edges.filter((e) => e.animated).map((e) => e.id).sort()).toEqual(["e:cluster:1:A>point:1", "e:src:1>cluster:1:A"]);
+      expect(edges.filter((e) => e.animated).map((e) => e.id)).toEqual(["e:src:1>cluster:1:A"]);
     });
 
     it("never changes the shared dashed style for the edges that stay dashed", () => {
-      const m = big(LIVE_EDGE_LIMIT, 5);
+      const m = wide(LIVE_EDGE_LIMIT - 1, 2);
       buildGraph(m, everything(m), { animate: true });
       expect(buildGraph(three(), everything(three())).edges.find((e) => e.id.startsWith("e:"))!.style).toEqual({ strokeDasharray: "6 4" });
     });

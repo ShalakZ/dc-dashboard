@@ -1722,13 +1722,18 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(node("src:1").dataset.class).not.toContain("lit");
     });
 
-    it("a selection lights its path without a hover", async () => {
+    it("a click selection (one node) lights nothing, and two selected nodes light the union of their paths without a hover", async () => {
       mockFetch(routes("operator"));
       open();
       await expand("Plant OPC");
       fireEvent.click(screen.getByTestId("select-cluster:1:LVP02"));
+      expect(node("cluster:1:LVP02")).toHaveAttribute("data-selected", "true");
+      expect(canvas()).not.toHaveClass("has-focus");
+      expect(node("cluster:1:LVP02").dataset.class ?? "").not.toContain("lit");
+      fireEvent.click(screen.getByTestId("select-asset:10"));
       expect(canvas()).toHaveClass("has-focus");
       expect(node("cluster:1:LVP02").dataset.class).toContain("lit");
+      expect(node("asset:10").dataset.class).toContain("lit");
       expect(node("cluster:1:LVP01").dataset.class ?? "").not.toContain("lit");
     });
 
@@ -1754,6 +1759,7 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       open();
       await expand("Plant OPC");
       fireEvent.click(screen.getByTestId("select-cluster:1:LVP02"));
+      fireEvent.click(screen.getByTestId("select-asset:10"));
       expect(canvas()).toHaveClass("has-focus");
       fireEvent.click(screen.getByTestId("dragstart-cluster:1:LVP02"));
       expect(canvas()).not.toHaveClass("has-focus");

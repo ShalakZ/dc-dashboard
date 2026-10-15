@@ -7,6 +7,7 @@ export const HOVER_DWELL_MS = 120;
 export const HOVER_GRACE_MS = 80;
 
 const NODE = ".react-flow__node";
+const MENU = ".graph-menu";
 
 type Timer = MutableRefObject<ReturnType<typeof setTimeout> | null>;
 
@@ -53,7 +54,8 @@ const NONE: string[] = [];
 /**
  * The path highlight of the Discovery canvas. It does not dim anything itself: `active` is the wrapper's `has-focus` class, and only the nodes and
  * edges on the path come back as new objects with the class `lit` (every other object keeps its identity, so a hover re-renders a few nodes, not 2,000).
- * What it lights from: the hovered node, else the node the keyboard focused, else the selection; never while a drag runs.
+ * What it lights from: the hovered node, else the node the keyboard focused, else a selection of two or more (a click selects one and lights nothing);
+ * never while a drag runs, and a drag forgets the hover.
  */
 export function useGraphHighlight({ nodes, edges, selectedIds, dragging }: {
   nodes: Node[];
@@ -66,14 +68,44 @@ export function useGraphHighlight({ nodes, edges, selectedIds, dragging }: {
   const dwell: Timer = useRef(null);
   const dwellId = useRef<string | null>(null);
   const grace: Timer = useRef(null);
+  const dragRef = useRef(false);
 
   useEffect(() => () => { stop(dwell); stop(grace); }, []);
+
+  // A drag forgets the hover: a dwell still pending at mousedown must not fire mid-drag, and after a put-back (the node jumps away from the pointer) no
+  // mouseleave comes until the pointer moves, so a stale hover would outrank the selection and light another path. The next real enter lights again.
+  // Enters during the drag (the pointer leaves and re-enters the lagging node) start nothing either: `dragRef` is what the stable handlers read.
+  useEffect(() => {
+    dragRef.current = dragging;
+    if (!dragging) return;
+    stop(dwell);
+    stop(grace);
+    dwellId.current = null;
+    setHover(null);
+  }, [dragging]);
+
+  // The node's own menu (Shift+F10) is rendered outside the canvas wrapper, so the wrapper never hears its focus events. The focus that moved into the menu
+  // keeps the node's path lit (see onBlur); this lets go when the focus then ends up anywhere but a node or the menu (an outside press closed it).
+  useEffect(() => {
+    if (focused === null) return;
+    const outside = (to: EventTarget | null) => !(to instanceof Element && to.closest(`${NODE}, ${MENU}`));
+    const onIn = (event: FocusEvent) => { if (outside(event.target)) setFocused(null); };
+    const onOut = (event: FocusEvent) => {
+      if (event.target instanceof Element && event.target.closest(MENU) && outside(event.relatedTarget)) setFocused(null);
+    };
+    document.addEventListener("focusin", onIn);
+    document.addEventListener("focusout", onOut);
+    return () => {
+      document.removeEventListener("focusin", onIn);
+      document.removeEventListener("focusout", onOut);
+    };
+  }, [focused]);
 
   // One object for the life of the component: handing the canvas new handlers on every render would re-render it for nothing.
   const handlers = useMemo<HighlightHandlers>(() => ({
     onNodeMouseEnter: (_event, node) => {
       stop(grace); // a new enter cancels the pending clear: sweeping from node to node never flashes the canvas
-      if (!canHover()) return;
+      if (!canHover() || dragRef.current) return;
       stop(dwell);
       const id = node.id;
       dwellId.current = id;
@@ -90,7 +122,9 @@ export function useGraphHighlight({ nodes, edges, selectedIds, dragging }: {
     },
     onBlur: (event) => {
       const node = nodeOf(event.target);
-      if (node && event.relatedTarget instanceof Element && node.contains(event.relatedTarget)) return; // the focus stays inside the same node
+      const to = event.relatedTarget;
+      if (node && to instanceof Element && node.contains(to)) return; // the focus stays inside the same node
+      if (to instanceof Element && to.closest(MENU)) return; // the node's own menu (Shift+F10) took the focus: its path stays lit until the focus leaves the menu
       setFocused(null);
     },
   }), []);

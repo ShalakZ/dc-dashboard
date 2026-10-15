@@ -100,16 +100,19 @@ describe("focusIds", () => {
   it.each([
     ["hover wins over keyboard focus and selection", { hover: "h", focused: "f", selected: ["a", "b"] }, ["h"]],
     ["keyboard focus wins over the selection", { hover: null, focused: "f", selected: ["a", "b"] }, ["f"]],
-    ["the selection is used when nothing else is", { hover: null, focused: null, selected: ["a", "b"] }, ["a", "b"]],
+    ["a selection of two or more is used when nothing else is (a box or Ctrl selection is a deliberate show-me-these)", { hover: null, focused: null, selected: ["a", "b"] }, ["a", "b"]],
+    ["a click selection (one node) lights nothing: the rest of the canvas would read as disabled", { hover: null, focused: null, selected: ["a"] }, []],
+    ["a hover still wins over a one-node selection", { hover: "h", focused: null, selected: ["a"] }, ["h"]],
+    ["keyboard focus still wins over a one-node selection", { hover: null, focused: "f", selected: ["a"] }, ["f"]],
     ["nothing at all", { hover: null, focused: null, selected: [] }, []],
   ])("%s", (_name, state, want) => {
     expect(focusIds(state)).toEqual(want);
   });
 
   it("hands back a copy of the selection", () => {
-    const selected = ["a"];
+    const selected = ["a", "b"];
     const out = focusIds({ hover: null, focused: null, selected });
-    expect(out).toEqual(["a"]);
+    expect(out).toEqual(["a", "b"]);
     expect(out).not.toBe(selected);
   });
 });

@@ -211,5 +211,8 @@ export const PERF_SHAPES: readonly Shape[] = [
   ...Array.from({ length: 8 }, (): Shape => ({ groups: 4, pointsPerGroup: 5 })),
 ];
 
-/** The idle-CPU graph: one online source of 30 groups of 9 points. One Expand all draws exactly 300 dashed edges (30 + 270), the page's limit of flowing ones. */
-export const LIVE_SHAPES: readonly Shape[] = [{ groups: 30, pointsPerGroup: 9 }];
+/**
+ * The idle-CPU graph: one online source of 100 groups of 2 points. One Expand all draws 301 nodes and 300 dashed edges, but only the 100 source to group
+ * edges flow (the group to point edges never do): exactly the page's limit of flowing ones.
+ */
+export const LIVE_SHAPES: readonly Shape[] = [{ groups: 100, pointsPerGroup: 2 }];
