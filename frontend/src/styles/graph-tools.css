@@ -1,2 +1,51 @@
 @layer w6 {
+  /* W7u: the Discovery canvas's own tools (Find, Snap to grid), the right-click menu, the alignment guides, the minimap, the selection box
+     and the canvas's focus ring. Tokens only. React Flow's own sheet is UNLAYERED, so a rule here that must beat one of its declarations
+     (a panel's z-index and margin) says !important; a custom property it exposes (--xy-*) needs no such help.
+     Rules on .graph-canvas are rooted in .graph-layout: graph-nodes.css names .graph-canvas with a second class, and the page-file guard
+     lets only one file write a class on its own. */
+
+  /* The tools panel is a React Flow Panel (absolute, top right). It also spans the canvas (left: 0, with the library's own 15px margin), so the
+     Find card can be as wide as the room the canvas has; the empty part lets every click and drag through to the canvas. */
+  .graph-tools { left: 0; z-index: 12 !important; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; pointer-events: none; }
+  .graph-tools > * { pointer-events: auto; }
+  .graph-tools-bar { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+
+  /* The Find card opens UNDER the two buttons and over the canvas: it moves nothing. */
+  .graph-find { box-sizing: border-box; width: min(360px, 100%); padding: 8px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); }
+  .graph-find-field { display: flex; align-items: center; gap: 8px; }
+  .graph-find-field svg.i { flex: none; color: var(--text-2); }
+  .graph-find-field input { flex: 1; min-width: 0; }
+  .graph-find-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: min(320px, 50vh); overflow-y: auto; }
+  .graph-find-opt { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--text); font-size: var(--fs-sm); cursor: pointer; }
+  .graph-find-opt:hover { background: var(--surface); }
+  /* The active option: a tint AND a bar at its left, so colour is not the only sign of where the arrows are. */
+  .graph-find-opt[aria-selected="true"] { background: var(--accent-tint); box-shadow: inset 3px 0 0 var(--accent); }
+  .graph-find-opt svg.i { flex: none; width: 16px; height: 16px; color: var(--text-2); }
+  .graph-find-label { flex: 0 0 auto; max-width: 60%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .graph-find-context { flex: 1 1 0; min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: var(--fs-xs); }
+  .graph-find-note { margin: 0; color: var(--text-2); font-size: var(--fs-xs); }
+  .graph-find-note:not(:empty) { margin: 6px 2px 0; }
+
+  /* The right-click menu is the row menu's panel (app.css, z-index 90). A disabled item is aria-disabled, not disabled, so it never holds the focus
+     it is skipped for: the looks of the row menu's disabled item, with its hover wash taken back (the extra class beats the hover rules of both families). */
+  .graph-menu { min-width: 190px; }
+  .graph-menu.row-menu-panel [role="menuitem"][aria-disabled="true"] { color: var(--text-disabled); cursor: not-allowed; }
+  .graph-menu.row-menu-panel [role="menuitem"][aria-disabled="true"]:hover { background: none; }
+
+  /* The alignment guides, drawn in the canvas's coordinates: one pixel at every zoom. */
+  .graph-guides line { stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
+
+  /* The minimap, in the page's colours (the --xy-minimap-* properties are React Flow's own). Its bottom margin clears the attribution link in the
+     corner; the outline of the visible window keeps its width at any zoom of the map. */
+  .graph-minimap { margin-bottom: 28px !important; border: 1px solid var(--border-strong); --xy-minimap-background-color: var(--bg); --xy-minimap-mask-background-color: color-mix(in srgb, var(--border-strong) 55%, transparent); --xy-minimap-mask-stroke-color: var(--accent); --xy-minimap-mask-stroke-width: 2; }
+  .graph-minimap .react-flow__minimap-mask { vector-effect: non-scaling-stroke; }
+
+  /* Shift-drag draws a selection box, and a finished selection keeps a rectangle over its nodes: a tint you can see through, a dashed accent edge. */
+  .graph-layout .react-flow { --xy-selection-background-color: color-mix(in srgb, var(--accent) 8%, transparent); --xy-selection-border: 1px dashed var(--accent); }
+
+  /* The canvas wrapper takes the focus when the empty canvas is clicked (tabindex -1), so Ctrl+K works there. A mouse click draws no ring; a keyboard
+     arrival (Escape from a menu, say) does, inside the box so the panel's border does not clip it. */
+  .graph-layout .graph-canvas:focus { outline: none; }
+  .graph-layout .graph-canvas:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 }
