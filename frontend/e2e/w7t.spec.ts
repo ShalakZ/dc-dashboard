@@ -480,7 +480,7 @@ test.describe("W7t: the trail above an asset", () => {
         await expect(heading1(page, device.name)).toBeVisible();
         await expect(items).toHaveCount(5);
         await settled(page);
-        expect(await overflowOf(page), "the page does not scroll sideways").toBeLessThanOrEqual(1);
+        expect.soft(await overflowOf(page), "the page does not scroll sideways").toBeLessThanOrEqual(1);
         expect(await crumbs.evaluate((el) => el.scrollWidth - el.clientWidth), "and the trail does not either").toBeLessThanOrEqual(1);
       });
     } finally {
@@ -978,51 +978,51 @@ test.describe("W7t: the Discovery bar", () => {
         await expect(first).toBeVisible({ timeout: 30_000 });
         await stopped(first);
         await settled(page);
-        expect(await overflowOf(page), `no sideways overflow at ${width}`).toBeLessThanOrEqual(1);
+        expect.soft(await overflowOf(page), `no sideways overflow at ${width}`).toBeLessThanOrEqual(1);
 
         // The bar: its summary and three buttons lie inside it, in a row, without touching, and inside the window.
         const barBox = await boxOf(bar(page), "the bar");
-        expect(barBox.height, "the bar is about 36 px high").toBeGreaterThanOrEqual(34);
-        expect(barBox.height).toBeLessThanOrEqual(40);
+        expect.soft(barBox.height, "the bar is about 36 px high").toBeGreaterThanOrEqual(34);
+        expect.soft(barBox.height).toBeLessThanOrEqual(40);
         const parts: [string, Box][] = [["the summary", await boxOf(page.locator(".graph-summary"), "the summary")]];
         for (const name of ["Collapse all", "Expand all", "Tidy layout"]) parts.push([name, await boxOf(barButton(page, name), name)]);
         for (const [what, box] of parts) {
-          expect(box.x, `${what}: left edge inside the bar`).toBeGreaterThanOrEqual(barBox.x - 1);
-          expect(box.x + box.width, `${what}: right edge inside the bar`).toBeLessThanOrEqual(barBox.x + barBox.width + 1);
-          expect(box.y, `${what}: top inside the bar`).toBeGreaterThanOrEqual(barBox.y - 1);
-          expect(box.y + box.height, `${what}: bottom inside the bar`).toBeLessThanOrEqual(barBox.y + barBox.height + 1);
-          expect(box.x + box.width, `${what}: inside the window`).toBeLessThanOrEqual(width + 1);
+          expect.soft(box.x, `${what}: left edge inside the bar`).toBeGreaterThanOrEqual(barBox.x - 1);
+          expect.soft(box.x + box.width, `${what}: right edge inside the bar`).toBeLessThanOrEqual(barBox.x + barBox.width + 1);
+          expect.soft(box.y, `${what}: top inside the bar`).toBeGreaterThanOrEqual(barBox.y - 1);
+          expect.soft(box.y + box.height, `${what}: bottom inside the bar`).toBeLessThanOrEqual(barBox.y + barBox.height + 1);
+          expect.soft(box.x + box.width, `${what}: inside the window`).toBeLessThanOrEqual(width + 1);
         }
-        for (let i = 1; i < parts.length; i++) expect(parts[i - 1][1].x + parts[i - 1][1].width, `${parts[i - 1][0]} and ${parts[i][0]} do not touch`).toBeLessThanOrEqual(parts[i][1].x + 1);
+        for (let i = 1; i < parts.length; i++) expect.soft(parts[i - 1][1].x + parts[i - 1][1].width, `${parts[i - 1][0]} and ${parts[i][0]} do not touch`).toBeLessThanOrEqual(parts[i][1].x + 1);
         const canvas = await boxOf(page.locator(".graph-canvas"), "the canvas");
         test.info().annotations.push({ type: "measure", description: `${width} x ${height}: the bar is ${barBox.height}px high, the canvas ${canvas.width} x ${canvas.height}px` });
 
         // The hint is the short one.
         const hint = ((await page.locator(".page-head .sub").textContent()) ?? "").trim();
-        expect(hint, "the hint names Alt and Option").toContain("Alt or Option moves it alone.");
-        expect(hint.length, `the hint is ${hint.length} characters`).toBeLessThanOrEqual(150);
+        expect.soft(hint, "the hint names Alt and Option").toContain("Alt or Option moves it alone.");
+        expect.soft(hint.length, `the hint is ${hint.length} characters`).toBeLessThanOrEqual(150);
         if (width === 1440) await shot(page, "discovery-bar-1440");
 
         // The source node: Details, Create assets... and the bin (no text) on one row, inside the node.
         if (target) {
           const row = srcNode(page, target).locator(".gnode-actions");
           const buttons = await row.getByRole("button").all();
-          expect(buttons.length, "Details, Create assets... and Remove").toBeGreaterThanOrEqual(2);
+          expect.soft(buttons.length, "Details, Create assets... and Remove").toBeGreaterThanOrEqual(2);
           const nodeBox = await boxOf(srcNode(page, target).locator(".gnode"), "the source node");
           const centres: number[] = [];
           for (const button of buttons) {
             const box = await boxOf(button, "a node button");
             centres.push(centreOf(box).y);
-            expect(box.x, "a node button: left").toBeGreaterThanOrEqual(nodeBox.x - 1);
-            expect(box.x + box.width, "a node button: right").toBeLessThanOrEqual(nodeBox.x + nodeBox.width + 1);
-            expect(box.y + box.height, "a node button: bottom").toBeLessThanOrEqual(nodeBox.y + nodeBox.height + 1);
+            expect.soft(box.x, "a node button: left").toBeGreaterThanOrEqual(nodeBox.x - 1);
+            expect.soft(box.x + box.width, "a node button: right").toBeLessThanOrEqual(nodeBox.x + nodeBox.width + 1);
+            expect.soft(box.y + box.height, "a node button: bottom").toBeLessThanOrEqual(nodeBox.y + nodeBox.height + 1);
           }
-          expect(Math.max(...centres) - Math.min(...centres), `the node's ${buttons.length} buttons share one row (centres ${centres.map((c) => c.toFixed(1)).join(", ")})`).toBeLessThanOrEqual(2);
+          expect.soft(Math.max(...centres) - Math.min(...centres), `the node's ${buttons.length} buttons share one row (centres ${centres.map((c) => c.toFixed(1)).join(", ")})`).toBeLessThanOrEqual(2);
           const remove = row.getByRole("button", { name: `Remove ${target.name} from Discovery`, exact: true });
-          await expect(remove, "the bin keeps its name").toHaveCount(1);
-          await expect(remove).toHaveAttribute("title", "Remove");
-          expect((await remove.innerText()).trim(), "and has no visible text").toBe("");
-          expect((await boxOf(remove, "the bin")).width, "just an icon wide").toBeLessThanOrEqual(40);
+          await expect.soft(remove, "the bin keeps its name").toHaveCount(1);
+          await expect.soft(remove).toHaveAttribute("title", "Remove");
+          expect.soft((await remove.innerText()).trim(), "and has no visible text").toBe("");
+          expect.soft((await boxOf(remove, "the bin")).width, "just an icon wide").toBeLessThanOrEqual(40);
         }
 
         if (width === 1024) {
@@ -1030,17 +1030,17 @@ test.describe("W7t: the Discovery bar", () => {
           const inCanvas = (box: Box) =>
             box.x >= canvas.x - 1 && box.y >= canvas.y - 1 && box.x + box.width <= canvas.x + canvas.width + 1 && box.y + box.height <= canvas.y + canvas.height + 1;
           const title = first.locator(".node-title");
-          expect(inCanvas(await boxOf(title, "the first source's title")), "the first source's title lies inside the canvas box").toBe(true);
+          expect.soft(inCanvas(await boxOf(title, "the first source's title")), "the first source's title lies inside the canvas box").toBe(true);
           const zoom = await zoomOf(page);
           const size = await title.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-          expect(zoom, "the opening zoom is held between 0.75 and 1").toBeGreaterThanOrEqual(0.749);
-          expect(zoom).toBeLessThanOrEqual(1.001);
-          expect(size * zoom, `the title is ${size}px at zoom ${zoom}`).toBeGreaterThanOrEqual(8.99);
+          expect.soft(zoom, "the opening zoom is held between 0.75 and 1").toBeGreaterThanOrEqual(0.749);
+          expect.soft(zoom).toBeLessThanOrEqual(1.001);
+          expect.soft(size * zoom, `the title is ${size}px at zoom ${zoom}`).toBeGreaterThanOrEqual(8.99);
           let checked = false;
           for (const source of graph.sources.slice(0, 3)) {
             const button = srcNode(page, source).getByRole("button", { name: /^Create assets for \d+ groups? of / });
             if ((await button.count()) === 0) continue;
-            expect(inCanvas(await boxOf(button, "Create assets")), `${source.name}: Create assets lies inside the canvas box`).toBe(true);
+            expect.soft(inCanvas(await boxOf(button, "Create assets")), `${source.name}: Create assets lies inside the canvas box`).toBe(true);
             checked = true;
             break;
           }
