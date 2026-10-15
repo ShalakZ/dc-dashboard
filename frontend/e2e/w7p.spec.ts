@@ -990,7 +990,11 @@ test.describe("W7p: who may move, and the layout", () => {
           for (const [what, value] of Object.entries(before)) {
             expect(Math.abs(after[what] - value), `${what} moved by the first pick: ${value} to ${after[what]}`).toBeLessThanOrEqual(0.5);
           }
-          expect(before["slot height"], "the slot is one fixed line, picked or not").toBe(32);
+          // The admin holds Delete since W7s, so the slot is two lines when its container, the tree body, is 275 px wide or less (styles/tree-move.css): the
+          // width decides, never the picks (the loop above proved the same height before and after the first pick). At 1024 px with the sidebar expanded
+          // the column is about 228 px, which is the two-line case.
+          const bodyWidth = await tree(page).locator(".tree-body").evaluate((el) => el.clientWidth);
+          expect(before["slot height"], `the slot is one line (32 px) above 275 px of room and two lines (64 px) at 275 px or less, picked or not: the tree body is ${bodyWidth} px wide`).toBe(bodyWidth > 275 ? 32 : 64);
 
           for (const selector of [".tree-scroll", "ul.tree"]) {
             const overflow = await tree(page).locator(selector).first().evaluate((el) => el.scrollWidth - el.clientWidth);

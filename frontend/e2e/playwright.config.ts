@@ -183,12 +183,19 @@ export default defineConfig({
       dependencies: ["w7p"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
     },
-    // LAST on purpose: its Clear unmapped removes every unmapped discovered source of the shared stack.
+    // Nothing may come after this one that needs a discovered source: its Clear unmapped removes every unmapped discovered source of the shared stack.
     {
       name: "w7r",
       testMatch: "w7r.spec.ts",
       dependencies: ["w7q"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
+    },
+    // LAST: it works on assets and roles only (never a source), so it may follow w7r.
+    {
+      name: "w7s",
+      testMatch: "w7s.spec.ts",
+      dependencies: ["w7r"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
   ],
 });
