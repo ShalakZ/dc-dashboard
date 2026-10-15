@@ -1,17 +1,21 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import type { MouseEvent } from "react";
+import { getBezierPath, Handle, Position, type ConnectionLineComponentProps, type Node, type NodeProps } from "@xyflow/react";
+import type { KeyboardEvent, MouseEvent } from "react";
 import { Icon } from "../Icon";
 import type {
   AssetNodeData, ClusterNodeData, NodeActions, PointNodeData, SourceNodeData, UnidentifiedNodeData,
 } from "../../lib/graph";
 import { protocolLabel, sourceStatus } from "../../lib/graphStatus";
 
+/**
+ * The two handles every node has are only where the edges attach: neither can start or end a connection (W12a). The one handle that can is the "+" of an
+ * asset node (`AddHandle`); without this, a press on the little dot of any node would start a line the page must then throw away.
+ */
 function Handles({ children }: { children: React.ReactNode }) {
   return (
     <>
-      <Handle type="target" position={Position.Left} />
+      <Handle type="target" position={Position.Left} isConnectableStart={false} isConnectableEnd={false} />
       {children}
-      <Handle type="source" position={Position.Right} />
+      <Handle type="source" position={Position.Right} isConnectableStart={false} isConnectableEnd={false} />
     </>
   );
 }
@@ -49,14 +53,56 @@ function MenuButton({ name, onMenu }: { name: string; onMenu?: NodeActions["onMe
   );
 }
 
-function MapButtons({ id, name, onMap, onNewAsset }: { id: string; name: string } & Pick<NodeActions, "onMap" | "onNewAsset">) {
+/**
+ * `wait` (W12a): New asset… opens the asset form, which needs the asset list; until it is read the button says so (aria-disabled, never `disabled`:
+ * it may hold the focus). It still takes the click: the page answers it with the reason.
+ */
+function MapButtons({ id, name, onMap, onNewAsset, wait }: { id: string; name: string; wait?: boolean } & Pick<NodeActions, "onMap" | "onNewAsset">) {
   if (!onMap && !onNewAsset) return null;
   return (
     <div className="row">
       {onMap && <button type="button" className="nodrag" aria-label={`Map ${name} to asset…`} onClick={press(() => onMap(id))}>Map…</button>}
-      {onNewAsset && <button type="button" className="nodrag" aria-label={`New asset from ${name}…`} onClick={press(() => onNewAsset(id))}>New asset…</button>}
+      {onNewAsset && (
+        <button type="button" className="nodrag" aria-label={`New asset from ${name}…`} aria-disabled={wait || undefined} onClick={press(() => onNewAsset(id))}>New asset…</button>
+      )}
     </div>
   );
+}
+
+/**
+ * W12a: the "+" on an asset node, a source Handle (so that a drag from it is a connection the page can read: it opens New sub-asset where it is
+ * released on the empty canvas) drawn as a small round control at the node's top right corner (`gnode-add`, hidden until the node is hovered, focused
+ * or selected). A click, Enter or Space opens the same dialog, which is also what keyboard and touch use: neither can drag. The handle's own
+ * `onClick` REPLACES the library's click-to-connect, so a click is only this. `nokey` keeps the keys off the node and the canvas; Enter and Space
+ * are taken here and every other key (Tab, the menu key) goes on. `wait`: see MapButtons.
+ */
+function AddHandle({ id, name, onAdd, wait }: { id: string; name: string; onAdd?: NodeActions["onAdd"]; wait?: boolean }) {
+  if (!onAdd) return null;
+  const add = () => onAdd(id);
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    add();
+  };
+  return (
+    <Handle
+      id="add" type="source" position={Position.Right} isConnectableEnd={false}
+      role="button" tabIndex={0} aria-label={`Add a sub-asset under ${name}`} aria-disabled={wait || undefined}
+      className="nodrag nokey gnode-add" onClick={press(add)} onKeyDown={onKeyDown}
+    >
+      <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+    </Handle>
+  );
+}
+
+/**
+ * The line drawn while the "+" is dragged: dashed, in the accent (`gconnect`, graph-nodes.css). The page's `isValidConnection` is always false, so it
+ * never turns into an edge; its only use is to show that a release on the empty canvas will do something.
+ */
+export function AddConnectionLine({ fromX, fromY, toX, toY, fromPosition, toPosition }: ConnectionLineComponentProps) {
+  const [path] = getBezierPath({ sourceX: fromX, sourceY: fromY, sourcePosition: fromPosition, targetX: toX, targetY: toY, targetPosition: toPosition });
+  return <path className="gconnect" d={path} />;
 }
 
 function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
@@ -97,7 +143,7 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
 }
 
 function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) {
-  const { label, count, mappedCount, expanded, onToggle, onMap, onNewAsset, onMenu } = data;
+  const { label, count, mappedCount, expanded, onToggle, onMap, onNewAsset, onMenu, formWait } = data;
   const share = count > 0 ? Math.min(100, Math.round((mappedCount / count) * 100)) : 0;
   return (
     <div className={onMenu ? "gnode gnode-cluster gprogress-host gnode-hasmenu" : "gnode gnode-cluster gprogress-host"}>
@@ -108,7 +154,7 @@ function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) 
         </div>
         <MenuButton name={label} onMenu={onMenu} />
         <div className="muted">{mappedCount} mapped</div>
-        <MapButtons id={id} name={label} onMap={onMap} onNewAsset={onNewAsset} />
+        <MapButtons id={id} name={label} onMap={onMap} onNewAsset={onNewAsset} wait={formWait} />
         {/* The share of mapped points as a 3px strip on the bottom edge: absolutely placed, so it adds no height. The words stay in the line above. */}
         <span className="gprogress" aria-hidden="true" style={{ width: `${share}%` }} title={`${mappedCount} of ${count} mapped`} />
       </Handles>
@@ -131,12 +177,14 @@ function PointNode({ id, data }: NodeProps<Node<PointNodeData, "point">>) {
   );
 }
 
-function AssetNode({ data }: NodeProps<Node<AssetNodeData, "asset">>) {
+function AssetNode({ id, data }: NodeProps<Node<AssetNodeData, "asset">>) {
   return (
     <div className="gnode gnode-asset">
       <Handles>
         <div className="node-title">{data.asset.name}</div>
       </Handles>
+      {/* After the two handles above on purpose: an edge with no sourceHandle (every asset-to-asset edge) starts at the FIRST source handle in the DOM, which must stay the default one. */}
+      <AddHandle id={id} name={data.asset.name} onAdd={data.onAdd} wait={data.formWait} />
     </div>
   );
 }

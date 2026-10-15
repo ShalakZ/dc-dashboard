@@ -97,6 +97,37 @@ describe("the Discovery node styles (W7u)", () => {
     expect(rule(".gnode-hasmenu .gnode-menu-btn svg.i")).toMatch(/width:\s*14px/);
   });
 
+  it("the + of an asset node (W12a) is a 20px round control at the node's top right corner, out of the layout, in tokens", () => {
+    const add = rule(".gnode-add");
+    expect(add).toMatch(/width:\s*20px\s*!important/); // the library's unlayered sheet says 6px: only an important declaration in a layer beats it
+    expect(add).toMatch(/height:\s*20px\s*!important/);
+    expect(add).toMatch(/border-radius:\s*50%/);
+    expect(add).toMatch(/top:\s*0\s*!important/); // the library centres a right handle at mid height: the top edge is the corner
+    expect(add).toMatch(/background-color:\s*var\(--accent\)\s*!important/);
+    expect(add).toMatch(/color:\s*var\(--bg\)/);
+    expect(add).not.toMatch(/position\s*:\s*(?!absolute)/); // the handle is absolute by the library already: a position here would only be able to take it out of that
+    expect(add).not.toMatch(/(?:^|;)\s*(?:margin|float)\s*:/); // nothing that could move the node's own box
+  });
+
+  it("the + is hidden with visibility and opacity, never display (display: none measures 0x0 and cannot take the focus), and shown on hover, focus, a selected node and while dragged from", () => {
+    const hidden = rule(".gnode-add");
+    expect(hidden).toMatch(/visibility:\s*hidden/);
+    expect(hidden).toMatch(/opacity:\s*0\b/);
+    expect(hidden).not.toMatch(/display\s*:\s*none/);
+    const shown = rule(".react-flow__node:hover .gnode-add, .react-flow__node:focus-within .gnode-add, .react-flow__node.selected .gnode-add, .gnode-add:focus-visible, .gnode-add.connectingfrom");
+    expect(shown).toMatch(/visibility:\s*visible/);
+    expect(shown).toMatch(/opacity:\s*1\b/);
+    expect(rules.filter((r) => /gnode-add/.test(r.selector) && /display\s*:\s*none/.test(r.body))).toEqual([]);
+    expect(rule(".gnode-add svg.i")).toMatch(/width:\s*12px/);
+  });
+
+  it("the line dragged from the + is dashed and in the accent", () => {
+    const line = rule(".gconnect");
+    expect(line).toMatch(/stroke:\s*var\(--accent\)/);
+    expect(line).toMatch(/stroke-dasharray:\s*\d+\s+\d+/);
+    expect(line).toMatch(/fill:\s*none/);
+  });
+
   it("a lit path leaves the nodes and edges that are on it alone and dims the rest, the edges more", () => {
     expect(rule(".graph-canvas.has-focus .react-flow__node:not(.lit)")).toMatch(/opacity:\s*0\.35/);
     expect(rule(".graph-canvas.has-focus .react-flow__edge:not(.lit)")).toMatch(/opacity:\s*0\.25/);
@@ -150,6 +181,10 @@ describe("the Discovery node styles (W7u)", () => {
     });
     it("the progress strip (--accent) reads at 3:1 on --bg and on --surface", () => {
       for (const ground of ["bg", "surface"]) expect(contrast(tok("accent"), tok(ground)), `--accent on --${ground}`).toBeGreaterThanOrEqual(NON_TEXT);
+    });
+    it("the + (W12a): its plus (--bg) reads on its fill (--accent) and on its hover fill (--accent-hover) at 3:1, and the control itself on the canvas (--bg)", () => {
+      for (const fill of ["accent", "accent-hover"]) expect(contrast(tok("bg"), tok(fill)), `--bg on --${fill}`).toBeGreaterThanOrEqual(NON_TEXT);
+      expect(contrast(tok("accent"), tok("bg")), "--accent on --bg").toBeGreaterThanOrEqual(NON_TEXT);
     });
   });
 });

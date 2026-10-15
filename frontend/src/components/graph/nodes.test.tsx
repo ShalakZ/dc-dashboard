@@ -1,10 +1,16 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GraphPoint, GraphSource } from "../../api/types";
 import { nodeTypes } from "./nodes";
 
-// Handles need a React Flow store; the node bodies are what is under test here.
-vi.mock("@xyflow/react", async (importOriginal) => ({ ...(await importOriginal<typeof import("@xyflow/react")>()), Handle: () => null }));
+// Handles need a React Flow store; the node bodies are what is under test here. The mock draws each handle as a div that says which handle it is and whether it can
+// start or end a connection (React Flow's defaults, true, when the node did not say), and passes on what a custom handle brings (the "+": role, name, class, clicks and keys).
+vi.mock("@xyflow/react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@xyflow/react")>()),
+  Handle: ({ id, type, isConnectableStart = true, isConnectableEnd = true, children, position: _position, ...rest }: any) => (
+    <div data-handle={id ?? type} data-start={String(isConnectableStart)} data-end={String(isConnectableEnd)} {...rest}>{children}</div>
+  ),
+}));
 
 const point: GraphPoint = {
   id: 3, address: "a3", name: "LVP01 kW", unit_hint: "kW", mapping_id: null, asset_id: null, mapped_metric: null,
@@ -353,6 +359,103 @@ describe("graph nodes", () => {
       renderNode("source", "src:1", { source, expanded: false });
       renderNode("unidentified", "unid:10.0.0.9:8080", { host: "10.0.0.9", port: 8080 });
       expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("every handle but the + cannot start or end a connection (W12a)", () => {
+    const asset = { id: 10, parent_id: null, name: "Site", kind: "generic" };
+    const handles = () => Array.from(document.querySelectorAll<HTMLElement>("[data-handle]"));
+
+    it.each([
+      ["source", "src:1", { source, expanded: false }],
+      ["cluster", "cluster:1:LVP01", { ...cluster, onToggle: vi.fn() }],
+      ["point", "point:3", { sourceId: 1, clusterKey: "LVP01", point }],
+      ["asset", "asset:10", { asset, depth: 0 }],
+      ["unidentified", "unid:10.0.0.9:8080", { host: "10.0.0.9", port: 8080 }],
+    ] as const)("a %s node has its two edge handles and neither starts or ends a connection", (type, id, data) => {
+      renderNode(type, id, data);
+      expect(handles().map((h) => h.dataset.handle)).toEqual(["target", "source"]);
+      for (const h of handles()) {
+        expect(h.dataset.start, `${h.dataset.handle} can start`).toBe("false");
+        expect(h.dataset.end, `${h.dataset.handle} can end`).toBe("false");
+      }
+    });
+  });
+
+  describe("the + on an asset node (W12a)", () => {
+    const asset = { id: 10, parent_id: null, name: "Site", kind: "generic" };
+    const handles = () => Array.from(document.querySelectorAll<HTMLElement>("[data-handle]"));
+    const add =() => screen.getByRole("button", { name: "Add a sub-asset under Site" });
+
+    it("is drawn only when the data carries onAdd; an asset without it draws no button at all", () => {
+      const view = renderNode("asset", "asset:10", { asset, depth: 0 });
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+      expect(document.querySelector('[data-handle="add"]')).toBeNull();
+      view.unmount();
+      renderNode("asset", "asset:10", { asset, depth: 0, onAdd: vi.fn() });
+      expect(add()).toBeInTheDocument();
+    });
+
+    it("is the handle with id add, a source that cannot end a connection, a button with a name, a tab stop and the classes that keep drags and keys off the node", () => {
+      renderNode("asset", "asset:10", { asset, depth: 0, onAdd: vi.fn() });
+      expect(add()).toBe(document.querySelector('[data-handle="add"]'));
+      expect(add()).toHaveAttribute("data-start", "true");
+      expect(add()).toHaveAttribute("data-end", "false");
+      expect(add()).toHaveAttribute("tabindex", "0");
+      expect(add()).toHaveClass("nodrag", "nokey", "gnode-add");
+      expect(add().querySelector("svg")).toHaveAttribute("aria-hidden", "true"); // the name is the label, the plus is a drawing
+    });
+
+    it("comes AFTER the two default handles: an edge with no sourceHandle starts at the first source handle in the document", () => {
+      renderNode("asset", "asset:10", { asset, depth: 0, onAdd: vi.fn() });
+      expect(handles().map((h) => h.dataset.handle)).toEqual(["target", "source", "add"]);
+    });
+
+    it("a click reports the node id and goes no further", async () => {
+      const onAdd = vi.fn();
+      const reachedNode = vi.fn();
+      const Node = nodeTypes.asset as unknown as (p: { id: string; data: object }) => React.ReactElement;
+      render(<div onClick={reachedNode}><Node id="asset:10" data={{ asset, depth: 0, onAdd }} /></div>);
+      await userEvent.click(add());
+      expect(onAdd).toHaveBeenCalledTimes(1);
+      expect(onAdd).toHaveBeenCalledWith("asset:10");
+      expect(reachedNode).not.toHaveBeenCalled();
+    });
+
+    it("Enter and Space report the node id, stay off the node and the canvas, and other keys go on", async () => {
+      const onAdd = vi.fn();
+      const reachedCanvas = vi.fn();
+      const Node = nodeTypes.asset as unknown as (p: { id: string; data: object }) => React.ReactElement;
+      render(<div onKeyDown={reachedCanvas}><Node id="asset:10" data={{ asset, depth: 0, onAdd }} /></div>);
+      act(() => add().focus());
+      await userEvent.keyboard("{Enter}");
+      expect(onAdd).toHaveBeenCalledTimes(1);
+      await userEvent.keyboard(" ");
+      expect(onAdd).toHaveBeenCalledTimes(2);
+      expect(onAdd).toHaveBeenLastCalledWith("asset:10");
+      expect(reachedCanvas).not.toHaveBeenCalled();
+      await userEvent.keyboard("a");
+      await userEvent.keyboard("{ContextMenu}");
+      expect(onAdd).toHaveBeenCalledTimes(2);
+      expect(reachedCanvas).toHaveBeenCalledTimes(2); // anything else (the menu key, Tab) is the canvas's
+    });
+
+    it("says aria-disabled while the asset list the form needs is not read, and still reports the click (the page says why nothing opened)", async () => {
+      const onAdd = vi.fn();
+      renderNode("asset", "asset:10", { asset, depth: 0, onAdd, formWait: true });
+      expect(add()).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(add());
+      expect(onAdd).toHaveBeenCalledTimes(1);
+    });
+
+    it("the group's New asset… button says aria-disabled in the same case, and a point draws no New asset button for its menu-only key", () => {
+      renderNode("cluster", "cluster:1:LVP01", { ...cluster, onMap: vi.fn(), onNewAsset: vi.fn(), formWait: true });
+      expect(screen.getByRole("button", { name: "New asset from LVP01…" })).toHaveAttribute("aria-disabled", "true");
+      expect(screen.getByRole("button", { name: "Map LVP01 to asset…" })).not.toHaveAttribute("aria-disabled");
+      cleanup();
+      renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point, onMap: vi.fn(), menuNewAsset: vi.fn() });
+      expect(screen.queryByRole("button", { name: /^New asset from/ })).not.toBeInTheDocument();
+      expect(screen.getAllByRole("button")).toHaveLength(1); // Map… only
     });
   });
 

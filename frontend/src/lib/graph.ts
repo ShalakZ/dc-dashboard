@@ -36,6 +36,12 @@ export type NodeActions = {
   /** W12a: the menu items "Unmap…" and "Move to another asset…" (a group: "this group"), given only to a role with assets.edit and only while something on the node is mapped. */
   onUnmap?: (nodeId: string) => void;
   onMove?: (nodeId: string) => void;
+  /** W12a: the "+" on an asset node (assets.edit and assets.view): opens New sub-asset with this asset as the parent. Also the menu item "New sub-asset…". */
+  onAdd?: (nodeId: string) => void;
+  /** W12a: an unmapped point's New asset… in its right-click menu only (the node draws no button for it: a point has Map… and nothing else). */
+  menuNewAsset?: (nodeId: string) => void;
+  /** W12a: the asset list the New asset form needs is not read yet: the buttons that open it (a group's New asset…, the "+") say so with aria-disabled. */
+  formWait?: boolean;
 };
 /** One source that has mappings on an asset, as the asset node's menu lists it (W12a). */
 export type MappedSource = { sourceId: number; sourceName: string; count: number };

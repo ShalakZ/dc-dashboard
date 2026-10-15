@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { GraphModel, GraphPoint, GraphSource } from "../api/types";
+import type { Asset, GraphModel, GraphPoint, GraphSource } from "../api/types";
+import { AddConnectionLine } from "../components/graph/nodes";
 import type { MappedInfo } from "../hooks/useMappingActions";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
@@ -27,6 +28,8 @@ const flow = vi.hoisted(() => {
   const state = {
     intersecting: [] as { id: string; type?: string }[], nodes: [] as any[], dropAt: { x: 7, y: 8 }, partner: null as string | null,
     viewport: { x: 0, y: 0, zoom: 1 },
+    // The connection props of the "+" (W12a), as the page gave them to React Flow on its last render.
+    connect: {} as { nodesConnectable?: boolean; isValidConnection?: (c: unknown) => boolean; connectionLineComponent?: unknown; onConnectEnd?: (event: unknown, state: unknown) => void },
   };
   return {
     state, getIntersectingNodes: vi.fn((_node: unknown) => state.intersecting), getNodes: vi.fn(() => state.nodes), fitView: vi.fn(),
@@ -54,9 +57,10 @@ vi.mock("@xyflow/react", async (importOriginal) => {
     ReactFlow: ({
       nodes, edges, nodeTypes, colorMode, edgesFocusable, nodesDraggable, snapToGrid, snapGrid, selectionKeyCode, multiSelectionKeyCode, children,
       onNodeClick, onNodeDragStart, onNodeDrag, onNodeDragStop, onNodesChange, onNodeMouseEnter, onNodeMouseLeave,
-      onNodeContextMenu, onPaneContextMenu, onSelectionContextMenu, onMoveStart,
+      onNodeContextMenu, onPaneContextMenu, onSelectionContextMenu, onMoveStart, nodesConnectable, isValidConnection, connectionLineComponent, onConnectEnd,
     }: any) => {
       flow.state.nodes = nodes;
+      flow.state.connect = { nodesConnectable, isValidConnection, connectionLineComponent, onConnectEnd };
       return (
         <div
           data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)} data-nodes-draggable={String(nodesDraggable)}
@@ -105,7 +109,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
             );
           })}
           {/* The pane, the rectangle a box selection leaves over its nodes, and the camera starting to move: what the page's menu and guides listen to. */}
-          <div data-testid="pane" onContextMenu={(e) => onPaneContextMenu?.(e)} />
+          <div data-testid="pane" className="react-flow__pane" onContextMenu={(e) => onPaneContextMenu?.(e)} />
           {nodes.some((n: any) => n.selected) && (
             <div data-testid="selection-rect" className="react-flow__nodesselection-rect" tabIndex={-1} onContextMenu={(e) => onSelectionContextMenu?.(e, nodes.filter((n: any) => n.selected))} />
           )}
@@ -135,9 +139,15 @@ const graph = (over: Partial<GraphModel> = {}): GraphModel => ({
   assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }, { id: 11, parent_id: 10, name: "Panel 1", kind: "generic" }],
   layout: {}, ...over,
 });
+/** The full asset list the New asset form reads (the graph carries only id, parent, name and kind): the same two assets as `graph()`. */
+const ASSET_LIST: Asset[] = [
+  { id: 10, parent_id: null, name: "Site", kind: "generic", sort_order: 0 },
+  { id: 11, parent_id: 10, name: "Panel 1", kind: "generic", sort_order: 0 },
+];
 const routes = (role: string, model: GraphModel | (() => GraphModel) = graph()) => ({
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: userFor(role) },
+  "GET /api/assets": { body: ASSET_LIST },
   "GET /api/discovery/graph": () => ({ body: typeof model === "function" ? model() : model }),
   "PUT /api/discovery/layout": { status: 204 },
   "DELETE /api/discovery/layout": { status: 204 },
@@ -434,10 +444,11 @@ describe("DiscoveryPage mapping", () => {
     expect(screen.getByRole("status")).toHaveTextContent('Create asset "LVP01" from this cluster?');
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await userEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Create asset…" }));
-    const review = await dialog();
-    expect(within(review).getByRole("radio", { name: "New asset" })).toBeChecked();
-    expect(within(review).getByLabelText("New asset name")).toHaveValue("LVP01");
-    expect(within(review).getByLabelText("Parent asset")).toHaveValue("");
+    // For a role that has the asset form (assets.edit and assets.view) the form comes first, named after the cluster; the Review follows on the saved asset.
+    const form = await screen.findByRole("dialog", { name: "New asset" });
+    expect(within(form).getByLabelText("Name")).toHaveValue("LVP01");
+    expect(within(form).getByLabelText("Parent")).toHaveValue("");
+    expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
@@ -511,12 +522,28 @@ describe("DiscoveryPage mapping", () => {
     expect(within(review).getAllByRole("checkbox")).toHaveLength(2);
   });
 
-  it("the New asset button opens the dialog on a new asset named after the cluster", async () => {
-    await start("admin");
+  it("the New asset button opens the asset form named after the cluster, and saving it opens the Review on the new asset", async () => {
+    let created = false;
+    const model = () => {
+      const m = graph();
+      if (created) m.assets.push({ id: 12, parent_id: null, name: "LVP01", kind: "generic" });
+      return m;
+    };
+    const calls = await start("admin", model, {
+      "POST /api/assets": ({ body }: { body: unknown }) => { created = true; return { status: 201, body: { id: 12, sort_order: 0, ...(body as object) } }; },
+    });
     await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+    const form = await screen.findByRole("dialog", { name: "New asset" });
+    expect(within(form).getByLabelText("Name")).toHaveValue("LVP01");
+    expect(within(form).getByText("Next you choose the points to map. Cancel keeps the new asset.")).toBeInTheDocument();
+    await userEvent.click(within(form).getByRole("button", { name: "Change icon" }));
+    await userEvent.click(within(form).getByRole("radio", { name: "Panel", hidden: true }));
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
     const review = await dialog();
-    expect(within(review).getByRole("radio", { name: "New asset" })).toBeChecked();
-    expect(within(review).getByLabelText("New asset name")).toHaveValue("LVP01");
+    expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument();
+    expect(within(review).getByRole("radio", { name: "Existing asset" })).toBeChecked();
+    expect(within(review).getByLabelText("Asset")).toHaveValue("12"); // the asset just made, listed by the refreshed graph
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/assets")?.body).toMatchObject({ name: "LVP01", parent_id: null, icon: "panel" }); // the icon chosen is the icon saved
   });
 
   it("a point has a Map button but no New asset button, and the Ungrouped bag and a fully mapped cluster have neither", async () => {
@@ -1913,7 +1940,7 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Plant OPC" }))).toEqual(["Details", "Expand"]);
     });
 
-    it("a group offers Expand, Map… and New asset…, and an unmapped point Map…, for a role that may accept", async () => {
+    it("a group offers Expand, Map… and New asset…, and an unmapped point Map… and New asset… (menu only), for a role that may accept and has the asset form", async () => {
       mockFetch(routes("admin"));
       open();
       await expand("Plant OPC");
@@ -1923,7 +1950,8 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
       await userEvent.keyboard("{Escape}");
       rightClick("point:1");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Map…"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Map…", "New asset…"]);
+      expect(screen.queryByRole("button", { name: "New asset from LVP01 kW…" })).not.toBeInTheDocument(); // a point draws no button for it
     });
 
     it("a point that has no action for this role (no Map…) shows the canvas's menu instead", async () => {
@@ -2321,13 +2349,13 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Unmap…", "Move to another asset…"]);
     });
 
-    it("only a mapped point has it: an unmapped point gets Map… and no button (and the cluster's New asset… stays on the cluster)", async () => {
+    it("only a mapped point has it: an unmapped point gets Map… (and New asset… in its menu) and no button", async () => {
       await start([KW_ON_PANEL]);
       await menuButton("LVP01 kW");
       expect(screen.queryByRole("button", { name: "Mapping actions for LVP01 kWh" })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Map LVP01 kWh to asset…" })).toBeInTheDocument();
       rightClick("point:3");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kWh" }))).toEqual(["Map…"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kWh" }))).toEqual(["Map…", "New asset…"]);
     });
 
     it("a group with something mapped has the button too, and its menu adds the group's two items after the old ones", async () => {
@@ -2352,13 +2380,14 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       await start([KW_ON_PANEL, V_ON_SITE, M_ON_SITE]);
       await menuButton("LVP01 kW");
       rightClick("asset:10");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Site" }))).toEqual(["Unmap everything from Atrium…", "Unmap everything from Plant OPC…"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Site" }))).toEqual(["New sub-asset…", "Unmap everything from Atrium…", "Unmap everything from Plant OPC…"]);
       await userEvent.keyboard("{Escape}");
       rightClick("asset:11");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Panel 1" }))).toEqual(["Unmap everything from Plant OPC…"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Panel 1" }))).toEqual(["New sub-asset…", "Unmap everything from Plant OPC…"]);
       await userEvent.keyboard("{Escape}");
+      // An asset with nothing mapped on it still has New sub-asset… (a role with the asset form), so it no longer falls back to the canvas menu.
       rightClick("asset:12");
-      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Room 1" }))).toEqual(["New sub-asset…"]);
     });
   });
 
@@ -2575,6 +2604,325 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       expect(within(review).getByRole("button", { name: "Create mappings" })).toBeEnabled();
       await userEvent.selectOptions(select, "11"); // a panel: no note
       expect(select).not.toHaveAccessibleDescription();
+    });
+  });
+});
+
+// ---- W12a: New asset from Discovery (the real form), the "+" on an asset node, and several points dropped together ----
+
+describe("DiscoveryPage New asset, the + and several points at once (W12a)", () => {
+  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+  const rightClick = (id: string) => fireEvent.contextMenu(node(id));
+  const post = (calls: { method: string; path: string; body?: unknown }[]) => calls.find((c) => c.method === "POST" && c.path === "/api/assets");
+  const reviewDialog = () => screen.findByRole("dialog", { name: "Review mappings" });
+  const NO_FORM_REASON = "The asset list could not be read, so a new asset cannot be made now. Refresh and try again.";
+
+  /**
+   * The page with a server that makes asset 12 when it is asked to and lists it in the next graph (`lists: false`: the graph keeps answering without it, a refresh
+   * that does not show the new asset). `hold`: the asset list is held until `release()`. `model`: the graph the server starts from.
+   */
+  function setup(permissions: PermissionId[] | "admin" = "admin", opts: { lists?: boolean; hold?: boolean; model?: () => GraphModel; extra?: Record<string, unknown> } = {}) {
+    const { lists = true, hold = false, model: base = graph, extra = {} } = opts;
+    let created: Asset | null = null;
+    const model = () => {
+      const m = base();
+      if (created && lists) m.assets.push({ id: created.id, parent_id: created.parent_id, name: created.name, kind: created.kind });
+      return m;
+    };
+    const user = permissions === "admin" ? routes("admin", model) : { ...routes("custom", model), "GET /api/me": { body: userFor("custom", { permissions }) } };
+    const calls = mockFetch({
+      ...user,
+      "POST /api/assets": ({ body }: { body: unknown }) => { created = { id: 12, sort_order: 0, ...(body as Omit<Asset, "id" | "sort_order">) }; return { status: 201, body: created }; },
+      ...extra,
+    });
+    const held = hold ? holdFetch((method, path) => method === "GET" && path === "/api/assets") : null;
+    const toasts = spyToasts();
+    renderWithProviders(<><DiscoveryPage /><SignedIn /></>, { route: "/discovery", path: "/discovery", toasts: toasts.api });
+    return { calls, toasts, release: () => held?.release() };
+  }
+  const openAll = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: "Expand Plant OPC" }));
+    await userEvent.click(screen.getByRole("button", { name: "Expand LVP01" }));
+    await accountKnown();
+  };
+  /** Fills the open New asset form's icon (a Panel) and saves it. */
+  const savePanel = async (form: HTMLElement) => {
+    await userEvent.click(within(form).getByRole("button", { name: "Change icon" }));
+    await userEvent.click(within(form).getByRole("radio", { name: "Panel", hidden: true }));
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+  };
+
+  beforeEach(() => {
+    flow.state.intersecting = [];
+    flow.state.connect = {};
+    flow.getIntersectingNodes.mockClear();
+  });
+
+  describe("New asset on the empty canvas and on an asset", () => {
+    it("the empty canvas's menu ends with New asset…, which opens the asset form with no parent and no note, and saves the icon chosen", async () => {
+      const { calls, toasts } = setup();
+      await openAll();
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+      expect(labelsOf(menu)).toEqual(["Expand all", "Collapse all", "Tidy layout", "Fit view", "New asset…"]);
+      await userEvent.click(within(menu).getByRole("menuitem", { name: "New asset…" }));
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Parent")).toHaveValue("");
+      expect(within(form).queryByText(/Next you choose the points to map/)).not.toBeInTheDocument(); // nothing follows the save
+      await userEvent.type(within(form).getByLabelText("Name"), "Panel 9");
+      await savePanel(form);
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument());
+      expect(post(calls)?.body).toMatchObject({ name: "Panel 9", parent_id: null, icon: "panel" });
+      expect(toasts.calls.map((c) => c.text)).toContain("Asset created");
+      expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument(); // it only creates
+    });
+
+    it.each([
+      ["an operator (neither permission)", "operator" as const, false],
+      ["assets.edit without assets.view (the form needs both)", ["discovery.view", "assets.edit"] as PermissionId[], false],
+      ["assets.view without assets.edit", ["discovery.view", "assets.view"] as PermissionId[], false],
+      ["assets.edit and assets.view", ["discovery.view", "assets.view", "assets.edit"] as PermissionId[], true],
+    ])("the empty canvas's menu has New asset… for %s: %s", async (_who, who, has) => {
+      setup(who === "operator" ? ["discovery.view"] : who);
+      await screen.findByText("Plant OPC");
+      await accountKnown();
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      const items = labelsOf(await screen.findByRole("menu", { name: "Canvas actions" }));
+      expect(items.includes("New asset…")).toBe(has);
+    });
+
+    it("an asset's menu has New sub-asset…, which opens the form with that asset as the parent and creates only", async () => {
+      const { calls } = setup();
+      await openAll();
+      rightClick("asset:11");
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Panel 1" })).getByRole("menuitem", { name: "New sub-asset…" }));
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Parent")).toHaveValue("11");
+      expect(within(form).queryByText(/Next you choose/)).not.toBeInTheDocument();
+      await userEvent.type(within(form).getByLabelText("Name"), "Breaker 1");
+      await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument());
+      expect(post(calls)?.body).toMatchObject({ name: "Breaker 1", parent_id: 11 });
+      expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument();
+    });
+
+    it("Cancel keeps nothing and sends nothing", async () => {
+      const { calls } = setup();
+      await openAll();
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "New asset…" }));
+      await userEvent.click(within(await screen.findByRole("dialog", { name: "New asset" })).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(post(calls)).toBeUndefined();
+    });
+  });
+
+  describe("New asset from a group or a point, and the Review that follows", () => {
+    it("a group's menu item opens the form named after the group, and the Review opens on the saved asset", async () => {
+      const { calls } = setup();
+      await openAll();
+      rightClick("cluster:1:LVP01");
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for LVP01" })).getByRole("menuitem", { name: "New asset…" }));
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Name")).toHaveValue("LVP01");
+      await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+      const review = await reviewDialog();
+      expect(within(review).getByLabelText("Asset")).toHaveValue("12");
+      expect(within(review).getAllByRole("checkbox")).toHaveLength(2); // LVP01 kW and LVP01 V
+      expect(post(calls)?.body).toMatchObject({ name: "LVP01", parent_id: null });
+    });
+
+    it("an unmapped point has New asset… in its menu only, named after the point, and the Review follows with just that point", async () => {
+      setup();
+      await openAll();
+      expect(screen.queryByRole("button", { name: /New asset from LVP01 kW/ })).not.toBeInTheDocument();
+      rightClick("point:1");
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for LVP01 kW" })).getByRole("menuitem", { name: "New asset…" }));
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Name")).toHaveValue("LVP01 kW");
+      await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+      const review = await reviewDialog();
+      expect(within(review).getByLabelText("Asset")).toHaveValue("12");
+      expect(within(review).getAllByRole("checkbox")).toHaveLength(1);
+    });
+
+    it("when the graph cannot be read again the asset stays, the person is told, and no Review opens", async () => {
+      const { toasts } = setup("admin", { lists: false });
+      await openAll();
+      await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+      await userEvent.click(within(await screen.findByRole("dialog", { name: "New asset" })).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(toasts.calls).toContainEqual({ kind: "error", text: "The asset was created, but the graph could not be refreshed. Use Map… to map to it." }));
+      expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ["discovery.accept alone", ["discovery.view", "discovery.accept"] as PermissionId[]],
+      ["discovery.accept and assets.edit without assets.view (the form needs both)", ["discovery.view", "discovery.accept", "assets.edit"] as PermissionId[]],
+    ])("%s keeps the Review's own New asset choice (name and parent), and no form", async (_who, permissions) => {
+      const { calls } = setup(permissions);
+      await openAll();
+      await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+      const review = await reviewDialog();
+      expect(within(review).getByRole("radio", { name: "New asset" })).toBeChecked();
+      expect(within(review).getByLabelText("New asset name")).toHaveValue("LVP01");
+      expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument();
+      expect(post(calls)).toBeUndefined();
+      await userEvent.keyboard("{Escape}");
+      rightClick("point:1"); // an unmapped point has no New asset… for such a role
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Map…"]);
+    });
+  });
+
+  describe("until the asset list is read", () => {
+    it("the buttons and menu items that open the form say aria-disabled, a click says why, and they work once the list has come", async () => {
+      const { toasts, release } = setup("admin", { hold: true });
+      await openAll();
+      const button = screen.getByRole("button", { name: "New asset from LVP01…" });
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(button);
+      expect(toasts.calls).toContainEqual({ kind: "info", text: "Still reading the asset list. Try again in a moment." });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+      expect(within(menu).getByRole("menuitem", { name: "New asset…" })).toHaveAttribute("aria-disabled", "true");
+      await userEvent.keyboard("{Escape}");
+      release();
+      await waitFor(() => expect(screen.getByRole("button", { name: "New asset from LVP01…" })).not.toHaveAttribute("aria-disabled"));
+      await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+      expect(await screen.findByRole("dialog", { name: "New asset" })).toBeInTheDocument();
+    });
+
+    it("a list that cannot be read says so instead of opening a form with no parents to choose", async () => {
+      const { toasts } = setup("admin", { extra: { "GET /api/assets": { status: 500, body: { detail: "boom" } } } });
+      await openAll();
+      await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+      expect(toasts.calls).toContainEqual({ kind: "info", text: NO_FORM_REASON });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("the + on an asset node (what the page gives React Flow)", () => {
+    const pane = () => screen.getByTestId("pane");
+    /** A connection released on `target`, started from `fromHandle` on `fromNode` (what React Flow reports). */
+    const released = (target: Element | null, fromHandle: { id: string | null } | null, fromNode: { id: string } | null) =>
+      act(() => { flow.state.connect.onConnectEnd?.({ target }, { fromHandle, fromNode }); });
+
+    it("connections are drawn for a role with the form, can never be made, and use the dashed line", async () => {
+      setup();
+      await openAll();
+      expect(flow.state.connect.nodesConnectable).toBe(true);
+      expect(flow.state.connect.isValidConnection?.({ source: "asset:10", target: "asset:11" })).toBe(false);
+      expect(flow.state.connect.connectionLineComponent).toBe(AddConnectionLine);
+    });
+
+    it("a role without the form draws no connection line and has no + (an asset gets no New sub-asset…)", async () => {
+      setup(["discovery.view", "assets.view"]);
+      await screen.findByText("Plant OPC");
+      await accountKnown();
+      expect(flow.state.connect.nodesConnectable).toBe(false);
+      rightClick("asset:10");
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+    });
+
+    it("a line from the + released on the empty canvas opens New sub-asset with that asset as the parent", async () => {
+      setup();
+      await openAll();
+      released(pane(), { id: "add" }, { id: "asset:11" });
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Parent")).toHaveValue("11");
+      expect(within(form).queryByText(/Next you choose/)).not.toBeInTheDocument();
+    });
+
+    it("released over a node, or over anything that is not the canvas, it does nothing", async () => {
+      setup();
+      await openAll();
+      released(node("src:1"), { id: "add" }, { id: "asset:11" });
+      released(document.body, { id: "add" }, { id: "asset:11" });
+      released(null, { id: "add" }, { id: "asset:11" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("a line from any other handle (or none), or from a node that is not an asset, does nothing", async () => {
+      setup();
+      await openAll();
+      released(pane(), { id: null }, { id: "asset:11" });
+      released(pane(), { id: "other" }, { id: "asset:11" });
+      released(pane(), null, null);
+      released(pane(), { id: "add" }, { id: "src:1" });
+      released(pane(), { id: "add" }, null);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("several points dropped on an asset together", () => {
+    // point:1 (LVP01 kW) and point:2 (LVP01 V) are dragged together; `dragwith-point:1` plays the drag with the partner and ends at the page's drop place.
+    const dragTogether = async (partner = "point:2") => {
+      flow.state.partner = partner;
+      await userEvent.click(screen.getByTestId("dragwith-point:1"));
+    };
+    const mappedV = () => {
+      const m = graph();
+      m.sources[0].clusters[0].points[1] = point(2, "LVP01 V", { asset_id: 10, mapping_id: 9, mapped_metric: "voltage_v" });
+      return m;
+    };
+
+    it("opens ONE Review for all of them on the asset under the pointer, puts them back and remembers nothing", async () => {
+      const { calls } = setup("admin");
+      await openAll();
+      const start = [1, 2].map((id) => [node(`point:${id}`).dataset.x, node(`point:${id}`).dataset.y]);
+      flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+      await dragTogether();
+      const review = await reviewDialog();
+      expect(within(review).getByLabelText("Asset")).toHaveValue("11");
+      expect(within(review).getAllByRole("checkbox")).toHaveLength(2);
+      expect(review).toHaveTextContent("2 unmapped points from Plant OPC");
+      expect(flow.getIntersectingNodes).toHaveBeenCalledWith(expect.objectContaining({ id: "point:1" }));
+      expect(calls.some((c) => c.method === "PUT")).toBe(false); // the layout was not saved
+      await userEvent.click(within(review).getByRole("button", { name: "Cancel" }));
+      await userEvent.click(screen.getByRole("button", { name: "Collapse LVP01" }));
+      await userEvent.click(screen.getByRole("button", { name: "Expand LVP01" }));
+      expect([1, 2].map((id) => [node(`point:${id}`).dataset.x, node(`point:${id}`).dataset.y])).toEqual(start); // a rebuild still puts them at the start
+    });
+
+    it("a refusal (one of them is mapped already) is told in a toast, opens nothing, and saves no layout", async () => {
+      const { calls, toasts } = setup("admin", { model: mappedV });
+      await openAll();
+      flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+      await dragTogether();
+      await waitFor(() => expect(toasts.calls).toContainEqual({ kind: "info", text: "1 of the selected points is already mapped. Unmap it first, or select only unmapped points." }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(calls.some((c) => c.method === "PUT")).toBe(false);
+    });
+
+    it("not over an asset it is the plain move it always was: the layout is saved for both and no dialog opens", async () => {
+      const { calls } = setup("admin");
+      await openAll();
+      flow.state.intersecting = [];
+      await dragTogether();
+      await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+      const sent = (calls.find((c) => c.method === "PUT")!.body as { nodes: { node_id: string }[] }).nodes.map((n) => n.node_id);
+      expect(sent).toEqual(expect.arrayContaining(["point:1", "point:2"]));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("a mix with a node that is not a point (over an asset) stays a plain move, and a role that may not accept never maps by dragging", async () => {
+      const { calls } = setup("admin");
+      await openAll();
+      flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+      await dragTogether("cluster:1:LVP02");
+      await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("without discovery.accept the same drag only moves the nodes", async () => {
+      const { calls, toasts } = setup(["discovery.view", "discovery.edit"]);
+      await openAll();
+      flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+      await dragTogether();
+      await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(toasts.calls).toEqual([]);
     });
   });
 });

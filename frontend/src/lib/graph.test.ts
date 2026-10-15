@@ -75,6 +75,15 @@ describe("buildGraph", () => {
     expect(edge?.style?.strokeDasharray).toBeUndefined();
   });
 
+  it("no edge names a handle: every one starts at the node's default source handle, so the \"+\" of an asset node (handle id add, drawn after the defaults) never takes an edge (W12a)", () => {
+    const { edges } = buildGraph(model(), { sources: new Set([1, 2]), clusters: new Set([nodeId.cluster(1, "LVP01"), nodeId.cluster(2, "M")]) });
+    expect(edges.length).toBeGreaterThan(0);
+    for (const e of edges) {
+      expect(e.sourceHandle ?? null, `source handle of ${e.id}`).toBeNull();
+      expect(e.targetHandle ?? null, `target handle of ${e.id}`).toBeNull();
+    }
+  });
+
   it("a collapsed source with mapped points links to each asset with a count", () => {
     const { edges } = buildGraph(model(), none);
     expect(edges.find((e) => e.source === "src:2" && e.target === "asset:10")?.label).toBe("2 mapped");
