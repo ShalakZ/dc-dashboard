@@ -80,7 +80,7 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
   await expect(page.getByRole("cell", { name: "sim", exact: true })).toBeVisible();
   const scopeRow = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "sim", exact: true }) });
   await (await rowAction(page, scopeRow, "Scan")).click();
-  await expect(page.getByText("1 hosts × 3 ports (3 probes)")).toBeVisible();
+  await expect(page.getByText("1 hosts × 3 ports (3 checks)")).toBeVisible();
   await page.getByRole("button", { name: "Start scan" }).click();
   const findings = page.getByRole("table").filter({ has: page.getByRole("columnheader", { name: "Outcome" }) });
   await expect(findings.locator("tbody tr")).toHaveCount(3, { timeout: 90_000 });
@@ -100,6 +100,9 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
   expect(opcua).toBeTruthy();
   await navLink(page, "Discovery").click();
   await expect(page.getByRole("heading", { name: "Discovery", exact: true })).toBeVisible();
+  // The canvas opens on the first three sources (W7r fix wave); this journey was written for the whole graph in view, so press fit view first.
+  await expect(node(page, `src:${opcua.id}`)).toBeVisible();
+  await fitView(page, node(page, `src:${opcua.id}`));
   await page.getByRole("button", { name: `Expand ${opcua.name}` }).click();
   const cluster = (key: string) => node(page, `cluster:${opcua.id}:${key}`);
   await expect(page.locator(`.react-flow__node[data-id^="cluster:${opcua.id}:"]`)).toHaveCount(10);

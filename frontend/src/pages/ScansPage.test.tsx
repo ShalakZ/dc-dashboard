@@ -113,7 +113,7 @@ describe("ScansPage", () => {
     });
     open();
     await pick("Scan");
-    expect(await screen.findByText("2 hosts × 3 ports (6 probes)")).toBeInTheDocument();
+    expect(await screen.findByText("2 hosts × 3 ports (6 checks)")).toBeInTheDocument();
     expect(calls.some((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")).toBe(false); // nothing runs before confirming
     await userEvent.click(screen.getByRole("button", { name: "Start scan" }));
     expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({ confirm_host_count: 2, digest: "d1g3st" });
@@ -251,15 +251,15 @@ describe("ScansPage", () => {
     expect(screen.getByRole("link", { name: "Open the discovery graph" })).toBeInTheDocument();
   });
 
-  it("counts only sources that were read as sources, in the stats line and in the history, in words", async () => {
+  it("counts only recognised sources that are not locked as sources, in the stats line and in the history, in words", async () => {
     mockFetch({ ...base("operator"), "GET /api/scans/7": { body: done } }); // claimed 2, of which 1 needs credentials
     open();
     const history = await screen.findByRole("row", { name: /^lab .*done/ });
     expect(within(history).getByText("1 source, 120 points")).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Sources / points" })).toBeInTheDocument();
     await userEvent.click(within(history).getByRole("button", { name: "Details" }));
-    expect(await screen.findByText("1 source read")).toBeInTheDocument();
-    expect(screen.queryByText("2 sources read")).not.toBeInTheDocument();
+    expect(await screen.findByText("1 source recognised")).toBeInTheDocument();
+    expect(screen.queryByText("2 sources recognised")).not.toBeInTheDocument();
     expect(screen.queryByText(/\d claimed/)).not.toBeInTheDocument();
   });
 
@@ -303,7 +303,7 @@ describe("ScansPage", () => {
   });
 
   describe("confirmation panel never outlives the scope it was previewed for", () => {
-    const confirmation = "2 hosts × 3 ports (6 probes)";
+    const confirmation = "2 hosts × 3 ports (6 checks)";
 
     it("closes when the scope is edited", async () => {
       const calls = mockFetch({ ...base("admin"), "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } } });
@@ -351,7 +351,7 @@ describe("ScansPage", () => {
       expect(screen.queryByText(confirmation)).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Start scan" })).not.toBeInTheDocument();
       await pick("Scan");
-      expect(await screen.findByText("2 hosts × 20 ports (40 probes)")).toBeInTheDocument();
+      expect(await screen.findByText("2 hosts × 20 ports (40 checks)")).toBeInTheDocument();
       expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/scan"))).toBe(false);
     });
   });
@@ -666,6 +666,6 @@ describe("ScansPage scan drawer and readable numbers (W7r)", () => {
     open();
     const row = await screen.findByRole("row", { name: /^lab done/ });
     expect(row.querySelector(".cell-sub")).toBeNull();
-    expect(within(row).getByText("1 source, 120 points")).toHaveAttribute("title", "1 source recognised and read, 120 points found");
+    expect(within(row).getByText("1 source, 120 points")).toHaveAttribute("title", "1 source recognised, 120 points found");
   });
 });

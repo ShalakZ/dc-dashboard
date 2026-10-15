@@ -21,11 +21,11 @@ import { useToast } from "../components/Toasts";
 import { useAction } from "../hooks/useAction";
 import { dropPayload, mappableClusters, pickDropTarget, type DropPayload } from "../lib/drop";
 import {
-  buildGraph, isRemovable, removalDialogText, removalOutcome, seenLine,
+  buildGraph, initialView, isRemovable, removalDialogText, removalOutcome, seenLine,
   type ClusterNodeData, type OpenState, type PointNodeData, type SourceNodeData,
 } from "../lib/graph";
 
-const HINT = "Dashed nodes were discovered; solid nodes are assets. Press New asset… on a group, or drag it onto an asset. Drag other nodes to arrange them.";
+const HINT = "Dashed nodes were discovered; solid nodes are assets. Press New asset… on a group, or drag it onto an asset (Fit View shows them all). Drag other nodes to arrange them.";
 
 /** The server rejects a longer layout node id (a cluster id embeds device-reported names, so it can be long). */
 const MAX_LAYOUT_ID = 512;
@@ -124,6 +124,9 @@ function Canvas({ model }: { model: GraphModel }) {
   }, [model, openReview]);
 
   const canvas = useRef<HTMLDivElement>(null);
+  // Where the canvas opens (the first sources, readable). Taken once, when the canvas mounts: a refresh never moves the view, and the Controls'
+  // fit-view button (it passes no options) still fits everything, so a drop onto an asset that lies out of view is a click away.
+  const [opening] = useState(() => initialView(model));
   const onSelect = useCallback((id: string) => setSelectedId(Number(id.slice("src:".length))), []);
   const closePanel = useCallback(() => {
     const id = selectedId;
@@ -281,6 +284,7 @@ function Canvas({ model }: { model: GraphModel }) {
             edgesFocusable={false} // an edge is a Tab stop with no visible ring; the nodes stay focusable
             deleteKeyCode={null}
             fitView
+            fitViewOptions={opening}
           >
             <Controls />
             <Background />

@@ -218,6 +218,58 @@ describe("BulkCreateDialog", () => {
     expect(go("Cancel")).toBeInTheDocument();
   });
 
+  describe("the sentence under the list after a partial batch (W7r fix wave)", () => {
+    // The group that failed (LVP02) failed because an asset of that name appeared; the graph read after the batch holds it, so the dialog's own
+    // check now finds the same clash. The status line is one slot: the outcome of the batch must win over the clash of the row it left behind.
+    async function partial() {
+      const toasts = spyToasts();
+      let accepted = 0;
+      const clash = { id: 99, parent_id: null, name: "LVP02", kind: "generic" };
+      const calls = mockFetch({
+        ...routes(() => { accepted += 1; return accepted === 2 ? { status: 409, body: { detail: "already exists" } } : created(20 + accepted); }),
+        "GET /api/discovery/graph": () => ({ body: graph(accepted >= 2 ? [clash] : undefined) }),
+      });
+      const view = renderWithProviders(<Harness onClose={vi.fn()} />, { toasts: toasts.api });
+      const dialog = await screen.findByRole("dialog", { name: "Create an asset for each group" });
+      const status = () => dialog.querySelector(".bulk-status")!;
+      await userEvent.click(go("Create 3 assets"));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      return { dialog, status, calls, ...view };
+    }
+    const OUTCOME = "Created 2 of 3. The groups still listed were not created: fix the rows marked and press the button again.";
+
+    it("shows the outcome, not the clash of the row that is left", async () => {
+      const { status } = await partial();
+      await waitFor(() => expect(nameInput("LVP02")).toHaveAccessibleDescription(/already exists/)); // the refetched model holds the clash
+      expect(status()).toHaveTextContent(OUTCOME);
+      expect(status().textContent).not.toMatch(/already exists/);
+    });
+
+    it("drops the outcome when the name is edited, and the clash (the reason) takes the line", async () => {
+      const { status } = await partial();
+      await waitFor(() => expect(nameInput("LVP02")).toHaveAccessibleDescription(/already exists/));
+      await userEvent.type(nameInput("LVP02"), " ");
+      expect(status().textContent).not.toMatch(/Created 2 of 3/);
+      await userEvent.clear(nameInput("LVP02"));
+      await userEvent.type(nameInput("LVP02"), "LVP02 b");
+      expect(status().textContent).toBe("");
+    });
+
+    it("drops the outcome when a group is ticked or unticked", async () => {
+      const { status } = await partial();
+      expect(status()).toHaveTextContent(OUTCOME);
+      await userEvent.click(box("LVP02"));
+      expect(status().textContent).not.toMatch(/Created 2 of 3/);
+    });
+
+    it("drops the outcome when the parent changes", async () => {
+      const { status, dialog } = await partial();
+      expect(status()).toHaveTextContent(OUTCOME);
+      await userEvent.selectOptions(within(dialog).getByLabelText("Parent asset"), "99");
+      expect(status().textContent).not.toMatch(/Created 2 of 3/);
+    });
+  });
+
   it("refuses two groups with the same name before sending anything, whatever the case or spacing", async () => {
     const user = userEvent.setup();
     const { calls, dialog } = await open();

@@ -663,7 +663,7 @@ describe("DiscoveryPage controls follow the permissions of the role (a custom ro
 
 // ---- W7r: remove and clear unmapped discovered sources, last seen, the click path to create assets ----
 
-const HINT = "Dashed nodes were discovered; solid nodes are assets. Press New asset… on a group, or drag it onto an asset. Drag other nodes to arrange them.";
+const HINT = "Dashed nodes were discovered; solid nodes are assets. Press New asset… on a group, or drag it onto an asset (Fit View shows them all). Drag other nodes to arrange them.";
 const kw = (id: number, name: string, extra: Partial<GraphPoint> = {}) =>
   point(id, name, { suggestion: { metric: "active_power_kw", scale: 1, interval_seconds: 5, custom_unit: null }, ...extra });
 const srcOf = (id: number, name: string, over: Partial<GraphSource> = {}): GraphSource => ({

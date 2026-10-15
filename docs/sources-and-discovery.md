@@ -77,7 +77,7 @@ data-retrieval requests the connectors already use, nothing else.
 1. **Scan scopes** (Scans, admin): a named list of targets (CIDR ranges, host names or addresses,
    URLs) and TCP ports (at most 20). A new scope is pre-filled from the collector's own network
    interfaces, clamped to the /24 around its address, and from the ports the connectors know.
-2. **Confirmation.** Pressing Scan shows "N hosts × M ports (P probes)" and asks for confirmation on
+2. **Confirmation.** Pressing Scan shows "N hosts × M ports (P checks)" and asks for confirmation on
    every run. The API enforces it: the start request must carry the host count the API computed
    itself, or nothing runs. It must also carry the digest the preview returned (a hash of the scope's
    targets and ports), so a scope edited after it was previewed cannot be started unconfirmed: the
@@ -88,13 +88,13 @@ data-retrieval requests the connectors already use, nothing else.
    shows progress and, when done, one finding per open endpoint.
 
    On Scans, **Details** on a row of Recent scans (a scan you have just started opens the same view) shows that scan in a panel on the
-   right. It starts with the scope in one line, for example `Simulator: 172.20.0.0/24, ports 9000, 4840, 5020`, then the figures in
+   right. It starts with the scope, for example `Simulator: 172.20.0.0/24, ports 9000, 4840, 5020` (a long list wraps onto more lines; every target and port is there), then the figures in
    words: `762 checks (254 hosts × 3 ports)` (a check is one host and one port; while the scan runs it reads `310 of 762 checks`),
-   `3 open`, `1 source read`, `60 points`, `1 needs credentials`, `1 unidentified`, and below them the findings. A running scan
+   `3 open`, `1 source recognised`, `60 points`, `1 needs credentials`, `1 unidentified`, and below them the findings. A running scan
    updates by itself. Esc, the x or a click outside closes the panel, and closing it never stops the scan. The scope line comes from
    the scan itself, so it still shows the targets and ports after the scope was edited or deleted: when a scan finds less than you
    expected, look there first (a mistyped port such as `4080` for `4840` shows). In Recent scans the column **Sources / points**
-   reads `1 source, 60 points`: the sources the scan recognised and could read, and the points found in them (it is not a fraction),
+   reads `1 source, 60 points`: the sources the scan recognised (not necessarily browsed: one you added by hand that the scan only matched counts too), and the points found in them (it is not a fraction),
    and the Scope cell shows the targets and ports under the scope's name.
 4. **Discovered sources are disabled.** A discovered source is created disabled and is not polled,
    tested or listed under Sources until at least one of its points is mapped; mapping enables it. So a
@@ -111,7 +111,9 @@ data-retrieval requests the connectors already use, nothing else.
    borders; your assets are on the right with solid ones; mapped points are joined to their asset by a
    solid edge. Sources and clusters start collapsed: use the + / − button on a node to expand or
    collapse it. Points are grouped into suggested clusters (for example one per panel). Dragging nodes
-   saves their positions for everyone (admin); an operator's arrangement lasts for the session.
+   saves their positions for everyone (admin); an operator's arrangement lasts for the session. The canvas opens on the first three
+   sources at a readable size, so their buttons are in view; the assets on the right may be out of view until you pan or press **Fit
+   View** (the bottom-left control), which shows the whole graph.
 
    Each source node says when a scan last found it (`Seen in scan #6, 10 min ago`), or `Added by hand` for a source you made
    yourself, or `Not seen in a scan yet`. A scan only adds sources and refreshes their points; it never removes one, so a source

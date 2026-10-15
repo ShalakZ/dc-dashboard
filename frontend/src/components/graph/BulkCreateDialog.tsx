@@ -98,7 +98,9 @@ export function BulkCreateDialog({ model, source, onClose }: { model: GraphModel
   else if (chosen.length === 0) reason = "Tick at least one group.";
   else if (wrong.length > 0) reason = `${wrong[0].key}: ${problems[wrong[0].key]}${wrong.length > 1 ? ` ${plural(wrong.length - 1, "more name")} to fix.` : ""}`;
   const ready = !busy && reason === null;
-  const status = busy && progress ? `Creating ${progress.at} of ${progress.of}...` : (reason ?? outcome ?? "");
+  // One slot. The outcome of the batch comes first: after a partial one the graph that was read again holds the very clash that failed the row,
+  // and the dialog's own check would otherwise hide "Created 9 of 10" behind it. Any edit drops the outcome (it described the rows as they were).
+  const status = busy && progress ? `Creating ${progress.at} of ${progress.of}...` : (outcome ?? reason ?? "");
 
   async function createAll() {
     if (running.current || !ready) return;
@@ -192,7 +194,7 @@ export function BulkCreateDialog({ model, source, onClose }: { model: GraphModel
           <label htmlFor={parentId}>Parent asset</label>
           <select
             id={parentId} ref={parentSelect} value={parent ?? ""} disabled={busy}
-            onChange={(e) => { setParent(e.target.value === "" ? null : Number(e.target.value)); setFailures({}); }}
+            onChange={(e) => { setParent(e.target.value === "" ? null : Number(e.target.value)); setFailures({}); setOutcome(null); }}
           >
             <option value="">(root)</option>
             {choices.map((a) => <option key={a.id} value={a.id}>{INDENT.repeat(a.depth) + (labels.get(a.id) ?? a.name)}</option>)}
@@ -213,7 +215,7 @@ export function BulkCreateDialog({ model, source, onClose }: { model: GraphModel
                     <td>
                       <input
                         type="checkbox" aria-label={`Include ${g.key}`} checked={isTicked(g)} disabled={busy}
-                        onChange={(e) => setTicked((current) => ({ ...current, [g.key]: e.target.checked }))}
+                        onChange={(e) => { setTicked((current) => ({ ...current, [g.key]: e.target.checked })); setOutcome(null); }}
                       />
                     </td>
                     <td className="bulk-group">{g.key}</td>
@@ -225,6 +227,7 @@ export function BulkCreateDialog({ model, source, onClose }: { model: GraphModel
                         aria-describedby={isTicked(g) && message !== null ? id : undefined}
                         onChange={(e) => {
                           setNames((current) => ({ ...current, [g.key]: e.target.value }));
+                          setOutcome(null);
                           setFailures((current) => { const { [g.key]: _gone, ...rest } = current; return rest; });
                         }}
                       />

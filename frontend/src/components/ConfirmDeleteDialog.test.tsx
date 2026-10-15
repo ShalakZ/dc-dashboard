@@ -51,6 +51,24 @@ describe("ConfirmDeleteDialog", () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
+  // W7r fix wave: Remove and Clear unmapped are plain dialogs (no choice) that are refused more often than not (a scan runs: 409; every listed source
+  // was kept). Chrome drops the focus of the confirm button the moment it is disabled for the request, so the dialog stayed open with the focus on <body>.
+  it("a refused request leaves the focus on a control inside the dialog, not on the body (a dialog without a choice too)", async () => {
+    let refuse!: (error: Error) => void;
+    // What Chrome does to a focused button that becomes disabled: the focus is gone. jsdom ignores a blur on a disabled element, so the blur is done
+    // here, at the start of the request, while the button is still enabled in the DOM (React has not committed busy yet).
+    const onConfirm = vi.fn(() => { (document.activeElement as HTMLElement).blur(); return new Promise<void>((_resolve, reject) => { refuse = reject; }); });
+    const { onCancel } = open(onConfirm);
+    await userEvent.click(screen.getByRole("button", { name: "Delete anyway" }));
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => refuse(new ApiError(409, "A scan is running")));
+    expect(screen.getByRole("alert")).toHaveTextContent("A scan is running");
+    expect(document.activeElement).not.toBe(document.body);
+    expect(screen.getByRole("dialog")).toContainElement(document.activeElement as HTMLElement);
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(); // the harmless first control, as when the dialog opened
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
   it("keeps focus inside, and gives it back to where it was when it goes away", () => {
     const opener = document.createElement("button");
     const outside = document.createElement("button");
@@ -329,15 +347,6 @@ describe("ConfirmDeleteDialog", () => {
       await act(async () => finish());
       expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
       expect(screen.getByLabelText("Move the assets to")).toHaveFocus();
-    });
-
-    it("does not do that for a dialog without a choice: its focus rules are as they were", async () => {
-      let finish!: () => void;
-      const onConfirm = vi.fn(() => { (document.activeElement as HTMLElement).blur(); return new Promise<void>((resolve) => { finish = resolve; }); });
-      render(<ConfirmDeleteDialog {...props} onConfirm={onConfirm} />);
-      await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-      await act(async () => finish());
-      expect(document.activeElement).toBe(document.body);
     });
 
     it("leaves the focus alone when it is still inside and enabled (somebody tabbing through the choice is not pulled back)", async () => {

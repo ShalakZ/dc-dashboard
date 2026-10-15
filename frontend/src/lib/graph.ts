@@ -1,4 +1,4 @@
-import type { Edge, Node } from "@xyflow/react";
+import type { Edge, FitViewOptions, Node } from "@xyflow/react";
 import type { Asset, GraphModel, GraphPoint, GraphSource, RemoveSourcesResult } from "../api/types";
 import { relativeTime } from "./relativeTime";
 
@@ -175,6 +175,21 @@ export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[];
   model.assets.forEach((asset) => { if (!visited.has(asset.id)) walk(asset); }); // pure parent cycles have no root
 
   return { nodes, edges };
+}
+
+const OPENING_SOURCES = 3;
+
+/**
+ * How the Discovery canvas opens: on the first few sources, large enough to read, instead of fitting the whole graph. The assets stand in a column
+ * far to the right of the sources, so a tall asset column made the fit-all zoom out to React Flow's floor (0.5) and push the sources, the only
+ * nodes with Create assets and Remove, off the edge at a laptop's width (and render their text at 6 px at 1440). The zoom is held between 0.75
+ * and 1, so the sources may fill the view and the assets lie outside it; the Controls' fit-view button (no options) still shows everything.
+ * `undefined` with no source at all: the old fit-all (unidentified services only).
+ */
+export function initialView(model: GraphModel): FitViewOptions | undefined {
+  const first = model.sources.slice(0, OPENING_SOURCES);
+  if (first.length === 0) return undefined;
+  return { nodes: first.map((s) => ({ id: nodeId.source(s.id) })), minZoom: 0.75, maxZoom: 1, padding: 0.2 };
 }
 
 /** The points of a source, groups and the Ungrouped bag alike. */

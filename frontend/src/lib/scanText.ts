@@ -12,8 +12,9 @@ export function outcomeLabel(outcome: string): string {
 }
 
 /**
- * Sources the scan identified and could read. `progress.claimed` counts every service a connector claimed, including
- * those that then rejected the credentials (`progress.needs_credentials`), so those are taken out.
+ * Sources the scan recognised. `progress.claimed` counts every service a connector claimed, including those that then rejected the
+ * credentials (`progress.needs_credentials`), so those are taken out. It says nothing about a read: a source added by hand that the scan
+ * only matched (`existing source`) and a browse that failed are counted too, hence "recognised" and never "read".
  */
 export function claimedCount(progress: ScanCounters): number {
   return Math.max(0, (progress.claimed ?? 0) - (progress.needs_credentials ?? 0));
@@ -21,30 +22,9 @@ export function claimedCount(progress: ScanCounters): number {
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** The first `max` entries, then " and N more" for the rest. */
-function capped(items: readonly (string | number)[], max: number): string {
-  const rest = items.length - max;
-  return items.slice(0, max).join(", ") + (rest > 0 ? ` and ${rest} more` : "");
-}
-
-const MOST_TARGETS = 4;
-const MOST_PORTS = 8;
-
 /**
- * What a scan covered, in one line: `Simulator: 172.20.0.0/24, ports 9000, 4840, 5020`. The name alone when the scan has neither
- * targets nor ports (an old scan whose snapshot did not keep them). A long list is cut (4 targets, 8 ports) so the line stays a line.
- */
-export function scopeLine(name: string, targets: readonly string[], ports: readonly number[]): string {
-  const parts = [
-    targets.length > 0 ? capped(targets, MOST_TARGETS) : "",
-    ports.length > 0 ? `${ports.length === 1 ? "port" : "ports"} ${capped(ports, MOST_PORTS)}` : "",
-  ].filter(Boolean);
-  return parts.length > 0 ? `${name}: ${parts.join(", ")}` : name;
-}
-
-/**
- * The same without the name and without the cut, for the muted line under the scope's name in Recent scans (the cell cuts it with an
- * ellipsis and keeps all of it in its title, so a mistyped port is still there to be seen): `172.20.0.0/24, ports 9000, 4840, 5020`.
+ * The same without the name, for the muted line under the scope's name in Recent scans (the cell cuts it with an ellipsis and keeps all of
+ * it in its title, so a mistyped port is still there to be seen): `172.20.0.0/24, ports 9000, 4840, 5020`.
  */
 export function scopeDetail(targets: readonly string[], ports: readonly number[]): string {
   return [
@@ -53,14 +33,24 @@ export function scopeDetail(targets: readonly string[], ports: readonly number[]
   ].filter(Boolean).join(", ");
 }
 
-/** `1 source, 60 points`: the sources the scan identified and could read, and the points found in them. */
+/**
+ * What a scan covered, in one line that wraps: `Simulator: 172.20.0.0/24, ports 9000, 4840, 5020`. The name alone when the scan has neither
+ * targets nor ports (an old scan whose snapshot did not keep them). Never cut: the drawer is the details view and has the room, and a list
+ * that ends in "and 46 more" hides the very port a typo would be in.
+ */
+export function scopeLine(name: string, targets: readonly string[], ports: readonly number[]): string {
+  const detail = scopeDetail(targets, ports);
+  return detail ? `${name}: ${detail}` : name;
+}
+
+/** `1 source, 60 points`: the sources the scan recognised, and the points found in them. */
 export function sourcesAndPoints(progress: ScanCounters): string {
   return `${plural(claimedCount(progress), "source")}, ${plural(progress.points ?? 0, "point")}`;
 }
 
-/** The longer wording of the same figures, for a tooltip: `1 source recognised and read, 60 points found`. */
+/** The longer wording of the same figures, for a tooltip: `1 source recognised, 60 points found`. */
 export function recognisedText(progress: ScanCounters): string {
-  return `${plural(claimedCount(progress), "source")} recognised and read, ${plural(progress.points ?? 0, "point")} found`;
+  return `${plural(claimedCount(progress), "source")} recognised, ${plural(progress.points ?? 0, "point")} found`;
 }
 
 /**
@@ -77,12 +67,12 @@ export function checksText(progress: ScanCounters, running: boolean): string {
   return plural(pairs, "check");
 }
 
-/** The figures of the drawer's stats row after the checks, in words: `3 open`, `1 source read`, `60 points`, `2 need credentials`, `0 unidentified`. */
+/** The figures of the drawer's stats row after the checks, in words: `3 open`, `1 source recognised`, `60 points`, `2 need credentials`, `0 unidentified`. */
 export function statWords(progress: ScanCounters): string[] {
   const locked = progress.needs_credentials ?? 0;
   return [
     `${progress.open ?? 0} open`,
-    `${plural(claimedCount(progress), "source")} read`,
+    `${plural(claimedCount(progress), "source")} recognised`,
     plural(progress.points ?? 0, "point"),
     `${locked} ${locked === 1 ? "needs" : "need"} credentials`,
     `${progress.unidentified ?? 0} unidentified`,

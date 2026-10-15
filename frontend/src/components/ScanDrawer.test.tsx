@@ -36,11 +36,11 @@ describe("ScanDrawer", () => {
     expect(dialog()).toHaveTextContent("lab: simulator, ports 9000, 4840, 5020");
   });
 
-  it("counts the checks, the open ports, the sources read and the rest in plain words", async () => {
+  it("counts the checks, the open ports, the sources recognised and the rest in plain words", async () => {
     mockFetch({ ...base, "GET /api/scans/7": { body: done } });
     open();
     await screen.findByRole("dialog", { name: "Scan #7 — done" });
-    expect(figures()).toEqual(["3 checks (1 host × 3 ports)", "3 open", "1 source read", "120 points", "1 needs credentials", "0 unidentified"]);
+    expect(figures()).toEqual(["3 checks (1 host × 3 ports)", "3 open", "1 source recognised", "120 points", "1 needs credentials", "0 unidentified"]);
     expect(dialog().textContent).not.toMatch(/ports checked|\d claimed/);
   });
 
@@ -49,6 +49,17 @@ describe("ScanDrawer", () => {
     open();
     await screen.findByRole("dialog", { name: "Scan #7 — done" });
     expect(dialog()).toHaveTextContent("lab: simulator, ports 9000, 4840, 5020");
+  });
+
+  it("shows every target and port of a long scope, never cut to 'and N more'", async () => {
+    const targets = Array.from({ length: 50 }, (_, i) => `10.9.0.${i + 1}`);
+    const ports = [502, 4840, 5020, 9000, 20000, 20001, 20002, 20003, 20004, 20005];
+    mockFetch({ ...base, "GET /api/scans/7": { body: { ...done, targets, ports } } });
+    open();
+    await screen.findByRole("dialog", { name: "Scan #7 — done" });
+    const line = dialog().querySelector(".scan-scope")!.textContent!;
+    expect(line).toBe(`lab: ${targets.join(", ")}, ports ${ports.join(", ")}`);
+    expect(line).not.toMatch(/more/);
   });
 
   it("shows just the name for an old scan that kept neither targets nor ports", async () => {

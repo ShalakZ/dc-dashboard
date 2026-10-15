@@ -115,7 +115,7 @@ export function ScansPage() {
       {pending && (
         <div className="panel confirm-scan">
           <p className="confirm-title">Scan "{pending.scope.name}"?</p>
-          <p>{`${pending.preview.hosts} hosts × ${pending.preview.ports} ports (${pending.preview.pairs} probes)`}</p>
+          <p>{`${pending.preview.hosts} hosts × ${pending.preview.ports} ports (${pending.preview.pairs} checks)`}</p>
           <div className="row">
             <button onClick={() => setPending(null)} disabled={busy}>Cancel</button>
             <button className="primary" onClick={startScan} disabled={busy}>Start scan</button>

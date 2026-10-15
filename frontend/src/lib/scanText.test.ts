@@ -32,12 +32,13 @@ describe("scopeLine", () => {
   it("keeps several targets in the order the scope has them", () => {
     expect(scopeLine("lab", ["10.0.0.0/30", "simulator"], [502])).toBe("lab: 10.0.0.0/30, simulator, port 502");
   });
-  it("cuts the targets at 4 and the ports at 8, each with its own 'and N more'", () => {
+  it("never cuts the targets or the ports: a long scope is whole on the line", () => {
     const targets = ["a", "b", "c", "d", "e", "f", "g"];
     const ports = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-    expect(scopeLine("big", targets, ports)).toBe("big: a, b, c, d and 3 more, ports 1, 2, 3, 4, 5, 6, 7, 8 and 2 more");
-    expect(scopeLine("edge", ["a", "b", "c", "d"], [1, 2, 3, 4, 5, 6, 7, 8])).toBe("edge: a, b, c, d, ports 1, 2, 3, 4, 5, 6, 7, 8");
-    expect(scopeLine("edge", ["a", "b", "c", "d", "e"], [1, 2, 3, 4, 5, 6, 7, 8, 9])).toBe("edge: a, b, c, d and 1 more, ports 1, 2, 3, 4, 5, 6, 7, 8 and 1 more");
+    expect(scopeLine("big", targets, ports)).toBe("big: a, b, c, d, e, f, g, ports 1, 2, 3, 4, 5, 6, 7, 8, 9, 10");
+    const fifty = Array.from({ length: 50 }, (_, i) => `10.9.0.${i + 1}`);
+    expect(scopeLine("fifty", fifty, [502, 4840])).toBe(`fifty: ${fifty.join(", ")}, ports 502, 4840`);
+    expect(scopeLine("fifty", fifty, [502, 4840])).not.toMatch(/more/);
   });
   it("says ports for two ports", () => {
     expect(scopeLine("p", [], [1, 2])).toBe("p: ports 1, 2");
@@ -65,7 +66,7 @@ describe("scopeDetail", () => {
 });
 
 describe("sourcesAndPoints", () => {
-  it("reads the sources that were read and the points found, as words", () => {
+  it("reads the sources recognised and the points found, as words", () => {
     expect(sourcesAndPoints({ claimed: 2, needs_credentials: 1, points: 60 })).toBe("1 source, 60 points");
     expect(sourcesAndPoints({ claimed: 3, points: 120 })).toBe("3 sources, 120 points");
   });
@@ -77,9 +78,9 @@ describe("sourcesAndPoints", () => {
 
 describe("recognisedText", () => {
   it("is the longer wording of the Recent scans title", () => {
-    expect(recognisedText({ claimed: 2, needs_credentials: 1, points: 60 })).toBe("1 source recognised and read, 60 points found");
-    expect(recognisedText({ claimed: 3, points: 1 })).toBe("3 sources recognised and read, 1 point found");
-    expect(recognisedText({})).toBe("0 sources recognised and read, 0 points found");
+    expect(recognisedText({ claimed: 2, needs_credentials: 1, points: 60 })).toBe("1 source recognised, 60 points found");
+    expect(recognisedText({ claimed: 3, points: 1 })).toBe("3 sources recognised, 1 point found");
+    expect(recognisedText({})).toBe("0 sources recognised, 0 points found");
   });
 });
 
@@ -111,11 +112,11 @@ describe("checksText", () => {
 describe("statLine words (the drawer's stats row)", () => {
   it("counts in words with the plural the number needs", () => {
     expect(statWords({ open: 3, claimed: 2, needs_credentials: 1, points: 1, unidentified: 0 })).toEqual([
-      "3 open", "1 source read", "1 point", "1 needs credentials", "0 unidentified",
+      "3 open", "1 source recognised", "1 point", "1 needs credentials", "0 unidentified",
     ]);
     expect(statWords({ open: 1, claimed: 4, needs_credentials: 2, points: 60, unidentified: 1 })).toEqual([
-      "1 open", "2 sources read", "60 points", "2 need credentials", "1 unidentified",
+      "1 open", "2 sources recognised", "60 points", "2 need credentials", "1 unidentified",
     ]);
-    expect(statWords({})).toEqual(["0 open", "0 sources read", "0 points", "0 need credentials", "0 unidentified"]);
+    expect(statWords({})).toEqual(["0 open", "0 sources recognised", "0 points", "0 need credentials", "0 unidentified"]);
   });
 });

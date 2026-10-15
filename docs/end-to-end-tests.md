@@ -224,7 +224,8 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   a scan wins over the discovered one at the same address (`existing source`, the duplicate is not browsed). A role with only `discovery.view`
   sees no Remove, Clear unmapped or Create assets and gets 403; a role with `discovery.edit` but not `discovery.accept` can remove but not
   create. Create assets on the collapsed source node opens one dialog with a row per group and creates one asset each under the chosen parent.
-  At 1440 and 1024 px neither Scans nor Discovery scrolls sideways and the drawer fits.
+  At 1440 and 1024 px neither Scans nor Discovery scrolls sideways and the drawer fits, and a fresh load of Discovery at 1024×640 opens on the first
+  sources (the first Create assets button is inside the canvas and the node text is at least 9 px at the opening zoom).
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

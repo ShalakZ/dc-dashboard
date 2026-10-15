@@ -1,5 +1,5 @@
 import type { RemoveSourcesResult } from "../api/types";
-import { BLOCK_GAP, SOURCE_H, UNGROUPED, buildGraph, isRemovable, nodeId, removalDialogText, removalOutcome, seenLine, type OpenState } from "./graph";
+import { BLOCK_GAP, SOURCE_H, UNGROUPED, buildGraph, initialView, isRemovable, nodeId, removalDialogText, removalOutcome, seenLine, type OpenState } from "./graph";
 import { model, point, source } from "../test/graphFixtures";
 
 const none: OpenState = { sources: new Set(), clusters: new Set() };
@@ -171,6 +171,36 @@ describe("buildGraph: room for a source node (W7r)", () => {
     expect(sourceY(nodes, "src:2") - clusters[clusters.length - 1]).toBeGreaterThan(0);
     // a group node is 64 px apart from the next, as before
     expect(clusters[1] - clusters[0]).toBe(64);
+  });
+});
+
+describe("initialView (where the canvas opens)", () => {
+  const sources = (n: number) => model({ sources: Array.from({ length: n }, (_, i) => source(i + 1)) });
+
+  it.each([
+    [1, ["src:1"]],
+    [2, ["src:1", "src:2"]],
+    [3, ["src:1", "src:2", "src:3"]],
+    [4, ["src:1", "src:2", "src:3"]],
+    [12, ["src:1", "src:2", "src:3"]],
+  ])("with %i source(s) it frames %j, in the order of the list", (count, framed) => {
+    expect(initialView(sources(count))?.nodes).toEqual(framed.map((id) => ({ id })));
+  });
+
+  it("holds the zoom between 0.75 and 1 with room around the nodes, so the text stays readable", () => {
+    expect(initialView(sources(2))).toMatchObject({ minZoom: 0.75, maxZoom: 1, padding: 0.2 });
+  });
+
+  it("uses the ids of the source nodes the graph builds, and names no other node", () => {
+    const m = model();
+    const built = buildGraph(m, none).nodes.map((n) => n.id);
+    for (const { id } of initialView(m)!.nodes!) expect(built).toContain(id);
+    expect(initialView(m)!.nodes).toEqual([{ id: "src:1" }, { id: "src:2" }]);
+  });
+
+  it("is undefined with no source at all, so the graph is fitted whole as before", () => {
+    expect(initialView(sources(0))).toBeUndefined();
+    expect(initialView(model({ sources: [], assets: [] }))).toBeUndefined();
   });
 });
 

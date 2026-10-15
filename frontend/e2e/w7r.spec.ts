@@ -8,7 +8,8 @@ import { rowAction, userBlock } from "./shell";
 // simulator:5020 (the OPC UA source has all its 60 points mapped, the HTTP simulator is the hand-added `sim`), so the cases below read what is
 // removable from GET /api/discovery/graph at the moment they need it and never assume a number.
 // The Discovery graph is as tall as the stack's assets (64 px each, React Flow will not zoom out past 0.5), so openDiscovery makes the window
-// tall enough first; without it the first sources could sit above the window. What the spec makes starts `W7r <run> ` (the
+// tall enough first and then presses the Controls' fit view (the canvas now opens on the first sources instead of on the whole graph); the one
+// case that looks at the opening view itself (the last layout case) loads /discovery directly in an ordinary window. What the spec makes starts `W7r <run> ` (the
 // digits-only run suffix), the accounts and roles `w7r-`; afterAll (and beforeAll, for an earlier run that stopped half way) removes, whatever
 // the run, the assets (with `?confirm=true`, so their mappings go too and the sources are unmapped again), the hand-added source, the scopes,
 // then the accounts and the roles. Scans cannot be deleted and stay in Recent scans. The admin signs in through the API.
@@ -44,7 +45,8 @@ import { rowAction, userBlock } from "./shell";
 //   permission    a role with `discovery.view` only sees the nodes and none of Remove, Clear unmapped, Create assets; the API answers 403 and
 //                 the source stays; a role with `discovery.edit` as well sees Remove and Clear unmapped and still no Create assets.
 //   layout        at 1440 and 1024 px: no horizontal overflow on Scans and Discovery, the drawer fits the window, the header actions fit, the three
-//                 buttons of a source node stay inside it.
+//                 buttons of a source node stay inside it; and a fresh load at 1024 x 640 (the window as it is) opens on the first sources: the first
+//                 Create assets button is inside the canvas and the title text is at least 9 px at the opening zoom.
 //   create assets (LAST: it maps the Modbus source) the collapsed source node has `Create assets for N groups of <name>`; its dialog lists the
 //                 groups, one parent, two groups chosen and renamed; the assets exist under the parent with six mappings each, the audit log
 //                 counts two more accepts, the focus is back on the node's button.
@@ -292,7 +294,8 @@ async function ensureOnCanvas(page: Page, target: Locator) {
 
 /**
  * Opens Discovery and waits until the canvas has drawn at least one node (the heading is also in the loading skeleton).
- * React Flow's fit view will not zoom out past 0.5 and the asset column is 64 px per asset (the source column 176 px per collapsed source), so on this
+ * The canvas opens on the first three sources (W7r fix wave), so every case here presses the Controls' fit view first: they were written for the
+ * whole graph in view. React Flow's fit view will not zoom out past 0.5 and the asset column is 64 px per asset (the source column 176 px per collapsed source), so on this
  * stack, at the end of the chain and with dozens of assets, the first sources would sit above the window and could not be clicked. The window is made
  * tall enough for the whole graph at that zoom first (the page is exactly one window tall, so the canvas follows). Read with the signed-in
  * account's own graph: every role that sees the page may read it.
@@ -307,6 +310,7 @@ async function openDiscovery(page: Page): Promise<void> {
   await expect(heading1(page, "Discovery")).toBeVisible();
   await expect(page.locator(".react-flow__node").first()).toBeVisible({ timeout: 30_000 });
   await stopped(page.locator(".react-flow__node").first());
+  await fitView(page, page.locator(".react-flow__node").first());
 }
 
 /** Opens Scans and waits until the Recent scans table has its Details buttons. */
@@ -425,13 +429,13 @@ test.describe("W7r: the Scans page", () => {
     const cell = row.locator("td.scan-figures");
     await expect(cell).toHaveText(`${plural(sources, "source")}, ${plural(points, "point")}`);
     await expect(cell).toHaveText(/^\d+ sources?, \d+ points?$/);
-    await expect(cell, "the title says it longer").toHaveAttribute("title", `${plural(sources, "source")} recognised and read, ${plural(points, "point")} found`);
+    await expect(cell, "the title says it longer").toHaveAttribute("title", `${plural(sources, "source")} recognised, ${plural(points, "point")} found`);
     await expect(row.locator(".cell-sub"), "the Scope cell shows what was scanned").toHaveText("simulator, ports 9000, 5020");
 
     await row.locator("[data-scan-details]").click();
     const stats = scanDrawer(page, scan.id).locator(".scan-stats");
     await expect(stats).toContainText(`${scan.progress.open} open`);
-    await expect(stats).toContainText(`${plural(sources, "source")} read`);
+    await expect(stats).toContainText(`${plural(sources, "source")} recognised`);
     await expect(stats).toContainText(plural(points, "point"));
   });
 
@@ -444,7 +448,7 @@ test.describe("W7r: the Scans page", () => {
 
     const scopeRowOf = page.getByRole("row").filter({ has: page.getByRole("cell", { name: typo.name, exact: true }) });
     await (await rowAction(page, scopeRowOf, "Scan")).click();
-    await expect(page.getByText("1 hosts × 2 ports (2 probes)")).toBeVisible();
+    await expect(page.getByText("1 hosts × 2 ports (2 checks)")).toBeVisible();
     await page.getByRole("button", { name: "Start scan", exact: true }).click();
 
     // A started scan opens its drawer by itself; its id is in the title.
@@ -888,6 +892,54 @@ test.describe("W7r: layout", () => {
       });
     });
   }
+
+  // I1 of the whole-wave review: at a laptop's width the graph used to open fitted to everything, which with a tall asset column zoomed to the
+  // floor and pushed the sources (the only nodes with Create assets and Remove) off the edge. It now opens on the first three sources, readable.
+  // Loaded directly in an ordinary window: openDiscovery makes the window taller and presses fit view, which would hide what is under test.
+  test("a fresh load at 1024 x 640 opens on the source column: the first Create assets button is inside the canvas and the node text is readable", async ({ page }) => {
+    test.setTimeout(240_000);
+    await signIn(page);
+    await runScan(page.request, (await simScope(page.request)).id);
+    const graph = await graphOf(page.request);
+    expect(graph.sources.length, "the stack has sources").toBeGreaterThan(0);
+    await page.setViewportSize({ width: 1024, height: 640 });
+    await page.goto("/discovery");
+    await expect(heading1(page, "Discovery")).toBeVisible();
+    const first = srcNode(page, graph.sources[0]);
+    await expect(first).toBeVisible({ timeout: 30_000 });
+    await stopped(first);
+
+    const canvas = (await page.locator(".graph-canvas").boundingBox())!;
+    const inCanvas = (box: { x: number; y: number; width: number; height: number }) =>
+      box.x >= canvas.x - 1 && box.y >= canvas.y - 1 && box.x + box.width <= canvas.x + canvas.width + 1 && box.y + box.height <= canvas.y + canvas.height + 1;
+    const zoomOf = () => first.evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el.closest(".react-flow__viewport")!).transform).a);
+
+    await test.step("the first source's title is inside the canvas and, at the zoom the canvas opened with, at least 9 px tall text", async () => {
+      const title = first.locator(".node-title");
+      expect(inCanvas((await title.boundingBox())!), "the first source's title lies inside the canvas box").toBe(true);
+      const zoom = await zoomOf();
+      const size = await title.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+      expect(zoom, "the opening zoom is held between 0.75 and 1").toBeGreaterThanOrEqual(0.749);
+      expect(zoom).toBeLessThanOrEqual(1.001);
+      expect(size * zoom, `the title is ${size}px at zoom ${zoom}`).toBeGreaterThanOrEqual(8.99); // 12 px at the 0.75 floor is exactly 9
+    });
+
+    await test.step("the first Create assets button among the first three sources (if one has it) is inside the canvas", async () => {
+      for (const source of graph.sources.slice(0, 3)) {
+        const button = srcNode(page, source).getByRole("button", { name: /^Create assets for \d+ groups? of / });
+        if ((await button.count()) === 0) continue;
+        expect(inCanvas((await button.boundingBox())!), `${source.name}: Create assets lies inside the canvas box`).toBe(true);
+        return;
+      }
+      test.info().annotations.push({ type: "note", description: "none of the first three sources has a Create assets button on this stack" });
+    });
+
+    await test.step("the Controls' fit view still fits everything (it never zooms in past the opening view)", async () => {
+      const opening = await zoomOf();
+      await fitView(page, first);
+      expect(await zoomOf(), "fit view shows at least as much as the opening view").toBeLessThanOrEqual(opening + 0.001);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
