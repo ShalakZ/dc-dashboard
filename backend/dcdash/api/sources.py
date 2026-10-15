@@ -321,7 +321,7 @@ async def delete_source(
             detail = (
                 f'Source "{source.name}" has {mapped_points} mapped point{"" if mapped_points == 1 else "s"}; '
                 "deleting it deletes them and their mappings, and the past energy and cost figures that "
-                "depend on them disappear from billing and dashboards. "
+                "depend on them disappear from billing and dashboards, except in closed months, which keep their billed figures. "
                 "Repeat the request with confirm=true to go ahead."
             )
         return JSONResponse(status_code=409, content={"detail": detail, "points": mapped_points, "mappings": mappings})
