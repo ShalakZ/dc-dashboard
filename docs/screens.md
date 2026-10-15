@@ -29,8 +29,12 @@ lacks says "No access".
 - **Points** of a source (admins): the Points item of a source's row menu; needs `sources.edit`. **Browse points** asks the source
   what it offers; **Map** ties a point to an asset.
 - **Scans** and **Discovery** (operators and admins; only admins can change anything): need `discovery.view`. Scans lists the
-  scan scopes and their results; Discovery shows what was found as a graph to map by drag and drop. Changing scopes and the
-  layout needs `discovery.edit`, running a scan `discovery.scan`, accepting results `discovery.accept`. See
+  scan scopes and their results; **Details** on a result opens that scan in a panel on the right, with the scope it covered
+  (targets and ports), the figures in words and the findings, and Esc, the x or a click outside closes it. Discovery shows what was
+  found as a graph to map by drag and drop or with the buttons on its nodes, says when a scan last found each source, and lets an
+  admin remove discovered sources that have nothing mapped, one by one (**Remove**) or all at once (**Clear unmapped**). Changing
+  scopes and the layout, and removing unmapped discovered sources, needs `discovery.edit`, running a scan `discovery.scan`,
+  accepting results (**Map…**, **New asset…**, **Create assets…** for a whole source) `discovery.accept`. See
   [Discovery](sources-and-discovery.md#discovery).
 
 ## Administer

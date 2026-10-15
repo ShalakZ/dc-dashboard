@@ -86,17 +86,47 @@ data-retrieval requests the connectors already use, nothing else.
    open endpoint to every connector's read-only probe (first claim wins; an endpoint nobody claims is
    listed as an unidentified service), then browses the claimed sources to find their points. The page
    shows progress and, when done, one finding per open endpoint.
+
+   On Scans, **Details** on a row of Recent scans (a scan you have just started opens the same view) shows that scan in a panel on the
+   right. It starts with the scope in one line, for example `Simulator: 172.20.0.0/24, ports 9000, 4840, 5020`, then the figures in
+   words: `762 checks (254 hosts × 3 ports)` (a check is one host and one port; while the scan runs it reads `310 of 762 checks`),
+   `3 open`, `1 source read`, `60 points`, `1 needs credentials`, `1 unidentified`, and below them the findings. A running scan
+   updates by itself. Esc, the x or a click outside closes the panel, and closing it never stops the scan. The scope line comes from
+   the scan itself, so it still shows the targets and ports after the scope was edited or deleted: when a scan finds less than you
+   expected, look there first (a mistyped port such as `4080` for `4840` shows). In Recent scans the column **Sources / points**
+   reads `1 source, 60 points`: the sources the scan recognised and could read, and the points found in them (it is not a fraction),
+   and the Scope cell shows the targets and ports under the scope's name.
 4. **Discovered sources are disabled.** A discovered source is created disabled and is not polled,
-   tested or listed under Sources until at least one of its points is mapped; mapping enables it. A
-   source you added by hand at the same address is reused, never duplicated. A re-scan reuses existing
-   source rows untouched (name, config, secret, enabled, origin) and only refreshes their points and
-   findings. A source that answers "authentication failed" is marked as needing credentials and the scan
-   carries on.
+   tested or listed under Sources until at least one of its points is mapped; mapping enables it. So a
+   discovered source with nothing mapped shows on Discovery only, and the one you open from the Sources list has Enabled ticked
+   because mapping a point enabled it. A re-scan reuses existing source rows untouched (name, config,
+   secret, enabled, origin) and only refreshes their points and findings. A source that answers
+   "authentication failed" is marked as needing credentials and the scan carries on.
+
+   **A source you added by hand always wins.** If you add a source at an address a scan has already found, the next scan reuses
+   yours, reports it as `existing source` and does not create or browse another one, whichever of the two is older. The older
+   discovered duplicate is not browsed any more; it keeps its points and stays on Discovery until you remove it (item 5). Nothing is
+   merged, moved or deleted by the scan itself.
 5. **The graph** (Discovery). Discovered sources, clusters and points are on the left with dashed
    borders; your assets are on the right with solid ones; mapped points are joined to their asset by a
    solid edge. Sources and clusters start collapsed: use the + / − button on a node to expand or
    collapse it. Points are grouped into suggested clusters (for example one per panel). Dragging nodes
    saves their positions for everyone (admin); an operator's arrangement lasts for the session.
+
+   Each source node says when a scan last found it (`Seen in scan #6, 10 min ago`), or `Added by hand` for a source you made
+   yourself, or `Not seen in a scan yet`. A scan only adds sources and refreshes their points; it never removes one, so a source
+   whose device is gone, or that you deleted on Sources, stays or comes back until you remove it here.
+
+   **Removing leftovers** (needs `discovery.edit`). A discovered source with nothing mapped has a **Remove** button, and **Clear
+   unmapped (N)** above the graph removes every such source at once. Both ask first, in the same delete dialog as everywhere else, and
+   name the sources: the dialog lists the first five and says how many more. Removing takes the source, its points and their places on
+   the graph; asset, billing and dashboard data never depended on it, because nothing is mapped. Only a discovered source with no
+   mapped point can go. A source with a mapped point, or one you added by hand, is never removed here (the message says it was kept and
+   why), and the server checks again at the moment of removal, so a point someone mapped after the dialog opened keeps its source.
+   Nothing is removed while a scan is running (the dialog says to wait until it has finished). Past scans are not touched: their
+   findings stay, they just no longer lead to a source. A scan can find them again: the next scan of the same address creates the
+   source again, unmapped. Each removal is one audit entry. Unidentified services are not cleared: they are open ports no connector
+   recognised, not sources, and they leave Discovery with the next finished scan.
 6. **Mapping by drag and drop** (admin). Drop a cluster or a point on an asset to open the **Review
    mappings** dialog: one row per unmapped point with a guessed metric, scale and interval, all
    editable; rows whose metric the asset already has start unchecked, and a conflicting selection
@@ -106,6 +136,18 @@ data-retrieval requests the connectors already use, nothing else.
    dismiss it. The same dialog opens from keyboard-reachable buttons, for admins only: **Map…** on
    unmapped clusters and unmapped points, **New asset…** on clusters only. The Ungrouped bag and fully
    mapped clusters get neither.
+
+   **Create assets…** on a source node (needs `discovery.accept`) is the click path for a whole source. It opens
+   one dialog with one parent asset (or the top level) and a row per group that can become an asset: a tick, the asset's name (the
+   group's name, which you can change), the number of points and what the scan guessed for each point, such as `energy_kwh ×0.001`.
+   **Create N assets** then makes them one after another, each the way New asset… on that group would. A name already used under
+   the chosen parent, or twice in the batch, is shown before anything is sent and holds the button back until you change it. A group
+   the server still refuses (a point mapped elsewhere in the meantime, a name taken in another tab) is marked with the server's reason
+   and stays in the list; the others are created. The guesses are the scan's: look them over before you press Create, because they
+   cannot be changed here. To change a metric or a scale first, use New asset… on the group. The Ungrouped
+   bag, groups that are fully mapped and groups where every point needs a decision are left out (the dialog names the last kind), and
+   a point whose metric repeats another one in its group stays unmapped, as the row says. The button is missing on a source with no
+   such group.
 7. **Credentials.** Click a source that shows "needs credentials" (or press its **Details** button) to open its side panel, enter the
    secret (and the user name for OPC UA) and save: the source is browsed again. Secrets are stored
    encrypted and never returned by the API.
@@ -120,7 +162,7 @@ data-retrieval requests the connectors already use, nothing else.
    subject carries `origin`, and, for a save that needed confirmation, `confirmed_loss`; remembering a site
    default is `storage.default_set`), assets (create, edit, delete, and moving in the tree: one `asset.moved` entry per moved
    asset, with its old and new parent, all sharing one request id), mappings,
-   sources (create, edit, delete, test, test all, browse), tariffs, dashboards, asset kinds (a delete that moves assets records how many and
+   sources (create, edit, delete, test, test all, browse), removing unmapped discovered sources (`source.deleted`, `unmapped_only`), tariffs, dashboards, asset kinds (a delete that moves assets records how many and
    where to; adding the starter kinds records which), scopes, scans (start and
    finish) and accepted discoveries. Never recorded: passwords and password hashes, source secrets and
    credentials inside a URL (a marker shows that one was set or changed: `secret: set -> changed`, or
@@ -142,7 +184,13 @@ timeout, a 3 second timeout per connector probe, 4 sources browsed at a time. Ta
 In the dev stack, a scope with targets `simulator` and ports `9000, 4840, 5020` finds all three
 simulator protocols.
 
-Who may scan, map and accept results is set by the `sources.*` and `discovery.*` permissions; see
-[Roles and permissions](roles-and-permissions.md).
+Who may scan, map and accept results is set by the `sources.*` and `discovery.*` permissions (removing leftovers needs
+`discovery.edit`, Create assets… `discovery.accept`); see [Roles and permissions](roles-and-permissions.md).
+
+For scripts: removing discovered sources is `POST /api/discovery/sources/remove` with `{"source_ids": [...]}`, 1 to 500 ids in a
+request (more is refused with a 422). It answers which sources were removed and which were skipped, each with the reason `mapped`,
+`manual` or `gone`, and refuses with a 409 and removes nothing while a scan is queued or running. Each scan in `GET /api/scans` carries
+the `targets` and `ports` it covered, and each source in `GET /api/discovery/graph` a `last_scan` (`{scan_id, at}` of the newest scan
+that found it, or `null`).
 
 Related: [Assets and kinds](assets-and-kinds.md), [Storage](storage.md), [Install and run](install-and-run.md), [Field debugging](field-debugging.md), [Adding a connector](adding-a-connector.md)
