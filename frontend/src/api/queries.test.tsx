@@ -1197,6 +1197,25 @@ describe("removing discovered sources (W7r)", () => {
     expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([["POST", "/api/discovery/sources/remove", { source_ids: [3, 4] }]]);
   });
 
+  it("sends a list longer than the route's 500 in calls of 500, in order, and joins the answers (one refetch)", async () => {
+    const calls = mockFetch({
+      "POST /api/discovery/sources/remove": ({ body }) => {
+        const ids = (body as { source_ids: number[] }).source_ids;
+        return { body: { removed: ids.map((id) => ({ id, name: `s${id}` })), skipped: [] } };
+      },
+    });
+    const { wrapper, keysInvalidated } = mounted();
+    const { result } = renderHook(() => useRemoveDiscoveredSources(), { wrapper });
+    const ids = Array.from({ length: 1201 }, (_, i) => i + 1);
+    let joined: { removed: { id: number }[]; skipped: unknown[] } | undefined;
+    await act(async () => { joined = await result.current.mutateAsync(ids); });
+    const sent = calls.map((c) => (c.body as { source_ids: number[] }).source_ids);
+    expect(sent.map((part) => part.length)).toEqual([500, 500, 201]);
+    expect(sent.flat()).toEqual(ids);
+    expect(joined?.removed.map((r) => r.id)).toEqual(ids);
+    expect(keysInvalidated()).toEqual([keys.graph, keys.sources, keys.auditAll]);
+  });
+
   it("refetches the graph, the sources and the audit log once each", async () => {
     mockFetch({ "POST /api/discovery/sources/remove": { body: answer } });
     const { wrapper, keysInvalidated } = mounted();
