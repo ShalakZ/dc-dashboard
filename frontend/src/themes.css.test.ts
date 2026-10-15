@@ -77,6 +77,9 @@ describe.each(combos)("$id, $mode", ({ id, mode }) => {
     ["info banner ink on its tint", () => tok("info-ink"), () => tok("info-tint")],
     ["accent ink on the accent tint (selected, pressed)", () => tok("accent-ink"), () => tok("accent-tint")],
     ["accent on the accent tint (quiet button hover)", () => tok("accent"), () => tok("accent-tint")],
+    // W7s: the open tree row has no tint any more, its bold name is on the tree column's ground (--bg) and, hovered, on --surface
+    ["accent ink on bg (open tree row)", () => tok("accent-ink"), () => tok("bg")],
+    ["accent ink on the surface ground (open tree row, hovered)", () => tok("accent-ink"), () => tok("surface")],
     ["text-2 on the table head ground", () => tok("text-2"), () => tok("surface")],
     ["error text on bg", () => tok("crit"), () => tok("bg")],
     ["warning text on bg", () => tok("warn-ink"), () => tok("bg")],
@@ -124,7 +127,7 @@ describe.each(combos)("$id, $mode", ({ id, mode }) => {
     ["quick find: the active option's ring on the popup", () => tok("accent"), () => tok("bg")],
     ["the ring on bg (focus ring)", () => tok("ring"), () => tok("bg")],
     ["the ring on the accent tint (focus ring on a selected row, the active quick-find option)", () => tok("ring"), () => tok("accent-tint")],
-    ["the marker on the accent tint (selected tree row)", () => tok("accent"), () => tok("accent-tint")],
+    ["the frame on the accent tint (a picked tree row; the open row has no tint)", () => tok("accent"), () => tok("accent-tint")],
     ["the top bar's loading bar on the bar (its marker colour)", () => tok("side-accent"), () => tok("top-bg")],
   ];
   it.each(nonTextPairs)("%s reads at 3:1", (_name, fg, bg) => {
