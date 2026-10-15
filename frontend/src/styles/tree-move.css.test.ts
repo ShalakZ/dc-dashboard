@@ -79,17 +79,44 @@ describe("the Delete button and the narrow pick bar (W7s)", () => {
     expect(found[0].body).not.toMatch(/(^|[;\s])(container-type:\s*(size|normal)|contain:|container:)/); // size would collapse the height; the shorthand would name it
   });
 
-  it("a slot that has Delete is two reserved lines high when the container is narrow: the count (or the hint) on line 1, the buttons on line 2", () => {
+  it("a slot that has Delete is two reserved lines high when the container is narrow: the count (or the hint) and Move to... on line 1, Delete and Clear on line 2", () => {
     const body = narrow(".tree-slot.has-delete");
     expect(body).toContain("height: 64px");
     expect(body).toContain("flex-wrap: wrap");
-    expect(body).toContain("align-content: center");
     expect(body).toMatch(/row-gap:\s*2px/);
-    expect(narrow(".tree-slot.has-delete .tree-slot-text")).toMatch(/flex:\s*0 0 100%/); // the whole first line, so the buttons cannot join it
+    // W7t: line 1 stands still. With something picked there are three flex lines (the break item is the middle one) and with nothing picked two,
+    // so a centred block (align-content: center) would move line 1 by 13px at the first pick; from the top it cannot (7 + 24 + 2 + 0 + 2 + 24 + 5 = 64).
+    expect(body).toMatch(/align-content:\s*flex-start/);
+    expect(body).not.toContain("align-content: center");
+    expect(body).toMatch(/padding-top:\s*7px/);
+    // The text takes the room beside Move to... (it used to be the whole first line, which put every button on the second).
+    const text = narrow(".tree-slot.has-delete .tree-slot-text");
+    expect(text).toMatch(/flex:\s*1 1 0(?![\w%])/);
+    expect(text).not.toMatch(/100%/);
+    expect(text).toMatch(/line-height:\s*24px/); // as high as a button, so line 1 is 24px with or without Move to... and the words stay put
+  });
+
+  it("a zero-height break item forces Delete and Clear onto line 2: it is a flex item of 100% after the order-0 items and before the order-2 buttons", () => {
+    const brk = narrow(".tree-slot.has-delete::after");
+    expect(brk).toMatch(/content:\s*""/);
+    expect(brk).toMatch(/flex:\s*0 0 100%/);
+    expect(brk).toMatch(/height:\s*0(?![\w.])/);
+    expect(brk).toMatch(/order:\s*1(?![\w.])/);
+    expect(narrow(".tree-slot.has-delete .tree-slot-delete")).toMatch(/order:\s*2(?![\w.])/);
+    expect(narrow(".tree-slot.has-delete .tree-slot-clear")).toMatch(/order:\s*2(?![\w.])/);
+  });
+
+  it("the short hint ('Ctrl-click to pick') replaces the long one only in a slot that has Delete in a narrow container; elsewhere the long hint stays", () => {
+    expect(rule(".tree-slot-short")).toMatch(/display:\s*none/); // outside the query: a viewer without Delete, and every wide column
+    expect(rules.find((r) => r.selector === ".tree-slot-short")!.at).toEqual(["@layer w6"]);
+    expect(narrow(".tree-slot.has-delete .tree-slot-long")).toMatch(/display:\s*none/);
+    expect(narrow(".tree-slot.has-delete .tree-slot-short")).toMatch(/display:\s*inline/);
+    // The base rule comes first, so the narrow rule of the same selector weight outranks it by order and by its higher specificity.
+    expect(rules.findIndex((r) => r.selector === ".tree-slot-short")).toBeLessThan(rules.findIndex((r) => r.selector === ".tree-slot.has-delete .tree-slot-short"));
   });
 
   it("the narrow rules name has-delete: a viewer without Delete keeps the single 32px line at every width", () => {
-    for (const r of inNarrow) expect(r.selector, `"${r.selector}"`).toMatch(/^\.tree-slot\.has-delete(\s|$)/);
+    for (const r of inNarrow) expect(r.selector, `"${r.selector}"`).toMatch(/^\.tree-slot\.has-delete(::after|\s|$)/);
     expect(rule(".tree-slot")).toContain("height: 32px");
     expect(rules.filter((r) => r.at.length === 1 && r.selector.includes("has-delete"))).toEqual([]);
   });
@@ -106,7 +133,11 @@ describe("the Delete button and the narrow pick bar (W7s)", () => {
     const order = (selector: string) => rules.findIndex((r) => r.selector === selector);
     const last = order('.node[data-picked].is-selected[data-drop="inside"]');
     expect(last).toBeGreaterThan(-1);
-    for (const selector of [".tree-col > .tree-body", ".tree-slot-delete", ".tree-slot.has-delete", ".tree-slot.has-delete .tree-slot-text"]) {
+    for (const selector of [
+      ".tree-col > .tree-body", ".tree-slot-delete", ".tree-slot-short", ".tree-slot.has-delete", ".tree-slot.has-delete::after",
+      ".tree-slot.has-delete .tree-slot-text", ".tree-slot.has-delete .tree-slot-delete", ".tree-slot.has-delete .tree-slot-clear",
+      ".tree-slot.has-delete .tree-slot-long", ".tree-slot.has-delete .tree-slot-short",
+    ]) {
       expect(order(selector), selector).toBeGreaterThan(last);
     }
     const source = stripComments(readFileSync("src/styles/tree-move.css", "utf8"));
