@@ -1,13 +1,16 @@
 import type { AcceptIn, Asset, GraphModel, GraphPoint, GraphSource, Metric } from "../api/types";
 import { UNGROUPED } from "./graph";
 
-/** What a drag (or a button) offers to map: the points of one cluster, or one point, and the source they belong to. */
+/**
+ * What a drag (or a button) offers to map: the points of one cluster, one point, or several picked points (`points`, W12a), and the
+ * source they belong to.
+ */
 export interface DropPayload {
   source: GraphSource;
   /** Only points that are not mapped yet. */
   points: GraphPoint[];
   label: string;
-  kind: "cluster" | "point";
+  kind: "cluster" | "point" | "points";
 }
 
 const CLUSTER_ID = /^cluster:(\d+):(.+)$/;
@@ -41,6 +44,45 @@ export function dropPayload(model: GraphModel, id: string): DropPayload | null {
     }
   }
   return null;
+}
+
+/** What a drag of several nodes onto an asset offers to map, or why it cannot (W12a, A7). */
+export type MultiDrop = { payload: DropPayload } | { refusal: string };
+
+/**
+ * The payload of several point nodes dragged together, or null when this is not such a drag (fewer than two nodes, or any node that is not a
+ * point: a plain move, as before). A drag that IS of points but cannot map says why, so the page can put the nodes back and tell the person.
+ * A repeated id counts once.
+ */
+export function multiPointDrop(model: GraphModel, ids: readonly string[]): MultiDrop | null {
+  const unique = [...new Set(ids)];
+  if (unique.length < 2) return null;
+  const wanted = new Set<number>();
+  for (const id of unique) {
+    const match = POINT_ID.exec(id);
+    if (!match) return null;
+    wanted.add(Number(match[1]));
+  }
+  const found = new Map<number, { source: GraphSource; point: GraphPoint }>();
+  for (const source of model.sources) {
+    for (const points of [source.ungrouped, ...source.clusters.map((c) => c.points)]) {
+      for (const p of points) if (wanted.has(p.id)) found.set(p.id, { source, point: p });
+    }
+  }
+  const hits = [...wanted].map((id) => found.get(id));
+  const held = hits.filter((hit): hit is { source: GraphSource; point: GraphPoint } => hit !== undefined);
+  if (held.length < hits.length) return { refusal: "Some of the selected points are not in the graph any more. Refresh and try again." };
+  const mapped = held.filter((hit) => hit.point.asset_id !== null).length;
+  if (mapped > 0) {
+    return { refusal: mapped === 1
+      ? "1 of the selected points is already mapped. Unmap it first, or select only unmapped points."
+      : `${mapped} of the selected points are already mapped. Unmap them first, or select only unmapped points.` };
+  }
+  const source = held[0].source;
+  if (held.some((hit) => hit.source.id !== source.id)) {
+    return { refusal: "These points come from different sources. Select the points of one source at a time." };
+  }
+  return { payload: { source, points: held.map((hit) => hit.point), label: source.name, kind: "points" } };
 }
 
 /** The asset a dragged node was dropped on: the first intersecting `asset:{n}` node. */
