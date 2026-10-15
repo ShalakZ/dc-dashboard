@@ -444,7 +444,7 @@ describe("RoleEditor: the keyboard", () => {
     expect(first).not.toBeChecked();
     await userEvent.keyboard(" ");
     expect(first).toBeChecked();
-  });
+  }, 20_000); // 31 Tab presses through the whole catalogue: about 1.6 s alone, over 4 s beside a backend suite and a Docker build
 });
 
 describe("RoleEditor: offering what a permission needs", () => {
