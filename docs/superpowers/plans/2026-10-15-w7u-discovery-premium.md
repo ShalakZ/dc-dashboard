@@ -106,7 +106,7 @@ export interface Guides { vertical: Guide[]; horizontal: Guide[] }
 
 ### Task 2: find, guides and prefs helpers (pure, TDD)
 
-**Interfaces:** the stubs of T0 plus `buildFindIndex(model: GraphModel): FindEntry[]`, `findMatches(index: readonly FindEntry[], query: string, limit?: number): FindResult`, `findPlan(model: GraphModel, open: OpenState, entry: FindEntry, budget?: number): { open: OpenState; targetId: string; note: string | null }`; `alignGuides(dragged: Rect, others: readonly Rect[], opts?: { cap?: number; tolerance?: number }): Guides`; `readSnap(): boolean`, `writeSnap(on: boolean): void`, `SNAP_GRID = 16`.
+**Interfaces:** the stubs of T0 plus `buildFindIndex(model: GraphModel): FindEntry[]`, `findMatches(index: readonly FindEntry[], query: string, limit?: number): FindResult`, `findPlan(model: GraphModel, open: OpenState, entry: FindEntry, budget?: number): { open: OpenState; targetId: string; note: string | null }`; `alignGuides(dragged: Rect, others: readonly Rect[], opts?: { cap?: number; tolerance?: number }): Guides`; `readSnap(): boolean`, `writeSnap(on: boolean): void`, `SNAP_GRID = 8`.
 - [ ] Failing tests first: the index of `graphFixtures` (counts per kind, `text` lowercased, ungrouped points under "Ungrouped"), 6,000 points build and `findMatches` in well under 50 ms (assert `< 200` ms to avoid a flake; record the measured value in the test name), `more` counts the rest, ranking (starts-with, word start, anywhere), multi-term, empty query -> no items, no match; `findPlan` for a source (nothing to open), a group (opens the source), a point in a small group (opens source and group), a point in a group over budget (group stays closed, `targetId` the group node, a note naming the count), ungrouped points, never mutating the `open` passed in; `alignGuides` (left/centre/right/top/middle/bottom equal, within tolerance, just outside, the nearest `cap` only, no others -> empty, spans); `readSnap` default true, `off`, junk, storage that throws.
 - [ ] Implement; targeted vitest; typecheck; ONE commit.
 
@@ -150,7 +150,7 @@ export interface Guides { vertical: Guide[]; horizontal: Guide[] }
 
 ### Task 8: docs (parallel with T7)
 
-- [ ] `docs/screens.md`, `docs/sources-and-discovery.md`, `CHANGELOG.md`, backlog AT, roadmap row, this plan's boxes and log; then `uv run pytest backend/tests/test_docs_links.py backend/tests/test_readme_ops.py` (about 4 minutes, detached or under 9 minutes). ONE commit.
+- [x] `docs/screens.md`, `docs/sources-and-discovery.md`, `CHANGELOG.md`, backlog AT, roadmap row, this plan's boxes and log; then `uv run pytest backend/tests/test_docs_links.py backend/tests/test_readme_ops.py` (about 4 minutes, detached or under 9 minutes). ONE commit.
 
 ## Review Focus (for the plan review and the whole-wave review)
 
@@ -166,3 +166,5 @@ export interface Guides { vertical: Guide[]; horizontal: Guide[] }
 ## Execution log
 
 (Filled in as the wave runs.)
+
+- T8 (docs, 2026-10-15, written while T4 to T7 were still open, from the plan's Decisions and the committed T1 to T3 code): `docs/sources-and-discovery.md` (what each effect does, the keys table, reduced motion, the hint), `docs/screens.md`, `CHANGELOG.md` (W7u, merge commit left as a placeholder), backlog AT, roadmap row O-39. The doc tests are run in the same task (result in `task-8-report.md`). The controller re-reads the docs against T5 to T7 (what the page really does, the measured numbers) before the merge.
