@@ -228,14 +228,15 @@ async def _read(
 @router.get("/billing/months", dependencies=[Depends(require_permission("billing.view"))])
 async def months(db: AsyncSession = Depends(get_db)) -> dict[str, str | None]:
     """Where the Billing month picker starts: the site-local month of the first energy reading of any metered point, or the
-    earliest month that is closed (and not reopened) if that is earlier, so deleting a source or swapping a meter never hides
-    a closed month. The zone is not checked for whole hours; naming a month does not need that."""
+    earliest month that has ever been closed (reopened or not) if that is earlier, so deleting a source or swapping a meter never
+    hides a closed month, and a month that was reopened afterwards can still be opened and closed again. The zone is not checked
+    for whole hours; naming a month does not need that."""
     meters = await load_meters(db, await AssetTree.load(db))
     first = None
     if meters:
         first = await db.scalar(_FIRST_BUCKET, {"ids": sorted({m.point_id for m in meters.values()})})
     data_month = None if first is None else first.astimezone(ZoneInfo(await current_timezone(db))).strftime("%Y-%m")
-    closed_month = await db.scalar(select(func.min(BillingClose.month)).where(BillingClose.reopened_at.is_(None)))
+    closed_month = await db.scalar(select(func.min(BillingClose.month)))
     found = [month for month in (data_month, closed_month) if month is not None]
     return {"first_month": min(found) if found else None}
 

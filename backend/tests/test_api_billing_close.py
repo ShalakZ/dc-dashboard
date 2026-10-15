@@ -573,10 +573,10 @@ async def test_months_keeps_a_closed_month_reachable_after_its_source_is_deleted
     assert (await client.get("/api/billing/months")).json() == {"first_month": MONTH}
     assert (await client.get("/api/billing/months")).status_code == 200
     await reopen(client)
-    assert (await client.get("/api/billing/months")).json() == {"first_month": None}  # nothing keeps it any more
+    assert (await client.get("/api/billing/months")).json() == {"first_month": MONTH}  # a reopened month can still be opened and closed again
 
 
-async def test_months_starts_at_the_earlier_of_the_data_and_an_active_close(client, db):
+async def test_months_starts_at_the_earlier_of_the_data_and_any_close(client, db):
     await build(db)
     await login_as(client, db)
     await db.execute(
@@ -584,11 +584,11 @@ async def test_months_starts_at_the_earlier_of_the_data_and_an_active_close(clie
     )
     assert (await client.get("/api/billing/months")).json() == {"first_month": "2025-12"}
     await db.execute("DELETE FROM billing_closes")
-    await db.execute(  # a reopened close does not count
+    await db.execute(  # a reopened close still counts: its month stays reachable
         "INSERT INTO billing_closes (month, closed_name, timezone, total_kwh, figures, reopened_at, reopened_name, reopen_note) "
         "VALUES ('2025-11', 'Old', 'UTC', 0, '{}', now(), 'Old', 'because')"
     )
-    assert (await client.get("/api/billing/months")).json() == {"first_month": MONTH}
+    assert (await client.get("/api/billing/months")).json() == {"first_month": "2025-11"}
     await db.execute("DELETE FROM billing_closes")
     await db.execute(
         "INSERT INTO billing_closes (month, closed_name, timezone, total_kwh, figures) VALUES ('2026-06', 'Late', 'UTC', 0, '{}')"
