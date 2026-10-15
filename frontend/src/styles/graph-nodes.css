@@ -19,21 +19,21 @@
   .gprogress { position: absolute; left: 0; bottom: 0; height: 3px; max-width: 100%; background: var(--accent); }
 
   /* Path highlight. The wrapper gets has-focus while a path is lit (one DOM change), and only the nodes and edges of the path get lit (the rest keep their identity, so 2,000 nodes do not re-render).
-     The transition is ONE declaration in ONE rule, so it can be dropped without touching the dimming. */
-  .graph-canvas .react-flow__node, .graph-canvas .react-flow__edge { transition: opacity 120ms ease; }
+     The transition is ONE declaration in ONE rule, so it can be dropped without touching the dimming. `.graph-canvas` is never the FIRST compound of a selector here (the clash guard in app.css.test.ts would call the class "bare" in this file and fail graph-tools.css for naming it): the transition is rooted at div.graph-canvas, the rest carry a second class. */
+  div.graph-canvas .react-flow__node, div.graph-canvas .react-flow__edge { transition: opacity 120ms ease; }
   .graph-canvas.has-focus .react-flow__node:not(.lit) { opacity: 0.35; }
   .graph-canvas.has-focus .react-flow__edge:not(.lit) { opacity: 0.25; }
   /* The path itself turns to the accent: the library draws an edge with --xy-edge-stroke, which app.css points at a page token on .react-flow; a nearer declaration wins. */
   .graph-canvas.has-focus .react-flow__edge.lit { --xy-edge-stroke: var(--accent); }
 
-  /* A node that Find has just jumped to: a 2px accent outline for 1.5s (the page removes the class), pulsing outwards twice. Reduced motion keeps the outline and drops the pulse. */
-  .graph-canvas .react-flow__node.flash { outline: 2px solid var(--accent); outline-offset: 3px; animation: gnode-flash 0.75s ease-in-out 2; }
+  /* A node that Find has just jumped to: a 2px accent outline for 1.5s (the page removes the class), pulsing outwards twice. Reduced motion keeps the outline and drops the pulse. !important: the library's UNLAYERED sheet says outline: none on a focused selectable node, and Find focuses the node it flashes. */
+  .react-flow__node.flash { outline: 2px solid var(--accent) !important; outline-offset: 3px; animation: gnode-flash 0.75s ease-in-out 2; }
   @keyframes gnode-flash { 0% { outline-offset: 3px; } 50% { outline-offset: 6px; } 100% { outline-offset: 3px; } }
 
   /* Reduced motion: the global rule in app.css removes TRANSITIONS only. Each animation of this file needs its own off switch; the library's flowing dashes are in its UNLAYERED sheet, which beats a plain declaration of ours, hence !important (an important declaration in a layer beats a normal unlayered one). */
   @media (prefers-reduced-motion: reduce) {
     .gdot-online { animation: none; }
-    .graph-canvas .react-flow__node.flash { animation: none; }
-    .graph-canvas .react-flow__edge.animated path { animation: none !important; }
+    .react-flow__node.flash { animation: none; }
+    .react-flow__edge.animated path { animation: none !important; }
   }
 }

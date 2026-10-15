@@ -35,6 +35,19 @@ describe("the Discovery node styles (W7u)", () => {
     }
   });
 
+  it("never writes .graph-canvas or .graph-page on its own (the clash guard of app.css.test.ts): graph-tools.css owns both, and a class bare here and named there fails that guard", () => {
+    // The part of a selector before its first combinator, per comma-separated part (nothing here has a comma or a space inside a :not()/:is()).
+    const first = (selector: string) => selector.split(",").map((part) => part.trim().split(/[\s>+~]/)[0]);
+    for (const r of rules.filter((x) => !x.at.some((a) => a.startsWith("@keyframes")))) {
+      for (const compound of first(r.selector)) {
+        expect(compound, `"${r.selector}" starts with a bare .graph-canvas`).not.toMatch(/^\.graph-canvas(?::{1,2}[\w-]+(?:\([^)]*\))?|\[[^\]]*\])*$/);
+      }
+    }
+    expect(rules.filter((r) => /graph-page/.test(r.selector)).map((r) => r.selector)).toEqual([]);
+    // ...and it does name .graph-canvas, so the path highlight stays inside the Discovery canvas
+    expect(rules.some((r) => /graph-canvas/.test(r.selector))).toBe(true);
+  });
+
   it("the four dot colours are the status tokens, and the online dot alone pulses", () => {
     expect(rule(".gdot-online")).toMatch(/background:\s*var\(--ok\)/);
     expect(rule(".gdot-offline")).toMatch(/background:\s*var\(--crit\)/);
@@ -80,14 +93,14 @@ describe("the Discovery node styles (W7u)", () => {
   it("the opacity transition is ONE rule with ONE declaration (dropping it must not touch the dimming)", () => {
     const rulesWithTransition = rules.filter((r) => /transition/.test(r.body));
     expect(rulesWithTransition).toHaveLength(1);
-    expect(rulesWithTransition[0].selector).toBe(".graph-canvas .react-flow__node, .graph-canvas .react-flow__edge");
+    expect(rulesWithTransition[0].selector).toBe("div.graph-canvas .react-flow__node, div.graph-canvas .react-flow__edge");
     expect(rulesWithTransition[0].body.match(/:/g)).toHaveLength(1);
     expect(rulesWithTransition[0].body).toMatch(/transition:\s*opacity 120ms/);
   });
 
   it("the found node gets a 2px accent outline and a short pulse", () => {
-    const flash = rule(".graph-canvas .react-flow__node.flash");
-    expect(flash).toMatch(/outline:\s*2px solid var\(--accent\)/);
+    const flash = rule(".react-flow__node.flash");
+    expect(flash).toMatch(/outline:\s*2px solid var\(--accent\) !important/); // the library says outline: none on a focused node, in its unlayered sheet
     expect(flash).toMatch(/animation:\s*gnode-flash [\d.]+s ease-in-out 2\b/);
   });
 
@@ -98,17 +111,17 @@ describe("the Discovery node styles (W7u)", () => {
       const animated = rules
         .filter((r) => /animation\s*:\s*(?!none)/.test(r.body) && !r.at.some((a) => a.includes("prefers-reduced-motion")))
         .map((r) => r.selector);
-      expect(animated.sort()).toEqual([".gdot-online", ".graph-canvas .react-flow__node.flash"]);
+      expect(animated.sort()).toEqual([".gdot-online", ".react-flow__node.flash"]);
       expect(calm(".gdot-online")).toMatch(/animation:\s*none/);
-      expect(calm(".graph-canvas .react-flow__node.flash")).toMatch(/animation:\s*none/);
+      expect(calm(".react-flow__node.flash")).toMatch(/animation:\s*none/);
     });
 
     it("the library's flowing dashes (its own sheet is unlayered) are stopped with !important", () => {
-      expect(calm(".graph-canvas .react-flow__edge.animated path")).toMatch(/animation:\s*none\s*!important/);
+      expect(calm(".react-flow__edge.animated path")).toMatch(/animation:\s*none\s*!important/);
     });
 
     it("the flash keeps its outline, so Find still shows where it went", () => {
-      expect(calm(".graph-canvas .react-flow__node.flash")).not.toMatch(/outline/);
+      expect(calm(".react-flow__node.flash")).not.toMatch(/outline/);
     });
   });
 
