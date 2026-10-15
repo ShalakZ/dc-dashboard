@@ -483,7 +483,7 @@ function LoadingActions({ withClear }: { withClear: boolean }) {
   return (
     <span className="graph-actions-space" aria-hidden="true">
       <button type="button" tabIndex={-1}>Refresh</button>
-      {withClear && <button type="button" tabIndex={-1} className="discovery-clear">Clear unmapped (0)</button>}
+      {withClear && <button type="button" tabIndex={-1}>Clear unmapped (0)</button>}
     </span>
   );
 }

@@ -124,7 +124,8 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
   const add = (id: string, type: string, x: number, y: number, data: Record<string, unknown>, parentShift: XY = NO_SHIFT): XY => {
     const own = ownPlace(id);
     const position = own ? { x: own.x, y: own.y } : { x: x + parentShift.x, y: y + parentShift.y };
-    nodes.push({ id, type, position, data, draggable: true });
+    // No `draggable` of its own: React Flow lets a node's own `draggable: true` beat the canvas-wide `nodesDraggable`, and the page turns that off while a Tidy runs.
+    nodes.push({ id, type, position, data });
     return { x: position.x - x, y: position.y - y };
   };
   const link = (from: string, to: string, extra: Partial<Edge> = {}) => {

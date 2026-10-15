@@ -30,6 +30,7 @@ const flow = vi.hoisted(() => {
 });
 
 // React Flow measures the DOM, which jsdom cannot do: render the nodes plainly and expose the props the page wires up.
+// `data-draggable` is React Flow's own rule for one node (a node's `draggable` beats the canvas-wide `nodesDraggable`; undefined follows it).
 // `drag-{id}` plays a whole drag as React Flow does it (start, a move, the final position change, stop) and ends at `flow.state.dropAt` (7,8 unless a test says otherwise).
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
@@ -45,7 +46,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
             const Node = nodeTypes[n.type];
             const dropped = () => ({ ...n, position: flow.state.dropAt });
             return (
-              <div key={n.id} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} onClick={(e) => onNodeClick?.(e, n)}>
+              <div key={n.id} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)}>
                 <Node id={n.id} data={n.data} />
                 <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
                 <button data-testid={`dragstart-${n.id}`} onClick={(e) => onNodeDragStart?.(e, n, [n])} />
@@ -1347,20 +1348,28 @@ describe("DiscoveryPage Tidy layout, the bar, collapse and expand all (W7t)", ()
   it("nothing can be dragged while a Tidy runs (the question open, the DELETE in flight), and it can again afterwards", async () => {
     const calls = mockFetch({ ...routes("admin", placed()), "DELETE /api/discovery/layout": { status: 204 } });
     const draggable = () => screen.getByTestId("flow").dataset.nodesDraggable;
+    // What React Flow really decides per node: a node's own `draggable` beats the canvas-wide switch, so NO node may carry its own `true`.
+    const nodeFlags = () => [...document.querySelectorAll<HTMLElement>("[data-testid=flow] [data-id]")].map((el) => el.dataset.draggable);
     open();
     await screen.findByText("Plant OPC");
+    await expand("Plant OPC"); // a source with its groups: several nodes
     expect(draggable()).toBe("true");
+    expect(nodeFlags().length).toBeGreaterThan(2);
+    expect(new Set(nodeFlags())).toEqual(new Set(["true"]));
     const held = holdFetch((method, path) => method === "DELETE" && path === "/api/discovery/layout");
     await userEvent.click(tidyButton());
     const dialog = await screen.findByRole("dialog", { name: "Tidy the layout for everyone?" });
     expect(draggable()).toBe("false"); // the question is open
+    expect(new Set(nodeFlags())).toEqual(new Set(["false"])); // and no node can be dragged
     await userEvent.click(within(dialog).getByRole("button", { name: "Tidy for everyone" }));
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(calls_of(calls, "DELETE")).toHaveLength(0); // the DELETE is held: in flight
     expect(draggable()).toBe("false");
+    expect(new Set(nodeFlags())).toEqual(new Set(["false"]));
     held.release();
     await waitFor(() => expect(flow.fitView).toHaveBeenCalled());
     await waitFor(() => expect(draggable()).toBe("true"));
+    expect(new Set(nodeFlags())).toEqual(new Set(["true"]));
     expect(calls_of(calls, "DELETE")).toHaveLength(1);
   });
 

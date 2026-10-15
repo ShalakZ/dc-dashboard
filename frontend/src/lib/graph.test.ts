@@ -22,7 +22,8 @@ describe("buildGraph", () => {
     expect(nodeId.unidentified("10.0.0.9", 8080)).toBe("unid:10.0.0.9:8080");
     const open = { sources: new Set([1]), clusters: new Set([nodeId.cluster(1, "LVP01")]) };
     const { nodes } = buildGraph(model(), open);
-    expect(nodes.every((n) => n.draggable === true)).toBe(true);
+    // Every node is draggable by the canvas's default, and none carries a `draggable` of its own: React Flow lets a node's own `true` beat `nodesDraggable={false}` (the page's switch while Tidy runs).
+    expect(nodes.every((n) => n.draggable === undefined)).toBe(true);
     expect(new Set(nodes.map((n) => n.type))).toEqual(new Set(["source", "cluster", "point", "asset", "unidentified"]));
   });
 
