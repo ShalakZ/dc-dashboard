@@ -350,7 +350,7 @@ function Canvas({ model }: { model: GraphModel }) {
   };
 
   // The panel reads the source from the current model, so it follows a refresh instead of showing stale facts.
-  const selected =selectedId === null ? undefined : model.sources.find((s) => s.id === selectedId);
+  const selected = selectedId === null ? undefined : model.sources.find((s) => s.id === selectedId);
 
   const confirmRemoval = async () => {
     if (!removal) return;

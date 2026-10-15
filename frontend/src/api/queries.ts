@@ -402,7 +402,7 @@ export function useSetStorageDefault() {
 
 export const useScopes = () => useQuery({ queryKey: keys.scopes, queryFn: () => api.get<Scope[]>("/api/scopes") });
 
-/** Needs discovery.edit on the server: callers enable it only for someone who holds it, and only while the new-scope form is open. */
+/** Needs discovery.edit on the server: callers enable it only for someone who holds it, and only while a scope form (new or edit) is open. */
 export const useScopeSuggestions = (enabled: boolean) =>
   useQuery({
     queryKey: keys.suggestions,
