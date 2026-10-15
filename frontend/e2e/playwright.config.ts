@@ -197,12 +197,22 @@ export default defineConfig({
       dependencies: ["w7r"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
-    // LAST: its Tidy layout removes every saved node place of the shared stack and each case clears the layout first, so nothing may come after it that reads a
-    // saved place. w7r (before it) may have removed the discovered Modbus source (Clear unmapped), so w7t scans its own scope in beforeAll to bring it back.
+    // The LAST project that works on the real layout: its Tidy layout removes every saved node place of the shared stack and each case clears the layout first, so
+    // nothing may come after it that reads a saved place from the stack. w7r (before it) may have removed the discovered Modbus source (Clear unmapped), so w7t scans its
+    // own scope in beforeAll to bring it back.
     {
       name: "w7t",
       testMatch: "w7t.spec.ts",
       dependencies: ["w7s"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
+    // WRITES NOTHING and needs no discovery data from the stack: every case answers GET /api/discovery/graph and the layout's PUT and DELETE through page.route from a generated
+    // model (e2e/graphModel.ts, synthetic ids from 9,000,000 up), and any other write the app tries is refused and fails the case. That is why it may stand after w7t,
+    // whose Tidy layout would otherwise matter to it. Its measurements go to .superpowers/sdd/2026-10-15-w7u-discovery-premium/measure.json.
+    {
+      name: "w7u",
+      testMatch: "w7u.spec.ts",
+      dependencies: ["w7t"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
   ],
