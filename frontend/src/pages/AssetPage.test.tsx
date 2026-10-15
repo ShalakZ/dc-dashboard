@@ -3,12 +3,14 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes, useLocation } from "react-router";
 import { keys, useAssets } from "../api/queries";
+import type { Mapping, SummaryMetric } from "../api/types";
 import { PARTIAL_TIP } from "../components/Figure";
 import { formatSiteClock } from "../lib/siteTime";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { iconHtml } from "../test/iconHtml";
 import { renderWithProviders } from "../test/render";
+import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
 import { AssetPage } from "./AssetPage";
 
@@ -730,5 +732,198 @@ describe("AssetPage", () => {
       held.release();
       expect(await screen.findByRole("alert")).toHaveTextContent("the summary is down");
     });
+  });
+});
+
+// Taking a metric off the asset, or moving it to another asset, from the metrics table (W12a). The module's own rules (the order of the
+// requests, the failures, the Undo's checks) are pinned in useMappingActions.test.tsx; these tests are about the page: who sees the menu,
+// what it offers, what it names, and where the focus goes.
+describe("AssetPage mapping actions (W12a)", () => {
+  const stored = (id: number, over: Partial<Mapping> = {}): Mapping => ({ id, point_id: id + 6, asset_id: 4, metric: "active_power_kw", scale: 1, interval_seconds: 10, custom_unit: null, ...over });
+  const POWER = stored(1);
+  const VOLTS = stored(2, { metric: "voltage_v" });
+
+  /** A server over one asset's metrics: a delete or a move takes the row out of the summary the next time it is asked for. */
+  function serve(role: string, { onlyPower = false, mappings = [POWER, VOLTS], refuseMove = false }: { onlyPower?: boolean; mappings?: Mapping[]; refuseMove?: boolean } = {}) {
+    const store = new Map(mappings.map((m) => [m.id, { ...m }]));
+    const rowsFor = (): SummaryMetric[] => [...store.values()]
+      .filter((m) => m.asset_id === 4 && (!onlyPower || m.id === 1))
+      .sort((a, b) => a.point_id - b.point_id)
+      .map((m) => ({ mapping_id: m.id, point_id: m.point_id, metric: m.metric, unit: m.metric === "voltage_v" ? "V" : "kW", value: null, ts: null, quality: null }));
+    const calls = mockFetch({
+      ...routes(null),
+      "GET /api/me": { body: userFor(role, { username: "a" }) },
+      "GET /api/asset-kinds": { body: [] },
+      "GET /api/assets/4/summary": () => ({ body: { ...summary(null), metrics: rowsFor() } }),
+      ...Object.fromEntries([1, 2].flatMap((id) => [
+        [`GET /api/mappings/${id}`, () => (store.has(id) ? { body: store.get(id) } : { status: 404, body: { detail: "mapping not found" } })],
+        [`DELETE /api/mappings/${id}`, () => { store.delete(id); return { status: 204 }; }],
+        [`PATCH /api/mappings/${id}`, ({ body }: { body: unknown }) => {
+          if (refuseMove) return { status: 409, body: { detail: "this point is already mapped, or the asset already has this metric" } };
+          Object.assign(store.get(id)!, body);
+          return { body: store.get(id) };
+        }],
+      ])),
+      "POST /api/mappings": ({ body }) => { const made = { id: 40, ...(body as object) } as Mapping; store.set(made.id, made); return { status: 201, body: made }; },
+    });
+    return { calls, store };
+  }
+  const show = () => {
+    const spy = spyToasts();
+    renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id", toasts: spy.api });
+    return spy;
+  };
+  const menuOf = (name: string) => screen.findByRole("button", { name: `Actions for ${name}` });
+  const choose = async (name: string, item: string) => {
+    await userEvent.click(await menuOf(name));
+    await userEvent.click(await screen.findByRole("menuitem", { name: item }));
+  };
+  const writes = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method !== "GET").map((c) => `${c.method} ${c.path}`);
+
+  it("shows the menu only to a person with assets.edit: a viewer's rows have no Actions button and four cells", async () => {
+    serve("viewer");
+    show();
+    await screen.findByRole("row", { name: /^active_power_kw / });
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".metrics-table thead th")).toHaveLength(4);
+  });
+
+  it("an operator (no assets.edit) has none either", async () => {
+    serve("operator");
+    show();
+    await screen.findByRole("row", { name: /^active_power_kw / });
+    expect(screen.queryByRole("button", { name: /^Actions for / })).not.toBeInTheDocument();
+  });
+
+  it("gives an admin a menu on every row: Unmap… (danger) and Move to another asset…", async () => {
+    serve("admin");
+    show();
+    await userEvent.click(await menuOf("voltage_v"));
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Unmap…", "Move to another asset…"]);
+    expect(screen.getByRole("menuitem", { name: "Unmap…" })).toHaveClass("danger-item");
+    expect(document.querySelectorAll(".metrics-table thead th")).toHaveLength(5);
+  });
+
+  it("Unmap asks first, naming the metric and the asset; Cancel sends nothing", async () => {
+    const { calls } = serve("admin");
+    show();
+    await choose("active_power_kw", "Unmap…");
+    const dialog = await screen.findByRole("dialog", { name: 'Unmap "active_power_kw" from Panel 1?' });
+    expect(dialog).toHaveTextContent("Billing for months that are still open is recalculated without it; closed months keep their billed figures.");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it("Unmap reads the mapping, deletes it, toasts with an Undo, and the row goes", async () => {
+    const { calls } = serve("admin");
+    const spy = show();
+    await choose("voltage_v", "Unmap…");
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(calls.filter((c) => c.path === "/api/mappings/2").map((c) => c.method)).toEqual(["GET", "DELETE"]);
+    expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Unmapped 1 point from Panel 1.", options: { durationMs: 10_000, action: { label: "Undo" } } });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Actions for voltage_v" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Actions for active_power_kw" })).toBeInTheDocument();
+  });
+
+  it("Undo puts back what was read: the point, the metric, the scale and the interval", async () => {
+    const odd = stored(2, { metric: "voltage_v", scale: 0.001, interval_seconds: 60 });
+    const { calls } = serve("admin", { mappings: [POWER, odd] });
+    const spy = show();
+    await choose("voltage_v", "Unmap…");
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    act(() => spy.calls[0].options!.action!.onAction());
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/mappings")?.body).toEqual({
+      point_id: 8, asset_id: 4, metric: "voltage_v", scale: 0.001, interval_seconds: 60, custom_unit: null,
+    });
+    expect(spy.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+    expect(await menuOf("voltage_v")).toBeInTheDocument(); // the summary is fetched again, so the row is back
+  });
+
+  it("Move lists the other assets (not this one) and patches the mapping to the one chosen", async () => {
+    const { calls } = serve("admin");
+    const spy = show();
+    await choose("voltage_v", "Move to another asset…");
+    const dialog = await screen.findByRole("dialog", { name: 'Move "voltage_v" to another asset' });
+    const options = within(dialog).getAllByRole("option").map((o) => o.textContent!.replace(/ /g, "").trim());
+    expect(options).toEqual(["(choose)", "MV2", "Hall 1", "Rack A", "Rack B"]);
+    expect(within(dialog).getByRole("button", { name: "Move" })).toBeDisabled();
+    await userEvent.selectOptions(within(dialog).getByLabelText("Move to"), "5");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(calls.filter((c) => c.path === "/api/mappings/2").map((c) => [c.method, c.body])).toEqual([["GET", undefined], ["PATCH", { asset_id: 5 }]]);
+    expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Moved 1 point to Rack A.", options: { action: { label: "Undo" } } });
+    act(() => spy.calls[0].options!.action!.onAction());
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(calls.filter((c) => c.method === "PATCH").map((c) => c.body)).toEqual([{ asset_id: 5 }, { asset_id: 4 }]);
+  });
+
+  it("a clash the server refuses is said with the asset and the metric", async () => {
+    serve("admin", { refuseMove: true });
+    const spy = show();
+    await choose("voltage_v", "Move to another asset…");
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Move to"), "5");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toEqual({ kind: "error", text: '"voltage_v" could not be moved: Rack A already has voltage_v.' });
+  });
+
+  describe("focus after a change: the row and its button are gone, so it lands on something named", () => {
+    const unmap = async (name: string) => {
+      await choose(name, "Unmap…");
+      await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
+    };
+
+    it("the next row's menu button after an unmap of the first row", async () => {
+      serve("admin");
+      show();
+      await unmap("active_power_kw");
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Actions for active_power_kw" })).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("button", { name: "Actions for voltage_v" })).toHaveFocus());
+    });
+
+    it("the previous row's menu button after an unmap of the last row", async () => {
+      serve("admin");
+      show();
+      await unmap("voltage_v");
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Actions for voltage_v" })).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("button", { name: "Actions for active_power_kw" })).toHaveFocus());
+    });
+
+    it("the Metrics heading after a move of the only row, which can take the focus (tabindex -1)", async () => {
+      serve("admin", { onlyPower: true });
+      show();
+      await choose("active_power_kw", "Move to another asset…");
+      const dialog = await screen.findByRole("dialog");
+      await userEvent.selectOptions(within(dialog).getByLabelText("Move to"), "5");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+      const heading = screen.getByRole("heading", { name: "Metrics" });
+      expect(heading).toHaveAttribute("tabindex", "-1");
+      await waitFor(() => expect(screen.getByText("No metrics are mapped to this asset.")).toBeInTheDocument());
+      await waitFor(() => expect(heading).toHaveFocus());
+    });
+
+    it("the same row when the change was refused: nothing moved, so its button keeps the focus", async () => {
+      serve("admin", { refuseMove: true });
+      show();
+      await choose("voltage_v", "Move to another asset…");
+      const dialog = await screen.findByRole("dialog");
+      await userEvent.selectOptions(within(dialog).getByLabelText("Move to"), "5");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("button", { name: "Actions for voltage_v" })).toHaveFocus());
+    });
+  });
+
+  it("while the asset loads, a person who can edit sees the menu column drawn too (nothing shifts when the table lands)", async () => {
+    serve("admin");
+    const held = holdFetch((method, path) => method === "GET" && path === "/api/assets/4/summary");
+    show();
+    await waitFor(() => expect(document.querySelectorAll(".sk-table thead th")).toHaveLength(5));
+    held.release();
+    await menuOf("voltage_v");
   });
 });

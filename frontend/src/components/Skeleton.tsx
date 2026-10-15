@@ -347,8 +347,9 @@ export function FleetSkeleton({ label }: { label: string }) {
 /**
  * The asset page under the workspace's pane: the region IS the page's `div.asset-page`, so `.asset-page > h2` styles the two heading
  * placeholders. The header carries crumbs, the icon block and the sub line; three tiles without notes; the trend frame; the metrics table.
+ * `canEdit` (assets.edit): the loaded table has a fifth column, the row menu, so the placeholder draws it as a narrow one (the 56px the menu button and its padding take).
  */
-export function AssetSkeleton({ label }: { label: string }) {
+export function AssetSkeleton({ label, canEdit }: { label: string; canEdit?: boolean }) {
   return (
     <SkeletonRegion label={label} className="asset-page">
       <PageHeaderSkeleton crumbs icon sub />
@@ -356,7 +357,7 @@ export function AssetSkeleton({ label }: { label: string }) {
       <h2 aria-hidden="true"><Skeleton width="6ch" /></h2>
       <TrendSkeleton />
       <h2 aria-hidden="true"><Skeleton width="8ch" /></h2>
-      <TableSkeleton columns={4} rows={3} />
+      <TableSkeleton columns={canEdit ? 5 : 4} widths={canEdit ? [null, null, null, null, 56] : undefined} rows={3} />
     </SkeletonRegion>
   );
 }
