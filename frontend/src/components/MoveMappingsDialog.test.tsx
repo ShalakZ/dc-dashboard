@@ -32,7 +32,9 @@ function setup(props: Partial<Parameters<typeof MoveMappingsDialog>[0]> = {}) {
   const moveButton = () => within(dialog).getByRole("button", { name: "Move" });
   return { onConfirm, onCancel, dialog, select, moveButton };
 }
-const optionTexts = (select: HTMLSelectElement) => Array.from(select.options).map((o) => o.textContent!.replace(/^ +/, (lead) => "_".repeat(lead.length)));
+// The indent is non-breaking spaces (AssetPicker's assetOptions): a browser strips the leading ordinary spaces of an option. Shown here as "_".
+const NBSP = String.fromCodePoint(0xa0);
+const optionTexts = (select: HTMLSelectElement) => Array.from(select.options).map((o) => o.textContent!.replace(new RegExp(`^${NBSP}+`), (lead) => "_".repeat(lead.length)));
 
 describe("MoveMappingsDialog", () => {
   it("is a primary confirmation with the title, the billing sentence and a labelled select of the assets in tree order, indented", () => {
@@ -42,6 +44,21 @@ describe("MoveMappingsDialog", () => {
     // Panel 1 is where the rows are now, so it is not offered; the tree order and the indent by depth stay.
     expect(optionTexts(select())).toEqual(["(choose)", "Site", "__Room 1", "____Panel 2", "__Aisle B"]);
     expect(within(dialog).getByRole("button", { name: "Move" })).toHaveClass("primary");
+  });
+
+  it("tells two assets of the same name apart, as the other asset pickers do (the parent path, then the id), and keeps the choice by value", async () => {
+    const twin = [
+      { id: 1, parent_id: null, name: "Room 1", kind: "room" },
+      { id: 2, parent_id: null, name: "Room 2", kind: "room" },
+      { id: 3, parent_id: 1, name: "Panel", kind: "panel" },
+      { id: 4, parent_id: 2, name: "Panel", kind: "panel" },
+    ];
+    const { select, onConfirm, moveButton } = setup({ assets: twin, rows: [row(10, "kW", "active_power_kw", 1)] });
+    // Room 1 is where the row is, so it is not offered; its Panel keeps its indent.
+    expect(optionTexts(select())).toEqual(["(choose)", "__Panel (Room 1)", "Room 2", "__Panel (Room 2)"]);
+    await userEvent.selectOptions(select(), "4");
+    await userEvent.click(moveButton());
+    expect(onConfirm).toHaveBeenCalledWith(4);
   });
 
   it("names a single point and a given subject in the title", () => {

@@ -18,12 +18,17 @@ export const GONE_TEXT = "Those mappings were already gone.";
 
 /** One mapping a person acted on. `name` is what a sentence calls it (a point's name, or a metric); `assetId` is where the page believes it is. */
 export interface MappingRef { id: number; name: string; assetId: number }
-/** `reason` is a full sentence ending in a full stop. */
-export interface Failure { name: string; reason: string; status?: number }
+/**
+ * `reason` is a full sentence ending in a full stop. `unknown`: the write got no answer (or only a proxy's) and could not be checked afterwards,
+ * so it may have gone through; the item is in the Undo list all the same (the Undo runners check before they write).
+ */
+export interface Failure { name: string; reason: string; status?: number; unknown?: true }
 interface Stop { failed: Failure | null; notTried: number }
 
-export interface UnmapResult extends Stop { removed: Mapping[]; gone: number }
+/** `removed` includes the mapping of an `unknown` failure (it is the last one). `skipped` are the names of mappings that were moved since the confirmation, so they were left alone. */
+export interface UnmapResult extends Stop { removed: Mapping[]; skipped: string[]; gone: number }
 export interface MovedOne { id: number; name: string; from: number; to: number }
+/** `moved` includes the mapping of an `unknown` failure (it is the last one). */
 export interface MoveResult extends Stop { moved: MovedOne[]; unchanged: number; gone: number }
 /** The result of an Undo. `skipped` are the names of mappings that were changed since, so nothing was undone for them. */
 export interface PutBackResult extends Stop { done: number; skipped: string[]; gone: number }
@@ -74,13 +79,15 @@ export function reasonOf(error: unknown, step: Step = "other"): string {
   if (isUnreachable(error)) return withStop(error.message);
   if (error.status === 401) return "Your session has ended. Sign in again.";
   if (error.status === 403) return "Your role may not change mappings.";
-  if (error.status === 409 && step !== "other") return "It is mapped again, or the asset already has that metric.";
+  // A PATCH keeps the point, so a move can only meet the asset's one-of-each-metric rule; a create can meet that or the point being mapped again.
+  if (error.status === 409 && step === "move") return "The asset already has that metric.";
+  if (error.status === 409 && step === "create") return "It is mapped again, or the asset already has that metric.";
   if (error.status === 404 && step !== "other") return goneThing(error.detail);
   return withStop(upperFirst(error.message));
 }
 
-const failure = (name: string, error: unknown, step: Step): Failure => ({
-  name, reason: reasonOf(error, step), ...(error instanceof ApiError ? { status: error.status } : {}),
+const failure = (name: string, error: unknown, step: Step, unknown = false): Failure => ({
+  name, reason: reasonOf(error, step), ...(error instanceof ApiError ? { status: error.status } : {}), ...(unknown ? { unknown: true as const } : {}),
 });
 
 /** The reply, or null when the server says the thing is not there. `isGone` decides which 404 means that. */
@@ -95,13 +102,20 @@ async function attempt<T>(call: () => Promise<T>, isGone: (error: ApiError) => b
 /** A PATCH answers 404 for the mapping AND for the asset it is moved to: only the first means "already gone". */
 const mappingGone = (error: ApiError) => error.status === 404 && error.detail === "mapping not found";
 
+/** A write that got no answer and could not be checked: thrown out of one item so that `eachOne` words it "may or may not". */
+class Unsure {
+  readonly error: unknown;
+  constructor(error: unknown) { this.error = error; }
+}
+
 /** Runs `work` for each item in order and stops at the first that throws: the failure is named and the rest counted. */
 async function eachOne<T>(items: readonly T[], nameOf: (item: T) => string, step: Step, work: (item: T) => Promise<void>): Promise<Stop> {
   for (let at = 0; at < items.length; at += 1) {
     try {
       await work(items[at]);
     } catch (error) {
-      return { failed: failure(nameOf(items[at]), error, step), notTried: items.length - at - 1 };
+      const unsure = error instanceof Unsure;
+      return { failed: failure(nameOf(items[at]), unsure ? error.error : error, step, unsure), notTried: items.length - at - 1 };
     }
   }
   return { failed: null, notTried: 0 };
@@ -109,35 +123,79 @@ async function eachOne<T>(items: readonly T[], nameOf: (item: T) => string, step
 
 const readOne = (id: number) => api.get<Mapping>(`/api/mappings/${id}`);
 
+/**
+ * One write on mapping `id`: "gone" when the server says it is not there (`isGone`), else "done". A write that got no answer, or only a proxy's
+ * (502/503/504), may have gone through all the same, so the mapping is read once: `went(now)` (null = not there) says whether it shows the
+ * write's end state, and then the write counts as done; if not it failed as it said. A read that fails too leaves the outcome unknown: `keep()`
+ * puts the item in the Undo list (the Undo runners check before they write) and `Unsure` ends the item. Any other error is a refusal.
+ */
+async function write(
+  call: () => Promise<unknown>,
+  id: number,
+  { went, keep = () => undefined, isGone }: { went: (now: Mapping | null) => boolean; keep?: () => void; isGone?: (error: ApiError) => boolean },
+): Promise<"done" | "gone"> {
+  try {
+    return (await attempt(call, isGone)) === null ? "gone" : "done";
+  } catch (error) {
+    if (!isUnreachable(error)) throw error;
+    let now: Mapping | null;
+    try {
+      now = (await attempt(() => readOne(id)))?.value ?? null;
+    } catch {
+      keep();
+      throw new Unsure(error);
+    }
+    if (went(now)) return "done";
+    throw error;
+  }
+}
+
 // ---- the runners --------------------------------------------------------------------------------------------------------------------
 
-/** Takes each mapping off its asset: GET, then DELETE. `removed` holds the mappings AS READ, the values an Undo needs. */
+/**
+ * Takes each mapping off its asset: GET, then DELETE. `removed` holds the mappings AS READ, the values an Undo needs. A mapping that is no longer
+ * on the asset the page named (it was moved since the person confirmed) is NOT deleted: the confirmation and the toast would name the wrong asset,
+ * and billing for another asset would change without anyone having agreed to it. It is named in `skipped`.
+ */
 export async function unmapMappings(refs: readonly MappingRef[]): Promise<UnmapResult> {
   const removed: Mapping[] = [];
+  const skipped: string[] = [];
   let gone = 0;
   const stop = await eachOne(refs, (r) => r.name, "other", async (item) => {
     const read = await attempt(() => readOne(item.id));
     if (read === null) { gone += 1; return; }
-    const deleted = await attempt(() => api.del(`/api/mappings/${item.id}`));
-    if (deleted === null) { gone += 1; return; }
-    removed.push(read.value);
+    if (read.value.asset_id !== item.assetId) { skipped.push(item.name); return; }
+    const outcome = await write(() => api.del(`/api/mappings/${item.id}`), item.id, { went: (now) => now === null, keep: () => removed.push(read.value) });
+    if (outcome === "gone") gone += 1;
+    else removed.push(read.value);
   });
-  return { removed, gone, ...stop };
+  return { removed, skipped, gone, ...stop };
 }
 
-/** Undo of an unmap: creates each mapping again with exactly the values read before it was deleted (the id is a new one). */
+/**
+ * Undo of an unmap: creates each mapping again with exactly the values read before it was deleted (the id is a new one). A POST that got no answer
+ * cannot be read back (the new mapping has no id we know), so it stops as unknown and the sentence tells the person to look.
+ */
 export async function restoreMappings(removed: readonly Mapping[], nameOf: (m: Mapping) => string): Promise<PutBackResult> {
   let done = 0;
   const stop = await eachOne(removed, nameOf, "create", async (m) => {
-    await api.post<Mapping>("/api/mappings", {
-      point_id: m.point_id, asset_id: m.asset_id, metric: m.metric, scale: m.scale, interval_seconds: m.interval_seconds, custom_unit: m.custom_unit,
-    });
+    try {
+      await api.post<Mapping>("/api/mappings", {
+        point_id: m.point_id, asset_id: m.asset_id, metric: m.metric, scale: m.scale, interval_seconds: m.interval_seconds, custom_unit: m.custom_unit,
+      });
+    } catch (error) {
+      throw isUnreachable(error) ? new Unsure(error) : error;
+    }
     done += 1;
   });
   return { done, skipped: [], gone: 0, ...stop };
 }
 
-/** Moves each mapping to `toAssetId`: GET, then PATCH asset_id unless it is there already. A clash (409) changes nothing for that mapping and stops the batch. */
+/**
+ * Moves each mapping to `toAssetId`: GET, then PATCH asset_id unless it is there already. A clash (409) changes nothing for that mapping and stops
+ * the batch. It does NOT check that the mapping is still on the asset the page named, as `unmapMappings` does: the end state a move asks for is
+ * the target the person chose, wherever the mapping is now, and `from` is recorded as read so the Undo puts it back where it really was.
+ */
 export async function moveMappings(refs: readonly MappingRef[], toAssetId: number): Promise<MoveResult> {
   const moved: MovedOne[] = [];
   let unchanged = 0;
@@ -146,9 +204,12 @@ export async function moveMappings(refs: readonly MappingRef[], toAssetId: numbe
     const read = await attempt(() => readOne(item.id));
     if (read === null) { gone += 1; return; }
     if (read.value.asset_id === toAssetId) { unchanged += 1; return; }
-    const patched = await attempt(() => api.patch<Mapping>(`/api/mappings/${item.id}`, { asset_id: toAssetId }), mappingGone);
-    if (patched === null) { gone += 1; return; }
-    moved.push({ id: item.id, name: item.name, from: read.value.asset_id, to: toAssetId });
+    const entry: MovedOne = { id: item.id, name: item.name, from: read.value.asset_id, to: toAssetId };
+    const outcome = await write(() => api.patch<Mapping>(`/api/mappings/${item.id}`, { asset_id: toAssetId }), item.id, {
+      went: (now) => now?.asset_id === toAssetId, keep: () => moved.push(entry), isGone: mappingGone,
+    });
+    if (outcome === "gone") gone += 1;
+    else moved.push(entry);
   });
   return { moved, unchanged, gone, ...stop };
 }
@@ -162,9 +223,11 @@ export async function moveBack(moved: readonly MovedOne[]): Promise<PutBackResul
     const read = await attempt(() => readOne(item.id));
     if (read === null) { gone += 1; return; }
     if (read.value.asset_id !== item.to) { skipped.push(item.name); return; }
-    const patched = await attempt(() => api.patch<Mapping>(`/api/mappings/${item.id}`, { asset_id: item.from }), mappingGone);
-    if (patched === null) { gone += 1; return; }
-    done += 1;
+    const outcome = await write(() => api.patch<Mapping>(`/api/mappings/${item.id}`, { asset_id: item.from }), item.id, {
+      went: (now) => now?.asset_id === item.from, isGone: mappingGone,
+    });
+    if (outcome === "gone") gone += 1;
+    else done += 1;
   });
   return { done, skipped, gone, ...stop };
 }
@@ -182,33 +245,39 @@ export async function deleteMappings(made: readonly { id: number; assetId: numbe
     const read = await attempt(() => readOne(item.id));
     if (read === null) { gone += 1; return; }
     if (read.value.asset_id !== item.assetId) { skipped.push(nameOf(item)); return; }
-    const deleted = await attempt(() => api.del(`/api/mappings/${item.id}`));
-    if (deleted === null) { gone += 1; return; }
-    done += 1;
+    const outcome = await write(() => api.del(`/api/mappings/${item.id}`), item.id, { went: (now) => now === null });
+    if (outcome === "gone") gone += 1;
+    else done += 1;
   });
   return { done, skipped, gone, ...stop };
 }
 
 // ---- clashes on the target ----------------------------------------------------------------------------------------------------------
 
-interface ConflictRow { id: number; name: string; metric: Metric }
+/** A row to move: `assetId` is where it is now. */
+interface ConflictRow { id: number; name: string; metric: Metric; assetId: number }
 
-/** An asset has each metric once, `custom` any number of times. */
-function conflictGroups(rows: readonly ConflictRow[], taken: ReadonlySet<Metric>): { onTarget: ConflictRow[]; shared: ConflictRow[] } {
+/**
+ * An asset has each metric once, `custom` any number of times. A row that is on the target already does not move, so it is left out here and
+ * cannot clash with the target (its metric still counts as taken, through `taken`): the one place that rule lives.
+ */
+function conflictGroups(rows: readonly ConflictRow[], taken: ReadonlySet<Metric>, targetId: number): { moving: ConflictRow[]; onTarget: ConflictRow[]; shared: ConflictRow[] } {
+  const moving = rows.filter((r) => r.assetId !== targetId);
   const counts = new Map<Metric, number>();
-  for (const r of rows) if (r.metric !== "custom") counts.set(r.metric, (counts.get(r.metric) ?? 0) + 1);
-  const plain = rows.filter((r) => r.metric !== "custom");
+  for (const r of moving) if (r.metric !== "custom") counts.set(r.metric, (counts.get(r.metric) ?? 0) + 1);
+  const plain = moving.filter((r) => r.metric !== "custom");
   return {
+    moving,
     onTarget: plain.filter((r) => taken.has(r.metric)),
     shared: plain.filter((r) => !taken.has(r.metric) && (counts.get(r.metric) ?? 0) > 1),
   };
 }
 
-/** Names of the rows that would put a non-custom metric on the target twice: the target has it already, or two of the rows share it. */
-export function moveConflicts(rows: readonly ConflictRow[], taken: ReadonlySet<Metric>): string[] {
-  const { onTarget, shared } = conflictGroups(rows, taken);
+/** Names of the rows that would put a non-custom metric on the target twice: the target has it already, or two of the rows that move share it. */
+export function moveConflicts(rows: readonly ConflictRow[], taken: ReadonlySet<Metric>, targetId: number): string[] {
+  const { moving, onTarget, shared } = conflictGroups(rows, taken, targetId);
   const clash = new Set([...onTarget, ...shared]);
-  return rows.filter((r) => clash.has(r)).map((r) => r.name);
+  return moving.filter((r) => clash.has(r)).map((r) => r.name);
 }
 
 const quoted = (names: readonly string[]) => {
@@ -217,8 +286,8 @@ const quoted = (names: readonly string[]) => {
 };
 
 /** The sentence that says why a move cannot go ahead (it keeps Move off), or null when nothing clashes. */
-export function moveConflictText(rows: readonly ConflictRow[], taken: ReadonlySet<Metric>, assetName: string): string | null {
-  const { onTarget, shared } = conflictGroups(rows, taken);
+export function moveConflictText(rows: readonly ConflictRow[], taken: ReadonlySet<Metric>, targetId: number, assetName: string): string | null {
+  const { onTarget, shared } = conflictGroups(rows, taken, targetId);
   const parts: string[] = [];
   if (onTarget.length > 0) parts.push(`${quoted(onTarget.map((r) => r.name))} would clash: ${assetName} already has ${onTarget.length === 1 ? "that metric" : "those metrics"}.`);
   if (shared.length > 0) parts.push(`${quoted(shared.map((r) => r.name))} would clash: they map the same metric, and an asset can have each metric once.`);
@@ -241,8 +310,10 @@ export function isContainerKind(kind: string, kinds: ReadonlyArray<{ name: strin
 /** "Room 1 is a room; meters usually belong to a Panel or Rack. Map here anyway?" for an asset that is a place; null for any other. Never blocks. */
 export function containerNote(asset: { name: string; kind: string }, kinds: ReadonlyArray<{ name: string; icon: string }> | undefined, verb: "Map" | "Move"): string | null {
   if (!isContainerKind(asset.kind, kinds)) return null;
-  const noun = asset.kind.trim().replace(/\s+/g, " ").toLowerCase();
-  return `${asset.name} is ${/^[aeiou]/.test(noun) ? "an" : "a"} ${noun}; meters usually belong to a Panel or Rack. ${verb} here anyway?`;
+  // The kind as typed, except that a capital first letter goes down unless the second is a capital too: "Room" is a room, "UPS room" and "LV room" keep their capitals.
+  const typed = asset.kind.trim().replace(/\s+/g, " ");
+  const noun = typed.length > 1 && typed[1] !== typed[1].toLowerCase() ? typed : typed.charAt(0).toLowerCase() + typed.slice(1);
+  return `${asset.name} is ${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}; meters usually belong to a Panel or Rack. ${verb} here anyway?`;
 }
 
 // ---- the words ----------------------------------------------------------------------------------------------------------------------
@@ -278,15 +349,34 @@ export function moveMessage(count: number, asset?: string): string {
   return `Billing for months that are still open is recalculated with ${count === 1 ? "it" : "them"} under ${asset ?? "the asset you choose"}; closed months keep their billed figures.`;
 }
 
+/**
+ * How a batch stopped: `"B" could not be moved: <reason>`, or, when the write got no answer and could not be checked, that it may or may not have
+ * been. `look`: nothing can read it back (a restore makes a mapping with a new id), so the person is told to check the asset.
+ */
+function stoppedText(failed: Failure, verb: string, look = false): string {
+  if (!failed.unknown) return `"${failed.name}" could not be ${verb}: ${failed.reason}`;
+  if (look) return `"${failed.name}" may have been ${verb}: ${failed.reason} Check the asset before you try again.`;
+  return `"${failed.name}" may or may not have been ${verb}: ${failed.reason}`;
+}
+
+/** How many of a batch's Undo list were surely done: a failure of unknown outcome keeps its own item in the list, as the last one. */
+const surely = (listed: number, failed: Failure | null) => listed - (failed?.unknown ? 1 : 0);
+
+const movedSince = (names: readonly string[]) =>
+  names.length === 0 ? "" : ` ${quoted(names)} ${wasWere(names.length)} moved since, so ${names.length === 1 ? "it was" : "they were"} left alone.`;
+
 /** What an unmap toast says. `total` is how many mappings were asked for; `where` is "Room 1" or "2 assets". */
 export function unmapOutcome(result: UnmapResult, where: string, total: number): Outcome {
-  const done = result.removed.length;
+  const done = surely(result.removed.length, result.failed);
+  const tail = `${movedSince(result.skipped)}${goneText(result.gone)}`;
   if (result.failed) {
     const head = done > 0 ? `Unmapped ${done} of ${total}. ` : "";
-    return { kind: "error", text: `${head}"${result.failed.name}" could not be unmapped: ${result.failed.reason}${notTriedText(result.notTried)}` };
+    return { kind: "error", text: `${head}${stoppedText(result.failed, "unmapped")}${notTriedText(result.notTried)}${tail}` };
   }
-  if (done === 0) return { kind: "info", text: GONE_TEXT };
-  return { kind: "success", text: `Unmapped ${points(done)} from ${where}.${goneText(result.gone)}` };
+  const kind = result.skipped.length > 0 ? "info" : "success";
+  if (done > 0) return { kind, text: `Unmapped ${points(done)} from ${where}.${tail}` };
+  if (result.skipped.length > 0) return { kind, text: tail.trim() };
+  return { kind: "info", text: GONE_TEXT };
 }
 
 /**
@@ -294,15 +384,15 @@ export function unmapOutcome(result: UnmapResult, where: string, total: number):
  * says the module's own sentence, which does not know them.
  */
 export function moveOutcome(result: MoveResult, total: number, target: string, metric?: Metric): Outcome {
-  const done = result.moved.length;
+  const done = surely(result.moved.length, result.failed);
+  const there = result.unchanged > 0 ? ` ${result.unchanged} ${wasWere(result.unchanged)} already there.` : "";
   if (result.failed) {
     const clash = result.failed.status === 409 && metric !== undefined && metric !== "custom";
-    const reason = clash ? `${target} already has ${metric}.` : result.failed.reason;
+    const failed = clash ? { ...result.failed, reason: `${target} already has ${metric}.` } : result.failed;
     const head = done > 0 ? `Moved ${done} of ${total}. ` : "";
-    return { kind: "error", text: `${head}"${result.failed.name}" could not be moved: ${reason}${notTriedText(result.notTried)}` };
+    return { kind: "error", text: `${head}${stoppedText(failed, "moved")}${notTriedText(result.notTried)}${there}${goneText(result.gone)}` };
   }
   if (done > 0) {
-    const there = result.unchanged > 0 ? ` ${result.unchanged} ${wasWere(result.unchanged)} already there.` : "";
     return { kind: "success", text: `Moved ${points(done)} to ${target}.${there}${goneText(result.gone)}` };
   }
   if (result.unchanged > 0 && result.gone === 0) return { kind: "info", text: `Already on ${target}. Nothing changed.` };
@@ -327,15 +417,14 @@ export function undoOutcome(kind: UndoKind, result: PutBackResult, total: number
   const unmapping = kind === "deleteMade";
   const head = (n: number) => (unmapping ? `Unmapped ${points(n)}` : `Put back ${n} mapping${n === 1 ? "" : "s"}`);
   const tail = `${changedSince(result.skipped)}${goneText(result.gone)}`;
+  // Only an unmap leaves assets behind, and they stay whatever else happened (a failure, nothing done), so the person is always told.
+  const stays = unmapping && newAssets.length > 0 ? ` ${staysText(newAssets)}` : "";
   if (result.failed) {
     const verbed = kind === "restore" ? "restored" : unmapping ? "unmapped" : "moved back";
     const lead = result.done > 0 ? `${unmapping ? "Unmapped" : "Put back"} ${result.done} of ${total}. ` : "";
-    return { kind: "error", text: `${lead}"${result.failed.name}" could not be ${verbed}: ${result.failed.reason}${notTriedText(result.notTried)}${tail}` };
+    return { kind: "error", text: `${lead}${stoppedText(result.failed, verbed, kind === "restore")}${notTriedText(result.notTried)}${stays}${tail}` };
   }
-  if (result.done > 0) {
-    const stays = unmapping && newAssets.length > 0 ? ` ${staysText(newAssets)}` : "";
-    return { kind: result.skipped.length > 0 ? "info" : "success", text: `${head(result.done)}.${stays}${tail}` };
-  }
-  if (result.skipped.length > 0) return { kind: "info", text: tail.trim() };
-  return { kind: "info", text: GONE_TEXT };
+  if (result.done > 0) return { kind: result.skipped.length > 0 ? "info" : "success", text: `${head(result.done)}.${stays}${tail}` };
+  if (result.skipped.length > 0) return { kind: "info", text: `${stays}${tail}`.trim() };
+  return { kind: "info", text: `${GONE_TEXT}${stays}` };
 }

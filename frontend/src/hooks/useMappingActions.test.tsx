@@ -1,6 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState, type ReactElement } from "react";
 import { api } from "../api/client";
 import { keys } from "../api/queries";
 import type { Mapping, Metric } from "../api/types";
@@ -78,14 +79,29 @@ function mappingRoutes(store: Map<number, Mapping>, inject: (method: string, pat
   return routes;
 }
 
-function setup(store: Map<number, Mapping>, { role = "admin", inject, takenFor }: { role?: string; inject?: Parameters<typeof mappingRoutes>[1]; takenFor?: (assetId: number) => ReadonlySet<Metric> } = {}) {
+/** A page that can go: the probes stay mounted (so the refreshes still show in the fetch count) while the host that raised the action unmounts. */
+let leave: () => void = () => undefined;
+function Host({ capture }: { capture: (actions: Actions) => void }) {
+  const actions = useMappingActions({ assets: ASSETS, kinds: KINDS });
+  capture(actions);
+  return <div>{actions.dialogs}</div>;
+}
+function Leaving({ capture }: { capture: (actions: Actions) => void }) {
+  const [here, setHere] = useState(true);
+  useEffect(() => { leave = () => setHere(false); }, []);
+  return <div><Probes />{here && <Host capture={capture} />}</div>;
+}
+
+type Setup = { role?: string; inject?: Parameters<typeof mappingRoutes>[1]; takenFor?: (assetId: number) => ReadonlySet<Metric>; page?: (capture: (actions: Actions) => void) => ReactElement };
+function setup(store: Map<number, Mapping>, { role = "admin", inject, takenFor, page }: Setup = {}) {
   const calls = mockFetch({
     "GET /api/me": { body: userFor(role) }, "GET /api/setup": { body: { needed: false } },
     ...probeRoutes, ...mappingRoutes(store, inject),
   });
   const spy = spyToasts();
   let actions!: Actions;
-  const view = renderWithProviders(<Harness capture={(a) => { actions = a; }} takenFor={takenFor} />, { toasts: spy.api });
+  const capture = (a: Actions) => { actions = a; };
+  const view = renderWithProviders(page ? page(capture) : <Harness capture={capture} takenFor={takenFor} />, { toasts: spy.api });
   return { calls, spy, view, actions: () => actions };
 }
 /** The account is known and every list has been fetched once (so that a later count of fetches counts refreshes only). */
@@ -230,6 +246,131 @@ describe("useMappingActions: unmap", () => {
   });
 });
 
+describe("useMappingActions: unmap, what the person confirmed", () => {
+  it("a point that was moved to another asset since is left alone, and the toast says so (info, no Undo)", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { asset_id: 2 })));
+    await ready(actions, calls);
+    act(() => actions().unmap([ref(1, "kW", 1)]));
+    await screen.findByRole("dialog", { name: "Unmap \"kW\" from Room 1?" });
+    await confirm("Unmap");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(writes(calls)).toEqual([]);
+    expect(spy.calls[0]).toEqual({ kind: "info", text: '"kW" was moved since, so it was left alone.' });
+  });
+
+  it("in a batch the others still go, and the Undo covers only what was removed", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1), mapping(2, { asset_id: 2 }), mapping(3, { point_id: 43 })));
+    await ready(actions, calls);
+    act(() => actions().unmap([ref(1, "kW"), ref(2, "V"), ref(3, "A")]));
+    await confirm("Unmap");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(writes(calls)).toEqual(["DELETE /api/mappings/1", "DELETE /api/mappings/3"]);
+    expect(spy.calls[0]).toMatchObject({
+      kind: "info", text: 'Unmapped 2 points from Room 1. "V" was moved since, so it was left alone.', options: { action: { label: "Undo" } },
+    });
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(calls.filter((c) => c.method === "POST").map((c) => (c.body as { point_id: number }).point_id)).toEqual([1001, 43]);
+    expect(spy.calls[1]).toEqual({ kind: "success", text: "Put back 2 mappings." });
+  });
+});
+
+describe("useMappingActions: a write whose outcome is unknown", () => {
+  const down = { status: 504, body: { detail: "gateway timeout" } };
+  const NOT_ANSWERING = "The server is not answering (status 504). It may be restarting; try again in a moment.";
+  const chooseAsset = async (id: number) => userEvent.selectOptions(within(screen.getByRole("dialog")).getByLabelText("Move to"), String(id));
+
+  it("a PATCH that gets no answer but did change the mapping is a move that worked, with an Undo that moves it back", async () => {
+    const s = store(mapping(1, { asset_id: 2 }));
+    let lost = true;
+    const { calls, actions, spy } = setup(s, {
+      inject: (method, path) => {
+        if (!lost || method !== "PATCH" || path !== "/api/mappings/1") return undefined;
+        lost = false;
+        s.get(1)!.asset_id = 3; // the api committed; the answer was lost
+        return down;
+      },
+    });
+    await ready(actions, calls);
+    act(() => actions().move([refM(1, "active_power_kw", 2, "kW")]));
+    await screen.findByRole("dialog");
+    await chooseAsset(3);
+    await confirm("Move");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Moved 1 point to Panel 2.", options: { action: { label: "Undo" } } });
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(s.get(1)!.asset_id).toBe(2);
+    expect(spy.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+  });
+
+  it("a DELETE that gets no answer but did remove the mapping is an unmap that worked, and the Undo has its values", async () => {
+    const s = store(mapping(1, { scale: 0.5 }));
+    const { calls, actions, spy } = setup(s, {
+      inject: (method, path) => {
+        if (method !== "DELETE" || path !== "/api/mappings/1") return undefined;
+        s.delete(1);
+        return down;
+      },
+    });
+    await ready(actions, calls);
+    act(() => actions().unmap([ref(1, "kW")]));
+    await confirm("Unmap");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Unmapped 1 point from Room 1.", options: { action: { label: "Undo" } } });
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.body)).toEqual([
+      { point_id: 1001, asset_id: 1, metric: "active_power_kw", scale: 0.5, interval_seconds: 10, custom_unit: null },
+    ]);
+  });
+
+  it("when the check fails too the toast says 'may or may not' and still offers the Undo (which checks before it writes)", async () => {
+    let reads = 0;
+    const { calls, actions, spy } = setup(store(mapping(1)), {
+      inject: (method, path) => {
+        if (path !== "/api/mappings/1") return undefined;
+        if (method === "DELETE") return down;
+        if (method === "GET") { reads += 1; return reads === 2 ? down : undefined; }
+        return undefined;
+      },
+    });
+    await ready(actions, calls);
+    act(() => actions().unmap([ref(1, "kW")]));
+    await confirm("Unmap");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toMatchObject({
+      kind: "error", text: `"kW" may or may not have been unmapped: ${NOT_ANSWERING}`, options: { durationMs: 10_000, action: { label: "Undo" } },
+    });
+  });
+
+  it("a move that cannot be checked is 'may or may not have been moved', and its Undo moves back only what is still where the move put it", async () => {
+    const s = store(mapping(1, { asset_id: 2 }), mapping(2, { asset_id: 2 }));
+    let reads2 = 0;
+    const { calls, actions, spy } = setup(s, {
+      inject: (method, path) => {
+        if (path !== "/api/mappings/2") return undefined;
+        if (method === "PATCH" && s.get(2)!.asset_id === 2) { s.get(2)!.asset_id = 3; return down; }
+        if (method === "GET") { reads2 += 1; return reads2 === 2 ? down : undefined; }
+        return undefined;
+      },
+    });
+    await ready(actions, calls);
+    act(() => actions().move([refM(1, "active_power_kw", 2, "kW"), refM(2, "voltage_v", 2, "V")]));
+    await screen.findByRole("dialog");
+    await chooseAsset(3);
+    await confirm("Move");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toMatchObject({
+      kind: "error", text: `Moved 1 of 2. "V" may or may not have been moved: ${NOT_ANSWERING}`, options: { action: { label: "Undo" } },
+    });
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(spy.calls[1]).toEqual({ kind: "success", text: "Put back 2 mappings." });
+    expect([s.get(1)!.asset_id, s.get(2)!.asset_id]).toEqual([2, 2]);
+  });
+});
+
 describe("useMappingActions: move", () => {
   const chooseAsset = async (id: number) => userEvent.selectOptions(within(screen.getByRole("dialog")).getByLabelText("Move to"), String(id));
 
@@ -316,6 +457,142 @@ describe("useMappingActions: move", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(writes(calls)).toEqual([]);
   });
+
+  it("a move that fails part-way: an error naming the point, with an Undo that moves back only what moved", async () => {
+    const s = store(mapping(1, { asset_id: 2 }), mapping(2, { asset_id: 2 }), mapping(3, { asset_id: 2 }));
+    const { calls, actions, spy } = setup(s, { inject: (method, path) => (method === "PATCH" && path === "/api/mappings/2" ? { status: 500, body: { detail: "database is busy" } } : undefined) });
+    await ready(actions, calls);
+    act(() => actions().move([refM(1, "active_power_kw", 2, "kW"), refM(2, "voltage_v", 2, "V"), refM(3, "current_a", 2, "A")]));
+    await screen.findByRole("dialog");
+    await chooseAsset(3);
+    await confirm("Move");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toMatchObject({
+      kind: "error", text: 'Moved 1 of 3. "V" could not be moved: Database is busy. 1 was not tried.', options: { durationMs: 10_000, action: { label: "Undo" } },
+    });
+    expect([1, 2, 3].map((id) => s.get(id)!.asset_id)).toEqual([3, 2, 2]);
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    // PATCH 1 (move), PATCH 2 (refused), PATCH 1 (back): mapping 3 was never touched, mapping 2 was never moved.
+    expect(calls.filter((c) => c.method === "PATCH").map((c) => [c.path, c.body])).toEqual([
+      ["/api/mappings/1", { asset_id: 3 }], ["/api/mappings/2", { asset_id: 3 }], ["/api/mappings/1", { asset_id: 2 }],
+    ]);
+    expect(spy.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+    expect([1, 2, 3].map((id) => s.get(id)!.asset_id)).toEqual([2, 2, 2]);
+  });
+
+  it("the lists are fetched again after a move that failed, as after one that worked", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { asset_id: 2 })), { inject: (method) => (method === "PATCH" ? { status: 500, body: { detail: "database is busy" } } : undefined) });
+    await ready(actions, calls);
+    act(() => actions().move([refM(1, "active_power_kw", 2, "kW")]));
+    await screen.findByRole("dialog");
+    await chooseAsset(3);
+    await confirm("Move");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toEqual({ kind: "error", text: '"kW" could not be moved: Database is busy.' });
+    await waitFor(() => expect(fetched(calls)).toEqual(EVERY(2)));
+  });
+
+  it("a batch that the server refuses for a clash says what a move can clash on", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { asset_id: 2 }), mapping(2, { asset_id: 2 })), {
+      inject: (method, path) => (method === "PATCH" && path === "/api/mappings/2" ? { status: 409, body: { detail: "this point is already mapped, or the asset already has this metric" } } : undefined),
+    });
+    await ready(actions, calls);
+    act(() => actions().move([refM(1, "active_power_kw", 2, "kW"), refM(2, "voltage_v", 2, "V")]));
+    await screen.findByRole("dialog");
+    await chooseAsset(3);
+    await confirm("Move");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0].text).toBe('Moved 1 of 2. "V" could not be moved: The asset already has that metric.');
+  });
+
+  it("an Undo stopped because the asset it would go back to is gone says so, and does not go on", async () => {
+    let backGone = false;
+    const s = store(mapping(1, { asset_id: 2 }), mapping(2, { asset_id: 2 }));
+    const { calls, actions, spy } = setup(s, {
+      inject: (method, path) => (backGone && method === "PATCH" && path.startsWith("/api/mappings/") ? { status: 404, body: { detail: "asset not found" } } : undefined),
+    });
+    await ready(actions, calls);
+    act(() => actions().move([refM(1, "active_power_kw", 2, "kW"), refM(2, "voltage_v", 2, "V")]));
+    await screen.findByRole("dialog");
+    await chooseAsset(3);
+    await confirm("Move");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    backGone = true; // Panel 1 (the asset they came from) was deleted meanwhile
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(spy.calls[1]).toEqual({ kind: "error", text: '"kW" could not be moved back: The asset no longer exists. 1 was not tried.' });
+    expect([1, 2].map((id) => s.get(id)!.asset_id)).toEqual([3, 3]);
+    await idle();
+  });
+});
+
+describe("useMappingActions: a change that is already running", () => {
+  const chooseAsset = async (id: number) => userEvent.selectOptions(within(screen.getByRole("dialog")).getByLabelText("Move to"), String(id));
+
+  it("a Move dialog opened while idle is refused when it is confirmed while an Undo runs", async () => {
+    const s = store(mapping(1, { asset_id: 2 }), mapping(2, { point_id: 42 }));
+    const { calls, actions, spy } = setup(s);
+    await ready(actions, calls);
+    act(() => actions().unmap([ref(2, "V")])); // a toast with an Undo
+    await confirm("Unmap");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    await idle();
+    act(() => actions().move([refM(1, "active_power_kw", 2, "kW")]));
+    await screen.findByRole("dialog");
+    await chooseAsset(3);
+    const gate = holdFetch((method, path) => method === "POST" && path === "/api/mappings");
+    pressUndo(spy, 0);
+    await waitFor(() => expect(isBusy()).toBe(true));
+    await confirm("Move");
+    expect(spy.calls[1]).toEqual({ kind: "info", text: "Still working on the last change." });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    gate.release();
+    await waitFor(() => expect(spy.calls).toHaveLength(3));
+    expect(spy.calls[2]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+    expect(calls.filter((c) => c.method === "PATCH")).toEqual([]); // the move was never sent
+    await idle();
+  });
+
+  it("an Unmap confirmation answered while an Undo runs is refused too, and nothing is deleted", async () => {
+    const s = store(mapping(1), mapping(2, { point_id: 42 }));
+    const { calls, actions, spy } = setup(s);
+    await ready(actions, calls);
+    act(() => actions().unmap([ref(2, "V")]));
+    await confirm("Unmap");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    await idle();
+    act(() => actions().unmap([ref(1, "kW")]));
+    await screen.findByRole("dialog", { name: 'Unmap "kW" from Room 1?' });
+    const gate = holdFetch((method, path) => method === "POST" && path === "/api/mappings");
+    pressUndo(spy, 0);
+    await waitFor(() => expect(isBusy()).toBe(true));
+    await confirm("Unmap");
+    expect(spy.calls[1]).toEqual({ kind: "info", text: "Still working on the last change." });
+    gate.release();
+    await waitFor(() => expect(spy.calls).toHaveLength(3));
+    expect(writes(calls).filter((w) => w.startsWith("DELETE"))).toEqual(["DELETE /api/mappings/2"]); // mapping 1 was never deleted
+    await idle();
+  });
+
+  it("a new unmap is refused while an Undo (not a batch) is running, and does not ask", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1), mapping(2, { point_id: 42 })));
+    await ready(actions, calls);
+    act(() => actions().unmap([ref(1, "kW")]));
+    await confirm("Unmap");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    await idle();
+    const gate = holdFetch((method, path) => method === "POST" && path === "/api/mappings");
+    pressUndo(spy, 0);
+    await waitFor(() => expect(isBusy()).toBe(true));
+    act(() => actions().unmap([ref(2, "V")]));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(spy.calls[1]).toEqual({ kind: "info", text: "Still working on the last change." });
+    gate.release();
+    await waitFor(() => expect(spy.calls).toHaveLength(3));
+    expect(spy.calls[2]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+    await idle();
+  });
 });
 
 describe("useMappingActions: mappedToast", () => {
@@ -344,6 +621,23 @@ describe("useMappingActions: mappedToast", () => {
     expect(spy.calls[1]).toEqual({ kind: "success", text: "Unmapped 1 point." });
   });
 
+  it("a toast of kind error (a batch that made only some of what was asked) keeps its kind and still carries the Undo for what was made", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1)));
+    await ready(actions, calls);
+    act(() => actions().mappedToast({ text: "Created 1 of 3 assets", kind: "error", mappings: [{ id: 1, assetId: 1 }], newAssets: ["LVP01"] }));
+    expect(spy.calls).toEqual([expect.objectContaining({ kind: "error", text: "Created 1 of 3 assets", options: expect.objectContaining({ durationMs: 10_000, action: expect.objectContaining({ label: "Undo" }) }) })]);
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(writes(calls)).toEqual(["DELETE /api/mappings/1"]);
+  });
+
+  it("a toast of kind error with nothing made is plain text of that kind, with or without assets.edit", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1)));
+    await ready(actions, calls);
+    act(() => actions().mappedToast({ text: "Created 0 of 3 assets", kind: "error", mappings: [], newAssets: [] }));
+    expect(spy.calls).toEqual([{ kind: "error", text: "Created 0 of 3 assets" }]);
+  });
+
   it("without assets.edit (discovery.accept alone) the toast has no Undo at all", async () => {
     const { calls, actions, spy } = setup(store(mapping(1)), { role: "operator" });
     await ready(actions, calls, false);
@@ -367,6 +661,24 @@ describe("useMappingActions: an Undo outlives the page", () => {
     ]);
     expect(spy.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
     await idle();
+  });
+
+  it("after() is not called once the page that asked has gone, but the toast and the refresh still happen", async () => {
+    const after = vi.fn();
+    const { calls, actions, spy } = setup(store(mapping(1)), { page: (capture) => <Leaving capture={capture} /> });
+    await ready(actions, calls);
+    const gate = holdFetch((method, path) => method === "DELETE" && path === "/api/mappings/1");
+    act(() => actions().unmap([ref(1, "kW")], { after }));
+    await confirm("Unmap");
+    await waitFor(() => expect(isBusy()).toBe(true));
+    act(() => leave());
+    gate.release();
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Unmapped 1 point from Room 1." });
+    await waitFor(() => expect(fetched(calls)).toEqual(EVERY(2)));
+    await idle();
+    await new Promise((resolve) => setTimeout(resolve, 50)); // after() would have run by now, right after the refresh
+    expect(after).not.toHaveBeenCalled();
   });
 
   it("two Undos pressed together run one after the other: neither is dropped", async () => {

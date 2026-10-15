@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keys, useInvalidate } from "../api/queries";
 import type { Asset, AssetKind, Mapping, Metric } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
@@ -14,6 +14,18 @@ import { useConfirm } from "./useConfirm";
 type AssetLike = Pick<Asset, "id" | "parent_id" | "name" | "kind">;
 type MoveRef = MappingRef & { metric: Metric };
 interface MoveRequest { refs: readonly MoveRef[]; what?: string; after?: () => void }
+
+/**
+ * What a dialog that has just made mappings tells the page (it unmounts at once, so the page owns the toast): the sentence, the mappings it made
+ * (and which asset each is on, for the Undo's check) and the names of the assets it made on the way. `kind: "error"` is a batch that made only
+ * part of what was asked: the toast says so and still carries the Undo for the part that went.
+ */
+export interface MappedInfo {
+  text: string;
+  mappings: readonly { id: number; assetId: number; name?: string }[];
+  newAssets: readonly string[];
+  kind?: "success" | "error";
+}
 
 interface Options {
   /** Every asset (Discovery's graph carries them; the asset page passes its own list): the names in the sentences and the choices of the Move dialog. */
@@ -37,15 +49,17 @@ const undoOptions = (run: () => void): ToastOptions => ({ durationMs: UNDO_MS, a
  * `unmap`/`move` do nothing without assets.edit and refuse (a toast) while an earlier change is still running; `mappedToast` raises the toast of
  * a mapping that Discovery made, with an Undo for people who hold assets.edit (discovery.accept alone maps but may not unmap). `dialogs` goes
  * anywhere in the page. After ANY write, whether it worked or not (the lists are out of date either way), every list is fetched again and then the
- * caller's `after()` runs (it puts the focus somewhere named).
+ * caller's `after()` runs (it puts the focus somewhere named), unless the page that asked has gone by then (the toast and the refresh still happen).
+ * The busy check is made twice, when the action is asked for and again when it is confirmed: an Undo may have been pressed in between.
  *
  * An Undo outlives the page that raised it: its closures hold the toast api, the invalidate function and plain values, never component state.
+ * An Undo takes no `after()`: the toast's own focus handling applies when its button goes (the pages' own targets are for the change they raised).
  */
 export function useMappingActions({ assets, kinds, takenFor }: Options): {
   canEdit: boolean;
   unmap(refs: readonly MappingRef[], opts?: { what?: string; after?: () => void }): void;
   move(refs: readonly MoveRef[], opts?: { what?: string; after?: () => void }): void;
-  mappedToast(info: { text: string; mappings: readonly { id: number; assetId: number; name?: string }[]; newAssets: readonly string[] }): void;
+  mappedToast(info: MappedInfo): void;
   dialogs: ReactNode;
 } {
   const toast = useToast();
@@ -54,6 +68,12 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
   const [ask, confirmDialog] = useConfirm();
   const [moving, setMoving] = useState<MoveRequest | null>(null);
   const labels = useMemo(() => assetLabels(assets.map((a) => ({ ...a, sort_order: 0 }))), [assets]);
+  // False once the host has unmounted: the caller's `after()` would focus a node that is gone (the effect also sets it true again for Strict Mode's second mount).
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const say = (outcome: Outcome, options?: ToastOptions) => toast[outcome.kind](outcome.text, options);
 
@@ -69,7 +89,7 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
       } catch {
         // the lists fetch themselves again on their next visit
       }
-      after?.();
+      if (mounted.current) after?.();
     }
   }
 
@@ -93,6 +113,10 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
     const prompt = unmapPrompt({ count: refs.length, name: refs[0].name, asset: where.one, assetCount: where.count, what: opts.what });
     void (async () => {
       if (!(await ask({ ...prompt, confirmLabel: "Unmap", tone: "danger" }))) return;
+      if (isBusy()) { // an Undo may have been pressed while the person was reading the question
+        toast.info(BUSY_TEXT);
+        return;
+      }
       const names = new Map(refs.map((r) => [r.id, r.name]));
       const nameOf = (m: Mapping) => names.get(m.id) ?? "a mapping";
       await execute(() => unmapMappings(refs), (result) => {
@@ -114,6 +138,10 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
   /** The dialog is closed at once and the outcome comes as a toast: a request error never shows inside a dialog that has gone. */
   function confirmMove(request: MoveRequest, toAssetId: number) {
     setMoving(null);
+    if (isBusy()) { // as in unmap: busy when it was asked for is checked at open, busy when it is confirmed here
+      toast.info(BUSY_TEXT);
+      return;
+    }
     const target = labels.get(toAssetId) ?? "the asset";
     void execute(() => moveMappings(request.refs, toAssetId), (result) => {
       const back = () => { void execute(() => moveBack(result.moved), (put) => say(undoOutcome("moveBack", put, result.moved.length))); };
@@ -122,13 +150,13 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
     }, request.after);
   }
 
-  function mappedToast({ text, mappings, newAssets }: { text: string; mappings: readonly { id: number; assetId: number; name?: string }[]; newAssets: readonly string[] }) {
+  function mappedToast({ text, mappings, newAssets, kind = "success" }: MappedInfo) {
     if (!canEdit || mappings.length === 0) {
-      toast.success(text);
+      toast[kind](text);
       return;
     }
     const undo = () => { void execute(() => deleteMappings(mappings), (result) => say(undoOutcome("deleteMade", result, mappings.length, newAssets))); };
-    toast.success(text, undoOptions(undo));
+    toast[kind](text, undoOptions(undo));
   }
 
   const dialogs = (

@@ -1,8 +1,7 @@
 import { useId, useMemo, useState } from "react";
 import type { Asset, AssetKind, Metric } from "../api/types";
-import { assetChoices } from "../lib/drop";
 import { containerNote, moveConflictText, moveMessage, moveTitle } from "../lib/mappingActions";
-import { assetLabels } from "./dashboard/AssetPicker";
+import { assetLabels, assetOptions } from "./dashboard/AssetPicker";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
 
 /** A mapping to move: what a sentence calls it, its metric (for a clash on the target) and the asset it is on now. */
@@ -23,7 +22,6 @@ interface Props {
 }
 
 const NONE: ReadonlySet<Metric> = new Set();
-const indent = (depth: number) => "  ".repeat(depth); // as ReviewDialog does; a browser collapses the leading spaces of an option, the label (parent path) is what tells equal names apart
 
 /**
  * Move mappings to another asset: a confirmation (ConfirmDeleteDialog: Cancel has the focus, Escape closes, Tab wraps) with an asset select.
@@ -34,17 +32,17 @@ export function MoveMappingsDialog({ assets, kinds, rows, what, takenFor, onConf
   const selectId = useId();
   const noteId = useId();
   const [target, setTarget] = useState<number | null>(null);
+  // The caller's order is the tree's order among siblings (the index stands in for sort_order, which these assets do not carry).
+  const full = useMemo(() => assets.map((a, index) => ({ ...a, sort_order: index })), [assets]);
   const choices = useMemo(() => {
     const shared = new Set(rows.map((r) => r.assetId));
-    // All rows on one asset: moving them there is no move, so it is not offered.
-    return assetChoices(assets).filter((a) => !(shared.size === 1 && shared.has(a.id)));
-  }, [assets, rows]);
-  const labels = useMemo(() => assetLabels(assets.map((a) => ({ ...a, sort_order: 0 }))), [assets]);
+    // All rows on one asset: moving them there is no move, so it is not offered (its children keep their indent).
+    return assetOptions(full).filter((a) => !(shared.size === 1 && shared.has(a.id)));
+  }, [full, rows]);
+  const labels = useMemo(() => assetLabels(full), [full]);
 
   const asset = target === null ? undefined : assets.find((a) => a.id === target);
-  // A row that is on the target already does not move, so it is not checked against the target; its metric still counts as taken.
-  const moving = target === null ? [] : rows.filter((r) => r.assetId !== target);
-  const clash = target === null || asset === undefined ? null : moveConflictText(moving, takenFor?.(target) ?? NONE, labels.get(asset.id) ?? asset.name);
+  const clash = target === null || asset === undefined ? null : moveConflictText(rows, takenFor?.(target) ?? NONE, target, labels.get(asset.id) ?? asset.name);
   const note = clash === null && asset ? containerNote({ name: labels.get(asset.id) ?? asset.name, kind: asset.kind }, kinds, "Move") : null;
 
   return (
@@ -66,7 +64,7 @@ export function MoveMappingsDialog({ assets, kinds, rows, what, takenFor, onConf
           onChange={(event) => setTarget(event.target.value === "" ? null : Number(event.target.value))}
         >
           <option value="">(choose)</option>
-          {choices.map((a) => <option key={a.id} value={a.id}>{indent(a.depth) + (labels.get(a.id) ?? a.name)}</option>)}
+          {choices.map((a) => <option key={a.id} value={a.id}>{a.text}</option>)}
         </select>
       </div>
       {/* Always there, two lines tall: a clash or a note arriving moves nothing. The clash is an alert (it is why Move is off); the note is only
