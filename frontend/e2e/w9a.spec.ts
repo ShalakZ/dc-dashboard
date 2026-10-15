@@ -90,6 +90,7 @@ const ADMIN_TIER: Probe[] = [
   get("/api/diagnostics/report?format=bogus"), // a gate that lets it through answers 422 and builds no report
   put("/api/discovery/layout"), post("/api/scopes"), patch(`/api/scopes/${GONE}`), del(`/api/scopes/${GONE}`),
   get("/api/scopes/suggestions"), get(`/api/scopes/${GONE}/preview`), post(`/api/scopes/${GONE}/scan`), post("/api/discovery/accept"),
+  post("/api/discovery/sources/remove"), // W7r: discovery.edit; an empty body from a role without it is a 403, a gate that lets it through answers 422 and removes nothing
   get("/api/storage"), get("/api/storage/rows-per-day"), get("/api/settings/storage"),
   put("/api/settings/storage"), put("/api/settings/storage/default"),
   get("/api/settings/general"), get("/api/settings/sign-in"), get("/api/tls/status"),

@@ -89,6 +89,10 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
   await expect(findingRow("modbus")).toContainText("claimed");
   await expect(findingRow("9000")).toContainText("existing source");
 
+  // A started scan opens its drawer (W7r), and an open drawer makes the sidebar inert: close it before the next navigation.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: /^Scan #\d+/ })).toBeHidden();
+
   // 3. The graph: expand the OPC UA source into ten clusters
   const graphRes = await page.request.get("/api/discovery/graph");
   expect(graphRes.ok()).toBe(true);
