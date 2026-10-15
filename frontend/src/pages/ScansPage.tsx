@@ -26,6 +26,19 @@ const ScansIcon = () => (
   <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /><path d="M11 7v4l2.5 2" /></svg>
 );
 
+/**
+ * Why Scan again cannot be pressed, or null. The order matters: the role first, then the scopes themselves (a list that is still loading or
+ * could not be read has no scope to find, which says nothing about the scope having been deleted), and only then "deleted" and "busy".
+ */
+export function scanAgainBlock(state: { canScan: boolean; loading: boolean; failed: boolean; scope: Scope | undefined; busy: boolean }): string | null {
+  if (!state.canScan) return "Your role may not start scans.";
+  if (state.loading) return "Loading scopes…";
+  if (state.failed) return "The scopes could not be read.";
+  if (!state.scope) return "The scope was deleted.";
+  if (state.busy) return "Another request is in progress.";
+  return null;
+}
+
 export function ScansPage() {
   const { can } = useAuth();
   const canEdit = can("discovery.edit"); // New scope, Edit, Delete and the suggestions
@@ -62,12 +75,8 @@ export function ScansPage() {
   // Scan again: the same preview and confirmation as the scope row's Scan item, for the scope as it is now (it may have been edited since).
   // `null` = the button can be pressed. It is drawn for every role that can read the table: a reason beats a missing control.
   const scanAgainScope = (scan: ScanSummary) => (scan.scope_id === null ? undefined : scopes.find((s) => s.id === scan.scope_id));
-  const scanAgainReason = (scan: ScanSummary): string | null => {
-    if (!canScan) return "Your role may not start scans.";
-    if (!scanAgainScope(scan)) return "The scope was deleted.";
-    if (busy) return "Another request is in progress.";
-    return null;
-  };
+  const scanAgainReason = (scan: ScanSummary): string | null =>
+    scanAgainBlock({ canScan, loading: isLoading, failed: Boolean(scopesError), scope: scanAgainScope(scan), busy });
   const startScan = () => run(async () => {
     if (!pending) return;
     let scanId: number;
@@ -135,7 +144,7 @@ export function ScansPage() {
         </div>
       )}
       {pending && (
-        <div className="panel confirm-scan" ref={panel}>
+        <div className="panel confirm-scan scan-confirm-reveal" ref={panel}>
           <p className="confirm-title">Scan "{pending.scope.name}"?</p>
           <p>{`${plural(pending.preview.hosts, "host")} × ${plural(pending.preview.ports, "port")} (${plural(pending.preview.pairs, "check")})`}</p>
           <div className="row">

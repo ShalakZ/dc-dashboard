@@ -3,7 +3,7 @@ import { api } from "../api/client";
 import { keys, useInvalidate } from "../api/queries";
 import type { Scope, ScopeIn, ScopeSuggestions } from "../api/types";
 import { useAction } from "../hooks/useAction";
-import { knownPorts, portHints, portName, portsLine, readPorts } from "../lib/ports";
+import { knownPorts, moreLine, portHints, portName, portsLine, readPorts } from "../lib/ports";
 import { parsePorts, parseTargets } from "../lib/scope";
 import { useToast } from "./Toasts";
 
@@ -20,7 +20,8 @@ interface Props {
  * Under the Ports field sits one reserved slot (`.scope-ports-note`, two lines tall whether it is empty or not, so nothing below it moves while
  * someone types). It holds the ports as typed, with the names the page knows (`502 (Modbus), 4840 (OPC UA)`; cut at two lines, the text stays
  * whole), or, when a port looks like a typo of a known one, a plain-text warning that names the likely port instead (a readout beside it would
- * be a third line). The warning never blocks the save, and the slot is no live region (it would speak on every key).
+ * be a third line). With several suspect ports the FIRST warning is shown in full and one more line counts the rest, so the slot keeps its two
+ * lines and Save does not move. The warning never blocks the save, and the slot is no live region (it would speak on every key).
  */
 export function ScopeForm({ initial, suggestions, onSaved, onCancel }: Props) {
   const invalidate = useInvalidate();
@@ -57,10 +58,10 @@ export function ScopeForm({ initial, suggestions, onSaved, onCancel }: Props) {
       <label>Ports<input value={ports} onChange={(e) => setPorts(e.target.value)} aria-describedby="scope-ports-hint scope-ports-note" /></label>
       <small id="scope-ports-hint" className="muted">Comma or space separated TCP ports to probe on every host.</small>
       <div id="scope-ports-note" className="scope-ports-note">
-        {warnings.lines.length > 0 ? (
+        {warnings.first !== null ? (
           <>
-            {warnings.lines.map((line) => <p key={line} className="warning">{line}</p>)}
-            {warnings.more > 0 && <p className="warning">and {warnings.more} more</p>}
+            <p className="warning scope-ports-warn">{warnings.first}</p>
+            {warnings.more > 0 && <p className="warning scope-ports-warn">{moreLine(warnings.more)}</p>}
           </>
         ) : (
           typed.some((port) => portName(port)) && <p className="muted scope-ports-readout">Reads as {portsLine(typed)}</p>

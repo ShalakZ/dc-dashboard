@@ -8,7 +8,7 @@ import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
 import type { ToastApi } from "../components/Toasts";
 import type { PermissionId } from "../lib/permissions";
-import { ScansPage } from "./ScansPage";
+import { ScansPage, scanAgainBlock } from "./ScansPage";
 
 const scope = { id: 3, name: "lab", targets: ["simulator"], ports: [9000, 4840, 5020], created_at: "2026-10-07T10:00:00Z" };
 const done = {
@@ -740,12 +740,20 @@ describe("ScansPage port names, the typo guard and Scan again (W7t)", () => {
     expect(note()).not.toHaveTextContent("did you mean");
   });
 
-  it("lists at most three warnings and counts the rest", async () => {
+  it("shows the first warning in full and ONE more line for the rest, so the slot keeps its two lines and Save stays put", async () => {
     await newScope();
     await userEvent.clear(screen.getByLabelText("Ports"));
     await userEvent.type(screen.getByLabelText("Ports"), "4080 4048 4804 503 5022");
-    expect(note().querySelectorAll("p")).toHaveLength(3 + 1); // three warnings and "and 2 more" (no port here has a name, so no readout)
-    expect(note()).toHaveTextContent("and 2 more");
+    const lines = [...note().querySelectorAll("p")].map((p) => p.textContent);
+    expect(lines).toEqual(["4080 is not a port any connector uses; did you mean 4840 (OPC UA)?", "and 4 more ports look like typos."]); // no list, no readout
+    await userEvent.clear(screen.getByLabelText("Ports"));
+    await userEvent.type(screen.getByLabelText("Ports"), "4080 4048");
+    expect([...note().querySelectorAll("p")].map((p) => p.textContent)).toEqual([
+      "4080 is not a port any connector uses; did you mean 4840 (OPC UA)?", "and 1 more port looks like a typo.",
+    ]);
+    await userEvent.clear(screen.getByLabelText("Ports"));
+    await userEvent.type(screen.getByLabelText("Ports"), "4080");
+    expect(note().querySelectorAll("p")).toHaveLength(1); // one typo: the line is unchanged and there is no count
   });
 
   it("still guards from the static names when the suggestions cannot be read", async () => {
@@ -795,6 +803,7 @@ describe("ScansPage port names, the typo guard and Scan again (W7t)", () => {
       expect(button).toHaveFocus();
       await waitFor(() => expect(reveal).toHaveBeenCalledWith({ block: "nearest", behavior: "auto" })); // the panel is above the table, often off screen
       expect(reveal.mock.contexts[0]).toBe(document.querySelector(".confirm-scan"));
+      expect(reveal.mock.contexts[0]).toHaveClass("scan-confirm-reveal"); // the class that carries its 8px scroll margin (scans-polish.css)
       await userEvent.click(screen.getByRole("button", { name: "Start scan" }));
       expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({ confirm_host_count: 2, digest: "d1g3st" });
     });
@@ -899,6 +908,23 @@ describe("ScansPage port names, the typo guard and Scan again (W7t)", () => {
       expect(screen.getByRole("button", { name: "Details" })).toHaveFocus();
       expect(document.querySelectorAll("[data-scan-details]")).toHaveLength(1);
     });
+  });
+});
+
+describe("scanAgainBlock (the reason Scan again cannot be pressed, in order)", () => {
+  const ok = { canScan: true, loading: false, failed: false, scope, busy: false };
+  it("is null when the role may scan, the scopes are read, the scope is there and nothing is in flight", () => {
+    expect(scanAgainBlock(ok)).toBeNull();
+  });
+  it("says the scopes are loading, or could not be read, before it says the scope was deleted (an empty list finds nothing)", () => {
+    expect(scanAgainBlock({ ...ok, loading: true, scope: undefined })).toBe("Loading scopes…");
+    expect(scanAgainBlock({ ...ok, failed: true, scope: undefined })).toBe("The scopes could not be read.");
+    expect(scanAgainBlock({ ...ok, scope: undefined })).toBe("The scope was deleted.");
+  });
+  it("puts the role first, and busy after the scope", () => {
+    expect(scanAgainBlock({ ...ok, canScan: false, loading: true, failed: true, scope: undefined, busy: true })).toBe("Your role may not start scans.");
+    expect(scanAgainBlock({ ...ok, busy: true })).toBe("Another request is in progress.");
+    expect(scanAgainBlock({ ...ok, scope: undefined, busy: true })).toBe("The scope was deleted.");
   });
 });
 

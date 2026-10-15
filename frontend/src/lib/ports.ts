@@ -98,12 +98,19 @@ export function portHint(port: number, known: readonly number[] = knownPorts()):
   return { port, near: best.anchor, text: `${port} is not a port any connector uses; did you mean ${portLabel(best.anchor)}?` };
 }
 
-const MOST_WARNINGS = 3;
-
-/** The warnings for a typed list: one line per suspect port (each port once), at most three, and how many more there are. */
-export function portHints(ports: readonly number[], known: readonly number[] = knownPorts()): { lines: string[]; more: number } {
+/**
+ * The warning for a typed list: the FIRST suspect port's warning in full (each port counted once), and how many other suspect ports there are.
+ * The form draws the warning and, when `more` is above 0, ONE line from `moreLine`; a list of warnings would make the reserved slot grow
+ * and move the Save button, which is what the slot is there to prevent.
+ */
+export function portHints(ports: readonly number[], known: readonly number[] = knownPorts()): { first: string | null; more: number } {
   const hints = [...new Set(ports)].flatMap((port) => portHint(port, known) ?? []);
-  return { lines: hints.slice(0, MOST_WARNINGS).map((hint) => hint.text), more: Math.max(0, hints.length - MOST_WARNINGS) };
+  return { first: hints[0]?.text ?? null, more: Math.max(0, hints.length - 1) };
+}
+
+/** The line that counts the warnings that are not shown: `and 1 more port looks like a typo.`, `and 4 more ports look like typos.` */
+export function moreLine(more: number): string {
+  return more === 1 ? "and 1 more port looks like a typo." : `and ${more} more ports look like typos.`;
 }
 
 /** The valid ports in what is typed in the Ports field, in order, for the readout and the guard: anything that is not a port (a word, 0, 70000) is left out, the save reports it. */

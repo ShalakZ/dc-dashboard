@@ -1,4 +1,4 @@
-import { COMMON_PORTS, INDUSTRIAL_PORTS, knownPorts, PORT_NAMES, portHint, portHints, portLabel, portName, portsLine, readPorts } from "./ports";
+import { COMMON_PORTS, INDUSTRIAL_PORTS, knownPorts, moreLine, PORT_NAMES, portHint, portHints, portLabel, portName, portsLine, readPorts } from "./ports";
 
 describe("port names", () => {
   it("names the ports the connectors and the dev simulator use", () => {
@@ -83,15 +83,23 @@ describe("portHint (the typo guard)", () => {
 });
 
 describe("portHints (the warnings for a typed list)", () => {
-  it("is empty for good ports and carries one warning per suspect port, once each", () => {
-    expect(portHints([502, 4840, 9000]).lines).toEqual([]);
-    expect(portHints([9000, 4080, 4080]).lines).toEqual(["4080 is not a port any connector uses; did you mean 4840 (OPC UA)?"]);
+  it("has no warning for good ports and the single warning, unchanged, for one suspect port (counted once)", () => {
+    expect(portHints([502, 4840, 9000])).toEqual({ first: null, more: 0 });
+    expect(portHints([9000, 4080, 4080])).toEqual({ first: "4080 is not a port any connector uses; did you mean 4840 (OPC UA)?", more: 0 });
   });
-  it("lists at most three and counts the rest", () => {
+  it("keeps the first warning in full and only counts the other suspect ports (no list)", () => {
     const out = portHints([4080, 4048, 4804, 503, 5022]);
-    expect(out.lines).toHaveLength(3);
-    expect(out.more).toBe(2);
-    expect(portHints([4080, 4048, 4804]).more).toBe(0);
+    expect(out.first).toBe("4080 is not a port any connector uses; did you mean 4840 (OPC UA)?");
+    expect(out.more).toBe(4);
+    expect(portHints([4080, 4048]).more).toBe(1);
+  });
+});
+
+describe("moreLine (the one line that counts the warnings that are not shown)", () => {
+  it("is singular for one and plural for more", () => {
+    expect(moreLine(1)).toBe("and 1 more port looks like a typo.");
+    expect(moreLine(2)).toBe("and 2 more ports look like typos.");
+    expect(moreLine(4)).toBe("and 4 more ports look like typos.");
   });
 });
 

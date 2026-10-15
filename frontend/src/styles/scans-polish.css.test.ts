@@ -25,13 +25,29 @@ describe("the Scans page styles (W7t)", () => {
     const body = rule(".scope-ports-note");
     expect(body).toMatch(/min-height:\s*2lh/);
     expect(body).toMatch(/line-height:\s*1\.4/); // the unit counts lines of the note's own line height
+    expect(body).not.toContain("display"); // a block: the warning paragraphs below flow inline inside it
   });
 
   it("the readout is cut at two lines (a long list of named ports would be a taller slot), the warning is not", () => {
     const readout = rule(".scope-ports-readout");
     expect(readout).toContain("-webkit-line-clamp: 2");
     expect(readout).toContain("overflow: hidden");
-    expect(rules.some((r) => r.selector.includes("warning"))).toBe(false);
+    for (const selector of [".scope-ports-warn", ".scope-ports-warn + .scope-ports-warn"]) {
+      expect(rule(selector), `"${selector}" is never cut`).not.toMatch(/line-clamp|overflow|max-height|height/);
+    }
+  });
+
+  it("the first warning and the line that counts the others flow as one text with a space between, so the count fills the end of a wrapped warning (finding 8)", () => {
+    expect(rule(".scope-ports-warn")).toMatch(/display:\s*inline\b/);
+    expect(rule(".scope-ports-warn + .scope-ports-warn")).toMatch(/margin-inline-start:\s*0\.4em/);
+  });
+
+  it("the confirmation panel Scan again scrolls to has 8px of air above it, on top of the html's own scroll-padding for the sticky top bar (finding 11)", () => {
+    expect(rule(".scan-confirm-reveal")).toMatch(/scroll-margin-top:\s*8px/);
+    // The two ADD UP: if the bar's height were in the margin too, the panel would stop 60px below the bar. So the bar's height lives in the padding only.
+    const app = parseRules(stripComments(readFileSync("src/app.css", "utf8")));
+    expect(app.filter((r) => r.selector === "html" && r.body.includes("scroll-padding-top: var(--bar-h)"))).toHaveLength(1);
+    expect(rule(".scan-confirm-reveal")).not.toContain("--bar-h");
   });
 
   it("the Recent scans table stacks Scan again over Details only when the TABLE is narrower than 860px, and never wraps a button's own text", () => {

@@ -82,8 +82,9 @@ data-retrieval requests the connectors already use, nothing else.
    `4840 (OPC UA)`, `9000 (simulator)` and `5020 (Modbus, simulator)`, which is the dev simulator's own Modbus port. A port it does not
    know shows as the bare number, so a typo stands out beside its named neighbours. While you type in the Ports field, a line under it
    reads the list back (`Reads as 502 (Modbus), 4840 (OPC UA)`). When a port is one slip away from a known one, the line becomes a
-   warning instead, for example `4080 is not a port any connector uses; did you mean 4840 (OPC UA)?` (at most three warnings, then
-   `and N more`). The warning is advice and never stops you: Save works whatever it says, and an unusual port you meant to scan is simply
+   warning instead, for example `4080 is not a port any connector uses; did you mean 4840 (OPC UA)?` (with several suspect ports the
+   first warning is shown in full, followed by one line that counts the rest, `and 4 more ports look like typos.`, so the Save button
+   stays where it is). The warning is advice and never stops you: Save works whatever it says, and an unusual port you meant to scan is simply
    kept. Everyday and industrial ports (80, 443, 8080, 3306, 1502, 4843 and so on) never trigger it, nor does a port with one or two
    digits; port 9000 is named but not guarded, and 4800 or 5002 may still be flagged.
 2. **Confirmation.** Pressing Scan shows "N hosts × M ports (P checks)" (`1 host × 1 port (1 check)` for one) and asks for confirmation on
@@ -140,7 +141,11 @@ data-retrieval requests the connectors already use, nothing else.
    with it, back where it was.
 
    **Alt (Option on a Mac) moves a node alone.** Hold Alt when you start the drag and only that node moves; its open children stay
-   where they stand and are given a place there, so they do not jump back beside it the next time the graph redraws. Let go of Alt
+   where they stand and are given a place there, so they do not jump back beside it the next time the graph redraws. That place is a
+   saved one like any other: it is saved for everyone, so one Alt drag of a source with ten open groups saves ten places, and only
+   **Tidy layout** (below) takes them away again (dragging such a child moves its place, it does not remove it). A collapsed group that
+   has no place of its own is not drawn, so it is not given one: when you open it later it stands next to the source's new place, not
+   where the source used to be. Let go of Alt
    mid-drag or press it later and nothing changes: the key is read once, at the start. On some Linux desktops Alt-drag is taken by
    the window manager to move the whole window, so the page never sees the key; change the desktop's window-move key there, or drag
    without Alt and move the children back by hand. Two ways of moving nodes are unchanged and take no children along: the arrow keys

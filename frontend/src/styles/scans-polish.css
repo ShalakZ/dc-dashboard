@@ -3,11 +3,20 @@
 
   /* The note under the Ports field: the ports as read (with their names) or, if a port looks like a typo, the warning. One slot of two lines,
      drawn whether it is empty or not, so the Save button does not move while someone types. The readout is cut at two lines (the text in the
-     DOM stays whole, and it is what the field's description reads); a warning wraps, and a second or third one make the slot grow, which happens
-     only after the operator typed that many suspect ports. */
-  .scope-ports-note { display: grid; align-content: start; min-height: 2lh; font-size: var(--fs-xs); line-height: 1.4; }
+     DOM stays whole, and it is what the field's description reads). With several suspect ports the form shows the FIRST warning in full and one
+     short line that counts the rest; the two paragraphs flow as one text (inline, a space between), so the count fills the end of the second line
+     of a warning that wraps instead of starting a third one. The slot grows only when the first warning and the count do not fit two lines
+     (a note narrower than about 340px, which is a form narrower than about 380px). */
+  .scope-ports-note { min-height: 2lh; font-size: var(--fs-xs); line-height: 1.4; }
   .scope-ports-note > p { margin: 0; }
+  .scope-ports-warn { display: inline; }
+  .scope-ports-warn + .scope-ports-warn { margin-inline-start: 0.4em; }
   .scope-ports-readout { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+
+  /* Scan again brings the confirmation panel into view (ScansPage scrollIntoView, block "nearest"). The page's `html { scroll-padding-top: var(--bar-h) }`
+     already keeps a scrolled-to element clear of the sticky top bar, which left the panel's top edge touching the bar; this adds 8px of air on top of
+     it (not the bar's height again: the two add up, and the panel would stop 60px below the bar). */
+  .scan-confirm-reveal { scroll-margin-top: 8px; }
 
   /* Recent scans: each row has two buttons (Scan again, Details) in a cell that never wraps. With the sidebar open at a laptop's width
      (about 1000 to 1180px) the table has about 30px too little, so a table narrower than 860px puts the two buttons one above the other (the
