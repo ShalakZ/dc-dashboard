@@ -263,6 +263,18 @@ export function descendantNodeIds(model: GraphModel, id: string): string[] {
 }
 
 /**
+ * The nodes directly under `id`: a source's groups, a group's points, an asset's sub-assets (one level; `descendantNodeIds` is every level). An
+ * Alt-drag pins these where they stand when they have no place of their own, so they do not follow the parent on the next rebuild.
+ */
+export function childNodeIds(model: GraphModel, id: string): string[] {
+  if (id.startsWith("src:")) return descendantNodeIds(model, id).filter((d) => d.startsWith("cluster:"));
+  if (id.startsWith("cluster:")) return descendantNodeIds(model, id);
+  if (!id.startsWith("asset:")) return [];
+  const parent = model.assets.find((a) => nodeId.asset(a.id) === id);
+  return parent ? model.assets.filter((a) => a.parent_id === parent.id && a.id !== parent.id).map((a) => nodeId.asset(a.id)) : [];
+}
+
+/**
  * `snapshot + delta` for every id that has a place of its own IN THE SNAPSHOT (`ownPlaces`, taken when the drag began); an id with none is left
  * out, because it follows its parent by the rule of `buildGraph`. The snapshot is never changed, and an id listed twice is shifted once.
  */
@@ -296,8 +308,11 @@ export function layoutBatches(entries: Iterable<readonly [string, XY]>, size: nu
 }
 
 const OPENING_SOURCES = 3;
-/** The part of the graph, in graph pixels, that still opens readable on a 1024x640 canvas at zoom 0.75 (the opening zoom's floor). */
-const OPENING_BOX = { w: 900, h: 560 } as const;
+/**
+ * The part of the graph, in graph pixels, that still opens readable on a 1024x640 canvas at zoom 0.75 (the opening zoom's floor). The height was
+ * 560 before the bar (the summary and its buttons: 36px and 8px under it) took 44 screen pixels from the canvas: 44 / 0.75 = 59 graph pixels.
+ */
+const OPENING_BOX = { w: 900, h: 560 - Math.ceil((36 + 8) / 0.75) } as const;
 /** A source node's width on the canvas (`.gnode` is 220px wide). */
 const SOURCE_W = 220;
 

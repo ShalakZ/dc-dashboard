@@ -88,7 +88,9 @@ const ADMIN_TIER: Probe[] = [
   post("/api/sources"), patch(`/api/sources/${GONE}`), del(`/api/sources/${GONE}`), post(`/api/sources/${GONE}/browse`),
   get("/api/connectors"),
   get("/api/diagnostics/report?format=bogus"), // a gate that lets it through answers 422 and builds no report
-  put("/api/discovery/layout"), post("/api/scopes"), patch(`/api/scopes/${GONE}`), del(`/api/scopes/${GONE}`),
+  put("/api/discovery/layout"),
+  del("/api/discovery/layout"), // W7t: Tidy layout; discovery.edit. The probe runs as a Viewer and an Operator: a gate that lets it through would wipe the shared stack's saved layout
+  post("/api/scopes"), patch(`/api/scopes/${GONE}`), del(`/api/scopes/${GONE}`),
   get("/api/scopes/suggestions"), get(`/api/scopes/${GONE}/preview`), post(`/api/scopes/${GONE}/scan`), post("/api/discovery/accept"),
   post("/api/discovery/sources/remove"), // W7r: discovery.edit; an empty body from a role without it is a 403, a gate that lets it through answers 422 and removes nothing
   get("/api/storage"), get("/api/storage/rows-per-day"), get("/api/settings/storage"),

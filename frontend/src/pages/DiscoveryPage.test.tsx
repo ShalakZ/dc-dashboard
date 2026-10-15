@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GraphModel, GraphPoint, GraphSource } from "../api/types";
@@ -19,52 +20,65 @@ vi.mock("../components/graph/BulkCreateDialog", () => ({
   },
 }));
 
-// What React Flow reports as overlapping the dropped node; set per test.
+// What React Flow reports as overlapping the dropped node, the nodes it was last given (`getNodes`), where a played drag ends and, for
+// `dragwith`, which node is dragged along with it; set per test.
 const flow = vi.hoisted(() => {
-  const state = { intersecting: [] as { id: string; type?: string }[] };
-  return { state, getIntersectingNodes: vi.fn((_node: unknown) => state.intersecting) };
+  const state = {
+    intersecting: [] as { id: string; type?: string }[], nodes: [] as any[], dropAt: { x: 7, y: 8 }, partner: null as string | null,
+  };
+  return { state, getIntersectingNodes: vi.fn((_node: unknown) => state.intersecting), getNodes: vi.fn(() => state.nodes), fitView: vi.fn() };
 });
 
 // React Flow measures the DOM, which jsdom cannot do: render the nodes plainly and expose the props the page wires up.
-// `drag-{id}` plays a whole drag as React Flow does it (start, the final position change, stop) and ends at 7,8.
+// `drag-{id}` plays a whole drag as React Flow does it (start, a move, the final position change, stop) and ends at `flow.state.dropAt` (7,8 unless a test says otherwise).
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
   return {
     ...actual,
     Handle: () => null,
-    useReactFlow: () => ({ getIntersectingNodes: flow.getIntersectingNodes }),
-    ReactFlow: ({ nodes, nodeTypes, colorMode, edgesFocusable, onNodeClick, onNodeDragStart, onNodeDragStop, onNodesChange }: any) => (
-      <div data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)}>
-        {nodes.map((n: any) => {
-          const Node = nodeTypes[n.type];
-          const dropped = { ...n, position: { x: 7, y: 8 } };
-          return (
-            <div key={n.id} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} onClick={(e) => onNodeClick?.(e, n)}>
-              <Node id={n.id} data={n.data} />
-              <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
-              <button data-testid={`dragstart-${n.id}`} onClick={(e) => onNodeDragStart?.(e, n, [n])} />
-              <button
-                data-testid={`drag-${n.id}`}
-                onClick={(e) => {
-                  onNodeDragStart?.(e, n, [n]);
-                  onNodesChange?.([{ id: n.id, type: "position", position: { x: 7, y: 8 }, dragging: false }]);
-                  onNodeDragStop?.(e, dropped, [dropped]);
-                }}
-              />
-              <button
-                data-testid={`dragwith-${n.id}`}
-                onClick={(e) => {
-                  const other = nodes.find((o: any) => o.id !== n.id);
-                  const together = [dropped, { ...other, position: { x: 9, y: 9 } }];
-                  onNodeDragStart?.(e, n, [n, other]);
-                  onNodeDragStop?.(e, dropped, together);
-                }}
-              />
-            </div>
-          );
-        })}
-      </div>
-    ),
+    useReactFlow: () => ({ getIntersectingNodes: flow.getIntersectingNodes, getNodes: flow.getNodes, fitView: flow.fitView }),
+    ReactFlow: ({ nodes, nodeTypes, colorMode, edgesFocusable, onNodeClick, onNodeDragStart, onNodeDrag, onNodeDragStop, onNodesChange }: any) => {
+      flow.state.nodes = nodes;
+      return (
+        <div data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)}>
+          {nodes.map((n: any) => {
+            const Node = nodeTypes[n.type];
+            const dropped = () => ({ ...n, position: flow.state.dropAt });
+            return (
+              <div key={n.id} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} onClick={(e) => onNodeClick?.(e, n)}>
+                <Node id={n.id} data={n.data} />
+                <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
+                <button data-testid={`dragstart-${n.id}`} onClick={(e) => onNodeDragStart?.(e, n, [n])} />
+                <button
+                  data-testid={`drag-${n.id}`}
+                  onClick={(e) => {
+                    onNodeDragStart?.(e, n, [n]);
+                    onNodeDrag?.(e, dropped(), [dropped()]);
+                    onNodesChange?.([{ id: n.id, type: "position", position: flow.state.dropAt, dragging: false }]);
+                    onNodeDragStop?.(e, dropped(), [dropped()]);
+                  }}
+                />
+                <button
+                  data-testid={`dragwith-${n.id}`}
+                  onClick={(e) => {
+                    const other = nodes.find((o: any) => o.id === flow.state.partner) ?? nodes.find((o: any) => o.id !== n.id);
+                    const at = flow.state.dropAt;
+                    // A named partner moves by the same distance, as React Flow moves every node of a selection; the default one lands at 9,9.
+                    const along = flow.state.partner
+                      ? { x: other.position.x + at.x - n.position.x, y: other.position.y + at.y - n.position.y }
+                      : { x: 9, y: 9 };
+                    const together = [dropped(), { ...other, position: along }];
+                    onNodeDragStart?.(e, n, [n, other]);
+                    onNodeDrag?.(e, dropped(), together);
+                    onNodeDragStop?.(e, dropped(), together);
+                  }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      );
+    },
     Background: () => null,
     Controls: () => null,
   };
@@ -90,9 +104,16 @@ const routes = (role: string, model: GraphModel | (() => GraphModel) = graph()) 
   "GET /api/me": { body: userFor(role) },
   "GET /api/discovery/graph": () => ({ body: typeof model === "function" ? model() : model }),
   "PUT /api/discovery/layout": { status: 204 },
+  "DELETE /api/discovery/layout": { status: 204 },
 });
 const open = () => renderWithProviders(<><DiscoveryPage /><SignedIn /></>, { route: "/discovery", path: "/discovery" });
 const node = (id: string) => document.querySelector(`[data-id="${id}"]`) as HTMLElement;
+
+beforeEach(() => {
+  flow.state.dropAt = { x: 7, y: 8 };
+  flow.state.partner = null;
+  flow.fitView.mockClear();
+});
 
 describe("DiscoveryPage", () => {
   it("renders sources, assets and unidentified services collapsed", async () => {
@@ -522,7 +543,7 @@ describe("DiscoveryPage look (W6)", () => {
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     const header = title.closest("header")!;
     expect(header).toHaveClass("page-head");
-    expect(within(header).getByText(/Dashed nodes were discovered/)).toHaveClass("sub");
+    expect(within(header).getByText(/Dashed: discovered/)).toHaveClass("sub");
     expect(within(header.querySelector(".actions") as HTMLElement).getByRole("button", { name: "Refresh" })).toBeInTheDocument();
   });
 
@@ -552,7 +573,7 @@ describe("DiscoveryPage while the graph loads", () => {
     const title = screen.getByRole("heading", { level: 1, name: "Discovery" });
     expect(wrapper.contains(title)).toBe(true);
     expect(title.closest("header")).toHaveClass("page-head");
-    expect(screen.getByText(/Dashed nodes were discovered/)).toHaveClass("sub");
+    expect(screen.getByText(/Dashed: discovered/)).toHaveClass("sub");
     expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument(); // a gap holds its place until the graph is in
     const region = screen.getByText(LABEL).parentElement!;
     expect(region).toHaveAttribute("role", "status");
@@ -663,7 +684,7 @@ describe("DiscoveryPage controls follow the permissions of the role (a custom ro
 
 // ---- W7r: remove and clear unmapped discovered sources, last seen, the click path to create assets ----
 
-const HINT = "Dashed nodes were discovered; solid nodes are assets. Press New asset… on a group, or drag it onto an asset (Fit View shows them all). Drag other nodes to arrange them.";
+const HINT = "Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset… A node takes its open children along; Alt or Option moves it alone.";
 const kw = (id: number, name: string, extra: Partial<GraphPoint> = {}) =>
   point(id, name, { suggestion: { metric: "active_power_kw", scale: 1, interval_seconds: 5, custom_unit: null }, ...extra });
 const srcOf = (id: number, name: string, over: Partial<GraphSource> = {}): GraphSource => ({
@@ -711,11 +732,16 @@ const confirmDialog = (name: string) => screen.findByRole("dialog", { name });
 const removeCalls = (calls: { method: string; path: string; body?: unknown }[]) => calls.filter((c) => c.method === "POST" && c.path === "/api/discovery/sources/remove");
 
 describe("DiscoveryPage hint and last seen (W7r)", () => {
-  it("the sub line says to press New asset… on a group, or drag it onto an asset", async () => {
+  it("the sub line says to drag a group onto an asset or press New asset…, that a node takes its open children along and that Alt or Option moves it alone", async () => {
     serverWith("operator", [srcOf(1, "Plant OPC")]);
     openToasts();
     await screen.findByText("Plant OPC");
-    expect(screen.getByText(/Dashed nodes were discovered/)).toHaveTextContent(HINT);
+    expect(screen.getByText(/Dashed: discovered/)).toHaveTextContent(HINT);
+  });
+
+  it("the hint is short (at most 150 characters, so it keeps to a line or two under the title) and names the Alt and Option keys", () => {
+    expect(HINT.length).toBeLessThanOrEqual(150);
+    expect(HINT).toContain("Alt or Option");
   });
 
   it("every source says when it was last seen: the scan and how long ago, added by hand, or not seen yet", async () => {
@@ -761,7 +787,10 @@ describe("DiscoveryPage Remove (W7r)", () => {
   it("a role that may edit the graph sees Remove on a discovered source with nothing mapped, and no one else does", async () => {
     serverWith("admin", [srcOf(1, "Plant OPC"), mappedSource(2, "Lab"), srcOf(3, "Bench", { origin: "manual" })]);
     openToasts();
-    expect(await removeButton("Plant OPC")).toHaveTextContent("Remove");
+    const remove = await removeButton("Plant OPC");
+    expect(remove.textContent).toBe(""); // the bin alone: its name is the label, its tooltip the title
+    expect(remove).toHaveAttribute("title", "Remove");
+    expect(remove.querySelector("svg.i")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Remove Lab from Discovery" })).not.toBeInTheDocument(); // something is mapped
     expect(screen.queryByRole("button", { name: "Remove Bench from Discovery" })).not.toBeInTheDocument(); // added by hand
   });
@@ -1057,5 +1086,423 @@ describe("DiscoveryPage Create assets (W7r)", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: /^Create assets/ })).not.toBeInTheDocument());
     await userEvent.click(within(dialog).getByRole("button", { name: "Close stub" }));
     expect(screen.getByRole("button", { name: "Details for Plant OPC" })).toHaveFocus();
+  });
+});
+
+// ---- W7t: children follow their parent, Alt, Tidy layout, the summary bar, collapse and expand all ----
+
+describe("DiscoveryPage children, Alt and the places that follow (W7t)", () => {
+  /** Source 1 stands at 10,20; its group LVP02 and that group's point 3 have places of their own (500,300 and 800,340). */
+  const placed = () => graph({ layout: { "src:1": { x: 10, y: 20 }, "cluster:1:LVP02": { x: 500, y: 300 }, "point:3": { x: 800, y: 340 } } });
+  const puts = <T extends { method: string }>(calls: T[]) => calls.filter((c) => c.method === "PUT");
+  const at = (id: string) => [Number(node(id).dataset.x), Number(node(id).dataset.y)];
+  const expand = async (name: string) => userEvent.click(await screen.findByRole("button", { name: `Expand ${name}` }));
+  const body = (call: { body?: unknown }) => (call.body as { nodes: { node_id: string; x: number; y: number }[] }).nodes;
+
+  it("dragging a source takes its open group and points along by the same distance; only the source is saved (the rest follow by the rule)", async () => {
+    const calls = mockFetch(routes("admin"));
+    open();
+    await expand("Plant OPC");
+    await expand("LVP01");
+    const before = ["cluster:1:LVP01", "cluster:1:LVP02", "cluster:1:__ungrouped__", "point:1", "point:2", "asset:10", "unid:10.0.0.9:8080"].map(at);
+    flow.state.dropAt = { x: 100, y: 50 }; // the source stood at 0,0
+    await userEvent.click(screen.getByTestId("drag-src:1"));
+    const after = ["cluster:1:LVP01", "cluster:1:LVP02", "cluster:1:__ungrouped__", "point:1", "point:2", "asset:10", "unid:10.0.0.9:8080"].map(at);
+    expect(after.slice(0, 5)).toEqual(before.slice(0, 5).map(([x, y]) => [x + 100, y + 50]));
+    expect(after.slice(5)).toEqual(before.slice(5)); // nodes that are not under it stay
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(body(puts(calls)[0])).toEqual([{ node_id: "src:1", x: 100, y: 50 }]);
+  });
+
+  it("the followers keep their offset when the graph is rebuilt afterwards (collapse, expand): the rule puts them beside their parent", async () => {
+    mockFetch(routes("operator"));
+    open();
+    await expand("Plant OPC");
+    await expand("LVP01");
+    const before = at("point:1");
+    flow.state.dropAt = { x: 100, y: 50 };
+    await userEvent.click(screen.getByTestId("drag-src:1"));
+    await userEvent.click(screen.getByRole("button", { name: "Collapse LVP01" }));
+    await userEvent.click(screen.getByRole("button", { name: "Expand LVP01" }));
+    expect(at("point:1")).toEqual([before[0] + 100, before[1] + 50]);
+  });
+
+  it("the places of children that are hidden or saved move with it, in ONE request (the dragged node first)", async () => {
+    const calls = mockFetch(routes("admin", placed()));
+    open();
+    await expand("Plant OPC"); // the groups are drawn, their points are not: point 3 is hidden and has a place of its own
+    await userEvent.click(screen.getByTestId("drag-src:1")); // 10,20 -> 7,8: by -3,-12
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(body(puts(calls)[0])).toEqual([
+      { node_id: "src:1", x: 7, y: 8 }, { node_id: "cluster:1:LVP02", x: 497, y: 288 }, { node_id: "point:3", x: 797, y: 328 },
+    ]);
+    expect(at("cluster:1:LVP02")).toEqual([497, 288]); // the drawn one moved on screen too
+  });
+
+  it("a role that may not change the shared layout sends nothing, but remembers the hidden places: opening the group puts its point beside it", async () => {
+    const calls = mockFetch(routes("operator", placed()));
+    open();
+    await expand("Plant OPC");
+    await userEvent.click(screen.getByTestId("drag-src:1"));
+    await expand("LVP02");
+    expect(at("point:3")).toEqual([797, 328]);
+    expect(at("cluster:1:LVP02")).toEqual([497, 288]);
+    expect(puts(calls)).toHaveLength(0);
+  });
+
+  it("two drags in a row with no re-read in between: the second works from where the first left every place", async () => {
+    const calls = mockFetch(routes("admin", placed()));
+    open();
+    await expand("Plant OPC");
+    await userEvent.click(screen.getByTestId("drag-src:1")); // 10,20 -> 7,8
+    flow.state.dropAt = { x: 0, y: 0 };
+    await userEvent.click(screen.getByTestId("drag-src:1")); // 7,8 -> 0,0: by -7,-8
+    await waitFor(() => expect(puts(calls)).toHaveLength(2));
+    expect(body(puts(calls)[1])).toEqual([
+      { node_id: "src:1", x: 0, y: 0 }, { node_id: "cluster:1:LVP02", x: 490, y: 280 }, { node_id: "point:3", x: 790, y: 320 },
+    ]);
+    expect(calls.filter((c) => c.method === "GET" && c.path === "/api/discovery/graph")).toHaveLength(1);
+    await expand("LVP02");
+    expect(at("point:3")).toEqual([790, 320]); // opening the group later puts the point where the second drag left it
+  });
+
+  it("a source dragged together with its own group shifts every place once, and each is sent once", async () => {
+    const calls = mockFetch(routes("admin", placed()));
+    open();
+    await expand("Plant OPC");
+    flow.state.partner = "cluster:1:LVP02";
+    await userEvent.click(screen.getByTestId("dragwith-src:1")); // both move by -3,-12
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    const sent = body(puts(calls)[0]);
+    expect(sent.map((n) => n.node_id).sort()).toEqual(["cluster:1:LVP02", "point:3", "src:1"]);
+    expect(sent.find((n) => n.node_id === "point:3")).toEqual({ node_id: "point:3", x: 797, y: 328 }); // not 794,316
+    expect(sent.find((n) => n.node_id === "cluster:1:LVP02")).toEqual({ node_id: "cluster:1:LVP02", x: 497, y: 288 });
+  });
+
+  it("dragging a group never moves its source, and a group dragged away keeps its place when the source is dragged later", async () => {
+    const calls = mockFetch(routes("admin"));
+    open();
+    await expand("Plant OPC");
+    const source = at("src:1");
+    await userEvent.click(screen.getByTestId("drag-cluster:1:LVP02")); // to 7,8
+    expect(at("src:1")).toEqual(source);
+    flow.state.dropAt = { x: 50, y: 50 };
+    await userEvent.click(screen.getByTestId("drag-src:1")); // by +50,+50
+    await waitFor(() => expect(puts(calls)).toHaveLength(2));
+    expect(body(puts(calls)[1])).toEqual([{ node_id: "src:1", x: 50, y: 50 }, { node_id: "cluster:1:LVP02", x: 57, y: 58 }]);
+  });
+
+  it("an Alt drag moves the node alone: the saved places of its hidden children stay, and only the node is sent", async () => {
+    const calls = mockFetch(routes("admin", placed()));
+    open();
+    await screen.findByText("Plant OPC");
+    fireEvent.click(screen.getByTestId("drag-src:1"), { altKey: true });
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(body(puts(calls)[0])).toEqual([{ node_id: "src:1", x: 7, y: 8 }]);
+  });
+
+  it("an Alt drag leaves the drawn children where they stand, and gives each one without a place the place it stands at (else it would follow at the next rebuild)", async () => {
+    const calls = mockFetch(routes("admin", placed()));
+    open();
+    await expand("Plant OPC");
+    const [lvp01, ungrouped] = [at("cluster:1:LVP01"), at("cluster:1:__ungrouped__")];
+    fireEvent.click(screen.getByTestId("drag-src:1"), { altKey: true });
+    expect(at("cluster:1:LVP01")).toEqual(lvp01);
+    expect(at("cluster:1:LVP02")).toEqual([500, 300]);
+    await waitFor(() => expect(puts(calls)).toHaveLength(1));
+    expect(body(puts(calls)[0])).toEqual([
+      { node_id: "src:1", x: 7, y: 8 }, { node_id: "cluster:1:LVP01", x: lvp01[0], y: lvp01[1] }, { node_id: "cluster:1:__ungrouped__", x: ungrouped[0], y: ungrouped[1] },
+    ]);
+    await expand("LVP01"); // a rebuild
+    expect(at("cluster:1:LVP01")).toEqual(lvp01);
+    expect(at("src:1")).toEqual([7, 8]);
+  });
+
+  it("a plain drag after an Alt drag takes the pinned children along again", async () => {
+    mockFetch(routes("operator"));
+    open();
+    await expand("Plant OPC");
+    const lvp01 = at("cluster:1:LVP01");
+    fireEvent.click(screen.getByTestId("drag-src:1"), { altKey: true }); // to 7,8; the group stays
+    flow.state.dropAt = { x: 17, y: 28 };
+    await userEvent.click(screen.getByTestId("drag-src:1")); // by +10,+20
+    expect(at("cluster:1:LVP01")).toEqual([lvp01[0] + 10, lvp01[1] + 20]);
+  });
+
+  it("dropping a group on an asset puts the group AND its open points back, and saves and remembers nothing", async () => {
+    const calls = mockFetch(routes("admin"));
+    open();
+    await expand("Plant OPC");
+    await expand("LVP01");
+    const before = ["cluster:1:LVP01", "point:1", "point:2"].map(at);
+    flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+    await userEvent.click(screen.getByTestId("drag-cluster:1:LVP01"));
+    await screen.findByRole("dialog", { name: "Review mappings" });
+    expect(["cluster:1:LVP01", "point:1", "point:2"].map(at)).toEqual(before);
+    expect(puts(calls)).toHaveLength(0);
+  });
+
+  it("a layout of more than 2000 places goes in several requests, one after the other", async () => {
+    const model = graph();
+    const keys = Array.from({ length: 2100 }, (_, i) => `K${i}`);
+    model.sources[0].clusters = keys.map((key, i) => ({ key, points: [point(1000 + i, `${key} p`)] }));
+    model.layout = { "src:1": { x: 0, y: 0 }, ...Object.fromEntries(keys.map((key, i) => [`cluster:1:${key}`, { x: i, y: i }])) };
+    const calls = mockFetch(routes("admin", model));
+    open();
+    await screen.findByText("Plant OPC");
+    await userEvent.click(screen.getByTestId("drag-src:1")); // collapsed: all 2100 groups are hidden, each with a place of its own
+    await waitFor(() => expect(puts(calls)).toHaveLength(2));
+    expect(puts(calls).map((c) => body(c).length)).toEqual([2000, 101]); // the source and the 2100 groups
+    expect(body(puts(calls)[0])[0].node_id).toBe("src:1");
+  });
+});
+
+describe("DiscoveryPage Tidy layout, the bar, collapse and expand all (W7t)", () => {
+  const placed = () => graph({ layout: { "src:1": { x: 10, y: 20 }, "cluster:1:LVP02": { x: 500, y: 300 } } });
+  const at = (id: string) => [Number(node(id).dataset.x), Number(node(id).dataset.y)];
+  const expand = async (name: string) => userEvent.click(await screen.findByRole("button", { name: `Expand ${name}` }));
+  const tidyButton = () => screen.getByRole("button", { name: "Tidy layout" });
+  const calls_of = (calls: { method: string; path: string }[], method: string) => calls.filter((c) => c.method === method && c.path === "/api/discovery/layout");
+  const graphReads = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method === "GET" && c.path === "/api/discovery/graph").length;
+
+  it("with discovery.edit it asks first, then deletes the saved layout for everyone, shows the default columns and fits the view by the opening rules", async () => {
+    let layout = placed().layout;
+    const calls = mockFetch({
+      ...routes("admin", () => graph({ layout })),
+      "DELETE /api/discovery/layout": () => { layout = {}; return { status: 204 }; },
+    });
+    open();
+    await screen.findByText("Plant OPC");
+    expect(at("src:1")).toEqual([10, 20]);
+    await userEvent.click(tidyButton());
+    const dialog = await screen.findByRole("dialog", { name: "Tidy the layout for everyone?" });
+    expect(dialog).toHaveTextContent("Every node goes back to its default column for all users. Nothing else changes.");
+    expect(calls_of(calls, "DELETE")).toHaveLength(0);
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Tidy for everyone" }));
+    await waitFor(() => expect(flow.fitView).toHaveBeenCalled());
+    expect(calls_of(calls, "DELETE")).toHaveLength(1);
+    expect(at("src:1")).toEqual([0, 0]);
+    expect(graphReads(calls)).toBe(2); // the graph was read again
+    expect(flow.fitView).toHaveBeenCalledWith(expect.objectContaining({ minZoom: 0.75, maxZoom: 1, padding: 0.2, nodes: [{ id: "src:1" }] }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(tidyButton()).toHaveFocus(); // the dialog handed the focus back
+  });
+
+  it("a Cancel sends nothing and changes nothing", async () => {
+    const calls = mockFetch(routes("admin", placed()));
+    open();
+    await screen.findByText("Plant OPC");
+    await userEvent.click(tidyButton());
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    expect(calls_of(calls, "DELETE")).toHaveLength(0);
+    expect(at("src:1")).toEqual([10, 20]);
+    expect(flow.fitView).not.toHaveBeenCalled();
+  });
+
+  it("the question is not asked twice, and the button waits (aria-disabled, never disabled) while it is open", async () => {
+    mockFetch(routes("admin", placed()));
+    open();
+    await screen.findByText("Plant OPC");
+    await userEvent.click(tidyButton());
+    await screen.findByRole("dialog");
+    expect(tidyButton()).toHaveAttribute("aria-disabled", "true");
+    expect(tidyButton()).not.toBeDisabled();
+  });
+
+  it("waits for the drag still being saved: the DELETE reaches the server after the PUT", async () => {
+    const calls = mockFetch(routes("admin", placed()));
+    const held = holdFetch((method) => method === "PUT");
+    open();
+    await screen.findByText("Plant OPC");
+    await userEvent.click(screen.getByTestId("drag-src:1"));
+    await userEvent.click(tidyButton());
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tidy for everyone" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls_of(calls, "DELETE")).toHaveLength(0); // the PUT has not got through yet
+    held.release();
+    await waitFor(() => expect(calls_of(calls, "DELETE")).toHaveLength(1));
+    expect(calls.map((c) => c.method).filter((m) => m === "PUT" || m === "DELETE")).toEqual(["PUT", "DELETE"]);
+    await waitFor(() => expect(flow.fitView).toHaveBeenCalled());
+  });
+
+  it("the old layout does not flash back: the places are gone as soon as the route answers, before the graph is read again", async () => {
+    const calls = mockFetch({ ...routes("admin", placed()) });
+    open();
+    await expand("Plant OPC");
+    await userEvent.click(screen.getByTestId("drag-src:1")); // to 7,8
+    const held = holdFetch((method, path) => method === "GET" && path === "/api/discovery/graph");
+    await userEvent.click(tidyButton());
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tidy for everyone" }));
+    await waitFor(() => expect(calls_of(calls, "DELETE")).toHaveLength(1));
+    await waitFor(() => expect(at("src:1")).toEqual([0, 0])); // while the read is still held
+    expect(at("cluster:1:LVP02")).not.toEqual([500, 300]);
+    held.release();
+    await waitFor(() => expect(flow.fitView).toHaveBeenCalled());
+  });
+
+  it("a refusal shows the server's reason in the error line and leaves every node where it was, with no refit", async () => {
+    mockFetch({ ...routes("admin", placed()), "DELETE /api/discovery/layout": { status: 403, body: { detail: "You may not change the layout." } } });
+    open();
+    await screen.findByText("Plant OPC");
+    await userEvent.click(screen.getByTestId("drag-src:1")); // to 7,8
+    await userEvent.click(tidyButton());
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tidy for everyone" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("You may not change the layout.");
+    expect(at("src:1")).toEqual([7, 8]);
+    expect(flow.fitView).not.toHaveBeenCalled();
+    expect(tidyButton()).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("every Tidy rebuilds the nodes: drag, Tidy, drag, Tidy puts them back each time", async () => {
+    mockFetch(routes("admin"));
+    open();
+    await screen.findByText("Plant OPC");
+    for (let round = 0; round < 2; round++) {
+      await userEvent.click(screen.getByTestId("drag-src:1"));
+      expect(at("src:1")).toEqual([7, 8]);
+      await userEvent.click(tidyButton());
+      await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Tidy for everyone" }));
+      await waitFor(() => expect(at("src:1")).toEqual([0, 0]));
+      await waitFor(() => expect(flow.fitView).toHaveBeenCalledTimes(round + 1));
+    }
+  });
+
+  it("without discovery.edit there is no question and no request: the view goes back to the default columns, and a toast says it is the person's own", async () => {
+    const calls = mockFetch(routes("operator", placed()));
+    const toasts = spyToasts();
+    renderWithProviders(<><DiscoveryPage /><SignedIn /></>, { route: "/discovery", path: "/discovery", toasts: toasts.api });
+    await screen.findByText("Plant OPC");
+    await userEvent.click(screen.getByTestId("drag-src:1"));
+    expect(at("src:1")).toEqual([7, 8]);
+    await userEvent.click(tidyButton());
+    await waitFor(() => expect(at("src:1")).toEqual([0, 0])); // the shared layout (10,20) is left out too: this view is tidy
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method === "DELETE" || c.method === "PUT")).toBe(false);
+    expect(toasts.calls).toEqual([{ kind: "info", text: "Tidied for you only. Your role may not change the layout everyone sees." }]);
+    await waitFor(() => expect(flow.fitView).toHaveBeenCalledTimes(1));
+  });
+
+  it("is drawn for every role that can see the page, as a plain button", async () => {
+    mockFetch(routes("operator"));
+    open();
+    await screen.findByText("Plant OPC");
+    expect(tidyButton()).toHaveAttribute("type", "button");
+    expect(tidyButton()).not.toHaveAttribute("aria-disabled");
+  });
+
+  describe("the bar", () => {
+    it("sits between the header and the canvas, inside .graph-page, with the summary as the one polite announcer and no role", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      const bar = document.querySelector(".graph-bar") as HTMLElement;
+      const page = document.querySelector(".graph-page") as HTMLElement;
+      expect(page.contains(bar)).toBe(true);
+      expect(bar.previousElementSibling).toBe(page.querySelector("header.page-head"));
+      expect(bar.nextElementSibling).toHaveClass("graph-layout");
+      const summary = bar.querySelector(".graph-summary") as HTMLElement;
+      expect(summary.tagName).toBe("P");
+      expect(summary).toHaveAttribute("aria-live", "polite");
+      expect(summary).toHaveAttribute("aria-atomic", "true");
+      expect(summary).not.toHaveAttribute("role");
+      expect(summary).toHaveAttribute("title", summary.textContent as string);
+      expect(within(bar).getAllByRole("button").map((b) => b.textContent)).toEqual(["Collapse all", "Expand all", "Tidy layout"]);
+      for (const button of within(bar).getAllByRole("button")) expect(button).toHaveAttribute("type", "button");
+    });
+
+    it.each([
+      ["1 source, 4 points, 0 mapped", graph()],
+      ["2 sources, 5 points, 2 mapped", graph({ sources: [
+        ...graph().sources,
+        { ...graph().sources[0], id: 2, name: "Lab", clusters: [{ key: "L", points: [point(20, "L kW", { asset_id: 10, mapping_id: 1 })] }], ungrouped: [] },
+      ].map((s, i) => (i === 0 ? { ...s, clusters: [{ key: "A", points: [point(1, "A", { asset_id: 11, mapping_id: 2 })] }], ungrouped: [point(4, "Status"), point(5, "S2"), point(6, "S3")] } : s)) })],
+      ["1 source, 4 points, 0 mapped, 1 needs credentials", graph({ sources: graph().sources.map((s) => ({ ...s, needs_credentials: true })) })],
+      ["2 sources, 8 points, 0 mapped, 2 need credentials", graph({ sources: [0, 1].map((i) => ({ ...graph().sources[0], id: i + 1, name: `S${i}`, needs_credentials: true })) })],
+    ])("the summary reads %s", async (text, model) => {
+      mockFetch(routes("operator", model));
+      open();
+      await screen.findByRole("heading", { level: 1, name: "Discovery" });
+      expect(await screen.findByText(text)).toHaveClass("graph-summary");
+    });
+
+    it("Collapse all and Expand all: Expand all opens every source and group, Collapse all closes them; the one with nothing to do is aria-disabled, not disabled, and does nothing", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      const collapse = () => screen.getByRole("button", { name: "Collapse all" });
+      const expandAll = () => screen.getByRole("button", { name: "Expand all" });
+      expect(collapse()).toHaveAttribute("aria-disabled", "true");
+      expect(collapse()).toHaveAttribute("title", "Nothing is open");
+      expect(collapse()).not.toBeDisabled();
+      expect(expandAll()).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(collapse());
+      expect(screen.queryByText("LVP01 (2)")).not.toBeInTheDocument();
+      await userEvent.click(expandAll());
+      expect(screen.getByText("LVP01 kW")).toBeInTheDocument(); // the source, its groups and their points
+      expect(screen.getByText("Status")).toBeInTheDocument();
+      expect(expandAll()).toHaveAttribute("aria-disabled", "true");
+      expect(expandAll()).toHaveAttribute("title", "Everything is open");
+      expect(expandAll()).toHaveFocus(); // it kept the focus the click gave it
+      expect(collapse()).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(expandAll());
+      expect(screen.getByText("LVP01 kW")).toBeInTheDocument();
+      await userEvent.click(collapse());
+      expect(screen.queryByText("LVP01 (2)")).not.toBeInTheDocument();
+      expect(screen.getByText("Plant OPC")).toBeInTheDocument();
+      expect(collapse()).toHaveAttribute("aria-disabled", "true");
+      expect(collapse()).toHaveFocus();
+    });
+
+    it("Expand all keeps the places the person set, and does not move the view", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByTestId("drag-src:1"));
+      await userEvent.click(screen.getByRole("button", { name: "Expand all" }));
+      expect(at("src:1")).toEqual([7, 8]);
+      expect(flow.fitView).not.toHaveBeenCalled();
+    });
+
+    it("a graph too big to open whole opens what fits and says what stayed closed in a toast; Expand all stays active", async () => {
+      const big = graph();
+      big.sources[0].clusters = [{ key: "Huge", points: Array.from({ length: 700 }, (_, i) => point(100 + i, `H${i}`)) }, { key: "Small", points: [point(900, "S")] }];
+      big.sources[0].ungrouped = [];
+      mockFetch(routes("operator", big));
+      const { toasts } = openToasts();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByRole("button", { name: "Expand all" }));
+      expect(toasts.calls).toEqual([{ kind: "info", text: "Opened 1 source and 1 group. 1 group stays closed: opening it would draw more than 600 nodes." }]);
+      expect(screen.getByText("S")).toBeInTheDocument(); // the small group's point is drawn
+      expect(screen.queryByText("H0")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Expand all" })).not.toHaveAttribute("aria-disabled");
+    });
+  });
+
+  describe("while the graph loads", () => {
+    it("holds the bar's room (aria-hidden, between the header and the canvas) and gives it up when the graph is in", async () => {
+      mockFetch(routes("operator"));
+      const held = holdFetch((_method, path) => path === "/api/discovery/graph");
+      open();
+      const space = document.querySelector(".graph-bar-space") as HTMLElement;
+      expect(space).not.toBeNull();
+      expect(space).toHaveAttribute("aria-hidden", "true");
+      expect(space.textContent).toBe("");
+      expect(space.previousElementSibling).toBe(document.querySelector("header.page-head"));
+      expect(space.nextElementSibling).toHaveClass("graph-layout");
+      held.release();
+      await screen.findByText("Plant OPC");
+      expect(document.querySelector(".graph-bar-space")).toBeNull();
+      expect(document.querySelector(".graph-bar")).not.toBeNull();
+    });
+
+    it("the bar and its placeholder share one rule for height and the gap under them (36px and 8px), so the canvas does not drop when the bar arrives", () => {
+      const css = readFileSync("src/styles/discovery-tidy.css", "utf8");
+      const rule = /\.graph-bar,\s*\.graph-bar-space\s*\{([^}]*)\}/.exec(css);
+      expect(rule, "one rule for both").not.toBeNull();
+      expect(rule![1]).toMatch(/height:\s*36px/);
+      expect(rule![1]).toMatch(/margin-bottom:\s*8px/);
+      expect(rule![1]).toMatch(/flex:\s*none/);
+    });
   });
 });

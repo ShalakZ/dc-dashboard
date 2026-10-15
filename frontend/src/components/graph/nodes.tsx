@@ -1,5 +1,6 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import type { MouseEvent } from "react";
+import { Icon } from "../Icon";
 import type {
   AssetNodeData, ClusterNodeData, NodeActions, PointNodeData, SourceNodeData, UnidentifiedNodeData,
 } from "../../lib/graph";
@@ -48,7 +49,7 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
           <div className="node-title">{source.name}</div>
           <Toggle id={id} name={source.name} expanded={expanded} onToggle={onToggle} />
         </div>
-        {/* One row that wraps: three buttons do not always fit the 220 px node, and a second line is better than a clipped one. Keyboard order is the order here. */}
+        {/* One row: Details, Create assets… and the bin (Remove has no text) fit the 220 px node; the row still wraps, a second line being better than a clipped one. Keyboard order is the order here. */}
         {(onSelect || onCreateAssets || onRemove) && (
           <div className="row gnode-actions">
             {onSelect && (
@@ -58,7 +59,7 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
               <button type="button" className="nodrag" aria-label={`Create assets for ${groups} ${groups === 1 ? "group" : "groups"} of ${source.name}`} onClick={press(() => onCreateAssets(id))}>Create assets…</button>
             )}
             {onRemove && (
-              <button type="button" className="nodrag quiet gnode-remove" aria-label={`Remove ${source.name} from Discovery`} onClick={press(() => onRemove(id))}>Remove</button>
+              <button type="button" className="nodrag quiet gnode-remove" aria-label={`Remove ${source.name} from Discovery`} title="Remove" onClick={press(() => onRemove(id))}><Icon name="trash" /></button>
             )}
           </div>
         )}

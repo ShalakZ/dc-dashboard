@@ -460,6 +460,21 @@ export function useRemoveDiscoveredSources() {
 }
 
 /**
+ * Tidy layout (`discovery.edit`): removes every saved node position of the Discovery graph, for everyone (`DELETE /api/discovery/layout`, 204, idempotent).
+ * `onDeleted` runs as soon as the route has answered, BEFORE the graph is read again (`onSuccess` runs ahead of `onSettled`): the page clears its own
+ * session places there, so the old layout never shows between the answer and the read. The graph is refetched in `onSettled` (a refusal also
+ * means the page may be out of date), and the call resolves after that read.
+ */
+export function useTidyLayout({ onDeleted }: { onDeleted?: () => void } = {}) {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: () => api.del("/api/discovery/layout"),
+    onSuccess: () => onDeleted?.(),
+    onSettled: () => invalidate(keys.graph),
+  });
+}
+
+/**
  * One page of the filtered audit log, as a query. `useAudit` and the drawer's Previous/Next (`queryClient.fetchQuery`, to look into the
  * neighbouring page before moving to it) both take this, so they share a key: the page fetched for a step is already in the cache when the list shows it.
  */

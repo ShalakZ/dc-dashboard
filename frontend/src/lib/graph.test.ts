@@ -1,6 +1,6 @@
 import type { RemoveSourcesResult } from "../api/types";
 import {
-  BLOCK_GAP, MAX_LAYOUT_ID, SOURCE_H, UNGROUPED, buildGraph, descendantNodeIds, initialView, isRemovable, layoutBatches, nodeId, ownPlaces,
+  BLOCK_GAP, MAX_LAYOUT_ID, SOURCE_H, UNGROUPED, buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches, nodeId, ownPlaces,
   removalDialogText, removalOutcome, seenLine, shiftedPlaces, type OpenState, type XY,
 } from "./graph";
 import { model, point, source } from "../test/graphFixtures";
@@ -489,6 +489,27 @@ describe("layoutBatches", () => {
   });
 });
 
+describe("childNodeIds (one level, what an Alt-drag pins)", () => {
+  const m = model({ assets: [
+    { id: 10, parent_id: null, name: "Site", kind: "generic" }, { id: 11, parent_id: 10, name: "Panel 1", kind: "generic" },
+    { id: 12, parent_id: 11, name: "Breaker", kind: "generic" }, { id: 13, parent_id: 13, name: "Self", kind: "generic" },
+  ] });
+
+  it.each([
+    ["a source: its groups and the Ungrouped bag, not their points", "src:1", ["cluster:1:LVP01", "cluster:1:LVP02", "cluster:1:__ungrouped__"]],
+    ["a group: its points", "cluster:1:LVP01", ["point:1", "point:2", "point:3"]],
+    ["an asset: its sub-assets, not theirs", "asset:10", ["asset:11"]],
+    ["an asset one level down", "asset:11", ["asset:12"]],
+    ["a leaf asset", "asset:12", []],
+    ["a self-parent asset is not its own child", "asset:13", []],
+    ["a point", "point:1", []],
+    ["something the model does not hold", "asset:99", []],
+    ["something that is no node id", "garbage", []],
+  ])("%s", (_name, id, expected) => {
+    expect([...childNodeIds(m, id)].sort()).toEqual([...expected].sort());
+  });
+});
+
 describe("initialView (where the canvas opens)", () => {
   const sources = (n: number) => model({ sources: Array.from({ length: n }, (_, i) => source(i + 1)) });
 
@@ -521,13 +542,20 @@ describe("initialView (where the canvas opens)", () => {
   });
 
   it("frames all three when the saved positions are near each other, wherever on the canvas they are", () => {
-    const near = model({ sources: [source(1), source(2), source(3)], layout: { "src:1": { x: -2000, y: 900 }, "src:2": { x: -1900, y: 1100 }, "src:3": { x: -1800, y: 1300 } } });
+    const near = model({ sources: [source(1), source(2), source(3)], layout: { "src:1": { x: -2000, y: 900 }, "src:2": { x: -1900, y: 1000 }, "src:3": { x: -1800, y: 1100 } } });
     expect(initialView(near)?.nodes).toEqual([{ id: "src:1" }, { id: "src:2" }, { id: "src:3" }]);
   });
 
   it("a source with no saved position counts where the graph puts a collapsed one, and a missing layout entry is not read from the prototype", () => {
     const mixed = model({ sources: [source(1), source(2)], layout: { "src:1": { x: 0, y: 0 }, constructor: { x: 9999, y: 9999 } } });
     expect(initialView(mixed)?.nodes).toEqual([{ id: "src:1" }, { id: "src:2" }]);
+  });
+
+  it("frames a second source only while it fits the box that the bar above the canvas left (501 graph pixels tall, was 560)", () => {
+    const at = (y: number) => model({ sources: [source(1), source(2)], layout: { "src:1": { x: 0, y: 0 }, "src:2": { x: 0, y } } });
+    const room = 501 - SOURCE_H; // the second source's top may lie this far below the first one's
+    expect(initialView(at(room))?.nodes).toEqual([{ id: "src:1" }, { id: "src:2" }]);
+    expect(initialView(at(room + 1))?.nodes).toEqual([{ id: "src:1" }]);
   });
 
   it("is undefined with no source at all, so the graph is fitted whole as before", () => {
