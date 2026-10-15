@@ -1204,7 +1204,7 @@ test.describe("W7u: measurements (about 2,000 nodes)", () => {
     await startFrames(page);
     await page.mouse.move(box.x + 8, box.y + 4);
     await expect.poll(() => page.evaluate(() => (window as unknown as { __w7uHover: { paint: number } }).__w7uHover.paint), { timeout: 20_000, message: "the path was lit and painted" }).toBeGreaterThan(0);
-    await page.waitForTimeout(400); // the opacity transition (120 ms) and the frames after it
+    await page.waitForTimeout(400); // the class change and the frames after it (the dimming has no transition any more)
     const frames = await stopFrames(page);
     const probe = await page.evaluate(() => (window as unknown as { __w7uHover: { enter: number; cls: number; paint: number } }).__w7uHover);
 
