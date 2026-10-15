@@ -75,9 +75,15 @@ dialog. Without that permission the tree is plain links: no picking, no draggabl
 - **Picking.** A plain click opens an asset, as always, and clears the picks. **Ctrl-click** (**Cmd-click** on a Mac) picks or unpicks a row
   without opening it; **Shift-click** picks every visible row between the last row you picked or opened and the one you clicked (rows hidden
   by a folded branch or by the filter are left out, and a second Shift-click replaces the range). On the keyboard, **Space** on a row's link
-  picks it, **Shift+Arrow** extends the range, **Escape** clears. A picked row has a tint and a frame; the open asset keeps its own bar. The
-  line between the filter and the rows says "N picked" with **Move to...** and **Clear** (with nothing picked it shows a hint, and a
-  **Move to...** button for the open asset, which is the way for a tablet). Ctrl-click does not open an asset in a new tab here; the
+  picks it, **Shift+Arrow** extends the range, **Escape** clears. The open asset's row has a bar on its left, a bold name and an
+  accent-coloured icon, and no tint; a picked row has a tint and a frame; an asset that is both shows both. The line between the filter and
+  the rows says "N picked" with **Move to...**, **Delete** and **Clear**. **Delete** is there only for someone who also holds **Delete
+  assets** (`assets.delete`) and only while something is picked (see [Deleting several assets](#deleting-several-assets)). The count does not include
+  the open asset unless it is picked too: the count's tooltip says "The open asset is not counted unless it is also picked", and a screen
+  reader hears "The open asset, Pump 3, is not counted". With nothing picked the line shows a hint, and a **Move to...** button for the open
+  asset, which is the way for a tablet. In a narrow tree column (276 px or less, which includes the narrowest, 220 px) the line is two lines
+  high for someone who sees **Delete**, the count above the buttons; it is two lines whether or not anything is picked, so no row jumps when
+  you pick the first one, and everyone else keeps one line. Ctrl-click does not open an asset in a new tab here; the
   middle button and the browser's menu still do. Picks live only in that browser tab and end when you move, press Clear or open an asset.
 - **Dragging.** Drag a picked row to move all the picked rows; drag a row that is not picked to move just that one. The row under the pointer
   shows where the assets would land: the top quarter of a row puts them **before** it (as its sibling), the middle half **inside** it (as its
@@ -132,5 +138,35 @@ changes; no side effects) and `POST /api/assets/move` (does it) take `{"moves": 
 Answers: 200; 422 with `refusals` (each with the asset, a reason in names and a code) when a rule refuses, or with an empty list and
 `unchanged` when everything is already there; 409 with `"stale": true` when what the caller saw is no longer true (`expect` is optional: the
 page sends the preview's own, so a child added after the preview, a parent that changed or a rate that changed is refused).
+
+## Deleting several assets
+
+Pick the assets as for a move, then press **Delete** in the line above the rows. It needs both **Change assets** (`assets.edit`, which
+picking needs) and **Delete assets** (`assets.delete`); a person with only the first sees no Delete, and the server answers 403 to a delete
+from them. A single asset is still deleted from its own page, and the bar's Delete never acts on the open asset unless it is picked too.
+
+- **The dialog.** "Delete 3 assets?" opens at once and asks the server what the delete takes with it (the same impact check as the single
+  delete). It lists the first 8 picked names and "and N more" for the rest, then what else goes with them, added up over the picks: the
+  sub-assets nobody picked, the mappings and the tariffs. When anything beyond the picks goes, the button reads **Delete anyway** and the
+  billing warning is the single delete's own: `5 assets, 2 mappings and 1 tariff will be deleted; their past energy and cost figures disappear
+  from Billing and dashboards.` The dialog always ends with "This can't be undone." A pick that sits inside another pick gets a note,
+  `LVP02 is inside Data_Hall_1, which is also picked, so it goes with it.` (the first three, then "and N more are inside other picked assets,
+  so they go with them"). Picks that the filter hides are still deleted, as they are still moved; the dialog names them.
+- **Only top-level picks are sent.** Deleting an asset deletes everything below it, so a pick inside another pick goes with it and is not
+  sent on its own. Each top-level asset is deleted by its own request (`DELETE /api/assets/{id}`), one after the other, with the counts the
+  dialog showed. If a branch grew in the meantime the server refuses that request; when nothing has been deleted yet the dialog stays
+  open, shows the new numbers and asks you to confirm again.
+- **A stop is honest.** The first asset that cannot be deleted stops the rest. An error toast says how many assets went and which one
+  failed and why, for example `Deleted 2 assets. "LVP03" could not be deleted: More was added under it since the numbers were shown. 1 was not
+  tried.` The assets that failed or were not tried stay picked, so you can look and try again. An asset that someone else deleted
+  meanwhile is not a failure: it counts as already gone and the rest go on. If a pick was already gone when the dialog opened, the dialog
+  cannot be confirmed (only Close), says so, and the tree refreshes; pick again.
+- **Counts.** At most 100 top-level assets go at once (a picked branch counts once); above that no dialog opens and a toast asks you to pick
+  fewer. The success toast, `Deleted 3 assets`, counts the assets the dialog showed, branches included; the audit log has the exact number:
+  one `asset.deleted` entry per top-level asset, with its name and the counts of its sub-assets, mappings and tariffs.
+- **Afterwards.** The focus goes to the first row left after the first deleted one (else the last row before it, else the filter), without
+  scrolling the page; after Cancel, or when some assets stayed, it goes back to the Delete button. If the open asset was deleted, or sits inside a deleted branch, the page moves to the parent of that deleted branch (the Assets
+  Tree itself when it was a top-level asset), at once and not at the end. The tree, the fleet summary, Billing, dashboards, tariffs and
+  sources refresh when the last request is done.
 
 Related: [Sources and discovery](sources-and-discovery.md), [Dashboards and billing](dashboards-and-billing.md), [Roles and permissions](roles-and-permissions.md), [Screens](screens.md)
