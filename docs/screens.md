@@ -9,7 +9,8 @@ lacks says "No access".
 ## Monitor
 
 - **Assets Tree** (everyone): needs `assets.view`. Your asset hierarchy on the left and, beside it, the fleet summary (the
-  Assets, Live power, Energy today and Cost today tiles) or the asset you opened, with its live values and charts. Adding and
+  Assets, Live power, Energy today and Cost today tiles) or the asset you opened, with its live values and charts. The trail above
+  an open asset (`Assets Tree / MV2 / Room 1 / LVP02`) shows each asset's own icon beside its name, the same icon as in the tree. Adding and
   editing assets and mapping points needs `assets.edit` (also needed to pick several assets and move them), deleting
   `assets.delete`. See [Assets and kinds](assets-and-kinds.md).
 - **Asset kinds** (everyone reads, admins change): the Asset kinds button of the Assets Tree (`/assets/kinds`). Reading needs
@@ -29,10 +30,14 @@ lacks says "No access".
 - **Points** of a source (admins): the Points item of a source's row menu; needs `sources.edit`. **Browse points** asks the source
   what it offers; **Map** ties a point to an asset.
 - **Scans** and **Discovery** (operators and admins; only admins can change anything): need `discovery.view`. Scans lists the
-  scan scopes and their results; **Details** on a result opens that scan in a panel on the right, with the scope it covered
-  (targets and ports), the figures in words and the findings, and Esc, the x or a click outside closes it. Discovery shows what was
+  scan scopes and their results, names the ports it knows (`4840 (OPC UA)`) and warns, without blocking, about a port that looks like
+  a typo of one; **Details** on a result opens that scan in a panel on the right, with the scope it covered
+  (targets and ports), the figures in words and the findings, and Esc, the x or a click outside closes it, and **Scan again** on a
+  result previews and confirms a new scan of the same scope. Discovery shows what was
   found as a graph to map by drag and drop or with the buttons on its nodes, says when a scan last found each source, and lets an
-  admin remove discovered sources that have nothing mapped, one by one (**Remove**) or all at once (**Clear unmapped**). Changing
+  admin remove discovered sources that have nothing mapped, one by one (the bin on the source) or all at once (**Clear unmapped**).
+  Dragging a node takes its open children along (hold Alt, Option on a Mac, to move it alone); a bar above the canvas gives a summary
+  line, **Collapse all**, **Expand all** and **Tidy layout**, which puts every node back in its default column for everyone. Changing
   scopes and the layout, and removing unmapped discovered sources, needs `discovery.edit`, running a scan `discovery.scan`,
   accepting results (**Map…**, **New asset…**, **Create assets…** for a whole source) `discovery.accept`. See
   [Discovery](sources-and-discovery.md#discovery).
