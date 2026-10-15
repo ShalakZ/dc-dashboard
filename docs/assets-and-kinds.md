@@ -7,7 +7,7 @@ moving assets in the Assets Tree, including what a move does to billing.
 ## Asset kinds
 
 A kind says once what each kind of asset looks like. An asset shows its own icon if it has one, else the icon of its kind, else the
-generic one. Change a kind's icon and every asset of that kind follows; rename a kind and the assets that carry the name follow it. A
+generic one. That icon is the one in the tree, in the page title and beside each asset's name in the trail above an open asset. Change a kind's icon and every asset of that kind follows; rename a kind and the assets that carry the name follow it. A
 kind's name is matched in any spelling ("Rack", " rack " and "RACK" are one kind).
 
 **Who may do what.** Everyone who may open the Assets Tree (`assets.view`) can read the Asset kinds page; every change needs
@@ -82,7 +82,8 @@ dialog. Without that permission the tree is plain links: no picking, no draggabl
   the open asset unless it is picked too: the count's tooltip says "The open asset is not counted unless it is also picked", and a screen
   reader hears "The open asset, Pump 3, is not counted". With nothing picked the line shows a hint, and a **Move to...** button for the open
   asset, which is the way for a tablet. In a narrow tree column (276 px or less, which includes the narrowest, 220 px) the line is two lines
-  high for someone who sees **Delete**, the count above the buttons; it is two lines whether or not anything is picked, so no row jumps when
+  high for someone who sees **Delete**: the count (or the hint, shortened there to "Ctrl-click to pick") and **Move to...** share the
+  first line, and **Delete** and **Clear** are on the second; it is two lines whether or not anything is picked, so no row jumps when
   you pick the first one, and everyone else keeps one line. Ctrl-click does not open an asset in a new tab here; the
   middle button and the browser's menu still do. Picks live only in that browser tab and end when you move, press Clear or open an asset.
 - **Dragging.** Drag a picked row to move all the picked rows; drag a row that is not picked to move just that one. The row under the pointer

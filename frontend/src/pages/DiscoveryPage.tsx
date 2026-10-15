@@ -6,7 +6,7 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
-import { keys, useGraph, useInvalidate, useRemoveDiscoveredSources, useSite } from "../api/queries";
+import { keys, useGraph, useInvalidate, useRemoveDiscoveredSources, useSite, useTidyLayout } from "../api/queries";
 import type { GraphModel, GraphSource } from "../api/types";
 import { useAppearance } from "../auth/AppearanceProvider";
 import { useAuth } from "../auth/AuthProvider";
@@ -16,19 +16,40 @@ import { nodeTypes } from "../components/graph/nodes";
 import { ReviewDialog, type InitialTarget } from "../components/graph/ReviewDialog";
 import { SourcePanel } from "../components/graph/SourcePanel";
 import { PageHeader } from "../components/PageHeader";
-import { ActionsSpace, CanvasSkeleton } from "../components/Skeleton";
+import { CanvasSkeleton, GraphBarSpace } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { useAction } from "../hooks/useAction";
+import { useConfirm } from "../hooks/useConfirm";
 import { dropPayload, mappableClusters, pickDropTarget, type DropPayload } from "../lib/drop";
 import {
-  buildGraph, initialView, isRemovable, removalDialogText, removalOutcome, seenLine,
-  type ClusterNodeData, type OpenState, type PointNodeData, type SourceNodeData,
+  buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches, ownPlaces, removalDialogText, removalOutcome, seenLine,
+  shiftedPlaces, type ClusterNodeData, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
+import { canCollapse, canExpand, collapseAll, expandAll, expandNote, graphSummary } from "../lib/graphView";
 
-const HINT = "Dashed nodes were discovered; solid nodes are assets. Press New asset… on a group, or drag it onto an asset (Fit View shows them all). Drag other nodes to arrange them.";
+const HINT = "Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset… A node takes its open children along; Alt or Option moves it alone.";
 
-/** The server rejects a longer layout node id (a cluster id embeds device-reported names, so it can be long). */
-const MAX_LAYOUT_ID = 512;
+/** Two animation frames: the nodes React Flow was given a moment ago are in its store and drawn. */
+const afterPaint = () => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); });
+
+/**
+ * What a drag works from, taken ONCE when it starts (the callbacks must not read the maps they are changing): which nodes are dragged, where every
+ * node that can move with the drag stood, which of them follow, and every place a node had of its own (as copies).
+ */
+interface DragSnapshot {
+  /** Alt (Option) was held when the drag began: the node moves alone. Read once; it holds for the whole drag. */
+  alone: boolean;
+  /** Where the dragged nodes, the followers and the pinned children stood when the drag began. */
+  starts: ReadonlyMap<string, XY>;
+  /** The nodes that are drawn and move with the dragged ones (never a dragged id). Empty for an Alt drag. */
+  followers: ReadonlySet<string>;
+  /** Every node under a dragged one, open or not, except the dragged ones themselves. Empty for an Alt drag. */
+  below: readonly string[];
+  /** An Alt drag only: the drawn children of the dragged nodes, which stay where they stand and so need a place of their own. */
+  pins: readonly string[];
+  /** `moved` over the saved layout, as it was when the drag began. */
+  own: ReadonlyMap<string, XY>;
+}
 
 const toggled = <T,>(set: ReadonlySet<T>, value: T): Set<T> => {
   const next = new Set(set);
@@ -89,10 +110,23 @@ function Canvas({ model }: { model: GraphModel }) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Where the user has dragged nodes this session. A rebuild (expand, collapse, refresh) puts these back instead of
   // snapping the nodes to the saved layout, which this person may never change or whose save may not have reloaded yet.
-  const moved = useRef(new Map<string, { x: number; y: number }>());
-  // Where the dragged nodes were when the drag began, so a drop onto an asset can put them back.
-  const dragStart = useRef(new Map<string, { x: number; y: number }>());
-  const { getIntersectingNodes } = useReactFlow();
+  const moved = useRef(new Map<string, XY>());
+  // The drag in progress (taken when it starts): a drop onto an asset puts the dragged nodes and their followers back from it.
+  const drag = useRef<DragSnapshot | null>(null);
+  // How many times Tidy layout ran here. Above 0 the saved layout is left out of the build (the graph is read again after a Tidy, and until then the old
+  // places must not flash back); each Tidy is a new value, so the nodes are rebuilt even when the second one changes nothing else.
+  const [tidyRuns, setTidyRuns] = useState(0);
+  const [tidying, setTidying] = useState(false);
+  const tidyBusy = useRef(false);
+  // Every layout write (a drag's PUT batches, Tidy's DELETE) goes through this one chain, so a quick second drag or a Tidy cannot reach the server out of order.
+  const layoutWrites = useRef<Promise<unknown>>(Promise.resolve());
+  const enqueue = useCallback(<T,>(work: () => Promise<T>): Promise<T> => {
+    const job = layoutWrites.current.then(work);
+    layoutWrites.current = job.catch(() => undefined); // the chain itself never rejects: a failed write is its caller's to show
+    return job;
+  }, []);
+  const { getIntersectingNodes, getNodes, fitView } = useReactFlow();
+  const [ask, askDialog] = useConfirm();
   const { dark } = useAppearance();
   const [review, setReview] = useState<{ key: number; payload: DropPayload; initialTarget: InitialTarget } | null>(null);
   const reviewCount = useRef(0);
@@ -167,14 +201,13 @@ function Canvas({ model }: { model: GraphModel }) {
   }])), [model, asOf, timezone, canAccept]);
 
   const seeded = useMemo(() => {
-    const built = buildGraph(model, open);
+    const built = buildGraph(model, open, { moved: moved.current, ignoreSaved: tidyRuns > 0 });
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
-      position: moved.current.get(n.id) ?? n.position,
       data: nodeData(n, canAccept, canRemove, facts, { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, canAccept, canRemove, facts, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove]);
+  }, [model, open, tidyRuns, canAccept, canRemove, facts, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
@@ -186,34 +219,135 @@ function Canvas({ model }: { model: GraphModel }) {
     setEdges(seeded.edges);
   }, [seeded, setNodes, setEdges]);
 
-  const onNodeDragStart: OnNodeDrag<Node> = useCallback((_event, _node, dragged) => {
-    dragStart.current = new Map(dragged.map((n) => [n.id, { x: n.position.x, y: n.position.y }]));
+  /** One snapshot per drag. A node takes its OPEN children along unless Alt (Option) is held; the places of the hidden ones are shifted at the drop. */
+  const onNodeDragStart: OnNodeDrag<Node> = useCallback((event, _node, dragged) => {
+    const draggedIds = new Set(dragged.map((n) => n.id));
+    const live = new Map(getNodes().map((n) => [n.id, n.position]));
+    const alone = event.altKey;
+    const below = new Set<string>();
+    if (!alone) for (const n of dragged) for (const id of descendantNodeIds(model, n.id)) if (!draggedIds.has(id)) below.add(id);
+    const followers = new Set([...below].filter((id) => live.has(id)));
+    const pins = alone ? [...new Set(dragged.flatMap((n) => childNodeIds(model, n.id)))].filter((id) => !draggedIds.has(id) && live.has(id)) : [];
+    const starts = new Map<string, XY>(dragged.map((n) => [n.id, { x: n.position.x, y: n.position.y }]));
+    for (const id of [...followers, ...pins]) starts.set(id, { ...live.get(id)! });
+    drag.current = { alone, starts, followers, below: [...below], pins, own: ownPlaces(model, { moved: moved.current, ignoreSaved: tidyRuns > 0 }) };
     setOffer(null);
-  }, []);
+  }, [model, tidyRuns, getNodes]);
+
+  /** The followers stand where they started plus how far the dragged node has gone from where IT started (never a dragged id: they are React Flow's). */
+  const placeFollowers = useCallback((snapshot: DragSnapshot, node: Node) => {
+    const from = snapshot.starts.get(node.id);
+    if (!from || snapshot.followers.size === 0) return;
+    const [dx, dy] = [node.position.x - from.x, node.position.y - from.y];
+    setNodes((current) => current.map((n) => {
+      const start = snapshot.followers.has(n.id) ? snapshot.starts.get(n.id) : undefined;
+      return start ? { ...n, position: { x: start.x + dx, y: start.y + dy } } : n;
+    }));
+  }, [setNodes]);
+  const onNodeDrag: OnNodeDrag<Node> = useCallback((_event, node) => {
+    if (drag.current) placeFollowers(drag.current, node);
+  }, [placeFollowers]);
 
   const onNodeDragStop: OnNodeDrag<Node> = useCallback((_event, node, dragged) => {
+    const snapshot = drag.current;
+    drag.current = null;
     // Everyone arranges the graph for themselves (kept in `moved`); only discovery.edit shares the layout, and only discovery.accept maps.
     if (canAccept && dragged.length <= 1) {
       const payload = dropPayload(model, node.id);
       const assetId = payload ? pickDropTarget(getIntersectingNodes(node)) : null;
       if (payload && assetId !== null) {
-        // Dropped on an asset: that is a request to map, not a move. Put the node back where it was (after React Flow's own
-        // final position change, hence the functional update) and remember nothing, so rebuilds keep it there too.
-        const back = dragStart.current.get(node.id);
-        if (back) setNodes((current) => current.map((n) => (n.id === node.id ? { ...n, position: back } : n)));
+        // Dropped on an asset: that is a request to map, not a move. Put the node and its followers back where they were (after React Flow's own
+        // final position change, hence the functional update) and remember nothing, so rebuilds keep them there too.
+        const back = snapshot?.starts;
+        if (back) setNodes((current) => current.map((n) => { const at = back.get(n.id); return at ? { ...n, position: at } : n; }));
         openReview(payload, { kind: "existing", assetId });
         return;
       }
       if (payload?.kind === "cluster") setOffer({ nodeId: node.id, label: payload.label });
     }
-    for (const n of dragged) moved.current.set(n.id, { x: n.position.x, y: n.position.y });
+    // What this drag changed, in the order it is sent: the dragged nodes where they now stand, then every place that was shifted with them.
+    const writes = new Map<string, XY>();
+    for (const n of dragged) writes.set(n.id, { x: n.position.x, y: n.position.y });
+    const from = snapshot?.starts.get(node.id);
+    if (snapshot && from) {
+      // Computed from the snapshot, never from `moved` while it is being filled: a source and its own group dragged together shift each place once.
+      placeFollowers(snapshot, node); // React Flow may deliver the last position without one more onNodeDrag
+      const shifted = shiftedPlaces(snapshot.own, snapshot.below, { x: node.position.x - from.x, y: node.position.y - from.y });
+      for (const [id, place] of shifted) writes.set(id, place);
+      // Alt: the children stay, so each one that had no place of its own gets the one it stands at (else it would follow its parent at the next rebuild).
+      for (const id of snapshot.pins) if (!snapshot.own.has(id)) writes.set(id, snapshot.starts.get(id)!);
+    }
+    for (const [id, place] of writes) moved.current.set(id, place);
     if (!canLayout) return;
-    // A node with an over-long id stays where it was dragged for this session but is not sent: the server would reject
+    // A node with an over-long id stays where it was dragged for this session but is not sent (layoutBatches leaves it out): the server would reject
     // the whole request and take every other position down with it.
-    const saved = dragged.filter((n) => n.id.length <= MAX_LAYOUT_ID);
-    if (saved.length === 0) return;
-    void run(() => api.put("/api/discovery/layout", { nodes: saved.map((n) => ({ node_id: n.id, x: n.position.x, y: n.position.y })) }));
-  }, [canAccept, canLayout, model, getIntersectingNodes, setNodes, openReview, run]);
+    const batches = layoutBatches(writes);
+    if (batches.length === 0) return;
+    void run(() => enqueue(async () => { for (const nodes of batches) await api.put("/api/discovery/layout", { nodes }); }));
+  }, [canAccept, canLayout, model, getIntersectingNodes, setNodes, placeFollowers, openReview, run, enqueue]);
+
+  // The bar above the canvas: what the graph holds, Collapse all, Expand all and Tidy layout. A button with nothing to do keeps its place and says so
+  // (aria-disabled and a click guard, never `disabled`: it may hold the focus the click gave it).
+  const summary = useMemo(() => graphSummary(model), [model]);
+  const collapsible = canCollapse(model, open);
+  const expandable = canExpand(model, open);
+  const onCollapseAll = () => {
+    if (collapsible) setOpen(collapseAll());
+  };
+  const onExpandAll = () => {
+    if (!expandable) return;
+    const result = expandAll(model, open);
+    setOpen(result.open);
+    const note = expandNote(result); // what the node budget kept closed, if anything
+    if (note) toast.info(note);
+  };
+
+  // Tidy layout: every node back to its default column. The model of the moment is read after the awaits (a refresh may have come in meanwhile).
+  const modelRef = useRef(model);
+  useEffect(() => { modelRef.current = model; }, [model]);
+  const tidyLayout = useTidyLayout({
+    // Right after the route has answered, before the graph is read again: the old layout (this session's drags and the saved places) never shows.
+    onDeleted: () => { moved.current.clear(); setTidyRuns((n) => n + 1); },
+  });
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const refit = useCallback(async () => {
+    await afterPaint(); // the rebuilt nodes are in React Flow's store
+    if (!mounted.current) return; // the person left the page meanwhile
+    void fitView(initialView({ ...modelRef.current, layout: {} })); // the opening rules (W7r), as if no place were saved
+  }, [fitView]);
+  const onTidy = async () => {
+    if (tidyBusy.current) return;
+    tidyBusy.current = true;
+    setTidying(true);
+    try {
+      if (!canLayout) {
+        // The layout is shared and this role may not change it: its own view goes back to the default columns, and nothing is sent.
+        moved.current.clear();
+        setTidyRuns((n) => n + 1);
+        toast.info("Tidied for you only. Your role may not change the layout everyone sees.");
+        await refit();
+        return;
+      }
+      const yes = await ask({
+        title: "Tidy the layout for everyone?",
+        message: "Every node goes back to its default column for all users. Nothing else changes.",
+        confirmLabel: "Tidy for everyone",
+        tone: "primary",
+      });
+      if (!yes) return;
+      let cleared = false;
+      // Behind the drags still being saved (one chain); a refusal lands in the same error line as a failed drag and changes nothing here.
+      await run(async () => { await enqueue(() => tidyLayout.mutateAsync()); cleared = true; });
+      if (cleared) await refit();
+    } finally {
+      tidyBusy.current = false;
+      setTidying(false);
+    }
+  };
 
   // The panel reads the source from the current model, so it follows a refresh instead of showing stale facts.
   const selected = selectedId === null ? undefined : model.sources.find((s) => s.id === selectedId);
@@ -267,6 +401,23 @@ function Canvas({ model }: { model: GraphModel }) {
           </>
         }
       />
+      <div className="graph-bar">
+        {/* The one announcer of this area: React leaves the text alone when the numbers do not change, so it speaks only when they do. */}
+        <p className="graph-summary" aria-live="polite" aria-atomic="true" title={summary}>{summary}</p>
+        <button
+          type="button"
+          aria-disabled={!collapsible || undefined}
+          title={collapsible ? undefined : "Nothing is open"}
+          onClick={onCollapseAll}
+        >Collapse all</button>
+        <button
+          type="button"
+          aria-disabled={!expandable || undefined}
+          title={expandable ? undefined : "Everything is open"}
+          onClick={onExpandAll}
+        >Expand all</button>
+        <button type="button" aria-disabled={tidying || undefined} onClick={() => void onTidy()}>Tidy layout</button>
+      </div>
       {saveError && <p className="error" role="alert">{saveError}</p>}
       <div className="graph-layout">
         <div className="graph-canvas" ref={canvas}>
@@ -278,9 +429,11 @@ function Canvas({ model }: { model: GraphModel }) {
             onEdgesChange={onEdgesChange}
             onNodeClick={(_event, node) => { if (node.type === "source") setSelectedId((node.data as SourceNodeData).source.id); }}
             onNodeDragStart={onNodeDragStart}
+            onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
             colorMode={dark ? "dark" : "light"}
             nodesConnectable={false}
+            nodesDraggable={!tidying} // a drag while Tidy runs would put the old places back after the wipe, for everyone
             edgesFocusable={false} // an edge is a Tab stop with no visible ring; the nodes stay focusable
             deleteKeyCode={null}
             fitView
@@ -308,6 +461,7 @@ function Canvas({ model }: { model: GraphModel }) {
         <ReviewDialog key={review.key} model={model} payload={review.payload} initialTarget={review.initialTarget} onClose={closeReview} />
       )}
       {canAccept && createFor && <BulkCreateDialog model={model} source={createFor} onClose={closeCreate} />}
+      {askDialog}
       {removal && (
         <ConfirmDeleteDialog
           {...removalDialogText(removal.sources.map((s) => s.name))}
@@ -320,8 +474,22 @@ function Canvas({ model }: { model: GraphModel }) {
   );
 }
 
+/**
+ * The header's actions while the graph loads: the words of the real buttons (Refresh, and Clear unmapped for a role that has it), hidden. The actions
+ * column takes its width from them, so the hint beside it wraps onto the same number of lines as it will beside the real buttons and the canvas does not
+ * drop when the graph arrives (a bare gap, `ActionsSpace`, holds the height but not the width). Not focusable and not read out.
+ */
+function LoadingActions({ withClear }: { withClear: boolean }) {
+  return (
+    <span className="graph-actions-space" aria-hidden="true">
+      <button type="button" tabIndex={-1}>Refresh</button>
+      {withClear && <button type="button" tabIndex={-1}>Clear unmapped (0)</button>}
+    </span>
+  );
+}
+
 export function DiscoveryPage() {
-  const { loading } = useAuth();
+  const { loading, can } = useAuth();
   const { data: model, error, isLoading } = useGraph();
   const empty = !model || (model.sources.length === 0 && model.unidentified.length === 0);
   // A Clear unmapped that takes the last source away leaves the empty page: the canvas, with the dialog and the button that had the focus, is
@@ -339,7 +507,8 @@ export function DiscoveryPage() {
     // Inside .graph-page from the first paint: the shell's one-window-tall rules key on it, and the canvas takes what the header leaves.
     return (
       <div className="graph-page">
-        <PageHeader title="Discovery" sub={HINT} actions={<ActionsSpace />} />
+        <PageHeader title="Discovery" sub={HINT} actions={<LoadingActions withClear={can("discovery.edit")} />} />
+        <GraphBarSpace />
         <CanvasSkeleton label="Loading the graph" />
       </div>
     );

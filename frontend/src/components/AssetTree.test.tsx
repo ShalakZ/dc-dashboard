@@ -961,6 +961,20 @@ describe("AssetTree picked slot", () => {
     expect(within(slot()).queryByRole("button")).not.toBeInTheDocument(); // no open asset, nothing picked: nothing to move
   });
 
+  it("W7t: the hint is a long and a short span (the narrow bar with Delete shows the short one), the full hint is the text's title, and the count has neither", () => {
+    render(withMove());
+    const text = slot().querySelector(".tree-slot-text")!;
+    expect(text.querySelector(".tree-slot-long")).toHaveTextContent(/^Ctrl-click to pick several$/);
+    expect(text.querySelector(".tree-slot-short")).toHaveTextContent(/^Ctrl-click to pick$/);
+    expect(text).toHaveAttribute("title", "Ctrl-click to pick several");
+    ctrlClick("Room A");
+    const count = slot().querySelector(".tree-slot-text")!;
+    expect(count).toHaveTextContent(/^1 picked$/);
+    expect(count.querySelector(".tree-slot-long, .tree-slot-short")).toBeNull();
+    expect(count).not.toHaveAttribute("title");
+    expect(within(slot()).getByRole("button", { name: "Clear" })).toHaveClass("tree-slot-btn", "tree-slot-clear");
+  });
+
   it("offers to move the open asset when nothing is picked, and hands the page that asset and the button", async () => {
     const move = moveApi();
     render(withMove({ move, selectedId: 4 }));

@@ -14,4 +14,22 @@
      with the base hover wash taken back by naming the base colour. */
   .discovery-clear[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
   .discovery-clear[aria-disabled="true"]:hover { background: var(--bg); }
+
+  /* W7t: Remove on a source node is the bin alone (its name is the aria-label, its tooltip the title): Details, Create assets… and the bin share one row of the 220px node. 14px keeps the row as tall as its text buttons. */
+  .gnode-remove svg.i { width: 14px; height: 14px; }
+
+  /* W7t: the header's actions while the graph loads are the real buttons' words, hidden (visibility keeps their width and takes them out of the tab order and the accessibility tree): the same width
+     as the real Refresh and Clear unmapped, so the hint beside them wraps onto the same lines and the canvas does not drop when the graph arrives. */
+  .graph-actions-space { display: flex; gap: 8px; visibility: hidden; }
+
+  /* W7t: the bar between the header and the canvas (the summary on the left, Collapse all, Expand all and Tidy layout on the right). One rule gives the bar and the place held for it while the graph loads
+     the same height and the same gap, so the canvas does not drop when the bar arrives (the page is exactly one window tall). */
+  .graph-bar, .graph-bar-space { flex: none; box-sizing: border-box; height: 36px; margin-bottom: 8px; }
+  .graph-bar { display: flex; align-items: center; gap: 8px; }
+  /* ONE line that gives way to the buttons (min-width 0): the whole text is in its title. */
+  .graph-summary { flex: 1 1 0; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: var(--fs-sm); }
+  .graph-bar button { flex: none; }
+  /* Waiting buttons use aria-disabled, never disabled (they may hold the focus the click gave them): the looks of button:disabled, with the base hover wash taken back by naming the base colour. */
+  .graph-bar button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+  .graph-bar button[aria-disabled="true"]:hover { background: var(--bg); }
 }

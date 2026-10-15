@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { keys, useInvalidate, useScans, useScopes, useScopeSuggestions, useSite } from "../api/queries";
-import type { Scope, ScopePreview } from "../api/types";
+import type { ScanSummary, Scope, ScopePreview } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
@@ -12,7 +12,8 @@ import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
 import { useAction } from "../hooks/useAction";
 import { useConfirm } from "../hooks/useConfirm";
-import { recognisedText, scopeDetail, sourcesAndPoints } from "../lib/scanText";
+import { portsLine } from "../lib/ports";
+import { plural, recognisedText, scopeDetail, sourcesAndPoints } from "../lib/scanText";
 import { formatSiteDateTime } from "../lib/siteTime";
 
 type FormState = "new" | Scope | null;
@@ -24,6 +25,19 @@ const SCAN_CHIP: Record<string, string> = { done: "chip-ok", failed: "chip-bad" 
 const ScansIcon = () => (
   <svg className="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /><path d="M11 7v4l2.5 2" /></svg>
 );
+
+/**
+ * Why Scan again cannot be pressed, or null. The order matters: the role first, then the scopes themselves (a list that is still loading or
+ * could not be read has no scope to find, which says nothing about the scope having been deleted), and only then "deleted" and "busy".
+ */
+export function scanAgainBlock(state: { canScan: boolean; loading: boolean; failed: boolean; scope: Scope | undefined; busy: boolean }): string | null {
+  if (!state.canScan) return "Your role may not start scans.";
+  if (state.loading) return "Loading scopes…";
+  if (state.failed) return "The scopes could not be read.";
+  if (!state.scope) return "The scope was deleted.";
+  if (state.busy) return "Another request is in progress.";
+  return null;
+}
 
 export function ScansPage() {
   const { can } = useAuth();
@@ -38,14 +52,31 @@ export function ScansPage() {
   const [ask, confirmDialog] = useConfirm();
   const toast = useToast();
   const [form, setForm] = useState<FormState>(null);
-  const suggestions = useScopeSuggestions(canEdit && form === "new");
+  // Read for the edit form too: its typo guard compares with the ports the server suggests (it works from the names alone until they arrive).
+  const suggestions = useScopeSuggestions(canEdit && form !== null);
   const [pending, setPending] = useState<{ scope: Scope; preview: ScopePreview } | null>(null);
   const [activeScan, setActiveScan] = useState<number | null>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const bringPanelIntoView = useRef(false);
+
+  // The confirmation stands above the Scopes table, off screen when Scan again was pressed low in Recent scans: bring it into view without moving the focus.
+  useEffect(() => {
+    if (!pending || !bringPanelIntoView.current) return;
+    bringPanelIntoView.current = false;
+    panel.current?.scrollIntoView?.({ block: "nearest", behavior: "auto" }); // "auto" follows the page's own scroll-behavior, which honours reduced motion
+  }, [pending]);
 
   // Nothing runs before the operator has seen the size of the scan: preview first, then confirm with that host count and the digest of the scope that was previewed.
-  const requestPreview = (scope: Scope) => run(async () => {
-    setPending({ scope, preview: await api.get<ScopePreview>(`/api/scopes/${scope.id}/preview`) });
+  const requestPreview = (scope: Scope, reveal = false) => run(async () => {
+    const preview = await api.get<ScopePreview>(`/api/scopes/${scope.id}/preview`);
+    bringPanelIntoView.current = reveal;
+    setPending({ scope, preview });
   });
+  // Scan again: the same preview and confirmation as the scope row's Scan item, for the scope as it is now (it may have been edited since).
+  // `null` = the button can be pressed. It is drawn for every role that can read the table: a reason beats a missing control.
+  const scanAgainScope = (scan: ScanSummary) => (scan.scope_id === null ? undefined : scopes.find((s) => s.id === scan.scope_id));
+  const scanAgainReason = (scan: ScanSummary): string | null =>
+    scanAgainBlock({ canScan, loading: isLoading, failed: Boolean(scopesError), scope: scanAgainScope(scan), busy });
   const startScan = () => run(async () => {
     if (!pending) return;
     let scanId: number;
@@ -109,13 +140,13 @@ export function ScansPage() {
       )}
       {form !== null && form !== "new" && (
         <div className="scope-card">
-          <ScopeForm key={form.id} initial={form} onSaved={saved} onCancel={() => setForm(null)} />
+          <ScopeForm key={form.id} initial={form} suggestions={suggestions.data} onSaved={saved} onCancel={() => setForm(null)} />
         </div>
       )}
       {pending && (
-        <div className="panel confirm-scan">
+        <div className="panel confirm-scan scan-confirm-reveal" ref={panel}>
           <p className="confirm-title">Scan "{pending.scope.name}"?</p>
-          <p>{`${pending.preview.hosts} hosts × ${pending.preview.ports} ports (${pending.preview.pairs} checks)`}</p>
+          <p>{`${plural(pending.preview.hosts, "host")} × ${plural(pending.preview.ports, "port")} (${plural(pending.preview.pairs, "check")})`}</p>
           <div className="row">
             <button onClick={() => setPending(null)} disabled={busy}>Cancel</button>
             <button className="primary" onClick={startScan} disabled={busy}>Start scan</button>
@@ -136,7 +167,7 @@ export function ScansPage() {
             <tbody>
               {scopes.map((s) => (
                 <tr key={s.id}>
-                  <td><span className="cell-name" title={s.name}>{s.name}</span></td><td className="wrap-any">{s.targets.join(", ")}</td><td className="wrap-any">{s.ports.join(", ")}</td>
+                  <td><span className="cell-name" title={s.name}>{s.name}</span></td><td className="wrap-any">{s.targets.join(", ")}</td><td className="wrap-any">{portsLine(s.ports)}</td>
                   {hasActions && (
                     <td className="row-actions">
                       <RowActions label={`Actions for ${s.name}`} items={[
@@ -168,12 +199,14 @@ export function ScansPage() {
         <div className="empty"><div className="empty-icon"><ScansIcon /></div><p className="muted">No scans yet.</p></div>
       )}
       {!scansLoading && !scansError && scans.length > 0 && (
-        <div className="table-wrap">
+        <div className="table-wrap scans-recent">
           <table>
             <thead><tr><th>Scope</th><th>Status</th><th>Started</th><th className="num scan-figures">Sources / points</th><th className="row-actions"></th></tr></thead>
             <tbody>
               {scans.map((scan) => {
                 const detail = scopeDetail(scan.targets ?? [], scan.ports ?? []);
+                const again = scanAgainScope(scan);
+                const reason = scanAgainReason(scan);
                 return (
                   <tr key={scan.id}>
                     <td>
@@ -183,7 +216,16 @@ export function ScansPage() {
                     <td><span className={`chip ${SCAN_CHIP[scan.status] ?? "chip-stale"}`}>{scan.status}</span></td>
                     <td className="nowrap">{site.data ? formatSiteDateTime(scan.created_at, site.data.timezone) : "—"}</td>
                     <td className="num scan-figures" title={recognisedText(scan.progress)}>{sourcesAndPoints(scan.progress)}</td>
-                    <td className="row-actions">
+                    <td className="row-actions scan-actions">
+                      {/* aria-disabled with a click guard, never native `disabled`: the pressed button keeps the focus while the preview loads. The title is the reason (and its description). */}
+                      <button
+                        type="button"
+                        className="quiet"
+                        data-scan-again={scan.id}
+                        aria-disabled={reason !== null ? "true" : undefined}
+                        title={reason ?? (again ? `Preview and scan "${again.name}" again` : undefined)}
+                        onClick={() => { if (reason === null && again) void requestPreview(again, true); }}
+                      >Scan again</button>
                       <button type="button" className="quiet" data-scan-details={scan.id} onClick={() => setActiveScan(scan.id)}>Details</button>
                     </td>
                   </tr>

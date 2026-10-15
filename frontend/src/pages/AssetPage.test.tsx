@@ -137,6 +137,48 @@ describe("AssetPage", () => {
       expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     });
 
+    it("draws each crumb's own icon beside its name: the Assets Tree icon first, then the ancestors', then the asset's", async () => {
+      mockFetch(routes(null));
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      const h1 = await screen.findByRole("heading", { name: "Panel 1", level: 1 });
+      const crumb = h1.closest("header")!.querySelector(".crumbs") as HTMLElement;
+      await waitFor(() => expect(crumbNames(crumb)).toEqual(["Assets Tree", "MV2", "Hall 1", "Panel 1"]));
+      const drawn = [...crumb.querySelectorAll("li > :not(.sep)")].map((el) => el.querySelector(".crumb-icon svg")?.innerHTML);
+      expect(drawn).toEqual([iconHtml("assets"), iconHtml("kindSite"), iconHtml("kindRoom"), iconHtml("kindPanel")]);
+      // decoration only: the links keep their plain names and no icon is a child of the list item itself
+      expect(within(crumb).getByRole("link", { name: "MV2" })).toHaveAttribute("href", "/assets/1");
+      expect(crumb.querySelectorAll("li > .crumb-icon")).toHaveLength(0);
+      for (const icon of crumb.querySelectorAll(".crumb-icon")) expect(icon).toHaveAttribute("aria-hidden", "true");
+    });
+
+    it("lets an asset's own icon, then its kind's icon, win over the guess from the kind name; the current asset reads the summary's own row", async () => {
+      mockFetch({
+        ...routes(null),
+        "GET /api/assets": {
+          body: [
+            { ...family[0], icon: "ups" },
+            { ...family[1], kind_icon: "rack" },
+            family[2],
+          ],
+        },
+        "GET /api/assets/4/summary": { body: { ...summary(null), asset: { id: 4, name: "Panel 1", parent_id: 3, kind: "panel", icon: "generator" } } },
+      });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      const crumb = (await screen.findByRole("heading", { name: "Panel 1", level: 1 })).closest("header")!.querySelector(".crumbs") as HTMLElement;
+      await waitFor(() => expect(crumbNames(crumb)).toEqual(["Assets Tree", "MV2", "Hall 1", "Panel 1"]));
+      const drawn = [...crumb.querySelectorAll("li > :not(.sep)")].map((el) => el.querySelector(".crumb-icon svg")?.innerHTML);
+      expect(drawn).toEqual([iconHtml("assets"), iconHtml("kindUps"), iconHtml("kindRack"), iconHtml("kindGenerator")]);
+    });
+
+    it("still draws the icons of Assets Tree and of the asset when the list could not be read", async () => {
+      mockFetch({ ...routes(null), "GET /api/assets": { status: 500, body: { detail: "down" } } });
+      renderWithProviders(<AssetPage />, { route: "/assets/4", path: "/assets/:id" });
+      const crumb = (await screen.findByRole("heading", { name: "Panel 1", level: 1 })).closest("header")!.querySelector(".crumbs") as HTMLElement;
+      await waitFor(() => expect(crumbNames(crumb)).toEqual(["Assets Tree", "Panel 1"]));
+      const drawn = [...crumb.querySelectorAll("li > :not(.sep)")].map((el) => el.querySelector(".crumb-icon svg")?.innerHTML);
+      expect(drawn).toEqual([iconHtml("assets"), iconHtml("kindPanel")]);
+    });
+
     it("goes to the asset or to the summary when a crumb is clicked", async () => {
       const hall = { ...summary(null), asset: { id: 3, name: "Hall 1", parent_id: 1, kind: "room" }, metrics: [] };
       mockFetch({ ...routes(null), "GET /api/assets/3/summary": { body: hall } });

@@ -76,6 +76,9 @@ describe("the Asset kinds page", () => {
     const trail = screen.getByRole("navigation", { name: "Breadcrumb" });
     expect(within(trail).getByRole("link", { name: "Assets Tree" })).toHaveAttribute("href", "/assets");
     expect(within(trail).getByText("Asset kinds")).toHaveAttribute("aria-current", "page");
+    // the first crumb carries the Assets Tree icon (the same as the Assets page's trail); the current page has none
+    expect(within(trail).getByRole("link", { name: "Assets Tree" }).querySelector(".crumb-icon svg")!.innerHTML).toBe(iconHtml("assets"));
+    expect(trail.querySelectorAll(".crumb-icon")).toHaveLength(1);
     await userEvent.click(screen.getByRole("button", { name: "What does this mean?" }));
     expect(screen.getByRole("note")).toHaveTextContent("An asset without an icon of its own shows its kind's icon. Change a kind's icon here and every asset of that kind follows.");
   });

@@ -642,6 +642,10 @@ async function checkBar(page: Page, plant: Plant, hasDelete: boolean, where: str
   const note = `${where} (the tree body is ${room} px wide, ${hasDelete ? "with" : "without"} Delete)`;
   const idle = await boxOf(slot(page), "the pick bar");
   expect(idle.height, `the bar is ${want} px high at ${note}`).toBe(want);
+  // W7t: the two-line bar (Delete, narrow) shows the SHORT hint so that Move to... can sit beside the words; everywhere else the long hint stays.
+  await expect(slot(page).locator(want === 64 ? ".tree-slot-short" : ".tree-slot-long"), `the idle hint at ${note}`).toBeVisible();
+  await expect(slot(page).locator(want === 64 ? ".tree-slot-long" : ".tree-slot-short"), `the other idle hint at ${note}`).toBeHidden();
+  const idleText = await boxOf(slot(page).locator(".tree-slot-text"), "the idle hint");
 
   await treeLink(page, plant.name("Rack 1")).click({ modifiers: ["Control"] });
   await expect(slot(page)).toContainText("1 picked");
@@ -665,10 +669,18 @@ async function checkBar(page: Page, plant: Plant, hasDelete: boolean, where: str
   expect(overflow, `the bar scrolls sideways by ${overflow} px at ${note}`).toBeLessThanOrEqual(1);
   const cut = await slot(page).locator(".tree-slot-count").evaluate((el) => el.scrollWidth - el.clientWidth);
   expect(cut, `the count is cut by ${cut} px at ${note}`).toBeLessThanOrEqual(1); // scrollWidth and clientWidth are rounded separately
+  // The words stand still at the first pick: the hint and the count have the same box (the bar's first line never moves).
+  expect(Math.abs(count.y - idleText.y), `the first pick moved the words at ${note}: ${idleText.y} to ${count.y}`).toBeLessThanOrEqual(0.5);
   if (hasDelete) {
     const del = await boxOf(barButton(page, "Delete the picked asset"), "Delete");
-    if (want === 64) expect(del.y, `Delete is on the second line, below the count, at ${note}`).toBeGreaterThanOrEqual(count.y + count.height - 0.5);
-    else expect(Math.abs(del.y + del.height / 2 - (count.y + count.height / 2)), `Delete is on the count's line at ${note}`).toBeLessThanOrEqual(2);
+    if (want === 64) {
+      // W7t: Move to... is beside the count on line 1; Delete (and Clear) are on line 2, below both.
+      const move = await boxOf(barButton(page, "Move to..."), "Move to...");
+      expect(Math.abs(move.y + move.height / 2 - (count.y + count.height / 2)), `Move to... is on the count's line at ${note}`).toBeLessThanOrEqual(2);
+      expect(del.y, `Delete is on the second line, below the count and Move to..., at ${note}`).toBeGreaterThanOrEqual(Math.max(count.y + count.height, move.y + move.height) - 0.5);
+      const clear = await boxOf(barButton(page, "Clear"), "Clear");
+      expect(Math.abs(clear.y - del.y), `Clear is on Delete's line at ${note}`).toBeLessThanOrEqual(1);
+    } else expect(Math.abs(del.y + del.height / 2 - (count.y + count.height / 2)), `Delete is on the count's line at ${note}`).toBeLessThanOrEqual(2);
   } else {
     await expect(slot(page).getByRole("button", { name: /^Delete/ })).toHaveCount(0);
   }

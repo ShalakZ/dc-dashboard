@@ -60,9 +60,9 @@ export const BLOCK_GAP = 40;
 export const SOURCE_H = 136;
 const DASHED = { strokeDasharray: "6 4" };
 
-interface Group { key: string; label: string; ungrouped: boolean; points: GraphPoint[] }
+export interface Group { key: string; label: string; ungrouped: boolean; points: GraphPoint[] }
 
-function groupsOf(source: GraphSource): Group[] {
+export function groupsOf(source: GraphSource): Group[] {
   const groups: Group[] = source.clusters.map((c) => ({ key: c.key, label: c.key, ungrouped: false, points: c.points }));
   if (source.ungrouped.length > 0) groups.push({ key: UNGROUPED, label: "Ungrouped", ungrouped: true, points: source.ungrouped });
   return groups;
@@ -76,18 +76,57 @@ function countMapped(points: Iterable<GraphPoint>, assetIds: ReadonlySet<number>
   return into;
 }
 
+export type XY = { x: number; y: number };
+
+export interface BuildOptions {
+  /** This session's places, from drags: they win over the saved layout. */
+  moved?: ReadonlyMap<string, XY>;
+  /** Leave the shared layout out (Tidy layout, until the graph has been read again). The places in `moved` still count. */
+  ignoreSaved?: boolean;
+}
+
+/** The server refuses a layout id longer than this, and with it the whole request. */
+export const MAX_LAYOUT_ID = 512;
+/** The most nodes one layout request may carry (`LayoutIn.nodes`). */
+export const LAYOUT_BATCH = 2000;
+
+const NO_SHIFT: XY = { x: 0, y: 0 };
+
 /**
- * The discovery graph as React Flow nodes and edges. Pure: positions come from the saved layout, else from a column
- * layout (discovered nodes on the left, assets on the right). Sources and clusters only show their children while open.
+ * The places a node can have of its own: the saved layout with this session's places over it, as a copy. A drag takes this snapshot at its
+ * start, so the shift it works out never reads the live map while that is being updated.
  */
-export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[]; edges: Edge[] } {
+export function ownPlaces(model: GraphModel, options: BuildOptions = {}): Map<string, XY> {
+  const places = new Map<string, XY>();
+  if (!options.ignoreSaved) for (const [id, p] of Object.entries(model.layout)) places.set(id, { x: p.x, y: p.y });
+  if (options.moved) for (const [id, p] of options.moved) places.set(id, { x: p.x, y: p.y });
+  return places;
+}
+
+/**
+ * The discovery graph as React Flow nodes and edges. Pure. A node stands at the place it has of its own (this session's `moved`, else the saved
+ * layout), else at its default (a column layout: discovered nodes on the left, assets on the right) moved by however far its PARENT now stands
+ * from the parent's default (source -> group -> point, asset -> sub-asset), so a child that was never placed opens beside its parent wherever
+ * that is. A child's default offset from its parent does not depend on the other blocks, so it stays put when other sources open or close.
+ * Sources and clusters only show their children while open.
+ */
+export function buildGraph(model: GraphModel, open: OpenState, options: BuildOptions = {}): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
   const assetIds = new Set<number>(model.assets.map((a) => a.id));
 
-  const add = (id: string, type: string, x: number, y: number, data: Record<string, unknown>) => {
-    const saved = Object.hasOwn(model.layout, id) ? model.layout[id] : undefined;
-    nodes.push({ id, type, position: saved ? { x: saved.x, y: saved.y } : { x, y }, data, draggable: true });
+  const ownPlace = (id: string): XY | undefined => {
+    const session = options.moved?.get(id);
+    if (session) return session;
+    return !options.ignoreSaved && Object.hasOwn(model.layout, id) ? model.layout[id] : undefined;
+  };
+  /** Adds a node and returns how far it stands from its own default, which is what its children follow. */
+  const add = (id: string, type: string, x: number, y: number, data: Record<string, unknown>, parentShift: XY = NO_SHIFT): XY => {
+    const own = ownPlace(id);
+    const position = own ? { x: own.x, y: own.y } : { x: x + parentShift.x, y: y + parentShift.y };
+    // No `draggable` of its own: React Flow lets a node's own `draggable: true` beat the canvas-wide `nodesDraggable`, and the page turns that off while a Tidy runs.
+    nodes.push({ id, type, position, data });
+    return { x: position.x - x, y: position.y - y };
   };
   const link = (from: string, to: string, extra: Partial<Edge> = {}) => {
     edges.push({ id: `e:${from}>${to}`, source: from, target: to, style: DASHED, ...extra });
@@ -105,7 +144,7 @@ export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[];
   for (const source of model.sources) {
     const sid = nodeId.source(source.id);
     const sourceOpen = open.sources.has(source.id);
-    add(sid, "source", X.source, cursor, { source, expanded: sourceOpen } satisfies SourceNodeData);
+    const sourceShift = add(sid, "source", X.source, cursor, { source, expanded: sourceOpen } satisfies SourceNodeData);
     let rows = 1;
     const groups = groupsOf(source);
     if (sourceOpen) {
@@ -115,16 +154,16 @@ export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[];
         const counts = countMapped(group.points, assetIds);
         let mappedCount = 0;
         for (const p of group.points) if (p.asset_id !== null) mappedCount++;
-        add(cid, "cluster", X.cluster, cursor + SOURCE_H + (rows - 1) * ROW, {
+        const clusterShift = add(cid, "cluster", X.cluster, cursor + SOURCE_H + (rows - 1) * ROW, {
           sourceId: source.id, key: group.key, label: group.label, count: group.points.length, mappedCount,
           expanded: clusterOpen, ungrouped: group.ungrouped,
-        } satisfies ClusterNodeData);
+        } satisfies ClusterNodeData, sourceShift);
         link(sid, cid);
         rows++;
         if (clusterOpen) {
           for (const p of group.points) {
             const pid = nodeId.point(p.id);
-            add(pid, "point", X.point, cursor + SOURCE_H + (rows - 1) * ROW, { sourceId: source.id, clusterKey: group.key, point: p } satisfies PointNodeData);
+            add(pid, "point", X.point, cursor + SOURCE_H + (rows - 1) * ROW, { sourceId: source.id, clusterKey: group.key, point: p } satisfies PointNodeData, clusterShift);
             link(cid, pid);
             if (p.asset_id !== null && assetIds.has(p.asset_id)) mappedLinks(pid, new Map([[p.asset_id, 1]]));
             rows++;
@@ -160,15 +199,17 @@ export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[];
   const visited = new Set<number>();
   let index = 0;
   const walk = (root: GraphModel["assets"][number]) => {
-    const stack: { asset: GraphModel["assets"][number]; depth: number }[] = [{ asset: root, depth: 0 }];
+    // The stack entry carries how far its parent stands from its default: the node this build descended from, which is already placed.
+    // A walk root (a root, an orphan, a self-parent, the first member of a cycle) has none.
+    const stack: { asset: GraphModel["assets"][number]; depth: number; parentShift?: XY }[] = [{ asset: root, depth: 0 }];
     while (stack.length > 0) {
-      const { asset, depth } = stack.pop()!;
+      const { asset, depth, parentShift } = stack.pop()!;
       if (visited.has(asset.id)) continue;
       visited.add(asset.id);
-      add(nodeId.asset(asset.id), "asset", X.asset + depth * ASSET_INDENT, index * ROW, { asset, depth } satisfies AssetNodeData);
+      const shift = add(nodeId.asset(asset.id), "asset", X.asset + depth * ASSET_INDENT, index * ROW, { asset, depth } satisfies AssetNodeData, parentShift);
       index++;
       const children = childrenOf.get(asset.id) ?? [];
-      for (let i = children.length - 1; i >= 0; i--) stack.push({ asset: children[i], depth: depth + 1 });
+      for (let i = children.length - 1; i >= 0; i--) stack.push({ asset: children[i], depth: depth + 1, parentShift: shift });
     }
   };
   roots.forEach(walk);
@@ -177,9 +218,102 @@ export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[];
   return { nodes, edges };
 }
 
+/**
+ * Every node under `id` in the model, open or not (a drag shifts the saved places of hidden children too): a source -> its groups, the
+ * Ungrouped group when it has ungrouped points, and their points; a group -> its points; an asset -> all its sub-assets, at every depth (cycle
+ * safe, never the asset itself). A point, an unidentified service and an id the model does not hold have none.
+ */
+export function descendantNodeIds(model: GraphModel, id: string): string[] {
+  const found: string[] = [];
+  if (id.startsWith("src:")) {
+    const source = model.sources.find((s) => nodeId.source(s.id) === id);
+    if (!source) return found;
+    for (const group of groupsOf(source)) {
+      found.push(nodeId.cluster(source.id, group.key));
+      for (const p of group.points) found.push(nodeId.point(p.id));
+    }
+  } else if (id.startsWith("cluster:")) {
+    // A group key may hold colons: match the whole id, built from each group, rather than splitting it.
+    for (const source of model.sources) {
+      if (!id.startsWith(`cluster:${source.id}:`)) continue;
+      const group = groupsOf(source).find((g) => nodeId.cluster(source.id, g.key) === id);
+      if (group) return group.points.map((p) => nodeId.point(p.id));
+    }
+  } else if (id.startsWith("asset:")) {
+    const start = model.assets.find((a) => nodeId.asset(a.id) === id);
+    if (!start) return found;
+    const childrenOf = new Map<number, number[]>();
+    for (const a of model.assets) {
+      if (a.parent_id === null || a.parent_id === a.id) continue;
+      const siblings = childrenOf.get(a.parent_id);
+      if (siblings) siblings.push(a.id);
+      else childrenOf.set(a.parent_id, [a.id]);
+    }
+    const seen = new Set<number>([start.id]);
+    const stack = [...(childrenOf.get(start.id) ?? [])].reverse();
+    while (stack.length > 0) {
+      const next = stack.pop()!;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      found.push(nodeId.asset(next));
+      const below = childrenOf.get(next) ?? [];
+      for (let i = below.length - 1; i >= 0; i--) stack.push(below[i]);
+    }
+  }
+  return found;
+}
+
+/**
+ * The nodes directly under `id`: a source's groups, a group's points, an asset's sub-assets (one level; `descendantNodeIds` is every level). An
+ * Alt-drag pins these where they stand when they have no place of their own, so they do not follow the parent on the next rebuild.
+ */
+export function childNodeIds(model: GraphModel, id: string): string[] {
+  if (id.startsWith("src:")) return descendantNodeIds(model, id).filter((d) => d.startsWith("cluster:"));
+  if (id.startsWith("cluster:")) return descendantNodeIds(model, id);
+  if (!id.startsWith("asset:")) return [];
+  const parent = model.assets.find((a) => nodeId.asset(a.id) === id);
+  return parent ? model.assets.filter((a) => a.parent_id === parent.id && a.id !== parent.id).map((a) => nodeId.asset(a.id)) : [];
+}
+
+/**
+ * `snapshot + delta` for every id that has a place of its own IN THE SNAPSHOT (`ownPlaces`, taken when the drag began); an id with none is left
+ * out, because it follows its parent by the rule of `buildGraph`. The snapshot is never changed, and an id listed twice is shifted once.
+ */
+export function shiftedPlaces(snapshot: ReadonlyMap<string, XY>, ids: Iterable<string>, delta: XY): Map<string, XY> {
+  const shifted = new Map<string, XY>();
+  for (const id of ids) {
+    const own = snapshot.get(id);
+    if (own) shifted.set(id, { x: own.x + delta.x, y: own.y + delta.y });
+  }
+  return shifted;
+}
+
+/** One entry of the body of `PUT /api/discovery/layout`. */
+export interface LayoutEntry { node_id: string; x: number; y: number }
+
+/**
+ * The places to save, cut into request bodies of at most `size` entries (the route takes 2000), in order. An id over 512 characters is left out:
+ * the server would refuse the whole request and every other place with it (the node stays where it was dragged for this session).
+ */
+export function layoutBatches(entries: Iterable<readonly [string, XY]>, size: number = LAYOUT_BATCH): LayoutEntry[][] {
+  const per = size >= 1 ? Math.floor(size) : 1;
+  const batches: LayoutEntry[][] = [];
+  let current: LayoutEntry[] = [];
+  for (const [id, p] of entries) {
+    if (id.length > MAX_LAYOUT_ID) continue;
+    if (current.length === per) { batches.push(current); current = []; }
+    current.push({ node_id: id, x: p.x, y: p.y });
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
 const OPENING_SOURCES = 3;
-/** The part of the graph, in graph pixels, that still opens readable on a 1024x640 canvas at zoom 0.75 (the opening zoom's floor). */
-const OPENING_BOX = { w: 900, h: 560 } as const;
+/**
+ * The part of the graph, in graph pixels, that still opens readable on a 1024x640 canvas at zoom 0.75 (the opening zoom's floor). The height was
+ * 560 before the bar (the summary and its buttons: 36px and 8px under it) took 44 screen pixels from the canvas: 44 / 0.75 = 59 graph pixels.
+ */
+const OPENING_BOX = { w: 900, h: 560 - Math.ceil((36 + 8) / 0.75) } as const;
 /** A source node's width on the canvas (`.gnode` is 220px wide). */
 const SOURCE_W = 220;
 

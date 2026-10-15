@@ -279,6 +279,38 @@ async def test_layout_keeps_the_last_position_when_a_node_repeats_and_rejects_no
     assert (await client.get("/api/discovery/graph")).status_code == 200
 
 
+async def test_delete_layout_clears_every_position_is_idempotent_and_leaves_no_audit_row(client, db):
+    await login_as(client, db, "admin")
+    nodes = [{"node_id": "src:1", "x": 1.5, "y": 2.5}, {"node_id": "cluster:1:LVP01", "x": 3, "y": 4}]
+    assert (await client.put("/api/discovery/layout", json={"nodes": nodes})).status_code == 204
+    assert len((await client.get("/api/discovery/graph")).json()["layout"]) == 2
+    audit_rows = await db.fetchval("SELECT count(*) FROM audit_log")
+    response = await client.delete("/api/discovery/layout")
+    assert response.status_code == 204 and response.content == b""
+    assert (await client.get("/api/discovery/graph")).json()["layout"] == {}
+    assert await db.fetchval("SELECT count(*) FROM graph_layout") == 0
+    # A second call, with nothing left to remove, is the same answer.
+    assert (await client.delete("/api/discovery/layout")).status_code == 204
+    assert await db.fetchval("SELECT count(*) FROM audit_log") == audit_rows
+    # The PUT still works afterwards.
+    assert (await client.put("/api/discovery/layout", json={"nodes": nodes[:1]})).status_code == 204
+    assert (await client.get("/api/discovery/graph")).json()["layout"] == {"src:1": {"x": 1.5, "y": 2.5}}
+
+
+async def test_delete_layout_is_refused_without_the_edit_permission(client, db):
+    await login_as(client, db, "admin")
+    nodes = [{"node_id": "src:1", "x": 1, "y": 2}]
+    assert (await client.put("/api/discovery/layout", json={"nodes": nodes})).status_code == 204
+    await client.post("/api/logout")
+    assert (await client.delete("/api/discovery/layout")).status_code == 401
+    await login_as(client, db, "operator")
+    assert (await client.delete("/api/discovery/layout")).status_code == 403
+    await client.post("/api/logout")
+    await login_as(client, db, "viewer")
+    assert (await client.delete("/api/discovery/layout")).status_code == 403
+    assert await db.fetchval("SELECT count(*) FROM graph_layout") == 1
+
+
 async def test_accept_maps_points_enables_the_source_audits_and_notifies(client, db, database_url):
     await login_as(client, db, "admin")
     source, ids = await seed_source(db)

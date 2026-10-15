@@ -313,7 +313,10 @@ function PickSlot({ store, open, disabled, onMoveTo, onDelete, onClear }: {
   const leftOut = count > 0 && open !== null && !picks.ids.has(open.id) ? open : null;
   return (
     <div className={onDelete ? "tree-slot has-delete" : "tree-slot"} role="group" aria-label="Selection">
-      <span className={count > 0 ? "tree-slot-text tree-slot-count" : "tree-slot-text"} title={leftOut ? OPEN_NOT_COUNTED : undefined}>{count > 0 ? `${count} picked` : "Ctrl-click to pick several"}</span>
+      {/* The idle hint is two spans (W7t): the long one is drawn everywhere, the short one only beside Move to... in the narrow slot that has Delete (tree-move.css). */}
+      <span className={count > 0 ? "tree-slot-text tree-slot-count" : "tree-slot-text"} title={leftOut ? OPEN_NOT_COUNTED : count === 0 ? "Ctrl-click to pick several" : undefined}>
+        {count > 0 ? `${count} picked` : <><span className="tree-slot-long">Ctrl-click to pick several</span><span className="tree-slot-short">Ctrl-click to pick</span></>}
+      </span>
       {leftOut && <span className="sr-only">{`The open asset, ${leftOut.name}, is not counted.`}</span>}
       {(count > 0 || open) && (
         // aria-disabled, not disabled: a button that has the focus must not lose it when the page gets busy.
@@ -347,7 +350,7 @@ function PickSlot({ store, open, disabled, onMoveTo, onDelete, onClear }: {
           Delete
         </button>
       )}
-      {count > 0 && <button type="button" className="tree-slot-btn" onClick={onClear}>Clear</button>}
+      {count > 0 && <button type="button" className="tree-slot-btn tree-slot-clear" onClick={onClear}>Clear</button>}
     </div>
   );
 }

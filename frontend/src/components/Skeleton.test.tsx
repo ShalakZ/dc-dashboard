@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { StrictMode, type ReactElement } from "react";
 import { CHART_HEIGHT } from "../lib/chartBox";
 import {
-  ActionsSpace, AssetSkeleton, CanvasSkeleton, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageCardSkeleton, PageHeaderSkeleton, PageSkeleton, ParagraphSkeleton,
+  ActionsSpace, AssetSkeleton, CanvasSkeleton, GraphBarSpace, ChartBlock, DashboardSkeleton, FleetSkeleton, FormSkeleton, PageCardSkeleton, PageHeaderSkeleton, PageSkeleton, ParagraphSkeleton,
   resetSkeletonClock, Skeleton, SkeletonRegion, TableSkeleton, TilesSkeleton, TreeSkeleton, TrendSkeleton,
 } from "./Skeleton";
 
@@ -413,6 +413,19 @@ describe("ActionsSpace", () => {
   it("takes a height of its own (Billing's month bar is 38px)", () => {
     const { container } = render(<ActionsSpace height={38} />);
     expect((container.firstElementChild as HTMLElement).style.height).toBe("38px");
+  });
+});
+
+describe("GraphBarSpace", () => {
+  it("is one empty aria-hidden block that holds the Discovery bar's room (the height is the shared rule's, in discovery-tidy.css), with no text, nothing grey and nothing focusable", () => {
+    const { container } = render(<GraphBarSpace />);
+    const gap = container.firstElementChild as HTMLElement;
+    expect(container.children).toHaveLength(1);
+    expect(gap).toHaveClass("graph-bar-space");
+    expect(gap).toHaveAttribute("aria-hidden", "true");
+    expect(gap.className).not.toMatch(/\bsk-/);
+    expect(gap.textContent).toBe("");
+    expect(gap.children).toHaveLength(0);
   });
 });
 

@@ -10,7 +10,7 @@ import {
   usePutBillingSettings, usePutGeneralSettings, usePutSignInPolicy, useRowsPerDay, useSaveDashboard, useScan, useSeries, useSignInPolicy, useSite, useStatus, useTariffs, useUnblockUser, useUsers, useWidgetData,
   useCreateRole, useDeleteRole, useDuplicateRole, usePatchRole, usePermissions, useRoles, keys,
   useAddStarterKinds, useAssetKinds, useAssets, useBulkDeleteAssetKinds, useCreateAssetKind, useDeleteAssetKind, usePatchAssetKind, useSummary,
-  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources,
+  loadMovePreview, useMoveAssets, useRemoveDiscoveredSources, useTidyLayout,
 } from "./queries";
 import { ApiError } from "./client";
 import type { MoveBody, RangePreset, WidgetConfig } from "./types";
@@ -1246,5 +1246,53 @@ describe("removing discovered sources (W7r)", () => {
     await act(async () => { await result.current.remove.mutateAsync([3]); });
     // Read from the cache at the moment the call resolved: the refetch had already landed.
     expect((client.getQueryData(keys.graph) as { sources: unknown[] }).sources).toEqual([]);
+  });
+});
+
+describe("tidying the layout (W7t)", () => {
+  function mounted() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidated = vi.spyOn(client, "invalidateQueries");
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    return { client, wrapper, keysInvalidated: () => invalidated.mock.calls.map(([filters]) => filters?.queryKey) };
+  }
+  const graphWith = (layout: object) => ({ body: { sources: [], unidentified: [], assets: [], layout } });
+
+  it("sends DELETE to the layout route and refetches only the graph", async () => {
+    const calls = mockFetch({ "DELETE /api/discovery/layout": { status: 204 } });
+    const { wrapper, keysInvalidated } = mounted();
+    const { result } = renderHook(() => useTidyLayout(), { wrapper });
+    await act(async () => { await result.current.mutateAsync(); });
+    expect(calls.map((c) => [c.method, c.path])).toEqual([["DELETE", "/api/discovery/layout"]]);
+    expect(keysInvalidated()).toEqual([keys.graph]);
+  });
+
+  it("calls onDeleted once the route has answered and BEFORE the graph is read again, and the call resolves after the read", async () => {
+    let layout: object = { "src:1": { x: 5, y: 5 } };
+    const order: string[] = [];
+    const calls = mockFetch({
+      "GET /api/discovery/graph": () => { order.push("read"); return graphWith(layout); },
+      "DELETE /api/discovery/layout": () => { layout = {}; order.push("deleted"); return { status: 204 }; },
+    });
+    const { client, wrapper } = mounted();
+    const { result } = renderHook(() => ({ graph: useGraph(), tidy: useTidyLayout({ onDeleted: () => order.push("callback") }) }), { wrapper });
+    await waitFor(() => expect(result.current.graph.data?.layout).toEqual({ "src:1": { x: 5, y: 5 } }));
+    order.length = 0;
+    await act(async () => { await result.current.tidy.mutateAsync(); });
+    expect(order).toEqual(["deleted", "callback", "read"]);
+    expect((client.getQueryData(keys.graph) as { layout: object }).layout).toEqual({}); // the refetch had already landed
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+  });
+
+  it("a refusal does not call onDeleted, still reads the graph again, and the error keeps the server's words", async () => {
+    const onDeleted = vi.fn();
+    mockFetch({ "DELETE /api/discovery/layout": { status: 403, body: { detail: "You may not change the layout." } } });
+    const { wrapper, keysInvalidated } = mounted();
+    const { result } = renderHook(() => useTidyLayout({ onDeleted }), { wrapper });
+    let caught: unknown;
+    await act(async () => { await result.current.mutateAsync().catch((error) => { caught = error; }); });
+    expect((caught as ApiError).message).toBe("You may not change the layout.");
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(keysInvalidated()).toEqual([keys.graph]);
   });
 });

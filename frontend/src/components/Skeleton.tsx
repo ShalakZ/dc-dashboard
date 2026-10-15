@@ -296,6 +296,15 @@ export function ActionsSpace({ height = 34 }: { height?: number } = {}) {
   return <span aria-hidden="true" style={{ display: "block", height }} />;
 }
 
+/**
+ * The room of the Discovery bar (the summary and its three buttons) while the graph loads, so the canvas does not drop when the bar arrives. It
+ * shares one rule with the bar (`.graph-bar, .graph-bar-space` in discovery-tidy.css: 36px and 8px under it), so the two cannot drift apart.
+ * Empty, not grey, and outside any region, like `ActionsSpace`.
+ */
+export function GraphBarSpace() {
+  return <div className="graph-bar-space" aria-hidden="true" />;
+}
+
 /** A whole page with nothing known about it: a page head with a title line, then two 240px blocks side by side. One region. */
 export function PageSkeleton({ label }: { label: string }) {
   return (

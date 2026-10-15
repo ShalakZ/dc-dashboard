@@ -96,6 +96,8 @@ ROUTE_PERMISSIONS: dict[str, tuple[str, tuple[str, ...]]] = _table(
     # Added in W7r (removing discovered sources that have nothing mapped): after the freeze, so not in auth_matrix_pre_w9a.json;
     # the gate and isolation tests cover it.
     _all("discovery.edit", "POST /api/discovery/sources/remove"),
+    # Added in W7t (Tidy layout: clears every saved node position); after the freeze, like the route above.
+    _all("discovery.edit", "DELETE /api/discovery/layout"),
     _all("storage.view", "GET /api/storage", "GET /api/storage/rows-per-day", "GET /api/settings/storage"),
     _all("storage.edit", "PUT /api/settings/storage", "PUT /api/settings/storage/default"),
     _all("settings.view", "GET /api/settings/general", "GET /api/settings/sign-in", "GET /api/tls/status"),

@@ -1,4 +1,5 @@
 import type { ScanCounters } from "../api/types";
+import { portsLine } from "./ports";
 
 /** Outcomes as the operator reads them. `claimed` stays as is: the end-to-end test looks for that word. */
 const OUTCOME_WORDS: Record<string, string> = {
@@ -20,21 +21,22 @@ export function claimedCount(progress: ScanCounters): number {
   return Math.max(0, (progress.claimed ?? 0) - (progress.needs_credentials ?? 0));
 }
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** `1 host`, `3 hosts`: the count, then the word in the form the count needs. */
+export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /**
  * The same without the name, for the muted line under the scope's name in Recent scans (the cell cuts it with an ellipsis and keeps all of
- * it in its title, so a mistyped port is still there to be seen): `172.20.0.0/24, ports 9000, 4840, 5020`.
+ * it in its title, so a mistyped port is still there to be seen): `172.20.0.0/24, ports 9000 (simulator), 4840 (OPC UA), 5020 (Modbus, simulator)`.
  */
 export function scopeDetail(targets: readonly string[], ports: readonly number[]): string {
   return [
     targets.join(", "),
-    ports.length > 0 ? `${ports.length === 1 ? "port" : "ports"} ${ports.join(", ")}` : "",
+    ports.length > 0 ? `${ports.length === 1 ? "port" : "ports"} ${portsLine(ports)}` : "",
   ].filter(Boolean).join(", ");
 }
 
 /**
- * What a scan covered, in one line that wraps: `Simulator: 172.20.0.0/24, ports 9000, 4840, 5020`. The name alone when the scan has neither
+ * What a scan covered, in one line that wraps: `Simulator: 172.20.0.0/24, ports 9000 (simulator), 4840 (OPC UA)`. The name alone when the scan has neither
  * targets nor ports (an old scan whose snapshot did not keep them). Never cut: the drawer is the details view and has the room, and a list
  * that ends in "and 46 more" hides the very port a typo would be in.
  */

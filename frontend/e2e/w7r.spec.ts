@@ -381,7 +381,7 @@ test.describe("W7r: the Scans page", () => {
 
     await test.step("the dialog is named for the scan and its status, and says what was scanned", async () => {
       await open();
-      await expect(drawer.locator(".scan-scope")).toHaveText(`${SIM_SCOPE}: simulator, ports 9000, 5020`);
+      await expect(drawer.locator(".scan-scope")).toHaveText(`${SIM_SCOPE}: simulator, ports 9000 (simulator), 5020 (Modbus, simulator)`);
       await expect(drawer.locator(".scan-stats")).toContainText("2 checks (1 host × 2 ports)");
       await expect(drawer.locator(".scan-stats"), "the old wording is gone").not.toContainText("ports checked");
       await expect(drawer.getByRole("table").locator("tbody tr"), "one finding per open port").toHaveCount(scan.findings.length);
@@ -430,7 +430,7 @@ test.describe("W7r: the Scans page", () => {
     await expect(cell).toHaveText(`${plural(sources, "source")}, ${plural(points, "point")}`);
     await expect(cell).toHaveText(/^\d+ sources?, \d+ points?$/);
     await expect(cell, "the title says it longer").toHaveAttribute("title", `${plural(sources, "source")} recognised, ${plural(points, "point")} found`);
-    await expect(row.locator(".cell-sub"), "the Scope cell shows what was scanned").toHaveText("simulator, ports 9000, 5020");
+    await expect(row.locator(".cell-sub"), "the Scope cell shows what was scanned").toHaveText("simulator, ports 9000 (simulator), 5020 (Modbus, simulator)");
 
     await row.locator("[data-scan-details]").click();
     const stats = scanDrawer(page, scan.id).locator(".scan-stats");
@@ -448,7 +448,7 @@ test.describe("W7r: the Scans page", () => {
 
     const scopeRowOf = page.getByRole("row").filter({ has: page.getByRole("cell", { name: typo.name, exact: true }) });
     await (await rowAction(page, scopeRowOf, "Scan")).click();
-    await expect(page.getByText("1 hosts × 2 ports (2 checks)")).toBeVisible();
+    await expect(page.getByText("1 host × 2 ports (2 checks)")).toBeVisible();
     await page.getByRole("button", { name: "Start scan", exact: true }).click();
 
     // A started scan opens its drawer by itself; its id is in the title.
@@ -457,7 +457,7 @@ test.describe("W7r: the Scans page", () => {
     const title = drawer.getByRole("heading", { level: 2 });
     await expect(title).toHaveText(/^Scan #\d+ — done$/, { timeout: 120_000 });
     const id = Number(/#(\d+)/.exec(await title.innerText())![1]);
-    await expect(drawer.locator(".scan-scope")).toHaveText(`${TYPO_SCOPE}: simulator, ports 9000, 4080`);
+    await expect(drawer.locator(".scan-scope")).toHaveText(`${TYPO_SCOPE}: simulator, ports 9000 (simulator), 4080`);
     await expect(drawer.locator(".scan-stats")).toContainText("2 checks (1 host × 2 ports)");
     await expect(drawer.locator(".scan-stats")).toContainText("1 open");
 
@@ -465,8 +465,8 @@ test.describe("W7r: the Scans page", () => {
     await expect(drawer).toBeHidden();
     const row = scanRow(page, id);
     await expect(row, "the new scan heads Recent scans").toBeVisible();
-    await expect(row.locator(".cell-sub")).toHaveText("simulator, ports 9000, 4080");
-    await expect(row.locator(".cell-sub")).toHaveAttribute("title", "simulator, ports 9000, 4080");
+    await expect(row.locator(".cell-sub")).toHaveText("simulator, ports 9000 (simulator), 4080");
+    await expect(row.locator(".cell-sub")).toHaveAttribute("title", "simulator, ports 9000 (simulator), 4080");
     await expect(row.locator("[data-scan-details]"), "the focus went back to the row").toBeFocused();
   });
 });

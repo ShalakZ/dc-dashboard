@@ -68,8 +68,22 @@
      measured identical with and without it. 275px is the body's own width: the column less its 1px border, so a column of 276px is already
      two lines and one line starts at a column of 277px; the narrowest column, 220px, leaves 219px: 201px between the slot's padding. */
   .tree-col > .tree-body { container-type: inline-size; } /* a descendant selector: app.css owns the plain .tree-body rule, and a plain class is written in one file only (app.css.test.ts) */
+  /* W7t: the two long hints. The words are two spans in the DOM (components/AssetTree.tsx) and the full one is the text's title; the short one is
+     only drawn in a slot that has Delete in the narrow container, where "Ctrl-click to pick several" (about 150px) cannot sit beside Move to...
+     (74px) in 201px of room and "Ctrl-click to pick" (about 105px) can. Everywhere else (a viewer without Delete, any wide column) the long hint stays. */
+  .tree-slot-short { display: none; }
   @container (max-width: 275px) {
-    .tree-slot.has-delete { height: 64px; flex-wrap: wrap; align-content: center; row-gap: 2px; }
-    .tree-slot.has-delete .tree-slot-text { flex: 0 0 100%; }
+    /* W7t: line 1 is the count (or the hint) with Move to... beside it, line 2 is Delete and Clear. The break after line 1 is a zero-height item of
+       100% (an ::after, order 1) between the order-0 items and the order-2 buttons. With something picked the slot has THREE flex lines (the break
+       item is the middle one) and with nothing picked two, so a centred block would move line 1 by 13px at the first pick: the block starts at the
+       top instead (7 + 24 + 2 + 0 + 2 + 24 + 5 = 64) and line 1 never moves. */
+    .tree-slot.has-delete { height: 64px; flex-wrap: wrap; align-content: flex-start; padding-top: 7px; row-gap: 2px; }
+    .tree-slot.has-delete::after { content: ""; flex: 0 0 100%; height: 0; order: 1; }
+    /* The text takes what Move to... leaves; line-height 24px makes line 1 as high as a button when the text is alone on it, so its words stay put. */
+    .tree-slot.has-delete .tree-slot-text { flex: 1 1 0; line-height: 24px; }
+    .tree-slot.has-delete .tree-slot-delete { order: 2; }
+    .tree-slot.has-delete .tree-slot-clear { order: 2; }
+    .tree-slot.has-delete .tree-slot-long { display: none; }
+    .tree-slot.has-delete .tree-slot-short { display: inline; }
   }
 }

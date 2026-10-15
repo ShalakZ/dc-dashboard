@@ -402,7 +402,7 @@ export function useSetStorageDefault() {
 
 export const useScopes = () => useQuery({ queryKey: keys.scopes, queryFn: () => api.get<Scope[]>("/api/scopes") });
 
-/** Needs discovery.edit on the server: callers enable it only for someone who holds it, and only while the new-scope form is open. */
+/** Needs discovery.edit on the server: callers enable it only for someone who holds it, and only while a scope form (new or edit) is open. */
 export const useScopeSuggestions = (enabled: boolean) =>
   useQuery({
     queryKey: keys.suggestions,
@@ -456,6 +456,21 @@ export function useRemoveDiscoveredSources() {
       return joined;
     },
     onSettled: () => invalidate(keys.graph, keys.sources, keys.auditAll),
+  });
+}
+
+/**
+ * Tidy layout (`discovery.edit`): removes every saved node position of the Discovery graph, for everyone (`DELETE /api/discovery/layout`, 204, idempotent).
+ * `onDeleted` runs as soon as the route has answered, BEFORE the graph is read again (`onSuccess` runs ahead of `onSettled`): the page clears its own
+ * session places there, so the old layout never shows between the answer and the read. The graph is refetched in `onSettled` (a refusal also
+ * means the page may be out of date), and the call resolves after that read.
+ */
+export function useTidyLayout({ onDeleted }: { onDeleted?: () => void } = {}) {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: () => api.del("/api/discovery/layout"),
+    onSuccess: () => onDeleted?.(),
+    onSettled: () => invalidate(keys.graph),
   });
 }
 

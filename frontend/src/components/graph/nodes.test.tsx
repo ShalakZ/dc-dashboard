@@ -86,7 +86,9 @@ describe("graph nodes", () => {
       renderNode("source", "src:1", { ...all, onRemove, onCreateAssets });
       const remove = screen.getByRole("button", { name: "Remove Plant OPC from Discovery" });
       const create = screen.getByRole("button", { name: "Create assets for 3 groups of Plant OPC" });
-      expect(remove).toHaveTextContent("Remove");
+      expect(remove.textContent).toBe(""); // the bin alone (W7t): the name is the aria-label, the tooltip the title
+      expect(remove).toHaveAttribute("title", "Remove");
+      expect(remove.querySelector("svg.i")).toHaveAttribute("aria-hidden", "true");
       expect(create).toHaveTextContent("Create assets…");
       expect(remove).toHaveClass("nodrag");
       expect(create).toHaveClass("nodrag");
@@ -118,6 +120,13 @@ describe("graph nodes", () => {
       expect(row).toContainElement(screen.getByRole("button", { name: /^Create assets/ }));
       expect(row).toContainElement(screen.getByRole("button", { name: /^Remove / }));
       expect(row).not.toContainElement(screen.getByRole("button", { name: "Expand Plant OPC" }));
+    });
+
+    it("Details and Create assets keep their words; only Remove is a bin without text", () => {
+      renderNode("source", "src:1", all);
+      expect(screen.getByRole("button", { name: "Details for Plant OPC" })).toHaveTextContent("Details");
+      expect(screen.getByRole("button", { name: /^Create assets/ })).toHaveTextContent("Create assets…");
+      expect(screen.getByRole("button", { name: /^Remove / })).toHaveClass("gnode-remove");
     });
 
     it("every button is type=button, so none submits a form around the graph", () => {

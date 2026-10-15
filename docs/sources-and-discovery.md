@@ -77,18 +77,35 @@ data-retrieval requests the connectors already use, nothing else.
 1. **Scan scopes** (Scans, admin): a named list of targets (CIDR ranges, host names or addresses,
    URLs) and TCP ports (at most 20). A new scope is pre-filled from the collector's own network
    interfaces, clamped to the /24 around its address, and from the ports the connectors know.
-2. **Confirmation.** Pressing Scan shows "N hosts × M ports (P checks)" and asks for confirmation on
+
+   **Port names and the typo warning.** The scope form, the Scopes table and the scan lines name the ports the app knows: `502 (Modbus)`,
+   `4840 (OPC UA)`, `9000 (simulator)` and `5020 (Modbus, simulator)`, which is the dev simulator's own Modbus port. A port it does not
+   know shows as the bare number, so a typo stands out beside its named neighbours. While you type in the Ports field, a line under it
+   reads the list back (`Reads as 502 (Modbus), 4840 (OPC UA)`). When a port is one slip away from a known one, the line becomes a
+   warning instead, for example `4080 is not a port any connector uses; did you mean 4840 (OPC UA)?` (with several suspect ports the
+   first warning is shown in full, followed by one line that counts the rest, `and 4 more ports look like typos.`, so the Save button
+   stays where it is). The warning is advice and never stops you: Save works whatever it says, and an unusual port you meant to scan is simply
+   kept. Everyday and industrial ports (80, 443, 8080, 3306, 1502, 4843 and so on) never trigger it, nor does a port with one or two
+   digits; port 9000 is named but not guarded, and 4800 or 5002 may still be flagged.
+2. **Confirmation.** Pressing Scan shows "N hosts × M ports (P checks)" (`1 host × 1 port (1 check)` for one) and asks for confirmation on
    every run. The API enforces it: the start request must carry the host count the API computed
    itself, or nothing runs. It must also carry the digest the preview returned (a hash of the scope's
    targets and ports), so a scope edited after it was previewed cannot be started unconfirmed: the
    page asks you to confirm again.
+
+   **Scan again.** Each row of Recent scans has a **Scan again** button (before Details). It opens the same preview and the same
+   confirmation as **Scan** in that scope's row menu, for the scope as it is now: if you edited the scope since, the numbers you
+   confirm are the new ones, not the old scan's. Nothing starts until you press Start scan. The button is greyed out, with the reason
+   as its tooltip, when your role may not start scans (`discovery.scan`), when the scope was deleted, or while another request is
+   running. The confirmation panel stands above the Scopes table, so the page brings it into view; the focus stays on the button you
+   pressed.
 3. **What a scan does.** The collector tries a TCP connect to every host and port, then offers each
    open endpoint to every connector's read-only probe (first claim wins; an endpoint nobody claims is
    listed as an unidentified service), then browses the claimed sources to find their points. The page
    shows progress and, when done, one finding per open endpoint.
 
    On Scans, **Details** on a row of Recent scans (a scan you have just started opens the same view) shows that scan in a panel on the
-   right. It starts with the scope, for example `Simulator: 172.20.0.0/24, ports 9000, 4840, 5020` (a long list wraps onto more lines; every target and port is there), then the figures in
+   right. It starts with the scope, for example `Simulator: 172.20.0.0/24, ports 9000 (simulator), 4840 (OPC UA), 5020 (Modbus, simulator)` (a long list wraps onto more lines; every target and port is there), then the figures in
    words: `762 checks (254 hosts × 3 ports)` (a check is one host and one port; while the scan runs it reads `310 of 762 checks`),
    `3 open`, `1 source recognised`, `60 points`, `1 needs credentials`, `1 unidentified`, and below them the findings. A running scan
    updates by itself. Esc, the x or a click outside closes the panel, and closing it never stops the scan. The scope line comes from
@@ -115,11 +132,45 @@ data-retrieval requests the connectors already use, nothing else.
    sources at a readable size, so their buttons are in view; the assets on the right may be out of view until you pan or press **Fit
    View** (the bottom-left control), which shows the whole graph.
 
+   **Children follow their parent.** Drag a source and its open groups and their points move with it, each keeping its distance from the
+   source; drag a group and its open points follow; drag an asset and its sub-assets follow. A group you have collapsed moves too, out of
+   sight: its saved place is shifted by the same distance in the same save, so when you open it again it stands beside its source,
+   not where the source used to be. A group or point that has never been moved has no place of its own and simply opens next to where
+   its parent now stands. One you dragged away on purpose keeps its own place and travels with its parent from then on, at the same
+   offset. Dragging a child never moves its parent. Dropping a group or point on an asset to map it puts it, and anything that went
+   with it, back where it was.
+
+   **Alt (Option on a Mac) moves a node alone.** Hold Alt when you start the drag and only that node moves; its open children stay
+   where they stand and are given a place there, so they do not jump back beside it the next time the graph redraws. That place is a
+   saved one like any other: it is saved for everyone, so one Alt drag of a source with ten open groups saves ten places, and only
+   **Tidy layout** (below) takes them away again (dragging such a child moves its place, it does not remove it). A collapsed group that
+   has no place of its own is not drawn, so it is not given one: when you open it later it stands next to the source's new place, not
+   where the source used to be. Let go of Alt
+   mid-drag or press it later and nothing changes: the key is read once, at the start. On some Linux desktops Alt-drag is taken by
+   the window manager to move the whole window, so the page never sees the key; change the desktop's window-move key there, or drag
+   without Alt and move the children back by hand. Two ways of moving nodes are unchanged and take no children along: the arrow keys
+   on a focused node, and dragging a group of nodes that you selected with a Shift box. Neither is saved; they move on screen only.
+
+   **The bar above the canvas** holds a one-line summary of what the graph shows, such as `3 sources, 120 points, 6 mapped, 1 needs
+   credentials` (it is read out only when a number changes), and three buttons.
+
+   - **Collapse all** closes every source, and with it its groups. **Expand all** opens every source and then every group, but never draws
+     more than 600 new nodes in one go: what does not fit stays closed and a message says so, for example `Opened 3 sources and 12 groups.
+     4 groups stay closed: opening them would draw more than 600 nodes.` Open those one by one with their + button. Neither button moves
+     the view. A button with nothing to do is greyed out and keeps its place.
+   - **Tidy layout** puts every node back in its default column. For someone who may change the layout (`discovery.edit`) it asks
+     first, `Tidy the layout for everyone?`, because the saved places are shared: confirming deletes every saved place, for every
+     user, and the canvas then opens as if nobody had ever dragged anything (mappings, assets, sources and points are not touched,
+     and the clear is not written to the audit log, like dragging). Use it when a graph has been pulled into a mess. For anyone else it
+     asks nothing and sends nothing: their own view is tidied until they reload, and a message says that the shared layout is
+     unchanged. If the server refuses, nothing changes and the reason is shown.
+
    Each source node says when a scan last found it (`Seen in scan #6, 10 min ago`), or `Added by hand` for a source you made
    yourself, or `Not seen in a scan yet`. A scan only adds sources and refreshes their points; it never removes one, so a source
    whose device is gone, or that you deleted on Sources, stays or comes back until you remove it here.
 
-   **Removing leftovers** (needs `discovery.edit`). A discovered source with nothing mapped has a **Remove** button, and **Clear
+   **Removing leftovers** (needs `discovery.edit`). A discovered source with nothing mapped has a **Remove** button (a small bin at the
+   right end of its row of buttons, named `Remove <source> from Discovery` for a screen reader), and **Clear
    unmapped (N)** above the graph removes every such source at once. Both ask first, in the same delete dialog as everywhere else, and
    name the sources: the dialog lists the first five and says how many more. Removing takes the source, its points and their places on
    the graph; asset, billing and dashboard data never depended on it, because nothing is mapped. Only a discovered source with no
@@ -171,7 +222,7 @@ data-retrieval requests the connectors already use, nothing else.
    `config_credentials: unchanged -> changed` when the credentials inside a source's URL changed, also when
    other fields changed in the same edit),
    a sign-in with an unknown username (only that one happened, and from which address), logging out and
-   the node positions on the Discovery graph. Failed sign-ins are capped at 30 rows per 5 minutes, then
+   the node positions on the Discovery graph (saving or clearing them with Tidy layout). Failed sign-ins are capped at 30 rows per 5 minutes, then
    counted on the next row (lockouts have their own cap of 30).
 
 Environment variables (set them in `.env`; both are optional):
@@ -189,7 +240,9 @@ simulator protocols.
 Who may scan, map and accept results is set by the `sources.*` and `discovery.*` permissions (removing leftovers needs
 `discovery.edit`, Create assets… `discovery.accept`); see [Roles and permissions](roles-and-permissions.md).
 
-For scripts: removing discovered sources is `POST /api/discovery/sources/remove` with `{"source_ids": [...]}`, 1 to 500 ids in a
+For scripts: `DELETE /api/discovery/layout` (`discovery.edit`) removes every saved node position and answers 204; calling it again is
+harmless, it writes no audit row, and `PUT /api/discovery/layout` still saves positions afterwards. It is what **Tidy layout** sends.
+Removing discovered sources is `POST /api/discovery/sources/remove` with `{"source_ids": [...]}`, 1 to 500 ids in a
 request (more is refused with a 422). It answers which sources were removed and which were skipped, each with the reason `mapped`,
 `manual` or `gone`, and refuses with a 409 and removes nothing while a scan is queued or running. Each scan in `GET /api/scans` carries
 the `targets` and `ports` it covered, and each source in `GET /api/discovery/graph` a `last_scan` (`{scan_id, at}` of the newest scan
