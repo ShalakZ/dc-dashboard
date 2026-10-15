@@ -148,8 +148,9 @@ data-retrieval requests the connectors already use, nothing else.
    where the source used to be. Let go of Alt
    mid-drag or press it later and nothing changes: the key is read once, at the start. On some Linux desktops Alt-drag is taken by
    the window manager to move the whole window, so the page never sees the key; change the desktop's window-move key there, or drag
-   without Alt and move the children back by hand. Two ways of moving nodes are unchanged and take no children along: the arrow keys
-   on a focused node, and dragging a group of nodes that you selected with a Shift box. Neither is saved; they move on screen only.
+   without Alt and move the children back by hand. The arrow keys on a focused node still take no children along and are not saved;
+   they move on screen only. Dragging nodes you selected (with a Shift box or Ctrl-click) is a drag like any other: the whole selection
+   moves, each node takes its open children along once, and the places are saved.
 
    **The bar above the canvas** holds a one-line summary of what the graph shows, such as `3 sources, 120 points, 6 mapped, 1 needs
    credentials` (it is read out only when a number changes), and three buttons.
@@ -191,23 +192,27 @@ data-retrieval requests the connectors already use, nothing else.
    a nearby node's (the 200 nearest are compared). The guides only show; they never pull the node, so it is dropped exactly where
    you let go. With snap on, equal edges are common; with snap off a guide shows only on an exact match, which is rare by hand.
 
-   **Lighting a path.** Rest the pointer on a node for a moment, tab to it (when the focus ring shows) or select it, and its path
+   **Lighting a path.** Rest the pointer on a node for a moment, or tab to it (when the focus ring shows), and its path
    stands out: the nodes it comes from and the nodes it leads to along the edges (a point lights its group, its source and the asset
    it is mapped to, with that asset's sub-assets; an asset lights its mapped points, their groups and sources), the edges between them
-   turn to the accent colour, and everything else fades to about a third. Moving off clears it after a short pause, so crossing the
-   canvas from one node to the next never flashes. A selection of up to 20 nodes lights the union of their paths. Nothing lights while
-   you drag, for a node with no edge, or when the path has more than 400 nodes (a source with hundreds of drawn points). A touch
-   screen has no hover: select a node to light its path. The faded text is below the usual contrast on purpose, and only while the path
-   is lit; the same facts are on the lit nodes and in the summary above.
+   turn to the accent colour, and everything else dims to about a third, at once (there is no fade). Moving off clears it after
+   a short pause, so crossing the canvas from one node to the next never flashes. Clicking a single node lights nothing: you click a
+   node to drag it or to open its menu, and the rest of the canvas would only look disabled. A selection of two or more nodes (a
+   Shift box or Ctrl-click, see below) is a deliberate "show me these", and lights the union of their paths, for up to 20 nodes.
+   Nothing lights while you drag, for a node with no edge, or when the path has more than 400 nodes (a source with hundreds of drawn
+   points). A touch screen has no hover and no Shift or Ctrl, so it lights no path. The dimmed text is below the usual contrast on
+   purpose, and only while a path is lit; the same facts are on the lit nodes and in the summary above.
 
-   **Live edges.** The edges of a source that is enabled and online flow: dashes travel along the dashed edges to its groups and points
-   and along the edges from its mapped nodes to their assets (these are almost solid, with a small gap that moves, so they still read
-   as asset links). Offline, disabled and never-polled sources stay still, and so do the edges between assets. It means "this
-   source is being polled", not a measurement of traffic. If more than 300 edges would flow, none do.
+   **Live edges.** The edges of a source that is enabled and online flow: dashes travel along the dashed edges from the source to
+   its groups and along the edges from its mapped nodes to their assets (these are almost solid, with a small gap that moves, so they
+   still read as asset links). The dashed edges from a group to its points stay still, even for a live source: there can be hundreds
+   of them and they add little to the picture. Offline, disabled and never-polled sources stay still, and so do the edges between
+   assets. It means "this source is being polled", not a measurement of traffic. If more than 100 edges would flow, none do (a
+   flowing edge is repainted on every frame, which over a remote desktop is screen traffic for as long as the page is open).
 
    **Selecting several nodes.** Shift-drag on empty canvas draws a selection box (a plain drag still pans); Ctrl-click, or Cmd-click on
-   a Mac, adds or removes one node. The selection survives opening and closing nodes and the graph refreshing. Drag any selected
-   node and the whole selection moves; the children rule above applies once, so a source and its own group selected together move
+   a Mac, adds or removes one node. Two or more selected nodes light their paths (above); one does not. The selection survives
+   opening and closing nodes and the graph refreshing. Drag any selected node and the whole selection moves; the children rule above applies once, so a source and its own group selected together move
    their points once. Dropping a selection on an asset never maps (only one group or point maps). A frame is drawn over the
    selected nodes: click empty canvas or press Esc to clear the selection, because the buttons under the frame do not answer
    until you do.
@@ -224,8 +229,8 @@ data-retrieval requests the connectors already use, nothing else.
    every action also has a visible button.
 
    **Find.** The **Find** button at the top right of the canvas, or Ctrl+K (Cmd+K on a Mac) while the canvas has the focus (click
-   empty canvas first), opens a search card over the canvas. Type part of a name and it lists matching sources (by name or endpoint),
-   assets (by name or kind), groups (by name) and points (by name or address). Every word you type must appear; names that start with
+   empty canvas first, or with the focus on the **Find** or **Snap to grid** button), opens a search card over the canvas. Type part of
+   a name and it lists matching sources (by name or endpoint), assets (by name or kind), groups (by name) and points (by name or address). Every word you type must appear; names that start with
    it come first, then names with a word that starts with it, then the rest. At most 50 are listed, and `N more` says how many are
    not. Up and Down move through the list, Enter chooses, and Esc, or a click outside, closes the card and puts the focus back where
    it was. Choosing a result opens the source and group it sits in when they are closed, glides the view to it (zooming in to at
@@ -238,7 +243,7 @@ data-retrieval requests the connectors already use, nothing else.
 
    | Key | What it does |
    |---|---|
-   | Ctrl+K, or Cmd+K (canvas has the focus) | Open Find; anywhere else on the page it opens Quick find |
+   | Ctrl+K, or Cmd+K (canvas, or its Find and Snap buttons, has the focus) | Open Find; anywhere else on the page it opens Quick find |
    | Shift-drag | Draw a selection box |
    | Ctrl-click, or Cmd-click | Add a node to the selection or remove it |
    | Alt, or Option, held when you start a drag | Move the node alone, without its children |
@@ -247,8 +252,8 @@ data-retrieval requests the connectors already use, nothing else.
    | Esc | Close the open menu or Find card (one layer at a time), then clear a selection |
 
    **Reduced motion.** When your system asks for less motion, the camera moves at once, the green dot does not pulse, the edges do not
-   flow (they keep their dashes), the Find outline does not pulse (it still shows for 1.5 seconds), and the fade of the path highlight is
-   switched off, so lit and faded nodes change at once.
+   flow (they keep their dashes) and the Find outline does not pulse (it still shows for 1.5 seconds). The path highlight needs no
+   setting: it never fades, so lit and dimmed nodes always change at once.
 
    **The hint under the title** is one line, `Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset…`,
    followed by a `?` (named `What can I do on the canvas?`) that lists the keys above in six short lines.
