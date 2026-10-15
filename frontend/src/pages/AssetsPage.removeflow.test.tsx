@@ -145,7 +145,7 @@ describe("deleting the picked assets from the pick bar (W7s)", () => {
       "/api/assets/3?confirm=true&expect_assets=1&expect_mappings=0&expect_tariffs=0",
       "/api/assets/6?confirm=true&expect_assets=1&expect_mappings=0&expect_tariffs=0",
     ]);
-    expect(path()).toBe("/assets/1"); // Room B's parent, Site
+    await waitFor(() => expect(path()).toBe("/assets/1")); // Room B's parent, Site (the router renders a tick after the request that triggered it; under load that tick is late)
     expect(spy.calls).toEqual([{ kind: "success", text: "Deleted 2 assets" }]);
     await waitFor(() => expect(screen.queryByRole("link", { name: "Room B" })).not.toBeInTheDocument());
     expect(document.activeElement).not.toBe(document.body);
