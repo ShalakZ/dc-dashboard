@@ -26,8 +26,9 @@
 
   .bulk-notes { display: grid; gap: 4px; }
   .bulk-notes p { font-size: var(--fs-sm); }
-  /* The status line (creating 2 of 5, the reason the button waits, what a failed batch left): two lines are reserved so the buttons never move. */
-  .bulk-status { min-height: 2lh; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+  /* The status line (creating 2 of 5, the reason the button waits, what a failed batch left): a FIXED two lines, so that a long name in a reason never moves the buttons
+     (a longer text scrolls inside it, as the Move dialog's message slot does). */
+  .bulk-status { height: 2lh; overflow: auto; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 
   /* Create waits with aria-disabled, not disabled (the person may be on it when a batch fails): it looks the way a disabled primary does and does nothing. */
   .bulk-go { min-width: 9rem; }

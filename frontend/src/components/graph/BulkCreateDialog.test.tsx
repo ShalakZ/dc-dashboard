@@ -205,9 +205,12 @@ describe("BulkCreateDialog", () => {
 
   it("when nothing could be created it says so and keeps every row", async () => {
     const user = userEvent.setup();
-    const { onClose, toasts } = await open({ status: 500, body: { detail: "boom" } });
+    const { dialog, onClose, toasts } = await open({ status: 500, body: { detail: "boom" } });
     await user.click(go("Create 3 assets"));
     await waitFor(() => expect(toasts).toHaveLength(1));
+    // The line under the list names no group (the rows that are left are the failed ones; a list of names would have no length limit).
+    expect(dialog).toHaveTextContent("Created 0 of 3. The groups still listed were not created");
+    expect(within(dialog).getByText(/The groups still listed/).textContent).not.toMatch(/LVP|TEMPS/);
     expect(toasts).toEqual([{ kind: "error", text: "Created 0 of 3 assets" }]);
     expect(onClose).not.toHaveBeenCalled();
     for (const group of ["LVP01", "LVP02", "TEMPS"]) expect(nameInput(group)).toHaveAttribute("aria-invalid", "true");

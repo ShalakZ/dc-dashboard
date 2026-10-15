@@ -138,7 +138,8 @@ export function BulkCreateDialog({ model, source, onClose }: { model: GraphModel
       return;
     }
     toast.error(`Created ${made} of ${plural(plan.length, "asset")}`);
-    if (alive.current) setOutcome(`Created ${made} of ${plan.length}. Not created: ${failed.join(", ")}. Fix the rows marked above and press the button again.`);
+    // No names in it: the rows that are still listed are the ones that failed, and a list of names has no length limit (the line is a fixed slot).
+    if (alive.current) setOutcome(`Created ${made} of ${plan.length}. The groups still listed were not created: fix the rows marked and press the button again.`);
   }
 
   // Focus moves in and stays in (Tab wraps, a focus that lands outside is pulled back). When the dialog goes away nothing is restored: the page decides.
