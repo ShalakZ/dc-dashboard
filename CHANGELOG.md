@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## W11 (2026-10-15, merge commit <MERGE>)
+## W11 (2026-10-15, merge commit dee0ce8)
 
 W11 (close month) lets an administrator freeze a finished billing month, so that the bill for it stops moving. On Billing, an
 administrator now sees **Close month…** in the page header on a month that is over (it takes an optional note), and the month then
