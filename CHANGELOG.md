@@ -4,7 +4,7 @@ What each release (a merged wave) changed, newest first. Each section is headed 
 
 A release that needs an upgrade note carries it as a `###` entry: the schema revision it leads to when there is a migration, what
 changes and what you will notice, the pre-checks to run before it, how to verify it, whether its downgrade is lossless (which decides
-whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 17 releases have such an
+whether option a of [Upgrading and going back](docs/upgrading.md) is open), and the commit to go back to. 18 releases have such an
 entry; 9 of them have no migration. The other releases need nothing beyond the usual steps of
 [Upgrading and going back](docs/upgrading.md); they have one or two lines here. Phase 1A, Phase 1C and Phase 2 brought migrations 0001
 to 0003, from before the release notes (see [Migrations in order](docs/upgrading.md#migrations-in-order)).
@@ -14,6 +14,52 @@ this page) and working up. **To go back,** use the commit each entry names ("the
 heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
+
+## W11 (2026-10-15, merge commit <MERGE>)
+
+### Upgrading to W11 (migration 0012)
+
+Schema `0011` to `0012`. Downgrade: **lossless** for everything that existed before the upgrade (it only drops the new table of closed
+months, described below), so option a is open. The code to go back to is `e9c1a5e` (the W7u merge; `main` before W11 differs from it
+only in documentation).
+
+W11 (close month) lets an administrator freeze a finished billing month, so that the bill for it stops moving. On Billing, an
+administrator now sees **Close month…** in the page header on a month that is over (it takes an optional note), and the month then
+carries a **Closed** chip, a banner ("Closed by <name> on <date>") and the figures exactly as they stood, per asset and per day.
+Moving assets, mapping or unmapping points, editing tariffs and deleting assets or sources no longer change that month; dashboards and
+widgets stay live. When today's tree and rates would give other figures, a quiet line says so ("Today's tree and rates would give ...",
+and it counts assets that moved or changed even when the total is the same); readings that arrive late show up only there. The Billing CSV of a
+closed month is the file it had when closed, named `billing-YYYY-MM-closed.csv`. **Reopen month…** asks for a reason of at least 5
+characters and goes back to live figures; the old snapshot is kept and a new close stores a new one. The move and delete warnings gain
+"Closed months keep their billed figures." The Audit log gains `billing.closed` and `billing.reopened`. See
+[Closing a month](docs/dashboards-and-billing.md#closing-a-month). Closing is a new permission, **Close and reopen billing months**
+(`billing.close`, in the Sensitive actions of the Roles tab, 31 permissions in all) that the migration gives to **no role**: the
+built-in Admin holds it from the code, and nobody else until an administrator ticks it (it needs See billing). Also new, for developers:
+`python -m dcdash.seed.history` makes a month of made-up readings on a development or scratch stack; it ships in the `api` image but
+writes nothing unless it is given `--yes` and `DCDASH_ALLOW_SEED_HISTORY=1`, so a real installation never runs it (see
+[Developing](docs/developing.md#seeding-a-month-of-history)).
+
+Migration `0012` creates one table, `billing_closes` (one row per close: the month, who and when, the note, the currency and time zone,
+the totals and the stored figures as JSON, and the reopening). It writes no row and touches no other table, runs in a moment and needs
+no pre-check. A big site's snapshot is about 5 MB (2,000 assets, 31 days). The API gains `POST /api/billing/months/{month}/close` and
+`POST /api/billing/months/{month}/reopen` (both `billing.close`); `GET /api/billing/costs` gains `closed` (null for an open month)
+and, for a closed month, `live`; `GET /api/billing/months` counts a closed month when it names the first month. A client that does
+not use them sees an open month as before, with one more key (`closed: null`). The `api` container applies the migration the first time it starts from the new image.
+
+1. **Back up first**, as in step 1 of "Upgrading and going back". Keep the `.dump` and the `.version` file (it says `0011`).
+2. **Apply** as in step 4 of "Upgrading and going back": `docker compose up -d --build` (add `--profile dev` on a stack that has
+   the simulator). `scripts/setup.sh` and `scripts/setup.ps1` pass the build id for you. Reload open browser tabs.
+3. **Verify.** `docker compose exec api alembic current` prints `0012 (head)`; as an administrator, Billing on a finished month shows
+   **Close month…** left of **Download CSV** (do not press it unless you mean to close that month), and on the Roles tab a custom role
+   shows Close and reopen billing months among the Sensitive actions, not ticked.
+4. **Going back.** Use option a or option b of "Upgrading and going back" with `<previous>` = `0011` and `<old commit>` = `e9c1a5e`. The
+   `0012` downgrade drops `billing_closes`: **the closed months are lost**, and every month is then recalculated from the tree and
+   the rates as they are, so a month you had closed may show other figures. **Download the CSV of each closed month first** if you need
+   the closed figures. A custom role that had `billing.close` ticked keeps the id in its list; the older server ignores it, and a new
+   upgrade honours it again. `upgrade` after a downgrade creates an empty table. A restart of the W11 `api` would run `alembic upgrade
+   head` and apply `0012` again, so the W11 `api` must not be running once the schema is back at `0011`. Option b restores the
+   dump of step 1, which holds no closed month, and loses whatever was closed since (a restore of any older dump brings back the older
+   set of closed months; see [Backup and restore](docs/backup-and-restore.md)).
 
 ## W7u (2026-10-15, merge commit e9c1a5e)
 

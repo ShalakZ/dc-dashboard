@@ -67,6 +67,11 @@ so hypertables, the 1-minute and 1-hour rollups and their compression and retent
 part of the backup and come back with it; nothing has to be re-created by hand. The `pg_dump`
 warning about `continuous_agg` circular foreign keys is expected and harmless for a full dump.
 
+The **closed billing months** ([Closing a month](dashboards-and-billing.md#closing-a-month)) are database rows too, so they come back
+as the dump had them. That makes a restore of an older backup bring back the older set: a month closed since that backup is open
+again (and its billed figures are recalculated from the restored tree and rates), and a month reopened since is closed again. The
+audit log goes back in step with them. Take the CSV of a month before you restore if you need the figures as they were closed.
+
 **Retention and a restore.** The dump contains the retention policies, and a restored policy runs the moment the database starts its
 background jobs again, so restoring an old dump used to delete everything older than its retention limits within seconds. Raising the
 retention before the restore does not help: the restore brings the old limits back. `restore.sh` and `restore.ps1` now stop that.

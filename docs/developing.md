@@ -41,6 +41,40 @@ npm run e2e
 For `npm run dev` to reach the API without Caddy, publish it for the time being: `docker compose run --rm -p 8000:8000 api`, or add
 `ports: ["8000:8000"]` to a `compose.override.yaml` (ignored by git).
 
+## Seeding a month of history
+
+A new stack has no past, so Billing and its **Close month…** button have nothing to show. `dcdash.seed.history` makes a month of
+made-up readings for a **development or scratch stack**. It ships in the `api` image but is inert: it writes nothing unless it is
+asked twice, with `--yes` and with `DCDASH_ALLOW_SEED_HISTORY=1` in its environment. **Never run it on a real installation.**
+
+```bash
+docker compose exec -T api python -m dcdash.seed.history                  # the dry run: prints the plan, writes nothing
+docker compose exec -T -e DCDASH_ALLOW_SEED_HISTORY=1 api python -m dcdash.seed.history --yes
+```
+
+With neither switch it prints what it would create and exits 0; with `--yes` but without the variable it refuses (exit 2); when it
+refuses for another reason (below) it exits 1. In every refusal nothing is written. `--days N` uses the last N days instead of the
+default range, and `--seed N` changes the small random jitter (the default seed is fixed).
+
+- **What it makes.** A disabled simulator source called `seeded-history` (the collector never polls it) and, in the Assets Tree, the
+  asset **Seeded demo** with three panels: **Seeded Panel A** has an `energy_kwh` counter with a 6-hour gap (no samples) on one day,
+  **Seeded Panel B** only an `active_power_kw` point (so its energy is an estimate), and **Seeded Panel C** a counter that is reset to
+  near zero once in the middle of the range. Readings are every 5 minutes along a daily load curve of about 20 to 80 kW, written the way
+  the collector writes them, and the two rollups are then refreshed over the range. It adds no other row and writes no audit entry.
+- **The range, and why it is short.** It starts at the beginning of the previous month, but never earlier than the raw retention
+  allows (30 days by default, read from the Storage settings): a rollup refresh recomputes from the raw readings, and a window that
+  holds data the retention has already dropped would erase real rollup history. So it writes only inside the raw retention, and it
+  refuses (exit 1) on a stack whose rollups outlive their raw data. On most days of the month the previous month therefore holds only
+  its last days, which is enough to close it; in the last days of a month the default range would keep less than a day of the previous
+  month, and it refuses and says so (raise the raw retention, or run it earlier in the month). A second run is refused while the source
+  `seeded-history`, or a top-level asset called Seeded demo, exists.
+- **Undo.** Delete the **Seeded demo** asset (Assets Tree, with the normal Delete) and the source `seeded-history` (Sources, Delete).
+  That is not a full undo: as after any source delete, the readings and rollup rows of the deleted points stay behind as orphans, and the
+  seeder wrote no audit row (the deletes you make do). A scratch stack is better thrown away.
+- **Who uses it.** The end-to-end tests of close month (`frontend/e2e/w11.spec.ts`) seed their own history this way in a scratch
+  project ([End-to-end tests](end-to-end-tests.md)); the figures of a seeded month are also what `backend/tests/test_seed_history.py`
+  checks against the energy engine.
+
 ## Conventions
 
 - A database change is a new Alembic migration in `backend/migrations/versions/` (the next number), with a downgrade, an entry in
@@ -56,7 +90,7 @@ For `npm run dev` to reach the API without Caddy, publish it for the time being:
 
 | Path | What it holds |
 |---|---|
-| `backend/` | the Python package `dcdash` (`api`, `collector`, `connectors`, `core`, `diagnostics`, `profiles`, `simulator`), the Alembic migrations and the tests |
+| `backend/` | the Python package `dcdash` (`api`, `collector`, `connectors`, `core`, `diagnostics`, `profiles`, `seed`, `simulator`), the Alembic migrations and the tests |
 | `frontend/` | the React app (`src`), the Playwright specs (`e2e`), the static files (`public`) and the brand script (`scripts`) |
 | `deploy/` | the Caddy configuration (`Caddyfile`, `Caddyfile.tls`, `security-headers.caddy`) and the web image's `entrypoint.sh` |
 | `scripts/` | setup, backup, restore, update, diagnostics and test scripts, bash and PowerShell |

@@ -101,16 +101,18 @@ dialog. Without that permission the tree is plain links: no picking, no draggabl
   to the moved asset's link.
 - **The rate warning.** Before anything is written the server is asked what the move would change. Only when it changes **the rate an asset
   is billed at** does a question appear (for a drag, a confirmation titled "This changes the rate"; for Move to..., a message inside the
-  dialog, whose button then reads **Move anyway**): `Moving "Pump 3" changes its rate from 0.18 to 0.12 per kWh. Past periods are recalculated at
-  the new place, and the totals of both branches change.` With a site currency the rates carry it ("0.18 USD"); when the rate changes only
+  dialog, whose button then reads **Move anyway**): `Moving "Pump 3" changes its rate from 0.18 to 0.12 per kWh. Months that are not closed are recalculated at
+  the new place, and the totals of both branches change. Closed months keep their billed figures.` With a site currency the rates carry it ("0.18 USD"); when the rate changes only
   on other days than today the sentence reads "changes the rate some periods are billed at", and for several assets it names the first and
   "and N more". Cancel moves nothing and keeps your picks. An asset's rate on a day is the nearest rate in effect on itself or on an asset
   above it (else the site default), so moving an asset into another branch can change which rate applies. The comparison covers today and
   every date a rate starts, past and future, so a past day is flagged only if the rate the new place gives on it differs from the old one. A reorder inside
   one parent and a move between two places that bill at the same rate on every one of those dates never ask (nor does an asset whose own
   rate covers them all). The rules are in [Which rate applies to a day](dashboards-and-billing.md#which-rate-applies-to-a-day).
-- **Billing follows the tree.** Cost is worked out from the live tree on every request, so a move re-bills **past periods** at the new
-  place, not only from today. A past day's cost changes only if the rate the new place gives on that day differs from the one the old place gave; a rate in effect on the
+- **Billing follows the tree.** Cost is worked out from the live tree on every request, so a move re-bills the **past periods** of every
+  month that is not closed at the new place, not only from today. A month an administrator has **closed** is the exception: its Billing
+  page and CSV keep the figures it was closed with ([Closing a month](dashboards-and-billing.md#closing-a-month)); only dashboards and
+  widgets follow the move there. A past day's cost changes only if the rate the new place gives on that day differs from the one the old place gave; a rate in effect on the
   move day re-prices that whole day, the hours before the move included. The energy and cost totals of **both** branches change, with or
   without a warning (the warning is only about a changed rate), except for a place with its own meter, whose figures come from that meter.
   Nothing else is rewritten: dashboards, mappings, points and rates point at asset ids, which do not change, and the breadcrumbs, quick
@@ -128,7 +130,7 @@ dialog. Without that permission the tree is plain links: no picking, no draggabl
   others moved with it) in their details, which the audit drawer shows.
 - **One move is all or nothing.** A refusal for any asset refuses the whole request and moves nothing. Two people moving overlapping sets
   at once are served one after the other. At most 500 assets in one request.
-- **Not here yet.** Rules about which kind may sit under which (a Rack only in a Row, say), a note on a move, a frozen past, approvals, and
+- **Not here yet.** Rules about which kind may sit under which (a Rack only in a Row, say), a note on a move, approvals, and
   routing the Edit dialog's Parent field through the same warning (it still moves one asset without it); see the backlog.
 
 ### The move API
@@ -150,7 +152,7 @@ from them. A single asset is still deleted from its own page, and the bar's Dele
   delete). It lists the first 8 picked names and "and N more" for the rest, then what else goes with them, added up over the picks: the
   sub-assets nobody picked, the mappings and the tariffs. When anything beyond the picks goes, the button reads **Delete anyway** and the
   billing warning is the single delete's own: `5 assets, 2 mappings and 1 tariff will be deleted; their past energy and cost figures disappear
-  from Billing and dashboards.` The dialog always ends with "This can't be undone." (the names and the notes are one paragraph, the billing warning and that sentence the next) A pick that sits inside another pick gets a note,
+  from Billing and dashboards, except in closed months, which keep their billed figures.` The dialog always ends with "This can't be undone." (the names and the notes are one paragraph, the billing warning and that sentence the next) A pick that sits inside another pick gets a note,
   `LVP02 is inside Data_Hall_1, which is also picked, so it goes with it.` (the first three, then "and N more are inside other picked assets,
   so they go with them"). Picks that the filter hides are still deleted, as they are still moved; the dialog names them.
 - **Only top-level picks are sent.** Deleting an asset deletes everything below it, so a pick inside another pick goes with it and is not

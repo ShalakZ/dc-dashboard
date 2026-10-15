@@ -2,15 +2,15 @@
 
 This page is for the administrator who decides who may do what, and for a developer who calls the API. Every action in the API needs a
 named permission; an account holds one role, and a role is a set of permissions. The screens only hide what the server would refuse.
-The page lists the 30 permissions, the three built-in roles, how to make a role of your own, the safeguards, and the same through the API.
+The page lists the 31 permissions, the three built-in roles, how to make a role of your own, the safeguards, and the same through the API.
 
 ## The permissions
 
 `backend/dcdash/core/permissions.py` is the one list (the `CATALOGUE`); the Roles tab and `GET /api/permissions` draw from it, and
 `frontend/src/lib/permissions.ts` mirrors its ids and labels (`backend/tests/test_permissions_parity.py` fails when the two drift).
-There are 30 permissions, in groups by area. Each has a kind: a **see** permission opens a page, a **change** permission edits what is
+There are 31 permissions, in groups by area. Each has a kind: a **see** permission opens a page, a **change** permission edits what is
 on it, and a **risky** permission is a sensitive action kept apart on purpose (deleting assets, managing asset kinds, choosing the
-default dashboard, exporting billing or the audit log, running scans, accepting scan results, changing sign-in protection, managing
+default dashboard, exporting billing or the audit log, closing billing months, running scans, accepting scan results, changing sign-in protection, managing
 roles). The Roles editor shows the risky ones under **Sensitive actions**.
 
 "Also needs" is what the Roles editor suggests ticking with it (`PERMISSION_NEEDS` in `frontend/src/lib/roleEditor.ts`): without
@@ -27,6 +27,7 @@ those, the page or the control shows nothing. The server does not enforce these 
 | | `dashboards.default` | Choose the default dashboard | risky | Choose the dashboard everybody lands on. | `dashboards.view` |
 | Billing and tariffs | `billing.view` | See billing | see | Open the Billing page: energy and cost per asset and month. | |
 | | `billing.export` | Export billing as CSV | risky | Download the billing table as a CSV file. | `billing.view` |
+| | `billing.close` | Close and reopen billing months | risky | Close a finished month so its billed figures stop changing, and reopen it with a reason ([Closing a month](dashboards-and-billing.md#closing-a-month)). Admin only by default. | `billing.view` |
 | | `tariffs.view` | See tariffs | see | Open the Tariffs page, read-only (it also needs See the Assets Tree). | `assets.view` |
 | | `tariffs.edit` | Change tariffs | change | Set the currency, the site rate and per-asset rates. | `tariffs.view`, `assets.view` |
 | Sources and discovery | `sources.view` | See sources | see | Open the Sources page, a source's points and the collector status. | |
@@ -48,6 +49,11 @@ those, the page or the control shows nothing. The server does not enforce these 
 | Roles | `roles.manage` | Manage roles | risky | Create, edit and delete roles. Only the built-in Admin role holds it. | |
 | Diagnostics | `diagnostics.view` | See diagnostics | see | Open the Diagnostics page and build a report, which includes settings, retention, the audit tail and each source's security settings. | `sources.view` |
 | | `diagnostics.run` | Run the connection check | change | Run the step-by-step connection check of a source. | `sources.view` |
+
+`billing.close` is held by the built-in Admin only, until an administrator ticks it on a role of their own (unlike `roles.manage` it can
+be ticked on a custom role, as `billing.export` can). Migration `0012` gave it to no role, so after an upgrade nobody but the Admin can
+close or reopen a month. It needs See billing: the buttons live on the Billing page, so the Roles editor offers to tick **See billing**
+with it, and the API refuses a person without the permission with a 403 whatever the page shows.
 
 `assets.edit` also lets a person move assets in the Assets Tree ([Moving assets](assets-and-kinds.md#moving-assets)); deleting the picked
 assets from the tree's pick bar needs `assets.delete` as well ([Deleting several assets](assets-and-kinds.md#deleting-several-assets)).
@@ -176,6 +182,8 @@ built-in names are shown and the server still refuses what is not allowed).
 - The `permissions` column of the three built-in rows in the database is the snapshot migration `0009` wrote (28 ids, without
   `settings.security` and `assets.kinds`) and is never refreshed. A built-in role's permissions come from the code, so reading that
   column shows an Admin row without them, and nothing is affected.
+- Close and reopen billing months (`billing.close`, release W11) was given to no role by its migration `0012`: only the Administrator
+  holds it until you tick it on a role of your own (Sensitive actions on the Roles tab). Nothing a role could do before is taken away.
 - What each release changed is in [CHANGELOG.md](../CHANGELOG.md).
 
 Related: [Screens](screens.md), [Dashboards and billing](dashboards-and-billing.md), [Assets and kinds](assets-and-kinds.md), [Operating the stack](operating.md)
