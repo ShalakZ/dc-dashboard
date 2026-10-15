@@ -327,3 +327,67 @@ describe("useGraphHighlight, selection", () => {
     expect(result.current.shownNodes).toBe(NODES);
   });
 });
+
+// A node that leaves the DOM under a resting pointer (a collapse from the keyboard, a Find that closes groups, a refetch) sends no mouseleave
+// and no reliable focusout: the hook must not keep its id, or it would hide the selection and light the path again when the node comes back.
+describe("useGraphHighlight, a node that goes away", () => {
+  const without = (id: string) => ({
+    nodes: NODES.filter((n) => n.id !== id),
+    edges: EDGES.filter((e) => e.source !== id && e.target !== id),
+  });
+
+  it("drops a hover on a node that was removed, so the selection shows and the path does not return with the node", () => {
+    const { result, rerender, enter, wait } = setup({ selectedIds: ["p2"] });
+    enter("p1");
+    wait(120);
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    rerender({ ...BASE, ...without("p1"), selectedIds: ["p2"] });
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+    rerender({ ...BASE, selectedIds: ["p2"] }); // the node is back, the pointer is not on it
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+  });
+
+  it("drops a keyboard focus on a node that was removed", () => {
+    const { result, rerender, handlers } = setup({ selectedIds: ["p2"] });
+    const { button } = nodeElement("p1", true);
+    act(() => { handlers().onFocus(focusEvent(button)); });
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    rerender({ ...BASE, ...without("p1"), selectedIds: ["p2"] });
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+    rerender({ ...BASE, selectedIds: ["p2"] });
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+  });
+
+  it("cancels a dwell that was still running for the removed node, and only that one", () => {
+    const { result, rerender, enter, wait } = setup();
+    enter("p1");
+    wait(50);
+    rerender({ ...BASE, ...without("p1") });
+    wait(300);
+    rerender({ ...BASE });
+    expect(result.current.active).toBe(false);
+
+    enter("p2");
+    wait(50);
+    rerender({ ...BASE, edges: [...EDGES] }); // a rebuild that keeps the node
+    wait(70);
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+  });
+
+  it("keeps a hover on a node that is still there, even one with no edge (hover still wins over the selection)", () => {
+    const { result, rerender, enter, wait } = setup({ selectedIds: ["p2"] });
+    enter("lone");
+    wait(120);
+    expect(result.current.active).toBe(false); // hover on a node with nothing to follow lights nothing, selection or not
+    rerender({ ...BASE, edges: [...EDGES], selectedIds: ["p2"] });
+    expect(result.current.active).toBe(false);
+  });
+
+  it("does not re-render for a rebuild when nothing was hovered or focused", () => {
+    let renders = 0;
+    const { rerender } = renderHook((props: Props) => { renders += 1; return useGraphHighlight(props); }, { initialProps: BASE });
+    const before = renders;
+    rerender({ ...BASE, edges: [...EDGES] });
+    expect(renders - before).toBe(1); // the rerender itself, and no second pass from the effect
+  });
+});

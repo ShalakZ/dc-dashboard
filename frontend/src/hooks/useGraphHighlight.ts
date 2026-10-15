@@ -64,6 +64,7 @@ export function useGraphHighlight({ nodes, edges, selectedIds, dragging }: {
   const [hover, setHover] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
   const dwell: Timer = useRef(null);
+  const dwellId = useRef<string | null>(null);
   const grace: Timer = useRef(null);
 
   useEffect(() => () => { stop(dwell); stop(grace); }, []);
@@ -75,6 +76,7 @@ export function useGraphHighlight({ nodes, edges, selectedIds, dragging }: {
       if (!canHover()) return;
       stop(dwell);
       const id = node.id;
+      dwellId.current = id;
       dwell.current = setTimeout(() => { dwell.current = null; setHover(id); }, HOVER_DWELL_MS);
     },
     onNodeMouseLeave: () => {
@@ -94,7 +96,18 @@ export function useGraphHighlight({ nodes, edges, selectedIds, dragging }: {
   }), []);
 
   const index = useMemo(() => edgeIndex(edges), [edges]);
-  const ids = dragging ? NONE : focusIds({ hover, focused, selected: selectedIds });
+
+  // A node that leaves the DOM under a resting pointer (a collapse from the keyboard, a Find that closes groups, a refetch) sends no mouseleave and no
+  // reliable focusout. Without this the old id would outrank the selection and light its path again the moment the node came back. It runs on a rebuild
+  // (new edges, or nodes added or removed), never on a drag frame; presence is read from the nodes, so a node that is there but has no edge keeps its hover.
+  useEffect(() => {
+    const present = (id: string) => nodes.some((n) => n.id === id);
+    setHover((h) => (h === null || present(h) ? h : null));
+    setFocused((f) => (f === null || present(f) ? f : null));
+    if (dwellId.current !== null && !present(dwellId.current)) stop(dwell);
+  }, [index, nodes.length]); // eslint-disable-line react-hooks/exhaustive-deps -- `nodes` is read when a rebuild lands, not on every change of it
+
+  const ids =dragging ? NONE : focusIds({ hover, focused, selected: selectedIds });
   // A key that changes only when the ids do (the caller's array is new on every render); a selection over the cap lights nothing, so it needs no key.
   const key = ids.length === 0 || ids.length > FOCUS_CAP ? "" : JSON.stringify(ids);
   const set = useMemo(() => (key === "" ? null : focusSet(index, ids)), [index, key]); // eslint-disable-line react-hooks/exhaustive-deps -- `ids` is what `key` says
