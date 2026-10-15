@@ -119,12 +119,13 @@ function insideNotes(inside: readonly InsideItem[]): string {
 /**
  * The dialog's message: the picked names (the first eight), a note for each pick inside another, what else goes with them (the existing
  * billing warning, verbatim) when the delete is not plain, and that it cannot be undone. `null` = the numbers are still loading: no message.
+ * Two paragraphs split by a blank line (the dialog keeps newlines, `white-space: pre-line`): what was picked, then what it costs and that it is final.
  */
 export function deleteMessage(plan: DeletePlan, sum: AssetImpact | null): string {
   if (sum === null) return "";
-  return [`${namesLine(plan.picked.map((p) => p.name))}.`, insideNotes(plan.inside), isPlainDelete(plan, sum) ? "" : assetLoss(sum), "This can't be undone."]
-    .filter((part) => part !== "")
-    .join(" ");
+  const picked = [`${namesLine(plan.picked.map((p) => p.name))}.`, insideNotes(plan.inside)].filter((part) => part !== "").join(" ");
+  const cost = [isPlainDelete(plan, sum) ? "" : assetLoss(sum), "This can't be undone."].filter((part) => part !== "").join(" ");
+  return `${picked}\n\n${cost}`;
 }
 
 /** "Delete anyway" is for a delete that takes more than the picks; while the numbers load (and when it is plain) the button reads Delete, so it does not change width when they land. */

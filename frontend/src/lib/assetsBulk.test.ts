@@ -267,51 +267,61 @@ describe("deleteMessage", () => {
   const LOSS =(a: number, m: number, t: number) =>
     `${a} ${a === 1 ? "asset" : "assets"}, ${m} ${m === 1 ? "mapping" : "mappings"} and ${t} ${t === 1 ? "tariff" : "tariffs"} will be deleted; their past energy and cost figures disappear from Billing and dashboards.`;
   const LAST = "This can't be undone.";
+  const BREAK = "\n\n";
 
   it("is empty while the numbers load", () => {
     expect(deleteMessage(fake([item(1)]), null)).toBe("");
   });
 
   it.each([
-    ["one leaf", fake([item(1, "LVP01")]), impact(1), `LVP01. ${LAST}`],
-    ["two leaves", fake([item(1, "LVP02"), item(2, "LVP03")]), impact(2), `LVP02, LVP03. ${LAST}`],
-    ["names as written, commas and all", fake([item(1, "Rack, 42U"), item(2, "UPS")]), impact(2), `Rack, 42U, UPS. ${LAST}`],
-    ["eight names are all listed", fake(names(8)), impact(8), `K1, K2, K3, K4, K5, K6, K7, K8. ${LAST}`],
-    ["nine names: the eighth, then how many more", fake(names(9)), impact(9), `K1, K2, K3, K4, K5, K6, K7, K8 and 1 more. ${LAST}`],
-    ["twelve names", fake(names(12)), impact(12), `K1, K2, K3, K4, K5, K6, K7, K8 and 4 more. ${LAST}`],
-    ["sub-assets nobody picked", fake([item(1, "Hall")]), impact(41, 2, 1), `Hall. ${LOSS(41, 2, 1)} ${LAST}`],
-    ["one mapping", fake([item(1, "LVP01")]), impact(1, 1), `LVP01. ${LOSS(1, 1, 0)} ${LAST}`],
-    ["one tariff", fake([item(1, "LVP01")]), impact(1, 0, 1), `LVP01. ${LOSS(1, 0, 1)} ${LAST}`],
-    ["two picks and a child nobody picked", fake([item(1, "A"), item(2, "B")]), impact(3), `A, B. ${LOSS(3, 0, 0)} ${LAST}`],
+    ["one leaf", fake([item(1, "LVP01")]), impact(1), `LVP01.${BREAK}${LAST}`],
+    ["two leaves", fake([item(1, "LVP02"), item(2, "LVP03")]), impact(2), `LVP02, LVP03.${BREAK}${LAST}`],
+    ["names as written, commas and all", fake([item(1, "Rack, 42U"), item(2, "UPS")]), impact(2), `Rack, 42U, UPS.${BREAK}${LAST}`],
+    ["eight names are all listed", fake(names(8)), impact(8), `K1, K2, K3, K4, K5, K6, K7, K8.${BREAK}${LAST}`],
+    ["nine names: the eighth, then how many more", fake(names(9)), impact(9), `K1, K2, K3, K4, K5, K6, K7, K8 and 1 more.${BREAK}${LAST}`],
+    ["twelve names", fake(names(12)), impact(12), `K1, K2, K3, K4, K5, K6, K7, K8 and 4 more.${BREAK}${LAST}`],
+    ["sub-assets nobody picked", fake([item(1, "Hall")]), impact(41, 2, 1), `Hall.${BREAK}${LOSS(41, 2, 1)} ${LAST}`],
+    ["one mapping", fake([item(1, "LVP01")]), impact(1, 1), `LVP01.${BREAK}${LOSS(1, 1, 0)} ${LAST}`],
+    ["one tariff", fake([item(1, "LVP01")]), impact(1, 0, 1), `LVP01.${BREAK}${LOSS(1, 0, 1)} ${LAST}`],
+    ["two picks and a child nobody picked", fake([item(1, "A"), item(2, "B")]), impact(3), `A, B.${BREAK}${LOSS(3, 0, 0)} ${LAST}`],
   ])("%s", (_name, p, sum, text) => {
     expect(deleteMessage(p, sum)).toBe(text);
   });
 
+  it("is two paragraphs: what was picked, then the cost and that it is final", () => {
+    const p = fake([item(1, "Hall"), item(2, "Rack")], [{ id: 2, name: "Rack", rootName: "Hall", rootId: 1 }]);
+    const [picked, cost, ...more] = deleteMessage(p, impact(6, 1, 0)).split("\n\n");
+    expect(more).toEqual([]);
+    expect(picked).toBe("Hall, Rack. Rack is inside Hall, which is also picked, so it goes with it.");
+    expect(cost).toBe(`${LOSS(6, 1, 0)} ${LAST}`);
+    expect(deleteMessage(fake([item(1, "LVP01")]), impact(1)).split("\n\n")).toEqual(["LVP01.", LAST]);
+  });
+
   it("says, for a pick inside another pick, that it goes with it", () => {
     const p = fake([item(1, "Data_Hall_1"), item(2, "LVP02")], [{ id: 2, name: "LVP02", rootName: "Data_Hall_1", rootId: 1 }]);
-    expect(deleteMessage(p, impact(2))).toBe(`Data_Hall_1, LVP02. LVP02 is inside Data_Hall_1, which is also picked, so it goes with it. ${LAST}`);
+    expect(deleteMessage(p, impact(2))).toBe(`Data_Hall_1, LVP02. LVP02 is inside Data_Hall_1, which is also picked, so it goes with it.${BREAK}${LAST}`);
   });
 
   it("says it for the first three, then counts the rest", () => {
     const inside = (n: number) => Array.from({ length: n }, (_, i) => ({ id: 10 + i, name: `C${i + 1}`, rootName: "Hall", rootId: 1 }));
     const picked = (n: number) => [item(1, "Hall"), ...inside(n).map((c) => item(c.id, c.name))];
     const three = deleteMessage(fake(picked(3), inside(3)), impact(4));
-    expect(three).toContain("C1 is inside Hall, which is also picked, so it goes with it. C2 is inside Hall, which is also picked, so it goes with it. C3 is inside Hall, which is also picked, so it goes with it. This can't be undone.");
+    expect(three).toContain("C1 is inside Hall, which is also picked, so it goes with it. C2 is inside Hall, which is also picked, so it goes with it. C3 is inside Hall, which is also picked, so it goes with it.\n\nThis can't be undone.");
     expect(three).not.toContain("more");
     const four = deleteMessage(fake(picked(4), inside(4)), impact(5));
-    expect(four).toContain("C3 is inside Hall, which is also picked, so it goes with it, and 1 more is inside another picked asset, so it goes with it. This can't be undone.");
+    expect(four).toContain("C3 is inside Hall, which is also picked, so it goes with it, and 1 more is inside another picked asset, so it goes with it.\n\nThis can't be undone.");
     expect(four).not.toContain("C4 is inside");
     const nine = deleteMessage(fake(picked(9), inside(9)), impact(10));
-    expect(nine).toContain("C3 is inside Hall, which is also picked, so it goes with it, and 6 more are inside other picked assets, so they go with them. This can't be undone.");
+    expect(nine).toContain("C3 is inside Hall, which is also picked, so it goes with it, and 6 more are inside other picked assets, so they go with them.\n\nThis can't be undone.");
   });
 
   it("puts the notes before the billing warning", () => {
     const p = fake([item(1, "Hall"), item(2, "Rack")], [{ id: 2, name: "Rack", rootName: "Hall", rootId: 1 }]);
-    expect(deleteMessage(p, impact(6, 1, 0))).toBe(`Hall, Rack. Rack is inside Hall, which is also picked, so it goes with it. ${LOSS(6, 1, 0)} ${LAST}`);
+    expect(deleteMessage(p, impact(6, 1, 0))).toBe(`Hall, Rack. Rack is inside Hall, which is also picked, so it goes with it.${BREAK}${LOSS(6, 1, 0)} ${LAST}`);
   });
 
   it("works on a real plan", () => {
-    expect(deleteMessage(plan(1, 3), impact(5))).toBe(`Hall, LVP01. LVP01 is inside Hall, which is also picked, so it goes with it. ${LOSS(5, 0, 0)} ${LAST}`);
+    expect(deleteMessage(plan(1, 3), impact(5))).toBe(`Hall, LVP01. LVP01 is inside Hall, which is also picked, so it goes with it.${BREAK}${LOSS(5, 0, 0)} ${LAST}`);
   });
 });
 
