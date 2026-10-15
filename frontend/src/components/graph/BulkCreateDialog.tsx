@@ -128,7 +128,7 @@ export function BulkCreateDialog({ model, source, onClose }: { model: GraphModel
       }
     } finally {
       // Once, for the whole batch, and before the page is told: its focus rules read the refreshed graph.
-      try { await invalidate(keys.graph, keys.sources, keys.assets); } finally { running.current = false; }
+      try { await invalidate(keys.graph, keys.sources, keys.assets, keys.fleet, keys.auditAll); } finally { running.current = false; }
     }
     if (alive.current) {
       setProgress(null);

@@ -1,6 +1,8 @@
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useAssets, useGraph, useSources } from "../../api/queries";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../../api/client";
+import { keys, useAssets, useGraph, useSources } from "../../api/queries";
 import type { GraphModel, Metric } from "../../api/types";
 import { useAuth } from "../../auth/AuthProvider";
 import { mockFetch } from "../../test/fetchMock";
@@ -46,6 +48,8 @@ const routes = (accept: Accept = created(), assets?: GraphModel["assets"]) => ({
   "GET /api/discovery/graph": { body: graph(assets) },
   "GET /api/sources": { body: [] },
   "GET /api/assets": { body: [] },
+  "GET /api/fleet/summary": { body: {} },
+  "GET /api/audit/actions": { body: [] },
   "POST /api/discovery/accept": accept,
 });
 
@@ -55,6 +59,8 @@ function Harness({ onClose }: { onClose: () => void }) {
   const { data } = useGraph();
   useAssets();
   useSources();
+  useQuery({ queryKey: keys.fleet, queryFn: () => api.get("/api/fleet/summary") }); // the Assets Tree landing figures and the audit log are open elsewhere
+  useQuery({ queryKey: [...keys.auditAll, "actions"], queryFn: () => api.get("/api/audit/actions") });
   if (loading || !data) return null;
   return <BulkCreateDialog model={data} source={data.sources[0]} onClose={onClose} />;
 }
@@ -157,7 +163,7 @@ describe("BulkCreateDialog", () => {
     ]);
   });
 
-  it("refreshes the graph, the sources and the assets once for the whole batch", async () => {
+  it("refreshes the graph, the sources, the assets, the fleet summary and the audit log once for the whole batch", async () => {
     const user = userEvent.setup();
     const { calls, onClose } = await open();
     await waitFor(() => expect(gets(calls, "/api/sources")).toBe(1));
@@ -167,6 +173,8 @@ describe("BulkCreateDialog", () => {
     expect(gets(calls, "/api/discovery/graph")).toBe(2);
     expect(gets(calls, "/api/sources")).toBe(2);
     expect(gets(calls, "/api/assets")).toBe(2);
+    expect(gets(calls, "/api/fleet/summary")).toBe(2); // the fleet summary and the audit log too (LESSONS A11)
+    expect(gets(calls, "/api/audit/actions")).toBe(2);
   });
 
   it("when one group fails midway: the others are created, the failed row keeps the server's words, and the dialog stays", async () => {

@@ -114,7 +114,7 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
     void run(async () => {
       await api.post<AcceptResult>("/api/discovery/accept", acceptBody(payload.source.id, target, rows));
       // keys.sources also covers this source's points list (its key starts with it): naming both would fetch that list twice.
-      await invalidate(keys.graph, keys.sources, keys.assets);
+      await invalidate(keys.graph, keys.sources, keys.assets, keys.fleet, keys.auditAll);
       onClose();
     });
   };
