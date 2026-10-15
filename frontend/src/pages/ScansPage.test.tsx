@@ -12,7 +12,7 @@ import { ScansPage } from "./ScansPage";
 
 const scope = { id: 3, name: "lab", targets: ["simulator"], ports: [9000, 4840, 5020], created_at: "2026-10-07T10:00:00Z" };
 const done = {
-  id: 7, scope_id: 3, scope_name: "lab", status: "done", stage: "browse", created_at: "t", finished_at: "t", error: null,
+  id: 7, scope_id: 3, scope_name: "lab", targets: ["simulator"], ports: [9000, 4840, 5020], status: "done", stage: "browse", created_at: "t", finished_at: "t", error: null,
   progress: { hosts: 1, pairs: 3, checked: 3, open: 3, claimed: 2, points: 120, unidentified: 0, needs_credentials: 1 },
   scope_snapshot: {},
   findings: [
@@ -49,7 +49,7 @@ describe("ScansPage", () => {
   it("prints the start of a scan on the wall clock of the site zone", async () => {
     mockFetch({ ...base("operator"), "GET /api/scans": { body: [{ ...done, created_at: "2026-10-09T11:05:00Z", findings: undefined }] } });
     open();
-    const history = await screen.findByRole("row", { name: /^lab done/ });
+    const history = await screen.findByRole("row", { name: /^lab .*done/ });
     expect(await within(history).findByText("2026-10-09 14:05:00")).toBeInTheDocument();
   });
 
@@ -60,7 +60,7 @@ describe("ScansPage", () => {
       "GET /api/scans": { body: [{ ...done, created_at: "2026-10-09T11:05:00Z", findings: undefined }] },
     });
     open();
-    const history = await screen.findByRole("row", { name: /^lab done/ });
+    const history = await screen.findByRole("row", { name: /^lab .*done/ });
     await waitFor(() => expect(calls.some((c) => c.path === "/api/site")).toBe(true));
     expect(within(history).getByText("—")).toBeInTheDocument();
     expect(history).not.toHaveTextContent(/2026|2:05|14:05/);
@@ -117,7 +117,7 @@ describe("ScansPage", () => {
     expect(calls.some((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")).toBe(false); // nothing runs before confirming
     await userEvent.click(screen.getByRole("button", { name: "Start scan" }));
     expect(calls.find((c) => c.method === "POST" && c.path === "/api/scopes/3/scan")?.body).toEqual({ confirm_host_count: 2, digest: "d1g3st" });
-    expect(await screen.findByText(/running/i)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /running/i })).toBeInTheDocument(); // the drawer's title (the status text on the row says it too)
     const row = await screen.findByRole("row", { name: /^simulator 9000 / }, { timeout: 5000 });
     expect(within(row).getByText("needs credentials")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open the discovery graph" })).toHaveAttribute("href", "/discovery");
@@ -251,14 +251,16 @@ describe("ScansPage", () => {
     expect(screen.getByRole("link", { name: "Open the discovery graph" })).toBeInTheDocument();
   });
 
-  it("counts only sources that were read as claimed, in the progress line and in the history", async () => {
+  it("counts only sources that were read as sources, in the stats line and in the history, in words", async () => {
     mockFetch({ ...base("operator"), "GET /api/scans/7": { body: done } }); // claimed 2, of which 1 needs credentials
     open();
-    const history = await screen.findByRole("row", { name: /^lab done/ });
-    expect(within(history).getByText("1 / 120")).toBeInTheDocument();
+    const history = await screen.findByRole("row", { name: /^lab .*done/ });
+    expect(within(history).getByText("1 source, 120 points")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Sources / points" })).toBeInTheDocument();
     await userEvent.click(within(history).getByRole("button", { name: "Details" }));
-    expect(await screen.findByText("1 claimed")).toBeInTheDocument();
-    expect(screen.queryByText("2 claimed")).not.toBeInTheDocument();
+    expect(await screen.findByText("1 source read")).toBeInTheDocument();
+    expect(screen.queryByText("2 sources read")).not.toBeInTheDocument();
+    expect(screen.queryByText(/\d claimed/)).not.toBeInTheDocument();
   });
 
   it("writes the finding outcomes as words, never as needs_credentials", async () => {
@@ -276,13 +278,13 @@ describe("ScansPage", () => {
     expect(screen.queryByText(/needs_credentials|unclaimed/)).not.toBeInTheDocument();
   });
 
-  it("labels the sweep counter as ports checked, not probed", async () => {
+  it("counts the sweep as checks (hosts times ports), not ports checked or probed", async () => {
     const sweeping = { ...done, status: "running", stage: "sweep", findings: [], progress: { hosts: 1, pairs: 3, checked: 2, open: 1 } };
     mockFetch({ ...base("operator"), "GET /api/scans/7": { body: sweeping } });
     open();
     await userEvent.click(await screen.findByRole("button", { name: "Details" }));
-    expect(await screen.findByText("2/3 ports checked")).toBeInTheDocument();
-    expect(screen.queryByText(/probed/)).not.toBeInTheDocument();
+    expect(await screen.findByText("2 of 3 checks")).toBeInTheDocument();
+    expect(screen.queryByText(/probed|ports checked/)).not.toBeInTheDocument();
   });
 
   it("says so when there are no scopes and no scans yet, instead of showing empty tables", async () => {
@@ -366,9 +368,9 @@ describe("ScansPage look (W6)", () => {
       ] },
     });
     open();
-    expect(within(await screen.findByRole("row", { name: /^a done/ })).getByText("done")).toHaveClass("chip", "chip-ok");
-    expect(within(screen.getByRole("row", { name: /^b failed/ })).getByText("failed")).toHaveClass("chip", "chip-bad");
-    expect(within(screen.getByRole("row", { name: /^c running/ })).getByText("running")).toHaveClass("chip", "chip-stale");
+    expect(within(await screen.findByRole("row", { name: /^a .*done/ })).getByText("done")).toHaveClass("chip", "chip-ok");
+    expect(within(screen.getByRole("row", { name: /^b .*failed/ })).getByText("failed")).toHaveClass("chip", "chip-bad");
+    expect(within(screen.getByRole("row", { name: /^c .*running/ })).getByText("running")).toHaveClass("chip", "chip-stale");
   });
 
   it("writes each finding outcome as a chip: claimed ok, needs credentials warning, unidentified hollow", async () => {
@@ -569,5 +571,101 @@ describe("ScansPage controls follow the permissions of the role (a custom role)"
     expect(document.querySelector(".page-head > .actions > [aria-hidden]")).not.toBeNull();
     held.release();
     await screen.findByRole("button", { name: "New scope" });
+  });
+});
+
+describe("ScansPage scan drawer and readable numbers (W7r)", () => {
+  const second = { ...done, id: 8, scope_name: "plant", targets: ["10.0.0.0/24"], ports: [502], findings: undefined };
+  const history = [{ ...done, findings: undefined }, second];
+  const detailsOf = (name: RegExp) => within(screen.getByRole("row", { name })).getByRole("button", { name: "Details" });
+
+  it("opens Details in a drawer, closes it with Escape and puts the focus back on that row's Details button", async () => {
+    mockFetch({ ...base("operator"), "GET /api/scans": { body: history }, "GET /api/scans/8": { body: { ...second, findings: [] } }, "GET /api/scans/7": { body: done } });
+    open();
+    await screen.findByRole("row", { name: /^plant / });
+    const button = detailsOf(/^plant /);
+    expect(button).toHaveAttribute("data-scan-details", "8");
+    expect(button).toHaveAttribute("type", "button");
+    await userEvent.click(button);
+    const dialog = await screen.findByRole("dialog", { name: "Scan #8 — done" });
+    expect(dialog).toHaveTextContent("plant: 10.0.0.0/24, port 502");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(detailsOf(/^plant /)).toHaveFocus(); // not the other scan's button
+    await userEvent.click(detailsOf(/^lab .*done/));
+    await screen.findByRole("dialog", { name: "Scan #7 — done" });
+  });
+
+  it("closes with the x and with a click outside, and sends nothing but reads", async () => {
+    const calls = mockFetch({ ...base("operator"), "GET /api/scans/7": { body: done } });
+    open();
+    await userEvent.click(await screen.findByRole("button", { name: "Details" }));
+    await screen.findByRole("dialog", { name: "Scan #7 — done" });
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Details" })).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Details" }));
+    await screen.findByRole("dialog", { name: "Scan #7 — done" });
+    await userEvent.click(document.querySelector(".drawer-backdrop")!);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("opens the drawer of a scan that was just started, and closing it leaves the scan running with its row's Details button focused", async () => {
+    const calls = mockFetch({
+      ...base("admin"),
+      "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } },
+      "POST /api/scopes/3/scan": { status: 202, body: { scan_id: 7, job_id: 1 } },
+      "GET /api/scans/7": { body: { ...done, status: "running", stage: "sweep", findings: [], progress: { hosts: 2, pairs: 6, checked: 1 } } },
+    });
+    open();
+    await pick("Scan");
+    await userEvent.click(await screen.findByRole("button", { name: "Start scan" }));
+    expect(await screen.findByRole("dialog", { name: "Scan #7 — running" })).toHaveTextContent("1 of 6 checks");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Details" })).toHaveFocus();
+    expect(calls.filter((c) => c.method !== "GET").map((c) => `${c.method} ${c.path}`)).toEqual(["POST /api/scopes/3/scan"]); // nothing cancels it
+  });
+
+  it("falls back to the page when the scan's row is not in the list", async () => {
+    mockFetch({
+      ...base("admin"),
+      "GET /api/scopes/3/preview": { body: { hosts: 2, ports: 3, pairs: 6, digest: "d1g3st" } },
+      "POST /api/scopes/3/scan": { status: 202, body: { scan_id: 9, job_id: 1 } },
+      "GET /api/scans/9": { body: { ...done, id: 9 } },
+    });
+    const main = document.createElement("main");
+    main.id = "main";
+    main.tabIndex = -1;
+    document.body.append(main);
+    open();
+    await pick("Scan");
+    await userEvent.click(await screen.findByRole("button", { name: "Start scan" }));
+    await screen.findByRole("dialog", { name: "Scan #9 — done" });
+    await userEvent.keyboard("{Escape}");
+    expect(main).toHaveFocus(); // the list does not show scan 9, so there is no button to give the focus to
+    main.remove();
+  });
+
+  it("reads the scan's targets and ports under the scope's name in Recent scans, whole, with all of it in the title", async () => {
+    const ports = [1, 2, 3, 4, 5, 6, 7, 8, 9, 4080];
+    mockFetch({ ...base("operator"), "GET /api/scans": { body: [{ ...done, findings: undefined, targets: ["a", "b", "c", "d", "e"], ports }] } });
+    open();
+    const row = await screen.findByRole("row", { name: /^lab .*done/ });
+    const sub = row.querySelector(".cell-sub")!;
+    const all = "a, b, c, d, e, ports 1, 2, 3, 4, 5, 6, 7, 8, 9, 4080";
+    expect(sub).toHaveTextContent(all); // nothing cut in the text itself: the ellipsis is CSS, and a mistyped port stays visible
+    expect(sub).toHaveAttribute("title", all);
+    expect(row.querySelector(".cell-name")).toHaveTextContent(/^lab$/);
+  });
+
+  it("has no second line for a scan that kept neither targets nor ports, and gives the figures their longer wording as a title", async () => {
+    const { targets: _targets, ports: _ports, ...old } = done;
+    mockFetch({ ...base("operator"), "GET /api/scans": { body: [{ ...old, findings: undefined }] } });
+    open();
+    const row = await screen.findByRole("row", { name: /^lab done/ });
+    expect(row.querySelector(".cell-sub")).toBeNull();
+    expect(within(row).getByText("1 source, 120 points")).toHaveAttribute("title", "1 source recognised and read, 120 points found");
   });
 });
