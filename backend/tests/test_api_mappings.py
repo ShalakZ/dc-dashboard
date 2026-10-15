@@ -116,8 +116,55 @@ async def test_mapping_create_update_and_delete_are_audited(client, db):
     }
     assert deleted_row["detail"] == {
         "mapping_id": created["id"], "point_id": kw, "asset_id": asset, "metric": "active_power_kw",
+        "scale": 0.5, "interval_seconds": 10, "custom_unit": None,
     }
     assert {r["actor_name"] for r in (created_row, updated_row, deleted_row)} == {"admin"}
+
+
+async def test_the_delete_audit_row_keeps_the_values_that_an_undo_needs(client, db):
+    # The row alone must be enough to put a mapping back once the toast with the Undo is gone.
+    asset, kw, _ = await setup(client, db)
+    created = (await client.post(
+        "/api/mappings", json=body(kw, asset, "custom", interval_seconds=1, scale=0.001, custom_unit="MW")
+    )).json()
+    assert (await client.delete(f"/api/mappings/{created['id']}")).status_code == 204
+    _, deleted_row = await mapping_rows(db)
+    assert deleted_row["action"] == "mapping.deleted"
+    assert deleted_row["detail"] == {
+        "mapping_id": created["id"], "point_id": kw, "asset_id": asset, "metric": "custom",
+        "scale": 0.001, "interval_seconds": 1, "custom_unit": "MW",
+    }
+
+
+async def test_one_mapping_can_be_read_with_every_stored_value(client, db):
+    # The Undo of an unmap reads the mapping before it deletes it: no other payload holds the scale, interval and unit.
+    asset, kw, kwh = await setup(client, db)
+    custom = (await client.post(
+        "/api/mappings", json=body(kw, asset, "custom", interval_seconds=1, scale=0.001, custom_unit="MW")
+    )).json()
+    plain = (await client.post("/api/mappings", json=body(kwh, asset, "energy_kwh"))).json()
+    read = await client.get(f"/api/mappings/{custom['id']}")
+    assert read.status_code == 200
+    assert read.json() == {
+        "id": custom["id"], "point_id": kw, "asset_id": asset, "metric": "custom",
+        "scale": 0.001, "interval_seconds": 1, "custom_unit": "MW",
+    }
+    assert (await client.get(f"/api/mappings/{plain['id']}")).json() == plain
+    assert [r["action"] for r in await mapping_rows(db)] == ["mapping.created", "mapping.created"]  # a read writes no row
+
+
+async def test_reading_a_mapping_that_is_not_there_is_a_404(client, db):
+    await setup(client, db)
+    missing = await client.get("/api/mappings/999")
+    assert missing.status_code == 404 and missing.json()["detail"] == "mapping not found"
+
+
+async def test_only_admins_can_read_a_mapping(client, db):
+    asset, kw, _ = await setup(client, db)
+    mapping = await make_mapping(db, kw, asset)
+    for role in ("operator", "viewer"):
+        await login_as(client, db, role)
+        assert (await client.get(f"/api/mappings/{mapping}")).status_code == 403, role
 
 
 async def test_mapping_refusals_and_no_ops_write_no_row(client, db):
