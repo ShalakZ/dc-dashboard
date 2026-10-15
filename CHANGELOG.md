@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## W7t (2026-10-15, merge: pending)
+## W7t (2026-10-15, efc58a8)
 
 Discovery and the asset page polished. The trail above an open asset shows each asset's icon beside its name. On Discovery, dragging a source takes its open groups and points with it, dragging a group takes its points, and dragging an asset takes its sub-assets (hold Alt, Option on a Mac, to move a node alone); a group you had collapsed opens beside its source instead of where the source used to be. A new bar above the canvas gives a summary line (`3 sources, 120 points, 6 mapped, 1 needs credentials`), **Collapse all**, **Expand all** and **Tidy layout**, which asks first and then puts every node back in its default column for everyone; Remove on a source is now a small bin. The scope form names the ports it knows (`4840 (OPC UA)`) and warns, never blocks, about a port that looks like a typo (`4080 ... did you mean 4840 (OPC UA)?`), the scan lines read `1 host × 1 port (1 check)`, and each row of Recent scans has **Scan again**. In the Assets Tree's pick bar, **Move to...** now sits beside a shorter hint in a narrow column. No migration, no new permission and nothing to do when you update (rebuild as in [Upgrading and going back](docs/upgrading.md)); the schema stays `0011`. The API gains `DELETE /api/discovery/layout` (`discovery.edit`, 204, no audit row), which Tidy layout sends. Going back needs no database step; positions that Tidy layout deleted are not restored, the nodes stand in their default columns. See [Discovery](docs/sources-and-discovery.md#discovery).
 
