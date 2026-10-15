@@ -1,5 +1,6 @@
 import type { Edge, FitViewOptions, Node } from "@xyflow/react";
 import type { Asset, GraphModel, GraphPoint, GraphSource, RemoveSourcesResult } from "../api/types";
+import { isLive } from "./graphStatus";
 import { relativeTime } from "./relativeTime";
 
 /** Key of the pseudo-cluster that holds a source's points that have no cluster of their own. */
@@ -47,7 +48,11 @@ export type AssetNodeData = NodeActions & { asset: GraphModel["assets"][number];
 export type UnidentifiedNodeData = NodeActions & { host: string; port: number };
 
 const X = { source: 0, cluster: 360, point: 720, asset: 1200 } as const;
-const ASSET_INDENT = 220;
+/**
+ * W7u: 224, not 220. The canvas snaps a drag to an 8 px grid, and every default place has to lie on it (else the first nudge of one node
+ * lands it a few pixels from its untouched siblings): X above, SOURCE_H, BLOCK_GAP and ROW are multiples of 8, and so is this.
+ */
+const ASSET_INDENT = 224;
 const ROW = 64;
 export const BLOCK_GAP = 40;
 /**
@@ -59,6 +64,14 @@ export const BLOCK_GAP = 40;
  */
 export const SOURCE_H = 136;
 const DASHED = { strokeDasharray: "6 4" };
+/**
+ * A mapped link that flows: mostly solid with a small gap, so it still reads as a solid asset link. 8 + 2 is 10, the same period as the
+ * discovered edges' "6 4" and as the library's `dashdraw` animation (it moves the dashes 10 px per loop), so both loop without a jump.
+ * Without this the library's own `.animated path { stroke-dasharray: 5 }` would turn the solid links dashed.
+ */
+const LIVE_SOLID = { strokeDasharray: "8 2" };
+/** More animated edges than this and none are: every animated dash is repainted each frame, over a remote desktop that is screen traffic. */
+export const LIVE_EDGE_LIMIT = 300;
 
 export interface Group { key: string; label: string; ungrouped: boolean; points: GraphPoint[] }
 
@@ -83,6 +96,11 @@ export interface BuildOptions {
   moved?: ReadonlyMap<string, XY>;
   /** Leave the shared layout out (Tidy layout, until the graph has been read again). The places in `moved` still count. */
   ignoreSaved?: boolean;
+  /**
+   * Let the edges of live sources flow (`isLive`: enabled and online): their dashed edges and the solid links leaving their nodes get
+   * `animated`. Never the asset to sub-asset edges, and none at all past `LIVE_EDGE_LIMIT`. The page passes false under reduced motion.
+   */
+  animate?: boolean;
 }
 
 /** The server refuses a layout id longer than this, and with it the whole request. */
@@ -128,14 +146,20 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
     nodes.push({ id, type, position, data });
     return { x: position.x - x, y: position.y - y };
   };
-  const link = (from: string, to: string, extra: Partial<Edge> = {}) => {
-    edges.push({ id: `e:${from}>${to}`, source: from, target: to, style: DASHED, ...extra });
+  /** The edges of live sources that were given `animated`: taken back together if there turn out to be too many. */
+  const flowing: Edge[] = [];
+  const link = (from: string, to: string, flow: boolean) => {
+    const edge: Edge = { id: `e:${from}>${to}`, source: from, target: to, style: DASHED };
+    if (flow) { edge.animated = true; flowing.push(edge); }
+    edges.push(edge);
   };
   /** One edge per mapped asset; a count label when several points share it. */
-  const mappedLinks = (from: string, counts: ReadonlyMap<number, number>) => {
+  const mappedLinks = (from: string, counts: ReadonlyMap<number, number>, flow: boolean) => {
     for (const [assetId, n] of counts) {
       const target = nodeId.asset(assetId);
-      edges.push({ id: `m:${from}>${target}`, source: from, target, ...(n > 1 ? { label: `${n} mapped` } : {}) });
+      const edge: Edge = { id: `m:${from}>${target}`, source: from, target, ...(n > 1 ? { label: `${n} mapped` } : {}) };
+      if (flow) { edge.animated = true; edge.style = LIVE_SOLID; flowing.push(edge); }
+      edges.push(edge);
     }
   };
 
@@ -143,6 +167,7 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
   let cursor = 0;
   for (const source of model.sources) {
     const sid = nodeId.source(source.id);
+    const flow = options.animate === true && isLive(source);
     const sourceOpen = open.sources.has(source.id);
     const sourceShift = add(sid, "source", X.source, cursor, { source, expanded: sourceOpen } satisfies SourceNodeData);
     let rows = 1;
@@ -158,22 +183,22 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
           sourceId: source.id, key: group.key, label: group.label, count: group.points.length, mappedCount,
           expanded: clusterOpen, ungrouped: group.ungrouped,
         } satisfies ClusterNodeData, sourceShift);
-        link(sid, cid);
+        link(sid, cid, flow);
         rows++;
         if (clusterOpen) {
           for (const p of group.points) {
             const pid = nodeId.point(p.id);
             add(pid, "point", X.point, cursor + SOURCE_H + (rows - 1) * ROW, { sourceId: source.id, clusterKey: group.key, point: p } satisfies PointNodeData, clusterShift);
-            link(cid, pid);
-            if (p.asset_id !== null && assetIds.has(p.asset_id)) mappedLinks(pid, new Map([[p.asset_id, 1]]));
+            link(cid, pid, flow);
+            if (p.asset_id !== null && assetIds.has(p.asset_id)) mappedLinks(pid, new Map([[p.asset_id, 1]]), flow);
             rows++;
           }
         } else {
-          mappedLinks(cid, counts);
+          mappedLinks(cid, counts, flow);
         }
       }
     } else {
-      mappedLinks(sid, countMapped(groups.flatMap((g) => g.points), assetIds));
+      mappedLinks(sid, countMapped(groups.flatMap((g) => g.points), assetIds), flow);
     }
     cursor += SOURCE_H + (rows - 1) * ROW + BLOCK_GAP;
   }
@@ -215,6 +240,13 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
   roots.forEach(walk);
   model.assets.forEach((asset) => { if (!visited.has(asset.id)) walk(asset); }); // pure parent cycles have no root
 
+  // Too many flowing edges and none flow: each goes back to what it would be without `animate` (a solid link loses its 8 2 dashes).
+  if (flowing.length > LIVE_EDGE_LIMIT) {
+    for (const edge of flowing) {
+      delete edge.animated;
+      if (edge.id.startsWith("m:")) delete edge.style;
+    }
+  }
   return { nodes, edges };
 }
 

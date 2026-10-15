@@ -4,6 +4,7 @@ import { Icon } from "../Icon";
 import type {
   AssetNodeData, ClusterNodeData, NodeActions, PointNodeData, SourceNodeData, UnidentifiedNodeData,
 } from "../../lib/graph";
+import { protocolLabel, sourceStatus } from "../../lib/graphStatus";
 
 function Handles({ children }: { children: React.ReactNode }) {
   return (
@@ -42,6 +43,7 @@ function MapButtons({ id, name, onMap, onNewAsset }: { id: string; name: string 
 
 function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
   const { source, expanded, onToggle, onSelect, onCreateAssets, onRemove, groups = 0, seen } = data;
+  const status = sourceStatus(source);
   return (
     <div className={`gnode gnode-source ${source.origin}`}>
       <Handles>
@@ -63,7 +65,12 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
             )}
           </div>
         )}
-        <div className="muted">{source.connector_type} · {source.origin} · {source.status} · {source.point_count} points</div>
+        {/* The dot and the protocol replace the connector word in the facts line, so the node is no taller (SOURCE_H is measured for this line); the status WORD stays in the text, the dot is decoration. */}
+        <div className="muted gnode-facts">
+          <span className={`gdot gdot-${status.key}`} aria-hidden="true" title={status.label} />{" "}
+          <span className="gproto">{protocolLabel(source.connector_type)}</span>
+          {` ${source.origin} · ${source.status} · ${source.point_count} points`}
+        </div>
         {seen && <div className="muted gnode-seen" title={seen}>{seen}</div>}
         {source.needs_credentials && <span className="badge">needs credentials</span>}
       </Handles>
@@ -73,8 +80,9 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
 
 function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) {
   const { label, count, mappedCount, expanded, onToggle, onMap, onNewAsset } = data;
+  const share = count > 0 ? Math.min(100, Math.round((mappedCount / count) * 100)) : 0;
   return (
-    <div className="gnode gnode-cluster">
+    <div className="gnode gnode-cluster gprogress-host">
       <Handles>
         <div className="row">
           <div className="node-title">{`${label} (${count})`}</div>
@@ -82,6 +90,8 @@ function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) 
         </div>
         <div className="muted">{mappedCount} mapped</div>
         <MapButtons id={id} name={label} onMap={onMap} onNewAsset={onNewAsset} />
+        {/* The share of mapped points as a 3px strip on the bottom edge: absolutely placed, so it adds no height. The words stay in the line above. */}
+        <span className="gprogress" aria-hidden="true" style={{ width: `${share}%` }} title={`${mappedCount} of ${count} mapped`} />
       </Handles>
     </div>
   );

@@ -1,2 +1,39 @@
 @layer w6 {
+  /* W7u: what the Discovery graph's nodes show beyond their words (a status dot, a protocol badge, a mapped-progress strip), and how the canvas lights a path and flashes a found node.
+     Tokens only; every rule is scoped by a class this file owns (or by .graph-canvas with a second class), so no other page file can name them. */
+
+  /* Status dot: 8px, decoration only (aria-hidden; the status WORD stays in the node's text). The colours are text-or-better tokens, so the 3:1 rule for non-text marks holds on --bg and --surface in every look (graph-nodes.css.test.ts). */
+  .gdot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; vertical-align: 0.05em; }
+  /* The online dot breathes: opacity only (no box-shadow, so nothing repaints beyond 8px). */
+  .gdot-online { background: var(--ok); animation: gdot-pulse 2.4s ease-in-out infinite; }
+  @keyframes gdot-pulse { 0% { opacity: 1; } 50% { opacity: 0.45; } 100% { opacity: 1; } }
+  .gdot-offline { background: var(--crit); }
+  .gdot-credentials { background: var(--warn); }
+  .gdot-idle { background: var(--text-2); }
+
+  /* Protocol badge: a plain rectangle (never a pill) in the muted line. A tight line height and 1px borders keep the facts line as tall as before: SOURCE_H is measured for it. */
+  .gproto { display: inline-block; padding: 0 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text); font-size: 11px; line-height: 1.2; vertical-align: 0.05em; }
+
+  /* Mapped-progress strip on a group's bottom edge. Absolutely placed, so the node does not grow; the host is the node itself (its box is the one React Flow measures). */
+  .gprogress-host { position: relative; }
+  .gprogress { position: absolute; left: 0; bottom: 0; height: 3px; max-width: 100%; background: var(--accent); }
+
+  /* Path highlight. The wrapper gets has-focus while a path is lit (one DOM change), and only the nodes and edges of the path get lit (the rest keep their identity, so 2,000 nodes do not re-render).
+     The transition is ONE declaration in ONE rule, so it can be dropped without touching the dimming. */
+  .graph-canvas .react-flow__node, .graph-canvas .react-flow__edge { transition: opacity 120ms ease; }
+  .graph-canvas.has-focus .react-flow__node:not(.lit) { opacity: 0.35; }
+  .graph-canvas.has-focus .react-flow__edge:not(.lit) { opacity: 0.25; }
+  /* The path itself turns to the accent: the library draws an edge with --xy-edge-stroke, which app.css points at a page token on .react-flow; a nearer declaration wins. */
+  .graph-canvas.has-focus .react-flow__edge.lit { --xy-edge-stroke: var(--accent); }
+
+  /* A node that Find has just jumped to: a 2px accent outline for 1.5s (the page removes the class), pulsing outwards twice. Reduced motion keeps the outline and drops the pulse. */
+  .graph-canvas .react-flow__node.flash { outline: 2px solid var(--accent); outline-offset: 3px; animation: gnode-flash 0.75s ease-in-out 2; }
+  @keyframes gnode-flash { 0% { outline-offset: 3px; } 50% { outline-offset: 6px; } 100% { outline-offset: 3px; } }
+
+  /* Reduced motion: the global rule in app.css removes TRANSITIONS only. Each animation of this file needs its own off switch; the library's flowing dashes are in its UNLAYERED sheet, which beats a plain declaration of ours, hence !important (an important declaration in a layer beats a normal unlayered one). */
+  @media (prefers-reduced-motion: reduce) {
+    .gdot-online { animation: none; }
+    .graph-canvas .react-flow__node.flash { animation: none; }
+    .graph-canvas .react-flow__edge.animated path { animation: none !important; }
+  }
 }

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GraphPoint, GraphSource } from "../../api/types";
 import { nodeTypes } from "./nodes";
@@ -26,7 +26,7 @@ describe("graph nodes", () => {
   it("a source shows its facts, a credentials badge and a node-title", () => {
     renderNode("source", "src:1", { source, expanded: false });
     expect(screen.getByText("Plant OPC")).toHaveClass("node-title");
-    expect(screen.getByText(/opcua/)).toBeInTheDocument();
+    expect(screen.getByText(/OPC UA/)).toBeInTheDocument();
     expect(screen.getByText(/discovered/)).toBeInTheDocument();
     expect(screen.getByText(/7 points/)).toBeInTheDocument();
     expect(screen.getByText("needs credentials")).toBeInTheDocument();
@@ -144,6 +144,90 @@ describe("graph nodes", () => {
     it("draws no action row at all when the node has no button", () => {
       renderNode("source", "src:1", { source, expanded: false });
       expect(document.querySelector(".gnode-actions")).toBeNull();
+    });
+  });
+
+  describe("a source node's status dot and protocol badge (W7u)", () => {
+    const facts = () => document.querySelector(".gnode-facts") as HTMLElement;
+    const dot = () => facts().querySelector(".gdot") as HTMLElement;
+    const online = { ...source, enabled: true, status: "online", needs_credentials: false };
+
+    // [name, source fields, class of the dot, its tooltip]
+    it.each([
+      ["online", { enabled: true, status: "online", needs_credentials: false }, "gdot-online", "online"],
+      ["offline", { enabled: true, status: "offline", needs_credentials: false }, "gdot-offline", "offline"],
+      ["needs credentials", { enabled: true, status: "online", needs_credentials: true }, "gdot-credentials", "needs credentials"],
+      ["disabled", { enabled: false, status: "online", needs_credentials: false }, "gdot-idle", "disabled"],
+      ["never polled", { enabled: true, status: "unknown", needs_credentials: false }, "gdot-idle", "not polled"],
+    ])("%s: the dot has its class and tooltip, and is hidden from assistive tech (decoration)", (_name, fields, cls, title) => {
+      renderNode("source", "src:1", { source: { ...source, ...fields }, expanded: false });
+      expect(dot()).toHaveClass("gdot", cls);
+      expect(dot()).toHaveAttribute("aria-hidden", "true");
+      expect(dot()).toHaveAttribute("title", title);
+      expect(dot().textContent).toBe("");
+    });
+
+    it("the status word stays in the text, raw: colour is never the only signal (unknown stays unknown beside an amber dot)", () => {
+      renderNode("source", "src:1", { source, expanded: false }); // needs credentials, status "unknown"
+      expect(dot()).toHaveClass("gdot-credentials");
+      expect(screen.getByText(/discovered · unknown · 7 points/)).toBeInTheDocument();
+    });
+
+    it("the facts line is the dot, the badge, then the origin, status and count as ONE text node", () => {
+      renderNode("source", "src:1", { source: online, expanded: false });
+      expect(facts()).toHaveClass("muted");
+      const texts = [...facts().childNodes].filter((n) => n.nodeType === Node.TEXT_NODE && /\S/.test(n.textContent ?? ""));
+      expect(texts).toHaveLength(1);
+      expect(texts[0].textContent).toBe(" discovered · online · 7 points");
+      expect(facts().textContent).toBe(" OPC UA discovered · online · 7 points"); // what a screen reader reads: the dot is empty
+      const kids = [...facts().children].map((c) => c.className);
+      expect(kids).toEqual(["gdot gdot-online", "gproto"]);
+    });
+
+    it.each([["opcua", "OPC UA"], ["modbus", "Modbus"], ["simulator", "Simulator"], ["http", "http"]])("the badge says %s as %s", (type, label) => {
+      renderNode("source", "src:1", { source: { ...source, connector_type: type }, expanded: false });
+      expect(screen.getByText(label, { selector: ".gproto" })).toBeInTheDocument();
+      expect(document.querySelectorAll(".gproto")).toHaveLength(1);
+    });
+
+    it("the credentials badge below the facts is still there beside the amber dot", () => {
+      renderNode("source", "src:1", { source, expanded: false });
+      expect(screen.getByText("needs credentials", { selector: ".badge" })).toBeInTheDocument();
+    });
+  });
+
+  describe("a group's mapped progress strip (W7u)", () => {
+    const strip = () => document.querySelector(".gprogress") as HTMLElement;
+
+    // [mapped, of, width]
+    it.each([
+      [0, 6, "0%"],
+      [3, 6, "50%"],
+      [1, 3, "33%"],
+      [2, 3, "67%"],
+      [6, 6, "100%"],
+      [7, 6, "100%"], // more mapped than points (a point count that lags): never past the full width
+      [0, 0, "0%"], // an empty group: no division by zero
+    ])("%i of %i mapped is %s wide", (mappedCount, count, width) => {
+      renderNode("cluster", "cluster:1:LVP01", { ...cluster, count, mappedCount });
+      expect(strip().style.width).toBe(width);
+    });
+
+    it("is decoration (aria-hidden), carries the exact words in its title, and sits inside the node", () => {
+      renderNode("cluster", "cluster:1:LVP01", { ...cluster, count: 6, mappedCount: 3 });
+      expect(strip()).toHaveAttribute("aria-hidden", "true");
+      expect(strip()).toHaveAttribute("title", "3 of 6 mapped");
+      expect(strip().textContent).toBe("");
+      expect(strip().closest(".gnode-cluster")).toHaveClass("gprogress-host");
+    });
+
+    it("keeps the words N mapped, and the strip is not drawn on any other node", () => {
+      renderNode("cluster", "cluster:1:LVP01", { ...cluster, count: 6, mappedCount: 3 });
+      expect(screen.getByText("3 mapped")).toBeInTheDocument();
+      cleanup();
+      renderNode("point", "point:3", { sourceId: 1, clusterKey: "LVP01", point });
+      renderNode("source", "src:1", { source, expanded: false });
+      expect(document.querySelector(".gprogress")).toBeNull();
     });
   });
 

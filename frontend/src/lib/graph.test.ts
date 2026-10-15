@@ -1,6 +1,7 @@
+import type { Edge } from "@xyflow/react";
 import type { RemoveSourcesResult } from "../api/types";
 import {
-  BLOCK_GAP, MAX_LAYOUT_ID, SOURCE_H, UNGROUPED, buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches, nodeId, ownPlaces,
+  BLOCK_GAP, LIVE_EDGE_LIMIT, MAX_LAYOUT_ID, SOURCE_H, UNGROUPED, buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches, nodeId, ownPlaces,
   removalDialogText, removalOutcome, seenLine, shiftedPlaces, type OpenState, type XY,
 } from "./graph";
 import { model, point, source } from "../test/graphFixtures";
@@ -308,6 +309,165 @@ describe("buildGraph: places that follow their parent (W7t)", () => {
     const base = buildGraph(model(), none).nodes;
     expect(at(buildGraph(model(), none, { moved: new Map([[id, { x: 1, y: 2 }]]) }).nodes, id)).toEqual({ x: 1, y: 2 });
     expect(at(buildGraph(model(), none, { moved: new Map([["src:1", { x: 1, y: 2 }]]) }).nodes, id)).toEqual(at(base, id));
+  });
+});
+
+describe("buildGraph: live edges (W7u)", () => {
+  const live = (id: number, over: object = {}) => source(id, { enabled: true, status: "online", ...over });
+  const mapped = (id: number, name: string) => point(id, name, { asset_id: 10, mapping_id: id, mapped_metric: "voltage_v" });
+  const edgeOf = (edges: Edge[], id: string) => edges.find((e) => e.id === id)!;
+  const A = nodeId.cluster(1, "A");
+  const everything = (m: ReturnType<typeof model>): OpenState => ({
+    sources: new Set(m.sources.map((s) => s.id)),
+    clusters: new Set(m.sources.flatMap((s) => s.clusters.map((c) => nodeId.cluster(s.id, c.key)))),
+  });
+  // Source 1 is live, 2 is offline, 3 is online but disabled; all three map a point to asset 10, which has the sub-asset 11.
+  const three = () => model({ sources: [
+    live(1, { clusters: [{ key: "A", points: [mapped(1, "p1"), point(2, "p2")] }] }),
+    source(2, { enabled: true, status: "offline", clusters: [{ key: "B", points: [mapped(3, "p3")] }] }),
+    source(3, { enabled: false, status: "online", clusters: [{ key: "C", points: [mapped(4, "p4")] }] }),
+  ] });
+
+  it("without the option nothing is animated, a live source included (old calls are unchanged)", () => {
+    const m = three();
+    const open = everything(m);
+    expect(buildGraph(m, open).edges.some((e) => e.animated !== undefined)).toBe(false);
+    expect(buildGraph(m, open, { animate: false })).toEqual(buildGraph(m, open));
+  });
+
+  it("a live source: its dashed edges flow and keep the 6 4 dashes (period 10, the library's loop is seamless)", () => {
+    const m = three();
+    const { edges } = buildGraph(m, everything(m), { animate: true });
+    for (const id of ["e:src:1>cluster:1:A", "e:cluster:1:A>point:1", "e:cluster:1:A>point:2"]) {
+      expect(edgeOf(edges, id), id).toMatchObject({ animated: true, style: { strokeDasharray: "6 4" } });
+    }
+  });
+
+  it("a live source: the solid links from its nodes to assets flow with 8 2 dashes, whatever node they leave from", () => {
+    const m = three();
+    const open = everything(m);
+    // from a point (everything open), from a collapsed group, from a collapsed source
+    expect(edgeOf(buildGraph(m, open, { animate: true }).edges, "m:point:1>asset:10")).toMatchObject({ animated: true, style: { strokeDasharray: "8 2" } });
+    const group = buildGraph(m, { sources: open.sources, clusters: new Set() }, { animate: true }).edges;
+    expect(edgeOf(group, `m:${A}>asset:10`)).toMatchObject({ animated: true, style: { strokeDasharray: "8 2" } });
+    const collapsed = buildGraph(m, { sources: new Set(), clusters: new Set() }, { animate: true }).edges;
+    expect(edgeOf(collapsed, "m:src:1>asset:10")).toMatchObject({ animated: true, style: { strokeDasharray: "8 2" } });
+  });
+
+  it("the count label of a collapsed live source's link stays", () => {
+    const m = model({ sources: [live(1, { clusters: [{ key: "A", points: [mapped(1, "p1"), mapped(2, "p2")] }] })] });
+    const edge = edgeOf(buildGraph(m, { sources: new Set(), clusters: new Set() }, { animate: true }).edges, "m:src:1>asset:10");
+    expect(edge).toMatchObject({ animated: true, label: "2 mapped" });
+  });
+
+  it("an offline source and a disabled one keep every edge as it was, and so does a live source's neighbour onto the same asset", () => {
+    const m = three();
+    const open = everything(m);
+    const plain = buildGraph(m, open).edges;
+    const animated = buildGraph(m, open, { animate: true }).edges;
+    for (const id of ["e:src:2>cluster:2:B", "e:cluster:2:B>point:3", "m:point:3>asset:10", "e:src:3>cluster:3:C", "e:cluster:3:C>point:4", "m:point:4>asset:10"]) {
+      expect(edgeOf(animated, id), id).toEqual(edgeOf(plain, id));
+      expect(edgeOf(animated, id).animated, id).toBeUndefined();
+    }
+    // the live source's link into the same asset flows all the same
+    expect(edgeOf(animated, "m:point:1>asset:10").animated).toBe(true);
+  });
+
+  it("asset to sub-asset edges never flow, and stay solid", () => {
+    const m = three();
+    const edge = edgeOf(buildGraph(m, everything(m), { animate: true }).edges, "a:10>11");
+    expect(edge.animated).toBeUndefined();
+    expect(edge.style).toBeUndefined();
+  });
+
+  it("a live source with no point mapped has only its dashed edges flowing", () => {
+    const m = model({ assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }], sources: [live(1, { clusters: [{ key: "A", points: [point(1, "p1")] }] })] });
+    const { edges } = buildGraph(m, everything(m), { animate: true });
+    expect(edges.map((e) => e.id).sort()).toEqual(["e:cluster:1:A>point:1", "e:src:1>cluster:1:A"]);
+    expect(edges.every((e) => e.animated === true)).toBe(true);
+  });
+
+  describe("the limit (LIVE_EDGE_LIMIT, counted over the animated edges)", () => {
+    // One live source, one open group, `n` points; the first `mappedN` of them are mapped to asset 10.
+    const big = (n: number, mappedN: number) => model({ sources: [live(1, { clusters: [{ key: "A", points: Array.from({ length: n }, (_, i) => (i < mappedN ? mapped(i + 1, `p${i}`) : point(i + 1, `p${i}`))) }] })] });
+    const animatedCount = (m: ReturnType<typeof model>) => buildGraph(m, everything(m), { animate: true }).edges.filter((e) => e.animated).length;
+
+    it("is 300", () => {
+      expect(LIVE_EDGE_LIMIT).toBe(300);
+    });
+
+    it("exactly 300 animated edges all flow (source to group is one, the rest are group to point)", () => {
+      expect(animatedCount(big(LIVE_EDGE_LIMIT - 1, 0))).toBe(LIVE_EDGE_LIMIT);
+    });
+
+    it("one more and none flows: the edges go back to what they were without the option, solid links included", () => {
+      const m = big(LIVE_EDGE_LIMIT, 5);
+      const { edges } = buildGraph(m, everything(m), { animate: true });
+      expect(edges.filter((e) => e.animated)).toHaveLength(0);
+      expect(edges).toEqual(buildGraph(m, everything(m)).edges);
+      const link = edgeOf(edges, "m:point:1>asset:10");
+      expect(link.style).toBeUndefined(); // no 8 2 dashes left on a link that no longer flows
+      expect(edgeOf(edges, "e:cluster:1:A>point:1")).toMatchObject({ style: { strokeDasharray: "6 4" } });
+    });
+
+    it("the limit counts mapped links too, not just the dashed ones", () => {
+      expect(animatedCount(big(LIVE_EDGE_LIMIT - 10, 0))).toBe(LIVE_EDGE_LIMIT - 9);
+      expect(animatedCount(big(LIVE_EDGE_LIMIT - 10, 20))).toBe(0); // 1 + 290 + 20 = 311
+    });
+
+    it("an offline source's edges are not counted (only animated edges are)", () => {
+      const m = model({ sources: [live(1, { clusters: [{ key: "A", points: [point(1, "p1")] }] }), source(2, { enabled: true, status: "offline", clusters: [{ key: "B", points: Array.from({ length: 400 }, (_, i) => point(i + 10, `q${i}`)) }] })] });
+      const { edges } = buildGraph(m, everything(m), { animate: true });
+      expect(edges.filter((e) => e.animated).map((e) => e.id).sort()).toEqual(["e:cluster:1:A>point:1", "e:src:1>cluster:1:A"]);
+    });
+
+    it("never changes the shared dashed style for the edges that stay dashed", () => {
+      const m = big(LIVE_EDGE_LIMIT, 5);
+      buildGraph(m, everything(m), { animate: true });
+      expect(buildGraph(three(), everything(three())).edges.find((e) => e.id.startsWith("e:"))!.style).toEqual({ strokeDasharray: "6 4" });
+    });
+  });
+});
+
+describe("buildGraph: the default places lie on the 8 px grid (W7u)", () => {
+  // Sources of every shape (collapsed, open, open groups, an Ungrouped bag), unidentified services and assets four levels deep with siblings.
+  const deep = () => model({
+    sources: [model().sources[0], model().sources[1], source(3, { clusters: [{ key: "Z", points: [point(20, "z")] }] })],
+    unidentified: [{ host: "10.0.0.9", port: 8080, scan_id: 4 }, { host: "10.0.0.10", port: 502, scan_id: 4 }],
+    assets: [
+      { id: 10, parent_id: null, name: "Site", kind: "generic" }, { id: 11, parent_id: 10, name: "Hall", kind: "generic" },
+      { id: 12, parent_id: 11, name: "Row", kind: "generic" }, { id: 13, parent_id: 12, name: "Rack", kind: "generic" },
+      { id: 14, parent_id: 13, name: "PDU", kind: "generic" }, { id: 15, parent_id: 10, name: "Hall 2", kind: "generic" },
+      { id: 16, parent_id: null, name: "Other site", kind: "generic" },
+    ],
+  });
+  const opens: [string, OpenState][] = [
+    ["all collapsed", none],
+    ["a source open", { sources: new Set([1]), clusters: new Set() }],
+    ["everything open", { sources: new Set([1, 2, 3]), clusters: new Set([nodeId.cluster(1, "LVP01"), nodeId.cluster(1, "LVP02"), nodeId.cluster(1, UNGROUPED), nodeId.cluster(2, "M"), nodeId.cluster(3, "Z")]) }],
+  ];
+
+  it.each(opens)("%s: every node's x and y is a multiple of 8", (_name, open) => {
+    const { nodes } = buildGraph(deep(), open);
+    expect(nodes.length).toBeGreaterThan(8);
+    for (const n of nodes) {
+      expect(n.position.x % 8, `${n.id} x ${n.position.x}`).toBe(0);
+      expect(n.position.y % 8, `${n.id} y ${n.position.y}`).toBe(0);
+    }
+  });
+
+  it("the sizes it is made of are multiples of 8 too, so a block of any height keeps the next block on the grid", () => {
+    expect(SOURCE_H % 8).toBe(0);
+    expect(BLOCK_GAP % 8).toBe(0);
+  });
+
+  it("a sub-asset stands 224 px (28 cells) right of its parent, one level at a time", () => {
+    const { nodes } = buildGraph(deep(), none);
+    const x = (id: string) => nodes.find((n) => n.id === id)!.position.x;
+    expect(x("asset:11") - x("asset:10")).toBe(224);
+    expect(x("asset:12") - x("asset:11")).toBe(224);
+    expect(x("asset:14") - x("asset:10")).toBe(4 * 224);
+    expect(x("asset:10")).toBe(1200);
   });
 });
 
