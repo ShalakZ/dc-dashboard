@@ -347,7 +347,7 @@ const activeText = (page: Page) =>
 
 /** What the rate warning says for one root (a currency may follow each rate; `from` and `to` are the plain numbers). */
 const warning = (name: string, from: string, to: string) =>
-  new RegExp(`^Moving "${escapeRe(name)}" changes its rate from ${escapeRe(from)}( \\S+)? to ${escapeRe(to)}( \\S+)? per kWh\\. Past periods are recalculated at the new place, and the totals of both branches change\\.$`);
+  new RegExp(`^Moving "${escapeRe(name)}" changes its rate from ${escapeRe(from)}( \\S+)? to ${escapeRe(to)}( \\S+)? per kWh\\. Months that are not closed are recalculated at the new place, and the totals of both branches change\\. Closed months keep their billed figures\\.$`);
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 
@@ -694,7 +694,7 @@ test.describe("W7p: the rate warning", () => {
     await form.go.click();
     await expect(form.goAnyway, "the button now asks again").toBeVisible();
     await expect(form.message).toHaveText(
-      /^Moving these assets changes their rates \(".+" from 0\.111( \S+)? to 0\.222( \S+)? per kWh, and 3 more\)\. Past periods are recalculated at the new place, and the totals of both branches change\.$/,
+      /^Moving these assets changes their rates \(".+" from 0\.111( \S+)? to 0\.222( \S+)? per kWh, and 3 more\)\. Months that are not closed are recalculated at the new place, and the totals of both branches change\. Closed months keep their billed figures\.$/,
     );
     const after = await boxOf(button, "the Move anyway button");
     expect(Math.abs(after.y - before.y), `Move was at y=${before.y} and Move anyway is at y=${after.y}`).toBeLessThanOrEqual(0.5);

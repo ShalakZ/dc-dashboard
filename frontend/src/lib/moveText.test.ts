@@ -2,7 +2,7 @@ import { ApiError } from "../api/client";
 import type { MovedAsset } from "../api/types";
 import { MOVE_HINT, RATE_WARNING_TITLE, dragBadge, isStaleMove, moveRefusals, movedToast, pickLine, rateText, rateWarning } from "./moveText";
 
-const AFTER = "Past periods are recalculated at the new place, and the totals of both branches change.";
+const AFTER = "Months that are not closed are recalculated at the new place, and the totals of both branches change. Closed months keep their billed figures.";
 const plain = (rate: number) => String(rate);
 
 describe("rateText", () => {

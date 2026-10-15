@@ -1,5 +1,6 @@
 import type { AuditEntry, AuditRefs, RefKind } from "../api/types";
 import { assetIconLabel } from "./assetIcons";
+import { monthLabel } from "./billing";
 import { PERMISSION_LABELS, type PermissionId } from "./permissions";
 
 /** One field whose value changed; the texts are already formatted ("—" = absent or null). */
@@ -404,12 +405,40 @@ const scansPage = page("/scans", "Open Scans");
 const usersPage = page("/users", "Open Users & Roles");
 const rolesPage = page("/users/roles", "Open Roles");
 const tariffsPage = page("/tariffs", "Open Tariffs");
+const billingPage = page("/billing", "Open Billing"); // the page has no month in its address, so the link cannot point at one
 const storagePage = page("/storage", "Open Storage");
 
 /** "QAR", or "not set" when the side is missing or empty. */
 function settingSide(side: Detail | undefined, key: string): string {
   return (side && text(get(side, key))) || "not set";
 }
+
+/** " for October 2026" from the stored `YYYY-MM`; "" when the month is missing or not a month (a stored entry is data, not trusted text). */
+function billedMonth(d: Detail): string {
+  const month = text(d.month);
+  return month !== null && /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? ` for ${monthLabel(month)}` : "";
+}
+
+/** A figure with a fixed number of decimals and thousands separators ("1,234.5"); null when the value is not a finite number. */
+function figure(value: unknown, digits: number): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+/** " (1,234.5 kWh, 456.78 USD)" from the totals a close stored; the cost part is left out when the month had no cost (null), the whole bracket when it has neither. */
+function billedTotals(d: Detail): string {
+  const kwh = figure(d.total_kwh, 1);
+  const cost = figure(d.total_cost, 2);
+  const currency = text(d.currency);
+  const parts = [kwh !== null ? `${kwh} kWh` : null, cost !== null ? (currency ? `${cost} ${currency}` : cost) : null].filter((part) => part !== null);
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
+}
+
+/** The reason given for a reopen, after a colon; "" when the entry has none. The server keeps it whole (at most 500 characters) and the sentence is the only place it is read. */
+const reopenReason = (d: Detail) => {
+  const note = text(d.note);
+  return note ? `: ${note.trim()}` : "";
+};
 
 /** "tariff 0.1 per kWh from 2026-01-01 for asset Panel A" ("(site default)" for no asset) from the stored fields, else "tariff". */
 function tariffName(c: Context): string {
@@ -451,6 +480,8 @@ const RULES: Record<string, Rule> = {
   // One entry per moved root, both sides in full (parent_id, parent_name, sort_order); the rows of one drag share a request_id that no sentence shows.
   "asset.moved": { summary: assetMoved, link: ownAsset },
 
+  // The detail carries the month and, for a reopen, the reason; the closer's name is in `closed_name` and no sentence needs it.
+  "billing.closed": { summary: ({ d }) => `Closed billing${billedMonth(d)}${billedTotals(d)}`, link: billingPage },
   "billing.currency_changed": {
     summary: ({ sides }) =>
       sides
@@ -458,6 +489,7 @@ const RULES: Record<string, Rule> = {
         : "Changed the site currency",
     link: tariffsPage,
   },
+  "billing.reopened": { summary: ({ d }) => `Reopened billing${billedMonth(d)}${reopenReason(d)}`, link: billingPage },
 
   "dashboard.created": made("dashboard", "dashboard_id", ownDashboard),
   "dashboard.updated": changed("dashboard", "dashboard_id", ownDashboard),

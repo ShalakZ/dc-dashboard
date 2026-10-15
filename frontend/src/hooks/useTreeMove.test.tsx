@@ -207,7 +207,7 @@ describe("useTreeMove", () => {
         await settled(calls);
         await userEvent.click(screen.getByRole("button", { name: "drop" }));
         const confirm = await screen.findByRole("dialog", { name: "This changes the rate" });
-        expect(confirm).toHaveTextContent('Moving "Rack 1" changes its rate from 0.18 USD to 0.12 USD per kWh. Past periods are recalculated at the new place, and the totals of both branches change.');
+        expect(confirm).toHaveTextContent('Moving "Rack 1" changes its rate from 0.18 USD to 0.12 USD per kWh. Months that are not closed are recalculated at the new place, and the totals of both branches change. Closed months keep their billed figures.');
         expect(within(confirm).getByRole("button", { name: "Move anyway" })).not.toHaveClass("danger");
         expect(busy()).toBe("true");
         expect(posts(calls, "/api/assets/move")).toEqual([]);

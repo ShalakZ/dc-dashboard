@@ -49,7 +49,7 @@ const OPEN_NOT_COUNTED = "The open asset is not counted unless it is also picked
 const GREW = "More was added while this was open. The numbers above are updated; delete again to confirm.";
 const BLOCKED = "Some of the picked assets were already deleted by someone else. The tree has been refreshed; pick again.";
 const LOSS = (assets: number, mappings: number, tariffs: number) =>
-  `${assets} ${assets === 1 ? "asset" : "assets"}, ${mappings} ${mappings === 1 ? "mapping" : "mappings"} and ${tariffs} ${tariffs === 1 ? "tariff" : "tariffs"} will be deleted; their past energy and cost figures disappear from Billing and dashboards.`;
+  `${assets} ${assets === 1 ? "asset" : "assets"}, ${mappings} ${mappings === 1 ? "mapping" : "mappings"} and ${tariffs} ${tariffs === 1 ? "tariff" : "tariffs"} will be deleted; their past energy and cost figures disappear from Billing and dashboards, except in closed months, which keep their billed figures.`;
 const UNDONE = "This can't be undone.";
 
 interface ApiAsset { id: number; parent_id: number | null; name: string }

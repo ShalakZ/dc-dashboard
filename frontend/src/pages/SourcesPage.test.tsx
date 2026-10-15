@@ -403,7 +403,7 @@ describe("SourcesPage", () => {
   describe("deleting", () => {
     const mapped = { points: 3, mappings: 3 };
     const none = { points: 0, mappings: 0 };
-    const MAPPED_TEXT = "3 mapped points and 3 mappings will be deleted; the past energy and cost figures that depend on them disappear from Billing and dashboards.";
+    const MAPPED_TEXT = "3 mapped points and 3 mappings will be deleted; the past energy and cost figures that depend on them disappear from Billing and dashboards, except in closed months, which keep their billed figures.";
     const PLAIN_TEXT = "Its points go with it. This can't be undone.";
     const SEEN_MAPPED = "/api/sources/2?confirm=true&expect_points=3&expect_mappings=3";
     const SEEN_NONE = "/api/sources/2?confirm=true&expect_points=0&expect_mappings=0";

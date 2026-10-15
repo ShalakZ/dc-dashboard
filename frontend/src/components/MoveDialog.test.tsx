@@ -246,7 +246,7 @@ describe("MoveDialog", () => {
       await userEvent.click(radio("Yard"));
       await userEvent.click(primary());
       await waitFor(() => expect(screen.getByRole("button", { name: "Move anyway" })).toBeInTheDocument());
-      expect(slot()).toHaveTextContent('Moving "Rack 1" changes its rate from 0.18 USD to 0.12 USD per kWh. Past periods are recalculated at the new place, and the totals of both branches change.');
+      expect(slot()).toHaveTextContent('Moving "Rack 1" changes its rate from 0.18 USD to 0.12 USD per kWh. Months that are not closed are recalculated at the new place, and the totals of both branches change. Closed months keep their billed figures.');
       expect(slot()).toHaveAttribute("aria-live", "polite");
       expect(slot()).not.toHaveAttribute("role");
       expect(dialog().querySelectorAll('[role="status"], [role="alert"]')).toHaveLength(0); // one announcer, and it has no role

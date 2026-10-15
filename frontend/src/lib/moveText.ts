@@ -7,7 +7,7 @@ export const rateText = (rate: number, currency: string | null) => (currency ? `
 
 export const RATE_WARNING_TITLE = "This changes the rate";
 // What a move does to billing, in one sentence (verified in the plan: billing reads the live tree on every request).
-const BILLING_NOTE = "Past periods are recalculated at the new place, and the totals of both branches change.";
+const BILLING_NOTE = "Months that are not closed are recalculated at the new place, and the totals of both branches change. Closed months keep their billed figures.";
 
 type RateRoot = Pick<MovePreviewRoot, "name" | "rate_before" | "rate_after" | "rate_changes_today" | "rate_changes_other_days">;
 

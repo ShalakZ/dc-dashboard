@@ -334,7 +334,7 @@ export function TariffsPage() {
     <section className="tariffs-page">
       <PageHeader
         title="Tariffs"
-        sub="A rate applies from its effective date (a site-local date) until the next one. An asset's override replaces the site default from its own effective date. Editing a past rate recalculates history."
+        sub="A rate applies from its effective date (a site-local date) until the next one. An asset's override replaces the site default from its own effective date. Editing a past rate recalculates the months that are not closed; closed months keep their billed figures."
       />
       <div className="page-grid">
         {!canEdit && <div className="span-all"><ReadOnlyNote /></div>}
