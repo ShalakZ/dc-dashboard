@@ -46,6 +46,7 @@ export const PERMISSION_NEEDS: Record<PermissionId, readonly PermissionId[]> = {
   "dashboards.default": ["dashboards.view"],
   "billing.view": [],
   "billing.export": ["billing.view"],
+  "billing.close": ["billing.view"],
   "tariffs.view": ["assets.view"],
   "tariffs.edit": ["tariffs.view", "assets.view"],
   "sources.view": [],
