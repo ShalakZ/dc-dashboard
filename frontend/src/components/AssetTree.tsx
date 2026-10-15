@@ -3,6 +3,7 @@ import { Link, NavLink } from "react-router";
 import { Icon } from "./Icon";
 import { Skeleton, SkeletonRegion, TreeSkeleton } from "./Skeleton";
 import { assetIcon } from "../lib/assetIcons";
+import { focusAfterDelete } from "../lib/assetsBulk";
 import { pickLine, type PickEvent } from "../lib/moveText";
 import { readStored, writeStored } from "../lib/sidebarState";
 import { ancestorIds, type TreeNode } from "../lib/tree";
@@ -286,24 +287,34 @@ function useTreeWidth(column: RefObject<HTMLElement | null>) {
   };
 }
 
+/** The count's hover text and, for a screen reader, the sentence beside it, while the open asset is not one of the picks. */
+const OPEN_NOT_COUNTED = "The open asset is not counted unless it is also picked.";
+
 /**
  * The reserved line between the filter and the rows (W7p), always drawn for someone who may move assets so that nothing below it shifts:
- * a hint when nothing is picked (with a button to move the open asset), "N picked" with Move to... and Clear otherwise. It reads the picks
- * itself, so the tree does not render when a row is picked.
+ * a hint when nothing is picked (with a button to move the open asset), "N picked" with Move to..., Delete (W7s, with `onDelete`) and Clear
+ * otherwise. It reads the picks itself, so the tree does not render when a row is picked; it reads the whole pick state, because a pick
+ * swapped for another (a Shift-click range) leaves the count alone and still changes whether the open asset is one of them.
  */
-function PickSlot({ store, open, disabled, onMoveTo, onClear }: {
+function PickSlot({ store, open, disabled, onMoveTo, onDelete, onClear }: {
   store: PickStore;
   /** The asset in the URL, if there is one: with nothing picked the slot offers to move that. */
   open: { id: number; name: string } | null;
   disabled: boolean;
   onMoveTo: (ids: number[], opener: HTMLElement) => void;
+  /** Present for someone who may delete assets: a Delete beside Move to... while something is picked. It acts on the picks, never on the open asset. */
+  onDelete?: (ids: number[], opener: HTMLElement) => void;
   onClear: () => void;
 }) {
-  const count = useSyncExternalStore(store.subscribe, () => store.getSnapshot().ids.size);
+  const picks = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const count = picks.ids.size;
   const title = count > 0 ? `Move ${count === 1 ? "the picked asset" : `the ${count} picked assets`} to another place` : open ? `Move ${open.name} to another place` : undefined;
+  // A count that leaves out the asset the person is looking at reads as a mistake (the owner counted three rows and the bar said 2).
+  const leftOut = count > 0 && open !== null && !picks.ids.has(open.id) ? open : null;
   return (
-    <div className="tree-slot" role="group" aria-label="Selection">
-      <span className={count > 0 ? "tree-slot-text tree-slot-count" : "tree-slot-text"}>{count > 0 ? `${count} picked` : "Ctrl-click to pick several"}</span>
+    <div className={onDelete ? "tree-slot has-delete" : "tree-slot"} role="group" aria-label="Selection">
+      <span className={count > 0 ? "tree-slot-text tree-slot-count" : "tree-slot-text"} title={leftOut ? OPEN_NOT_COUNTED : undefined}>{count > 0 ? `${count} picked` : "Ctrl-click to pick several"}</span>
+      {leftOut && <span className="sr-only">{`The open asset, ${leftOut.name}, is not counted.`}</span>}
       {(count > 0 || open) && (
         // aria-disabled, not disabled: a button that has the focus must not lose it when the page gets busy.
         <button
@@ -318,6 +329,22 @@ function PickSlot({ store, open, disabled, onMoveTo, onClear }: {
           }}
         >
           Move to...
+        </button>
+      )}
+      {count > 0 && onDelete && (
+        // The name says what is deleted and contains the visible word. aria-disabled, not disabled, like Move to...
+        <button
+          type="button"
+          className="tree-slot-btn tree-slot-delete"
+          aria-label={count === 1 ? "Delete the picked asset" : `Delete the ${count} picked assets`}
+          aria-disabled={disabled ? "true" : undefined}
+          onClick={(e) => {
+            if (disabled) return;
+            const ids = [...store.getSnapshot().ids];
+            if (ids.length > 0) onDelete(ids, e.currentTarget);
+          }}
+        >
+          Delete
         </button>
       )}
       {count > 0 && <button type="button" className="tree-slot-btn" onClick={onClear}>Clear</button>}
@@ -340,7 +367,7 @@ interface Reveal { id: number; nodes: TreeNode[]; settled: boolean; timer: Retur
  * With `move` (someone who may change assets) the rows can also be picked (Ctrl/Cmd-click, Shift-click, Space, Shift+arrows) and dragged
  * onto a row or the area below the last one; the page does the moving. The picks are called "picked": "selected" is the asset in the URL.
  */
-export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, loading, move, remove: _remove }: {
+export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, loading, move, remove }: {
   nodes: TreeNode[];
   /** The asset in the URL (null: none). A node is a link to its page, so there is no select callback. */
   selectedId: number | null;
@@ -428,8 +455,8 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
     return all;
   }, [nodes]);
   // Everything the handlers below read, as of the last render: the handlers themselves are made once.
-  const latest = useRef({ nodes, byId, collapsed, visible, move, disabled });
-  latest.current = { nodes, byId, collapsed, visible, move, disabled };
+  const latest = useRef({ nodes, byId, collapsed, visible, move, remove, disabled });
+  latest.current = { nodes, byId, collapsed, visible, move, remove, disabled };
 
   // The one live line of the tree. Written to the DOM directly: no React child, so announcing never renders the rows.
   const announce = useCallback((text: string) => { if (liveLine.current) liveLine.current.textContent = text; }, []);
@@ -454,6 +481,13 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
     say({ kind: "clear" });
     if (back !== undefined) focusLink(back);
   }, [store, say, focusLink]);
+
+  // The pick bar's Delete: the page gets the picked ids (never the open asset), the button, and the row that takes the focus once they are gone,
+  // worked out now from the rows as they are on screen (a folded branch and a row a filter hides are not candidates).
+  const deletePicked = useCallback((ids: number[], opener: HTMLElement) => {
+    const { nodes: all, collapsed: folded, visible: shown, remove: del } = latest.current;
+    del?.onDelete(ids, opener, focusAfterDelete({ nodes: all, collapsed: folded, visible: shown, pickedIds: ids }));
+  }, []);
 
   const kit = useMemo<RowKit>(() => ({
     store,
@@ -649,7 +683,7 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
           // The filter's slot and the rows are one region, so neither shows before the 150 ms delay is over.
           <SkeletonRegion label="Loading the asset tree">
             <div className="tree-filter"><Skeleton variant="block" height={34} /></div>
-            {movable && <div className="tree-slot" aria-hidden="true" />}
+            {movable && <div className={remove ? "tree-slot has-delete" : "tree-slot"} aria-hidden="true" />}
             <div className="tree-scroll"><TreeSkeleton /></div>
           </SkeletonRegion>
         ) : (
@@ -667,6 +701,7 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
                 open={open ? { id: open.id, name: open.name } : null}
                 disabled={!!disabled}
                 onMoveTo={(ids, opener) => move.onMoveTo(ids, opener)}
+                onDelete={remove ? deletePicked : undefined}
                 onClear={clearPicks}
               />
             )}
