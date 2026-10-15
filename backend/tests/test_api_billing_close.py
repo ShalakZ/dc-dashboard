@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
+from auth_probe import silent_client
 from billing_helpers import add_counter, add_tariff, at, set_currency, set_zone
 from dcdash.api import billing
 from dcdash.core.billing_close import root_totals
@@ -319,7 +320,9 @@ async def test_a_month_without_energy_data_cannot_be_closed(client, db):
 async def test_a_month_with_no_assets_at_all_cannot_be_closed(client, db):
     await set_zone(db, "UTC")
     await login_as(client, db)
-    assert (await close(client)).status_code == 409
+    response = await close(client)
+    assert response.status_code == 409 and response.json()["detail"] == "no energy data was recorded for that month"
+    assert await rows(db) == []
 
 
 async def test_a_zone_billing_refuses_stops_the_close_with_billings_own_409(client, db):
@@ -376,6 +379,8 @@ async def test_reopening_a_month_that_is_open_or_was_never_closed_is_409(client,
 
 
 async def test_two_closes_at_once_give_one_201_one_409_and_one_row(client, db):
+    # Whether the two requests really overlap depends on the event loop; the index path itself is proven by the "check is
+    # blind" test below. This one proves the outcome whichever way they interleave.
     await build(db)
     await login_as(client, db)
     first, second = await asyncio.gather(close(client, note="one"), close(client, note="two"))
@@ -456,13 +461,15 @@ async def delete_the_source(client, db, ids):
     assert (await client.delete(f"/api/sources/{source}?confirm=true")).status_code == 204
 
 
-async def rename_an_asset(client, db, ids):
-    assert (await client.patch(f"/api/assets/{ids['Hall B']}", json={"name": "Hall C"})).status_code == 200
+def rename(name: str):
+    async def rename_an_asset(client, db, ids):
+        assert (await client.patch(f"/api/assets/{ids[name]}", json={"name": "Renamed"})).status_code == 200
+
+    return rename_an_asset
 
 
 CHANGES = [
     move_pump, change_a_rate, change_the_site_rate, unmap_a_point, delete_an_asset, delete_a_branch, delete_the_source,
-    rename_an_asset,
 ]
 
 
@@ -479,6 +486,20 @@ async def test_a_closed_month_does_not_move_when_the_configuration_changes(clien
     assert after["closed"] == closed_body["closed"]
     assert await csv_bytes(client) == open_csv  # BYTES
     assert after["live"]["differs"] is True, change.__name__
+
+
+@pytest.mark.parametrize("name", ["Hall B", "Hall A"])
+async def test_a_rename_does_not_move_a_closed_month_and_is_not_a_difference(client, db, name):
+    """Hall B has nothing under it; Hall A holds the Pump and the Fan, so their paths change too. No billed number moves."""
+    ids = await build(db)
+    await login_as(client, db)
+    open_body, open_csv = await costs(client), await csv_bytes(client)
+    assert (await close(client)).status_code == 201
+    await rename(name)(client, db, ids)
+    after = await costs(client)
+    assert figures_of(after) == figures_of(open_body)
+    assert await csv_bytes(client) == open_csv  # BYTES
+    assert after["live"]["differs"] is False and after["live"]["changed_assets"] == 0
 
 
 async def test_a_closed_month_survives_every_change_at_once(client, db):
@@ -509,6 +530,22 @@ async def test_what_a_change_does_to_the_live_line(client, db):
     assert live["delta_cost"] > 0 and live["delta_kwh"] == pytest.approx(0.0)
 
 
+async def test_an_empty_asset_added_or_deleted_after_the_close_is_not_a_difference(client, db):
+    ids = await build(db)
+    await login_as(client, db)
+    await close(client)
+    for body in ({"name": "New room", "parent_id": ids["Site"]}, {"name": "New root", "parent_id": None}):
+        assert (await client.post("/api/assets", json=body)).status_code == 201
+        live = (await costs(client))["live"]
+        assert live["differs"] is False and live["changed_assets"] == 0, body
+    assert (await client.delete(f"/api/assets/{ids['Hall B']}?confirm=true")).status_code == 204  # unmetered, in the close
+    live = (await costs(client))["live"]
+    assert live["differs"] is False and live["changed_assets"] == 0
+    assert (await client.delete(f"/api/assets/{ids['Fan']}?confirm=true")).status_code == 204  # metered: this one counts
+    live = (await costs(client))["live"]
+    assert live["differs"] is True and live["changed_assets"] >= 1
+
+
 async def test_late_readings_change_only_the_live_line(client, db):
     ids = await build(db)
     await login_as(client, db)
@@ -523,7 +560,8 @@ async def test_late_readings_change_only_the_live_line(client, db):
     assert await csv_bytes(client) == open_csv
     assert after["live"]["differs"] is True and after["live"]["changed_assets"] >= 1
     assert after["live"]["delta_kwh"] == pytest.approx(16.0, abs=2.5)
-    assert after["live"]["delta_cost"] > 0 and after["closed"]["total_kwh"] == after["live"]["total_kwh"] - after["live"]["delta_kwh"]
+    assert after["live"]["delta_cost"] > 0
+    assert after["closed"]["total_kwh"] == pytest.approx(after["live"]["total_kwh"] - after["live"]["delta_kwh"], abs=5e-4)
 
 
 async def test_months_keeps_a_closed_month_reachable_after_its_source_is_deleted(client, db):
@@ -578,7 +616,26 @@ async def test_the_site_currency_changing_later_does_not_change_the_closed_month
     await set_currency(db, "EUR")
     after = await costs(client)
     assert after["currency"] == "USD" and after["live"]["currency"] == "EUR"
+    assert after["live"]["delta_cost"] is None and after["live"]["differs"] is True  # two currencies do not subtract
     assert await csv_bytes(client) == open_csv
+
+
+async def test_a_closed_month_with_unreadable_figures_fails_and_never_shows_live_figures(app, db):
+    """Only the close route writes `figures`, always the full object. If a row is damaged (manual SQL, a bad restore) the
+    page and the CSV answer 500; they must not fall back to today's figures, which would pass off live numbers as billed."""
+    await build(db)
+    await db.execute(
+        "INSERT INTO billing_closes (month, closed_name, timezone, total_kwh, figures) "
+        "VALUES ($1, 'Old', 'UTC', 0, '{}')",
+        MONTH,
+    )
+    async with silent_client(app) as quiet:
+        await login_as(quiet, db)
+        for url in (COSTS, CSV):
+            response = await quiet.get(url, params={"month": MONTH})
+            assert response.status_code == 500, url
+            assert "assets" not in response.text and "Hall A" not in response.text, url
+        assert (await quiet.get(COSTS, params={"month": "2026-04"})).status_code == 200  # an open month is not affected
 
 
 # --- reopen -----------------------------------------------------------------------------------------------------------
@@ -679,11 +736,12 @@ async def test_the_closers_name_survives_the_deletion_of_the_account(app, client
     assert (await rows(db))[0]["reopened_name"] == "admin"
 
 
-async def test_an_account_whose_name_is_only_blanks_can_still_close_and_reopen(client, db):
+@pytest.mark.parametrize("blank", ["\t  ", "   "], ids=["tab and spaces", "spaces only"])
+async def test_an_account_whose_name_is_only_blanks_can_still_close_and_reopen(client, db, blank):
     await build(db)
     await login_as(client, db)
     admin_id = await db.fetchval("SELECT id FROM users WHERE username = 'admin'")
-    await db.execute("UPDATE users SET username = E'\\t  ' WHERE id = $1", admin_id)  # the session cookie stays valid
+    await db.execute("UPDATE users SET username = $1 WHERE id = $2", blank, admin_id)  # the session cookie stays valid
     response = await close(client)
     assert response.status_code == 201, response.text
     assert response.json()["closed_name"] == f"user {admin_id}"

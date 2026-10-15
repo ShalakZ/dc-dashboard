@@ -38,17 +38,36 @@ def _rounded(value: float | None, places: int) -> float | None:
 
 
 def _asset_key(asset: dict[str, Any]) -> tuple[Any, ...]:
+    """What one asset contributes to the billed numbers: where it hangs (its parent, so a move counts and a rename does not),
+    its total energy and cost at the compared precisions, and whether it has a cost at all."""
     total = asset["total"]
     kwh = None if total is None else total["kwh"]
     cost = None if total is None else total["cost"]
-    return asset["path"], _rounded(kwh, KWH_PLACES), _rounded(cost, COST_PLACES), cost is None
+    return asset["parent_id"], _rounded(kwh, KWH_PLACES), _rounded(cost, COST_PLACES), cost is None
+
+
+def _has_figure(key: tuple[Any, ...]) -> bool:
+    """Whether an asset key carries a billed figure (an energy or a cost that is not zero after rounding)."""
+    return key[1] is not None or key[2] is not None
 
 
 def _changed_assets(frozen: dict[str, Any], live: dict[str, Any]) -> int:
-    """How many assets differ between two figures: an id on one side only counts, so does a changed path or total."""
+    """How many assets differ between two figures: a changed parent (a move) or a changed total (energy, cost, or having a
+    cost at all). A rename changes no billed number and does not count. An id on one side only counts when it carries a figure
+    (a deleted metered asset, a newly metered one); an empty folder added or an unmetered asset deleted changes nothing that
+    is billed, so it does not."""
     before = {asset["asset_id"]: _asset_key(asset) for asset in frozen["assets"]}
     now = {asset["asset_id"]: _asset_key(asset) for asset in live["assets"]}
-    return sum(1 for asset_id in before.keys() | now.keys() if before.get(asset_id) != now.get(asset_id))
+    changed = 0
+    for asset_id in before.keys() | now.keys():
+        old, new = before.get(asset_id), now.get(asset_id)
+        if old == new:
+            continue
+        if old is None or new is None:
+            if not _has_figure(new if old is None else old):
+                continue
+        changed += 1
+    return changed
 
 
 def _clean(value: float, places: int) -> float:
@@ -58,15 +77,22 @@ def _clean(value: float, places: int) -> float:
 def live_delta(frozen: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
     """What today's tree and rates would give against the frozen figures.
 
-    `total_kwh` / `total_cost` are the live root sums, `delta_*` live minus frozen (kWh to 3 decimals, cost to 2; the cost delta
-    is None when exactly one side has a cost, and then `differs` is true), `changed_assets` the number of assets whose path or
-    total differ (root sums are blind to a move between two roots, and to a change under a metered parent), and `differs` is true
-    when the totals differ at those precisions, one side has no cost, or any asset differs."""
+    `total_kwh` / `total_cost` are the live root sums, `delta_*` live minus frozen (kWh to 3 decimals, cost to 2). The cost
+    delta is None when exactly one side has a cost, and when the site currency has changed since the close (a difference
+    between two currencies is not a money figure); `differs` is true then, unless neither side has a cost. `changed_assets` is
+    the number of assets whose parent or total differ, or that carry a figure on one side only (root sums are blind to a move
+    between two roots, and to a change under a metered parent; a rename and an empty asset added or deleted do not count).
+    `differs` is true when the totals differ at those precisions, one side has no cost, the currency changed under a cost, or
+    any asset differs."""
     frozen_kwh, frozen_cost = root_totals(frozen)
     live_kwh, live_cost = root_totals(live)
+    has_cost = frozen_cost is not None or live_cost is not None
+    currency_changed = has_cost and frozen.get("currency") != live.get("currency")
     delta_kwh = _clean(live_kwh - frozen_kwh, KWH_PLACES)
-    delta_cost = None if frozen_cost is None or live_cost is None else _clean(live_cost - frozen_cost, COST_PLACES)
-    cost_differs = (frozen_cost is None) != (live_cost is None) or bool(delta_cost)
+    delta_cost = (
+        None if currency_changed or frozen_cost is None or live_cost is None else _clean(live_cost - frozen_cost, COST_PLACES)
+    )
+    cost_differs = currency_changed or (frozen_cost is None) != (live_cost is None) or bool(delta_cost)
     changed = _changed_assets(frozen, live)
     return {
         "total_kwh": live_kwh,

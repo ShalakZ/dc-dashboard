@@ -124,7 +124,7 @@ def test_a_move_between_two_roots_leaves_the_root_sums_but_changes_assets():
     )
     result = live_delta(before, after)
     assert (result["delta_kwh"], result["delta_cost"]) == (0.0, 0.0)
-    assert result["changed_assets"] == 3 and result["differs"] is True  # Hall A, Pump (path) and Hall B
+    assert result["changed_assets"] == 3 and result["differs"] is True  # Hall A, Pump (its parent) and Hall B
 
 
 def test_an_unmapped_point_under_a_metered_parent_changes_only_the_child():
@@ -141,17 +141,67 @@ def test_a_child_tariff_under_a_metered_parent_changes_only_the_child():
     assert result["delta_cost"] == 0.0 and result["changed_assets"] == 1 and result["differs"] is True
 
 
-def test_an_asset_on_one_side_only_counts_as_changed():
+def test_an_asset_without_a_figure_on_one_side_only_changes_nothing_that_is_billed():
     both = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Hall", None))
     gone = figures(asset(1, None, "Site", 10.0, 1.0))
-    assert live_delta(both, gone)["changed_assets"] == 1
-    assert live_delta(gone, both)["changed_assets"] == 1
+    for frozen, live in ((both, gone), (gone, both)):  # an empty folder added, an unmetered asset deleted
+        result = live_delta(frozen, live)
+        assert result["changed_assets"] == 0 and result["differs"] is False
+    zero = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Hall", 0.0, None))  # a measured zero is no figure
+    assert live_delta(zero, gone)["changed_assets"] == 0 and live_delta(gone, zero)["changed_assets"] == 0
 
 
-def test_a_renamed_asset_has_a_new_path_and_counts():
-    before = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Hall", 6.0, 0.6))
-    after = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Room", 6.0, 0.6))
-    assert live_delta(before, after)["changed_assets"] == 1
+def test_an_asset_with_a_figure_on_one_side_only_counts_as_changed():
+    both = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Hall", 6.0, None))
+    gone = figures(asset(1, None, "Site", 10.0, 1.0))
+    assert live_delta(both, gone)["changed_assets"] == 1  # a metered asset deleted
+    assert live_delta(gone, both)["changed_assets"] == 1  # a newly metered one
+    assert live_delta(gone, both)["differs"] is True and live_delta(both, gone)["differs"] is True
+    cost_only = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Hall", 0.0, 0.7))
+    assert live_delta(gone, cost_only)["changed_assets"] == 1  # a cost alone is a figure too
+
+
+def test_a_renamed_asset_changes_no_billed_number_and_does_not_count():
+    before = figures(
+        asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Hall", 6.0, 0.6), asset(3, 2, "Site > Hall > Rack", 6.0, 0.6),
+    )
+    after = figures(  # the Hall is now the Room: its path and its rack's path changed, nothing else did
+        asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Room", 6.0, 0.6), asset(3, 2, "Site > Room > Rack", 6.0, 0.6),
+    )
+    result = live_delta(before, after)
+    assert result["changed_assets"] == 0 and result["differs"] is False
+
+
+def test_a_moved_asset_has_a_new_parent_and_counts_once():
+    before = figures(
+        asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Hall", 6.0, 0.6), asset(3, 1, "Site > Annex", 4.0, 0.4),
+    )
+    after = figures(  # the Hall (with its totals) now hangs under the Annex: only the Hall changed its parent
+        asset(1, None, "Site", 10.0, 1.0), asset(2, 3, "Site > Annex > Hall", 6.0, 0.6), asset(3, 1, "Site > Annex", 4.0, 0.4),
+    )
+    assert live_delta(before, after)["changed_assets"] == 1 and live_delta(before, after)["differs"] is True
+
+
+# --- the currency -----------------------------------------------------------------------------------------------------
+
+
+def test_a_changed_currency_gives_no_cost_delta_and_differs():
+    cheaper = figures(asset(1, None, "Site", 10.0, 0.9), asset(2, 1, "Site > Hall", 6.0, 0.54), currency="EUR")
+    result = live_delta(same(), cheaper)
+    assert result["delta_cost"] is None and result["differs"] is True
+    assert result["total_cost"] == pytest.approx(0.9) and result["delta_kwh"] == 0.0 and result["changed_assets"] == 2
+
+
+def test_the_same_figures_in_a_changed_currency_still_differ_and_have_no_cost_delta():
+    in_euro = figures(asset(1, None, "Site", 10.0, 1.0), asset(2, 1, "Site > Hall", 6.0, 0.6), currency="EUR")
+    result = live_delta(same(), in_euro)
+    assert result["delta_cost"] is None and result["differs"] is True and result["changed_assets"] == 0
+
+
+def test_a_changed_currency_over_figures_with_no_cost_is_not_a_difference():
+    unpriced = figures(asset(1, None, "Site", 10.0, None), currency=None)
+    result = live_delta(unpriced, figures(asset(1, None, "Site", 10.0, None), currency="USD"))
+    assert result["delta_cost"] is None and result["differs"] is False
 
 
 def test_a_missing_total_and_a_zero_total_are_the_same_kwh_but_a_cost_of_zero_is_a_cost():
