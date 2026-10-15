@@ -25,6 +25,7 @@ AUDIT_CALLS = {"audit", "audit_change", "audit_sign_in_failure"}
 EXEMPT: dict[str, str] = {
     "POST /api/logout": "ends a session; it changes no configuration or data",
     "PUT /api/discovery/layout": "node positions on the graph canvas: a picture, not configuration",
+    "DELETE /api/discovery/layout": "clears the node positions of the graph canvas: a picture, not configuration",
     "POST /api/widget-data": "a read sent as POST because the body carries the widget configs",
     "POST /api/widget-data/csv": "a read sent as POST: the CSV export of widget values",
     "POST /api/assets/move-preview": "a read sent as POST: the body is the planned move",

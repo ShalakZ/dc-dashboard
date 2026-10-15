@@ -197,6 +197,15 @@ async def save_layout(body: LayoutIn, db: AsyncSession = Depends(get_db)) -> Non
         await db.commit()
 
 
+@router.delete("/layout", status_code=204, dependencies=[Depends(require_permission("discovery.edit"))])
+async def clear_layout(db: AsyncSession = Depends(get_db)) -> None:
+    # Tidy layout: the PUT above can only write positions, never take one away, so a hidden node with an old absolute
+    # place would re-open far from its parent. Every row goes; the graph then falls back to its default columns.
+    # Idempotent (no rows is still 204) and not audited, like the PUT: positions are a picture, not configuration.
+    await db.execute(delete(GraphLayout))
+    await db.commit()
+
+
 @router.post("/accept", status_code=201, dependencies=[Depends(require_permission("discovery.accept"))])
 async def accept(
     body: AcceptIn, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
