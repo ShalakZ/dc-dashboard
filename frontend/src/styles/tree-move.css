@@ -59,16 +59,16 @@
   /* With Delete the bar has four things to say and a narrow column cannot hold them on one line. Measured in a browser (DejaVu Sans, wider than
      the app's own Segoe UI): "999 picked" 73px, Move to... 74, Delete 53, Clear 46, three 4px gaps and the 12px left padding: 270px, then the 6px
      right padding. The column decides, in CSS, so the first paint and the loading skeleton's slot (same class) are as high as the loaded bar and
-     nothing moves when the list arrives: at 268px and below the slot is two reserved lines, the count (or the hint) on the first and the three
-     buttons (about 170px) on the second, which fit the narrowest column's 201px of room; the picks only change the words. Above 268px one line
-     holds a one or two digit count with room to spare; a three-digit count just above it sits against the right edge (1px over at 269px in that font).
+     nothing moves when the list arrives: at 275px and below the slot is two reserved lines, the count (or the hint) on the first and the three
+     buttons (about 170px) on the second, which fit the narrowest column's 201px of room; the picks only change the words. Above 275px one line
+     holds even "999 picked" with the full 6px right padding (276px is what that needs in DejaVu Sans, the widest font measured; Segoe UI is narrower).
      A viewer without Delete has no has-delete and keeps one line.
      The container is the tree body, which the column sizes (a block child of a flex column, stretched to the column's width), so inline-size
      containment changes nothing else: the scroll box, the filter, the resize handle and the minimized state (the body is hidden then) were
-     measured identical with and without it. 268px is the body's own width: the column less its 1px border, so a column of 269px is already
-     two lines and one line starts at a column of 270px; the narrowest column, 220px, leaves 219px: 201px between the slot's padding. */
+     measured identical with and without it. 275px is the body's own width: the column less its 1px border, so a column of 276px is already
+     two lines and one line starts at a column of 277px; the narrowest column, 220px, leaves 219px: 201px between the slot's padding. */
   .tree-col > .tree-body { container-type: inline-size; } /* a descendant selector: app.css owns the plain .tree-body rule, and a plain class is written in one file only (app.css.test.ts) */
-  @container (max-width: 268px) {
+  @container (max-width: 275px) {
     .tree-slot.has-delete { height: 64px; flex-wrap: wrap; align-content: center; row-gap: 2px; }
     .tree-slot.has-delete .tree-slot-text { flex: 0 0 100%; }
   }

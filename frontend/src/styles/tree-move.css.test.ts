@@ -56,7 +56,7 @@ describe("the picking and dragging styles of the Assets Tree", () => {
 // W7s: Delete joins Move to... and Clear, and a slot that has it is two lines high in a narrow column. The decision is the column's own width
 // (a container query on .tree-body), not a JS measurement: the first paint and the loading skeleton's slot get the same answer as the loaded bar.
 describe("the Delete button and the narrow pick bar (W7s)", () => {
-  const NARROW = "@container (max-width: 268px)";
+  const NARROW = "@container (max-width: 275px)";
   const inNarrow = rules.filter((r) => r.at.includes(NARROW));
   const narrow = (selector: string) => {
     const found = inNarrow.filter((r) => r.selector === selector);
@@ -64,7 +64,7 @@ describe("the Delete button and the narrow pick bar (W7s)", () => {
     return found[0].body;
   };
 
-  it("the one container query of the file is 268px wide at most, and it sits inside @layer w6", () => {
+  it("the one container query of the file is 275px wide at most, and it sits inside @layer w6", () => {
     const queries = new Set(rules.flatMap((r) => r.at).filter((a) => a.startsWith("@container")));
     expect([...queries]).toEqual([NARROW]);
     expect(inNarrow.length).toBeGreaterThan(0);
