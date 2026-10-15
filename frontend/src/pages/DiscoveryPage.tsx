@@ -11,26 +11,73 @@ import type { GraphModel, GraphSource } from "../api/types";
 import { useAppearance } from "../auth/AppearanceProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { AlignGuides, type AlignGuidesHandle } from "../components/graph/AlignGuides";
 import { BulkCreateDialog } from "../components/graph/BulkCreateDialog";
+import { CanvasTools } from "../components/graph/CanvasTools";
+import { GraphContextMenu } from "../components/graph/GraphContextMenu";
+import { GraphMiniMap } from "../components/graph/GraphMiniMap";
 import { nodeTypes } from "../components/graph/nodes";
 import { ReviewDialog, type InitialTarget } from "../components/graph/ReviewDialog";
 import { SourcePanel } from "../components/graph/SourcePanel";
+import { InfoTip } from "../components/InfoTip";
 import { PageHeader } from "../components/PageHeader";
+import type { RowAction } from "../components/RowActions";
 import { CanvasSkeleton, GraphBarSpace } from "../components/Skeleton";
 import { useToast } from "../components/Toasts";
 import { useAction } from "../hooks/useAction";
+import { useCanvasKeys } from "../hooks/useCanvasKeys";
+import { useCanvasMenu } from "../hooks/useCanvasMenu";
 import { useConfirm } from "../hooks/useConfirm";
+import { useGraphHighlight } from "../hooks/useGraphHighlight";
+import { reducedMotion, useReducedMotion } from "../hooks/useReducedMotion";
 import { dropPayload, mappableClusters, pickDropTarget, type DropPayload } from "../lib/drop";
 import {
   buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches, ownPlaces, removalDialogText, removalOutcome, seenLine,
-  shiftedPlaces, type ClusterNodeData, type OpenState, type PointNodeData, type SourceNodeData, type XY,
+  shiftedPlaces, type ClusterNodeData, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
+import { cameraMs, keepInView, unionRect } from "../lib/graphCamera";
+import { buildFindIndex, findMatches, findPlan, type FindEntry } from "../lib/graphFind";
+import { alignGuides, type Rect } from "../lib/graphGuides";
+import { readSnap, SNAP_GRID, writeSnap } from "../lib/graphPrefs";
 import { canCollapse, canExpand, collapseAll, expandAll, expandNote, graphSummary } from "../lib/graphView";
 
-const HINT = "Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset… A node takes its open children along; Alt or Option moves it alone.";
+/** One line under the title; the rest of what the canvas can do is in the tip beside it (the same line in the loading branch, so nothing moves when the graph arrives). */
+const HINT = "Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset…";
+
+function HintLine() {
+  return (
+    <>
+      {HINT}{" "}
+      <InfoTip label="What can I do on the canvas?">
+        <ul className="graph-hint-list">
+          <li>Dragging a node takes its open children along. Alt or Option moves it alone.</li>
+          <li>Shift-drag selects. Ctrl or Cmd adds.</li>
+          <li>Ctrl+K finds while the canvas has focus.</li>
+          <li>Right-click or Shift+F10 opens the actions.</li>
+          <li>Hovering or selecting lights the path.</li>
+          <li>Click empty space or press Escape to clear a selection.</li>
+        </ul>
+      </InfoTip>
+    </>
+  );
+}
 
 /** Two animation frames: the nodes React Flow was given a moment ago are in its store and drawn. */
 const afterPaint = () => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); });
+
+/** A node's box for the camera: its measured size, else the width of a node and the height of a short one (a node not yet measured). */
+const NODE_W = 220;
+const NODE_H = 80;
+const rectOf = (n: Node): Rect => ({ x: n.position.x, y: n.position.y, w: n.measured?.width ?? NODE_W, h: n.measured?.height ?? NODE_H });
+
+/** The alignment guides while a node is dragged. Visual only; if a measurement ever shows they cost a frame, this is the one switch (the helper and its tests stay). */
+const GUIDES_ENABLED = true;
+/** How long the node Find jumped to wears its outline. */
+const FLASH_MS = 1500;
+
+const SNAP_GRID_XY: [number, number] = [SNAP_GRID, SNAP_GRID];
+const NO_IDS: readonly string[] = [];
+const selectorId = (id: string) => id.replace(/["\\]/g, "\\$&");
 
 /**
  * What a drag works from, taken ONCE when it starts (the callbacks must not read the maps they are changing): which nodes are dragged, where every
@@ -125,7 +172,22 @@ function Canvas({ model }: { model: GraphModel }) {
     layoutWrites.current = job.catch(() => undefined); // the chain itself never rejects: a failed write is its caller's to show
     return job;
   }, []);
-  const { getIntersectingNodes, getNodes, fitView } = useReactFlow();
+  const { getIntersectingNodes, getNodes, fitView, setViewport, getViewport, setCenter, getZoom } = useReactFlow();
+  const reduced = useReducedMotion(); // the dashes on live edges stop, and the Controls' fit-view button jumps instead of gliding
+  const [snap, setSnap] = useState(readSnap);
+  const onSnapChange = useCallback((on: boolean) => { setSnap(on); writeSnap(on); }, []);
+  const findRef = useRef<{ open(): void } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  // The alignment guides: where the nodes that do not move with the drag stand (taken once, when it starts), the last dragged node, the one pending frame,
+  // and the handle the guides' own component gives back (its state lives there, so a drag frame does not render this page a second time).
+  const guides = useRef<AlignGuidesHandle | null>(null);
+  const guideOthers = useRef<Rect[]>([]);
+  const guideNode = useRef<Node | null>(null);
+  const guideFrame = useRef(0);
+  // The node Find has just jumped to wears the class `flash` (through its `className`, so React Flow keeps it when it rewrites the node's classes), and the timer that takes it away.
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const flashTimer = useRef<number | undefined>(undefined);
+  const fitOptions = useMemo(() => ({ duration: cameraMs(reduced) }), [reduced]);
   const [ask, askDialog] = useConfirm();
   const { dark } = useAppearance();
   const [review, setReview] = useState<{ key: number; payload: DropPayload; initialTarget: InitialTarget } | null>(null);
@@ -169,11 +231,45 @@ function Canvas({ model }: { model: GraphModel }) {
     if (id !== null) canvas.current?.querySelector<HTMLElement>(`[data-id="src:${id}"] button[aria-label^="Details for"]`)?.focus();
   }, [selectedId]);
 
-  const onToggle = useCallback((id: string) => {
-    setOpen((prev) => id.startsWith("src:")
-      ? { ...prev, sources: toggled(prev.sources, Number(id.slice("src:".length))) }
-      : { ...prev, clusters: toggled(prev.clusters, id) });
+  // What the camera and the toggles read after an await, when a render may have come in meanwhile: the model of the moment, whether the page is still
+  // there, and which sources are open (so a source's own button knows whether it OPENS the source).
+  const modelRef = useRef(model);
+  useEffect(() => { modelRef.current = model; }, [model]);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
   }, []);
+  const openNow = useRef(open);
+  useEffect(() => { openNow.current = open; }, [open]);
+
+  /**
+   * After a source has opened: pan, never zoom, just enough to bring the source and its groups inside the canvas with a margin. Waits until the new
+   * nodes are in React Flow's store; does nothing when they are already in view. Only the source's own button and the menu's Expand ask for this
+   * (through `onToggle`): Expand all and Find move the camera themselves, and two animations would fight.
+   */
+  const panToOpened = useCallback(async (id: string) => {
+    await afterPaint();
+    const area = canvas.current;
+    if (!mounted.current || !area) return;
+    const wanted = new Set([id, ...childNodeIds(modelRef.current, id)]);
+    const box = unionRect(getNodes().filter((n) => wanted.has(n.id)).map(rectOf));
+    if (!box) return;
+    const view = getViewport();
+    const to = keepInView(box, view, { w: area.clientWidth, h: area.clientHeight });
+    if (to) void setViewport({ ...view, ...to }, { duration: cameraMs(reducedMotion()) });
+  }, [getNodes, getViewport, setViewport]);
+
+  const onToggle = useCallback((id: string) => {
+    if (id.startsWith("src:")) {
+      const sourceId = Number(id.slice("src:".length));
+      const opens = !openNow.current.sources.has(sourceId);
+      setOpen((prev) => ({ ...prev, sources: toggled(prev.sources, sourceId) }));
+      if (opens) void panToOpened(id);
+    } else {
+      setOpen((prev) => ({ ...prev, clusters: toggled(prev.clusters, id) }));
+    }
+  }, [panToOpened]);
 
   const sourceOf = useCallback((id: string) => model.sources.find((s) => s.id === Number(id.slice("src:".length))), [model]);
   const onCreateAssets = useCallback((id: string) => {
@@ -201,37 +297,58 @@ function Canvas({ model }: { model: GraphModel }) {
   }])), [model, asOf, timezone, canAccept]);
 
   const seeded = useMemo(() => {
-    const built = buildGraph(model, open, { moved: moved.current, ignoreSaved: tidyRuns > 0 });
+    const built = buildGraph(model, open, { moved: moved.current, ignoreSaved: tidyRuns > 0, animate: !reduced });
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
       data: nodeData(n, canAccept, canRemove, facts, { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, tidyRuns, canAccept, canRemove, facts, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove]);
+  }, [model, open, tidyRuns, reduced, canAccept, canRemove, facts, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
-    // New node objects carry no size, which would hide every node until React Flow measures them again: keep what it knows.
+    // New node objects carry no size, which would hide every node until React Flow measures them again: keep what it knows. A selection (a box drawn
+    // with Shift, a Ctrl-click) must also outlive a rebuild: an expand, a collapse or a refresh keeps the nodes that are still there selected.
     setNodes((current) => {
-      const known = new Map(current.map((n) => [n.id, n.measured]));
-      return seeded.nodes.map((n) => { const measured = known.get(n.id); return measured ? { ...n, measured } : n; });
+      const known = new Map(current.map((n) => [n.id, n]));
+      return seeded.nodes.map((n) => {
+        const was = known.get(n.id);
+        if (!was || (!was.measured && !was.selected)) return n;
+        return { ...n, ...(was.measured ? { measured: was.measured } : {}), ...(was.selected ? { selected: true } : {}) };
+      });
     });
     setEdges(seeded.edges);
   }, [seeded, setNodes, setEdges]);
 
+  // The path highlight: hovering, keyboard focus or a selection lights the node's whole path (only the path's nodes and edges become new objects; the
+  // wrapper's `has-focus` class dims the rest). The CURRENT nodes and edges of each rebuild go in, so it forgets a node that has gone. Not while dragging.
+  const selectedIds = useMemo(() => (dragging ? NO_IDS : nodes.filter((n) => n.selected).map((n) => n.id)), [nodes, dragging]);
+  const { shownNodes, shownEdges, active: dimming, handlers: highlight } = useGraphHighlight({ nodes, edges, selectedIds, dragging });
+  // The node Find has just jumped to wears the class `flash`: set through its className (a class added to the element itself would be lost the next time
+  // React Flow rewrites the node's classes, e.g. when the focus lights its path). One new object, made after the highlight's own, so `lit flash` sit together.
+  const flashed = useMemo(
+    () => (flashId === null ? shownNodes : shownNodes.map((n) => (n.id === flashId ? { ...n, className: n.className ? `${n.className} flash` : "flash" } : n))),
+    [shownNodes, flashId],
+  );
+
   /** One snapshot per drag. A node takes its OPEN children along unless Alt (Option) is held; the places of the hidden ones are shifted at the drop. */
   const onNodeDragStart: OnNodeDrag<Node> = useCallback((event, _node, dragged) => {
     const draggedIds = new Set(dragged.map((n) => n.id));
-    const live = new Map(getNodes().map((n) => [n.id, n.position]));
+    const everyone = getNodes();
+    const live = new Map(everyone.map((n) => [n.id, n.position]));
     const alone = event.altKey;
     const below = new Set<string>();
     if (!alone) for (const n of dragged) for (const id of descendantNodeIds(model, n.id)) if (!draggedIds.has(id)) below.add(id);
     const followers = new Set([...below].filter((id) => live.has(id)));
+    // What the guides line up with: every node that stands still during this drag. Not the dragged ones (the other nodes of a selection included) and
+    // not their followers, which move with them: each would line up with itself on every frame.
+    if (GUIDES_ENABLED) guideOthers.current = everyone.filter((n) => !draggedIds.has(n.id) && !followers.has(n.id)).map(rectOf);
     const pins = alone ? [...new Set(dragged.flatMap((n) => childNodeIds(model, n.id)))].filter((id) => !draggedIds.has(id) && live.has(id)) : [];
     const starts = new Map<string, XY>(dragged.map((n) => [n.id, { x: n.position.x, y: n.position.y }]));
     for (const id of [...followers, ...pins]) starts.set(id, { ...live.get(id)! });
     drag.current = { alone, starts, followers, below: [...below], pins, own: ownPlaces(model, { moved: moved.current, ignoreSaved: tidyRuns > 0 }) };
     setOffer(null);
+    setDragging(true);
   }, [model, tidyRuns, getNodes]);
 
   /** The followers stand where they started plus how far the dragged node has gone from where IT started (never a dragged id: they are React Flow's). */
@@ -244,13 +361,32 @@ function Canvas({ model }: { model: GraphModel }) {
       return start ? { ...n, position: { x: start.x + dx, y: start.y + dy } } : n;
     }));
   }, [setNodes]);
+  /** At most once per animation frame, from the last position the drag reported. */
+  const drawGuides = useCallback(() => {
+    guideFrame.current = 0;
+    const dragged = guideNode.current;
+    if (dragged) guides.current?.set(alignGuides(rectOf(dragged), guideOthers.current));
+  }, []);
+  const stopGuides = useCallback(() => {
+    if (guideFrame.current) cancelAnimationFrame(guideFrame.current);
+    guideFrame.current = 0;
+    guideNode.current = null;
+    guideOthers.current = [];
+    guides.current?.set(null);
+  }, []);
   const onNodeDrag: OnNodeDrag<Node> = useCallback((_event, node) => {
     if (drag.current) placeFollowers(drag.current, node);
-  }, [placeFollowers]);
+    if (GUIDES_ENABLED) {
+      guideNode.current = node;
+      if (!guideFrame.current) guideFrame.current = requestAnimationFrame(drawGuides);
+    }
+  }, [placeFollowers, drawGuides]);
 
   const onNodeDragStop: OnNodeDrag<Node> = useCallback((_event, node, dragged) => {
+    stopGuides(); // a frame still pending must not draw after the drop
     const snapshot = drag.current;
     drag.current = null;
+    setDragging(false);
     // Everyone arranges the graph for themselves (kept in `moved`); only discovery.edit shares the layout, and only discovery.accept maps.
     if (canAccept && dragged.length <= 1) {
       const payload = dropPayload(model, node.id);
@@ -284,7 +420,7 @@ function Canvas({ model }: { model: GraphModel }) {
     const batches = layoutBatches(writes);
     if (batches.length === 0) return;
     void run(() => enqueue(async () => { for (const nodes of batches) await api.put("/api/discovery/layout", { nodes }); }));
-  }, [canAccept, canLayout, model, getIntersectingNodes, setNodes, placeFollowers, openReview, run, enqueue]);
+  }, [canAccept, canLayout, model, getIntersectingNodes, setNodes, placeFollowers, openReview, run, enqueue, stopGuides]);
 
   // The bar above the canvas: what the graph holds, Collapse all, Expand all and Tidy layout. A button with nothing to do keeps its place and says so
   // (aria-disabled and a click guard, never `disabled`: it may hold the focus the click gave it).
@@ -303,21 +439,15 @@ function Canvas({ model }: { model: GraphModel }) {
   };
 
   // Tidy layout: every node back to its default column. The model of the moment is read after the awaits (a refresh may have come in meanwhile).
-  const modelRef = useRef(model);
-  useEffect(() => { modelRef.current = model; }, [model]);
   const tidyLayout = useTidyLayout({
     // Right after the route has answered, before the graph is read again: the old layout (this session's drags and the saved places) never shows.
     onDeleted: () => { moved.current.clear(); setTidyRuns((n) => n + 1); },
   });
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
   const refit = useCallback(async () => {
     await afterPaint(); // the rebuilt nodes are in React Flow's store
     if (!mounted.current) return; // the person left the page meanwhile
-    void fitView(initialView({ ...modelRef.current, layout: {} })); // the opening rules (W7r), as if no place were saved
+    // The opening rules (W7r), as if no place were saved; the camera glides there (at once under reduced motion).
+    void fitView({ ...initialView({ ...modelRef.current, layout: {} }), duration: cameraMs(reducedMotion()) });
   }, [fitView]);
   const onTidy = async () => {
     if (tidyBusy.current) return;
@@ -380,11 +510,89 @@ function Canvas({ model }: { model: GraphModel }) {
     (node?.querySelector<HTMLElement>('button[aria-label^="Create assets for"]') ?? node?.querySelector<HTMLElement>('button[aria-label^="Details for"]'))?.focus();
   }, [createFor]);
 
+  // ---- Find (Ctrl+K on the canvas), the right-click menus and the canvas's keys ----
+  const findIndex = useMemo(() => buildFindIndex(model), [model]);
+  const search = useCallback((query: string) => findMatches(findIndex, query), [findIndex]);
+  const openFind = useCallback(() => findRef.current?.open(), []);
+  useEffect(() => () => {
+    // The page goes away: no frame, no outline timer left behind.
+    if (guideFrame.current) cancelAnimationFrame(guideFrame.current);
+    window.clearTimeout(flashTimer.current);
+  }, []);
+
+  /**
+   * A choice in the Find card (it has closed and the focus is back where it was): open what hides the node, say so when the budget kept something closed,
+   * glide there, flash the node and hand it the focus. The focus comes LAST, once the glide is over: React Flow's own focus handler centres a node that is
+   * off screen with no animation, which would cut the glide short and lose the zoom.
+   */
+  const onFind = useCallback(async (entry: FindEntry) => {
+    const plan = findPlan(modelRef.current, openNow.current, entry); // the model and the open set of the moment: a refresh may have come in while the card was open
+    if (plan.open !== openNow.current) setOpen(plan.open); // the very same object when nothing has to open: no rebuild
+    if (plan.note) toast.info(plan.note);
+    await afterPaint(); // the nodes just opened are in React Flow's store
+    if (!mounted.current) return;
+    const target = getNodes().find((n) => n.id === plan.targetId);
+    if (!target) return; // the graph was read again meanwhile and the node is gone
+    const { x, y, w, h } = rectOf(target);
+    await setCenter(x + w / 2, y + h / 2, { zoom: Math.min(1, Math.max(0.75, getZoom())), duration: cameraMs(reducedMotion()) });
+    if (!mounted.current) return;
+    const element = canvas.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectorId(plan.targetId)}"]`);
+    if (!element) return;
+    window.clearTimeout(flashTimer.current);
+    setFlashId(plan.targetId); // (the outline holds under reduced motion too; the CSS drops only the pulse)
+    flashTimer.current = window.setTimeout(() => setFlashId(null), FLASH_MS);
+    element.focus({ preventScroll: true });
+  }, [toast, getNodes, getZoom, setCenter]);
+
+  const { menu, openNode, openPane, openSelection, openFromKey, close: closeMenu } = useCanvasMenu({ model, canvas });
+  const clearSelection = useCallback(() => {
+    setNodes((current) => (current.some((n) => n.selected) ? current.map((n) => (n.selected ? { ...n, selected: false } : n)) : current));
+  }, [setNodes]);
+  const canvasKeys = useCanvasKeys({ canvas, openFind, openMenuFor: openFromKey, onEscape: clearSelection });
+
+  // The menu's items come from the node's own callbacks (the ones its buttons use), so a role sees exactly the actions it has buttons for.
+  const nodeActions = (node: Node): RowAction[] => {
+    const d = node.data as NodeActions & { expanded?: boolean };
+    const items: RowAction[] = [];
+    if (d.onSelect) items.push({ label: "Details", onSelect: () => d.onSelect?.(node.id) });
+    if (d.onToggle) items.push({ label: d.expanded ? "Collapse" : "Expand", onSelect: () => d.onToggle?.(node.id) });
+    if (d.onCreateAssets) items.push({ label: "Create assets…", onSelect: () => d.onCreateAssets?.(node.id) });
+    if (d.onMap) items.push({ label: "Map…", onSelect: () => d.onMap?.(node.id) });
+    if (d.onNewAsset) items.push({ label: "New asset…", onSelect: () => d.onNewAsset?.(node.id) });
+    if (d.onRemove) items.push({ label: "Remove", tone: "danger", onSelect: () => d.onRemove?.(node.id) });
+    return items;
+  };
+  const nodeName = (node: Node): string => {
+    const d = node.data as Partial<SourceNodeData & ClusterNodeData & PointNodeData>;
+    return d.source?.name ?? d.label ?? d.point?.name ?? "this node";
+  };
+  /** The same four actions as the bar above the canvas (a button with nothing to do is aria-disabled there and here) and the Controls' fit-view button. */
+  const canvasActions = (): RowAction[] => [
+    { label: "Expand all", disabled: !expandable, onSelect: onExpandAll },
+    { label: "Collapse all", disabled: !collapsible, onSelect: onCollapseAll },
+    { label: "Tidy layout", disabled: tidying, onSelect: () => void onTidy() },
+    { label: "Fit view", onSelect: () => void fitView({ duration: cameraMs(reducedMotion()) }) },
+  ];
+  // A node with no actions of its own (an asset, an unidentified service) and a box selection get the canvas's menu.
+  let menuItems: RowAction[] = [];
+  let menuLabel = "Canvas actions";
+  if (menu) {
+    const aimed = menu.target;
+    const node = aimed.kind === "node" ? nodes.find((n) => n.id === aimed.id) : undefined;
+    const own = node ? nodeActions(node) : [];
+    if (node && own.length > 0) {
+      menuItems = own;
+      menuLabel = `Actions for ${nodeName(node)}`;
+    } else {
+      menuItems = canvasActions();
+    }
+  }
+
   return (
     <>
       <PageHeader
         title="Discovery"
-        sub={HINT}
+        sub={<HintLine />}
         actions={
           <>
             <button type="button" ref={refreshRef} onClick={() => invalidate(keys.graph)}>Refresh</button>
@@ -420,28 +628,50 @@ function Canvas({ model }: { model: GraphModel }) {
       </div>
       {saveError && <p className="error" role="alert">{saveError}</p>}
       <div className="graph-layout">
-        <div className="graph-canvas" ref={canvas}>
+        {/* tabIndex -1: a click on the empty canvas puts the focus here (no ring for a mouse), so the canvas's own keys work after it. `has-focus` dims everything off the lit path. */}
+        <div
+          className={dimming ? "graph-canvas has-focus" : "graph-canvas"}
+          ref={canvas}
+          tabIndex={-1}
+          role="group" // named, because it is a focus target (a pane click, and the return of Escape from a menu or from Find): a screen reader says "Discovery graph", not the whole canvas text
+          aria-label="Discovery graph"
+          onFocus={highlight.onFocus}
+          onBlur={highlight.onBlur}
+          onKeyDown={canvasKeys.onKeyDown}
+        >
           <ReactFlow
-            nodes={nodes}
-            edges={edges}
+            nodes={flashed}
+            edges={shownEdges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={(_event, node) => { if (node.type === "source") setSelectedId((node.data as SourceNodeData).source.id); }}
+            onNodeMouseEnter={highlight.onNodeMouseEnter}
+            onNodeMouseLeave={highlight.onNodeMouseLeave}
+            onNodeContextMenu={(event, node) => openNode(node.id, event)}
+            onPaneContextMenu={openPane}
+            onSelectionContextMenu={openSelection} // while a box selection stands, its rectangle takes the right-click that would reach a node
+            onMoveStart={closeMenu} // the menu is placed at a point of the screen: the canvas moving under it closes it
             onNodeDragStart={onNodeDragStart}
             onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
             colorMode={dark ? "dark" : "light"}
             nodesConnectable={false}
             nodesDraggable={!tidying} // a drag while Tidy runs would put the old places back after the wipe, for everyone
+            snapToGrid={snap}
+            snapGrid={SNAP_GRID_XY}
+            selectionKeyCode="Shift" // Shift-drag draws a selection box; Ctrl or Cmd (the library's multi-select key) is left at its default: a Ctrl-click is a right-click on a Mac
             edgesFocusable={false} // an edge is a Tab stop with no visible ring; the nodes stay focusable
             deleteKeyCode={null}
             fitView
             fitViewOptions={opening}
             minZoom={0.2} // the opening view holds 0.75 through fitViewOptions; this floor is what lets Fit View (and the wheel) show a tall graph whole
           >
-            <Controls />
+            <Controls fitViewOptions={fitOptions} />
             <Background />
+            <GraphMiniMap />
+            {GUIDES_ENABLED && <AlignGuides handleRef={guides} />}
+            <CanvasTools search={search} onChoose={onFind} snap={snap} onSnapChange={onSnapChange} openRef={findRef} />
           </ReactFlow>
           {canAccept && offer && (
             <div className="offer-bar" role="status">
@@ -462,6 +692,8 @@ function Canvas({ model }: { model: GraphModel }) {
       )}
       {canAccept && createFor && <BulkCreateDialog model={model} source={createFor} onClose={closeCreate} />}
       {askDialog}
+      {/* Outside the canvas on purpose: React passes the events of a portal up to its parents, and the canvas's focus and key handlers must not hear the menu. */}
+      {menu && <GraphContextMenu key={menu.id} at={menu.at} items={menuItems} label={menuLabel} returnFocus={menu.returnFocus} onClose={closeMenu} />}
       {removal && (
         <ConfirmDeleteDialog
           {...removalDialogText(removal.sources.map((s) => s.name))}
@@ -507,7 +739,7 @@ export function DiscoveryPage() {
     // Inside .graph-page from the first paint: the shell's one-window-tall rules key on it, and the canvas takes what the header leaves.
     return (
       <div className="graph-page">
-        <PageHeader title="Discovery" sub={HINT} actions={<LoadingActions withClear={can("discovery.edit")} />} />
+        <PageHeader title="Discovery" sub={<HintLine />} actions={<LoadingActions withClear={can("discovery.edit")} />} />
         <GraphBarSpace />
         <CanvasSkeleton label="Loading the graph" />
       </div>

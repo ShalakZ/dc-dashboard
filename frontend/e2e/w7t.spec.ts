@@ -6,7 +6,7 @@ import { rowAction, treeLink, userBlock } from "./shell";
 // W7t (Discovery and asset-page polish, batch 1: an icon beside every crumb, children that follow their parent on the Discovery graph with Alt/Option to
 // move a node alone, port names and a typo guard on the scope form, Scan again, Tidy layout, a summary line with Collapse all and Expand all, a source
 // node whose buttons fit one row, and a pick bar that keeps Move to... beside its hint) on the state the earlier projects leave behind: admin `admin` /
-// `correct-horse`. The stack is SHARED and w7t is its LAST project: Tidy layout removes EVERY saved node place of the stack, and each case clears the layout
+// `correct-horse`. The stack is SHARED and w7t is the LAST project that works on its layout (w7u follows it and answers the graph from a stub): Tidy layout removes EVERY saved node place of the stack, and each case clears the layout
 // first (`DELETE /api/discovery/layout`), so nothing here depends on what an earlier project dragged. What the spec makes starts `W7t <run> ` (the digits-only run
 // suffix), the accounts and roles `w7t-`; beforeAll (an earlier run that stopped half way) and afterAll remove, whatever the run, the assets (with
 // `?confirm=true`), the scopes, then the accounts and roles, and leave the saved layout empty. Scans cannot be deleted and stay in Recent scans.
@@ -350,6 +350,7 @@ async function expandSource(page: Page, source: ApiGraphSource): Promise<void> {
   await ensureOnCanvas(page, srcNode(page, source));
   await srcNode(page, source).getByRole("button", { name: `Expand ${source.name}`, exact: true }).click();
   await expect(clusterNode(page, source, groupsOf(source)[0].key)).toBeVisible();
+  await stopped(srcNode(page, source)); // W7u: a source's own + pans the camera for 300 ms; let it finish, or it could start after the fit below and win
   await fitView(page, srcNode(page, source));
 }
 /** Opens one group of an open source so that its points are drawn, then fits the view. */
@@ -999,10 +1000,16 @@ test.describe("W7t: the Discovery bar", () => {
         const canvas = await boxOf(page.locator(".graph-canvas"), "the canvas");
         test.info().annotations.push({ type: "measure", description: `${width} x ${height}: the bar is ${barBox.height}px high, the canvas ${canvas.width} x ${canvas.height}px` });
 
-        // The hint is the short one.
+        // The hint is the short one. W7u moved the keys (Alt or Option moves a node alone, and the rest) into the tip beside it.
         const hint = ((await page.locator(".page-head .sub").textContent()) ?? "").trim();
-        expect.soft(hint, "the hint names Alt and Option").toContain("Alt or Option moves it alone.");
+        expect.soft(hint, "the hint is the legend and the way to map").toContain("Dashed: discovered. Solid: assets.");
         expect.soft(hint.length, `the hint is ${hint.length} characters`).toBeLessThanOrEqual(150);
+        if (width === 1440) {
+          await page.getByRole("button", { name: "What can I do on the canvas?", exact: true }).click();
+          expect.soft(await page.getByRole("note").innerText(), "the tip names Alt and Option").toContain("Alt or Option");
+          await page.keyboard.press("Escape");
+          await expect(page.getByRole("note"), "Escape closes the tip").toHaveCount(0);
+        }
         if (width === 1440) await shot(page, "discovery-bar-1440");
 
         // The source node: Details, Create assets... and the bin (no text) on one row, inside the node.

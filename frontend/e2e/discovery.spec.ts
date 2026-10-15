@@ -108,6 +108,7 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
   await expect(page.locator(`.react-flow__node[data-id^="cluster:${opcua.id}:"]`)).toHaveCount(10);
   await expect(cluster("__ungrouped__")).toHaveCount(0); // all 60 points group, so there is no Ungrouped bag
   for (let n = 1; n <= 10; n++) await expect(cluster(`LVP${String(n).padStart(2, "0")}`)).toBeVisible();
+  await settled(cluster("LVP01")); // W7u: the source's own + pans the camera for 300 ms; let it finish before Fit View, or it could start after it and win
   await fitView(page, cluster("LVP01"));
 
   const dialog = page.getByRole("dialog", { name: "Review mappings" });

@@ -148,8 +148,9 @@ data-retrieval requests the connectors already use, nothing else.
    where the source used to be. Let go of Alt
    mid-drag or press it later and nothing changes: the key is read once, at the start. On some Linux desktops Alt-drag is taken by
    the window manager to move the whole window, so the page never sees the key; change the desktop's window-move key there, or drag
-   without Alt and move the children back by hand. Two ways of moving nodes are unchanged and take no children along: the arrow keys
-   on a focused node, and dragging a group of nodes that you selected with a Shift box. Neither is saved; they move on screen only.
+   without Alt and move the children back by hand. The arrow keys on a focused node still take no children along and are not saved;
+   they move on screen only. Dragging nodes you selected (with a Shift box or Ctrl-click) is a drag like any other: the whole selection
+   moves, each node takes its open children along once, and the places are saved.
 
    **The bar above the canvas** holds a one-line summary of what the graph shows, such as `3 sources, 120 points, 6 mapped, 1 needs
    credentials` (it is read out only when a number changes), and three buttons.
@@ -164,6 +165,98 @@ data-retrieval requests the connectors already use, nothing else.
      and the clear is not written to the audit log, like dragging). Use it when a graph has been pulled into a mess. For anyone else it
      asks nothing and sends nothing: their own view is tidied until they reload, and a message says that the shared layout is
      unchanged. If the server refuses, nothing changes and the reason is shown.
+
+   **What a node shows.** The facts line of a source starts with a small dot and the protocol of its connector, then the words it
+   always had: dot, `OPC UA`, `discovered · online · 60 points`. The dot is green for an enabled source that answered its last poll,
+   red for one that did not, amber for one that needs credentials, and grey for one that is disabled or has never been polled (the
+   status word beside it still says which, so colour is never the only signal; the green dot also pulses softly). The protocol reads
+   `OPC UA`, `Modbus` or `Simulator`, or the connector's own name when the app has no label for it. A group node keeps its `N mapped`
+   and gains a thin bar along its bottom edge, as long as the share of its points that are mapped (hover it for `3 of 6 mapped`).
+   None of this makes a node taller.
+
+   **The camera glides.** Fit View (the bottom-left control), the refit after **Tidy layout** and **Find** (below) move the view
+   over about a third of a second instead of jumping. Opening a source with its + button (or **Expand** in its right-click menu) pans
+   the view just far enough to keep the source and its groups in sight, with a margin of 40 px, and never changes the zoom; when they are
+   already in view nothing moves. Opening a group, closing anything, **Expand all** and **Collapse all** leave the view alone, and
+   so does the first view when the page opens.
+
+   **The overview.** At the bottom right, a small map of the whole graph shows where the view is (it is named `Overview of the whole
+   graph` for a screen reader). Click or drag in it to move the view and scroll over it to zoom. Sources, groups, points, assets and
+   unidentified services each have their own shade of the theme. It is not drawn when the canvas is narrower than about 700 px.
+
+   **Snap to grid and guides.** A node you drag snaps to an 8 px grid, and the default place of every node lies on that grid, so
+   nudging one group does not leave it a few pixels off its untouched neighbours (assets nested under an asset stand 224 px per level
+   further right, 4 px more than before, for the same reason). The **Snap to grid** button at the top right of the canvas turns
+   this off and on (pressed means on); it starts on and the choice is remembered in this browser. While you drag, thin accent-coloured
+   guide lines appear when the node's left edge, centre or right edge, or its top, middle or bottom, lines up to the pixel with
+   a nearby node's (the 200 nearest are compared). The guides only show; they never pull the node, so it is dropped exactly where
+   you let go. With snap on, equal edges are common; with snap off a guide shows only on an exact match, which is rare by hand.
+
+   **Lighting a path.** Rest the pointer on a node for a moment, or tab to it (when the focus ring shows), and its path
+   stands out: the nodes it comes from and the nodes it leads to along the edges (a point lights its group, its source and the asset
+   it is mapped to, with that asset's sub-assets; an asset lights its mapped points, their groups and sources), the edges between them
+   turn to the accent colour, and everything else dims to about a third, at once (there is no fade). Moving off clears it after
+   a short pause, so crossing the canvas from one node to the next never flashes. Clicking a single node lights nothing: you click a
+   node to drag it or to open its menu, and the rest of the canvas would only look disabled. A selection of two or more nodes (a
+   Shift box or Ctrl-click, see below) is a deliberate "show me these", and lights the union of their paths, for up to 20 nodes.
+   Nothing lights while you drag, for a node with no edge, or when the path has more than 400 nodes (a source with hundreds of drawn
+   points). A touch screen has no hover and no Shift or Ctrl, so it lights no path. The dimmed text is below the usual contrast on
+   purpose, and only while a path is lit; the same facts are on the lit nodes and in the summary above.
+
+   **Live edges.** The edges of a source that is enabled and online flow: dashes travel along the dashed edges from the source to
+   its groups and along the edges from its mapped nodes to their assets (these are almost solid, with a small gap that moves, so they
+   still read as asset links). The dashed edges from a group to its points stay still, even for a live source: there can be hundreds
+   of them and they add little to the picture. Offline, disabled and never-polled sources stay still, and so do the edges between
+   assets. It means "this source is being polled", not a measurement of traffic. If more than 100 edges would flow, none do (a
+   flowing edge is repainted on every frame, which over a remote desktop is screen traffic for as long as the page is open).
+
+   **Selecting several nodes.** Shift-drag on empty canvas draws a selection box (a plain drag still pans); Ctrl-click, or Cmd-click on
+   a Mac, adds or removes one node. Two or more selected nodes light their paths (above); one does not. The selection survives
+   opening and closing nodes and the graph refreshing. Drag any selected node and the whole selection moves; the children rule above applies once, so a source and its own group selected together move
+   their points once. Dropping a selection on an asset never maps (only one group or point maps). A frame is drawn over the
+   selected nodes: click empty canvas or press Esc to clear the selection, because the buttons under the frame do not answer
+   until you do.
+
+   **Right-click menus.** Right-click a node for the actions it has. A source: **Details**, **Collapse** or **Expand**, **Create
+   assets…**, **Remove**. A group: **Collapse** or **Expand**, **Map…**, **New asset…**. A point: **Map…**. Each is the same action
+   as the button on the node, and an item is there only when the button is for your role (**Map…**, **New asset…** and **Create
+   assets…** need `discovery.accept`, **Remove** needs `discovery.edit`, so a role that can only view sees Details and Collapse or
+   Expand). An asset, an unidentified service, empty canvas and a selection frame open the canvas menu instead: **Expand all**,
+   **Collapse all**, **Tidy layout** and **Fit view**, greyed out when the button above the canvas is. From the keyboard, press the
+   Menu key or Shift+F10 on a node that has the focus; anywhere else inside the canvas the canvas menu opens at its centre. Up and
+   Down move (and wrap), Home and End jump, Enter chooses, Esc closes the menu and puts the focus back on the node, and Tab closes it too.
+   A click elsewhere, scrolling, resizing, moving the view and the graph refreshing close it too. The menu is never the only way:
+   every action also has a visible button.
+
+   **Find.** The **Find** button at the top right of the canvas, or Ctrl+K (Cmd+K on a Mac) while the canvas has the focus (click
+   empty canvas first, or with the focus on the **Find** or **Snap to grid** button), opens a search card over the canvas. Type part of
+   a name and it lists matching sources (by name or endpoint), assets (by name or kind), groups (by name) and points (by name or address). Every word you type must appear; names that start with
+   it come first, then names with a word that starts with it, then the rest. At most 50 are listed, and `N more` says how many are
+   not. Up and Down move through the list, Enter chooses, and Esc, or a click outside, closes the card and puts the focus back where
+   it was. Choosing a result opens the source and group it sits in when they are closed, glides the view to it (zooming in to at
+   least 75%, never past 100%) and outlines it in the accent colour for about 1.5 seconds. If a group is too big to draw (more than
+   600 nodes), the source opens and the group stays closed, and a message says so, for example `LVP01 has 6,000 points, too many to
+   draw at once. Showing the group instead.`; when opening the source would draw too many nodes because its groups are already open,
+   those groups are closed first and the message says that. Elsewhere on the page, Ctrl+K is still the top bar's **Quick find**.
+
+   **Keys on the canvas.**
+
+   | Key | What it does |
+   |---|---|
+   | Ctrl+K, or Cmd+K (canvas, or its Find and Snap buttons, has the focus) | Open Find; anywhere else on the page it opens Quick find |
+   | Shift-drag | Draw a selection box |
+   | Ctrl-click, or Cmd-click | Add a node to the selection or remove it |
+   | Alt, or Option, held when you start a drag | Move the node alone, without its children |
+   | Menu key, or Shift+F10 | Open the actions of the focused node; elsewhere in the canvas, the canvas menu |
+   | Up, Down, Home, End, Enter in a menu or Find | Move, jump, choose |
+   | Esc | Close the open menu or Find card (one layer at a time), then clear a selection |
+
+   **Reduced motion.** When your system asks for less motion, the camera moves at once, the green dot does not pulse, the edges do not
+   flow (they keep their dashes) and the Find outline does not pulse (it still shows for 1.5 seconds). The path highlight needs no
+   setting: it never fades, so lit and dimmed nodes always change at once.
+
+   **The hint under the title** is one line, `Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset…`,
+   followed by a `?` (named `What can I do on the canvas?`) that lists the keys above in six short lines.
 
    Each source node says when a scan last found it (`Seen in scan #6, 10 min ago`), or `Added by hand` for a source you made
    yourself, or `Not seen in a scan yet`. A scan only adds sources and refreshes their points; it never removes one, so a source

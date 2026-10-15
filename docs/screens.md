@@ -37,7 +37,11 @@ lacks says "No access".
   found as a graph to map by drag and drop or with the buttons on its nodes, says when a scan last found each source, and lets an
   admin remove discovered sources that have nothing mapped, one by one (the bin on the source) or all at once (**Clear unmapped**).
   Dragging a node takes its open children along (hold Alt, Option on a Mac, to move it alone); a bar above the canvas gives a summary
-  line, **Collapse all**, **Expand all** and **Tidy layout**, which puts every node back in its default column for everyone. Changing
+  line, **Collapse all**, **Expand all** and **Tidy layout**, which puts every node back in its default column for everyone. Nodes show
+  a status dot and the source's protocol, and resting the pointer on one lights its whole path; the view glides, a minimap sits at the
+  bottom right, **Snap to grid** (top right) lines nodes up on an 8 px grid with guides while you drag, Shift-drag selects several
+  nodes, right-click (or Shift+F10) opens a node's actions, and **Find** (or Ctrl+K on the canvas) jumps to any source, group, point or
+  asset. The `?` under the title lists the keys. Changing
   scopes and the layout, and removing unmapped discovered sources, needs `discovery.edit`, running a scan `discovery.scan`,
   accepting results (**Map…**, **New asset…**, **Create assets…** for a whole source) `discovery.accept`. See
   [Discovery](sources-and-discovery.md#discovery).

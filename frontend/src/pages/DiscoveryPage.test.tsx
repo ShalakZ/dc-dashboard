@@ -21,13 +21,22 @@ vi.mock("../components/graph/BulkCreateDialog", () => ({
 }));
 
 // What React Flow reports as overlapping the dropped node, the nodes it was last given (`getNodes`), where a played drag ends and, for
-// `dragwith`, which node is dragged along with it; set per test.
+// `dragwith`, which node is dragged along with it, and the viewport the camera starts from; set per test.
 const flow = vi.hoisted(() => {
   const state = {
     intersecting: [] as { id: string; type?: string }[], nodes: [] as any[], dropAt: { x: 7, y: 8 }, partner: null as string | null,
+    viewport: { x: 0, y: 0, zoom: 1 },
   };
-  return { state, getIntersectingNodes: vi.fn((_node: unknown) => state.intersecting), getNodes: vi.fn(() => state.nodes), fitView: vi.fn() };
+  return {
+    state, getIntersectingNodes: vi.fn((_node: unknown) => state.intersecting), getNodes: vi.fn(() => state.nodes), fitView: vi.fn(),
+    // The camera: a move resolves as the library's does (true when it happened).
+    setViewport: vi.fn(async (_view: unknown, _options?: unknown) => true), getViewport: vi.fn(() => state.viewport),
+    setCenter: vi.fn(async (_x: number, _y: number, _options?: unknown) => true), getZoom: vi.fn(() => state.viewport.zoom),
+  };
 });
+
+// The minimap is its own piece (its own tests): here it only has to be drawn inside the canvas.
+vi.mock("../components/graph/GraphMiniMap", () => ({ GraphMiniMap: () => <div data-testid="minimap" /> }));
 
 // React Flow measures the DOM, which jsdom cannot do: render the nodes plainly and expose the props the page wires up.
 // `data-draggable` is React Flow's own rule for one node (a node's `draggable` beats the canvas-wide `nodesDraggable`; undefined follows it).
@@ -37,19 +46,36 @@ vi.mock("@xyflow/react", async (importOriginal) => {
   return {
     ...actual,
     Handle: () => null,
-    useReactFlow: () => ({ getIntersectingNodes: flow.getIntersectingNodes, getNodes: flow.getNodes, fitView: flow.fitView }),
-    ReactFlow: ({ nodes, nodeTypes, colorMode, edgesFocusable, nodesDraggable, onNodeClick, onNodeDragStart, onNodeDrag, onNodeDragStop, onNodesChange }: any) => {
+    useReactFlow: () => ({
+      getIntersectingNodes: flow.getIntersectingNodes, getNodes: flow.getNodes, fitView: flow.fitView,
+      setViewport: flow.setViewport, getViewport: flow.getViewport, setCenter: flow.setCenter, getZoom: flow.getZoom,
+    }),
+    ReactFlow: ({
+      nodes, edges, nodeTypes, colorMode, edgesFocusable, nodesDraggable, snapToGrid, snapGrid, selectionKeyCode, multiSelectionKeyCode, children,
+      onNodeClick, onNodeDragStart, onNodeDrag, onNodeDragStop, onNodesChange, onNodeMouseEnter, onNodeMouseLeave,
+      onNodeContextMenu, onPaneContextMenu, onSelectionContextMenu, onMoveStart,
+    }: any) => {
       flow.state.nodes = nodes;
       return (
-        <div data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)} data-nodes-draggable={String(nodesDraggable)}>
+        <div
+          data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)} data-nodes-draggable={String(nodesDraggable)}
+          data-snap={String(snapToGrid)} data-snap-grid={snapGrid?.join(",")} data-selection-key={String(selectionKeyCode)} data-multi-key={String(multiSelectionKeyCode)}
+        >
+          {edges.map((e: any) => <i key={e.id} data-edge={e.id} data-animated={String(!!e.animated)} data-class={e.className ?? ""} />)}
           {nodes.map((n: any) => {
             const Node = nodeTypes[n.type];
             const dropped = () => ({ ...n, position: flow.state.dropAt });
             return (
-              <div key={n.id} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)}>
+              <div key={n.id} className="react-flow__node" tabIndex={0} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-selected={String(!!n.selected)} data-class={n.className ?? ""} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)} onContextMenu={(e) => onNodeContextMenu?.(e, n)}>
                 <Node id={n.id} data={n.data} />
                 <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
+                <button data-testid={`select-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "select", selected: true }])} />
+                <button data-testid={`enter-${n.id}`} onClick={(e) => onNodeMouseEnter?.(e, n)} />
+                <button data-testid={`leave-${n.id}`} onClick={(e) => onNodeMouseLeave?.(e, n)} />
                 <button data-testid={`dragstart-${n.id}`} onClick={(e) => onNodeDragStart?.(e, n, [n])} />
+                {/* A drag played in two halves (start and one move, then the drop), for what is drawn while it runs. */}
+                <button data-testid={`dragmove-${n.id}`} onClick={(e) => { onNodeDragStart?.(e, n, [n]); onNodeDrag?.(e, dropped(), [dropped()]); }} />
+                <button data-testid={`dragstop-${n.id}`} onClick={(e) => onNodeDragStop?.(e, dropped(), [dropped()])} />
                 <button
                   data-testid={`drag-${n.id}`}
                   onClick={(e) => {
@@ -77,11 +103,19 @@ vi.mock("@xyflow/react", async (importOriginal) => {
               </div>
             );
           })}
+          {/* The pane, the rectangle a box selection leaves over its nodes, and the camera starting to move: what the page's menu and guides listen to. */}
+          <div data-testid="pane" onContextMenu={(e) => onPaneContextMenu?.(e)} />
+          {nodes.some((n: any) => n.selected) && (
+            <div data-testid="selection-rect" className="react-flow__nodesselection-rect" tabIndex={-1} onContextMenu={(e) => onSelectionContextMenu?.(e, nodes.filter((n: any) => n.selected))} />
+          )}
+          <button data-testid="move-start" onClick={() => onMoveStart?.(null, flow.state.viewport)} />
+          {children}
         </div>
       );
     },
+    ViewportPortal: ({ children }: any) => <div data-testid="viewport-portal">{children}</div>,
     Background: () => null,
-    Controls: () => null,
+    Controls: ({ fitViewOptions }: any) => <div data-testid="controls" data-fit-duration={String(fitViewOptions?.duration)} />,
   };
 });
 
@@ -113,7 +147,11 @@ const node = (id: string) => document.querySelector(`[data-id="${id}"]`) as HTML
 beforeEach(() => {
   flow.state.dropAt = { x: 7, y: 8 };
   flow.state.partner = null;
+  flow.state.viewport = { x: 0, y: 0, zoom: 1 };
   flow.fitView.mockClear();
+  flow.setViewport.mockClear();
+  flow.setCenter.mockClear();
+  window.localStorage.removeItem("dcdash.discovery.snap");
 });
 
 describe("DiscoveryPage", () => {
@@ -188,7 +226,7 @@ describe("DiscoveryPage", () => {
     mockFetch(routes("operator"));
     open();
     const details = await screen.findByRole("button", { name: "Details for Plant OPC" });
-    details.focus();
+    act(() => details.focus()); // inside act: the wrapper's onFocus updates the highlight
     await userEvent.keyboard("{Enter}");
     const panel = await screen.findByRole("complementary", { name: "Source details" });
     expect(within(panel).getByRole("heading", { name: "Plant OPC" })).toHaveFocus();
@@ -719,7 +757,7 @@ describe("DiscoveryPage controls follow the permissions of the role (a custom ro
 
 // ---- W7r: remove and clear unmapped discovered sources, last seen, the click path to create assets ----
 
-const HINT = "Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset… A node takes its open children along; Alt or Option moves it alone.";
+const HINT = "Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset…";
 const kw = (id: number, name: string, extra: Partial<GraphPoint> = {}) =>
   point(id, name, { suggestion: { metric: "active_power_kw", scale: 1, interval_seconds: 5, custom_unit: null }, ...extra });
 const srcOf = (id: number, name: string, over: Partial<GraphSource> = {}): GraphSource => ({
@@ -767,16 +805,15 @@ const confirmDialog = (name: string) => screen.findByRole("dialog", { name });
 const removeCalls = (calls: { method: string; path: string; body?: unknown }[]) => calls.filter((c) => c.method === "POST" && c.path === "/api/discovery/sources/remove");
 
 describe("DiscoveryPage hint and last seen (W7r)", () => {
-  it("the sub line says to drag a group onto an asset or press New asset…, that a node takes its open children along and that Alt or Option moves it alone", async () => {
+  it("the sub line says to drag a group onto an asset or press New asset…", async () => {
     serverWith("operator", [srcOf(1, "Plant OPC")]);
     openToasts();
     await screen.findByText("Plant OPC");
     expect(screen.getByText(/Dashed: discovered/)).toHaveTextContent(HINT);
   });
 
-  it("the hint is short (at most 150 characters, so it keeps to a line or two under the title) and names the Alt and Option keys", () => {
-    expect(HINT.length).toBeLessThanOrEqual(150);
-    expect(HINT).toContain("Alt or Option");
+  it("the hint is short (under 100 characters: the keys live in the tip beside it)", () => {
+    expect(HINT.length).toBeLessThan(100);
   });
 
   it("every source says when it was last seen: the scan and how long ago, added by hand, or not seen yet", async () => {
@@ -1575,6 +1612,604 @@ describe("DiscoveryPage Tidy layout, the bar, collapse and expand all (W7t)", ()
       expect(rule![1]).toMatch(/height:\s*36px/);
       expect(rule![1]).toMatch(/margin-bottom:\s*8px/);
       expect(rule![1]).toMatch(/flex:\s*none/);
+    });
+  });
+});
+
+// ---- W7u (part 1): camera, path highlight, live edges, minimap, snap and box select ----
+
+describe("DiscoveryPage premium canvas (W7u)", () => {
+  /** jsdom has no matchMedia: reduced motion and hover are answered here, and removed again after each test. */
+  const stubMedia = (reduced: boolean) => {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true, writable: true,
+      value: (query: string) => ({ matches: query.includes("reduced-motion") ? reduced : query.includes("hover: hover"), media: query, addEventListener: () => undefined, removeEventListener: () => undefined }),
+    });
+  };
+  /** Whether the browser would call the focused element's focus a keyboard one (`:focus-visible`). jsdom says yes to a click too; a real browser does not. */
+  const keyboard = { on: false };
+  beforeEach(() => {
+    keyboard.on = false;
+    const matches = Element.prototype.matches;
+    vi.spyOn(Element.prototype, "matches").mockImplementation(function (this: Element, selector: string) {
+      return selector === ":focus-visible" ? keyboard.on : matches.call(this, selector);
+    });
+  });
+  afterEach(() => {
+    delete (window as { matchMedia?: unknown }).matchMedia;
+    vi.restoreAllMocks();
+  });
+  const liveWorld = (over: Partial<GraphSource> = {}) => world([srcOf(1, "Plant OPC", { enabled: true, status: "online", ...over })]);
+  const expand = async (name: string) => userEvent.click(await screen.findByRole("button", { name: `Expand ${name}` }));
+  const at = (id: string) => [Number(node(id).dataset.x), Number(node(id).dataset.y)];
+  const canvas = () => document.querySelector(".graph-canvas") as HTMLElement;
+  const edge = (prefix: string) => document.querySelector(`[data-edge^="${prefix}"]`) as HTMLElement;
+  /** The canvas is 800x600 (jsdom measures nothing). */
+  const sized = () => {
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(800);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(600);
+  };
+
+  describe("live edges", () => {
+    it("an enabled online source's dashed edges flow, an offline one's do not", async () => {
+      mockFetch(routes("operator", liveWorld()));
+      open();
+      await expand("Plant OPC");
+      expect(edge("e:src:1>")).toHaveAttribute("data-animated", "true");
+    });
+
+    it("a source that is offline keeps still edges", async () => {
+      mockFetch(routes("operator", liveWorld({ status: "offline" })));
+      open();
+      await expand("Plant OPC");
+      expect(edge("e:src:1>")).toHaveAttribute("data-animated", "false");
+    });
+
+    it("under reduced motion no edge flows, and it follows the preference being on", async () => {
+      stubMedia(true);
+      mockFetch(routes("operator", liveWorld()));
+      open();
+      await expand("Plant OPC");
+      expect(edge("e:src:1>")).toHaveAttribute("data-animated", "false");
+    });
+  });
+
+  describe("selection", () => {
+    it("a selected node stays selected through a rebuild (expand, collapse, a refresh)", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByTestId("select-src:1"));
+      expect(node("src:1")).toHaveAttribute("data-selected", "true");
+      await expand("Plant OPC");
+      expect(node("src:1")).toHaveAttribute("data-selected", "true");
+      expect(node("asset:10")).toHaveAttribute("data-selected", "false");
+      await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(node("src:1")).toHaveAttribute("data-selected", "true"));
+    });
+
+    it("a selection and a box are React Flow's own: Shift draws the box, and Ctrl or Cmd (its default) adds, never a pass-through multi key", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      expect(screen.getByTestId("flow")).toHaveAttribute("data-selection-key", "Shift");
+      expect(screen.getByTestId("flow")).toHaveAttribute("data-multi-key", "undefined");
+    });
+
+    it("the canvas takes the focus on a click (tabindex -1) without joining the tab order", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      expect(canvas()).toHaveAttribute("tabindex", "-1");
+    });
+  });
+
+  describe("path highlight", () => {
+    it("hovering a node lights its path after the dwell and clears it after the grace", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      expect(canvas()).not.toHaveClass("has-focus");
+      fireEvent.click(screen.getByTestId("enter-cluster:1:LVP01"));
+      expect(canvas()).not.toHaveClass("has-focus"); // not before the dwell
+      await waitFor(() => expect(canvas()).toHaveClass("has-focus"));
+      expect(node("cluster:1:LVP01").dataset.class).toContain("lit");
+      expect(node("src:1").dataset.class).toContain("lit");
+      expect(node("asset:10").dataset.class ?? "").not.toContain("lit");
+      expect(edge("e:src:1>cluster:1:LVP01").dataset.class).toContain("lit");
+      fireEvent.click(screen.getByTestId("leave-cluster:1:LVP01"));
+      await waitFor(() => expect(canvas()).not.toHaveClass("has-focus"));
+      expect(node("src:1").dataset.class).not.toContain("lit");
+    });
+
+    it("a click selection (one node) lights nothing, and two selected nodes light the union of their paths without a hover", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      fireEvent.click(screen.getByTestId("select-cluster:1:LVP02"));
+      expect(node("cluster:1:LVP02")).toHaveAttribute("data-selected", "true");
+      expect(canvas()).not.toHaveClass("has-focus");
+      expect(node("cluster:1:LVP02").dataset.class ?? "").not.toContain("lit");
+      fireEvent.click(screen.getByTestId("select-asset:10"));
+      expect(canvas()).toHaveClass("has-focus");
+      expect(node("cluster:1:LVP02").dataset.class).toContain("lit");
+      expect(node("asset:10").dataset.class).toContain("lit");
+      expect(node("cluster:1:LVP01").dataset.class ?? "").not.toContain("lit");
+    });
+
+    it("a node the keyboard reached lights its path (focus on the wrapper), and a click on a button does not", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      expect(canvas()).not.toHaveClass("has-focus"); // the click that opened the source left the focus in its node, and that is a mouse focus
+      keyboard.on = true;
+      act(() => screen.getByRole("button", { name: "Expand LVP01" }).focus());
+      await waitFor(() => expect(canvas()).toHaveClass("has-focus"));
+      expect(node("cluster:1:LVP01").dataset.class).toContain("lit");
+      expect(node("cluster:1:LVP02").dataset.class ?? "").not.toContain("lit");
+      act(() => screen.getByRole("button", { name: "Refresh" }).focus());
+      await waitFor(() => expect(canvas()).not.toHaveClass("has-focus"));
+      keyboard.on = false;
+      act(() => screen.getByRole("button", { name: "Expand LVP01" }).focus());
+      expect(canvas()).not.toHaveClass("has-focus");
+    });
+
+    it("nothing is lit while a drag runs", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      fireEvent.click(screen.getByTestId("select-cluster:1:LVP02"));
+      fireEvent.click(screen.getByTestId("select-asset:10"));
+      expect(canvas()).toHaveClass("has-focus");
+      fireEvent.click(screen.getByTestId("dragstart-cluster:1:LVP02"));
+      expect(canvas()).not.toHaveClass("has-focus");
+    });
+  });
+
+  describe("camera", () => {
+    it("the Controls' fit-view button glides for 300 ms, and not at all under reduced motion", async () => {
+      mockFetch(routes("operator"));
+      const first = open();
+      await screen.findByText("Plant OPC");
+      expect(screen.getByTestId("controls")).toHaveAttribute("data-fit-duration", "300");
+      first.unmount();
+      stubMedia(true);
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      expect(screen.getByTestId("controls")).toHaveAttribute("data-fit-duration", "0");
+    });
+
+    it("Tidy's refit glides", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByRole("button", { name: "Tidy layout" }));
+      await waitFor(() => expect(flow.fitView).toHaveBeenCalled());
+      expect(flow.fitView).toHaveBeenCalledWith(expect.objectContaining({ duration: 300 }));
+    });
+
+    it("opening a source by its own button pans just enough to bring it and its groups inside the margin; the zoom is untouched", async () => {
+      sized();
+      flow.state.viewport = { x: -30, y: -30, zoom: 0.5 };
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await waitFor(() => expect(flow.setViewport).toHaveBeenCalledTimes(1));
+      const [view, options] = flow.setViewport.mock.calls[0] as [{ x: number; y: number; zoom: number }, { duration: number }];
+      expect(view.zoom).toBe(0.5);
+      expect(view.x).toBe(40); // the source's left edge (0 * 0.5 - 30) comes to the 40 px margin
+      expect(view.y).toBe(40);
+      expect(options).toEqual({ duration: 300 });
+    });
+
+    it("moves instantly under reduced motion", async () => {
+      stubMedia(true);
+      sized();
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await waitFor(() => expect(flow.setViewport).toHaveBeenCalled());
+      expect(flow.setViewport.mock.calls[0][1]).toEqual({ duration: 0 });
+    });
+
+    it("does not move when everything is already in view", async () => {
+      sized();
+      flow.state.viewport = { x: 100, y: 100, zoom: 1 };
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await screen.findByText("LVP01 (2)");
+      await new Promise((resolve) => setTimeout(resolve, 80)); // two animation frames
+      expect(flow.setViewport).not.toHaveBeenCalled();
+    });
+
+    it("only a source's own opening pans: a group, a close, Expand all and Collapse all leave the camera alone", async () => {
+      sized();
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await waitFor(() => expect(flow.setViewport).toHaveBeenCalledTimes(1));
+      flow.setViewport.mockClear();
+      await expand("LVP01");
+      await userEvent.click(screen.getByRole("button", { name: "Collapse LVP01" }));
+      await userEvent.click(screen.getByRole("button", { name: "Collapse Plant OPC" }));
+      await userEvent.click(screen.getByRole("button", { name: "Expand all" }));
+      await userEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(flow.setViewport).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("minimap and snap", () => {
+    it("draws the minimap inside the canvas", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      expect(within(screen.getByTestId("flow")).getByTestId("minimap")).toBeInTheDocument();
+    });
+
+    it("snaps to an 8 px grid by default, and the toggle turns it off and remembers", async () => {
+      mockFetch(routes("operator"));
+      const first = open();
+      await screen.findByText("Plant OPC");
+      const toggle = screen.getByRole("button", { name: "Snap to grid" });
+      expect(toggle).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByTestId("flow")).toHaveAttribute("data-snap", "true");
+      expect(screen.getByTestId("flow")).toHaveAttribute("data-snap-grid", "8,8");
+      await userEvent.click(toggle);
+      expect(screen.getByRole("button", { name: "Snap to grid" })).toHaveAttribute("aria-pressed", "false");
+      expect(screen.getByTestId("flow")).toHaveAttribute("data-snap", "false");
+      expect(window.localStorage.getItem("dcdash.discovery.snap")).toBe("off");
+      first.unmount();
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      expect(screen.getByRole("button", { name: "Snap to grid" })).toHaveAttribute("aria-pressed", "false");
+      expect(screen.getByTestId("flow")).toHaveAttribute("data-snap", "false");
+    });
+  });
+
+  describe("a selection dragged together", () => {
+    it("a source and its own open group dragged together move the group's open points once (not once for each)", async () => {
+      const layout = { "src:1": { x: 10, y: 20 }, "cluster:1:LVP02": { x: 500, y: 300 }, "point:3": { x: 800, y: 340 } };
+      mockFetch(routes("admin", graph({ layout })));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP02");
+      expect(at("point:3")).toEqual([800, 340]);
+      flow.state.partner = "cluster:1:LVP02";
+      await userEvent.click(screen.getByTestId("dragwith-src:1")); // from 10,20 to 7,8: by -3,-12
+      expect(at("point:3")).toEqual([797, 328]); // not 794,316 (the two dragged nodes are React Flow's to move; the mock does not)
+    });
+  });
+
+  // ---- W7u (part 2): right-click menus, Find, alignment guides, the shorter hint and its tip ----
+
+  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+  const viewOnly = () => mockFetch({ ...routes("custom"), "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view"] }) } });
+  const rightClick = (id: string) => fireEvent.contextMenu(node(id));
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  describe("right-click menus", () => {
+    it("a source's menu holds Details, Expand, Create assets… and Remove for an admin, with the focus on the first", async () => {
+      mockFetch(routes("admin", world([srcOf(1, "Plant OPC")]))); // (a group with a unit, so there is something to create assets from)
+      open();
+      await screen.findByRole("button", { name: /Create assets for/ }); // (the account is known: the node's own buttons are there)
+      rightClick("src:1");
+      const menu = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
+      expect(labelsOf(menu)).toEqual(["Details", "Expand", "Create assets…", "Remove"]);
+      expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus();
+      expect(within(menu).getByRole("menuitem", { name: "Remove" })).toHaveClass("danger-item");
+    });
+
+    it("a role with discovery.view alone gets Details and Expand: no Create assets… and no Remove (the menu is gated like the buttons)", async () => {
+      viewOnly();
+      open();
+      await screen.findByText("Plant OPC");
+      await accountKnown();
+      rightClick("src:1");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Plant OPC" }))).toEqual(["Details", "Expand"]);
+    });
+
+    it("a group offers Expand, Map… and New asset…, and an unmapped point Map…, for a role that may accept", async () => {
+      mockFetch(routes("admin"));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      await screen.findByRole("button", { name: "Map LVP01 to asset…" });
+      rightClick("cluster:1:LVP01");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
+      await userEvent.keyboard("{Escape}");
+      rightClick("point:1");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Map…"]);
+    });
+
+    it("a point that has no action for this role (no Map…) shows the canvas's menu instead", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      rightClick("point:1");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Canvas actions" }))).toEqual(["Expand all", "Collapse all", "Tidy layout", "Fit view"]);
+    });
+
+    it("so does an asset, and so does the empty canvas", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      rightClick("asset:10");
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+    });
+
+    it("the canvas menu mirrors the bar: Collapse all is aria-disabled while nothing is open (and does nothing), Expand all opens everything, Fit view glides", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+      const collapse = within(menu).getByRole("menuitem", { name: "Collapse all" });
+      expect(collapse).toHaveAttribute("aria-disabled", "true");
+      expect(within(menu).getByRole("menuitem", { name: "Expand all" })).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(collapse);
+      expect(screen.getByRole("menu")).toBeInTheDocument(); // a disabled item does not even close the menu
+      await userEvent.click(within(menu).getByRole("menuitem", { name: "Fit view" }));
+      expect(flow.fitView).toHaveBeenCalledWith({ duration: 300 });
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Canvas actions" })).getByRole("menuitem", { name: "Expand all" }));
+      expect(await screen.findByText("LVP01 (2)")).toBeInTheDocument();
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("the rectangle a box selection leaves over its nodes opens the canvas menu", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByTestId("select-src:1"));
+      fireEvent.contextMenu(screen.getByTestId("selection-rect"));
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+    });
+
+    it("choosing Details opens the source's panel; choosing Expand opens the source", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      rightClick("src:1");
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Details" }));
+      expect(await screen.findByRole("complementary", { name: "Source details" })).toBeInTheDocument();
+      rightClick("src:1");
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Expand" }));
+      expect(await screen.findByText("LVP01 (2)")).toBeInTheDocument();
+    });
+
+    it("the menu's Expand pans the camera like the node's own + button", async () => {
+      sized();
+      flow.state.viewport = { x: -30, y: -30, zoom: 0.5 };
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      rightClick("src:1");
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Expand" }));
+      await waitFor(() => expect(flow.setViewport).toHaveBeenCalledTimes(1));
+      expect(flow.setViewport.mock.calls[0][0]).toMatchObject({ x: 40, y: 40, zoom: 0.5 });
+    });
+
+    it("Shift+F10 and the ContextMenu key open the menu of the node that has the focus; on the canvas itself, the canvas's menu", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      act(() => node("src:1").focus());
+      fireEvent.keyDown(node("src:1"), { key: "F10", shiftKey: true });
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Plant OPC" }))).toEqual(["Details", "Expand"]);
+      await userEvent.keyboard("{Escape}");
+      expect(node("src:1")).toHaveFocus();
+      fireEvent.keyDown(node("src:1"), { key: "ContextMenu" });
+      expect(await screen.findByRole("menu", { name: "Actions for Plant OPC" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      act(() => canvas().focus());
+      fireEvent.keyDown(canvas(), { key: "ContextMenu" });
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      expect(canvas()).toHaveFocus();
+    });
+
+    it("Escape closes the menu and gives the focus back to the node, and leaves the selection alone (a second Escape clears it)", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByTestId("select-src:1"));
+      expect(node("src:1")).toHaveAttribute("data-selected", "true");
+      rightClick("src:1");
+      await screen.findByRole("menu");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(node("src:1")).toHaveFocus();
+      expect(node("src:1")).toHaveAttribute("data-selected", "true");
+      await userEvent.keyboard("{Escape}");
+      expect(node("src:1")).toHaveAttribute("data-selected", "false");
+    });
+
+    it("a graph refresh closes an open menu, and so does the canvas starting to move", async () => {
+      let points = 4;
+      mockFetch(routes("operator", () => graph({ sources: [{ ...graph().sources[0], point_count: points }] })));
+      open();
+      await screen.findByText("Plant OPC");
+      rightClick("src:1");
+      await screen.findByRole("menu");
+      points = 5;
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" })); // (a click without a press: nothing but the new graph closes it)
+      await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+      rightClick("src:1");
+      await screen.findByRole("menu");
+      fireEvent.click(screen.getByTestId("move-start"));
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Find", () => {
+    const findButton = () => screen.getByRole("button", { name: "Find" });
+    const search = async (text: string) => {
+      await userEvent.click(findButton());
+      await userEvent.type(await screen.findByRole("combobox"), text);
+      await userEvent.keyboard("{Enter}");
+    };
+
+    it("Ctrl+K inside the canvas opens Find and the key goes no further; from the page body it is left alone", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      const heard = vi.fn((event: KeyboardEvent) => event.key);
+      document.addEventListener("keydown", heard);
+      try {
+        act(() => node("src:1").focus());
+        fireEvent.keyDown(node("src:1"), { key: "k", ctrlKey: true });
+        expect(await screen.findByRole("combobox")).toBeInTheDocument();
+        expect(heard.mock.calls.filter(([event]) => event.key === "k")).toHaveLength(0);
+        await userEvent.keyboard("{Escape}");
+        expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+        fireEvent.keyDown(document.body, { key: "k", ctrlKey: true });
+        expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+        expect(heard.mock.calls.filter(([event]) => event.key === "k")).toHaveLength(1); // the top bar's quick find would have it
+      } finally {
+        document.removeEventListener("keydown", heard);
+      }
+    });
+
+    it("choosing a point in a closed group opens its source and group, glides to it, and focuses it only once the glide is over", async () => {
+      keyboard.on = true; // (Enter in the field: the focus Find gives the node counts as a keyboard one, so its path lights as well; the outline must outlive that)
+      let finish!: () => void;
+      flow.setCenter.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = () => resolve(true); }));
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await search("LVP02 kW");
+      await waitFor(() => expect(flow.setCenter).toHaveBeenCalledTimes(1));
+      expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+      const [x, y] = at("point:3"); // (opened: source and group)
+      expect(flow.setCenter).toHaveBeenCalledWith(x + 110, y + 40, { zoom: 1, duration: 300 }); // the centre of a 220 x 80 node
+      expect(node("point:3")).not.toHaveFocus();
+      finish();
+      await waitFor(() => expect(node("point:3")).toHaveFocus());
+      await waitFor(() => expect(node("point:3")).toHaveAttribute("data-class", expect.stringContaining("flash")));
+      expect(node("point:3").dataset.class).toMatch(/\blit\b/); // the focus lit its path, and the outline is still there beside it
+    });
+
+    it("the outline goes after 1.5 s", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await search("Plant OPC");
+      await waitFor(() => expect(node("src:1")).toHaveAttribute("data-class", expect.stringContaining("flash")));
+      await waitFor(() => expect(node("src:1")).toHaveAttribute("data-class", ""), { timeout: 2500 });
+    }, 6000);
+
+    it.each([[0.5, 0.75], [0.9, 0.9], [2, 1]])("keeps the zoom between 0.75 and 1 (%s -> %s) and glides instantly under reduced motion", async (zoom, expected) => {
+      flow.state.viewport = { x: 0, y: 0, zoom };
+      stubMedia(zoom === 2);
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await search("Site");
+      await waitFor(() => expect(flow.setCenter).toHaveBeenCalledTimes(1));
+      expect(flow.setCenter.mock.calls[0][2]).toEqual({ zoom: expected, duration: zoom === 2 ? 0 : 300 });
+    });
+
+    it("a point in a group too big to draw opens the source only, says so, and centres on the group", async () => {
+      const points = Array.from({ length: 700 }, (_, i) => kw(1000 + i, `BIG pt ${i}`));
+      serverWith("operator", [srcOf(1, "Big", { clusters: [{ key: "BIG", points }], point_count: 700 })]);
+      const { toasts } = openToasts();
+      await screen.findByText("Big");
+      await search("BIG pt 699");
+      await waitFor(() => expect(flow.setCenter).toHaveBeenCalledTimes(1));
+      expect(toasts.calls).toEqual([{ kind: "info", text: "BIG has 700 points, too many to draw at once. Showing the group instead." }]);
+      expect(node("cluster:1:BIG")).not.toBeNull();
+      expect(node("point:1699")).toBeNull();
+      const [x, y] = at("cluster:1:BIG");
+      expect(flow.setCenter).toHaveBeenCalledWith(x + 110, y + 40, expect.anything());
+    });
+
+    it("Escape in the Find card closes only the card: the selection stays", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByTestId("select-src:1"));
+      await userEvent.click(findButton());
+      await screen.findByRole("combobox");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+      expect(node("src:1")).toHaveAttribute("data-selected", "true");
+    });
+  });
+
+  describe("alignment guides", () => {
+    const lines = () => document.querySelectorAll(".graph-guides line");
+
+    it("a line shows while a node is dragged level with another one, and is gone when the drag ends", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      flow.state.dropAt = { x: at("cluster:1:LVP01")[0], y: 500 }; // the same left edge as LVP01
+      await userEvent.click(screen.getByTestId("dragmove-cluster:1:LVP02"));
+      await waitFor(() => expect(lines().length).toBeGreaterThan(0));
+      expect([...lines()].map((line) => line.getAttribute("x1"))).toEqual(["360", "470", "580"]); // same column: left, centre and right edges line up
+      await userEvent.click(screen.getByTestId("dragstop-cluster:1:LVP02"));
+      expect(lines()).toHaveLength(0);
+    });
+
+    it("nodes that move with the drag are not lined up with: a source dragged to its own groups' column draws nothing", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      flow.state.dropAt = { x: at("cluster:1:LVP01")[0], y: 500 };
+      await userEvent.click(screen.getByTestId("dragmove-src:1"));
+      await sleep(100); // (a few animation frames)
+      expect(lines()).toHaveLength(0);
+      await userEvent.click(screen.getByTestId("dragstop-src:1"));
+    });
+
+    it("a frame still waiting when the drag ends never draws", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      flow.state.dropAt = { x: at("cluster:1:LVP01")[0], y: 500 };
+      await userEvent.click(screen.getByTestId("drag-cluster:1:LVP02")); // start, move and drop in one go
+      await sleep(100);
+      expect(lines()).toHaveLength(0);
+    });
+  });
+
+  describe("the hint and its tip", () => {
+    const TIP = "What can I do on the canvas?";
+
+    it("the canvas draws the short line and a tip that lists the keys", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      expect(screen.getByText(/Dashed: discovered/)).toHaveClass("sub");
+      expect(screen.getByText(/Dashed: discovered/).textContent!.trim().length).toBeLessThan(100);
+      await userEvent.click(screen.getByRole("button", { name: TIP }));
+      const lines = within(await screen.findByRole("note")).getAllByRole("listitem").map((item) => item.textContent);
+      expect(lines).toHaveLength(6);
+      expect(lines[0]).toContain("Alt or Option moves it alone.");
+      expect(lines.join("\n")).toMatch(/Shift-drag selects/);
+      expect(lines.join("\n")).toMatch(/Ctrl\+K finds/);
+      expect(lines.join("\n")).toMatch(/Shift\+F10/);
+      expect(lines.join("\n")).toMatch(/Escape/);
+    });
+
+    it("the loading branch draws the same line and tip, so nothing moves when the graph arrives", async () => {
+      mockFetch(routes("operator"));
+      const held = holdFetch((_method, path) => path === "/api/discovery/graph");
+      open();
+      expect(screen.getByText(/Dashed: discovered/)).toHaveClass("sub");
+      expect(screen.getByRole("button", { name: TIP })).toBeInTheDocument();
+      held.release();
+      await screen.findByText("Plant OPC");
+      expect(screen.getAllByRole("button", { name: TIP })).toHaveLength(1);
     });
   });
 });

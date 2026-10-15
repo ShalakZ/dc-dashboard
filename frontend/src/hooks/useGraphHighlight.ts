@@ -1,0 +1,160 @@
+import type { Edge, Node, NodeMouseHandler } from "@xyflow/react";
+import { useEffect, useMemo, useRef, useState, type FocusEventHandler, type MutableRefObject } from "react";
+import { edgeIndex, FOCUS_CAP, focusIds, focusSet, pathEdgeIds } from "../lib/graphFocus";
+
+/** How long the pointer must rest on a node before its path lights, and how long a leave waits before it clears (a new enter cancels the wait). */
+export const HOVER_DWELL_MS = 120;
+export const HOVER_GRACE_MS = 80;
+
+const NODE = ".react-flow__node";
+const MENU = ".graph-menu";
+
+type Timer = MutableRefObject<ReturnType<typeof setTimeout> | null>;
+
+export interface HighlightHandlers {
+  onNodeMouseEnter: NodeMouseHandler;
+  onNodeMouseLeave: NodeMouseHandler;
+  onFocus: FocusEventHandler;
+  onBlur: FocusEventHandler;
+}
+
+function stop(timer: Timer): void {
+  if (timer.current !== null) clearTimeout(timer.current);
+  timer.current = null;
+}
+
+// A touch screen emulates mouseenter on a tap and would leave the highlight stuck: hover counts only where the device can hover (true when unknown).
+function canHover(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
+  try {
+    return window.matchMedia("(hover: hover)").matches;
+  } catch {
+    return true;
+  }
+}
+
+const nodeOf = (target: EventTarget | null): Element | null => (target instanceof Element ? target.closest(NODE) : null);
+
+// The browser's own rule for "the keyboard put the focus here" (a click on a node's button is not it). A browser that cannot answer says no.
+function keyboardFocus(target: Element): boolean {
+  try {
+    return target.matches(":focus-visible");
+  } catch {
+    return false;
+  }
+}
+
+const withLit = (className: string | undefined): string => {
+  if (!className) return "lit";
+  return /(^|\s)lit(\s|$)/.test(className) ? className : `${className} lit`;
+};
+
+const NONE: string[] = [];
+
+/**
+ * The path highlight of the Discovery canvas. It does not dim anything itself: `active` is the wrapper's `has-focus` class, and only the nodes and
+ * edges on the path come back as new objects with the class `lit` (every other object keeps its identity, so a hover re-renders a few nodes, not 2,000).
+ * What it lights from: the hovered node, else the node the keyboard focused, else a selection of two or more (a click selects one and lights nothing);
+ * never while a drag runs, and a drag forgets the hover.
+ */
+export function useGraphHighlight({ nodes, edges, selectedIds, dragging }: {
+  nodes: Node[];
+  edges: Edge[];
+  selectedIds: readonly string[];
+  dragging: boolean;
+}): { shownNodes: Node[]; shownEdges: Edge[]; active: boolean; handlers: HighlightHandlers } {
+  const [hover, setHover] = useState<string | null>(null);
+  const [focused, setFocused] = useState<string | null>(null);
+  const dwell: Timer = useRef(null);
+  const dwellId = useRef<string | null>(null);
+  const grace: Timer = useRef(null);
+  const dragRef = useRef(false);
+
+  useEffect(() => () => { stop(dwell); stop(grace); }, []);
+
+  // A drag forgets the hover: a dwell still pending at mousedown must not fire mid-drag, and after a put-back (the node jumps away from the pointer) no
+  // mouseleave comes until the pointer moves, so a stale hover would outrank the selection and light another path. The next real enter lights again.
+  // Enters during the drag (the pointer leaves and re-enters the lagging node) start nothing either: `dragRef` is what the stable handlers read.
+  useEffect(() => {
+    dragRef.current = dragging;
+    if (!dragging) return;
+    stop(dwell);
+    stop(grace);
+    dwellId.current = null;
+    setHover(null);
+  }, [dragging]);
+
+  // The node's own menu (Shift+F10) is rendered outside the canvas wrapper, so the wrapper never hears its focus events. The focus that moved into the menu
+  // keeps the node's path lit (see onBlur); this lets go when the focus then ends up anywhere but a node or the menu (an outside press closed it).
+  useEffect(() => {
+    if (focused === null) return;
+    const outside = (to: EventTarget | null) => !(to instanceof Element && to.closest(`${NODE}, ${MENU}`));
+    const onIn = (event: FocusEvent) => { if (outside(event.target)) setFocused(null); };
+    const onOut = (event: FocusEvent) => {
+      if (event.target instanceof Element && event.target.closest(MENU) && outside(event.relatedTarget)) setFocused(null);
+    };
+    document.addEventListener("focusin", onIn);
+    document.addEventListener("focusout", onOut);
+    return () => {
+      document.removeEventListener("focusin", onIn);
+      document.removeEventListener("focusout", onOut);
+    };
+  }, [focused]);
+
+  // One object for the life of the component: handing the canvas new handlers on every render would re-render it for nothing.
+  const handlers = useMemo<HighlightHandlers>(() => ({
+    onNodeMouseEnter: (_event, node) => {
+      stop(grace); // a new enter cancels the pending clear: sweeping from node to node never flashes the canvas
+      if (!canHover() || dragRef.current) return;
+      stop(dwell);
+      const id = node.id;
+      dwellId.current = id;
+      dwell.current = setTimeout(() => { dwell.current = null; setHover(id); }, HOVER_DWELL_MS);
+    },
+    onNodeMouseLeave: () => {
+      stop(dwell); // the pointer left before it rested: nothing starts
+      stop(grace);
+      grace.current = setTimeout(() => { grace.current = null; setHover(null); }, HOVER_GRACE_MS);
+    },
+    onFocus: (event) => {
+      const target = event.target;
+      setFocused(target instanceof Element && keyboardFocus(target) ? nodeOf(target)?.getAttribute("data-id") ?? null : null);
+    },
+    onBlur: (event) => {
+      const node = nodeOf(event.target);
+      const to = event.relatedTarget;
+      if (node && to instanceof Element && node.contains(to)) return; // the focus stays inside the same node
+      if (to instanceof Element && to.closest(MENU)) return; // the node's own menu (Shift+F10) took the focus: its path stays lit until the focus leaves the menu
+      setFocused(null);
+    },
+  }), []);
+
+  const index = useMemo(() => edgeIndex(edges), [edges]);
+
+  // A node that leaves the DOM under a resting pointer (a collapse from the keyboard, a Find that closes groups, a refetch) sends no mouseleave and no
+  // reliable focusout. Without this the old id would outrank the selection and light its path again the moment the node came back. It runs on a rebuild
+  // (new edges, or nodes added or removed), never on a drag frame; presence is read from the nodes, so a node that is there but has no edge keeps its hover.
+  useEffect(() => {
+    const present = (id: string) => nodes.some((n) => n.id === id);
+    setHover((h) => (h === null || present(h) ? h : null));
+    setFocused((f) => (f === null || present(f) ? f : null));
+    if (dwellId.current !== null && !present(dwellId.current)) stop(dwell);
+  }, [index, nodes.length]); // eslint-disable-line react-hooks/exhaustive-deps -- `nodes` is read when a rebuild lands, not on every change of it
+
+  const ids =dragging ? NONE : focusIds({ hover, focused, selected: selectedIds });
+  // A key that changes only when the ids do (the caller's array is new on every render); a selection over the cap lights nothing, so it needs no key.
+  const key = ids.length === 0 || ids.length > FOCUS_CAP ? "" : JSON.stringify(ids);
+  const set = useMemo(() => (key === "" ? null : focusSet(index, ids)), [index, key]); // eslint-disable-line react-hooks/exhaustive-deps -- `ids` is what `key` says
+  const litEdgeIds = useMemo(() => (set ? pathEdgeIds(edges, set) : null), [edges, set]);
+
+  const shownNodes = useMemo(
+    () => (set ? nodes.map((n) => (set.has(n.id) ? { ...n, className: withLit(n.className) } : n)) : nodes),
+    [nodes, set],
+  );
+  const shownEdges = useMemo(
+    () => (litEdgeIds ? edges.map((e) => (litEdgeIds.has(e.id) ? { ...e, className: withLit(e.className) } : e)) : edges),
+    [edges, litEdgeIds],
+  );
+
+  return { shownNodes, shownEdges, active: set !== null, handlers };
+}

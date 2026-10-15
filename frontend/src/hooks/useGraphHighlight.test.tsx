@@ -1,0 +1,517 @@
+import { act, renderHook } from "@testing-library/react";
+import type { Edge, Node } from "@xyflow/react";
+import type { FocusEvent as ReactFocusEvent, MouseEvent as ReactMouseEvent } from "react";
+import { useGraphHighlight } from "./useGraphHighlight";
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+const node = (id: string, extra: Partial<Node> = {}): Node => ({ id, position: { x: 0, y: 0 }, data: {}, ...extra });
+const edge = (source: string, target: string, extra: Partial<Edge> = {}): Edge => ({ id: `${source}>${target}`, source, target, ...extra });
+
+// source s -> group g -> points p1 and p2; p1 is mapped to asset a, a has a sub-asset; o -> og is another source with a group; lone has no edge.
+const NODES = ["s", "g", "p1", "p2", "a", "sub", "o", "og", "lone"].map((id) => node(id));
+const EDGES = [edge("s", "g"), edge("g", "p1"), edge("g", "p2"), edge("p1", "a"), edge("a", "sub"), edge("o", "og")];
+
+const PATH_OF_P1 = ["a", "g", "p1", "s", "sub"];
+const PATH_EDGES_OF_P1 = ["a>sub", "g>p1", "p1>a", "s>g"];
+// Two selected nodes (a box or Ctrl selection) are the only selection that lights anything; their union is the source s, group g and p2 plus the other chain o -> og.
+const SEL = ["p2", "o"];
+const SEL_LIT = ["g", "o", "og", "p2", "s"];
+
+const mouse = {} as ReactMouseEvent;
+const litNodes = (nodes: Node[]) => nodes.filter((n) => n.className?.split(" ").includes("lit")).map((n) => n.id).sort();
+const litEdges = (edges: Edge[]) => edges.filter((e) => e.className?.split(" ").includes("lit")).map((e) => e.id).sort();
+
+type Props = { nodes: Node[]; edges: Edge[]; selectedIds: readonly string[]; dragging: boolean };
+const BASE: Props = { nodes: NODES, edges: EDGES, selectedIds: [], dragging: false };
+
+function setup(initial: Partial<Props> = {}) {
+  const hook = renderHook((props: Props) => useGraphHighlight(props), { initialProps: { ...BASE, ...initial } });
+  const handlers = () => hook.result.current.handlers;
+  const enter = (id: string) => act(() => { handlers().onNodeMouseEnter(mouse, node(id)); });
+  const leave = (id: string) => act(() => { handlers().onNodeMouseLeave(mouse, node(id)); });
+  const wait = (ms: number) => act(() => { vi.advanceTimersByTime(ms); });
+  return { ...hook, handlers, enter, leave, wait };
+}
+
+// A node element as React Flow draws it, with a button inside; `visible` is what the browser would answer to :focus-visible.
+function nodeElement(id: string, visible: boolean) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "react-flow__node";
+  wrapper.setAttribute("data-id", id);
+  const button = document.createElement("button");
+  wrapper.append(button);
+  document.body.append(wrapper);
+  vi.spyOn(wrapper, "matches").mockImplementation((selector) => selector === ":focus-visible" && visible);
+  vi.spyOn(button, "matches").mockImplementation((selector) => selector === ":focus-visible" && visible);
+  return { wrapper, button };
+}
+const focusEvent = (target: Element, relatedTarget: Element | null = null) => ({ target, relatedTarget }) as unknown as ReactFocusEvent;
+
+describe("useGraphHighlight, hover", () => {
+  it("lights nothing before the 120 ms dwell, then exactly the path", () => {
+    const { result, enter, wait } = setup();
+    enter("p1");
+    wait(119);
+    expect(result.current.active).toBe(false);
+    expect(litNodes(result.current.shownNodes)).toEqual([]);
+    wait(1);
+    expect(result.current.active).toBe(true);
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    expect(litEdges(result.current.shownEdges)).toEqual(PATH_EDGES_OF_P1);
+  });
+
+  it("keeps the identity of every node and edge it does not light, and returns the very arrays while idle", () => {
+    const { result, enter, wait } = setup();
+    expect(result.current.shownNodes).toBe(NODES);
+    expect(result.current.shownEdges).toBe(EDGES);
+    enter("p1");
+    wait(120);
+    const lit = new Set(PATH_OF_P1);
+    result.current.shownNodes.forEach((n, i) => {
+      if (lit.has(n.id)) expect(n).not.toBe(NODES[i]);
+      else expect(n).toBe(NODES[i]);
+    });
+    const litEdge = new Set(PATH_EDGES_OF_P1);
+    result.current.shownEdges.forEach((e, i) => {
+      if (litEdge.has(e.id)) expect(e).not.toBe(EDGES[i]);
+      else expect(e).toBe(EDGES[i]);
+    });
+  });
+
+  it("does not touch the originals and keeps a class a node already had", () => {
+    const nodes = [node("s", { className: "mine" }), node("g", { className: "lit" }), node("x")];
+    const edges = [edge("s", "g", { className: "dashed" })];
+    const { result, enter, wait } = setup({ nodes, edges });
+    enter("s");
+    wait(120);
+    const [s, g] = result.current.shownNodes;
+    expect(s.className).toBe("mine lit");
+    expect(g.className).toBe("lit"); // not "lit lit"
+    expect(result.current.shownEdges[0].className).toBe("dashed lit");
+    expect(nodes[0].className).toBe("mine");
+    expect(edges[0].className).toBe("dashed");
+  });
+
+  it("a leave alone clears after the 80 ms grace", () => {
+    const { result, enter, leave, wait } = setup();
+    enter("p1");
+    wait(120);
+    leave("p1");
+    wait(79);
+    expect(result.current.active).toBe(true);
+    wait(1);
+    expect(result.current.active).toBe(false);
+    expect(result.current.shownNodes).toBe(NODES);
+  });
+
+  it("a leave then an enter within the grace never clears: the old path stays until the new dwell is over", () => {
+    const { result, enter, leave, wait } = setup();
+    enter("p1");
+    wait(120);
+    leave("p1");
+    wait(60);
+    enter("p2");
+    expect(result.current.active).toBe(true);
+    wait(119); // well past the grace of the first leave, still the first path
+    expect(result.current.active).toBe(true);
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    wait(1);
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+  });
+
+  it("an enter that is left before its dwell is over starts nothing", () => {
+    const { result, enter, leave, wait } = setup();
+    enter("p1");
+    wait(50);
+    leave("p1");
+    wait(500);
+    expect(result.current.active).toBe(false);
+  });
+
+  it("re-entering the lit node during the grace keeps it lit", () => {
+    const { result, enter, leave, wait } = setup();
+    enter("p1");
+    wait(120);
+    leave("p1");
+    wait(40);
+    enter("p1");
+    wait(1000);
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+  });
+
+  it("lights nothing for a node with no edge", () => {
+    const { result, enter, wait } = setup();
+    enter("lone");
+    wait(500);
+    expect(result.current.active).toBe(false);
+    expect(result.current.shownNodes).toBe(NODES);
+  });
+
+  it("lights nothing where the device cannot hover (a tap emulates mouseenter)", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query !== "(hover: hover)", media: query, addEventListener() {}, removeEventListener() {} }));
+    const { result, enter, wait } = setup();
+    enter("p1");
+    wait(500);
+    expect(result.current.active).toBe(false);
+  });
+
+  it("lights on hover where the device can hover", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(hover: hover)", media: query, addEventListener() {}, removeEventListener() {} }));
+    const { result, enter, wait } = setup();
+    enter("p1");
+    wait(120);
+    expect(result.current.active).toBe(true);
+  });
+
+  it("lights nothing while a drag runs, and nothing comes back when it ends until a new enter (the drag forgot the hover)", () => {
+    const { result, rerender, enter, wait } = setup();
+    enter("p1");
+    wait(120);
+    rerender({ ...BASE, dragging: true });
+    expect(result.current.active).toBe(false);
+    expect(result.current.shownNodes).toBe(NODES);
+    rerender({ ...BASE, dragging: false });
+    expect(result.current.active).toBe(false);
+    enter("p1");
+    wait(120);
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+  });
+
+  it("a dwell still pending when the drag starts never fires: 200 ms into the drag and after the drop nothing is lit until a new enter", () => {
+    const { result, rerender, enter, wait } = setup();
+    enter("p1");
+    wait(60); // mousedown: the 120 ms dwell is half over
+    rerender({ ...BASE, dragging: true });
+    wait(200);
+    expect(vi.getTimerCount()).toBe(0);
+    rerender({ ...BASE, dragging: false });
+    expect(result.current.active).toBe(false);
+    wait(500);
+    expect(result.current.active).toBe(false);
+    enter("p2");
+    wait(120);
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+  });
+
+  it("a grace timer still pending when the drag starts is cleared too, and a stale hover cannot outrank the selection after the drop", () => {
+    const { result, rerender, enter, leave, wait } = setup({ selectedIds: SEL });
+    enter("p1");
+    wait(120);
+    leave("p1"); // the grace of 80 ms is running
+    rerender({ ...BASE, selectedIds: SEL, dragging: true });
+    expect(vi.getTimerCount()).toBe(0);
+    rerender({ ...BASE, selectedIds: SEL, dragging: false });
+    expect(litNodes(result.current.shownNodes)).toEqual(SEL_LIT); // the selection shows, not p1's path
+  });
+
+  it("an enter DURING the drag (the pointer leaves and re-enters the lagging node) starts no dwell: nothing is lit after the drop, the selection shows", () => {
+    const { result, rerender, enter, wait } = setup({ selectedIds: SEL });
+    rerender({ ...BASE, selectedIds: SEL, dragging: true });
+    enter("p1");
+    expect(vi.getTimerCount()).toBe(0);
+    wait(200);
+    rerender({ ...BASE, selectedIds: SEL, dragging: false });
+    expect(litNodes(result.current.shownNodes)).toEqual(SEL_LIT);
+  });
+
+  it("a hover lit before the drag no longer outranks the selection after a put-back (no mouseleave arrives for a node that jumped away)", () => {
+    const { result, rerender, enter, wait } = setup({ selectedIds: SEL });
+    enter("p1");
+    wait(120);
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    rerender({ ...BASE, selectedIds: SEL, dragging: true });
+    rerender({ ...BASE, selectedIds: SEL, dragging: false });
+    expect(litNodes(result.current.shownNodes)).toEqual(SEL_LIT);
+  });
+
+  it("clears its timers when it unmounts", () => {
+    const { enter, leave, unmount } = setup();
+    enter("p1");
+    leave("p1");
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("hands out handlers that do not change, so the canvas is not re-rendered for them", () => {
+    const { result, rerender, enter, wait } = setup();
+    const first = result.current.handlers;
+    enter("p1");
+    wait(120);
+    rerender({ ...BASE, selectedIds: SEL });
+    expect(result.current.handlers).toBe(first);
+  });
+
+  it("reuses its answer while nothing it reads changed", () => {
+    const { result, rerender, enter, wait } = setup();
+    enter("p1");
+    wait(120);
+    const nodes = result.current.shownNodes;
+    const edges = result.current.shownEdges;
+    rerender({ ...BASE });
+    expect(result.current.shownNodes).toBe(nodes);
+    expect(result.current.shownEdges).toBe(edges);
+  });
+});
+
+describe("useGraphHighlight, keyboard focus", () => {
+  it("counts a focus that is :focus-visible and lights the path of the node that holds the target", () => {
+    const { result, handlers } = setup();
+    const { button } = nodeElement("p1", true);
+    act(() => { handlers().onFocus(focusEvent(button)); });
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    expect(result.current.active).toBe(true);
+  });
+
+  it("counts the node element itself", () => {
+    const { result, handlers } = setup();
+    const { wrapper } = nodeElement("p2", true);
+    act(() => { handlers().onFocus(focusEvent(wrapper)); });
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+  });
+
+  it("ignores a focus the pointer caused (not :focus-visible)", () => {
+    const { result, handlers } = setup();
+    const { button } = nodeElement("p1", false);
+    act(() => { handlers().onFocus(focusEvent(button)); });
+    expect(result.current.active).toBe(false);
+  });
+
+  it("ignores a focus outside any node", () => {
+    const { result, handlers } = setup();
+    const lone = document.createElement("button");
+    document.body.append(lone);
+    vi.spyOn(lone, "matches").mockReturnValue(true);
+    act(() => { handlers().onFocus(focusEvent(lone)); });
+    expect(result.current.active).toBe(false);
+  });
+
+  it("treats a browser that cannot answer :focus-visible as no keyboard focus", () => {
+    const { result, handlers } = setup();
+    const { button } = nodeElement("p1", true);
+    vi.spyOn(button, "matches").mockImplementation(() => { throw new SyntaxError("unknown pseudo-class"); });
+    act(() => { handlers().onFocus(focusEvent(button)); });
+    expect(result.current.active).toBe(false);
+  });
+
+  it("clears on blur, but not when the focus only moves inside the same node", () => {
+    const { result, handlers } = setup();
+    const { wrapper, button } = nodeElement("p1", true);
+    act(() => { handlers().onFocus(focusEvent(button)); });
+    act(() => { handlers().onBlur(focusEvent(button, wrapper)); }); // to the node element: still inside
+    expect(result.current.active).toBe(true);
+    act(() => { handlers().onBlur(focusEvent(button, null)); });
+    expect(result.current.active).toBe(false);
+  });
+
+  // The menu is rendered OUTSIDE the canvas wrapper (the page says so), so the wrapper's onFocus and onBlur never hear it: the hook must keep the node's
+  // path while the menu has the focus, and let go itself when the focus ends up somewhere else (the menu closes by an outside press).
+  describe("a node's own menu (Shift+F10)", () => {
+    function withMenu() {
+      const hook = setup();
+      const { button } = nodeElement("p1", true);
+      const menu = document.createElement("div");
+      menu.className = "graph-menu";
+      const item = document.createElement("button");
+      menu.append(item);
+      document.body.append(menu);
+      const elsewhere = document.createElement("button");
+      document.body.append(elsewhere);
+      act(() => { hook.handlers().onFocus(focusEvent(button)); });
+      act(() => { hook.handlers().onBlur(focusEvent(button, item)); }); // the new focus is outside the node but inside .graph-menu
+      return { ...hook, button, item, elsewhere };
+    }
+    const fire = (el: Element, type: "focusin" | "focusout", relatedTarget: Element | null = null) =>
+      act(() => { el.dispatchEvent(new FocusEvent(type, { bubbles: true, relatedTarget })); });
+
+    it("keeps the path while the focus is in the menu", () => {
+      const { result, item } = withMenu();
+      expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+      fire(item, "focusin"); // moving between the menu's own items changes nothing
+      expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    });
+
+    it("lets go when the focus then lands on something outside every node and the menu (an outside press on a button)", () => {
+      const { result, elsewhere } = withMenu();
+      fire(elsewhere, "focusin");
+      expect(result.current.active).toBe(false);
+    });
+
+    it("lets go when the menu loses the focus to nothing (it closed and its item went away)", () => {
+      const { result, item } = withMenu();
+      fire(item, "focusout", null);
+      expect(result.current.active).toBe(false);
+    });
+
+    it("keeps the path when the menu hands the focus back to a node (Escape), and leaves the next node to the wrapper's own onFocus", () => {
+      const { result, handlers, item, button } = withMenu();
+      fire(item, "focusout", button);
+      fire(button, "focusin");
+      expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+      const two = nodeElement("p2", true);
+      fire(two.button, "focusin"); // the document listener must not undo the wrapper's choice
+      act(() => { handlers().onFocus(focusEvent(two.button)); });
+      expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+    });
+  });
+
+  it("clears on blur to another node, then lights that one", () => {
+    const { result, handlers } = setup();
+    const one = nodeElement("p1", true);
+    const two = nodeElement("p2", true);
+    act(() => { handlers().onFocus(focusEvent(one.button)); });
+    act(() => { handlers().onBlur(focusEvent(one.button, two.button)); });
+    expect(result.current.active).toBe(false);
+    act(() => { handlers().onFocus(focusEvent(two.button)); });
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+  });
+
+  it("is overruled by the hover", () => {
+    const { result, handlers, enter, wait } = setup();
+    const { button } = nodeElement("p1", true);
+    act(() => { handlers().onFocus(focusEvent(button)); });
+    enter("p2");
+    wait(120);
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+  });
+
+  it("lights nothing while a drag runs", () => {
+    const { result, rerender, handlers } = setup();
+    const { button } = nodeElement("p1", true);
+    act(() => { handlers().onFocus(focusEvent(button)); });
+    rerender({ ...BASE, dragging: true });
+    expect(result.current.active).toBe(false);
+  });
+});
+
+describe("useGraphHighlight, selection", () => {
+  it("a click selection (one node) lights nothing: the rest of the canvas would read as disabled", () => {
+    const { result } = setup({ selectedIds: ["p2"] });
+    expect(result.current.active).toBe(false);
+    expect(result.current.shownNodes).toBe(NODES);
+    expect(result.current.shownEdges).toBe(EDGES);
+  });
+
+  it("uses a selection of two or more when nothing is hovered or focused: the union of both paths", () => {
+    const { result } = setup({ selectedIds: ["p2", "o"] });
+    expect(result.current.active).toBe(true);
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "o", "og", "p2", "s"]);
+    expect(litEdges(result.current.shownEdges)).toEqual(["g>p2", "o>og", "s>g"]);
+  });
+
+  it("a hover on a node while one node is selected lights the hover's path, and clearing it goes back to nothing", () => {
+    const { result, enter, leave, wait } = setup({ selectedIds: ["p2"] });
+    enter("p1");
+    wait(120);
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    leave("p1");
+    wait(80);
+    expect(result.current.active).toBe(false);
+  });
+
+  it("keyboard focus on a node while one node is selected lights the focus path", () => {
+    const { result, handlers } = setup({ selectedIds: ["p2"] });
+    const { button } = nodeElement("p1", true);
+    act(() => { handlers().onFocus(focusEvent(button)); });
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+  });
+
+  it("returns to the selection when the hover is gone", () => {
+    const { result, enter, leave, wait } = setup({ selectedIds: ["p2", "o"] });
+    enter("p1");
+    wait(120);
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    leave("p1");
+    wait(80);
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "o", "og", "p2", "s"]);
+  });
+
+  it("lights nothing for a selection over the cap of 20", () => {
+    const nodes = Array.from({ length: 25 }, (_v, i) => node(`n${i}`)).concat([node("s")]);
+    const edges = Array.from({ length: 25 }, (_v, i) => edge("s", `n${i}`));
+    const { result, rerender } = setup({ nodes, edges, selectedIds: nodes.slice(0, 21).map((n) => n.id) });
+    expect(result.current.active).toBe(false);
+    rerender({ nodes, edges, selectedIds: nodes.slice(0, 20).map((n) => n.id), dragging: false });
+    expect(result.current.active).toBe(true);
+  });
+
+  it("lights nothing for selected nodes with no edge, or ones the graph no longer has", () => {
+    expect(setup({ selectedIds: ["lone", "gone"] }).result.current.active).toBe(false);
+    expect(setup({ selectedIds: ["lone"] }).result.current.active).toBe(false);
+    expect(setup({ selectedIds: ["gone"] }).result.current.active).toBe(false);
+  });
+
+  it("lights nothing while a drag runs", () => {
+    const { result } = setup({ selectedIds: ["p2", "o"], dragging: true });
+    expect(result.current.active).toBe(false);
+    expect(result.current.shownNodes).toBe(NODES);
+  });
+});
+
+// A node that leaves the DOM under a resting pointer (a collapse from the keyboard, a Find that closes groups, a refetch) sends no mouseleave
+// and no reliable focusout: the hook must not keep its id, or it would hide the selection and light the path again when the node comes back.
+describe("useGraphHighlight, a node that goes away", () => {
+  const without = (id: string) => ({
+    nodes: NODES.filter((n) => n.id !== id),
+    edges: EDGES.filter((e) => e.source !== id && e.target !== id),
+  });
+
+  it("drops a hover on a node that was removed, so the selection shows and the path does not return with the node", () => {
+    const { result, rerender, enter, wait } = setup({ selectedIds: SEL });
+    enter("p1");
+    wait(120);
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    rerender({ ...BASE, ...without("p1"), selectedIds: SEL });
+    expect(litNodes(result.current.shownNodes)).toEqual(SEL_LIT);
+    rerender({ ...BASE, selectedIds: SEL }); // the node is back, the pointer is not on it
+    expect(litNodes(result.current.shownNodes)).toEqual(SEL_LIT);
+  });
+
+  it("drops a keyboard focus on a node that was removed", () => {
+    const { result, rerender, handlers } = setup({ selectedIds: SEL });
+    const { button } = nodeElement("p1", true);
+    act(() => { handlers().onFocus(focusEvent(button)); });
+    expect(litNodes(result.current.shownNodes)).toEqual(PATH_OF_P1);
+    rerender({ ...BASE, ...without("p1"), selectedIds: SEL });
+    expect(litNodes(result.current.shownNodes)).toEqual(SEL_LIT);
+    rerender({ ...BASE, selectedIds: SEL });
+    expect(litNodes(result.current.shownNodes)).toEqual(SEL_LIT);
+  });
+
+  it("cancels a dwell that was still running for the removed node, and only that one", () => {
+    const { result, rerender, enter, wait } = setup();
+    enter("p1");
+    wait(50);
+    rerender({ ...BASE, ...without("p1") });
+    wait(300);
+    rerender({ ...BASE });
+    expect(result.current.active).toBe(false);
+
+    enter("p2");
+    wait(50);
+    rerender({ ...BASE, edges: [...EDGES] }); // a rebuild that keeps the node
+    wait(70);
+    expect(litNodes(result.current.shownNodes)).toEqual(["g", "p2", "s"]);
+  });
+
+  it("keeps a hover on a node that is still there, even one with no edge (hover still wins over the selection)", () => {
+    const { result, rerender, enter, wait } = setup({ selectedIds: SEL });
+    enter("lone");
+    wait(120);
+    expect(result.current.active).toBe(false); // hover on a node with nothing to follow lights nothing, selection or not
+    rerender({ ...BASE, edges: [...EDGES], selectedIds: SEL });
+    expect(result.current.active).toBe(false);
+  });
+
+  it("does not re-render for a rebuild when nothing was hovered or focused", () => {
+    let renders = 0;
+    const { rerender } = renderHook((props: Props) => { renders += 1; return useGraphHighlight(props); }, { initialProps: BASE });
+    const before = renders;
+    rerender({ ...BASE, edges: [...EDGES] });
+    expect(renders - before).toBe(1); // the rerender itself, and no second pass from the effect
+  });
+});
