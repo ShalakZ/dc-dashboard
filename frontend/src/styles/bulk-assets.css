@@ -34,4 +34,9 @@
   .bulk-go { min-width: 9rem; }
   .bulk-go[aria-disabled="true"], .bulk-go[aria-disabled="true"]:hover { border-color: var(--border-strong); background: var(--surface); color: var(--text-disabled); cursor: not-allowed; }
   .bulk-cancel[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
+  /* W12a: the Move mappings dialog (components/MoveMappingsDialog.tsx), a ConfirmDeleteDialog with an asset select. The slot under the select is
+     always there and two lines tall: the clash that keeps Move off, or the note about a room, arriving or going moves nothing. A longer text grows
+     it (a rare case). Its text is the dialog's own p.error / p.muted at the small size, so 2lh is measured at the size the text is set in. */
+  .mapmove-slot { min-height: 2lh; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 }
