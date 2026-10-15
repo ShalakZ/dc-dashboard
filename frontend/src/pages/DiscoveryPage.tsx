@@ -633,6 +633,8 @@ function Canvas({ model }: { model: GraphModel }) {
           className={dimming ? "graph-canvas has-focus" : "graph-canvas"}
           ref={canvas}
           tabIndex={-1}
+          role="group" // named, because it is a focus target (a pane click, and the return of Escape from a menu or from Find): a screen reader says "Discovery graph", not the whole canvas text
+          aria-label="Discovery graph"
           onFocus={highlight.onFocus}
           onBlur={highlight.onBlur}
           onKeyDown={canvasKeys.onKeyDown}

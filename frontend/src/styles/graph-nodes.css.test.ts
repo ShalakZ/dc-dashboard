@@ -90,12 +90,9 @@ describe("the Discovery node styles (W7u)", () => {
     expect(rule(".graph-canvas.has-focus .react-flow__edge.lit")).toMatch(/--xy-edge-stroke:\s*var\(--accent\)/);
   });
 
-  it("the opacity transition is ONE rule with ONE declaration (dropping it must not touch the dimming)", () => {
-    const rulesWithTransition = rules.filter((r) => /transition/.test(r.body));
-    expect(rulesWithTransition).toHaveLength(1);
-    expect(rulesWithTransition[0].selector).toBe("div.graph-canvas .react-flow__node, div.graph-canvas .react-flow__edge");
-    expect(rulesWithTransition[0].body.match(/:/g)).toHaveLength(1);
-    expect(rulesWithTransition[0].body).toMatch(/transition:\s*opacity 120ms/);
+  it("the dimming is immediate: no opacity transition on the nodes and edges (a fade over 2,280 layers made every hover 5-6 slow frames; whole-wave review, finding 1)", () => {
+    expect(rules.filter((r) => /transition/.test(r.body))).toEqual([]);
+    expect(rule(".graph-canvas.has-focus .react-flow__node:not(.lit)")).toMatch(/opacity:\s*0\.35/); // the dimming itself stays
   });
 
   it("the found node gets a 2px accent outline and a short pulse", () => {

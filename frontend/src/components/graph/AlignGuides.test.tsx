@@ -36,7 +36,7 @@ describe("AlignGuides", () => {
     ]);
   });
 
-  it("the svg is decoration: aria-hidden, no pointer events, overflow visible from a 0x0 box at the origin, and every line keeps its width at any zoom", () => {
+  it("the svg is decoration: aria-hidden, no pointer events, overflow visible from a 1x1 box at the origin, and every line keeps its width at any zoom", () => {
     const { handleRef, container } = mount();
     act(() => handleRef.current!.set(GUIDES));
     const svg = container.querySelector("svg")!;
@@ -46,8 +46,8 @@ describe("AlignGuides", () => {
     // At the origin of the portal, not on a text baseline (an inline svg sits a line-height too low, and the error grows with the zoom).
     expect([svg.style.position, svg.style.left, svg.style.top]).toEqual(["absolute", "0px", "0px"]);
     expect(svg.style.pointerEvents).toBe("none");
-    expect(svg).toHaveAttribute("width", "0");
-    expect(svg).toHaveAttribute("height", "0");
+    expect(svg).toHaveAttribute("width", "1"); // not 0: Chromium draws nothing at all inside an svg of zero width or height, whatever its overflow says (static look, whole-wave fix 2)
+    expect(svg).toHaveAttribute("height", "1");
     for (const line of container.querySelectorAll("line")) expect(line).toHaveAttribute("vector-effect", "non-scaling-stroke");
   });
 
