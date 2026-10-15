@@ -178,18 +178,39 @@ export function buildGraph(model: GraphModel, open: OpenState): { nodes: Node[];
 }
 
 const OPENING_SOURCES = 3;
+/** The part of the graph, in graph pixels, that still opens readable on a 1024x640 canvas at zoom 0.75 (the opening zoom's floor). */
+const OPENING_BOX = { w: 900, h: 560 } as const;
+/** A source node's width on the canvas (`.gnode` is 220px wide). */
+const SOURCE_W = 220;
 
 /**
  * How the Discovery canvas opens: on the first few sources, large enough to read, instead of fitting the whole graph. The assets stand in a column
- * far to the right of the sources, so a tall asset column made the fit-all zoom out to React Flow's floor (0.5) and push the sources, the only
+ * far to the right of the sources, so a tall asset column made the fit-all zoom out to React Flow's floor and push the sources, the only
  * nodes with Create assets and Remove, off the edge at a laptop's width (and render their text at 6 px at 1440). The zoom is held between 0.75
- * and 1, so the sources may fill the view and the assets lie outside it; the Controls' fit-view button (no options) still shows everything.
+ * and 1, so the sources may fill the view and the assets lie outside it; the Controls' fit-view button shows everything (the canvas may zoom out
+ * far enough for that).
+ * The saved layout is shared, and an admin may have dragged sources far apart: fitting three sources 3000px apart at zoom 0.75 would centre the
+ * view on the empty space between them. So the first source is always framed, and each next one only while it still lies within OPENING_BOX of
+ * those already framed (a source with no saved position stands where `buildGraph` puts a collapsed one).
  * `undefined` with no source at all: the old fit-all (unidentified services only).
  */
 export function initialView(model: GraphModel): FitViewOptions | undefined {
-  const first = model.sources.slice(0, OPENING_SOURCES);
-  if (first.length === 0) return undefined;
-  return { nodes: first.map((s) => ({ id: nodeId.source(s.id) })), minZoom: 0.75, maxZoom: 1, padding: 0.2 };
+  if (model.sources.length === 0) return undefined;
+  const at = (s: GraphSource, index: number) => {
+    const saved = Object.hasOwn(model.layout, nodeId.source(s.id)) ? model.layout[nodeId.source(s.id)] : undefined;
+    return saved ?? { x: X.source, y: index * (SOURCE_H + BLOCK_GAP) };
+  };
+  const framed = [model.sources[0]];
+  const start = at(model.sources[0], 0);
+  let [minX, maxX, minY, maxY] = [start.x, start.x, start.y, start.y];
+  for (let i = 1; i < Math.min(OPENING_SOURCES, model.sources.length); i++) {
+    const p = at(model.sources[i], i);
+    const [nx0, nx1, ny0, ny1] = [Math.min(minX, p.x), Math.max(maxX, p.x), Math.min(minY, p.y), Math.max(maxY, p.y)];
+    if (nx1 - nx0 + SOURCE_W > OPENING_BOX.w || ny1 - ny0 + SOURCE_H > OPENING_BOX.h) break;
+    [minX, maxX, minY, maxY] = [nx0, nx1, ny0, ny1];
+    framed.push(model.sources[i]);
+  }
+  return { nodes: framed.map((s) => ({ id: nodeId.source(s.id) })), minZoom: 0.75, maxZoom: 1, padding: 0.2 };
 }
 
 /** The points of a source, groups and the Ungrouped bag alike. */

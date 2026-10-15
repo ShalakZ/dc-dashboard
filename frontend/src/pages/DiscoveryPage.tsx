@@ -285,6 +285,7 @@ function Canvas({ model }: { model: GraphModel }) {
             deleteKeyCode={null}
             fitView
             fitViewOptions={opening}
+            minZoom={0.2} // the opening view holds 0.75 through fitViewOptions; this floor is what lets Fit View (and the wheel) show a tall graph whole
           >
             <Controls />
             <Background />

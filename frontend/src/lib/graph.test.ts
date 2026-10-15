@@ -198,6 +198,23 @@ describe("initialView (where the canvas opens)", () => {
     expect(initialView(m)!.nodes).toEqual([{ id: "src:1" }, { id: "src:2" }]);
   });
 
+  it("frames only the sources that still lie close together when the shared layout moved some far away (the view must not open on empty space)", () => {
+    const apart = model({ sources: [source(12), source(2), source(5)], layout: { "src:12": { x: 0, y: 0 }, "src:2": { x: 3000, y: 2500 } } });
+    expect(initialView(apart)?.nodes).toEqual([{ id: "src:12" }]);
+    const second = model({ sources: [source(1), source(2), source(3)], layout: { "src:1": { x: 100, y: 100 }, "src:2": { x: 300, y: 400 }, "src:3": { x: 5000, y: 100 } } });
+    expect(initialView(second)?.nodes).toEqual([{ id: "src:1" }, { id: "src:2" }]);
+  });
+
+  it("frames all three when the saved positions are near each other, wherever on the canvas they are", () => {
+    const near = model({ sources: [source(1), source(2), source(3)], layout: { "src:1": { x: -2000, y: 900 }, "src:2": { x: -1900, y: 1100 }, "src:3": { x: -1800, y: 1300 } } });
+    expect(initialView(near)?.nodes).toEqual([{ id: "src:1" }, { id: "src:2" }, { id: "src:3" }]);
+  });
+
+  it("a source with no saved position counts where the graph puts a collapsed one, and a missing layout entry is not read from the prototype", () => {
+    const mixed = model({ sources: [source(1), source(2)], layout: { "src:1": { x: 0, y: 0 }, constructor: { x: 9999, y: 9999 } } });
+    expect(initialView(mixed)?.nodes).toEqual([{ id: "src:1" }, { id: "src:2" }]);
+  });
+
   it("is undefined with no source at all, so the graph is fitted whole as before", () => {
     expect(initialView(sources(0))).toBeUndefined();
     expect(initialView(model({ sources: [], assets: [] }))).toBeUndefined();

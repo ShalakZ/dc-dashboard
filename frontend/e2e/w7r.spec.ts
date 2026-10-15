@@ -939,6 +939,13 @@ test.describe("W7r: layout", () => {
       await fitView(page, first);
       expect(await zoomOf(), "fit view shows at least as much as the opening view").toBeLessThanOrEqual(opening + 0.001);
     });
+
+    await test.step("and after Fit View every node of the graph lies inside the canvas (the zoom floor is low enough to show a tall graph whole)", async () => {
+      const outside = await page.locator(".react-flow__node").evaluateAll((els) =>
+        els.map((el) => ({ id: el.getAttribute("data-id"), r: el.getBoundingClientRect() })).map(({ id, r }) => ({ id, box: { x: r.x, y: r.y, width: r.width, height: r.height } })));
+      expect(outside.length, "the graph has nodes").toBeGreaterThan(0);
+      expect(outside.filter(({ box }) => !inCanvas(box)).map(({ id }) => id), "nodes outside the canvas box after Fit View").toEqual([]);
+    });
   });
 });
 
