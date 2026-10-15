@@ -149,7 +149,7 @@ from them. A single asset is still deleted from its own page, and the bar's Dele
   delete). It lists the first 8 picked names and "and N more" for the rest, then what else goes with them, added up over the picks: the
   sub-assets nobody picked, the mappings and the tariffs. When anything beyond the picks goes, the button reads **Delete anyway** and the
   billing warning is the single delete's own: `5 assets, 2 mappings and 1 tariff will be deleted; their past energy and cost figures disappear
-  from Billing and dashboards.` The dialog always ends with "This can't be undone." A pick that sits inside another pick gets a note,
+  from Billing and dashboards.` The dialog always ends with "This can't be undone." (the names and the notes are one paragraph, the billing warning and that sentence the next) A pick that sits inside another pick gets a note,
   `LVP02 is inside Data_Hall_1, which is also picked, so it goes with it.` (the first three, then "and N more are inside other picked assets,
   so they go with them"). Picks that the filter hides are still deleted, as they are still moved; the dialog names them.
 - **Only top-level picks are sent.** Deleting an asset deletes everything below it, so a pick inside another pick goes with it and is not
@@ -160,7 +160,9 @@ from them. A single asset is still deleted from its own page, and the bar's Dele
   failed and why, for example `Deleted 2 assets. "LVP03" could not be deleted: More was added under it since the numbers were shown. 1 was not
   tried.` The assets that failed or were not tried stay picked, so you can look and try again. An asset that someone else deleted
   meanwhile is not a failure: it counts as already gone and the rest go on. If a pick was already gone when the dialog opened, the dialog
-  cannot be confirmed (only Close), says so, and the tree refreshes; pick again.
+  cannot be confirmed (only Close), says so, and the tree refreshes; pick again. The same happens when the tree changed under the picks
+  since this tab last loaded it (someone else added, moved or deleted something: the dialog reads the asset list again while it opens and
+  compares it with what you picked): "The tree changed while you were picking. It has been refreshed; pick again."
 - **Counts.** At most 100 top-level assets go at once (a picked branch counts once); above that no dialog opens and a toast asks you to pick
   fewer. The success toast, `Deleted 3 assets`, counts the assets the dialog showed, branches included; the audit log has the exact number:
   one `asset.deleted` entry per top-level asset, with its name and the counts of its sub-assets, mappings and tariffs.

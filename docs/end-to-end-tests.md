@@ -227,7 +227,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   create. Create assets on the collapsed source node opens one dialog with a row per group and creates one asset each under the chosen parent.
   At 1440 and 1024 px neither Scans nor Discovery scrolls sideways and the drawer fits, and a fresh load of Discovery at 1024×640 opens on the first
   sources (the first Create assets button is inside the canvas and the node text is at least 9 px at the opening zoom).
-- `w7s.spec.ts` (its own project, last in the list, after `w7r`, at 1600×1000 unless a case sets its own size) checks deleting several assets
+- `w7s.spec.ts` (its own project, last in the list, after `w7r`, at 1440×900 unless a case sets its own size) checks deleting several assets
   from the Assets Tree and telling the open asset from the picked ones. Each case builds its own small tree through the API, named `W7s <run> ...`
   (accounts and roles `w7s-`), and removes what it made. With two leaves picked and a third open, the open row is not on the tint and the picked
   rows are, the bar says `2 picked` and its count carries the "open asset is not counted" tooltip; Delete opens a dialog that lists both names,
@@ -242,7 +242,8 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   has no Delete, and the API answers 403 to a delete from it. From the keyboard, Tab reaches Delete, Enter opens the dialog with the focus on
   Cancel, Escape closes it and the focus is back on Delete. At 1440, 1024 and 800 px the bar is whole and does not change height on the first
   pick; with the stored tree width 220 its buttons lie inside the bar, and the bar is 32 px high in a column of 277 px and 64 px in one of 276 px
-  or less for the admin, but 32 px at every width for the role without Delete.
+  or less for the admin, but 32 px at every width for the role without Delete. The browser prints its own console lines for the refusals the app
+  handles on purpose (the 404s of a vanished pick, the 409s of a grown branch, the 403 of a role that lost the permission); they are not app errors.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
