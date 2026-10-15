@@ -48,4 +48,8 @@
      arrival (Escape from a menu, say) does, inside the box so the panel's border does not clip it. */
   .graph-layout .graph-canvas:focus { outline: none; }
   .graph-layout .graph-canvas:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+
+  /* The tip beside the page's hint ("What can I do on the canvas?"): six short lines in the shared bubble. */
+  .graph-hint-list { margin: 0; padding-left: 1.1em; }
+  .graph-hint-list li + li { margin-top: 4px; }
 }
