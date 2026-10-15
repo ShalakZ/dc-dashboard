@@ -54,7 +54,7 @@ CATALOGUE: tuple[Permission, ...] = (
        "Make the server try to reach a source (Test and Test all)."),
     _p("discovery.view", "Sources and discovery", "see", "See scans and the graph", "Open the Scans and Discovery pages."),
     _p("discovery.edit", "Sources and discovery", "change", "Change scan scopes and the graph layout",
-       "Add, edit and delete scan scopes; save the graph layout."),
+       "Add, edit and delete scan scopes; save the graph layout; remove discovered sources that have nothing mapped."),
     _p("discovery.scan", "Sources and discovery", "risky", "Run network scans", "Start a scan of a scope (it probes a network)."),
     _p("discovery.accept", "Sources and discovery", "risky", "Accept scan results",
        "Turn scan results into sources, assets and mappings."),

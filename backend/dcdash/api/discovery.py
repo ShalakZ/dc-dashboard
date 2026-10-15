@@ -2,8 +2,8 @@ import math
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, StringConstraints, model_validator
-from sqlalchemy import func, select
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from sqlalchemy import Text, cast, delete, func, literal, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dcdash.api.asset_names import AssetName, require_free_name
 from dcdash.api.assets import get_asset
 from dcdash.api.deps import current_user, get_db, notify, require_permission
-from dcdash.api.sources import get_source
+from dcdash.api.scans import SCAN_START_LOCK
+from dcdash.api.sources import _lock_source, _mapped_counts
 from dcdash.core.audit import audit, hidden_values, safe_config, scrub_url_credentials
 from dcdash.core.discovery import MappingGuess, PointInfo, guess_mapping, suggest_groups
 from dcdash.core.metrics import Metric, Scale, default_interval
@@ -57,6 +58,17 @@ class AcceptIn(BaseModel):
         return self
 
 
+INT32_MAX = 2_147_483_647  # an id above this would come back from the driver as a 500, not a 422
+SourceId = Annotated[int, Field(ge=1, le=INT32_MAX)]
+MAX_REMOVE_IDS = 500  # more is a 422: a client with a longer list sends it in several calls
+SCAN_RUNNING = "A scan is running. Remove discovered sources when it has finished."
+
+
+class RemoveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # a misspelt key must not mean "remove nothing" without a word
+    source_ids: list[SourceId] = Field(min_length=1, max_length=MAX_REMOVE_IDS)
+
+
 class LayoutNode(BaseModel):
     node_id: str = Field(min_length=1, max_length=512)  # cluster ids embed device-reported name tokens
     x: float
@@ -86,7 +98,7 @@ def point_json(point: Any, mapping: Any, guess: MappingGuess) -> dict[str, Any]:
 
 
 def source_json(
-    source: Source, rows: list[Any], mappings: dict[int, Any], latest_outcome: str | None
+    source: Source, rows: list[Any], mappings: dict[int, Any], latest_outcome: str | None, last_scan: dict[str, Any] | None
 ) -> dict[str, Any]:
     """One source with its points clustered by name and a suggested mapping for each point."""
     infos = [PointInfo(r.id, r.address, r.name, r.unit_hint) for r in rows]
@@ -110,6 +122,7 @@ def source_json(
         "last_error": last_error,
         "has_secret": source.has_secret,
         "needs_credentials": not rows and latest_outcome == "needs_credentials",
+        "last_scan": last_scan,  # not `last_seen`: that is Source.last_seen, the last poll or browse that worked
         "config": safe_config(source.config),  # never the user name and password of a URL
         "point_count": len(rows),
         "clusters": [{"key": g.key, "points": [render(pid) for pid in g.point_ids]} for g in groups],
@@ -129,16 +142,23 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     mappings = {
         m.point_id: m for m in await db.execute(select(Mapping.id, Mapping.point_id, Mapping.asset_id, Mapping.metric))
     }
-    # The most recent finding per source decides "needs credentials": a later scan may have browsed it fine.
+    # The most recent finding per source decides "needs credentials": a later scan may have browsed it fine. The same row
+    # says which scan last saw the source, and when (its finish time, or its start while it is still running).
     latest_finding = (
         select(func.max(ScanFinding.id)).where(ScanFinding.source_id.is_not(None)).group_by(ScanFinding.source_id)
     )
-    latest_outcome = {
-        r.source_id: r.outcome
-        for r in await db.execute(
-            select(ScanFinding.source_id, ScanFinding.outcome).where(ScanFinding.id.in_(latest_finding))
+    latest_outcome: dict[int, str] = {}
+    last_scan: dict[int, dict[str, Any]] = {}
+    for r in await db.execute(
+        select(
+            ScanFinding.source_id, ScanFinding.outcome, ScanFinding.scan_id,
+            func.coalesce(Scan.finished_at, Scan.created_at).label("at"),
         )
-    }
+        .join(Scan, Scan.id == ScanFinding.scan_id)
+        .where(ScanFinding.id.in_(latest_finding))
+    ):
+        latest_outcome[r.source_id] = r.outcome
+        last_scan[r.source_id] = {"scan_id": r.scan_id, "at": r.at}
     latest_done_scan = select(Scan.id).where(Scan.status == "done").order_by(Scan.id.desc()).limit(1).scalar_subquery()
     unidentified = await db.execute(
         select(ScanFinding.host, ScanFinding.port, ScanFinding.scan_id)
@@ -151,7 +171,8 @@ async def graph(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     layout = await db.execute(select(GraphLayout.node_id, GraphLayout.x, GraphLayout.y))
     return {
         "sources": [
-            source_json(s, points_by_source.get(s.id, []), mappings, latest_outcome.get(s.id)) for s in sources
+            source_json(s, points_by_source.get(s.id, []), mappings, latest_outcome.get(s.id), last_scan.get(s.id))
+            for s in sources
         ],
         "unidentified": [{"host": r.host, "port": r.port, "scan_id": r.scan_id} for r in unidentified],
         "assets": [{"id": a.id, "parent_id": a.parent_id, "name": a.name, "kind": a.kind} for a in assets],
@@ -180,7 +201,13 @@ async def save_layout(body: LayoutIn, db: AsyncSession = Depends(get_db)) -> Non
 async def accept(
     body: AcceptIn, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
 ) -> dict[str, Any]:
-    source = await get_source(db, body.source_id)
+    # The source row first, before its points or any mapping: Remove locks the source and then its points, and a mapping
+    # insert takes its point, so taking the source after a point is the order that deadlocks. FOR NO KEY UPDATE conflicts
+    # with Remove's FOR UPDATE but not with the collector adding points (FOR KEY SHARE). A source Remove took first is gone
+    # by the time this lock is granted: a 404.
+    source = await db.scalar(select(Source).where(Source.id == body.source_id).with_for_update(key_share=True))
+    if source is None:
+        raise HTTPException(404, "source not found")
     point_ids = [p.point_id for p in body.points]
     if len(set(point_ids)) != len(point_ids):
         raise HTTPException(422, "a point appears more than once")
@@ -230,3 +257,58 @@ async def accept(
     await notify(db, CONFIG_CHANNEL)
     await db.commit()
     return {"asset_id": asset.id, "mapping_ids": [m.id for m in mappings]}
+
+
+@router.post("/sources/remove", dependencies=[Depends(require_permission("discovery.edit"))])
+async def remove_sources(
+    body: RemoveIn, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
+) -> dict[str, Any]:
+    """Take discovered sources that have nothing mapped off the Discovery graph. A source with a mapping is never removed.
+
+    The client sends the ids it listed, so a source a scan created since is never in the request, and one that was mapped
+    since is skipped here (the count is read after the lock, see delete_source). Findings keep their rows with no source.
+    """
+    # Same lock as start_scan, held to the commit: a scan cannot start while this runs, and none is running now. A scan
+    # writes its findings (a foreign key to the source) in one insert at its end and browses sources while it runs, so a
+    # removal during a scan would fail it or deadlock with its browse (see _lock_source for the order it needs).
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": SCAN_START_LOCK})
+    if await db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(("queued", "running")))):
+        raise HTTPException(409, SCAN_RUNNING)
+    removed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for source_id in sorted(set(body.source_ids)):  # ascending, so two removals that meet lock in the same order
+        if not await _lock_source(db, source_id):
+            skipped.append({"id": source_id, "name": None, "reason": "gone"})
+            continue
+        source = await db.get(Source, source_id)
+        assert source is not None  # locked just above
+        name = source.name  # read now: the object is deleted below
+        if source.origin != "discovered":
+            skipped.append({"id": source_id, "name": name, "reason": "manual"})
+            continue
+        mapped_points, mappings = await _mapped_counts(db, source_id)  # its own statement: it sees what committed while waiting
+        if mapped_points or mappings:
+            skipped.append({"id": source_id, "name": name, "reason": "mapped"})
+            continue
+        # The graph keeps node positions by string key with no foreign key, so they are removed here: this source's node, its
+        # points, and its clusters (`cluster:<id>:<name>`; the colon after the id keeps `cluster:1:` away from `cluster:12:`).
+        point_keys = select(literal("point:") + cast(Point.id, Text)).where(Point.source_id == source_id)
+        await db.execute(
+            delete(GraphLayout).where(
+                or_(
+                    GraphLayout.node_id == f"src:{source_id}",
+                    GraphLayout.node_id.in_(point_keys),
+                    GraphLayout.node_id.startswith(f"cluster:{source_id}:", autoescape=True),
+                )
+            )
+        )
+        await db.delete(source)  # its points go with it
+        await audit(
+            db, user.id, "source.deleted",
+            {"source_id": source_id, "name": name, "points": 0, "mappings": 0, "unmapped_only": True},
+        )
+        removed.append({"id": source_id, "name": name})
+    if removed:
+        await notify(db, CONFIG_CHANNEL)
+    await db.commit()  # also when nothing was removed: it ends the transaction and lets go of the locks taken above
+    return {"removed": removed, "skipped": skipped}

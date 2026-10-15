@@ -284,13 +284,34 @@ async def test_scan_history_and_detail_survive_scope_deletion(client, db):
     await client.delete(f"/api/scopes/{scope['id']}")
     listing = (await client.get("/api/scans")).json()
     assert listing[0]["id"] == scan_id and listing[0]["scope_id"] is None and listing[0]["scope_name"] == "lab"
+    assert listing[0]["targets"] == ["127.0.0.1/30"] and listing[0]["ports"] == [9000, 4840]  # the scope is gone, its range is not
     detail = (await client.get(f"/api/scans/{scan_id}")).json()
     assert detail["findings"] == [{
         "host": "127.0.0.1", "port": 4840, "source_id": None, "connector_type": "opcua",
         "outcome": "claimed", "detail": "60 points",
     }]
     assert detail["scope_snapshot"]["targets"] == ["127.0.0.1/30"]
+    assert detail["targets"] == ["127.0.0.1/30"] and detail["ports"] == [9000, 4840]
     assert (await client.get("/api/scans/999")).status_code == 404
+
+
+async def test_a_scan_lists_what_it_scanned_in_the_summary_and_the_detail(client, db):
+    await login_as(client, db, "admin")
+    scope = await create_scope(client, targets=["127.0.0.1/30", "localhost"], ports=[9000, 4840, 5020])
+    scan_id = (await start_scan(client, scope["id"])).json()["scan_id"]
+    [listed] = (await client.get("/api/scans")).json()
+    detail = (await client.get(f"/api/scans/{scan_id}")).json()
+    for summary in (listed, detail):
+        assert summary["targets"] == ["127.0.0.1/30", "localhost"] and summary["ports"] == [9000, 4840, 5020]
+
+
+async def test_a_scan_whose_snapshot_has_no_scope_keys_lists_empty_targets_and_ports(client, db):
+    await login_as(client, db, "admin")
+    scan_id = await db.fetchval("INSERT INTO scans (scope_snapshot, status) VALUES ('{}', 'done') RETURNING id")
+    [listed] = (await client.get("/api/scans")).json()
+    detail = (await client.get(f"/api/scans/{scan_id}")).json()
+    for summary in (listed, detail):
+        assert summary["targets"] == [] and summary["ports"] == [] and summary["scope_name"] is None
 
 
 async def test_sources_list_hides_discovered_sources_until_they_are_mapped(client, db):
