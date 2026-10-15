@@ -150,6 +150,15 @@ describe("treeDrift: does the server's tree still match the picture the dialog w
     expect(drift(plan(7, 3, 1), ASSETS)).toBeNull();
   });
 
+  it("is null when a rename elsewhere only flips the ORDER of the same top-level picks (the re-review's m1)", () => {
+    const before = [asset(1, null, "Hall 1"), asset(2, 1, "Rack B"), asset(3, null, "Hall 2"), asset(4, 3, "Rack C")];
+    const p = planDelete([2, 4], indexTree(buildTree(before)), (id) => before.find((a) => a.id === id)?.name ?? "?");
+    expect(p.roots.map((r) => r.id)).toEqual([2, 4]);
+    const renamed = before.map((a) => (a.id === 1 ? { ...a, name: "Hall 9" } : a)); // the walk now meets Hall 2 first: [4, 2]
+    expect(planDelete([2, 4], indexTree(buildTree(renamed)), (id) => renamed.find((a) => a.id === id)?.name ?? "?").roots.map((r) => r.id)).toEqual([4, 2]);
+    expect(drift(p, renamed)).toBeNull();
+  });
+
   it("is null on the empty plan with no roots", () => {
     expect(treeDrift({ picked: [], roots: [], inside: [] }, ASSETS, new Map())).toBeNull();
   });
@@ -192,9 +201,9 @@ describe("treeDrift: does the server's tree still match the picture the dialog w
       expect(drift(plan(6), moved(6, 8))).toBeNull(); // Yard under Shed: Yard is still the top of what is picked, and its subtree is the same
     });
 
-    it("the roots come in another order (a sibling was reordered)", () => {
+    it("the roots come in another order (a sibling was reordered): the same roots, so no drift (the re-review's m1; it was a false block)", () => {
       const reordered = ASSETS.map((a) => (a.id === 1 ? { ...a, sort_order: 5 } : a)); // Hall now sorts after Yard and Shed
-      expect(drift(plan(1, 6), reordered)).toMatch(/top-level picks changed/);
+      expect(drift(plan(1, 6), reordered)).toBeNull();
     });
   });
 

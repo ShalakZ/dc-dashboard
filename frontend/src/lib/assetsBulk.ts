@@ -74,7 +74,10 @@ export function treeDrift(plan: DeletePlan, fresh: Asset[], impacts: ReadonlyMap
   const index = indexTree(nodes);
   if (plan.picked.some((p) => !index.has(p.id))) return "A picked asset is no longer in the list.";
   const now = planDelete(plan.picked.map((p) => p.id), index, (id) => index.nameOf(id) ?? "");
-  if (now.roots.length !== plan.roots.length || now.roots.some((root, at) => root.id !== plan.roots[at].id)) return "The top-level picks changed.";
+  // As a SET, not by position: the roots come out in walk order (sort_order, then name, ancestors included), so a rename or a reorder of an
+  // ancestor elsewhere flips their order without changing anything the dialog says. The pick -> root map below pins the structure.
+  const planned = new Set(plan.roots.map((r) => r.id));
+  if (now.roots.length !== plan.roots.length || now.roots.some((root) => !planned.has(root.id))) return "The top-level picks changed.";
   const rootNow = new Map(now.inside.map((i) => [i.id, i.rootId]));
   if (plan.inside.some((i) => rootNow.get(i.id) !== i.rootId)) return "A pick moved to another branch.";
   const sizes = new Map<number, number>(); // every asset, the asset itself included: the server counts a subtree that way
