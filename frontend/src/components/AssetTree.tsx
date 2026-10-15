@@ -171,6 +171,15 @@ export interface AssetTreeMove {
   moved: { firstId: number; ids: number[]; line?: string } | null;
 }
 
+/** What the Assets page hands the tree for deleting the picked assets (W7s). Absent without assets.delete (and without `move`, because picking is the move feature's): no Delete in the pick bar. */
+export interface AssetTreeRemove {
+  /**
+   * The pick bar's Delete: the page opens the confirmation for these picked ids. `opener` is the button (it gets the focus back when the
+   * dialog is cancelled); `focusAfter` is the row to focus once every pick is gone (null: no row is left to take it).
+   */
+  onDelete(ids: number[], opener: HTMLElement | null, focusAfter: number | null): void;
+}
+
 /** Ctrl+Z and Cmd+Z, but not Redo (Shift) or Alt. On a layout whose key is not a Latin letter (Arabic, Cyrillic) the physical key decides. */
 function isUndoKey(e: KeyboardEvent): boolean {
   if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return false;
@@ -331,7 +340,7 @@ interface Reveal { id: number; nodes: TreeNode[]; settled: boolean; timer: Retur
  * With `move` (someone who may change assets) the rows can also be picked (Ctrl/Cmd-click, Shift-click, Space, Shift+arrows) and dragged
  * onto a row or the area below the last one; the page does the moving. The picks are called "picked": "selected" is the asset in the URL.
  */
-export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, loading, move }: {
+export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, loading, move, remove: _remove }: {
   nodes: TreeNode[];
   /** The asset in the URL (null: none). A node is a link to its page, so there is no select callback. */
   selectedId: number | null;
@@ -345,6 +354,8 @@ export function AssetTree({ nodes, selectedId, onAddChild, onAddTop, disabled, l
   loading?: boolean;
   /** Present for someone who may change assets (W7p): picking rows, dragging them, Move to.... While `disabled` rows can still be picked but not dragged. */
   move?: AssetTreeMove;
+  /** Present for someone who may delete assets AND pick them (W7s): a Delete in the pick bar. Meaningful only together with `move`. */
+  remove?: AssetTreeRemove;
 }) {
   const [state, setState] = useState<ColumnState>(() => (readStored(KEY) === "minimized" ? "minimized" : "expanded"));
   const [filter, setFilter] = useState("");
