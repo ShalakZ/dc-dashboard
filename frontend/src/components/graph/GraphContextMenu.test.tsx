@@ -57,6 +57,28 @@ describe("GraphContextMenu", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("a disabled item's reason is a muted second line INSIDE the item (read with it) and its title; an enabled item, or a disabled one with no reason, shows plain text", async () => {
+    const reason = "Select a source, group or asset first.";
+    const list = items({ Details: { disabled: true, reason }, Collapse: { reason: "ignored while enabled" }, Create: { disabled: true } });
+    open({ items: list });
+    const [details, collapse, create] = menuItems();
+    expect(details).toHaveAttribute("aria-disabled", "true");
+    expect(details).toHaveAttribute("title", reason);
+    const line = details.querySelector(".graph-menu-reason") as HTMLElement;
+    expect(line).toHaveTextContent(reason);
+    expect(details).toHaveTextContent(`Details ${reason}`);
+    expect(screen.getByRole("menuitem", { name: `Details ${reason}` })).toBe(details); // the reason is part of the item's name
+    expect(collapse.querySelector(".graph-menu-reason")).toBeNull();
+    expect(collapse).not.toHaveAttribute("title");
+    expect(collapse.textContent).toBe("Collapse");
+    expect(create.querySelector(".graph-menu-reason")).toBeNull();
+    expect(create.textContent).toBe("Create assets…");
+    expect(details).not.toHaveFocus(); // arrows and the first focus still skip it
+    expect(collapse).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
+    expect(menuItems()[3]).toHaveFocus();
+  });
+
   it("ArrowDown and ArrowUp wrap; Home and End jump", async () => {
     open();
     await userEvent.keyboard("{ArrowUp}");

@@ -41,7 +41,8 @@ export function placeAtPoint(
  * that element as the place to give the focus back to.
  *
  * `at` is read once, when the menu mounts: the page keys the menu by its open, so a second open mounts a fresh one. A disabled item is
- * `aria-disabled` (never native disabled) and skipped by the focus. Items are buttons; a `to` link is not supported here.
+ * `aria-disabled` (never native disabled) and skipped by the focus; its `reason`, when it has one, is a muted second line inside the item and its
+ * `title`. Items are buttons; a `to` link is not supported here.
  */
 export function GraphContextMenu({ at, items, label, returnFocus, onClose }: {
   at: GraphMenuAt;
@@ -149,9 +150,16 @@ export function GraphContextMenu({ at, items, label, returnFocus, onClose }: {
           tabIndex={-1}
           className={item.tone === "danger" ? "danger-item" : undefined}
           aria-disabled={item.disabled || undefined}
+          title={item.disabled ? item.reason : undefined}
           onClick={() => choose(item)}
         >
-          {item.label}
+          {/* The reason is part of the item (the second line of its text), so it is read with the label. The space keeps the two words apart in the name. */}
+          {item.disabled && item.reason ? (
+            <span className="graph-menu-text">
+              <span>{item.label}</span>{" "}
+              <span className="graph-menu-reason">{item.reason}</span>
+            </span>
+          ) : item.label}
         </button>
       ))}
     </div>,
