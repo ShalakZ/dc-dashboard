@@ -885,6 +885,24 @@ describe("AssetPage mapping actions (W12a)", () => {
       await waitFor(() => expect(screen.getByRole("button", { name: "Actions for voltage_v" })).toHaveFocus());
     });
 
+    it("after the toast's Undo it is the restored row's menu button, at the position the row had, not the body", async () => {
+      serve("admin");
+      const spy = show();
+      await unmap("voltage_v");
+      await waitFor(() => expect(spy.calls).toHaveLength(1));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Actions for active_power_kw" })).toHaveFocus());
+      // Pressed from the toast, whose button holds the focus and goes away with the toast.
+      const toastButton = document.body.appendChild(document.createElement("div")).appendChild(document.createElement("button"));
+      toastButton.parentElement!.className = "toast-stack";
+      toastButton.focus();
+      act(() => spy.calls[0].options!.action!.onAction());
+      toastButton.parentElement!.remove();
+      expect(document.activeElement).toBe(document.body);
+      await waitFor(() => expect(spy.calls).toHaveLength(2));
+      await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+      expect(await menuOf("voltage_v")).toHaveFocus();
+    });
+
     it("the previous row's menu button after an unmap of the last row", async () => {
       serve("admin");
       show();

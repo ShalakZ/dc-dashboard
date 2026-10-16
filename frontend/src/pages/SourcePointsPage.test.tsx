@@ -484,6 +484,33 @@ describe("SourcePointsPage look (W6)", () => {
     });
   });
 
+  it("after the toast's Undo the focus is on the row's menu button again, not the body (the Undo button left with its toast)", async () => {
+    let unmapped = false;
+    mockFetch({
+      ...routes,
+      "GET /api/sources/2/points": () => ({ body: [points[0], unmapped ? { ...points[1], mapping: null } : points[1]] }),
+      "DELETE /api/mappings/2": () => { unmapped = true; return { status: 204 }; },
+      "POST /api/mappings": () => { unmapped = false; return { status: 201, body: { id: 5, point_id: 8, asset_id: 4, metric: "energy_kwh", scale: 1, interval_seconds: 60, custom_unit: null } }; },
+    });
+    const spy = spyToasts();
+    renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points", toasts: spy.api });
+    const row = (await screen.findByText("panel1/energy")).closest("tr")!;
+    await choose(row, "Unmap…");
+    await confirmUnmap();
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    await waitFor(() => expect(within(row).getByRole("button", { name: "Actions for Panel 1 energy" })).toHaveFocus());
+    // Pressed from the toast, whose button holds the focus and goes away with the toast.
+    const toastButton = document.body.appendChild(document.createElement("div")).appendChild(document.createElement("button"));
+    toastButton.parentElement!.className = "toast-stack";
+    toastButton.focus();
+    act(() => spy.calls[0].options!.action!.onAction());
+    toastButton.parentElement!.remove();
+    expect(document.activeElement).toBe(document.body);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(within(row).getByRole("button", { name: "Actions for Panel 1 energy" })).toHaveFocus();
+  });
+
   it("when the filter drops the row once it is unmapped, the focus goes to the search box (the row's button is gone)", async () => {
     let unmapped = false;
     mockFetch({

@@ -149,7 +149,7 @@ describe("useMappingActions: unmap", () => {
     expect(writes(calls)).toEqual(["DELETE /api/mappings/1", "DELETE /api/mappings/2"]);
     expect(spy.calls).toHaveLength(1);
     expect(spy.calls[0]).toMatchObject({
-      kind: "success", text: "Unmapped 2 points from Room 1.", options: { durationMs: 10_000, action: { label: "Undo", title: "Undo" } },
+      kind: "success", text: "Unmapped 2 points from Room 1.", options: { durationMs: 10_000, action: { label: "Undo", title: "Undo (Ctrl+Z)" } },
     });
     expect(seen[0], "every list was fetched again before after() ran").toEqual({ graph: 2, sources: 2, assets: 2, fleet: 2, audit: 2, billing: 2, widgetData: 2 });
   });
@@ -432,7 +432,7 @@ describe("useMappingActions: move", () => {
     await waitFor(() => expect(spy.calls).toHaveLength(1));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(writes(calls)).toEqual(["PATCH /api/mappings/1", "PATCH /api/mappings/2"]);
-    expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Moved 2 points to Panel 2.", options: { durationMs: 10_000, action: { label: "Undo", title: "Undo" } } });
+    expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Moved 2 points to Panel 2.", options: { durationMs: 10_000, action: { label: "Undo", title: "Undo (Ctrl+Z)" } } });
     await waitFor(() => expect(fetched(calls).graph).toBe(2));
   });
 
@@ -648,7 +648,7 @@ describe("useMappingActions: mappedToast", () => {
     const { calls, actions, spy } = setup(s);
     await ready(actions, calls);
     act(() => actions().mappedToast({ text: "Mapped 3 points to Room 1.", mappings: [{ id: 1, assetId: 1, name: "kW" }, { id: 2, assetId: 1, name: "V" }, { id: 3, assetId: 1, name: "A" }], newAssets: ["Room 1"] }));
-    expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Mapped 3 points to Room 1.", options: { durationMs: 10_000, action: { label: "Undo", title: "Undo" } } });
+    expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Mapped 3 points to Room 1.", options: { durationMs: 10_000, action: { label: "Undo", title: "Undo (Ctrl+Z)" } } });
     s.get(2)!.asset_id = 2; // V was moved to a panel since
     pressUndo(spy, 0);
     await waitFor(() => expect(spy.calls).toHaveLength(2));
@@ -741,6 +741,294 @@ describe("useMappingActions: an Undo outlives the page", () => {
     pressUndo(spy, 1);
     await waitFor(() => expect(spy.calls).toHaveLength(4));
     expect(calls.filter((c) => c.method === "POST" && c.path === "/api/mappings").map((c) => (c.body as { point_id: number }).point_id)).toEqual([41, 42]);
+    await idle();
+  });
+});
+
+describe("useMappingActions: an Undo returns the focus (it runs the after() its action got)", () => {
+  it("the Undo of an unmap runs the same after(), once every list is fetched again", async () => {
+    const seen: Record<string, number>[] = [];
+    const after = vi.fn(() => { seen.push(fetched(calls)); });
+    const { calls, actions, spy } = setup(store(mapping(1)));
+    await ready(actions, calls);
+    act(() => actions().unmap([ref(1, "kW")], { after }));
+    await confirm("Unmap");
+    await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+    pressUndo(spy, 0);
+    await waitFor(() => expect(after).toHaveBeenCalledTimes(2));
+    expect(seen[1], "the lists were fetched a third time before the Undo's after() ran").toEqual(EVERY(3));
+    expect(spy.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+    await idle();
+  });
+
+  it("the Undo of a move runs the move's after()", async () => {
+    const after = vi.fn();
+    const { calls, actions, spy } = setup(store(mapping(1, { asset_id: 2 })));
+    await ready(actions, calls);
+    act(() => actions().move([refM(1, "active_power_kw", 2, "kW")], { after }));
+    await screen.findByRole("dialog");
+    await userEvent.selectOptions(within(screen.getByRole("dialog")).getByLabelText("Move to"), "3");
+    await confirm("Move");
+    await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+    pressUndo(spy, 0);
+    await waitFor(() => expect(after).toHaveBeenCalledTimes(2));
+    expect(spy.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+    await idle();
+  });
+
+  it("the Undo of a mapping made in Discovery runs the after() that mappedToast was given", async () => {
+    const after = vi.fn();
+    const { calls, actions, spy } = setup(store(mapping(1)));
+    await ready(actions, calls);
+    act(() => actions().mappedToast({ text: "Mapped 1 point to Room 1.", mappings: [{ id: 1, assetId: 1 }], newAssets: [], after }));
+    expect(after, "the mapping itself is the caller's: after() is for the Undo only").not.toHaveBeenCalled();
+    pressUndo(spy, 0);
+    await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+    expect(spy.calls[1]).toEqual({ kind: "success", text: "Unmapped 1 point." });
+    await idle();
+  });
+
+  it("an Undo pressed after the page has gone does not call after(); the toast and the refresh still happen", async () => {
+    const after = vi.fn();
+    const { calls, actions, spy } = setup(store(mapping(1)), { page: (capture) => <Leaving capture={capture} /> });
+    await ready(actions, calls);
+    act(() => actions().unmap([ref(1, "kW")], { after }));
+    await confirm("Unmap");
+    await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+    act(() => leave());
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    await waitFor(() => expect(fetched(calls)).toEqual(EVERY(3)));
+    await idle();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(after).toHaveBeenCalledTimes(1);
+  });
+
+  it("the Undo button's title is Undo (Ctrl+Z) by default and the caller's undoTitle when it gives one", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1), mapping(2)));
+    await ready(actions, calls);
+    act(() => actions().mappedToast({ text: "Mapped 1 point to Room 1.", mappings: [{ id: 1, assetId: 1 }], newAssets: [] }));
+    act(() => actions().mappedToast({ text: "Created 1 asset", mappings: [{ id: 2, assetId: 1 }], newAssets: [], undoTitle: "Unmap the points it mapped; the assets stay" }));
+    expect(spy.calls.map((c) => c.options?.action?.title)).toEqual(["Undo (Ctrl+Z)", "Unmap the points it mapped; the assets stay"]);
+  });
+});
+
+describe("useMappingActions: Ctrl+Z undoes the latest mapping action", () => {
+  /** A keydown on `target` (the body by default); `defaultPrevented` on the result says whether the shortcut was taken. */
+  const press = (over: KeyboardEventInit = {}, target: Element = document.body) => {
+    const event = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true, ...over });
+    act(() => { target.dispatchEvent(event); });
+    return event;
+  };
+  const posts = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method === "POST" && c.path === "/api/mappings").length;
+  const unmapOne = async (actions: () => Actions, spy: ReturnType<typeof spyToasts>, id: number, after?: () => void) => {
+    const before = spy.calls.length;
+    act(() => actions().unmap([ref(id, `P${id}`)], { after }));
+    await confirm("Unmap");
+    await waitFor(() => expect(spy.calls).toHaveLength(before + 1));
+  };
+  const extras: HTMLElement[] = [];
+  afterEach(() => { extras.splice(0).forEach((el) => el.remove()); });
+  const element = (tag: string, attrs: Record<string, string> = {}, parent: HTMLElement = document.body) => {
+    const el = parent.appendChild(document.createElement(tag));
+    for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, value);
+    extras.push(el);
+    return el;
+  };
+
+  it.each([
+    ["Ctrl+Z", {}],
+    ["Cmd+Z", { ctrlKey: false, metaKey: true }],
+  ])("%s runs the Undo once, takes its toast away and runs after(); the toast's button pressed later does nothing more", async (_name, keys) => {
+    const after = vi.fn();
+    const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
+    await ready(actions, calls);
+    await unmapOne(actions, spy, 1, after);
+    await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+    const signal = spy.calls[0].options!.signal!;
+    expect(signal.aborted).toBe(false);
+    expect(press(keys).defaultPrevented).toBe(true);
+    expect(signal.aborted, "the toast leaves with the shortcut").toBe(true);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(spy.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+    await waitFor(() => expect(after).toHaveBeenCalledTimes(2));
+    pressUndo(spy, 0);
+    await idle();
+    expect(posts(calls)).toBe(1);
+    expect(spy.calls).toHaveLength(2);
+  });
+
+  it("the toast's button first, and Ctrl+Z after it finds nothing: it does nothing and leaves the key to the browser", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
+    await ready(actions, calls);
+    await unmapOne(actions, spy, 1);
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    await idle();
+    expect(press().defaultPrevented).toBe(false);
+    await idle();
+    expect(posts(calls)).toBe(1);
+    expect(spy.calls).toHaveLength(2);
+  });
+
+  it("with no Undo at all it does nothing", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1)), { role: "operator" });
+    await ready(actions, calls, false);
+    act(() => actions().mappedToast({ text: "Mapped 1 point to Room 1.", mappings: [{ id: 1, assetId: 1 }], newAssets: [] }));
+    expect(press().defaultPrevented).toBe(false);
+    expect(writes(calls)).toEqual([]);
+    expect(spy.calls).toHaveLength(1);
+  });
+
+  it("is ignored in a field, beside an open dialog, on the Assets Tree, with other modifiers, or once the default was prevented; the Undo is still there after", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
+    await ready(actions, calls);
+    await unmapOne(actions, spy, 1);
+    for (const field of [element("input"), element("textarea"), element("select"), element("div", { contenteditable: "true" })]) {
+      expect(press({}, field).defaultPrevented, field.tagName).toBe(false);
+    }
+    const tree = element("ul", { class: "tree" });
+    expect(press({}, element("button", {}, element("li", {}, tree))).defaultPrevented, "inside ul.tree").toBe(false);
+    expect(press({ shiftKey: true }).defaultPrevented, "Ctrl+Shift+Z is redo").toBe(false);
+    expect(press({ altKey: true }).defaultPrevented).toBe(false);
+    expect(press({ ctrlKey: false }).defaultPrevented, "a plain z").toBe(false);
+    expect(press({ key: "y" }).defaultPrevented).toBe(false);
+    const taken = (e: Event) => e.preventDefault();
+    document.body.addEventListener("keydown", taken);
+    try {
+      expect(press().defaultPrevented, "the other handler's own preventDefault: this one stood aside").toBe(true);
+    } finally {
+      document.body.removeEventListener("keydown", taken);
+    }
+    const dialog = element("div", { role: "dialog" });
+    expect(press().defaultPrevented, "a dialog is open").toBe(false);
+    dialog.remove();
+    await idle();
+    expect(posts(calls), "none of those started an Undo").toBe(0);
+    expect(press({ key: "Z" }).defaultPrevented, "a capital Z (caps lock) counts").toBe(true);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(posts(calls)).toBe(1);
+  });
+
+  it("is ignored beside the Move dialog this hook opens", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 }), mapping(2, { asset_id: 2, point_id: 42 })));
+    await ready(actions, calls);
+    await unmapOne(actions, spy, 1);
+    act(() => actions().move([refM(2, "voltage_v", 2, "V")]));
+    await screen.findByRole("dialog");
+    expect(press().defaultPrevented).toBe(false);
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    expect(posts(calls)).toBe(0);
+    expect(press().defaultPrevented).toBe(true);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+  });
+
+  it("stops once the toast's 10 seconds are up", async () => {
+    const real = Date.now.bind(Date);
+    let skew = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => real() + skew);
+    try {
+      const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 }), mapping(2, { point_id: 42 })));
+      await ready(actions, calls);
+      await unmapOne(actions, spy, 1);
+      skew = 9_000;
+      expect(press().defaultPrevented, "still inside the 10 s").toBe(true);
+      await waitFor(() => expect(spy.calls).toHaveLength(2));
+      await unmapOne(actions, spy, 2);
+      skew += 10_001;
+      expect(press().defaultPrevented).toBe(false);
+      await idle();
+      expect(posts(calls)).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("is for the LATEST action: a newer one replaces the older entry, and the older toast's button still works", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 }), mapping(2, { point_id: 42 })));
+    await ready(actions, calls);
+    await unmapOne(actions, spy, 1);
+    await unmapOne(actions, spy, 2);
+    expect(press().defaultPrevented).toBe(true);
+    await waitFor(() => expect(spy.calls).toHaveLength(3));
+    expect(calls.filter((c) => c.method === "POST").map((c) => (c.body as { point_id: number }).point_id)).toEqual([42]);
+    expect(spy.calls[1].options!.signal!.aborted).toBe(true);
+    expect(spy.calls[0].options!.signal!.aborted, "the older toast stays").toBe(false);
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(4));
+    expect(calls.filter((c) => c.method === "POST").map((c) => (c.body as { point_id: number }).point_id)).toEqual([42, 41]);
+    expect(press().defaultPrevented, "the button was used: the key has nothing left").toBe(false);
+  });
+
+  it("an older toast's button does not wipe the newer action's entry", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 }), mapping(2, { point_id: 42 })));
+    await ready(actions, calls);
+    await unmapOne(actions, spy, 1);
+    await unmapOne(actions, spy, 2);
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(3));
+    expect(press().defaultPrevented).toBe(true);
+    await waitFor(() => expect(spy.calls).toHaveLength(4));
+    expect(calls.filter((c) => c.method === "POST").map((c) => (c.body as { point_id: number }).point_id)).toEqual([41, 42]);
+  });
+
+  it("covers a move and a mapping made in Discovery too, each with the toast's signal and title", async () => {
+    const s = store(mapping(1, { asset_id: 2 }), mapping(2));
+    const { calls, actions, spy } = setup(s);
+    await ready(actions, calls);
+    act(() => actions().move([refM(1, "active_power_kw", 2, "kW")]));
+    await screen.findByRole("dialog");
+    await userEvent.selectOptions(within(screen.getByRole("dialog")).getByLabelText("Move to"), "3");
+    await confirm("Move");
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0].options!.action!.title).toBe("Undo (Ctrl+Z)");
+    expect(press().defaultPrevented).toBe(true);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(s.get(1)!.asset_id).toBe(2);
+    act(() => actions().mappedToast({ text: "Mapped 1 point to Room 1.", mappings: [{ id: 2, assetId: 1 }], newAssets: [] }));
+    expect(spy.calls[2].options!.signal).toBeInstanceOf(AbortSignal);
+    expect(press().defaultPrevented).toBe(true);
+    await waitFor(() => expect(spy.calls).toHaveLength(4));
+    expect(s.has(2)).toBe(false);
+    expect(spy.calls[2].options!.signal!.aborted).toBe(true);
+  });
+
+  it("only one hook instance acts on a keypress", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })), {
+      page: (capture) => <><Probes /><Host capture={capture} /><Host capture={() => undefined} /></>,
+    });
+    await ready(actions, calls);
+    await unmapOne(actions, spy, 1);
+    press();
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    await idle();
+    expect(posts(calls)).toBe(1);
+  });
+
+  it("unmounting the host removes the shortcut, but a toast pressed later still works", async () => {
+    const { calls, actions, spy, view } = setup(store(mapping(1, { point_id: 41 })));
+    await ready(actions, calls);
+    await unmapOne(actions, spy, 1);
+    view.unmount();
+    expect(press().defaultPrevented).toBe(false);
+    expect(posts(calls)).toBe(0);
+    pressUndo(spy, 0);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(posts(calls)).toBe(1);
+    await idle();
+  });
+
+  it("undoLatest() starts the latest Undo once and says whether it did", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
+    await ready(actions, calls);
+    await unmapOne(actions, spy, 1);
+    let first = false;
+    let second = true;
+    act(() => { first = actions().undoLatest(); });
+    act(() => { second = actions().undoLatest(); });
+    expect([first, second]).toEqual([true, false]);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(posts(calls)).toBe(1);
     await idle();
   });
 });

@@ -18,13 +18,17 @@ interface MoveRequest { refs: readonly MoveRef[]; what?: string; after?: () => v
 /**
  * What a dialog that has just made mappings tells the page (it unmounts at once, so the page owns the toast): the sentence, the mappings it made
  * (and which asset each is on, for the Undo's check) and the names of the assets it made on the way. `kind: "error"` is a batch that made only
- * part of what was asked: the toast says so and still carries the Undo for the part that went.
+ * part of what was asked: the toast says so and still carries the Undo for the part that went. `after` runs once the Undo has refreshed the lists
+ * (the caller puts the focus somewhere named: the Undo's button leaves with its toast); `undoTitle` is the Undo button's description (the
+ * default tells about Ctrl+Z; a caller whose Undo does less than the toast's words suggest says what it does instead).
  */
 export interface MappedInfo {
   text: string;
   mappings: readonly { id: number; assetId: number; name?: string }[];
   newAssets: readonly string[];
   kind?: "success" | "error";
+  after?: () => void;
+  undoTitle?: string;
 }
 
 interface Options {
@@ -39,7 +43,60 @@ interface Options {
 /** Every list a mapping write moves: the graph, the sources' counts, the assets (their summaries), the fleet, the audit log, billing and the widgets' figures. */
 const REFRESHED = [keys.graph, keys.sources, keys.assets, keys.fleet, keys.auditAll, keys.billing, keys.widgetData] as const;
 
-const undoOptions = (run: () => void): ToastOptions => ({ durationMs: UNDO_MS, action: { label: "Undo", title: "Undo", onAction: run } });
+/** The Undo button's description (its name stays "Undo"): where the keyboard way to it is told. The toast's own live region announces the toast. */
+const UNDO_TITLE = "Undo (Ctrl+Z)";
+
+/**
+ * The latest Undo of any action of this hook, for both routes to it: the toast's button and Ctrl+Z. It lives at module level, not in a hook
+ * instance: an Undo outlives the page that raised it, and a newer Undo (from any page) replaces it. `used` is shared by the two routes, so
+ * whichever comes second does nothing, and the shortcut takes the toast away (`toastGone`: no Undo button may stay on screen that does
+ * nothing). `until` is when the toast's own 10 seconds are up. The model is useTreeMove's `lastUndo`.
+ */
+interface UndoEntry { run: () => void; until: number; used: boolean; toastGone: AbortController }
+let lastUndo: UndoEntry | null = null;
+
+/** Makes `run` the latest Undo and gives the toast its button and the signal that takes the toast away when the shortcut was used instead. */
+function undoOptions(run: () => void, title: string = UNDO_TITLE): ToastOptions {
+  const entry: UndoEntry = { run, until: Date.now() + UNDO_MS, used: false, toastGone: new AbortController() };
+  lastUndo = entry;
+  return {
+    durationMs: UNDO_MS,
+    signal: entry.toastGone.signal,
+    action: {
+      label: "Undo",
+      title,
+      onAction: () => {
+        if (entry.used) return; // Ctrl+Z was first
+        entry.used = true;
+        if (lastUndo === entry) lastUndo = null; // only its own: an older toast's button must not wipe a newer action's entry
+        run(); // the toast is leaving by itself
+      },
+    },
+  };
+}
+
+/** Ctrl+Z: the latest Undo, while its toast is still up. False when there was nothing to start. */
+function startLatestUndo(): boolean {
+  const entry = lastUndo;
+  if (!entry) return false;
+  if (entry.used || Date.now() > entry.until) {
+    lastUndo = null;
+    return false;
+  }
+  entry.used = true;
+  lastUndo = null;
+  entry.toastGone.abort();
+  entry.run(); // through the same queue as the toast's button: see execute()
+  return true;
+}
+
+/**
+ * Where Ctrl+Z is not ours: in a field (the browser's own undo of the text), on the Assets Tree (it undoes its own moves), and beside an open
+ * dialog (the person is answering something else).
+ */
+const shortcutIgnored = (target: EventTarget | null): boolean =>
+  (target instanceof Element && target.closest('input, textarea, select, ul.tree, [contenteditable]:not([contenteditable="false"])') !== null) ||
+  document.querySelector('[role="dialog"]') !== null;
 
 /**
  * Taking mappings off an asset, moving them to another, and the Undo of both and of a mapping made in Discovery (W12a). One confirmation, one
@@ -53,13 +110,17 @@ const undoOptions = (run: () => void): ToastOptions => ({ durationMs: UNDO_MS, a
  * The busy check is made twice, when the action is asked for and again when it is confirmed: an Undo may have been pressed in between.
  *
  * An Undo outlives the page that raised it: its closures hold the toast api, the invalidate function and plain values, never component state.
- * An Undo takes no `after()`: the toast's own focus handling applies when its button goes (the pages' own targets are for the change they raised).
+ * An Undo runs the SAME `after()` as the action it undoes (a mapping made in Discovery: `MappedInfo.after`): the Undo's button leaves with
+ * its toast, which would drop the focus on the body, and the caller's target (the row, the node) is back by then. It also has a second way in:
+ * Ctrl+Z (Cmd+Z), for the latest Undo of any action of this hook while its toast is up. Every mounted instance listens, the entry's `used` flag
+ * lets only one act; `undoLatest()` is the same thing for a caller (and a test) that has no key event.
  */
 export function useMappingActions({ assets, kinds, takenFor }: Options): {
   canEdit: boolean;
   unmap(refs: readonly MappingRef[], opts?: { what?: string; after?: () => void }): void;
   move(refs: readonly MoveRef[], opts?: { what?: string; after?: () => void }): void;
   mappedToast(info: MappedInfo): void;
+  undoLatest(): boolean;
   dialogs: ReactNode;
 } {
   const toast = useToast();
@@ -73,6 +134,17 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
+  }, []);
+  // Ctrl+Z, on the document: the Undo toast is the last thing in the page, far from where the keyboard is. The entry is the module's, so any
+  // instance may start it, and it keeps working after the page that raised it has gone as long as another instance (or none: the toast) is there.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || (event.key ?? "").toLowerCase() !== "z") return; // Ctrl+Shift+Z is redo
+      if (event.defaultPrevented || shortcutIgnored(event.target)) return;
+      if (startLatestUndo()) event.preventDefault();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, []);
 
   const say = (outcome: Outcome, options?: ToastOptions) => toast[outcome.kind](outcome.text, options);
@@ -122,7 +194,7 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
       await execute(() => unmapMappings(refs), (result) => {
         // A delete of unknown outcome keeps its mapping as the LAST of `removed`: the Undo needs to know it, to read a 409 for it as "still mapped".
         const unsureId = result.failed?.unknown ? result.removed[result.removed.length - 1]?.id : undefined;
-        const putBack = () => { void execute(() => restoreMappings(result.removed, nameOf, unsureId), (put) => say(undoOutcome("restore", put, result.removed.length))); };
+        const putBack = () => { void execute(() => restoreMappings(result.removed, nameOf, unsureId), (put) => say(undoOutcome("restore", put, result.removed.length)), opts.after); };
         say(unmapOutcome(result, where.text, refs.length), result.removed.length > 0 ? undoOptions(putBack) : undefined);
       }, opts.after);
     })();
@@ -146,19 +218,19 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
     }
     const target = labels.get(toAssetId) ?? "the asset";
     void execute(() => moveMappings(request.refs, toAssetId), (result) => {
-      const back = () => { void execute(() => moveBack(result.moved), (put) => say(undoOutcome("moveBack", put, result.moved.length))); };
+      const back = () => { void execute(() => moveBack(result.moved), (put) => say(undoOutcome("moveBack", put, result.moved.length)), request.after); };
       const outcome = moveOutcome(result, request.refs.length, target, request.refs.length === 1 ? request.refs[0].metric : undefined);
       say(outcome, result.moved.length > 0 ? undoOptions(back) : undefined);
     }, request.after);
   }
 
-  function mappedToast({ text, mappings, newAssets, kind = "success" }: MappedInfo) {
+  function mappedToast({ text, mappings, newAssets, kind = "success", after, undoTitle }: MappedInfo) {
     if (!canEdit || mappings.length === 0) {
       toast[kind](text);
       return;
     }
-    const undo = () => { void execute(() => deleteMappings(mappings), (result) => say(undoOutcome("deleteMade", result, mappings.length, newAssets))); };
-    toast[kind](text, undoOptions(undo));
+    const undo = () => { void execute(() => deleteMappings(mappings), (result) => say(undoOutcome("deleteMade", result, mappings.length, newAssets)), after); };
+    toast[kind](text, undoOptions(undo, undoTitle));
   }
 
   const dialogs = (
@@ -172,5 +244,5 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
       )}
     </>
   );
-  return { canEdit, unmap, move, mappedToast, dialogs };
+  return { canEdit, unmap, move, mappedToast, undoLatest: startLatestUndo, dialogs };
 }
