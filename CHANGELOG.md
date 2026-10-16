@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## w12b (2026-10-16, MERGE_PENDING)
+## w12b (2026-10-16, 0909a1e)
 
 w12b (Discovery speed and navigation) makes the Discovery canvas quick on big graphs and adds the tools for working through them. It was
 measured first: the slow drag over about 100 to 150 points came from the dashed lines between a group and its points, which are tens of
