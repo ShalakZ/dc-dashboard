@@ -12,7 +12,18 @@ export const nodeId = {
   point: (id: number) => `point:${id}`,
   asset: (id: number) => `asset:${id}`,
   unidentified: (host: string, port: number) => `unid:${host}:${port}`,
+  /** W12b: the "Show 50 more" control at the end of an open group's points. It has no place of its own (it is never saved to the layout). */
+  more: (clusterId: string) => `more:${clusterId}`,
 };
+
+/** W12b: an open group draws this many points at first; "Show 50 more" adds this many again. */
+export const PAGE_SIZE = 50;
+/**
+ * W12b: a group that draws more points than this draws the edges from the group to its points SOLID. A dashed edge costs the browser one dash per few
+ * pixels of its length, and these edges are as long as the list is tall, so the cost grows with the square of the points: measured, a drag stays at
+ * 60 frames per second up to 300 points and falls to 24 at 500 and 8 at 1,000 (and stays at 60 with the dashes off).
+ */
+export const FAN_DASH_LIMIT = 150;
 
 export interface OpenState {
   sources: ReadonlySet<number>;
@@ -42,6 +53,10 @@ export type NodeActions = {
   menuNewAsset?: (nodeId: string) => void;
   /** W12a: the asset list the New asset form needs is not read yet: the buttons that open it (a group's New asset…, the "+") say so with aria-disabled. */
   formWait?: boolean;
+  /** W12b: the `more` node's button: show the next page of a group's points (the argument is the group's node id). */
+  onMore?: (clusterId: string) => void;
+  /** W12b: an asset node with sub-assets: hide or show them (given to every role: it only changes the view). */
+  onToggleAssets?: (nodeId: string) => void;
 };
 /** One source that has mappings on an asset, as the asset node's menu lists it (W12a). */
 export type MappedSource = { sourceId: number; sourceName: string; count: number };
@@ -55,9 +70,15 @@ export type SourceNodeData = NodeActions & {
 };
 export type ClusterNodeData = NodeActions & {
   sourceId: number; key: string; label: string; count: number; mappedCount: number; expanded: boolean; ungrouped: boolean;
+  /** W12b: the points the "Unmapped only" filter lets through, and how many of them an open group draws (the page; `count` stays the total). Absent = `count`. */
+  visibleCount?: number; shownCount?: number;
 };
 export type PointNodeData = NodeActions & { sourceId: number; clusterKey: string; point: GraphPoint };
+/** W12b: the "Show 50 more (70 left)" control at the end of a paged group's points. `step` is how many the next press adds (the page, or what is left). */
+export type MoreNodeData = NodeActions & { clusterId: string; label: string; left: number; step: number };
 export type AssetNodeData = NodeActions & {
+  /** W12b: `children` = how many sub-assets it has; `collapsed` = they are hidden; `mappedInside` = points mapped to it or anything under it (a collapsed asset only); `navParent` = the node id of the asset this one was reached from in the walk (null for a walk root). */
+  children?: number; collapsed?: boolean; mappedInside?: number; navParent?: string | null;
   asset: GraphModel["assets"][number]; depth: number;
   /** W12a: the sources with mappings on this asset (at most five, by name), for a role with assets.edit; each is a menu item that takes them all off. */
   mapped?: MappedSource[];
@@ -102,6 +123,72 @@ export function groupsOf(source: GraphSource): Group[] {
   return groups;
 }
 
+/**
+ * W12b: how the graph is looked at, over and above what is open. Every field has a neutral default (`NO_VIEW`): no filter, nothing paged, no asset
+ * folded, so a caller that passes no view gets exactly the graph it always got.
+ */
+export interface GraphView {
+  /** "Unmapped only": mapped points, groups whose points are all mapped and sources with nothing left to map are not drawn, and no mapped edge is. */
+  unmappedOnly: boolean;
+  /** Group node id -> how many of its (visible) points the page shows. Absent = `pageSize`. Session only; `pruneShown` drops the entries of closed groups. */
+  shown: ReadonlyMap<string, number>;
+  /** Asset ids whose sub-assets are hidden. */
+  assetsClosed: ReadonlySet<number>;
+  /** An open group with more visible points than this draws this many and a `more` node. `Infinity` = never page (the old behaviour). */
+  pageSize: number;
+}
+export const NO_VIEW: GraphView = Object.freeze({ unmappedOnly: false, shown: new Map<string, number>(), assetsClosed: new Set<number>(), pageSize: Infinity });
+
+/** The points of a group the view lets through. "Mapped" is `asset_id !== null` everywhere (the summary, the group's count, the filter). */
+export function visiblePoints(group: Group, view: GraphView): GraphPoint[] {
+  return view.unmappedOnly ? group.points.filter((p) => p.asset_id === null) : group.points;
+}
+
+/** How many points an OPEN group draws: all the visible ones, or the page when there are more than a page. */
+export function drawnCount(group: Group, clusterId: string, view: GraphView): number {
+  const visible = visiblePoints(group, view).length;
+  return visible <= view.pageSize ? visible : Math.min(visible, view.shown.get(clusterId) ?? view.pageSize);
+}
+
+/** A group is hidden by the filter when it has points and every one of them is mapped. A group with no points stays (it is not "all mapped"). */
+export function groupVisible(group: Group, view: GraphView): boolean {
+  return !view.unmappedOnly || group.points.length === 0 || group.points.some((p) => p.asset_id === null);
+}
+
+/** A source is hidden by the filter when it has at least one point and every point is mapped. A source with no points stays (it may need credentials). */
+export function sourceVisible(source: GraphSource, view: GraphView): boolean {
+  if (!view.unmappedOnly) return true;
+  const groups = groupsOf(source);
+  const total = groups.reduce((n, g) => n + g.points.length, 0);
+  return total === 0 || groups.some((g) => g.points.some((p) => p.asset_id === null));
+}
+
+/** The page extents of groups that are still open (a closed group, or one of a closed source, starts again at one page). New map; the one passed in is never changed. */
+export function pruneShown(shown: ReadonlyMap<string, number>, open: OpenState): ReadonlyMap<string, number> {
+  const kept = new Map<string, number>();
+  for (const [id, n] of shown) {
+    const sourceId = Number(id.split(":")[1]);
+    if (open.clusters.has(id) && open.sources.has(sourceId)) kept.set(id, n);
+  }
+  return kept.size === shown.size ? shown : kept;
+}
+
+/**
+ * The `more` node ids a drag takes along: a source's groups' (every group, drawn or not: the caller keeps the ones that are on the canvas) or one
+ * group's. They are NOT in `descendantNodeIds`: that list also feeds the places that are saved, and a `more` node never has a place of its own.
+ */
+export function moreNodeIds(model: GraphModel, id: string): string[] {
+  if (id.startsWith("src:")) {
+    const source = model.sources.find((s) => nodeId.source(s.id) === id);
+    return source ? groupsOf(source).map((g) => nodeId.more(nodeId.cluster(source.id, g.key))) : [];
+  }
+  if (!id.startsWith("cluster:")) return [];
+  for (const source of model.sources) {
+    if (id.startsWith(`cluster:${source.id}:`) && groupsOf(source).some((g) => nodeId.cluster(source.id, g.key) === id)) return [nodeId.more(id)];
+  }
+  return [];
+}
+
 /** Number of mapped points per existing asset. Points mapped to an asset that is not in the model are ignored. */
 function countMapped(points: Iterable<GraphPoint>, assetIds: ReadonlySet<number>, into = new Map<number, number>()) {
   for (const p of points) {
@@ -123,6 +210,8 @@ export interface BuildOptions {
    * all past `LIVE_EDGE_LIMIT`. The page passes false under reduced motion.
    */
   animate?: boolean;
+  /** W12b: the filter, the pages and the folded assets. Absent = `NO_VIEW`. */
+  view?: GraphView;
 }
 
 /** The server refuses a layout id longer than this, and with it the whole request. */
