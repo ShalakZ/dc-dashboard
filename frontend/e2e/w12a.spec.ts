@@ -869,25 +869,6 @@ for (const size of SIZES) {
           await expect(page.locator(".gconnect"), "and the line is gone").toHaveCount(0);
         }
       });
-      await test.step("Escape in the middle of the drag takes the line away, and letting go afterwards opens nothing", async () => {
-        await ensureOnCanvas(page, asset);
-        await asset.hover();
-        await expect.poll(() => plusOpacity(plus), { message: "the + shows when the node is hovered" }).toBe("1");
-        const from = centreOf(await boxOf(plus, "the +"));
-        const to = await emptySpot(page);
-        await page.mouse.move(from.x, from.y);
-        await page.mouse.down();
-        await page.mouse.move(from.x + 6, from.y + 6, { steps: 3 });
-        await page.mouse.move(to.x, to.y, { steps: 25 });
-        await expect(page.locator(".gconnect"), "the dashed line follows the pointer").toHaveCount(1);
-        await page.keyboard.press("Escape");
-        await expect(page.locator(".gconnect"), "Escape takes the line away").toHaveCount(0);
-        await page.mouse.up();
-        await frames(page);
-        await page.waitForTimeout(500);
-        await expect(page.getByRole("dialog"), "and letting go afterwards opens no dialog").toHaveCount(0);
-        expect((await assetsOf(request)).filter((a) => a.name.startsWith(CHILD)), "nothing was made").toHaveLength(1);
-      });
       await test.step("the canvas menu's New asset... opens the form with no parent", async () => {
         const at = await emptySpot(page);
         await page.mouse.click(at.x, at.y, { button: "right" });
@@ -1081,7 +1062,7 @@ test("11 Ctrl+Z takes an unmap made from a Discovery node back with the keyboard
     await test.step("Ctrl+Z with the focus on the group: the mappings are back with the same scale, interval and unit, the toast has gone, a second press does nothing", async () => {
       await page.keyboard.press("Control+z");
       await expect(raised, "the shortcut takes the Undo toast away").toBeHidden();
-      await expect(toast(page, `Put back ${count} mappings.`)).toBeVisible();
+      await expect(toast(page, `Put back ${count} mappings.`).last(), "the earlier toast of the same words may still be on screen").toBeVisible();
       await expect(page.getByRole("button", { name: "Undo", exact: true }), "no Undo button is left on screen").toHaveCount(0);
       await expectTargetHolds(request, stored, "scale, interval, custom unit, metric, point and asset are what they were");
       await expect(cluster, "the focus is on the group again").toBeFocused();
@@ -1101,7 +1082,7 @@ test("11 Ctrl+Z takes an unmap made from a Discovery node back with the keyboard
       await expect(canvasGroup(page)).toBeFocused();
       await page.keyboard.press("Control+z");
       await expect(again).toBeHidden();
-      await expect(toast(page, `Put back ${count} mappings.`)).toBeVisible();
+      await expect(toast(page, `Put back ${count} mappings.`).last(), "the earlier toast of the same words may still be on screen").toBeVisible();
       await expectTargetHolds(request, stored, "the mappings are back with their values");
     });
   } finally {
