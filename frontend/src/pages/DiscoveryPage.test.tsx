@@ -59,6 +59,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
       nodes, edges, nodeTypes, colorMode, edgesFocusable, nodesDraggable, snapToGrid, snapGrid, selectionKeyCode, multiSelectionKeyCode, children,
       onNodeClick, onNodeDragStart, onNodeDrag, onNodeDragStop, onNodesChange, onNodeMouseEnter, onNodeMouseLeave,
       onNodeContextMenu, onPaneContextMenu, onSelectionContextMenu, onMoveStart, nodesConnectable, isValidConnection, connectionLineComponent, onConnectEnd,
+      ariaLabelConfig,
     }: any) => {
       flow.state.nodes = nodes;
       flow.state.connect = { nodesConnectable, isValidConnection, connectionLineComponent, onConnectEnd };
@@ -67,6 +68,8 @@ vi.mock("@xyflow/react", async (importOriginal) => {
           data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)} data-nodes-draggable={String(nodesDraggable)}
           data-snap={String(snapToGrid)} data-snap-grid={snapGrid?.join(",")} data-selection-key={String(selectionKeyCode)} data-multi-key={String(multiSelectionKeyCode)}
         >
+          {/* The library's hidden description of a node (`aria-describedby` on every focusable wrapper points at it); the page overrides its words through `ariaLabelConfig`. */}
+          <div id="flow-node-desc" style={{ display: "none" }}>{ariaLabelConfig?.["node.a11yDescription.default"] ?? "Press enter or space to select a node."}</div>
           {/* Like the real library: the pane is the PARENT of the viewport, so every node and every edge lives INSIDE `.react-flow__pane`. The pane's own
               context menu is the one aimed at the pane itself, never at a node or an edge that bubbles up to it (xyflow's `wrapHandler` checks the target). */}
           <div data-testid="pane" className="react-flow__pane" onContextMenu={(e) => { if (e.target === e.currentTarget) onPaneContextMenu?.(e); }}>
@@ -75,7 +78,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
               const Node = nodeTypes[n.type];
               const dropped = () => ({ ...n, position: flow.state.dropAt });
               return (
-                <div key={n.id} className="react-flow__node" role={(n.focusable ?? true) ? "group" : undefined} aria-label={n.ariaLabel} tabIndex={(n.focusable ?? true) ? 0 : undefined} data-selectable={String((n.selectable ?? true))} data-focusable={String((n.focusable ?? true))} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-selected={String(!!n.selected)} data-class={n.className ?? ""} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)} onContextMenu={(e) => onNodeContextMenu?.(e, n)}>
+                <div key={n.id} className={n.selected ? "react-flow__node selected" : "react-flow__node"} role={(n.focusable ?? true) ? "group" : undefined} aria-label={n.ariaLabel} aria-describedby={(n.focusable ?? true) ? "flow-node-desc" : undefined} tabIndex={(n.focusable ?? true) ? 0 : undefined} data-selectable={String((n.selectable ?? true))} data-focusable={String((n.focusable ?? true))} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-selected={String(!!n.selected)} data-class={n.className ?? ""} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)} onContextMenu={(e) => onNodeContextMenu?.(e, n)}>
                   <Node id={n.id} data={n.data} />
                   <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
                   <button data-testid={`select-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "select", selected: true }])} />
@@ -2247,8 +2250,9 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(screen.getByText(/Dashed: discovered/).textContent!.trim().length).toBeLessThan(100);
       await userEvent.click(screen.getByRole("button", { name: TIP }));
       const lines = within(await screen.findByRole("note")).getAllByRole("listitem").map((item) => item.textContent);
-      expect(lines).toHaveLength(7);
+      expect(lines).toHaveLength(8);
       expect(lines[0]).toContain("Alt or Option moves it alone.");
+      expect(lines.join("\n")).toMatch(/Arrow keys move between nodes\. Enter opens or closes one\./);
       expect(lines.join("\n")).toContain("Ctrl+Z undoes the last mapping change for 10 seconds.");
       expect(lines.join("\n")).toMatch(/Shift-drag selects/);
       expect(lines.join("\n")).toMatch(/Ctrl\+K finds/);
@@ -3516,6 +3520,402 @@ describe("DiscoveryPage Unmapped only, Show more, folded assets and branches (W1
       await mapPoint(11);
       await new Promise((resolve) => setTimeout(resolve, 120));
       expect(node("point:12")).not.toHaveFocus();
+    });
+  });
+});
+
+// ---- W12b: the arrow keys, the camera rules of a jump, the screen-reader text and the rule that the focus never lands on the page body ----
+
+describe("DiscoveryPage arrow keys, camera and focus rules (W12b)", () => {
+  const DESCRIPTION = "Arrow keys move between nodes. Enter opens or closes. Space selects.";
+  const FILTER = "dcdash.discovery.unmapped-only";
+  const FOLDED = "dcdash.discovery.assets-closed";
+  const expand = async (name: string) => userEvent.click(await screen.findByRole("button", { name: `Expand ${name}` }));
+  /** Inside act: the wrapper's onFocus updates the path highlight. */
+  const focusOn = (id: string) => act(() => node(id).focus());
+  const canvasGroup = () => screen.getByRole("group", { name: "Discovery graph" });
+  const later = (ms = 100) => new Promise((resolve) => setTimeout(resolve, ms));
+  const switchOf = () => screen.getByRole("switch", { name: "Unmapped only" });
+  /** The canvas is 800x600 (jsdom measures nothing). */
+  const sized = () => {
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(800);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(600);
+  };
+  /** Waits for the open source's pan to be over (it runs after a paint), then moves the camera so that no node is in sight. */
+  const lookAway = async (zoom = 1) => {
+    await screen.findByText("LVP01 (2)");
+    await later(80);
+    flow.state.viewport = { x: -3000, y: -3000, zoom };
+    flow.setViewport.mockClear();
+  };
+  const pressed = async (key: string, expected: string) => {
+    await userEvent.keyboard(`{${key}}`);
+    await waitFor(() => expect(node(expected)).toHaveFocus());
+  };
+  const mapped = (id: number) => kw(id, `pt ${id}`, { asset_id: 10, mapping_id: id + 500, mapped_metric: "voltage_v" });
+
+  beforeEach(() => {
+    window.localStorage.removeItem(FILTER);
+    window.localStorage.removeItem(FOLDED);
+    // jsdom measures nothing, and the page waits for a node to be measured before it aims the camera at it: every node is measured unless a test says otherwise.
+    flow.getNodes.mockImplementation(() => flow.state.nodes.map((n: any) => (n.measured ? n : { ...n, measured: { width: 220, height: 80 } })));
+    flow.setViewport.mockImplementation(async () => true);
+    flow.state.intersecting = [];
+  });
+  afterEach(() => {
+    flow.getNodes.mockImplementation(() => flow.state.nodes);
+    flow.setViewport.mockImplementation(async () => true);
+    vi.restoreAllMocks();
+  });
+
+  describe("the arrow keys", () => {
+    it("walk the drawn tree: down and up between siblings, right into the first child, left to the parent", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      focusOn("src:1");
+      await pressed("ArrowRight", "cluster:1:LVP01");
+      await pressed("ArrowDown", "cluster:1:LVP02");
+      await pressed("ArrowUp", "cluster:1:LVP01");
+      await pressed("ArrowRight", "point:1");
+      await pressed("ArrowDown", "point:2");
+      await pressed("ArrowLeft", "cluster:1:LVP01");
+      await pressed("ArrowLeft", "src:1");
+      await pressed("ArrowDown", "unid:10.0.0.9:8080"); // the unidentified services stand in the sources' column
+      expect(document.body).not.toHaveFocus();
+    });
+
+    it("the assets are a column of their own: right goes to a sub-asset, left back to its parent, and down never leaves the column", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Site");
+      focusOn("asset:10");
+      await pressed("ArrowRight", "asset:11");
+      await pressed("ArrowLeft", "asset:10");
+      await userEvent.keyboard("{ArrowDown}"); // nothing below Site in its column: the key is ours all the same
+      await later(120);
+      expect(node("asset:10")).toHaveFocus();
+    });
+
+    it("from the canvas itself, Down or Right goes to the first node and Up or Left does nothing", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      act(() => canvasGroup().focus());
+      await userEvent.keyboard("{ArrowUp}{ArrowLeft}");
+      await later(120);
+      expect(canvasGroup()).toHaveFocus();
+      await pressed("ArrowDown", "src:1");
+    });
+
+    it("an arrow pressed inside a node's own button is left alone, and so is a node that is selected (React Flow moves it 5 px)", async () => {
+      mockFetch(routes("operator"));
+      open();
+      const toggle = await screen.findByRole("button", { name: "Expand Plant OPC" });
+      act(() => toggle.focus());
+      expect(fireEvent.keyDown(toggle, { key: "ArrowDown" })).toBe(true); // not prevented
+      await userEvent.click(screen.getByTestId("select-src:1"));
+      focusOn("src:1");
+      expect(fireEvent.keyDown(node("src:1"), { key: "ArrowDown" })).toBe(true);
+      await later(120);
+      expect(node("src:1")).toHaveFocus();
+      expect(flow.setViewport).not.toHaveBeenCalled();
+    });
+
+    it("Enter opens or closes a source or a group and folds an asset that has sub-assets; the focus stays on the node", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      focusOn("src:1");
+      expect(fireEvent.keyDown(node("src:1"), { key: "Enter" })).toBe(false); // ours: React Flow never sees it
+      await screen.findByText("LVP01 (2)");
+      expect(node("src:1")).toHaveFocus();
+      focusOn("cluster:1:LVP01");
+      fireEvent.keyDown(node("cluster:1:LVP01"), { key: "Enter" });
+      await waitFor(() => expect(node("point:1")).not.toBeNull());
+      expect(node("cluster:1:LVP01")).toHaveFocus();
+      fireEvent.keyDown(node("cluster:1:LVP01"), { key: "Enter" });
+      await waitFor(() => expect(node("point:1")).toBeNull());
+      expect(node("cluster:1:LVP01")).toHaveFocus();
+      focusOn("asset:10");
+      fireEvent.keyDown(node("asset:10"), { key: "Enter" });
+      await waitFor(() => expect(node("asset:11")).toBeNull());
+      expect(node("asset:10")).toHaveFocus();
+      fireEvent.keyDown(node("asset:10"), { key: "Enter" });
+      await waitFor(() => expect(node("asset:11")).not.toBeNull());
+      expect(node("asset:10")).toHaveFocus();
+    });
+
+    it("Enter on a point or on an asset with no sub-assets does not toggle anything and is left to React Flow (it selects)", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      focusOn("point:1");
+      expect(fireEvent.keyDown(node("point:1"), { key: "Enter" })).toBe(true);
+      focusOn("asset:11");
+      expect(fireEvent.keyDown(node("asset:11"), { key: "Enter" })).toBe(true);
+      await later(120);
+      expect(screen.getByRole("button", { name: "Collapse LVP01" })).toBeInTheDocument();
+      expect(node("asset:11")).not.toBeNull();
+      expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("the camera and the focus of a jump", () => {
+    it("pans and never zooms, and the focus lands only after the glide is over, without scrolling the page", async () => {
+      sized();
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await lookAway(1.5);
+      let release!: () => void;
+      flow.setViewport.mockImplementationOnce(() => new Promise<boolean>((resolve) => { release = () => resolve(true); }));
+      const focus = vi.spyOn(node("cluster:1:LVP02"), "focus");
+      focusOn("cluster:1:LVP01");
+      await userEvent.keyboard("{ArrowDown}");
+      await waitFor(() => expect(flow.setViewport).toHaveBeenCalledTimes(1));
+      const [view, options] = flow.setViewport.mock.calls[0] as [{ x: number; y: number; zoom: number }, { duration: number }];
+      expect(view.zoom).toBe(1.5); // the zoom is the person's
+      expect(view.x).toBeGreaterThan(-3000);
+      expect(view.y).toBeGreaterThan(-3000);
+      expect(options).toEqual({ duration: 300 });
+      expect(focus).not.toHaveBeenCalled(); // React Flow's own focus handler would cut the glide short
+      release();
+      await waitFor(() => expect(node("cluster:1:LVP02")).toHaveFocus());
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    });
+
+    it("does not move the camera for a node that is already in view", async () => {
+      sized();
+      flow.state.viewport = { x: 100, y: 100, zoom: 1 };
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await screen.findByText("LVP01 (2)");
+      await later(80);
+      flow.setViewport.mockClear();
+      focusOn("cluster:1:LVP01");
+      await pressed("ArrowDown", "cluster:1:LVP02");
+      expect(flow.setViewport).not.toHaveBeenCalled();
+    });
+
+    it("moves at once under reduced motion", async () => {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true, writable: true,
+        value: (query: string) => ({ matches: query.includes("reduced-motion"), media: query, addEventListener: () => undefined, removeEventListener: () => undefined }),
+      });
+      try {
+        sized();
+        mockFetch(routes("operator"));
+        open();
+        await expand("Plant OPC");
+        await lookAway();
+        focusOn("cluster:1:LVP01");
+        await pressed("ArrowDown", "cluster:1:LVP02");
+        expect(flow.setViewport.mock.calls[0][1]).toEqual({ duration: 0 });
+      } finally {
+        delete (window as { matchMedia?: unknown }).matchMedia;
+      }
+    });
+
+    it("waits until the node is measured: a new node is hidden until then, and a hidden node cannot take the focus", async () => {
+      sized();
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await lookAway();
+      let reads = 0; // how often the page has looked at the target
+      flow.getNodes.mockImplementation(() => flow.state.nodes.map((n: any) => {
+        if (n.id !== "cluster:1:LVP02") return { ...n, measured: { width: 220, height: 80 } };
+        reads += 1;
+        return { ...n, measured: reads > 3 ? { width: 220, height: 80 } : undefined };
+      }));
+      const readsWhenAimed: number[] = [];
+      flow.setViewport.mockImplementation(async () => { readsWhenAimed.push(reads); return true; });
+      focusOn("cluster:1:LVP01");
+      await pressed("ArrowDown", "cluster:1:LVP02");
+      expect(readsWhenAimed).toHaveLength(1);
+      expect(readsWhenAimed[0]).toBeGreaterThan(3);
+    });
+
+    it("gives up waiting after about ten frames and goes on with the size of a node it has not been told", async () => {
+      sized();
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await lookAway();
+      flow.getNodes.mockImplementation(() => flow.state.nodes.map((n: any) => ({ ...n, measured: undefined })));
+      focusOn("cluster:1:LVP01");
+      await userEvent.keyboard("{ArrowDown}");
+      await waitFor(() => expect(node("cluster:1:LVP02")).toHaveFocus(), { timeout: 2000 });
+      expect(flow.setViewport).toHaveBeenCalledTimes(1);
+    });
+
+    it("Show more pans to the first new point without zooming, then focuses it", async () => {
+      sized();
+      const group = Array.from({ length: 120 }, (_, i) => kw(1000 + i, `BIG pt ${i}`));
+      mockFetch(routes("operator", world([srcOf(1, "Big", { clusters: [{ key: "BIG", points: group }], point_count: 120 })])));
+      open();
+      await expand("Big");
+      await expand("BIG");
+      await later(80);
+      flow.state.viewport = { x: -3000, y: -3000, zoom: 0.5 };
+      flow.setViewport.mockClear();
+      fireEvent.click(within(node("more:cluster:1:BIG")).getByRole("button", { name: /^Show 50 more points of BIG/ }));
+      await waitFor(() => expect(node("point:1050")).toHaveFocus());
+      expect(flow.setViewport).toHaveBeenCalledTimes(1);
+      expect((flow.setViewport.mock.calls[0][0] as { zoom: number }).zoom).toBe(0.5);
+    });
+  });
+
+  describe("what a screen reader hears", () => {
+    it("every node is described by the page's own words about the keys, not the library's", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      expect(node("src:1")).toHaveAccessibleDescription(DESCRIPTION);
+      expect(node("asset:10")).toHaveAccessibleDescription(DESCRIPTION);
+    });
+
+    it("the tip lists the arrow keys", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByRole("button", { name: "What can I do on the canvas?" }));
+      const lines = within(await screen.findByRole("note")).getAllByRole("listitem").map((item) => item.textContent);
+      expect(lines).toContain("Arrow keys move between nodes. Enter opens or closes one.");
+    });
+  });
+
+  describe("the focus never lands on the page body", () => {
+    it("Collapse all with the focus on a point: the source, the nearest node still drawn, takes it", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      focusOn("point:1");
+      fireEvent.click(screen.getByRole("button", { name: "Collapse all" })); // a click that leaves the focus where it is
+      await waitFor(() => expect(node("point:1")).toBeNull());
+      await waitFor(() => expect(node("src:1")).toHaveFocus());
+    });
+
+    it("Expand all leaves the focus on the node that had it", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      focusOn("point:1");
+      fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
+      await waitFor(() => expect(node("point:3")).not.toBeNull());
+      await later();
+      expect(node("point:1")).toHaveFocus();
+    });
+
+    it("a node's Collapse this branch (from its menu) leaves the focus on that node", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      fireEvent.contextMenu(node("src:1"));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Plant OPC" })).getByRole("menuitem", { name: "Collapse this branch" }));
+      await waitFor(() => expect(node("cluster:1:LVP01")).toBeNull());
+      await later();
+      expect(node("src:1")).toHaveFocus();
+    });
+
+    it("the bar's Collapse selection and Expand this branch give the focus back to their chevron, never to the body", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      await userEvent.click(screen.getByTestId("select-cluster:1:LVP01"));
+      await userEvent.click(screen.getByRole("button", { name: "More ways to collapse" }));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Collapse options" })).getByRole("menuitem", { name: "Collapse selection" }));
+      await waitFor(() => expect(node("point:1")).toBeNull());
+      await later();
+      expect(screen.getByRole("button", { name: "More ways to collapse" })).toHaveFocus();
+      await userEvent.click(screen.getByRole("button", { name: "More ways to expand" }));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Expand options" })).getByRole("menuitem", { name: "Expand this branch" }));
+      await waitFor(() => expect(node("point:1")).not.toBeNull());
+      await later();
+      expect(screen.getByRole("button", { name: "More ways to expand" })).toHaveFocus();
+    });
+
+    it("folding an asset by its button or by Enter keeps the focus", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Site");
+      await userEvent.click(screen.getByRole("button", { name: "Hide sub-assets of Site" }));
+      expect(node("asset:11")).toBeNull();
+      expect(screen.getByRole("button", { name: "Show sub-assets of Site" })).toHaveFocus();
+      focusOn("asset:10");
+      fireEvent.keyDown(node("asset:10"), { key: "Enter" });
+      await waitFor(() => expect(node("asset:11")).not.toBeNull());
+      await later();
+      expect(node("asset:10")).toHaveFocus();
+    });
+
+    describe("Unmapped only", () => {
+      const two = () => world([
+        srcOf(1, "Alpha", { clusters: [{ key: "G1", points: [mapped(11), kw(12, "pt 12")] }, { key: "G2", points: [mapped(21)] }], point_count: 3 }),
+        srcOf(2, "Omega", { clusters: [{ key: "H", points: [mapped(31)] }], point_count: 1 }),
+      ]);
+
+      it("the switch keeps the focus it was given by a click", async () => {
+        mockFetch(routes("operator", two()));
+        open();
+        await screen.findByText("Alpha");
+        await userEvent.click(switchOf());
+        expect(switchOf()).toBeChecked();
+        expect(switchOf()).toHaveFocus();
+      });
+
+      it("the point that goes: the group that stays takes the focus", async () => {
+        mockFetch(routes("operator", two()));
+        open();
+        await expand("Alpha");
+        await expand("G1");
+        focusOn("point:11");
+        fireEvent.click(switchOf());
+        await waitFor(() => expect(node("point:11")).toBeNull());
+        await waitFor(() => expect(node("cluster:1:G1")).toHaveFocus());
+      });
+
+      it("the group goes too: the source takes the focus", async () => {
+        mockFetch(routes("operator", two()));
+        open();
+        await expand("Alpha");
+        await expand("G2");
+        focusOn("point:21");
+        fireEvent.click(switchOf());
+        await waitFor(() => expect(node("cluster:1:G2")).toBeNull());
+        await waitFor(() => expect(node("src:1")).toHaveFocus());
+      });
+
+      it("the whole branch goes: the canvas group, which is named, takes the focus", async () => {
+        mockFetch(routes("operator", two()));
+        open();
+        await expand("Omega");
+        await expand("H");
+        focusOn("point:31");
+        fireEvent.click(switchOf());
+        await waitFor(() => expect(node("src:2")).toBeNull());
+        await waitFor(() => expect(canvasGroup()).toHaveFocus());
+      });
+
+      it("a focus that is still on a node that stands is left alone", async () => {
+        mockFetch(routes("operator", two()));
+        open();
+        await expand("Alpha");
+        await expand("G1");
+        focusOn("point:12");
+        fireEvent.click(switchOf());
+        await waitFor(() => expect(node("point:11")).toBeNull());
+        await later();
+        expect(node("point:12")).toHaveFocus();
+      });
     });
   });
 });

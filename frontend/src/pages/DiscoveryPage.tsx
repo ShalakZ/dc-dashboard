@@ -33,6 +33,7 @@ import { useCanvasMenu } from "../hooks/useCanvasMenu";
 import { useConfirm } from "../hooks/useConfirm";
 import { useCreateAsset } from "../hooks/useCreateAsset";
 import { useGraphHighlight } from "../hooks/useGraphHighlight";
+import { useGraphNav } from "../hooks/useGraphNav";
 import { useMappingActions, type MappedInfo } from "../hooks/useMappingActions";
 import { reducedMotion, useReducedMotion } from "../hooks/useReducedMotion";
 import { afterPaint } from "../lib/afterPaint";
@@ -45,6 +46,7 @@ import {
 import { cameraMs, keepInView, unionRect } from "../lib/graphCamera";
 import { buildFindIndex, findMatches, findPlan, type FindEntry } from "../lib/graphFind";
 import { alignGuides, type Rect } from "../lib/graphGuides";
+import { navIndex } from "../lib/graphNav";
 import {
   readAssetsClosed, readSnap, readUnmappedOnly, SNAP_GRID, writeAssetsClosed, writeSnap, writeUnmappedOnly,
 } from "../lib/graphPrefs";
@@ -68,6 +70,7 @@ function HintLine() {
           <li>Shift-drag selects. Ctrl or Cmd adds.</li>
           <li>Ctrl+K finds while the canvas has focus.</li>
           <li>Right-click or Shift+F10 opens the actions.</li>
+          <li>Arrow keys move between nodes. Enter opens or closes one.</li>
           <li>Ctrl+Z undoes the last mapping change for 10 seconds.</li>
           <li>Hovering or selecting lights the path.</li>
           <li>Click empty space or press Escape to clear a selection.</li>
@@ -81,6 +84,16 @@ function HintLine() {
 const NODE_W = 220;
 const NODE_H = 80;
 const rectOf = (n: Node): Rect => ({ x: n.position.x, y: n.position.y, w: n.measured?.width ?? NODE_W, h: n.measured?.height ?? NODE_H });
+/** A new node is `visibility: hidden` until React Flow has measured it, and a hidden element cannot take the focus: a jump waits for the measure, at most this many frames. */
+const MEASURE_FRAMES = 10;
+const FRAME_MS = 16;
+const isMeasured = (n: Node) => n.measured?.width !== undefined && n.measured?.height !== undefined;
+const nap = (ms: number) => new Promise<void>((resolve) => { window.setTimeout(resolve, ms); });
+/**
+ * What a screen reader is told when a node takes the focus. The library's own sentence says Enter or Space selects it and the arrows move a SELECTED node, which
+ * is no longer all there is to say here. Module level, so the prop keeps its identity.
+ */
+const ARIA_LABELS = { "node.a11yDescription.default": "Arrow keys move between nodes. Enter opens or closes. Space selects." };
 
 /** The alignment guides while a node is dragged. Visual only; if a measurement ever shows they cost a frame, this is the one switch (the helper and its tests stay). */
 const GUIDES_ENABLED = true;
@@ -90,6 +103,11 @@ const FLASH_MS = 1500;
 const SNAP_GRID_XY: [number, number] = [SNAP_GRID, SNAP_GRID];
 const NO_IDS: readonly string[] = [];
 const selectorId = (id: string) => id.replace(/["\\]/g, "\\$&");
+/** What takes the focus for a node: its wrapper, or, for the "show more" node (its wrapper is not a stop), its button. Null when the node is not on the canvas. */
+function focusTargetOf(root: HTMLElement | null, id: string): HTMLElement | null {
+  const wrapper = root?.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectorId(id)}"]`) ?? null;
+  return id.startsWith("more:") ? wrapper?.querySelector<HTMLElement>(".gnode-more button") ?? null : wrapper;
+}
 
 /**
  * What a drag works from, taken ONCE when it starts (the callbacks must not read the maps they are changing): which nodes are dragged, where every
@@ -450,6 +468,58 @@ function Canvas({ model }: { model: GraphModel }) {
     (element ?? document.getElementById("main"))?.focus({ preventScroll: true });
   }, []);
   /**
+   * A jump of the keyboard (an arrow, Show more): pan to the node, then focus it. Waits for the nodes just drawn to be in React Flow's store and measured (a new
+   * node is `visibility: hidden` until then, and a hidden element cannot take the focus; about ten frames at most, then it goes on with the size of a node it has
+   * not been told). The camera only pans (`keepInView`: the zoom is the person's) and glides; the focus comes LAST, once the glide is over, with no scrolling:
+   * React Flow's own focus handler centres a node that is off screen with no animation, which would cut the glide short. The "show more" node has no focus
+   * stop of its own, so for it the button inside takes the focus. `focusNode` above is the other thing (the node an action was about, no camera).
+   */
+  const goToNode = useCallback(async (id: string) => {
+    await afterPaint();
+    const area = canvas.current;
+    if (!mounted.current || !area) return;
+    let target = getNodes().find((n) => n.id === id);
+    for (let frame = 0; frame < MEASURE_FRAMES && !(target && isMeasured(target)); frame++) {
+      await nap(FRAME_MS);
+      if (!mounted.current) return;
+      target = getNodes().find((n) => n.id === id);
+    }
+    if (target) {
+      const view = getViewport();
+      const to = keepInView(rectOf(target), view, { w: area.clientWidth, h: area.clientHeight });
+      if (to) {
+        await setViewport({ ...view, ...to }, { duration: cameraMs(reducedMotion()) });
+        if (!mounted.current) return;
+      }
+    }
+    const element = focusTargetOf(canvas.current, id);
+    if (element) element.focus({ preventScroll: true });
+    else if (!document.activeElement || document.activeElement === document.body) canvas.current?.focus({ preventScroll: true }); // the node is not there: not the body
+  }, [getNodes, getViewport, setViewport]);
+  /**
+   * The focus never ends on <body>. Whatever can take away the node that holds it (Collapse, Expand, a fold, the filter, Enter on a node) calls this first:
+   * it notes where the focus is and, once the graph is drawn again, if the focus has been lost it goes to the nearest node of the same branch that is still
+   * drawn (the group, then the source; a sub-asset's parent), else the control the person used, else the canvas group, which is named. A focus that is
+   * somewhere that still stands is left alone.
+   */
+  const keepFocus = useCallback(() => {
+    const active = document.activeElement;
+    const held = active instanceof Element ? active.closest<HTMLElement>(".react-flow__node")?.dataset.id : undefined;
+    const branch: string[] = [];
+    if (held) {
+      const parent = navIndex(getNodes()).parent;
+      for (let id: string | null | undefined = held; id && !branch.includes(id); id = parent.get(id)) branch.push(id);
+    }
+    const control = active instanceof HTMLElement && active !== document.body && !canvas.current?.contains(active) ? active : null;
+    void afterPaint().then(() => {
+      if (!mounted.current) return;
+      const now = document.activeElement;
+      if (now && now !== document.body && now.isConnected) return;
+      const target = branch.map((id) => focusTargetOf(canvas.current, id)).find((el) => el) ?? (control?.isConnected ? control : null) ?? canvas.current;
+      target?.focus({ preventScroll: true });
+    });
+  }, [getNodes]);
+  /**
    * "Show 50 more" of a group: its page grows by a page (never past its visible points). The `more` node, whose button had the focus, goes when the last page
    * is shown, so the focus moves on at once: to the first point just drawn, or to the group itself when there is nothing new to go to.
    */
@@ -460,16 +530,22 @@ function Canvas({ model }: { model: GraphModel }) {
     const visible = visiblePoints(group, now);
     const drawn = drawnCount(group, clusterId, now);
     if (drawn >= visible.length) {
-      void focusNode(clusterId);
+      void goToNode(clusterId);
       return;
     }
     setShown((current) => new Map(current).set(clusterId, Math.min(visible.length, drawn + PAGE_SIZE)));
-    void focusNode(nodeId.point(visible[drawn].id));
-  }, [focusNode]);
-  /** The fold of an asset's sub-assets: kept per browser. The button stays where it is, so the focus does not move. */
+    void goToNode(nodeId.point(visible[drawn].id));
+  }, [goToNode]);
+  /** The fold of an asset's sub-assets: kept per browser. Its button (or the node, for Enter) stays where it is, so the focus does not move. */
   const onToggleAssets = useCallback((id: string) => {
+    keepFocus();
     setAssetsClosed(toggled(assetsClosedNow.current, Number(id.slice("asset:".length))));
-  }, [setAssetsClosed]);
+  }, [setAssetsClosed, keepFocus]);
+  /** The bar's Unmapped only switch. The switch keeps the focus it was given; a focus that was on a node the filter takes away goes to the nearest one left. */
+  const onFilter = useCallback((on: boolean) => {
+    keepFocus();
+    setUnmappedOnly(on);
+  }, [keepFocus, setUnmappedOnly]);
 
   // ---- After a mapping, with "Unmapped only" on (W12b): the node the person acted on may be gone, and a focus on <body> helps nobody ----
   /** What was mapped, as the nodes that stood for it: set when the mapping succeeds, used once the dialog has closed and the graph is read again. */
@@ -716,10 +792,13 @@ function Canvas({ model }: { model: GraphModel }) {
   const expandable = useMemo(() => canExpand(model, open, view), [model, open, view]);
   const states = useMemo(() => selectionStates(model, open, view, selectedNow), [model, open, view, selectedNow]);
   const onCollapseAll = () => {
-    if (collapsible) setOpen(collapseAll());
+    if (!collapsible) return;
+    keepFocus();
+    setOpen(collapseAll());
   };
   const onExpandAll = () => {
     if (!expandable) return;
+    keepFocus();
     const result = expandAll(model, open, EXPAND_NODE_BUDGET, view);
     setOpen(result.open);
     const note = expandNote(result); // what the node budget kept closed, if anything
@@ -730,6 +809,7 @@ function Canvas({ model }: { model: GraphModel }) {
    * announcement for a screen reader (the bar's one live region is the summary, which these do not change); nothing to say, nothing is said.
    */
   const applyChange = (change: Change, verb: "expand" | "collapse") => {
+    keepFocus();
     if (change.open !== open) setOpen(change.open);
     if (change.assetsClosed !== assetsClosed) setAssetsClosed(change.assetsClosed);
     const note = changeNote(change, verb);
@@ -855,6 +935,16 @@ function Canvas({ model }: { model: GraphModel }) {
     setNodes((current) => (current.some((n) => n.selected) ? current.map((n) => (n.selected ? { ...n, selected: false } : n)) : current));
   }, [setNodes]);
   const canvasKeys = useCanvasKeys({ canvas, openFind, openMenuFor: openFromKey, onEscape: clearSelection });
+  // Enter on a focused node: a source or a group opens or closes, an asset with sub-assets folds; the hook only knows "toggle this id", the page knows which kind it is.
+  const navToggle = useCallback((id: string) => {
+    if (id.startsWith("asset:")) {
+      onToggleAssets(id);
+    } else {
+      keepFocus();
+      onToggle(id);
+    }
+  }, [onToggle, onToggleAssets, keepFocus]);
+  const nav = useGraphNav({ canvas, nodes, onToggle: navToggle, onMore, goToNode });
   // Stable, because React Flow re-renders every node wrapper when one of these props changes identity: as inline arrows they cost a render of the
   // whole graph on each hover (measured, W12b).
   const onNodeClick: NodeMouseHandler = useCallback((_event, node) => {
@@ -949,7 +1039,7 @@ function Canvas({ model }: { model: GraphModel }) {
       />
       <GraphBar
         summary={summary} collapsible={collapsible} expandable={expandable} tidying={tidying}
-        unmappedOnly={unmappedOnly} onUnmappedOnly={setUnmappedOnly}
+        unmappedOnly={unmappedOnly} onUnmappedOnly={onFilter}
         onCollapseAll={onCollapseAll} onExpandAll={onExpandAll} onTidy={() => void onTidy()}
         expandSelection={states.expandSelection} collapseSelection={states.collapseSelection}
         expandBranch={states.expandBranch} collapseBranch={states.collapseBranch}
@@ -968,6 +1058,7 @@ function Canvas({ model }: { model: GraphModel }) {
           onFocus={highlight.onFocus}
           onBlur={highlight.onBlur}
           onKeyDown={canvasKeys.onKeyDown}
+          onKeyDownCapture={nav.onKeyDownCapture}
         >
           <ReactFlow
             nodes={flashed}
@@ -986,6 +1077,7 @@ function Canvas({ model }: { model: GraphModel }) {
             onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
             colorMode={dark ? "dark" : "light"}
+            ariaLabelConfig={ARIA_LABELS}
             nodesConnectable={canForm} // the connection line is drawn only with this: the "+" of an asset node is the one handle that can start one
             isValidConnection={NEVER_VALID} // ...and it never makes an edge; letting go on the empty canvas is read by onConnectEnd
             connectionLineComponent={AddConnectionLine}
