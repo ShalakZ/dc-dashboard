@@ -15,7 +15,7 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
-## W12a (2026-10-16, merge commit MERGE_PENDING)
+## W12a (2026-10-16, merge commit 4e14905)
 
 W12a (mapping actions) lets you take a mapping off an asset, or move it to another asset, from the places you see it, with one
 confirmation and an Undo. In **Discovery**, a mapped point or group has a small **Mapping actions** button (the same menu as a
