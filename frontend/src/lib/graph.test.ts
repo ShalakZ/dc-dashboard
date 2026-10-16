@@ -1248,6 +1248,23 @@ describe("buildGraph with a view (W12b)", () => {
       expect(label(model(), all, nodeId.cluster(1, UNGROUPED))).toBe("Ungrouped, group of 1 point, 0 mapped, closed");
     });
 
+    it("an open group that draws fewer points than it has says how many it shows (it reads 50 of 120 on screen); closed, unpaged and fully drawn groups keep their names", () => {
+      const m = oneGroup(120, (i) => (i <= 3 ? 10 : null), { assets: [asset(10, null)] });
+      expect(label(m, openG, G, paged)).toBe("G, group of 120 points, 3 mapped, open, 50 shown");
+      expect(label(m, openG, G, { ...paged, shown: new Map([[G, 100]]) })).toBe("G, group of 120 points, 3 mapped, open, 100 shown");
+      expect(label(m, openG, G, { ...paged, shown: new Map([[G, 120]]) })).toBe("G, group of 120 points, 3 mapped, open");
+      expect(label(m, srcOnly, G, paged)).toBe("G, group of 120 points, 3 mapped, closed");
+      expect(label(oneGroup(40), openG, G, paged)).toBe("G, group of 40 points, 0 mapped, open");
+      expect(label(oneGroup(50), openG, G, paged)).toBe("G, group of 50 points, 0 mapped, open");
+    });
+
+    it("the filter counts: a group paged only among its unmapped points says so, and one that fits in a page after the filter does not", () => {
+      const m = oneGroup(120, (i) => (i <= 3 ? 10 : null), { assets: [asset(10, null)] });
+      expect(label(m, openG, G, { ...paged, unmappedOnly: true })).toBe("G, group of 120 points, 3 mapped, open, 50 shown");
+      const mostlyMapped = oneGroup(120, (i) => (i <= 100 ? 10 : null), { assets: [asset(10, null)] });
+      expect(label(mostlyMapped, openG, G, { ...paged, unmappedOnly: true })).toBe("G, group of 120 points, 100 mapped, open");
+    });
+
     it("a point: mapped to the asset's name, unmapped, or just mapped when the asset is not in the model", () => {
       expect(label(model(), all, "point:8")).toBe("M kW, point, mapped to Site");
       expect(label(model(), all, "point:1")).toBe("LVP01 kW, point, unmapped");

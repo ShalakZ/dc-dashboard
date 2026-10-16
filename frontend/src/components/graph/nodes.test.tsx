@@ -550,21 +550,31 @@ describe("graph nodes", () => {
     const asset = { id: 10, parent_id: null, name: "Rack A", kind: "rack" };
     const parent = { asset, depth: 0, children: 3, collapsed: false };
 
-    it("an open parent offers Hide sub-assets of X as a minus; a collapsed one Show sub-assets of X as a plus; both report the node id and go no further", async () => {
+    it("an open parent offers Hide sub-assets of X; a collapsed one Show sub-assets of X; both are a chevron (never a minus or a plus, which the add handle owns), and report the node id and go no further", async () => {
       const onToggleAssets = vi.fn();
       const reachedNode = vi.fn();
       const Node = nodeTypes.asset as unknown as (p: { id: string; data: object }) => React.ReactElement;
       const view = render(<div onClick={reachedNode}><Node id="asset:10" data={{ ...parent, onToggleAssets }} /></div>);
       const hide = screen.getByRole("button", { name: "Hide sub-assets of Rack A" });
-      expect(hide).toHaveTextContent(/^−$/);
-      expect(hide).toHaveClass("nodrag");
+      expect(hide).toHaveTextContent(/^$/);
+      expect(hide.querySelector("svg.i")).not.toBeNull();
+      expect(hide).not.toHaveAttribute("data-folded");
+      expect(hide).toHaveClass("nodrag", "gnode-fold");
       expect(hide).toHaveAttribute("type", "button");
       await userEvent.click(hide);
       expect(onToggleAssets).toHaveBeenCalledWith("asset:10");
       expect(reachedNode).not.toHaveBeenCalled();
       view.rerender(<div onClick={reachedNode}><Node id="asset:10" data={{ ...parent, collapsed: true, onToggleAssets }} /></div>);
       expect(screen.queryByRole("button", { name: "Hide sub-assets of Rack A" })).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Show sub-assets of Rack A" })).toHaveTextContent(/^\+$/);
+      const show = screen.getByRole("button", { name: "Show sub-assets of Rack A" });
+      expect(show).toHaveTextContent(/^$/);
+      expect(show.querySelector("svg.i")).not.toBeNull();
+      expect(show).toHaveAttribute("data-folded", "true"); // the stylesheet turns the chevron to point right
+    });
+
+    it("a source keeps its minus and plus (only the asset fold changed)", () => {
+      renderNode("source", "src:1", { source, expanded: true, onToggle: vi.fn() });
+      expect(screen.getByRole("button", { name: "Collapse Plant OPC" })).toHaveTextContent(/^−$/);
     });
 
     it("the words Expand and Collapse are not used (they belong to groups and sources)", () => {

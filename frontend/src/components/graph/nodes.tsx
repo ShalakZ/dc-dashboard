@@ -26,12 +26,19 @@ const press = (action: (event: MouseEvent<HTMLElement>) => void) => (event: Mous
   action(event);
 };
 
-/** `label` (W12b) replaces the name "Expand X" / "Collapse X": an asset's toggle hides its sub-assets and must not read like the one of a group or a source. */
-function Toggle({ id, name, expanded, onToggle, label }: { id: string; name: string; expanded: boolean; onToggle?: NodeActions["onToggle"]; label?: string }) {
+/**
+ * `label` (W12b) replaces the name "Expand X" / "Collapse X": an asset's toggle hides its sub-assets and must not read like the one of a group or a source.
+ * `fold` draws a chevron instead of the minus and plus (the asset's fold: its "+" must not be read as the add handle's); the stylesheet turns it down while the
+ * sub-assets show and leaves it pointing right while they are hidden (`data-folded`).
+ */
+function Toggle({ id, name, expanded, onToggle, label, fold }: { id: string; name: string; expanded: boolean; onToggle?: NodeActions["onToggle"]; label?: string; fold?: boolean }) {
   if (!onToggle) return null;
   return (
-    <button type="button" className="nodrag" aria-label={label ?? `${expanded ? "Collapse" : "Expand"} ${name}`} onClick={press(() => onToggle(id))}>
-      {expanded ? "−" : "+"}
+    <button
+      type="button" className={fold ? "nodrag gnode-fold" : "nodrag"} data-folded={fold && !expanded ? "true" : undefined}
+      aria-label={label ?? `${expanded ? "Collapse" : "Expand"} ${name}`} onClick={press(() => onToggle(id))}
+    >
+      {fold ? <Icon name="chevron" /> : expanded ? "−" : "+"}
     </button>
   );
 }
@@ -182,7 +189,7 @@ function PointNode({ id, data }: NodeProps<Node<PointNodeData, "point">>) {
 }
 
 /**
- * W12b: an asset with sub-assets has a toggle on its title row (`−` while they show, `+` while hidden), and a hidden subtree that holds mapped points says
+ * W12b: an asset with sub-assets has a toggle on its title row (a chevron: down while they show, right while hidden), and a hidden subtree that holds mapped points says
  * how many in a small badge on the SAME row, so the node keeps its height (asset rows are `ROW` apart). A node with neither keeps the bare title as before.
  */
 function AssetNode({ id, data }: NodeProps<Node<AssetNodeData, "asset">>) {
@@ -197,7 +204,7 @@ function AssetNode({ id, data }: NodeProps<Node<AssetNodeData, "asset">>) {
             <div className="node-title">{asset.name}</div>
             {badge && <span className="gnode-mapped" title={`${mappedInside} mapped inside`}>{`${mappedInside} mapped`}</span>}
             {toggle && (
-              <Toggle id={id} name={asset.name} expanded={!collapsed} onToggle={onToggleAssets} label={`${collapsed ? "Show" : "Hide"} sub-assets of ${asset.name}`} />
+              <Toggle id={id} name={asset.name} expanded={!collapsed} onToggle={onToggleAssets} label={`${collapsed ? "Show" : "Hide"} sub-assets of ${asset.name}`} fold />
             )}
           </div>
         ) : (

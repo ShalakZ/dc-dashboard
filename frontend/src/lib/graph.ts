@@ -360,11 +360,13 @@ export function buildGraph(model: GraphModel, open: OpenState, options: BuildOpt
         for (const p of group.points) if (p.asset_id !== null) mappedCount++;
         const visible = visiblePoints(group, view);
         const drawn = drawnCount(group, cid, view);
+        // A paged group says so in its name as the node does on screen ("50 of 120 shown"): a screen reader must not take the page for the whole list.
+        const pagedNote = clusterOpen && drawn < visible.length ? `, ${drawn} shown` : "";
         const clusterShift = add(cid, "cluster", X.cluster, cursor + SOURCE_H + (rows - 1) * ROW, {
           sourceId: source.id, key: group.key, label: group.label, count: group.points.length, mappedCount,
           expanded: clusterOpen, ungrouped: group.ungrouped, visibleCount: visible.length, shownCount: drawn,
         } satisfies ClusterNodeData, sourceShift, {
-          ariaLabel: `${group.label}, group of ${countOf(group.points.length, "point")}, ${mappedCount} mapped, ${clusterOpen ? "open" : "closed"}`,
+          ariaLabel: `${group.label}, group of ${countOf(group.points.length, "point")}, ${mappedCount} mapped, ${clusterOpen ? "open" : "closed"}${pagedNote}`,
         });
         link(sid, cid, flow);
         rows++;
