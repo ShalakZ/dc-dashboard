@@ -85,7 +85,7 @@ describe("the Discovery node styles (W7u)", () => {
   });
 
   it("the Show-more node (W12b) is the button alone: no padding, an invisible frame, the button across the node, no height of its own", () => {
-    const node = rule(".gnode.gnode-more");
+    const node = rule(".gnode-more.gnode-more");
     expect(node).toMatch(/padding:\s*0\b/);
     expect(node).toMatch(/border-color:\s*transparent/);
     expect(node).toMatch(/background:\s*none/);

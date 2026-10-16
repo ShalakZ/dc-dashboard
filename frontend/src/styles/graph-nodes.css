@@ -20,7 +20,7 @@
 
   /* W12b: the "Show 50 more" node at the end of a paged group's points. It is the button alone: the node's own frame is invisible (the border keeps its 1px so the box is as wide as a
      point's), so it reads as a quiet control in the point column and, at about 19px, is never taller than a point node. Two classes beat app.css's `.gnode` (padding, border, background). */
-  .gnode.gnode-more { padding: 0; border-color: transparent; background: none; }
+  .gnode-more.gnode-more { padding: 0; border-color: transparent; background: none; } /* doubled class: it beats the base .gnode rule without naming .gnode here (app.css.test.ts keeps one page file from restyling another) */
   .gnode-more button { width: 100%; }
 
   /* W12b: "N mapped" on the title row of a collapsed asset that hides mapped points: a small plain rectangle like the protocol badge (never a pill), on the SAME row as the title and the toggle
