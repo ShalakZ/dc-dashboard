@@ -1,7 +1,9 @@
 // Discovery speed harness (w12b): the same steps on any build of the front end (a `dist` folder), answered by page.route (no server, no docker, no stack).
 // usage (from frontend/):  npx vite build --outDir /tmp/dist-x --emptyOutDir && node scripts/discovery-perf.mjs <label> /tmp/dist-x <out.json> [scenario ...]
 //   scenarios: expandAll:60 expandAll:150 expandAll:500 expandOne:60 expandOne:150 expandOne:500 expandOne:2000 toggle hover drag
-//              dragLive hoverLive (online sources: live edges) dragGroup:<n> (one open group of n points) dragW7u hoverW7u (W7u's 2,286-node graph); default: the first ten
+//              dragLive hoverLive (online sources: live edges) dragGroup:<n> (one open group of n points) dragW7u hoverW7u (W7u's 2,286-node graph);
+//              the same with "All" (dragGroupAll:<n> dragW7uAll hoverW7uAll expandOneAll:<n>) press every "Show N more" first: ALL pages drawn, comparable with a build
+//              that draws everything at once (on such a build the "All" scenarios equal the plain ones); default: the first ten
 //   env: REPEAT=n samples per scenario (default 3, the median is reported, every sample is kept), CPU_SLOWDOWN=4 (a CPU four times slower),
 //        INJECT_CSS='...' (a stylesheet added to the page, for what-if runs), PROFILE_OUT=file.cpuprofile (hover only), SHOT=file.png
 // A sample = a fresh browser context at 1440 x 900. "toVisibleMs" = from the click to the first frame in which the first new point node is drawn
@@ -115,6 +117,58 @@ const TIMED_CLICK = async ({ buttonScript, doneSel, goneSel }) => {
   };
 };
 
+
+// Like TIMED_CLICK, but it also presses every "Show N more" control (a build with paged groups has them, one without has none) until `lastSel`, the
+// last point, is drawn: "all pages drawn", the number that can be compared with a build that draws everything at once.
+const TIMED_ALL = async ({ buttonScript, lastSel }) => {
+  const find = new Function(`return (${buttonScript})`)();
+  const button = find();
+  if (!button) throw new Error("button not found");
+  const longs = [];
+  const po = new PerformanceObserver((list) => { for (const e of list.getEntries()) longs.push({ at: e.startTime, ms: e.duration }); });
+  po.observe({ entryTypes: ["longtask"] });
+  const t0 = performance.now();
+  button.click();
+  let presses = 0;
+  let tVisible = null;
+  await new Promise((resolve) => {
+    const tick = () => {
+      const more = document.querySelector('.react-flow__node[data-id^="more:"] button');
+      if (more) { more.click(); presses++; }
+      else {
+        const n = document.querySelector(lastSel);
+        if (n && getComputedStyle(n).visibility !== "hidden") { tVisible = performance.now(); resolve(); return; }
+      }
+      if (performance.now() - t0 > 120_000) { resolve(); return; }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const tPaint = performance.now();
+  for (let i = 0; i < 80; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    const lastEnd = longs.length ? Math.max(...longs.map((l) => l.at + l.ms)) : t0;
+    if (performance.now() - lastEnd > 400) break;
+  }
+  po.disconnect();
+  return {
+    toVisibleMs: tVisible === null ? null : tVisible - t0, toPaintMs: tPaint - t0, busyMs: longs.reduce((s, l) => s + l.ms, 0), presses,
+    longTasks: longs.length, worstTaskMs: longs.reduce((m, l) => Math.max(m, l.ms), 0), nodes: document.querySelectorAll(".react-flow__node").length,
+  };
+};
+
+// Presses every "Show N more" control on the page until none is left (nothing to do on a build without paging).
+async function pressAllMore(page) {
+  for (let i = 0; i < 400; i++) {
+    const more = page.locator('.react-flow__node[data-id^="more:"] button').first();
+    if ((await more.count()) === 0) break;
+    await more.dispatchEvent("click");
+    await page.waitForTimeout(120);
+  }
+  await page.waitForTimeout(600);
+}
+
 async function expandAllSample(browser, points) {
   const groups = points >= 500 ? 10 : 6;
   const shapes = [{ groups, pointsPerGroup: Math.round(points / groups), status: "offline" }];
@@ -127,6 +181,22 @@ async function expandAllSample(browser, points) {
   await context.close();
   return { ...r, errors };
 }
+
+async function expandOneAllSample(browser, points) {
+  const shapes = [{ groups: 1, pointsPerGroup: points, status: "offline" }];
+  const { context, page, errors } = await openPage(browser, bigModel(shapes));
+  const sid = bigSourceId(1);
+  await page.locator(`.react-flow__node[data-id="src:${sid}"]`).getByRole("button", { name: /^Expand W7u Big 1$/ }).dispatchEvent("click");
+  await page.locator(`.react-flow__node[data-id="cluster:${sid}:${bigGroup(1, 1)}"]`).waitFor({ state: "visible", timeout: 30_000 });
+  await cameraStill(page);
+  const r = await page.evaluate(TIMED_ALL, {
+    buttonScript: `() => document.querySelector('.react-flow__node[data-id="cluster:${sid}:${bigGroup(1, 1)}"] button[aria-label="Expand ${bigGroup(1, 1)}"]')`,
+    lastSel: `.react-flow__node[data-id="point:${bigPointId(shapes, 1, 1, points)}"]`,
+  });
+  await context.close();
+  return { ...r, errors };
+}
+
 async function expandOneSample(browser, points) {
   const shapes = [{ groups: 1, pointsPerGroup: points, status: "offline" }];
   const { context, page, errors } = await openPage(browser, bigModel(shapes));
@@ -147,6 +217,8 @@ async function expandOneSample(browser, points) {
 const dragShapes = (status) => Array.from({ length: 10 }, () => ({ groups: 4, pointsPerGroup: 49, status }));
 async function openDrag(browser, status = "offline") {
   if (status === "w7u") return openW7u(browser);
+  if (status === "w7uAll") return openW7u(browser, true);
+  if (String(status).startsWith("groupAll")) return openGroup(browser, Number(String(status).slice(8)), true);
   if (String(status).startsWith("group")) return openGroup(browser, Number(String(status).slice(5)));
   const { context, page, errors } = await openPage(browser, bigModel(dragShapes(status)));
   const expand = page.locator(".graph-bar").getByRole("button", { name: "Expand all", exact: true });
@@ -170,7 +242,7 @@ const W7U_SHAPES = [
   { groups: 6, pointsPerGroup: 1000, status: "offline" }, { groups: 6, pointsPerGroup: 10 },
   ...Array.from({ length: 8 }, () => ({ groups: 4, pointsPerGroup: 5 })),
 ];
-async function openW7u(browser) {
+async function openW7u(browser, all = false) {
   const { context, page, errors } = await openPage(browser, bigModel(W7U_SHAPES));
   await page.locator(".graph-bar").getByRole("button", { name: "Expand all", exact: true }).click();
   const poll = async (fn, ok, ms) => { const t0 = Date.now(); for (;;) { const v = await fn(); if (ok(v)) return v; if (Date.now() - t0 > ms) throw new Error("timeout"); await new Promise((r) => setTimeout(r, 150)); } };
@@ -180,6 +252,7 @@ async function openW7u(browser) {
     await group.waitFor({ state: "attached" });
     await group.getByRole("button", { name: `Expand ${bigGroup(1, g)}`, exact: true }).dispatchEvent("click");
   }
+  if (all) await pressAllMore(page);
   // Every node is in the DOM on a build that draws them all (>= 2,000); a build that draws only what is on screen settles at fewer: wait until the count holds still.
   let still = 0, lastCount = -1;
   await poll(async () => { const n = await page.locator(".react-flow__node").count(); still = n === lastCount ? still + 1 : 0; lastCount = n; return n >= 2000 || still >= 8 ? n : 0; }, (n) => n > 0, 120_000);
@@ -193,7 +266,7 @@ async function openW7u(browser) {
 }
 
 // One source with one open group of `points` points, a point dragged: how the cost of a drag grows with the size of a group (the owner's "over 100-150 points").
-async function openGroup(browser, points) {
+async function openGroup(browser, points, all = false) {
   const shapes = [{ groups: 1, pointsPerGroup: points, status: "offline" }];
   const { context, page, errors } = await openPage(browser, bigModel(shapes));
   const sid = bigSourceId(1);
@@ -202,6 +275,7 @@ async function openGroup(browser, points) {
   await cluster.waitFor({ state: "visible", timeout: 30_000 });
   await cluster.getByRole("button", { name: `Expand ${bigGroup(1, 1)}`, exact: true }).dispatchEvent("click");
   await page.waitForTimeout(1500);
+  if (all) await pressAllMore(page);
   const nodes = await page.locator(".react-flow__node").count();
   await page.getByRole("button", { name: "fit view" }).click();
   await cameraStill(page);
@@ -318,7 +392,7 @@ for (const scenario of SCENARIOS) {
   const repeat = /^(drag|hover)/.test(kind) ? Math.min(REPEAT, 3) : REPEAT;
   for (let i = 0; i < repeat; i++) {
     try {
-      samples.push(kind === "expandAll" ? await expandAllSample(browser, Number(n)) : kind === "expandOne" ? await expandOneSample(browser, Number(n)) : kind === "drag" ? await dragSample(browser) : kind === "dragLive" ? await dragSample(browser, "online") : kind === "dragW7u" ? await dragSample(browser, "w7u") : kind === "dragGroup" ? await dragSample(browser, `group${n}`) : kind === "toggle" ? await toggleSample(browser) : kind === "hoverW7u" ? await hoverSample(browser, "w7u") : kind === "hoverLive" ? await hoverSample(browser, "online") : await hoverSample(browser));
+      samples.push(kind === "expandAll" ? await expandAllSample(browser, Number(n)) : kind === "expandOne" ? await expandOneSample(browser, Number(n)) : kind === "drag" ? await dragSample(browser) : kind === "dragLive" ? await dragSample(browser, "online") : kind === "dragW7u" ? await dragSample(browser, "w7u") : kind === "dragW7uAll" ? await dragSample(browser, "w7uAll") : kind === "dragGroupAll" ? await dragSample(browser, `groupAll${n}`) : kind === "expandOneAll" ? await expandOneAllSample(browser, Number(n)) : kind === "hoverW7uAll" ? await hoverSample(browser, "w7uAll") : kind === "dragGroup" ? await dragSample(browser, `group${n}`) : kind === "toggle" ? await toggleSample(browser) : kind === "hoverW7u" ? await hoverSample(browser, "w7u") : kind === "hoverLive" ? await hoverSample(browser, "online") : await hoverSample(browser));
     } catch (e) { samples.push({ failure: String(e?.message ?? e).split("\n")[0] }); }
   }
   const ok = samples.filter((s) => !s.failure);
