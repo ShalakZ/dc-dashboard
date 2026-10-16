@@ -47,7 +47,7 @@ lacks says "No access".
   line, **Collapse all**, **Expand all** (each with a small arrow beside it for just the nodes you selected, or one branch), **Tidy
   layout**, which puts every node back in its default column for everyone, and an **Unmapped only** switch that hides what is already
   mapped. An open group of more than 50 points shows 50 and a **Show 50 more** button at the end of its list; an asset with sub-assets
-  has a − / + to fold them away. Arrow keys move between nodes and Enter opens or closes one. Nodes show
+  has a small arrow to fold them away. Arrow keys move between nodes and Enter opens or closes one. Nodes show
   a status dot and the source's protocol, and resting the pointer on one lights its whole path; the view glides, a minimap sits at the
   bottom right, **Snap to grid** (top right) lines nodes up on an 8 px grid with guides while you drag, Shift-drag selects several
   nodes, right-click (or Shift+F10) opens a node's actions, and **Find** (or Ctrl+K on the canvas) jumps to any source, group, point or

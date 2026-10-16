@@ -273,7 +273,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   all** and **Collapse all** is greyed out and says why; a box of two groups and **Expand selection** open both and the message says
   `Opened 2 groups.`; **Expand this branch** on a closed source opens it and its groups, **Collapse this branch** closes them, from the
   bar and from the right-click menu. With the keyboard, Tab onto a node, then Down and Up walk between sibling groups, Right goes to
-  the first child and Left back to the parent, Enter opens and closes a group and does nothing to a point, the Menu key opens the
+  the first child and Left back to the parent, Enter opens and closes a group and never opens or closes a point (it selects it), the Menu key opens the
   node's actions, a node's name reads like `LVP01, group of 6 points, 6 mapped, open`, the view pans to a node that was off screen
   without changing the zoom, and the focus is never on the page itself. In a graph of about 2,000 nodes (ten sources of four groups of
   49 points) closing and opening one group, and resting the pointer on a node, stay within three times the measured times (rerun once

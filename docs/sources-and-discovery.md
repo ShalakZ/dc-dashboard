@@ -199,21 +199,27 @@ data-retrieval requests the connectors already use, nothing else.
    there are several, so no mapping ever disappears. Paging counts toward the 600-node budget by what is drawn (the 50 and the button).
    **Find** extends the page to reach a point (below).
 
-   **Folding an asset's sub-assets.** An asset that has sub-assets carries a small − (and + when folded) named `Hide sub-assets of
-   <name>` or `Show sub-assets of <name>`, and its right-click menu has **Hide sub-assets** or **Show sub-assets**. Folding hides every
+   **Folding an asset's sub-assets.** An asset that has sub-assets carries a small arrow named
+   `Hide sub-assets of <name>` or `Show sub-assets of <name>`, and its right-click menu has **Hide sub-assets** or **Show sub-assets**.
+   Adding a sub-asset under a folded asset (the + on the asset, or **New sub-asset…**) unfolds it, so the new asset is seen. Folding hides every
    asset below it; a point mapped to a hidden asset keeps its line, which now ends on the folded asset, and that asset shows a small
    `N mapped` badge (hover it for `N mapped inside`) counting the points mapped to it or to anything under it. Anyone who can open the
    page can fold; the choice is remembered in this browser. **Collapse all** and **Expand all** leave it alone, and **Tidy layout**
    does not undo it.
 
-   **Arrow keys.** Tab to the canvas or to a node, then: Up and Down move to the previous or next node in the same list (the sources, the
-   groups of a source, the points of a group, the assets of one level), Right moves to the first node under it and Left back to its
-   parent; at the end of a group's points Down reaches **Show 50 more**. Enter opens or closes a source, a group or an asset that has
-   sub-assets (on a point it selects, as before; on **Show 50 more** it presses the button). Space selects the node, the Menu key or
-   Shift+F10 opens its actions. The view moves only as far as it must to keep the node in sight and never zooms. A node you have
-   selected keeps the old arrows (a 5 px nudge on screen only): press Esc to clear the selection and the arrows walk again. Every node has a name for
-   a screen reader that says its kind and state, such as `LVP01, group of 6 points, 6 mapped, open`, and the canvas says how to use
-   the keys.
+   **Arrow keys.** Tab reaches the nodes (the canvas itself takes the focus when you click empty space, or when Esc closes Find or a
+   menu, and Down or Right on it goes to the first node). Then: Up and Down move to the previous or next node in the same list (the
+   sources, the groups of a source, the points of a group, the assets of one level), Right moves to the first node under it and Left
+   back to its parent; at the end of a group's points Down reaches **Show 50 more**, and the arrows work from that button too (Up goes
+   to the last point, Left to the group). The arrows walk inside one column and do not cross to the other: **Ctrl+K** (Find) is the
+   quick way to an asset from a source or a point. Enter opens or closes a source, a group or an asset that has sub-assets; on a
+   point, an asset without sub-assets and an unidentified service it selects the node, as Space does on every node (on **Show 50
+   more** it presses the button). The Menu key or Shift+F10 opens its actions. The view moves only as far as it must to keep the node
+   in sight, clear of the overview map and the Find panel, and never zooms. On a node you have selected the arrows move the node
+   instead, on screen only (8 px with **Snap to grid** on, 5 px without): press Esc to clear the selection, the focus stays on the
+   node and the arrows walk again. Every node has a name for a screen reader that says its kind and state, such as `LVP01, group of 6
+   points, 6 mapped, open`, and a group that draws only a page of its points says how many it shows; the canvas says how to use the
+   keys.
 
    **Big graphs.** The long lines from a group to its points are solid, not dashed, once a group draws more than 150 points: dashes on
    a line tens of thousands of pixels long are what made dragging slow, and nothing else changes in how they look. Opening a group and
@@ -319,10 +325,10 @@ data-retrieval requests the connectors already use, nothing else.
    | Alt, or Option, held when you start a drag | Move the node alone, without its children |
    | Menu key, or Shift+F10 | Open the actions of the focused node; elsewhere in the canvas, the canvas menu |
    | Up, Down, Home, End, Enter in a menu or Find | Move, jump, choose |
-   | Arrow keys on a node that is not selected, or on the canvas | Move to the next, previous, parent or first child node (Down or Right on the canvas goes to the first node) |
+   | Arrow keys on a node that is not selected, on **Show 50 more**, or on the canvas | Move to the next, previous, parent or first child node (Down or Right on the canvas goes to the first node); on a selected node they move it instead (8 px with Snap to grid on, 5 px without) |
    | Enter on a source, a group or an asset with sub-assets | Open or close it; on **Show 50 more** it shows the next 50 |
-   | Space on a node | Select it |
-   | Esc | Close the open menu or Find card (one layer at a time), then clear a selection |
+   | Space on a node (Enter too on a point, an asset without sub-assets and an unidentified service) | Select it |
+   | Esc | Close the open menu or Find card (one layer at a time), then clear a selection (on a selected node it clears the selection and the focus stays on the node) |
 
    **Reduced motion.** When your system asks for less motion, the camera moves at once, the green dot does not pulse, the edges do not
    flow (they keep their dashes) and the Find outline does not pulse (it still shows for 1.5 seconds). The path highlight needs no

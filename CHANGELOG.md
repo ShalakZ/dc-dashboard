@@ -27,8 +27,8 @@ same, and a message says how many opened or closed; an **Unmapped only** switch 
 sources with nothing left to map, and the lines to assets, and the summary then reads `Showing 42 of 60 points, 3 sources, 18 mapped`
 (remembered in your browser; **Find** still reaches a hidden node and turns the switch off for it). An open group of more than 50 points
 draws 50, with a **Show 50 more (70 left)** button at the end of the list; a point that is not drawn yet keeps its line to its asset, so
-no mapping disappears. An asset with sub-assets has a − / + to fold them away (a folded asset shows how many points are mapped inside it;
-remembered in your browser). The arrow keys move between nodes (Up and Down between neighbours, Right to the first child, Left to the
+no mapping disappears. An asset with sub-assets has a small arrow to fold them away (a folded asset shows how many points are mapped inside it;
+remembered in your browser; adding a sub-asset under a folded asset unfolds it). The arrow keys move between nodes (Up and Down between neighbours, Right to the first child, Left to the
 parent), Enter opens or closes a source, a group or an asset, the Menu key opens the actions, and every node has a name for a screen
 reader such as `LVP01, group of 6 points, 6 mapped, open`. Expand all still never draws more than 600 new nodes in one go. One thing
 to know: rows close up when you filter, fold or close, and a node you pinned by hand with an Alt-drag keeps its place, so closed-up rows can
