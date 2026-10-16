@@ -709,4 +709,46 @@ describe("selectionStates", () => {
   it("returns the same answers for the same input", () => {
     expect(states(allOpen, [nodeId.source(1)])).toEqual(states(allOpen, [nodeId.source(1)]));
   });
+
+  // A node's own menu acts on THAT node whatever is selected, so its reasons speak of the node and never of "everything selected".
+  describe("for a node's own menu (subject 'node')", () => {
+    const own = (open: OpenState, id: string, v: GraphView = NO_VIEW) => selectionStates(m, open, v, [id], "node");
+
+    it("a closed source: the branch can be opened, and is already closed", () => {
+      const s = own(none, nodeId.source(1));
+      expect(s.expandBranch).toEqual({ enabled: true });
+      expect(s.collapseBranch).toEqual({ enabled: false, reason: "This branch is already closed." });
+    });
+
+    it("a source that is open with every group open: the branch is already open", () => {
+      const s = own(allOpen, nodeId.source(1));
+      expect(s.expandBranch).toEqual({ enabled: false, reason: "This branch is already open." });
+      expect(s.collapseBranch).toEqual({ enabled: true });
+    });
+
+    it("a folded asset: the branch can be opened, and is already closed", () => {
+      const s = own(none, nodeId.asset(10), view({ assetsClosed: new Set([10, 11]) }));
+      expect(s.expandBranch).toEqual({ enabled: true });
+      expect(s.collapseBranch).toEqual({ enabled: false, reason: "This branch is already closed." });
+    });
+
+    it("a node with nothing under it that opens or closes", () => {
+      const s = own(allOpen, "point:1");
+      expect(s.expandBranch).toEqual({ enabled: false, reason: "Nothing under it opens or closes." });
+      expect(s.collapseBranch).toEqual({ enabled: false, reason: "Nothing under it opens or closes." });
+    });
+
+    it("a source the filter hides", () => {
+      const s = own(none, nodeId.source(3), view({ unmappedOnly: true }));
+      expect(s.expandBranch).toEqual({ enabled: false, reason: "Nothing under it opens or closes." });
+    });
+
+    it("no reason of the node's words says 'selected'", () => {
+      const reasons = [none, allOpen].flatMap((o) => [nodeId.source(1), "point:1", nodeId.asset(10)].flatMap((id) => {
+        const s = own(o, id);
+        return [s.expandBranch.reason, s.collapseBranch.reason];
+      }));
+      for (const reason of reasons) expect(reason ?? "").not.toMatch(/selected/i);
+    });
+  });
 });

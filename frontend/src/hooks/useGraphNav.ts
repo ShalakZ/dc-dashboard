@@ -30,14 +30,19 @@ function canToggle(node: Node): boolean {
  * dialog or with Ctrl/Cmd/Alt/Shift held. A SELECTED node keeps its plain arrows for React Flow, which nudges it 5 px: nothing the person could do
  * before is lost. An arrow with nowhere to go is swallowed all the same, so the page does not scroll under a key that was ours.
  *
+ * Two more keys are ours. Escape on a SELECTED node clears the selection and leaves the focus on the node: React Flow would clear it too, but it blurs the
+ * node as it does, which sends the focus to the page body (`clearSelection` is the page's, the one Escape on the empty canvas uses). And the arrows work on the
+ * BUTTON of a "show more" node, which is that node's one focus stop (its wrapper is not focusable): Enter and Space there are the native button's.
+ *
  * `goToNode(id)` is the page's: it pans to the node and focuses it.
  */
-export function useGraphNav({ canvas, nodes, onToggle, goToNode }: {
+export function useGraphNav({ canvas, nodes, onToggle, goToNode, clearSelection }: {
   canvas: RefObject<HTMLElement | null>;
   nodes: readonly Node[];
   onToggle: (id: string) => void;
   onMore?: (clusterId: string) => void;
   goToNode: (id: string) => void;
+  clearSelection: () => void;
 }): { onKeyDownCapture: (event: ReactKeyboardEvent) => void } {
   const index = useMemo(() => navIndex(nodes), [nodes]);
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node] as const)), [nodes]);
@@ -49,7 +54,7 @@ export function useGraphNav({ canvas, nodes, onToggle, goToNode }: {
     if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
     const key = event.key ?? ""; // autofill sends keydown events without a key
     const move = moveOf(key);
-    if (move === null && key !== "Enter") return;
+    if (move === null && key !== "Enter" && key !== "Escape") return;
     if (target.closest(".graph-find, .graph-menu")) return;
     if (document.querySelector('[aria-modal="true"]')) return;
 
@@ -66,12 +71,26 @@ export function useGraphNav({ canvas, nodes, onToggle, goToNode }: {
       goToNode(first);
       return;
     }
+    if (move !== null && target.matches("button")) {
+      // The button of a "show more" node: the arrows walk on from it like from any node.
+      const moreId = target.closest<HTMLElement>(".react-flow__node")?.dataset.id;
+      if (moreId?.startsWith("more:") && byId.has(moreId)) {
+        const to = navTarget(index, moreId, move);
+        swallow();
+        if (to !== null) goToNode(to);
+        return;
+      }
+    }
     if (!target.matches(".react-flow__node")) return;
     const id = target.getAttribute("data-id");
     const node = id === null ? undefined : byId.get(id);
     if (id === null || !node) return;
 
-    if (move !== null) {
+    if (key === "Escape") {
+      if (!target.classList.contains("selected")) return;
+      swallow(); // React Flow never sees it, so it never blurs the node
+      clearSelection();
+    } else if (move !== null) {
       if (target.classList.contains("selected")) return;
       const to = navTarget(index, id, move);
       swallow();
@@ -80,6 +99,6 @@ export function useGraphNav({ canvas, nodes, onToggle, goToNode }: {
       swallow();
       onToggle(id);
     }
-  }, [canvas, index, byId, onToggle, goToNode]);
+  }, [canvas, index, byId, onToggle, goToNode, clearSelection]);
   return { onKeyDownCapture };
 }

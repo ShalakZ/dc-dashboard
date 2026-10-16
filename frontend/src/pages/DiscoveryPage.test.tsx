@@ -40,7 +40,7 @@ const flow = vi.hoisted(() => {
 });
 
 // The minimap is its own piece (its own tests): here it only has to be drawn inside the canvas.
-vi.mock("../components/graph/GraphMiniMap", () => ({ GraphMiniMap: () => <div data-testid="minimap" /> }));
+vi.mock("../components/graph/GraphMiniMap", () => ({ GraphMiniMap: () => <div data-testid="minimap" className="graph-minimap" /> }));
 
 // React Flow measures the DOM, which jsdom cannot do: render the nodes plainly and expose the props the page wires up.
 // `data-draggable` is React Flow's own rule for one node (a node's `draggable` beats the canvas-wide `nodesDraggable`; undefined follows it).
@@ -1972,7 +1972,7 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       await expand("LVP01");
       await screen.findByRole("button", { name: "Map LVP01 to asset…" });
       rightClick("cluster:1:LVP01");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…", "Expand this branch", "Collapse this branch"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
       await userEvent.keyboard("{Escape}");
       rightClick("point:1");
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Map…", "New asset…"]);
@@ -2428,7 +2428,7 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       expect(node("cluster:1:LVP01")).toContainElement(button);
       await userEvent.click(button);
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual([
-        "Collapse", "Map…", "New asset…", "Unmap this group…", "Move this group's mappings…", "Expand this branch", "Collapse this branch",
+        "Collapse", "Map…", "New asset…", "Unmap this group…", "Move this group's mappings…",
       ]);
     });
 
@@ -2437,7 +2437,7 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       await screen.findByRole("button", { name: "Map LVP01 to asset…" });
       expect(screen.queryByRole("button", { name: /^Mapping actions/ })).not.toBeInTheDocument();
       rightClick("cluster:1:LVP01");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…", "Expand this branch", "Collapse this branch"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
     });
 
     it("an asset's menu has one item per source with mappings on it, by name, and nothing for an asset with none (that keeps the canvas menu)", async () => {
@@ -2589,7 +2589,7 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
       await userEvent.keyboard("{Escape}");
       rightClick("cluster:1:LVP01");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…", "Expand this branch", "Collapse this branch"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
       await userEvent.keyboard("{Escape}");
       rightClick("asset:11"); // (a leaf: Site has sub-assets, so it has the branch items of its own)
       expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
@@ -3302,6 +3302,81 @@ describe("DiscoveryPage Unmapped only, Show more, folded assets and branches (W1
       await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Site" })).getByRole("menuitem", { name: "Hide sub-assets" }));
       expect(node("asset:12")).toBeNull();
     });
+
+    // A sub-asset made under a folded asset would be saved and not drawn: the parent is opened first (kept per browser, like any fold).
+    describe("a new sub-asset under a folded asset", () => {
+      const folded = async (role = "admin") => {
+        window.localStorage.setItem(FOLDED, "[10]");
+        mockFetch(routes(role, tree()));
+        open();
+        await screen.findByText("Site");
+        await accountKnown();
+        expect(node("asset:11")).toBeNull();
+      };
+
+      it("the menu's New sub-asset… opens the parent, then the form", async () => {
+        await folded();
+        fireEvent.contextMenu(node("asset:10"));
+        await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Site" })).getByRole("menuitem", { name: "New sub-asset…" }));
+        expect(within(await screen.findByRole("dialog", { name: "New asset" })).getByLabelText("Parent")).toHaveValue("10");
+        expect(node("asset:11")).not.toBeNull();
+        expect(node("asset:12")).not.toBeNull();
+        expect(window.localStorage.getItem(FOLDED)).toBe("[]");
+      });
+
+      it("the + (a line released on the empty canvas) does the same", async () => {
+        await folded();
+        act(() => { flow.state.connect.onConnectEnd?.({ target: screen.getByTestId("pane") }, { fromHandle: { id: "add" }, fromNode: { id: "asset:10" } }); });
+        expect(within(await screen.findByRole("dialog", { name: "New asset" })).getByLabelText("Parent")).toHaveValue("10");
+        expect(node("asset:11")).not.toBeNull();
+        expect(window.localStorage.getItem(FOLDED)).toBe("[]");
+      });
+
+      it("only the parent is opened: another folded asset stays folded", async () => {
+        window.localStorage.setItem(FOLDED, "[10,11]");
+        mockFetch(routes("admin", world([srcOf(1, "Plant", { clusters: [{ key: "G", points: [kw(1, "pt 1")] }], point_count: 1 })], {
+          assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }, { id: 11, parent_id: 10, name: "Panel 1", kind: "generic" }, { id: 13, parent_id: 11, name: "Breaker", kind: "generic" }],
+        })));
+        open();
+        await screen.findByText("Site");
+        await accountKnown();
+        fireEvent.contextMenu(node("asset:10"));
+        await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Site" })).getByRole("menuitem", { name: "New sub-asset…" }));
+        await screen.findByRole("dialog", { name: "New asset" });
+        expect(node("asset:11")).not.toBeNull();
+        expect(node("asset:13")).toBeNull(); // Panel 1 is still folded
+        expect(window.localStorage.getItem(FOLDED)).toBe("[11]");
+      });
+
+      it("an asset that is not folded changes nothing", async () => {
+        window.localStorage.setItem(FOLDED, "[]");
+        mockFetch(routes("admin", tree()));
+        open();
+        await screen.findByText("Site");
+        await accountKnown();
+        fireEvent.contextMenu(node("asset:10"));
+        await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Site" })).getByRole("menuitem", { name: "New sub-asset…" }));
+        await screen.findByRole("dialog", { name: "New asset" });
+        expect(window.localStorage.getItem(FOLDED)).toBe("[]");
+        expect(node("asset:11")).not.toBeNull();
+      });
+
+      it("while the asset list is still being read no form opens, and the asset stays folded", async () => {
+        window.localStorage.setItem(FOLDED, "[10]");
+        mockFetch(routes("admin", tree()));
+        const held = holdFetch((method, path) => method === "GET" && path === "/api/assets");
+        const toasts = spyToasts();
+        renderWithProviders(<><DiscoveryPage /><SignedIn /></>, { route: "/discovery", path: "/discovery", toasts: toasts.api });
+        await screen.findByText("Site");
+        await accountKnown();
+        act(() => { flow.state.connect.onConnectEnd?.({ target: screen.getByTestId("pane") }, { fromHandle: { id: "add" }, fromNode: { id: "asset:10" } }); });
+        expect(toasts.calls).toContainEqual({ kind: "info", text: "Still reading the asset list. Try again in a moment." });
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(node("asset:11")).toBeNull();
+        expect(window.localStorage.getItem(FOLDED)).toBe("[10]");
+        held.release();
+      });
+    });
   });
 
   describe("expand and collapse a selection or a branch", () => {
@@ -3353,11 +3428,48 @@ describe("DiscoveryPage Unmapped only, Show more, folded assets and branches (W1
       await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Plant OPC" })).getByRole("menuitem", { name: "Expand this branch" }));
       expect(toasts.calls.at(-1)).toEqual({ kind: "info", text: "Opened 1 source and 3 groups." });
       expect(node("point:1")).not.toBeNull();
+      fireEvent.contextMenu(node("src:1"));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Plant OPC" })).getByRole("menuitem", { name: "Collapse this branch" }));
+      expect(toasts.calls.at(-1)).toEqual({ kind: "info", text: "Closed 1 source and 3 groups." });
+      expect(node("cluster:1:LVP01")).toBeNull();
+    });
+
+    it("a group's own menu has no branch items (its branch is itself, and Expand or Collapse is that); a source's and an asset's keep them", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await expand("Plant OPC");
+      await expand("LVP01");
       fireEvent.contextMenu(node("cluster:1:LVP01"));
-      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for LVP01" })).getByRole("menuitem", { name: "Collapse this branch" }));
-      expect(toasts.calls.at(-1)).toEqual({ kind: "info", text: "Closed 1 group." });
-      expect(node("point:1")).toBeNull();
-      expect(node("point:3")).not.toBeNull();
+      const labels = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.querySelector(".graph-menu-text > span")?.textContent ?? item.textContent);
+      expect(labels(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse"]);
+      await userEvent.keyboard("{Escape}");
+      fireEvent.contextMenu(node("src:1"));
+      expect(labels(await screen.findByRole("menu", { name: "Actions for Plant OPC" }))).toEqual(expect.arrayContaining(["Expand this branch", "Collapse this branch"]));
+      await userEvent.keyboard("{Escape}");
+      fireEvent.contextMenu(node("asset:10"));
+      expect(labels(await screen.findByRole("menu", { name: "Actions for Site" }))).toEqual(expect.arrayContaining(["Expand this branch", "Collapse this branch"]));
+    });
+
+    it("a node's menu words its reasons for the node, never for 'everything selected'", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await pick("asset:11"); // something else is selected, and it is not what the menu acts on
+      fireEvent.contextMenu(node("src:1"));
+      const closed = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
+      expect(within(closed).getByRole("menuitem", { name: /^Collapse this branch/ })).toHaveAttribute("title", "This branch is already closed.");
+      expect(within(closed).getByRole("menuitem", { name: /^Collapse this branch/ })).toHaveTextContent("This branch is already closed.");
+      expect(within(closed).getByRole("menuitem", { name: "Expand this branch" })).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(within(closed).getByRole("menuitem", { name: "Expand this branch" }));
+      fireEvent.contextMenu(node("src:1"));
+      const opened = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
+      expect(within(opened).getByRole("menuitem", { name: /^Expand this branch/ })).toHaveAttribute("title", "This branch is already open.");
+      expect(opened.textContent ?? "").not.toMatch(/selected/i);
+      await userEvent.keyboard("{Escape}");
+      // The bar and the selection menu keep their own words.
+      await pick("src:1");
+      fireEvent.contextMenu(screen.getByTestId("selection-rect"));
+      expect(within(await screen.findByRole("menu", { name: "Canvas actions" })).getByRole("menuitem", { name: /^Expand selection/ })).toHaveAttribute("title", "Everything selected is already open.");
     });
 
     it("the pane's menu has Expand selection and Collapse selection, disabled with the reason while nothing is selected", async () => {
@@ -3661,6 +3773,71 @@ describe("DiscoveryPage arrow keys, camera and focus rules (W12b)", () => {
       expect(node("asset:11")).not.toBeNull();
       expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     });
+
+    it("Escape on a selected node clears the selection and the focus stays on the node (React Flow would have blurred it)", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByTestId("select-src:1"));
+      await userEvent.click(screen.getByTestId("select-asset:11"));
+      expect(node("src:1")).toHaveAttribute("data-selected", "true");
+      focusOn("src:1");
+      expect(fireEvent.keyDown(node("src:1"), { key: "Escape" })).toBe(false); // ours: React Flow never sees it
+      await waitFor(() => expect(node("src:1")).toHaveAttribute("data-selected", "false"));
+      expect(node("asset:11")).toHaveAttribute("data-selected", "false"); // the whole selection goes, as it does on the empty canvas
+      expect(node("src:1")).toHaveFocus();
+      expect(document.body).not.toHaveFocus();
+    });
+
+    it("Escape on a node that is not selected is left alone, and so is Escape on the empty canvas (which clears as before)", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      await userEvent.click(screen.getByTestId("select-asset:11"));
+      focusOn("src:1");
+      expect(fireEvent.keyDown(node("src:1"), { key: "Escape" })).toBe(true);
+      act(() => canvasGroup().focus());
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(node("asset:11")).toHaveAttribute("data-selected", "false"));
+      expect(canvasGroup()).toHaveFocus();
+    });
+
+    describe("on the Show more button", () => {
+      const BIG = () => world([srcOf(1, "Big", { clusters: [{ key: "BIG", points: Array.from({ length: 120 }, (_, i) => kw(1000 + i, `BIG pt ${i}`)) }], point_count: 120 })]);
+      const more = () => within(node("more:cluster:1:BIG")).getByRole("button", { name: /^Show 50 more points of BIG/ });
+      const onMore = async () => {
+        sized();
+        mockFetch(routes("operator", BIG()));
+        open();
+        await expand("Big");
+        await expand("BIG");
+        act(() => more().focus());
+      };
+
+      it("Up goes to the last point drawn and Left to the group: the list's last stop is not a dead end", async () => {
+        await onMore();
+        await pressed("ArrowUp", "point:1049");
+        act(() => more().focus());
+        await pressed("ArrowLeft", "cluster:1:BIG");
+      });
+
+      it("Down and Right have nowhere to go: the key is ours all the same and the focus stays", async () => {
+        await onMore();
+        expect(fireEvent.keyDown(more(), { key: "ArrowDown" })).toBe(false);
+        expect(fireEvent.keyDown(more(), { key: "ArrowRight" })).toBe(false);
+        await later(120);
+        expect(more()).toHaveFocus();
+      });
+
+      it("Enter and Space are the button's own: they press it (50 more points are drawn)", async () => {
+        await onMore();
+        expect(fireEvent.keyDown(more(), { key: "Enter" })).toBe(true); // not taken
+        expect(fireEvent.keyDown(more(), { key: " " })).toBe(true);
+        await userEvent.keyboard("{Enter}");
+        await waitFor(() => expect(node("point:1050")).toHaveFocus());
+        expect(node("point:1099")).not.toBeNull();
+      });
+    });
   });
 
   describe("the camera and the focus of a jump", () => {
@@ -3699,6 +3876,48 @@ describe("DiscoveryPage arrow keys, camera and focus rules (W12b)", () => {
       focusOn("cluster:1:LVP01");
       await pressed("ArrowDown", "cluster:1:LVP02");
       expect(flow.setViewport).not.toHaveBeenCalled();
+    });
+
+    describe("the minimap and the tools panel are drawn over the canvas: a node the keys go to is kept clear of them", () => {
+      const box = (top: number, bottom: number, left = 0, right = 800) => ({ top, bottom, left, right, x: left, y: top, width: right - left, height: bottom - top, toJSON: () => ({}) }) as DOMRect;
+      /** The canvas is 600 tall and starts 100 px down the page; the minimap's top is at 450, the tools panel ends at 150. The usual margin is 40, so a node may not end below 334 or start above 58. */
+      const overlaid = async (targetTop: number) => {
+        sized();
+        mockFetch(routes("operator"));
+        open();
+        await expand("Plant OPC");
+        await screen.findByText("LVP01 (2)");
+        await later(80);
+        canvasGroup().getBoundingClientRect = () => box(100, 700);
+        screen.getByTestId("minimap").getBoundingClientRect = () => box(450, 602, 600, 800);
+        document.querySelector(".graph-tools")!.getBoundingClientRect = () => box(108, 150);
+        flow.state.viewport = { x: 0, y: targetTop - Number(node("cluster:1:LVP02").dataset.y), zoom: 1 }; // the target (80 tall) stands at screen y targetTop
+        flow.setViewport.mockClear();
+        focusOn("cluster:1:LVP01");
+        await userEvent.keyboard("{ArrowDown}");
+        await waitFor(() => expect(node("cluster:1:LVP02")).toHaveFocus());
+      };
+      const screenTop = () => {
+        const [to] = flow.setViewport.mock.calls[0] as [{ y: number }];
+        return Number(node("cluster:1:LVP02").dataset.y) + to.y;
+      };
+
+      it("a node that would land under the minimap is lifted above it", async () => {
+        await overlaid(400); // 400..480: inside the usual 40, under the minimap
+        expect(flow.setViewport).toHaveBeenCalledTimes(1);
+        expect(screenTop() + 80).toBeLessThanOrEqual(450 - 100 - 16 + 0.5);
+      });
+
+      it("a node that would land under the tools panel is lowered below it", async () => {
+        await overlaid(45); // 45..125: inside the usual 40, under the panel (its bottom is 50 below the canvas top)
+        expect(flow.setViewport).toHaveBeenCalledTimes(1);
+        expect(screenTop()).toBeGreaterThanOrEqual(150 - 100 + 8 - 0.5);
+      });
+
+      it("a node that is clear of both does not move the camera", async () => {
+        await overlaid(200);
+        expect(flow.setViewport).not.toHaveBeenCalled();
+      });
     });
 
     it("moves at once under reduced motion", async () => {

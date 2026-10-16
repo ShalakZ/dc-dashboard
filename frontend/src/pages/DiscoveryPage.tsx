@@ -43,7 +43,7 @@ import {
   removalDialogText, removalOutcome, seenLine, shiftedPlaces, visiblePoints,
   type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
-import { cameraMs, keepInView, unionRect } from "../lib/graphCamera";
+import { cameraMs, keepInView, overlayMargin, unionRect } from "../lib/graphCamera";
 import { buildFindIndex, findMatches, findPlan, type FindEntry } from "../lib/graphFind";
 import { alignGuides, type Rect } from "../lib/graphGuides";
 import { navIndex } from "../lib/graphNav";
@@ -88,7 +88,14 @@ const rectOf = (n: Node): Rect => ({ x: n.position.x, y: n.position.y, w: n.meas
 const MEASURE_FRAMES = 10;
 const FRAME_MS = 16;
 const isMeasured = (n: Node) => n.measured?.width !== undefined && n.measured?.height !== undefined;
-const nap = (ms: number) => new Promise<void>((resolve) => { window.setTimeout(resolve, ms); });
+/**
+ * The margin a jump keeps a node away from the canvas's edges: the minimap (bottom right) and the tools panel (top right) are drawn OVER the canvas, so the
+ * plain 40 px would park the node under them. Measured when the jump is made (the panel grows with its card, the minimap is hidden on a small window).
+ */
+const overlayMarginOf = (area: HTMLElement) => overlayMargin(
+  area.getBoundingClientRect(), area.querySelector(".graph-minimap")?.getBoundingClientRect() ?? null, area.querySelector(".graph-tools")?.getBoundingClientRect() ?? null,
+);
+const nap =(ms: number) => new Promise<void>((resolve) => { window.setTimeout(resolve, ms); });
 /**
  * What a screen reader is told when a node takes the focus. The library's own sentence says Enter or Space selects it and the arrows move a SELECTED node, which
  * is no longer all there is to say here. Module level, so the prop keeps its identity.
@@ -238,6 +245,14 @@ function Canvas({ model }: { model: GraphModel }) {
     return new Set([...readAssetsClosed()].filter((id) => known.has(id)));
   });
   const view = useMemo<GraphView>(() => ({ unmappedOnly, shown, assetsClosed, pageSize: PAGE_SIZE }), [unmappedOnly, shown, assetsClosed]);
+  // The folds are set at once by their setter (two quick presses must not both start from the old set); it is up here because a new sub-asset opens its parent (`onAdd`).
+  // It keeps only ids the model knows, and reads the model of the moment (`modelRef`, below) because a graph read may have come in since the render.
+  const assetsClosedNow = useRef(assetsClosed);
+  const setAssetsClosed = useCallback((next: ReadonlySet<number>) => {
+    assetsClosedNow.current = next;
+    setAssetsClosedState(next);
+    writeAssetsClosed(next, new Set(modelRef.current.assets.map((a) => a.id)));
+  }, []);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Where the user has dragged nodes this session. A rebuild (expand, collapse, refresh) puts these back instead of
   // snapping the nodes to the saved layout, which this person may never change or whose save may not have reloaded yet.
@@ -332,11 +347,23 @@ function Canvas({ model }: { model: GraphModel }) {
     const payload = dropPayload(model, id);
     if (payload) newAssetFor(payload);
   }, [model, newAssetFor]);
+  /**
+   * A new sub-asset under `parentId`. A parent that is folded is opened first (kept per browser like any fold), or the asset would be made and not drawn. Not when the
+   * form cannot open yet (the asset list is still being read): nothing happens then, and the fold stays.
+   */
+  const addUnder = useCallback((parentId: number) => {
+    if (formState.current.ready && assetsClosedNow.current.has(parentId)) {
+      const next = new Set(assetsClosedNow.current);
+      next.delete(parentId);
+      setAssetsClosed(next);
+    }
+    openNewAsset({ parentId });
+  }, [openNewAsset, setAssetsClosed]);
   /** The "+" and the asset's New sub-asset…: the node's own id names the parent. */
   const onAdd = useCallback((id: string) => {
     const parentId = pickDropTarget([{ id }]);
-    if (parentId !== null) openNewAsset({ parentId });
-  }, [openNewAsset]);
+    if (parentId !== null) addUnder(parentId);
+  }, [addUnder]);
   /**
    * A line dragged from an asset's "+" and let go on the empty canvas: New sub-asset under that asset. Only the "+" (handle `add`) and only the empty pane count: a
    * release over a node, an edge or a control does nothing, and no connection is ever made (`isValidConnection`). The library draws every node and edge INSIDE
@@ -350,8 +377,8 @@ function Canvas({ model }: { model: GraphModel }) {
     if (!target?.closest?.(".react-flow__pane")) return;
     if (target.closest(".react-flow__node, .react-flow__edge, .react-flow__nodesselection, .react-flow__nodesselection-rect, .react-flow__selection, .react-flow__minimap, .react-flow__controls, .react-flow__panel")) return;
     const parentId = state.fromNode ? pickDropTarget([state.fromNode]) : null;
-    if (parentId !== null) openNewAsset({ parentId });
-  }, [openNewAsset]);
+    if (parentId !== null) addUnder(parentId);
+  }, [addUnder]);
 
   const canvas = useRef<HTMLDivElement>(null);
   // The right-click menu's state is up here because a mapped node's own menu button opens it (`onMenu`), and the nodes are built below.
@@ -378,15 +405,9 @@ function Canvas({ model }: { model: GraphModel }) {
   }, []);
   const openNow = useRef(open);
   useEffect(() => { openNow.current = open; }, [open]);
-  // The view of the moment, for the same reason; the folded assets are set at once by their setter (two quick presses must not both start from the old set).
+  // The view of the moment, for the same reason.
   const viewNow = useRef(view);
   useEffect(() => { viewNow.current = view; }, [view]);
-  const assetsClosedNow = useRef(assetsClosed);
-  const setAssetsClosed = useCallback((next: ReadonlySet<number>) => {
-    assetsClosedNow.current = next;
-    setAssetsClosedState(next);
-    writeAssetsClosed(next, new Set(modelRef.current.assets.map((a) => a.id)));
-  }, []);
   const setUnmappedOnly = useCallback((on: boolean) => {
     setUnmappedOnlyState(on);
     writeUnmappedOnly(on);
@@ -474,7 +495,8 @@ function Canvas({ model }: { model: GraphModel }) {
   /**
    * A jump of the keyboard (an arrow, Show more): pan to the node, then focus it. Waits for the nodes just drawn to be in React Flow's store and measured (a new
    * node is `visibility: hidden` until then, and a hidden element cannot take the focus; about ten frames at most, then it goes on with the size of a node it has
-   * not been told). The camera only pans (`keepInView`: the zoom is the person's) and glides; the focus comes LAST, once the glide is over, with no scrolling:
+   * not been told). The camera only pans (`keepInView`: the zoom is the person's), keeps the node clear of the minimap and the tools panel (`overlayMarginOf`, measured
+   * once per jump) and glides; the focus comes LAST, once the glide is over, with no scrolling:
    * React Flow's own focus handler centres a node that is off screen with no animation, which would cut the glide short. The "show more" node has no focus
    * stop of its own, so for it the button inside takes the focus. `focusNode` above is the other thing (the node an action was about, no camera).
    */
@@ -490,7 +512,7 @@ function Canvas({ model }: { model: GraphModel }) {
     }
     if (target) {
       const view = getViewport();
-      const to = keepInView(rectOf(target), view, { w: area.clientWidth, h: area.clientHeight });
+      const to = keepInView(rectOf(target), view, { w: area.clientWidth, h: area.clientHeight }, overlayMarginOf(area));
       if (to) {
         await setViewport({ ...view, ...to }, { duration: cameraMs(reducedMotion()) });
         if (!mounted.current) return;
@@ -948,7 +970,7 @@ function Canvas({ model }: { model: GraphModel }) {
       onToggle(id);
     }
   }, [onToggle, onToggleAssets, keepFocus]);
-  const nav = useGraphNav({ canvas, nodes, onToggle: navToggle, onMore, goToNode });
+  const nav = useGraphNav({ canvas, nodes, onToggle: navToggle, onMore, goToNode, clearSelection });
   // Stable, because React Flow re-renders every node wrapper when one of these props changes identity: as inline arrows they cost a render of the
   // whole graph on each hover (measured, W12b).
   const onNodeClick: NodeMouseHandler = useCallback((_event, node) => {
@@ -975,9 +997,10 @@ function Canvas({ model }: { model: GraphModel }) {
     if (d.onMove) items.push({ label: group ? "Move this group's mappings…" : "Move to another asset…", onSelect: () => d.onMove?.(node.id) });
     for (const m of d.mapped ?? []) items.push({ label: `Unmap everything from ${m.sourceName}…`, tone: "danger", onSelect: () => d.onUnmapSource?.(node.id, m.sourceId) });
     // W12b, last: the branch of THIS node (whatever is selected), for a node that opens or closes; an asset with sub-assets also folds them.
+    // A group has no branch items: its branch is itself, so they would do what its Expand or Collapse does.
     const hasChildren = (d.children ?? 0) > 0;
-    if (node.type === "source" || group || (node.type === "asset" && hasChildren)) {
-      const branch = selectionStates(model, open, view, [node.id]);
+    if (node.type === "source" || (node.type === "asset" && hasChildren)) {
+      const branch = selectionStates(model, open, view, [node.id], "node"); // (its reasons speak of the node, not of the selection)
       items.push(
         { label: "Expand this branch", disabled: !branch.expandBranch.enabled, reason: branch.expandBranch.reason, onSelect: () => expandBy([node.id], true) },
         { label: "Collapse this branch", disabled: !branch.collapseBranch.enabled, reason: branch.collapseBranch.reason, onSelect: () => collapseBy([node.id], true) },

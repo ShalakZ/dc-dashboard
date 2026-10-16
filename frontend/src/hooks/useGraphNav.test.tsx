@@ -1,6 +1,6 @@
 import type { Node } from "@xyflow/react";
 import { createPortal } from "react-dom";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useRef } from "react";
 import { useGraphNav } from "./useGraphNav";
 
@@ -16,7 +16,7 @@ const nodes: Node[] = [
   { id: "asset:2", type: "asset", position: at, data: { children: 0, navParent: "asset:1" } },
 ];
 
-const calls = { onToggle: vi.fn(), onMore: vi.fn(), goToNode: vi.fn() };
+const calls = { onToggle: vi.fn(), onMore: vi.fn(), goToNode: vi.fn(), clearSelection: vi.fn() };
 
 /** The canvas wrapper with fake React Flow node wrappers (a button inside the first, the Find card and a portalled menu), as the page renders it. */
 function Host({ selected, portal, withNodes = nodes }: { selected?: string; portal?: HTMLElement; withNodes?: readonly Node[] }) {
@@ -29,6 +29,7 @@ function Host({ selected, portal, withNodes = nodes }: { selected?: string; port
         {withNodes.map((node) => (
           <div key={node.id} className={`react-flow__node${node.id === selected ? " selected" : ""}`} data-id={node.id} data-testid={node.id} tabIndex={0}>
             {node.id === "src:1" && <button type="button">inside</button>}
+            {node.type === "more" && <button type="button">Show 50 more</button>}
           </div>
         ))}
         <div className="graph-find"><input aria-label="in find" /></div>
@@ -194,6 +195,152 @@ describe("useGraphNav arrows", () => {
     const event = press(stray, "ArrowDown");
     expect(calls.goToNode).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("useGraphNav arrows on the Show more button", () => {
+  // The more node's wrapper is not focusable, so the keyboard stands on the button inside it (the page's goToNode focuses it).
+  const more = () => screen.getByRole("button", { name: "Show 50 more" });
+
+  it.each([
+    ["ArrowUp", "point:11"],
+    ["ArrowLeft", "cluster:1:a"],
+  ])("%s on the button goes to %s, and React Flow never sees the key", (key, to) => {
+    render(<Host />);
+    const event = press(more(), key);
+    expect(calls.goToNode).toHaveBeenCalledTimes(1);
+    expect(calls.goToNode).toHaveBeenCalledWith(to);
+    expect(event.defaultPrevented).toBe(true);
+    expect(reached.down).not.toHaveBeenCalled();
+  });
+
+  it.each(["ArrowDown", "ArrowRight"])("%s on the button has nowhere to go (it is the last child and has none) and is still swallowed", (key) => {
+    render(<Host />);
+    const event = press(more(), key);
+    expect(calls.goToNode).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+    expect(reached.down).not.toHaveBeenCalled();
+  });
+
+  it.each(["Enter", " "])("%s on the button is the native button's", (key) => {
+    render(<Host />);
+    const event = press(more(), key);
+    expect(calls.goToNode).not.toHaveBeenCalled();
+    expect(calls.onToggle).not.toHaveBeenCalled();
+    expect(calls.onMore).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    expect(reached.down).toHaveBeenCalledWith(key);
+  });
+
+  it("a modifier leaves the arrow alone", () => {
+    render(<Host />);
+    const event = press(more(), "ArrowUp", { shiftKey: true });
+    expect(calls.goToNode).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("the arrows on a button that sits in another kind of node are still not ours", () => {
+    render(<Host />);
+    const event = press(screen.getByRole("button", { name: "inside" }), "ArrowUp");
+    expect(calls.goToNode).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("a more node the list does not know is left alone", () => {
+    render(<Host withNodes={nodes.filter((n) => n.type !== "more")} />);
+    // the fake DOM draws no button without a node, so make one by hand, inside a wrapper with a more: id
+    const wrapper = document.createElement("div");
+    wrapper.className = "react-flow__node";
+    wrapper.dataset.id = "more:cluster:9:z";
+    const button = wrapper.appendChild(document.createElement("button"));
+    screen.getByTestId("canvas").appendChild(wrapper);
+    const event = press(button, "ArrowUp");
+    expect(calls.goToNode).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("useGraphNav Escape", () => {
+  it("on a SELECTED node clears the selection, leaves the focus on the node (React Flow would blur it) and React Flow never sees the key", () => {
+    render(<Host selected="src:1" />);
+    const el = screen.getByTestId("src:1");
+    act(() => el.focus());
+    const event = press(el, "Escape");
+    expect(calls.clearSelection).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+    expect(reached.down).not.toHaveBeenCalled();
+    expect(el).toHaveFocus();
+  });
+
+  it.each(["point:11", "asset:2", "cluster:1:a"])("works on a selected %s too", (id) => {
+    render(<Host selected={id} />);
+    press(screen.getByTestId(id), "Escape");
+    expect(calls.clearSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("on a node that is not selected is left alone", () => {
+    render(<Host selected="src:2" />);
+    const event = press(screen.getByTestId("src:1"), "Escape");
+    expect(calls.clearSelection).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    expect(reached.down).toHaveBeenCalledWith("Escape");
+  });
+
+  it("on the canvas wrapper, a button inside a selected node, the Find card, a menu or outside the canvas is left alone", () => {
+    const portal = document.body.appendChild(document.createElement("div"));
+    render(<Host selected="src:1" portal={portal} />);
+    const targets = [
+      screen.getByTestId("canvas"), screen.getByRole("button", { name: "inside" }), screen.getByLabelText("in find"),
+      screen.getByRole("button", { name: "in menu" }), screen.getByRole("button", { name: "outside" }),
+    ];
+    for (const target of targets) expect(press(target, "Escape").defaultPrevented).toBe(false);
+    expect(calls.clearSelection).not.toHaveBeenCalled();
+    portal.remove();
+  });
+
+  it.each([
+    ["Ctrl", { ctrlKey: true }],
+    ["Cmd", { metaKey: true }],
+    ["Alt", { altKey: true }],
+    ["Shift", { shiftKey: true }],
+  ])("%s held: left alone", (_name, mod) => {
+    render(<Host selected="src:1" />);
+    const event = press(screen.getByTestId("src:1"), "Escape", mod);
+    expect(calls.clearSelection).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("an open modal dialog ignores it", () => {
+    render(<Host selected="src:1" />);
+    const modal = document.body.appendChild(document.createElement("div"));
+    modal.setAttribute("aria-modal", "true");
+    const event = press(screen.getByTestId("src:1"), "Escape");
+    expect(calls.clearSelection).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    modal.remove();
+  });
+
+  it("a selected node the list does not know is left alone", () => {
+    render(<Host />);
+    const stray = document.createElement("div");
+    stray.className = "react-flow__node selected";
+    stray.dataset.id = "src:99";
+    screen.getByTestId("canvas").appendChild(stray);
+    const event = press(stray, "Escape");
+    expect(calls.clearSelection).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("Enter on a point is still React Flow's (it selects it), and the Escape after it now clears it", () => {
+    render(<Host />);
+    const enter = press(screen.getByTestId("point:11"), "Enter");
+    expect(enter.defaultPrevented).toBe(false);
+    expect(reached.down).toHaveBeenCalledWith("Enter");
+    // (React Flow now marks the wrapper `selected`: the Host is told so)
+    screen.getByTestId("point:11").classList.add("selected");
+    const escape = press(screen.getByTestId("point:11"), "Escape");
+    expect(escape.defaultPrevented).toBe(true);
+    expect(calls.clearSelection).toHaveBeenCalledTimes(1);
   });
 });
 

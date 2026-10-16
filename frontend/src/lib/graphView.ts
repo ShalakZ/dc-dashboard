@@ -277,9 +277,12 @@ export interface ActionState { enabled: boolean; reason?: string }
  * Which of Expand/Collapse selection/branch have something to do for the selected nodes. A target counts as closed when its source is not
  * open, its group is not open or its asset is folded; one the filter hides is neither open nor closed. Reasons, in the order they apply:
  * nothing selected; nothing selected can open or close; everything is already open (expand) / closed (collapse).
+ *
+ * `subject`: "selection" (the default) is for the bar and the selection and pane menus. A node's own menu passes "node" with that node's id: it acts on
+ * the node whatever is selected, so its reasons speak of the node's branch ("This branch is already open.") and never of "everything selected".
  */
 export function selectionStates(
-  model: GraphModel, open: OpenState, view: GraphView, selectedIds: readonly string[],
+  model: GraphModel, open: OpenState, view: GraphView, selectedIds: readonly string[], subject: "selection" | "node" = "selection",
 ): { expandSelection: ActionState; collapseSelection: ActionState; expandBranch: ActionState; collapseBranch: ActionState } {
   const stateOf = new Map<string, "open" | "closed" | "hidden">();
   for (const source of model.sources) {
@@ -294,8 +297,10 @@ export function selectionStates(
 
   const judge = (targets: readonly string[], expand: boolean): ActionState => {
     const states = targets.map((id) => stateOf.get(id));
-    if (!states.some((s) => s === "open" || s === "closed")) return { enabled: false, reason: "Nothing selected opens or closes." };
+    const own = subject === "node";
+    if (!states.some((s) => s === "open" || s === "closed")) return { enabled: false, reason: own ? "Nothing under it opens or closes." : "Nothing selected opens or closes." };
     if (states.includes(expand ? "closed" : "open")) return { enabled: true };
+    if (own) return { enabled: false, reason: expand ? "This branch is already open." : "This branch is already closed." };
     return { enabled: false, reason: expand ? "Everything selected is already open." : "Everything selected is already closed." };
   };
   if (selectedIds.length === 0) {
