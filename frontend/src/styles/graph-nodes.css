@@ -28,7 +28,7 @@
   .gnode-asset .row .node-title { flex: 1 1 auto; min-width: 0; }
   /* The fold of an asset is a chevron, not a minus and a plus: the round "+" of the add handle stands beside it and the two must not read alike. The icon points right at rest; it is turned down
      while the sub-assets show, and left pointing right while they are hidden (data-folded). 14px in a 24px-wide button (the base `button svg.i` is 16px, `.gnode button` pads 6px), so the row is no taller. */
-  .gnode .gnode-fold { padding: 0 4px; }
+  .gnode-fold.gnode-fold { padding: 0 4px; } /* doubled class: it beats `.gnode button` without naming .gnode here (app.css.test.ts: one page file does not restyle another) */
   .gnode-fold svg.i { width: 14px; height: 14px; transform: rotate(90deg); } /* no transition: a guard of this file keeps every node paint immediate */
   .gnode-fold[data-folded] svg.i { transform: none; }
   .gnode-mapped { flex: none; padding: 0 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text-2); font-size: 11px; line-height: 1.2; white-space: nowrap; }
