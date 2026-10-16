@@ -29,6 +29,11 @@ function foreignUnit(row: ReviewRow): string | null {
 }
 const mappedText = (r: ReviewRow) => `${r.name}: ${r.metric === "custom" ? `custom (${(r.customUnit ?? "").trim()})` : r.metric} ×${r.scale}`;
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/**
+ * The toast says `Created 3 assets` and its Undo only unmaps the points the batch mapped (the assets stay: deleting one is a separate, guarded act). The
+ * sentence is pinned and the button is named Undo, so what it does is said in the button's description.
+ */
+const UNDO_TITLE = "Unmap the points it mapped; the assets stay";
 
 /**
  * Create one asset for each group of a source in one go (W7r): choose ONE parent (or the top level), tick the groups, adjust their names and
@@ -146,11 +151,11 @@ export function BulkCreateDialog({ model, source, onMapped, onClose }: { model: 
       setBusy(false);
     }
     if (failed.length === 0) {
-      mapped.current({ text: `Created ${plural(made, "asset")}`, kind: "success", mappings: madeMappings, newAssets: madeAssets });
+      mapped.current({ text: `Created ${plural(made, "asset")}`, kind: "success", mappings: madeMappings, newAssets: madeAssets, undoTitle: UNDO_TITLE });
       close.current();
       return;
     }
-    mapped.current({ text: `Created ${made} of ${plural(plan.length, "asset")}`, kind: "error", mappings: madeMappings, newAssets: madeAssets });
+    mapped.current({ text: `Created ${made} of ${plural(plan.length, "asset")}`, kind: "error", mappings: madeMappings, newAssets: madeAssets, undoTitle: UNDO_TITLE });
     // No names in it: the rows that are still listed are the ones that failed, and a list of names has no length limit (the line is a fixed slot).
     if (alive.current) setOutcome(`Created ${made} of ${plan.length}. The groups still listed were not created: fix the rows marked and press the button again.`);
   }

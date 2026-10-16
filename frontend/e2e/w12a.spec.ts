@@ -31,7 +31,7 @@ import { rowAction } from "./shell";
 //
 // Locators. Playwright matches a name by case-insensitive SUBSTRING: every lookup below is `exact: true` (or an anchored expression) where a second name could contain it
 // (`Mapping actions for LVP02` is also the start of `Mapping actions for LVP02_kW`, `Map` starts `Mapping`, `Unmapped 6 points.` contains `mapped 6 points`). The Review is
-// `Review mappings`, the form `New asset`, the confirmation of an unmap `Unmap "<name>" from <asset>?`, the Move dialog `Move the group "<key>" to another asset`.
+// `Review mappings`, the form `New asset`, the confirmation of an unmap `Unmap "<name>" from <asset>?`, the Move dialog `Move the group "<key>" to another asset` (`... "<key>" of "<source>" ...` when another source has a group of that name).
 
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost/";
 const ADMIN = { username: "admin", password: "correct-horse" };
@@ -550,7 +550,9 @@ test.describe("W12a: mapping from Discovery, and taking it back", () => {
         await menu.getByRole("menuitem", { name: "Move this group's mappings…", exact: true }).click();
       });
 
-      const move = page.getByRole("dialog", { name: `Move the group "${target.key}" to another asset`, exact: true });
+      // A group label that more than one source has names its source: `Move the group "LVP01" of "sim" to another asset`.
+      const own = `${target.key}`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const move = page.getByRole("dialog", { name: new RegExp(`^Move the group "${own}"( of "[^"]+")? to another asset$`) });
       await test.step("the Move dialog: the billing sentence, no move to where they are, the Panel is a choice and no note comes with it", async () => {
         await expect(move).toBeVisible();
         await expect(move).toContainText("Billing for months that are still open is recalculated with them under the asset you choose; closed months keep their billed figures.");

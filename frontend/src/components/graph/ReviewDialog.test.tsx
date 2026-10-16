@@ -47,8 +47,9 @@ const routes = (accept: object = created) => ({
 const posts = (calls: { method: string; path: string; body: unknown }[]) => calls.filter((c) => c.method === "POST");
 
 /** Mounts a graph query next to the dialog, as the page does, so the refetch after a commit is observable. `onMapped` is the page's `maps.mappedToast`. */
-function Harness({ cluster = "LVP01", initialTarget, onClose, onMapped = () => undefined, kinds, observe = false }: {
+function Harness({ cluster = "LVP01", initialTarget, onClose, onMapped = () => undefined, kinds, observe = false, createdAsset }: {
   cluster?: string; initialTarget: Initial; onClose: () => void; onMapped?: (info: MappedInfo) => void; kinds?: React.ComponentProps<typeof ReviewDialog>["kinds"]; observe?: boolean;
+  createdAsset?: string;
 }) {
   const { loading } = useAuth();
   const { data } = useGraph();
@@ -58,7 +59,7 @@ function Harness({ cluster = "LVP01", initialTarget, onClose, onMapped = () => u
   return (
     <>
       {observe && <Observers />}
-      <ReviewDialog model={data} payload={payload.current!} initialTarget={initialTarget} kinds={kinds} onClose={onClose} onMapped={onMapped} />
+      <ReviewDialog model={data} payload={payload.current!} initialTarget={initialTarget} kinds={kinds} createdAsset={createdAsset} onClose={onClose} onMapped={onMapped} />
     </>
   );
 }
@@ -576,5 +577,57 @@ describe("ReviewDialog container note (W12a, A4)", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(calls.filter((c) => c.method === "POST")[0].body).toMatchObject({ source_id: 1, asset_id: 12 });
     expect(onMapped).toHaveBeenCalledWith(expect.objectContaining({ text: "Mapped 3 points to Room 1." }));
+  });
+});
+
+describe("ReviewDialog after a New asset (W12a, the continuation)", () => {
+  const ROOM = { id: 12, parent_id: 10, name: "Room 1", kind: "room" };
+  const KINDS = [{ id: 1, name: "room", icon: "room", asset_count: 1, starter: true }];
+  const CREATED = "Cancel keeps it without any mappings.";
+  const NOTE = "Room 1 is a room; meters usually belong to a Panel or Rack. Map here anyway?";
+  async function openCreated(initialTarget: Initial, createdAsset: string | null = "Panel 9", kinds: typeof KINDS | undefined = KINDS) {
+    mockFetch({ ...routes(), "GET /api/discovery/graph": { body: { ...graph(), assets: [...graph().assets, ROOM] } } });
+    const onClose = vi.fn();
+    renderWithProviders(<Harness initialTarget={initialTarget} onClose={onClose} createdAsset={createdAsset ?? undefined} kinds={kinds} />);
+    const dialog = await screen.findByRole("dialog", { name: "Review mappings" });
+    return { dialog, onClose, slot: dialog.querySelector(".mapmove-slot") as HTMLElement };
+  }
+
+  it("says in the reserved slot that the asset was made and that Cancel keeps it", async () => {
+    const { slot } = await openCreated(existing(11));
+    expect(slot).toHaveTextContent(`Panel 9 was created. ${CREATED}`);
+    expect(slot.querySelector("p")).toHaveClass("muted");
+    expect(slot.querySelector("[role]")).toBeNull(); // not an announcer
+  });
+
+  it("the Asset select is described by it, so the person who starts on the select hears it", async () => {
+    await openCreated(existing(11));
+    expect(screen.getByLabelText("Asset")).toHaveAccessibleDescription(`Panel 9 was created. ${CREATED}`);
+  });
+
+  it("with the container note too, the slot shows both, the created line first", async () => {
+    const { slot } = await openCreated(existing(12));
+    const lines = [...slot.querySelectorAll("p")].map((p) => p.textContent);
+    expect(lines).toEqual([`Panel 9 was created. ${CREATED}`, NOTE]);
+    expect(screen.getByLabelText("Asset")).toHaveAccessibleDescription(`Panel 9 was created. ${CREATED} ${NOTE}`);
+  });
+
+  it("choosing another asset keeps the line (the asset was still made); it is one line, not repeated", async () => {
+    const { slot } = await openCreated(existing(11));
+    await userEvent.selectOptions(screen.getByLabelText("Asset"), "10");
+    expect(slot.querySelectorAll("p")).toHaveLength(1);
+    expect(slot).toHaveTextContent(`Panel 9 was created. ${CREATED}`);
+  });
+
+  it("a Review that does not follow a New asset has no such line", async () => {
+    const { slot } = await openCreated(existing(11), null);
+    expect(slot).toBeEmptyDOMElement();
+    expect(screen.getByLabelText("Asset")).not.toHaveAccessibleDescription();
+  });
+
+  it("it lives in the existing reserved slot under the select, not in a new element", async () => {
+    const { slot } = await openCreated(existing(11));
+    expect(slot).toHaveClass("mapmove-slot");
+    expect(slot.closest(".field")).toContainElement(screen.getByLabelText("Asset"));
   });
 });

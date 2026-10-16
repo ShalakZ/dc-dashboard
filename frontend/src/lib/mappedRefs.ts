@@ -78,13 +78,21 @@ export function mappedSourcesByAsset(model: GraphModel): Map<number, MappedSourc
 /** The sources with mappings on one asset, by name, at most MAX_SOURCE_ITEMS. */
 export const mappedSources = (model: GraphModel, assetId: number): MappedSource[] => mappedSourcesByAsset(model).get(assetId) ?? [];
 
+/** Whether more than one source of the model has a group with this key (the Ungrouped bag counts as one): then the label alone does not say which is meant. */
+const sharedKey = (model: GraphModel, key: string): boolean => model.sources.filter((s) => groupsOf(s).some((g) => g.key === key)).length > 1;
+
 /**
  * What a confirmation or a dialog calls the mappings of a node when it is more than the one point's name: `the group "LVP01"`,
- * `the 6 points of source "Plant OPC"`. A point node has none (the point's own name is the title).
+ * `the 6 points of source "Plant OPC"`. A group whose label another source has too names its source: `the group "LVP01" of "sim"`
+ * (the seed has one LVP01 per source). A point node has none (the point's own name is the title).
  */
 export function mappingsWhat(model: GraphModel, id: string, sourceId?: number): string | undefined {
   const cluster = CLUSTER_ID.exec(id);
-  if (cluster) return cluster[2] === UNGROUPED ? "the Ungrouped points" : `the group "${cluster[2]}"`;
+  if (cluster) {
+    const label = cluster[2] === UNGROUPED ? "the Ungrouped points" : `the group "${cluster[2]}"`;
+    const owner = sharedKey(model, cluster[2]) ? model.sources.find((s) => s.id === Number(cluster[1]))?.name : undefined;
+    return owner === undefined ? label : `${label} of "${owner}"`;
+  }
   if (ASSET_ID.test(id) && sourceId !== undefined) {
     const name = model.sources.find((s) => s.id === sourceId)?.name ?? "this source";
     const n = mappedRefs(model, id, sourceId).length;

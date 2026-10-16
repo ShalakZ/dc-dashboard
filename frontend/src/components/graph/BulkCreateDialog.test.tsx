@@ -55,6 +55,12 @@ const routes = (accept: Accept = created(), assets?: GraphModel["assets"]) => ({
 });
 
 /**
+ * The Undo of "Created 3 assets" only unmaps the points the batch mapped (the assets stay, a separate and guarded delete): the dialog says so in the Undo
+ * button's description, because the sentence it raises is pinned and a person reads `Created 3 assets [Undo]` as "take the assets away".
+ */
+const UNDO_TITLE = "Unmap the points it mapped; the assets stay";
+
+/**
  * The page's side of the dialog: `maps.mappedToast`, which raises the toast (with its Undo only for assets.edit). Here it records the info the dialog
  * handed over and raises the plain toast with the dialog's own text and kind, so the texts this file pinned before the Undo existed stay pinned.
  */
@@ -413,6 +419,7 @@ describe("BulkCreateDialog", () => {
       expect(onMapped).toHaveBeenCalledWith({
         text: "Created 3 assets",
         kind: "success",
+        undoTitle: UNDO_TITLE,
         mappings: [
           { id: 100, assetId: 21, name: "LVP01 kW" }, { id: 101, assetId: 21, name: "LVP01 kWh" }, { id: 102, assetId: 21, name: "LVP01 V" },
           { id: 200, assetId: 22, name: "LVP02 kW" }, { id: 201, assetId: 22, name: "LVP02 V" },
@@ -448,6 +455,7 @@ describe("BulkCreateDialog", () => {
       expect(onMapped).toHaveBeenCalledWith({
         text: "Created 2 of 3 assets",
         kind: "error",
+        undoTitle: UNDO_TITLE,
         // the second call failed, so the third made the second asset of the batch
         mappings: [
           { id: 100, assetId: 21, name: "LVP01 kW" }, { id: 101, assetId: 21, name: "LVP01 kWh" }, { id: 102, assetId: 21, name: "LVP01 V" },
@@ -464,7 +472,7 @@ describe("BulkCreateDialog", () => {
       const { onMapped } = await open({ status: 500, body: { detail: "boom" } });
       await user.click(go("Create 3 assets"));
       await waitFor(() => expect(onMapped).toHaveBeenCalledTimes(1));
-      expect(onMapped).toHaveBeenCalledWith({ text: "Created 0 of 3 assets", kind: "error", mappings: [], newAssets: [] });
+      expect(onMapped).toHaveBeenCalledWith({ text: "Created 0 of 3 assets", kind: "error", undoTitle: UNDO_TITLE, mappings: [], newAssets: [] });
     });
 
     it("a second press after a partial batch tells the page only about what that press made", async () => {
@@ -484,7 +492,7 @@ describe("BulkCreateDialog", () => {
       await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
       expect(onMapped).toHaveBeenCalledTimes(2);
       expect(onMapped).toHaveBeenLastCalledWith({
-        text: "Created 1 asset", kind: "success", mappings: [{ id: 300, assetId: 23, name: "LVP02 kW" }, { id: 301, assetId: 23, name: "LVP02 V" }], newAssets: ["LVP02 b"],
+        text: "Created 1 asset", kind: "success", undoTitle: UNDO_TITLE, mappings: [{ id: 300, assetId: 23, name: "LVP02 kW" }, { id: 301, assetId: 23, name: "LVP02 V" }], newAssets: ["LVP02 b"],
       });
     });
   });

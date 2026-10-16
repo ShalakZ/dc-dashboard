@@ -32,7 +32,7 @@ import { useCanvasMenu } from "../hooks/useCanvasMenu";
 import { useConfirm } from "../hooks/useConfirm";
 import { useCreateAsset } from "../hooks/useCreateAsset";
 import { useGraphHighlight } from "../hooks/useGraphHighlight";
-import { useMappingActions } from "../hooks/useMappingActions";
+import { useMappingActions, type MappedInfo } from "../hooks/useMappingActions";
 import { reducedMotion, useReducedMotion } from "../hooks/useReducedMotion";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
@@ -224,7 +224,8 @@ function Canvas({ model }: { model: GraphModel }) {
   const fitOptions = useMemo(() => ({ duration: cameraMs(reduced) }), [reduced]);
   const [ask, askDialog] = useConfirm();
   const { dark } = useAppearance();
-  const [review, setReview] = useState<{ key: number; payload: DropPayload; initialTarget: InitialTarget } | null>(null);
+  // `createdAsset`: the Review that follows the New asset form carries the name of the asset the form made (it says Cancel keeps it).
+  const [review, setReview] = useState<{ key: number; payload: DropPayload; initialTarget: InitialTarget; createdAsset?: string } | null>(null);
   const reviewCount = useRef(0);
   const [offer, setOffer] = useState<{ nodeId: string; label: string } | null>(null);
   // The sources a Remove or a Clear unmapped is asking about, FROZEN when the dialog opens: the request carries these ids and no others, so a source
@@ -238,9 +239,9 @@ function Canvas({ model }: { model: GraphModel }) {
   const focusAfterCreate = useRef<number | null>(null);
 
   // The offer has no timer (WCAG 2.2.1): it stays until it is dismissed, used, replaced by a newer one, or another drag starts.
-  const openReview = useCallback((payload: DropPayload, initialTarget: InitialTarget) => {
+  const openReview = useCallback((payload: DropPayload, initialTarget: InitialTarget, createdAsset?: string) => {
     setOffer(null);
-    setReview({ key: ++reviewCount.current, payload, initialTarget });
+    setReview({ key: ++reviewCount.current, payload, initialTarget, createdAsset });
   }, []);
   const closeReview = useCallback(() => setReview(null), []);
   /** The buttons on the nodes: the keyboard-reachable way to map, which dragging only duplicates. */
@@ -286,20 +287,23 @@ function Canvas({ model }: { model: GraphModel }) {
     if (parentId !== null) openNewAsset({ parentId });
   }, [openNewAsset]);
   /**
-   * A line dragged from an asset's "+" and let go on the empty canvas: New sub-asset under that asset. Only the "+" (handle `add`) and only the pane count: a release
-   * over a node or a control does nothing, and no connection is ever made (`isValidConnection`). Touch has no drag here: a finger's end event is aimed at the element
-   * the touch began on, never at the pane, so the tap on the "+" and the node's menu do the same job there.
+   * A line dragged from an asset's "+" and let go on the empty canvas: New sub-asset under that asset. Only the "+" (handle `add`) and only the empty pane count: a
+   * release over a node, an edge or a control does nothing, and no connection is ever made (`isValidConnection`). The library draws every node and edge INSIDE
+   * `.react-flow__pane`, so being in the pane is not enough: the release must be on nothing else. Touch has no drag here: a finger's end event is aimed at the
+   * element the touch began on, never at the pane, so the tap on the "+" and the node's menu do the same job there.
    */
   const onConnectEnd: OnConnectEnd = useCallback((event, state) => {
     if (state.fromHandle?.id !== "add") return;
-    if (!(event.target as Element | null)?.closest?.(".react-flow__pane")) return;
+    const target = event.target as Element | null;
+    if (!target?.closest?.(".react-flow__pane")) return;
+    if (target.closest(".react-flow__node, .react-flow__edge, .react-flow__minimap, .react-flow__controls, .react-flow__panel")) return;
     const parentId = state.fromNode ? pickDropTarget([state.fromNode]) : null;
     if (parentId !== null) openNewAsset({ parentId });
   }, [openNewAsset]);
 
   const canvas = useRef<HTMLDivElement>(null);
   // The right-click menu's state is up here because a mapped node's own menu button opens it (`onMenu`), and the nodes are built below.
-  const { menu, openNode, openPane, openSelection, openFromKey, close: closeMenu } = useCanvasMenu({ model, canvas });
+  const { menu, openNode, openPane, openSelection, openFromKey, openFor, close: closeMenu } = useCanvasMenu({ model, canvas });
   // Where the canvas opens (the first sources, readable). Taken once, when the canvas mounts: a refresh never moves the view, and the Controls'
   // fit-view button (it passes no options) still fits everything, so a drop onto an asset that lies out of view is a click away.
   const [opening] = useState(() => initialView(model));
@@ -394,7 +398,19 @@ function Canvas({ model }: { model: GraphModel }) {
     const element = canvas.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectorId(id)}"]`);
     (element ?? document.getElementById("main"))?.focus({ preventScroll: true });
   }, []);
-  const onMenu = useCallback((button: HTMLElement) => openFromKey(button), [openFromKey]);
+  /**
+   * The toast a Review or a bulk create raises has an Undo; its button leaves with the toast, so when the Undo is done (the lists read again) the focus goes to the
+   * canvas group, which is named: the keyboard person carries on from the graph, not from the top of the page.
+   */
+  const onMapped = useCallback((info: MappedInfo) => {
+    mapsRef.current.mappedToast({ ...info, after: () => canvas.current?.focus({ preventScroll: true }) });
+  }, []);
+  // The menu opens next to the button itself (not next to the whole node, whose far side can be a long way from the pointer), and a second press on the button closes it.
+  const onMenu = useCallback((button: HTMLElement) => {
+    const id = button.closest<HTMLElement>(".react-flow__node")?.dataset.id;
+    if (id) openFor(id, button);
+    else openFromKey(button);
+  }, [openFor, openFromKey]);
   const onUnmap = useCallback((id: string) => {
     mapsRef.current.unmap(mappedRefs(model, id), { what: mappingsWhat(model, id), after: () => void focusNode(id) });
   }, [model, focusNode]);
@@ -415,7 +431,7 @@ function Canvas({ model }: { model: GraphModel }) {
     if (!payload) return;
     await afterPaint();
     if (!mounted.current) return;
-    if (modelRef.current.assets.some((a) => a.id === asset.id)) openReview(payload, { kind: "existing", assetId: asset.id });
+    if (modelRef.current.assets.some((a) => a.id === asset.id)) openReview(payload, { kind: "existing", assetId: asset.id }, asset.name);
     else toast.error("The asset was created, but the graph could not be refreshed. Use Map… to map to it.");
   };
 
@@ -838,9 +854,12 @@ function Canvas({ model }: { model: GraphModel }) {
         {selected && <SourcePanel key={selected.id} source={selected} canEdit={canEditSource} seen={facts.get(selected.id)?.seen ?? ""} onClose={closePanel} />}
       </div>
       {canAccept && review && (
-        <ReviewDialog key={review.key} model={model} payload={review.payload} initialTarget={review.initialTarget} kinds={kinds} onMapped={maps.mappedToast} onClose={closeReview} />
+        <ReviewDialog
+          key={review.key} model={model} payload={review.payload} initialTarget={review.initialTarget} kinds={kinds} createdAsset={review.createdAsset}
+          onMapped={onMapped} onClose={closeReview}
+        />
       )}
-      {canAccept && createFor && <BulkCreateDialog model={model} source={createFor} onMapped={maps.mappedToast} onClose={closeCreate} />}
+      {canAccept && createFor && <BulkCreateDialog model={model} source={createFor} onMapped={onMapped} onClose={closeCreate} />}
       {/* Beside the Review and outside the canvas, like it: the form's keys and focus must not reach the canvas's handlers. */}
       {canForm && newAsset && assetList.data && (
         <NewAssetDialog

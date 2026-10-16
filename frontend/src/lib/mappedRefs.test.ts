@@ -108,4 +108,34 @@ describe("mappingsWhat", () => {
     expect(mappingsWhat(m, "asset:10", 1)).toBe('the 2 points of source "Plant"');
     expect(mappingsWhat(m, "asset:11", 1)).toBe('the point of source "Plant"');
   });
+
+  // The seed has one LVP01 per source: "the group LVP01" does not say which one a person is about to unmap or move.
+  describe("a group label that more than one source has", () => {
+    const shared = () => model({
+      sources: [
+        source(1, { name: "sim", clusters: [{ key: "LVP01", points: [mapped(1, "kW", 10, 101)] }, { key: "LVP02", points: [mapped(2, "kW", 10, 102)] }], ungrouped: [mapped(3, "Status", 10, 103)] }),
+        source(2, { name: "plant", clusters: [{ key: "LVP01", points: [mapped(4, "kW", 11, 201)] }], ungrouped: [mapped(5, "Status", 11, 202)] }),
+        source(3, { name: "solo", clusters: [{ key: "LVP09", points: [mapped(6, "kW", 11, 301)] }] }),
+      ],
+    });
+
+    it("says whose it is: the group LVP01 of the source", () => {
+      expect(mappingsWhat(shared(), "cluster:1:LVP01")).toBe('the group "LVP01" of "sim"');
+      expect(mappingsWhat(shared(), "cluster:2:LVP01")).toBe('the group "LVP01" of "plant"');
+    });
+
+    it("leaves a label that only one source has as it was", () => {
+      expect(mappingsWhat(shared(), "cluster:1:LVP02")).toBe('the group "LVP02"');
+      expect(mappingsWhat(shared(), "cluster:3:LVP09")).toBe('the group "LVP09"');
+    });
+
+    it("the Ungrouped bag is a group with a label too: it names its source when another source has one", () => {
+      expect(mappingsWhat(shared(), `cluster:1:${UNGROUPED}`)).toBe('the Ungrouped points of "sim"');
+      expect(mappingsWhat(shared(), `cluster:2:${UNGROUPED}`)).toBe('the Ungrouped points of "plant"');
+    });
+
+    it("an unknown source adds nothing", () => {
+      expect(mappingsWhat(shared(), "cluster:99:LVP01")).toBe('the group "LVP01"');
+    });
+  });
 });

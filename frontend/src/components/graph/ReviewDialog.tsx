@@ -22,6 +22,11 @@ interface Props {
   initialTarget: InitialTarget;
   /** The kinds registry, for the note under the asset select when the asset is a place (a room, a hall) rather than equipment. */
   kinds?: readonly Pick<AssetKind, "name" | "icon">[];
+  /**
+   * Set only for the Review that follows the New asset form: the name of the asset that form just made. The slot under the select then says it was made and that
+   * Cancel keeps it (Cancel is pressed on this screen, and the form's own warning was on the one before).
+   */
+  createdAsset?: string;
   /** The page raises the "Mapped N points to X." toast (with its Undo): this dialog unmounts the moment the accept is done. */
   onMapped: (info: MappedInfo) => void;
   onClose: () => void;
@@ -55,7 +60,7 @@ const takenFor = (model: GraphModel, mode: Mode, assetId: number | null): Readon
  * Review and commit the mappings for what was dropped (or picked): choose the asset (existing or new), tick the points,
  * adjust metric, scale and interval, then create them all in one request. Nothing is saved until "Create mappings".
  */
-export function ReviewDialog({ model, payload, initialTarget, kinds, onMapped, onClose }: Props) {
+export function ReviewDialog({ model, payload, initialTarget, kinds, createdAsset, onMapped, onClose }: Props) {
   const invalidate = useInvalidate();
   const { run, busy, error } = useAction();
   const dialog = useRef<HTMLDivElement>(null);
@@ -66,6 +71,7 @@ export function ReviewDialog({ model, payload, initialTarget, kinds, onMapped, o
   const assetSelectId = useId();
   const parentSelectId = useId();
   const noteId = useId();
+  const createdId = useId();
 
   const [mode, setMode] = useState<Mode>(initialTarget.kind);
   const [assetId, setAssetId] = useState<number | null>(initialTarget.kind === "existing" ? initialTarget.assetId : null);
@@ -81,6 +87,7 @@ export function ReviewDialog({ model, payload, initialTarget, kinds, onMapped, o
   // Mapping to a room or a hall is allowed (the note never blocks), but meters usually belong to a panel or a rack: say so under the select.
   const chosen = mode === "existing" && assetId !== null ? model.assets.find((a) => a.id === assetId) : undefined;
   const note = chosen ? containerNote({ name: labels.get(chosen.id) ?? chosen.name, kind: chosen.kind }, kinds, "Map") : null;
+  const described = [createdAsset !== undefined ? createdId : null, note !== null ? noteId : null].filter((id) => id !== null).join(" ") || undefined;
 
   // Moving to another asset starts the review over: which metrics are free depends on the asset.
   const retarget = (nextMode: Mode, nextAssetId: number | null) => {
@@ -186,14 +193,18 @@ export function ReviewDialog({ model, payload, initialTarget, kinds, onMapped, o
             <div className="field">
               <label htmlFor={assetSelectId}>Asset</label>
               <select
-                id={assetSelectId} ref={assetSelect} value={assetId ?? ""} aria-describedby={note ? noteId : undefined}
+                id={assetSelectId} ref={assetSelect} value={assetId ?? ""} aria-describedby={described}
                 onChange={(e) => retarget("existing", e.target.value === "" ? null : Number(e.target.value))}
               >
                 <option value="">(choose)</option>
                 {choices.map((a) => <option key={a.id} value={a.id}>{indent(a.depth) + (labels.get(a.id) ?? a.name)}</option>)}
               </select>
-              {/* Always there, two lines tall: the note arriving moves nothing. It is only the select's description (read when the select is reached), not an announcer. */}
-              <div className="mapmove-slot">{note !== null && <p id={noteId} className="muted">{note}</p>}</div>
+              {/* Always there, two lines tall: the note arriving moves nothing. It is only the select's description (read when the select is reached), not an announcer.
+                  After a New asset the first line says the asset was made and that Cancel keeps it; the note about a room follows it. */}
+              <div className="mapmove-slot">
+                {createdAsset !== undefined && <p id={createdId} className="muted">{`${createdAsset} was created. Cancel keeps it without any mappings.`}</p>}
+                {note !== null && <p id={noteId} className="muted">{note}</p>}
+              </div>
             </div>
           ) : (
             <>

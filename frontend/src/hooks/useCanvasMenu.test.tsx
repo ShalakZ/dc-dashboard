@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, fireEvent, renderHook } from "@testing-library/react";
 import { useRef, type RefObject } from "react";
 import { useCanvasMenu } from "./useCanvasMenu";
 
@@ -18,6 +18,8 @@ function setup() {
   node.getBoundingClientRect = () => box(150, 250, 220, 80);
   const rect = canvas.querySelector<HTMLElement>(".react-flow__nodesselection-rect")!;
   rect.getBoundingClientRect = () => box(300, 400, 100, 100);
+  // The node's menu button sits at its top right corner.
+  canvas.querySelector<HTMLElement>(".inner")!.getBoundingClientRect = () => box(154, 444, 20, 20);
   return { canvas, node, rect, inner: node.querySelector<HTMLElement>(".inner")!, other: canvas.querySelector<HTMLElement>('[data-id="pt:2"]')! };
 }
 
@@ -177,6 +179,80 @@ describe("useCanvasMenu", () => {
       act(() => result.current.close());
       act(() => result.current.openFromKey(node));
       expect(result.current.menu).not.toBeNull();
+    });
+  });
+
+  describe("openFor: the menu button on a node", () => {
+    it("opens the node's menu next to the BUTTON (its own box); the focus returns to the button, else to the node", () => {
+      const { canvas, node, inner } = setup();
+      const { result } = mount(canvas);
+      act(() => result.current.openFor("src:1", inner));
+      expect(result.current.menu).toMatchObject({ target: { kind: "node", id: "src:1" }, via: "key", at: { box: { top: 154, left: 444, right: 464, bottom: 174 } } });
+      expect(result.current.menu?.returnFocus()).toBe(inner);
+      inner.remove(); // the button went away (an unmap turned its node into a plain one): the node is the next best place
+      expect(result.current.menu?.returnFocus()).toBe(node);
+    });
+
+    it("a second open of the same node while its menu stands is ignored, like the keyboard's", () => {
+      const { canvas, inner } = setup();
+      const { result } = mount(canvas);
+      act(() => result.current.openFor("src:1", inner));
+      const first = result.current.menu;
+      act(() => result.current.openFor("src:1", inner));
+      expect(result.current.menu).toBe(first);
+    });
+
+    it("a press on the button while ITS menu stands closes it: the click that follows does not open it again", () => {
+      const { canvas, inner } = setup();
+      const { result } = mount(canvas);
+      act(() => result.current.openFor("src:1", inner));
+      // What the browser does for the second click: the pointerdown (the menu's own listener closes it), then the click.
+      fireEvent.pointerDown(inner);
+      act(() => result.current.close());
+      act(() => result.current.openFor("src:1", inner));
+      expect(result.current.menu).toBeNull();
+      // ... and the NEXT click is a plain open again.
+      act(() => result.current.openFor("src:1", inner));
+      expect(result.current.menu).not.toBeNull();
+    });
+
+    it("a press anywhere else is not a toggle: closing by it and then opening the button opens", () => {
+      const { canvas, inner, other } = setup();
+      const { result } = mount(canvas);
+      act(() => result.current.openFor("src:1", inner));
+      fireEvent.pointerDown(other);
+      act(() => result.current.close());
+      act(() => result.current.openFor("src:1", inner));
+      expect(result.current.menu).not.toBeNull();
+    });
+
+    it("a press on the button that did not become a click (a drag away) does not swallow the next, keyboard, open", () => {
+      const { canvas, inner } = setup();
+      const { result } = mount(canvas);
+      act(() => result.current.openFor("src:1", inner));
+      fireEvent.pointerDown(inner);
+      act(() => result.current.close());
+      fireEvent.keyDown(inner, { key: "Enter" }); // no click came; the person goes on by keyboard
+      act(() => result.current.openFor("src:1", inner));
+      expect(result.current.menu).not.toBeNull();
+    });
+
+    it("a press on a button whose menu is not the one standing (the menu was opened by a right-click) just opens the button's menu", () => {
+      const { canvas, inner } = setup();
+      const { result } = mount(canvas);
+      act(() => result.current.openNode("src:1", click({ clientX: 5, clientY: 6 })));
+      fireEvent.pointerDown(inner);
+      act(() => result.current.close());
+      act(() => result.current.openFor("src:1", inner));
+      expect(result.current.menu).toMatchObject({ at: { box: { top: 154 } } });
+    });
+
+    it("keeps its identity across renders, like the other openers", () => {
+      const { canvas } = setup();
+      const { result, rerender } = mount(canvas);
+      const before = result.current.openFor;
+      rerender({ model: {} });
+      expect(result.current.openFor).toBe(before);
     });
   });
 

@@ -66,50 +66,53 @@ vi.mock("@xyflow/react", async (importOriginal) => {
           data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)} data-nodes-draggable={String(nodesDraggable)}
           data-snap={String(snapToGrid)} data-snap-grid={snapGrid?.join(",")} data-selection-key={String(selectionKeyCode)} data-multi-key={String(multiSelectionKeyCode)}
         >
-          {edges.map((e: any) => <i key={e.id} data-edge={e.id} data-animated={String(!!e.animated)} data-class={e.className ?? ""} />)}
-          {nodes.map((n: any) => {
-            const Node = nodeTypes[n.type];
-            const dropped = () => ({ ...n, position: flow.state.dropAt });
-            return (
-              <div key={n.id} className="react-flow__node" tabIndex={0} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-selected={String(!!n.selected)} data-class={n.className ?? ""} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)} onContextMenu={(e) => onNodeContextMenu?.(e, n)}>
-                <Node id={n.id} data={n.data} />
-                <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
-                <button data-testid={`select-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "select", selected: true }])} />
-                <button data-testid={`enter-${n.id}`} onClick={(e) => onNodeMouseEnter?.(e, n)} />
-                <button data-testid={`leave-${n.id}`} onClick={(e) => onNodeMouseLeave?.(e, n)} />
-                <button data-testid={`dragstart-${n.id}`} onClick={(e) => onNodeDragStart?.(e, n, [n])} />
-                {/* A drag played in two halves (start and one move, then the drop), for what is drawn while it runs. */}
-                <button data-testid={`dragmove-${n.id}`} onClick={(e) => { onNodeDragStart?.(e, n, [n]); onNodeDrag?.(e, dropped(), [dropped()]); }} />
-                <button data-testid={`dragstop-${n.id}`} onClick={(e) => onNodeDragStop?.(e, dropped(), [dropped()])} />
-                <button
-                  data-testid={`drag-${n.id}`}
-                  onClick={(e) => {
-                    onNodeDragStart?.(e, n, [n]);
-                    onNodeDrag?.(e, dropped(), [dropped()]);
-                    onNodesChange?.([{ id: n.id, type: "position", position: flow.state.dropAt, dragging: false }]);
-                    onNodeDragStop?.(e, dropped(), [dropped()]);
-                  }}
-                />
-                <button
-                  data-testid={`dragwith-${n.id}`}
-                  onClick={(e) => {
-                    const other = nodes.find((o: any) => o.id === flow.state.partner) ?? nodes.find((o: any) => o.id !== n.id);
-                    const at = flow.state.dropAt;
-                    // A named partner moves by the same distance, as React Flow moves every node of a selection; the default one lands at 9,9.
-                    const along = flow.state.partner
-                      ? { x: other.position.x + at.x - n.position.x, y: other.position.y + at.y - n.position.y }
-                      : { x: 9, y: 9 };
-                    const together = [dropped(), { ...other, position: along }];
-                    onNodeDragStart?.(e, n, [n, other]);
-                    onNodeDrag?.(e, dropped(), together);
-                    onNodeDragStop?.(e, dropped(), together);
-                  }}
-                />
-              </div>
-            );
-          })}
-          {/* The pane, the rectangle a box selection leaves over its nodes, and the camera starting to move: what the page's menu and guides listen to. */}
-          <div data-testid="pane" className="react-flow__pane" onContextMenu={(e) => onPaneContextMenu?.(e)} />
+          {/* Like the real library: the pane is the PARENT of the viewport, so every node and every edge lives INSIDE `.react-flow__pane`. The pane's own
+              context menu is the one aimed at the pane itself, never at a node or an edge that bubbles up to it (xyflow's `wrapHandler` checks the target). */}
+          <div data-testid="pane" className="react-flow__pane" onContextMenu={(e) => { if (e.target === e.currentTarget) onPaneContextMenu?.(e); }}>
+            {edges.map((e: any) => <i key={e.id} className="react-flow__edge" data-edge={e.id} data-animated={String(!!e.animated)} data-class={e.className ?? ""} />)}
+            {nodes.map((n: any) => {
+              const Node = nodeTypes[n.type];
+              const dropped = () => ({ ...n, position: flow.state.dropAt });
+              return (
+                <div key={n.id} className="react-flow__node" tabIndex={0} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-selected={String(!!n.selected)} data-class={n.className ?? ""} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)} onContextMenu={(e) => onNodeContextMenu?.(e, n)}>
+                  <Node id={n.id} data={n.data} />
+                  <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
+                  <button data-testid={`select-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "select", selected: true }])} />
+                  <button data-testid={`enter-${n.id}`} onClick={(e) => onNodeMouseEnter?.(e, n)} />
+                  <button data-testid={`leave-${n.id}`} onClick={(e) => onNodeMouseLeave?.(e, n)} />
+                  <button data-testid={`dragstart-${n.id}`} onClick={(e) => onNodeDragStart?.(e, n, [n])} />
+                  {/* A drag played in two halves (start and one move, then the drop), for what is drawn while it runs. */}
+                  <button data-testid={`dragmove-${n.id}`} onClick={(e) => { onNodeDragStart?.(e, n, [n]); onNodeDrag?.(e, dropped(), [dropped()]); }} />
+                  <button data-testid={`dragstop-${n.id}`} onClick={(e) => onNodeDragStop?.(e, dropped(), [dropped()])} />
+                  <button
+                    data-testid={`drag-${n.id}`}
+                    onClick={(e) => {
+                      onNodeDragStart?.(e, n, [n]);
+                      onNodeDrag?.(e, dropped(), [dropped()]);
+                      onNodesChange?.([{ id: n.id, type: "position", position: flow.state.dropAt, dragging: false }]);
+                      onNodeDragStop?.(e, dropped(), [dropped()]);
+                    }}
+                  />
+                  <button
+                    data-testid={`dragwith-${n.id}`}
+                    onClick={(e) => {
+                      const other = nodes.find((o: any) => o.id === flow.state.partner) ?? nodes.find((o: any) => o.id !== n.id);
+                      const at = flow.state.dropAt;
+                      // A named partner moves by the same distance, as React Flow moves every node of a selection; the default one lands at 9,9.
+                      const along = flow.state.partner
+                        ? { x: other.position.x + at.x - n.position.x, y: other.position.y + at.y - n.position.y }
+                        : { x: 9, y: 9 };
+                      const together = [dropped(), { ...other, position: along }];
+                      onNodeDragStart?.(e, n, [n, other]);
+                      onNodeDrag?.(e, dropped(), together);
+                      onNodeDragStop?.(e, dropped(), together);
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {/* The rectangle a box selection leaves over its nodes, and the camera starting to move: what the page's menu and guides listen to. */}
           {nodes.some((n: any) => n.selected) && (
             <div data-testid="selection-rect" className="react-flow__nodesselection-rect" tabIndex={-1} onContextMenu={(e) => onSelectionContextMenu?.(e, nodes.filter((n: any) => n.selected))} />
           )}
@@ -2358,6 +2361,40 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kWh" }))).toEqual(["Map…", "New asset…"]);
     });
 
+    it("the menu opens next to the BUTTON, not next to the whole node whose far side can be a long way from the pointer", async () => {
+      await start([KW_ON_PANEL]);
+      const button = await menuButton("LVP01 kW");
+      const box = (top: number, left: number, w: number, h: number) =>
+        ({ top, left, right: left + w, bottom: top + h, width: w, height: h, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+      node("point:1").getBoundingClientRect = () => box(100, 200, 220, 48); // the node: its menu used to open at ITS left edge, 196
+      button.getBoundingClientRect = () => box(300, 560, 20, 20); // the button at the node's top right
+      await userEvent.click(button);
+      const menu = await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+      await waitFor(() => expect(menu.style.left).toBe("556px")); // the button's left edge less the 4 px gap (the panel measures 0 wide here)
+      expect(menu.style.top).toBe("300px"); // the button's top
+    });
+
+    it("a second press on the button closes its menu and leaves the focus on the button; a third opens it again", async () => {
+      await start([KW_ON_PANEL]);
+      const button = await menuButton("LVP01 kW");
+      await userEvent.click(button);
+      expect(await screen.findByRole("menu", { name: "Actions for LVP01 kW" })).toBeInTheDocument();
+      await userEvent.click(button);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(button).toHaveFocus();
+      await userEvent.click(button);
+      expect(await screen.findByRole("menu", { name: "Actions for LVP01 kW" })).toBeInTheDocument();
+    });
+
+    it("a press on another node's button closes the first menu and opens the other's", async () => {
+      await start([KW_ON_PANEL, V_ON_SITE]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+      await userEvent.click(await menuButton("LVP01 V"));
+      expect(await screen.findByRole("menu", { name: "Actions for LVP01 V" })).toBeInTheDocument();
+      expect(screen.getAllByRole("menu")).toHaveLength(1);
+    });
+
     it("a group with something mapped has the button too, and its menu adds the group's two items after the old ones", async () => {
       await start([KW_ON_PANEL, V_ON_SITE]);
       const button = await menuButton("LVP01");
@@ -2573,14 +2610,36 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       expect(toasts.calls).toEqual([{ kind: "success", text: "Mapped 1 point to Panel 1." }]);
     });
 
+    it("pressing the Undo leaves the focus on the canvas group (named Discovery graph), not on <body>: the Undo's button went with its toast", async () => {
+      const { toasts } = await start([KW_ON_PANEL]);
+      await mapKwh();
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.body).toHaveFocus();
+      undoOf(toasts, 0)();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      await waitFor(() => expect(screen.getByRole("group", { name: "Discovery graph" })).toHaveFocus());
+    });
+
     it("the bulk create hands its own sentence and what it made to the same toast", async () => {
       const { toasts } = await start([KW_ON_PANEL]);
       await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
       await screen.findByRole("dialog", { name: "Create assets stub" });
-      const info = { text: "Created 2 of 3 assets", kind: "error" as const, mappings: [{ id: 5, assetId: 30, name: "a" }], newAssets: ["LVP01"] };
+      const info = { text: "Created 2 of 3 assets", kind: "error" as const, mappings: [{ id: 5, assetId: 30, name: "a" }], newAssets: ["LVP01"], undoTitle: "Unmap the points it mapped; the assets stay" };
       act(() => bulk.props[bulk.props.length - 1].onMapped(info));
       expect(toasts.calls).toHaveLength(1);
-      expect(toasts.calls[0]).toMatchObject({ kind: "error", text: "Created 2 of 3 assets", options: { action: { label: "Undo" } } });
+      // The dialog's own description of what its Undo does reaches the button.
+      expect(toasts.calls[0]).toMatchObject({ kind: "error", text: "Created 2 of 3 assets", options: { action: { label: "Undo", title: "Unmap the points it mapped; the assets stay" } } });
+    });
+
+    it("the bulk create's Undo puts the focus on the canvas group too", async () => {
+      const { toasts } = await start([KW_ON_PANEL]);
+      await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
+      await screen.findByRole("dialog", { name: "Create assets stub" });
+      act(() => bulk.props[bulk.props.length - 1].onMapped({ text: "Created 1 asset", kind: "success", mappings: [{ id: 21, assetId: 11 }], newAssets: ["LVP01"] }));
+      (document.activeElement as HTMLElement | null)?.blur();
+      undoOf(toasts, 0)();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      await waitFor(() => expect(screen.getByRole("group", { name: "Discovery graph" })).toHaveFocus());
     });
 
     it("the bulk create's toast has no Undo for discovery.accept alone", async () => {
@@ -2730,6 +2789,16 @@ describe("DiscoveryPage New asset, the + and several points at once (W12a)", () 
       expect(within(review).getByLabelText("Asset")).toHaveValue("12");
       expect(within(review).getAllByRole("checkbox")).toHaveLength(2); // LVP01 kW and LVP01 V
       expect(post(calls)?.body).toMatchObject({ name: "LVP01", parent_id: null });
+      // The screen where Cancel is pressed says what Cancel does to the asset just made.
+      expect(review.querySelector(".mapmove-slot")).toHaveTextContent("LVP01 was created. Cancel keeps it without any mappings.");
+    });
+
+    it("a Review opened any other way has no such line", async () => {
+      setup();
+      await openAll();
+      await userEvent.click(screen.getByRole("button", { name: "Map LVP01 to asset…" }));
+      const review = await reviewDialog();
+      expect(review.querySelector(".mapmove-slot")).toBeEmptyDOMElement();
     });
 
     it("an unmapped point has New asset… in its menu only, named after the point, and the Review follows with just that point", async () => {
@@ -2744,6 +2813,7 @@ describe("DiscoveryPage New asset, the + and several points at once (W12a)", () 
       const review = await reviewDialog();
       expect(within(review).getByLabelText("Asset")).toHaveValue("12");
       expect(within(review).getAllByRole("checkbox")).toHaveLength(1);
+      expect(review.querySelector(".mapmove-slot")).toHaveTextContent("LVP01 kW was created. Cancel keeps it without any mappings.");
     });
 
     it("when the graph cannot be read again the asset stays, the person is told, and no Review opens", async () => {
@@ -2834,10 +2904,43 @@ describe("DiscoveryPage New asset, the + and several points at once (W12a)", () 
       expect(within(form).queryByText(/Next you choose/)).not.toBeInTheDocument();
     });
 
-    it("released over a node, or over anything that is not the canvas, it does nothing", async () => {
+    // In the real library every node and every edge is INSIDE `.react-flow__pane` (the mock draws them so), so the pane test alone lets a release on a
+    // node through: it was New sub-asset of the asset the line STARTED from, which is the opposite of what putting a line on another asset means.
+    it.each<[string, () => Element | null]>([
+      ["another asset node", () => node("asset:10")],
+      ["the asset it started from", () => node("asset:11")],
+      ["something drawn inside a node", () => node("asset:10").firstElementChild],
+      ["a point node", () => node("point:1")],
+      ["a group node", () => node("cluster:1:LVP01")],
+      ["a source node", () => node("src:1")],
+      ["an edge", () => document.querySelector("[data-edge]")],
+      ["the controls", () => screen.getByTestId("controls")],
+    ])("released over %s it does nothing", async (_what, target) => {
       setup();
       await openAll();
-      released(node("src:1"), { id: "add" }, { id: "asset:11" });
+      const over = target();
+      expect(over).not.toBeNull();
+      if (_what !== "the controls") expect(over!.closest(".react-flow__pane")).not.toBeNull(); // the case that matters is the one inside the pane
+      released(over, { id: "add" }, { id: "asset:11" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("released over a control, the minimap or a panel drawn inside the canvas it does nothing either", async () => {
+      setup();
+      await openAll();
+      for (const cls of ["react-flow__controls", "react-flow__minimap", "react-flow__panel"]) {
+        const over = document.createElement("div");
+        over.className = cls;
+        screen.getByTestId("pane").append(over);
+        released(over, { id: "add" }, { id: "asset:11" });
+        over.remove();
+      }
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("released outside the canvas, or on nothing, it does nothing", async () => {
+      setup();
+      await openAll();
       released(document.body, { id: "add" }, { id: "asset:11" });
       released(null, { id: "add" }, { id: "asset:11" });
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
