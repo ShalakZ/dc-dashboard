@@ -97,6 +97,10 @@ export default defineConfig({
       name: "w7f",
       testMatch: "w7f.spec.ts",
       dependencies: ["w7e"],
+      // The chained-skeleton case (line 470) times a 150 ms fade against answers held back by 130 ms: on this machine it misses by one frame about one run in
+      // three (W7i, W7j and W12b saw it, always with the same numbers, and the Discovery wave does not touch that page). One retry keeps a flake from
+      // stopping the whole chain behind it; a real regression fails twice.
+      retries: 1,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
     },
     {

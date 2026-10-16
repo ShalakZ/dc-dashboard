@@ -780,7 +780,8 @@ test.describe("W7u: the menus", () => {
         await nodeEl(page, id).focus();
         await page.keyboard.press(key);
         await expect(menu).toBeVisible();
-        const items = menu.getByRole("menuitem");
+        // The arrows skip an item that says why it cannot act (aria-disabled: "Collapse this branch" on a closed source), so End lands on the last ENABLED one.
+        const items = menu.locator('[role="menuitem"]:not([aria-disabled="true"])');
         expect(await itemCount(menu, ITEM.details), "the source's menu").toBe(1);
         await expect(items.first()).toBeFocused();
         await page.keyboard.press("ArrowDown");
