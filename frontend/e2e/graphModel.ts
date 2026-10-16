@@ -164,6 +164,8 @@ export function smallModel(): ApiGraphModel {
 export interface Shape {
   groups: number;
   pointsPerGroup: number;
+  /** The points of each group, one number per group, instead of `groups` x `pointsPerGroup` (then `groups` is the list's length and `pointsPerGroup` is not read). */
+  groupSizes?: readonly number[];
   /** `online` (the default) makes the source live: its edges flow, up to the page's limit. `offline` keeps them still. */
   status?: "online" | "offline";
 }
@@ -172,11 +174,16 @@ export interface Shape {
 export const bigGroup = (source: number, group: number) => `GRP-${source}-${group}`;
 export const bigPoint = (source: number, group: number, point: number) => `PT-${source}-${group}-${String(point).padStart(4, "0")}`;
 export const bigSourceId = (source: number) => BASE + 100 + source;
+/** The points of the group `group` (1-based) of a shape. */
+const sizeOf = (shape: Shape, group: number): number => shape.groupSizes ? shape.groupSizes[group - 1] : shape.pointsPerGroup;
+/** The points of all the groups of a shape. */
+const totalOf = (shape: Shape): number => shape.groupSizes ? shape.groupSizes.reduce((sum, n) => sum + n, 0) : shape.groups * shape.pointsPerGroup;
 /** The id of a point of `bigModel`: sources hold at most 1,000,000 points between them. */
 export const bigPointId = (shapes: readonly Shape[], source: number, group: number, point: number): number => {
   let before = 0;
-  for (let s = 1; s < source; s++) before += shapes[s - 1].groups * shapes[s - 1].pointsPerGroup;
-  return BASE + 1_000_000 + before + (group - 1) * shapes[source - 1].pointsPerGroup + (point - 1);
+  for (let s = 1; s < source; s++) before += totalOf(shapes[s - 1]);
+  for (let g = 1; g < group; g++) before += sizeOf(shapes[source - 1], g);
+  return BASE + 1_000_000 + before + (point - 1);
 };
 
 /**
@@ -189,7 +196,7 @@ export function bigModel(shapes: readonly Shape[], assets = 12): ApiGraphModel {
     const clusters: ApiCluster[] = [];
     for (let g = 1; g <= shape.groups; g++) {
       const points: ApiPoint[] = [];
-      for (let p = 1; p <= shape.pointsPerGroup; p++) {
+      for (let p = 1; p <= sizeOf(shape, g); p++) {
         points.push(point({ id: bigPointId(shapes, s, g, p), name: bigPoint(s, g, p), metric: METRIC_CYCLE[(p - 1) % METRIC_CYCLE.length] }));
       }
       clusters.push({ key: bigGroup(s, g), points });
@@ -210,6 +217,18 @@ export const PERF_SHAPES: readonly Shape[] = [
   { groups: 6, pointsPerGroup: 10 },
   ...Array.from({ length: 8 }, (): Shape => ({ groups: 4, pointsPerGroup: 5 })),
 ];
+
+/**
+ * About 2,000 nodes once everything is open, and no group over a page (49 points, the page is 50), so paging changes nothing: ten offline sources of four groups of
+ * 49 points. Open it with repeated Expand all clicks (one press stops at 600 new nodes). The drag and the toggle cases of the W7u and W12b specs use it.
+ */
+export const DRAG_SHAPES: readonly Shape[] = Array.from({ length: 10 }, (): Shape => ({ groups: 4, pointsPerGroup: 49, status: "offline" }));
+
+/**
+ * One offline source with three groups, of 120, 260 and 1,000 points: the paging and the dash-limit cases (a group over 50 points opens with 50 points and a
+ * Show 50 more node; a group over 150 draws solid fan-out edges). Its groups are `bigGroup(1, 1)` to `bigGroup(1, 3)`.
+ */
+export const PAGED_SHAPES: readonly Shape[] = [{ groups: 3, pointsPerGroup: 0, groupSizes: [120, 260, 1000], status: "offline" }];
 
 /**
  * The idle-CPU graph: one online source of 100 groups of 2 points. One Expand all draws 301 nodes and 300 dashed edges, but only the 100 source to group

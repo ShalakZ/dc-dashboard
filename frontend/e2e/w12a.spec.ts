@@ -714,7 +714,8 @@ test("5 a read-only account sees no mapping action: no menu button on a node or 
         await reader.mouse.click(at.x, at.y, { button: "right" });
         const menu = menuEl(reader);
         await expect(menu).toBeVisible();
-        await expect(menu.getByRole("menuitem", { name: "Expand all", exact: true })).toHaveCount(1);
+        // W12b: a prefix, not the exact name (an item that cannot run carries its reason as a second line of its name), and "Expand selection" does not start with it.
+        await expect(menu.getByRole("menuitem", { name: /^Expand all/ })).toHaveCount(1);
         await expect(menu.getByRole("menuitem", { name: /^New asset/ })).toHaveCount(0);
         await reader.keyboard.press("Escape");
         await expect(menu).toBeHidden();

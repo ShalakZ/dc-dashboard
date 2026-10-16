@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
-  bigGroup, bigModel, bigPointId, bigSourceId, LIVE_SHAPES, node as nid, PERF_SHAPES, SMALL, SMALL_GROUPS, SMALL_NAMES, smallModel,
+  bigGroup, bigModel, bigPointId, bigSourceId, DRAG_SHAPES, LIVE_SHAPES, node as nid, PERF_SHAPES, SMALL, SMALL_GROUPS, SMALL_NAMES, smallModel,
   type ApiGraphModel, type XY,
 } from "./graphModel";
 
@@ -29,10 +29,11 @@ import {
 //   menus       right-click a source / group / point / asset, the keyboard (Shift+F10, the ContextMenu key), the canvas menu and what its items do; the menu opens at the pointer,
 //               takes the focus in, and gives it back to the node on Escape.
 //   find        Ctrl+K on the canvas opens Find (and not the top bar's quick find), the jump opens the parents and focuses the node, Escape gives the focus back, Ctrl+K from the
-//               page body is still the quick find; at 6,000 points the list is capped at 50 and a group over the node budget is honest about it.
+//               page body is still the quick find; at 6,000 points the list is capped at 50, a point deep in a paged group widens the page, and one too far down for the node
+//               budget is honest about it (W12b).
 //   hint        the short line and the tip that lists the keys, also while the graph loads.
 //   placement   at 1440 x 900, 1024 x 640 and 800 x 600 with the offer shown AND the source panel open: the offer, the tools and the Find card do not overlap and stay in the canvas.
-//   perf        (about 2,000 nodes) the frames of a 3 s drag with guides, without the minimap and with snap off; hover to the lit path and the frames during the opacity
+//   perf        (about 2,000 nodes, W12b: DRAG_SHAPES opened by repeated Expand all) the frames of a 3 s drag with guides, without the minimap and with snap off; hover to the lit path and the frames during the opacity
 //               transition; the keystroke-to-results time of Find at 6,000 points; the idle cost of 100 flowing edges against the same graph without motion. The numbers go to
 //               .superpowers/sdd/2026-10-15-w7u-discovery-premium/measure.json and into each case's `measure` annotation (a test title is fixed before the run, so it cannot hold them);
 //               the assertions are generous on purpose, the controller reads the numbers.
@@ -667,8 +668,9 @@ test.describe("W7u: box select", () => {
 // ---------------------------------------------------------------------------------------------------------------------------------
 // menus
 
+// W12b: `expand` and `collapse` are EXACT (a node's menu also holds "Expand this branch" and "Collapse this branch", which a prefix would count too).
 const ITEM = {
-  details: /^Details/, expand: /^Expand/, collapse: /^Collapse/, create: /^Create assets/, remove: /^Remove/, map: /^Map/, newAsset: /^New asset/,
+  details: /^Details/, expand: /^Expand$/, collapse: /^Collapse$/, create: /^Create assets/, remove: /^Remove/, map: /^Map/, newAsset: /^New asset/,
   expandAll: /^Expand all/, collapseAll: /^Collapse all/, tidy: /^Tidy layout/, fit: /^Fit view/,
 };
 const itemCount = (menu: Locator, name: RegExp) => menu.getByRole("menuitem", { name }).count();
@@ -778,7 +780,8 @@ test.describe("W7u: the menus", () => {
         await nodeEl(page, id).focus();
         await page.keyboard.press(key);
         await expect(menu).toBeVisible();
-        const items = menu.getByRole("menuitem");
+        // The arrows skip an item that says why it cannot act (aria-disabled: "Collapse this branch" on a closed source), so End lands on the last ENABLED one.
+        const items = menu.locator('[role="menuitem"]:not([aria-disabled="true"])');
         expect(await itemCount(menu, ITEM.details), "the source's menu").toBe(1);
         await expect(items.first()).toBeFocused();
         await page.keyboard.press("ArrowDown");
@@ -905,6 +908,7 @@ test.describe("W7u: the hint", () => {
         ["Shift+F10 does too", /Shift\+F10/],
         ["hovering lights the path", /hover/i],
         ["Escape clears a selection", /Escape/i],
+        ["W12b: the arrow keys move between nodes and Enter opens or closes one", /Arrow keys move between nodes\. Enter opens or closes one\./],
       ] as const) expect(text, what).toMatch(pattern);
       await page.keyboard.press("Escape");
       await expect(bubble).toHaveCount(0);
@@ -986,7 +990,10 @@ test.describe("W7u: Find at 6,000 points", () => {
     await arrive(page, bigModel(PERF_SHAPES), { fit: false });
     const sourceId = bigSourceId(1);
     const groupId = nid.cluster(sourceId, bigGroup(1, 1));
-    const pointId = nid.point(bigPointId(PERF_SHAPES, 1, 1, 500));
+    // W12b: a group over 50 points shows a page of 50 and Show 50 more. Point 500 is reached by widening the page (500 + the group is within the 600-node budget); the last
+    // point (1,000) is not, so it is the one that still gets the group instead.
+    const pointId = nid.point(bigPointId(PERF_SHAPES, 1, 1, 1000));
+    const midId = nid.point(bigPointId(PERF_SHAPES, 1, 1, 500));
 
     const spot = await emptySpot(page);
     await page.mouse.click(spot.x, spot.y);
@@ -1025,14 +1032,27 @@ test.describe("W7u: Find at 6,000 points", () => {
       expect(stats.worstMs, "generous: the controller reads the number").toBeLessThan(1500);
     });
 
-    await test.step("a point in a group of 1,000 (over the 600-node budget): the group is shown, and the person is told", async () => {
+    await test.step("the last point of a group of 1,000 (too far down for the 600-node budget): the group is shown on its first page, and the person is told", async () => {
+      await field.fill("pt-1-1-1000");
+      await expect(findOptions(page)).toHaveCount(1);
+      await page.keyboard.press("Enter");
+      await expect(toast(page, /GRP-1-1 has 1,000 points; the one you chose is too far down to draw at once\. Showing the group: use Show 50 more to go on\./)).toBeVisible();
+      await expect(nodeEl(page, groupId), "the group is drawn").toBeVisible();
+      await expect(nodeEl(page, pointId), "the point itself is not").toHaveCount(0);
+      await expect(page.getByRole("button", { name: /^Show 50 more points of GRP-1-1,/ }), "the way to go on is there").toHaveCount(1);
+      await expect.poll(() => focusedNodeId(page), { message: "the group takes the focus" }).toBe(groupId);
+    });
+
+    await test.step("point 500 of the same group: the page widens to reach it, and the point takes the focus", async () => {
+      await expect(field, "the card has closed").toHaveCount(0);
+      await cameraStill(page);
+      await page.keyboard.press("Control+K");
+      await expect(field).toBeFocused();
       await field.fill("pt-1-1-0500");
       await expect(findOptions(page)).toHaveCount(1);
       await page.keyboard.press("Enter");
-      await expect(toast(page, /GRP-1-1 has 1,000 points, too many to draw at once\. Showing the group instead\./)).toBeVisible();
-      await expect(nodeEl(page, groupId), "the group is drawn").toBeVisible();
-      await expect(nodeEl(page, pointId), "its thousand points are not").toHaveCount(0);
-      await expect.poll(() => focusedNodeId(page), { message: "the group takes the focus" }).toBe(groupId);
+      await expect(nodeEl(page, midId), "point 500 is drawn").toBeVisible();
+      await expect.poll(() => focusedNodeId(page), { message: "the point takes the focus" }).toBe(midId);
     });
   });
 });
@@ -1079,20 +1099,27 @@ function frameStats(gaps: number[], long: number[]): FrameStats {
 }
 
 /**
- * About 2,000 nodes: Expand all (it opens what the 600-node budget allows: every small source, and only the groups of the big one that fit, so none), then the first
- * two groups of the first source by their own buttons (a thousand points each, over the budget; a dispatched click, since the nodes lie far off screen). Returns the
- * node count. The camera is then fitted and zoomed in to a readable size.
+ * W12b: Expand all opens what the 600-node budget allows and stops, so a graph larger than that opens with several presses. Press until the button waits (it is
+ * `aria-disabled` once everything is open; Playwright would wait for an enabled button, so the state is read first), and after each press wait for the nodes it drew.
+ */
+async function expandEverything(page: Page): Promise<void> {
+  const expand = barButton(page, "Expand all");
+  for (let press = 1; press <= 12; press++) {
+    if ((await expand.getAttribute("aria-disabled")) === "true") return;
+    const before = await page.locator(".react-flow__node").count();
+    await expand.click();
+    await expect.poll(() => page.locator(".react-flow__node").count(), { timeout: 60_000, message: `Expand all, press ${press}, drew more nodes` }).toBeGreaterThan(before);
+  }
+  throw new Error("Expand all was still ready after 12 presses");
+}
+
+/**
+ * About 2,000 nodes: DRAG_SHAPES (ten sources of four groups of 49 points, so no group is paged) opened with repeated Expand all presses (each opens at most 600 new
+ * nodes). Returns the node count. The camera is then fitted and zoomed in to a readable size.
  */
 async function openBig(page: Page): Promise<number> {
-  await arrive(page, bigModel(PERF_SHAPES), { fit: false });
-  const first = bigSourceId(1);
-  await barButton(page, "Expand all").click();
-  await expect.poll(() => clusters(page).count(), { timeout: 60_000, message: "the groups of the small sources are drawn" }).toBeGreaterThanOrEqual(40);
-  for (const g of [1, 2]) {
-    const group = nodeEl(page, nid.cluster(first, bigGroup(1, g)));
-    await expect(group).toHaveCount(1);
-    await group.getByRole("button", { name: `Expand ${bigGroup(1, g)}`, exact: true }).dispatchEvent("click");
-  }
+  await arrive(page, bigModel(DRAG_SHAPES), { fit: false });
+  await expandEverything(page);
   await expect.poll(() => page.locator(".react-flow__node").count(), { timeout: 120_000, message: "about 2,000 nodes are drawn" }).toBeGreaterThanOrEqual(2000);
   const count = await page.locator(".react-flow__node").count();
   await fitViewNow(page);

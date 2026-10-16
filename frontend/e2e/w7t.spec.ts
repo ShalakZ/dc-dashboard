@@ -74,6 +74,8 @@ const TWO_LINES_AT = 275;
 /** lib/graph.ts: a source's block (SOURCE_H) and the most nodes one Expand all draws (EXPAND_NODE_BUDGET). */
 const SOURCE_H = 136;
 const EXPAND_BUDGET = 600;
+/** lib/graph.ts PAGE_SIZE: the points a group draws before its "Show 50 more" node. */
+const PAGE_SIZE = 50;
 const NO_GROUP = "__ungrouped__";
 
 const TIDY_TITLE = "Tidy the layout for everyone?";
@@ -125,11 +127,20 @@ function summaryOf(graph: ApiGraph): string {
   return parts.join(", ");
 }
 
-/** What Expand all would draw from an all-closed graph: the groups of every source and the points of every group. */
-function expandCost(graph: ApiGraph): { groups: number; points: number } {
-  let [groups, points] = [0, 0];
-  for (const source of graph.sources) for (const group of groupsOf(source)) { groups++; points += group.points.length; }
-  return { groups, points };
+/**
+ * What Expand all would draw from an all-closed graph: the groups of every source, the points of every group's first page (W12b: a group of more than PAGE_SIZE points opens
+ * with that many, and a "Show 50 more" node stands at the end of its list) and one `more` node for each group that has points left out.
+ */
+function expandCost(graph: ApiGraph): { groups: number; points: number; more: number } {
+  let [groups, points, more] = [0, 0, 0];
+  for (const source of graph.sources) {
+    for (const group of groupsOf(source)) {
+      groups++;
+      points += Math.min(group.points.length, PAGE_SIZE);
+      if (group.points.length > PAGE_SIZE) more++;
+    }
+  }
+  return { groups, points, more };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -918,7 +929,7 @@ test.describe("W7t: the Discovery bar", () => {
     await clearLayout(page.request);
     const graph = await graphOf(page.request);
     const cost = expandCost(graph);
-    const fits = cost.groups + cost.points <= EXPAND_BUDGET;
+    const fits = cost.groups + cost.points + cost.more <= EXPAND_BUDGET;
     await page.setViewportSize({ width: 1440, height: 900 });
     await openDiscovery(page);
     const [collapse, expand] = [barButton(page, "Collapse all"), barButton(page, "Expand all")];
@@ -943,7 +954,8 @@ test.describe("W7t: the Discovery bar", () => {
       await expand.click();
       if (fits) {
         await expect(groups, `a node for each of the ${cost.groups} groups`).toHaveCount(cost.groups);
-        await expect(points, `and for each of the ${cost.points} points`).toHaveCount(cost.points);
+        await expect(points, `and for each of the ${cost.points} points (a group over ${PAGE_SIZE} draws its first page)`).toHaveCount(cost.points);
+        await expect(page.locator('.react-flow__node[data-id^="more:"]'), `and a Show ${PAGE_SIZE} more node for each of the ${cost.more} groups with points left out`).toHaveCount(cost.more);
         await expect(toast(page, GREW_NOTE), "nothing stays closed, so no toast").toHaveCount(0);
         await expect(expand).toHaveAttribute("aria-disabled", "true");
         await expect(expand).toHaveAttribute("title", "Everything is open");
@@ -983,13 +995,18 @@ test.describe("W7t: the Discovery bar", () => {
         await settled(page);
         expect.soft(await overflowOf(page), `no sideways overflow at ${width}`).toBeLessThanOrEqual(1);
 
-        // The bar: its summary and three buttons lie inside it, in a row, without touching, and inside the window.
+        // The bar: its summary and buttons lie inside it, in a row, without touching, and inside the window. W12b: a chevron joins Collapse all and Expand all and the Unmapped only
+        // switch ends the row; the three old buttons keep their order.
         const barBox = await boxOf(bar(page), "the bar");
         expect.soft(barBox.height, "the bar is about 36 px high").toBeGreaterThanOrEqual(34);
         expect.soft(barBox.height).toBeLessThanOrEqual(40);
         const parts: [string, Box][] = [["the summary", await boxOf(page.locator(".graph-summary"), "the summary")]];
         for (const name of ["Collapse all", "Expand all", "Tidy layout"]) parts.push([name, await boxOf(barButton(page, name), name)]);
-        for (const [what, box] of parts) {
+        parts.push(["Unmapped only", await boxOf(bar(page).locator(".graph-bar-switch"), "the Unmapped only switch")]);
+        // A chevron is the other half of its button (it overlaps the button's border by 1 px on purpose): it is checked inside the bar, not for touching.
+        const chevrons: [string, Box][] = [];
+        for (const name of ["More ways to collapse", "More ways to expand"]) chevrons.push([name, await boxOf(barButton(page, name), name)]);
+        for (const [what, box] of [...parts, ...chevrons]) {
           expect.soft(box.x, `${what}: left edge inside the bar`).toBeGreaterThanOrEqual(barBox.x - 1);
           expect.soft(box.x + box.width, `${what}: right edge inside the bar`).toBeLessThanOrEqual(barBox.x + barBox.width + 1);
           expect.soft(box.y, `${what}: top inside the bar`).toBeGreaterThanOrEqual(barBox.y - 1);

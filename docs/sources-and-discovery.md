@@ -148,23 +148,85 @@ data-retrieval requests the connectors already use, nothing else.
    where the source used to be. Let go of Alt
    mid-drag or press it later and nothing changes: the key is read once, at the start. On some Linux desktops Alt-drag is taken by
    the window manager to move the whole window, so the page never sees the key; change the desktop's window-move key there, or drag
-   without Alt and move the children back by hand. The arrow keys on a focused node still take no children along and are not saved;
-   they move on screen only. Dragging nodes you selected (with a Shift box or Ctrl-click) is a drag like any other: the whole selection
+   without Alt and move the children back by hand. The arrow keys on a node you have selected (clicked, or ticked with Space) still
+   take no children along and are not saved; they nudge it on screen only (on a node that only has the focus they move to the
+   next node instead, see **Arrow keys** below). Dragging nodes you selected (with a Shift box or Ctrl-click) is a drag like any other: the whole selection
    moves, each node takes its open children along once, and the places are saved.
 
    **The bar above the canvas** holds a one-line summary of what the graph shows, such as `3 sources, 120 points, 6 mapped, 1 needs
-   credentials` (it is read out only when a number changes), and three buttons.
+   credentials` (it is read out only when a number changes), three buttons, a small arrow beside the first two, and a switch.
 
    - **Collapse all** closes every source, and with it its groups. **Expand all** opens every source and then every group, but never draws
      more than 600 new nodes in one go: what does not fit stays closed and a message says so, for example `Opened 3 sources and 12 groups.
      4 groups stay closed: opening them would draw more than 600 nodes.` Open those one by one with their + button. Neither button moves
-     the view. A button with nothing to do is greyed out and keeps its place.
+     the view. A button with nothing to do is greyed out and keeps its place. Neither touches the fold of an asset's sub-assets
+     (below): assets have their own toggle and the branch and selection actions.
+   - **More ways to collapse** and **More ways to expand** (the small arrow beside each) open a menu of two items: **Collapse selection**
+     and **Collapse this branch**, or **Expand selection** and **Expand this branch**. They act on the nodes you selected (Shift-drag a
+     box, or Ctrl-click): **selection** opens or closes only the selected sources, groups and assets that have sub-assets, and ignores the
+     others, a point for instance; **branch** does the same and also reaches everything under them that can open or close, a source's
+     groups for example. The same two words are in the right-click menu of a node that can open or close (**Expand this branch**, **Collapse
+     this branch**, always for that node whatever is selected), and **Expand selection** and **Collapse selection** are in the menu of a
+     selection frame and of empty canvas. When nothing can be done the item, or the whole arrow, is greyed out and says why: `Select a
+     source, group or asset first.`, `Nothing selected opens or closes.`, `Everything selected is already open.` or `... already closed.`
+     What was done is said in a message, for example `Opened 3 groups and 1 source.` or `Closed 2 groups.`. Opening still obeys the budget
+     of 600 new nodes (below) and says what stayed closed, in the sentence of Expand all; opening or closing an asset's sub-assets costs
+     nothing and is counted in the message (`Opened 2 groups and 3 assets.`).
+   - **Unmapped only** hides what is already mapped, so what is left is what still needs a decision. See below.
    - **Tidy layout** puts every node back in its default column. For someone who may change the layout (`discovery.edit`) it asks
      first, `Tidy the layout for everyone?`, because the saved places are shared: confirming deletes every saved place, for every
      user, and the canvas then opens as if nobody had ever dragged anything (mappings, assets, sources and points are not touched,
      and the clear is not written to the audit log, like dragging). Use it when a graph has been pulled into a mess. For anyone else it
      asks nothing and sends nothing: their own view is tidied until they reload, and a message says that the shared layout is
      unchanged. If the server refuses, nothing changes and the reason is shown.
+
+   **Unmapped only.** The switch at the right of the bar hides every point that is mapped, every group whose points are all mapped and
+   every source with at least one point and all of them mapped (a source with no points stays), and draws no line from a point to an
+   asset. It is for working through what is left. The summary then leads with the count and drops the repeat of the points, for example
+   `Showing 42 of 60 points, 3 sources, 18 mapped` (all the points of every source, not only the open ones, and `mapped` here means
+   linked to an asset); with the switch off the line is the one above. A group's title still shows its total, mapped points included. The
+   choice is remembered in this browser, the same words as the **Unmapped only** tick on the Points page, and nothing is deleted or
+   changed by it. Mapping a point while the switch is on removes it from the canvas, and the focus then goes to the next unmapped point
+   of its group, else the group, else the source, else the canvas, never to nowhere. **Find** (below) still reaches a hidden node: it
+   turns the switch off and says so (`Unmapped only is off so LVP01 can be shown.`).
+
+   **Big groups, 50 at a time.** An open group of more than 50 points that the filter leaves draws the first 50, and a **Show 50 more
+   (70 left)** button stands at the end of the list, where you are looking (a 500-point list is 32,000 px tall, so the group's own node is
+   far from its end). Each press adds 50 (the last press adds what is left) and puts the focus on the first new point; when everything is
+   drawn the button goes and the focus goes to the group. The group node says `50 of 120 shown`. A group of 50 points or fewer never
+   pages. The page you have reached is not remembered: reload, or close the group, and it starts at 50 again. A point you have mapped
+   but that is not drawn yet is not lost from the picture: the group keeps one line to its asset for them, labelled `N mapped` when
+   there are several, so no mapping ever disappears. Paging counts toward the 600-node budget by what is drawn (the 50 and the button).
+   **Find** extends the page to reach a point (below).
+
+   **Folding an asset's sub-assets.** An asset that has sub-assets carries a small arrow named
+   `Hide sub-assets of <name>` or `Show sub-assets of <name>`, and its right-click menu has **Hide sub-assets** or **Show sub-assets**.
+   Adding a sub-asset under a folded asset (the + on the asset, or **New sub-asset…**) unfolds it, so the new asset is seen. Folding hides every
+   asset below it; a point mapped to a hidden asset keeps its line, which now ends on the folded asset, and that asset shows a small
+   `N mapped` badge (hover it for `N mapped inside`) counting the points mapped to it or to anything under it. Anyone who can open the
+   page can fold; the choice is remembered in this browser. **Collapse all** and **Expand all** leave it alone, and **Tidy layout**
+   does not undo it.
+
+   **Arrow keys.** Tab reaches the nodes (the canvas itself takes the focus when you click empty space, or when Esc closes Find or a
+   menu, and Down or Right on it goes to the first node). Then: Up and Down move to the previous or next node in the same list (the
+   sources, the groups of a source, the points of a group, the assets of one level), Right moves to the first node under it and Left
+   back to its parent; at the end of a group's points Down reaches **Show 50 more**, and the arrows work from that button too (Up goes
+   to the last point, Left to the group). The arrows walk inside one column and do not cross to the other: **Ctrl+K** (Find) is the
+   quick way to an asset from a source or a point. Enter opens or closes a source, a group or an asset that has sub-assets; on a
+   point, an asset without sub-assets and an unidentified service it selects the node, as Space does on every node (on **Show 50
+   more** it presses the button). The Menu key or Shift+F10 opens its actions. The view moves only as far as it must to keep the node
+   in sight, clear of the overview map and the Find panel, and never zooms. On a node you have selected the arrows move the node
+   instead, on screen only (8 px with **Snap to grid** on, 5 px without): press Esc to clear the selection, the focus stays on the
+   node and the arrows walk again. Every node has a name for a screen reader that says its kind and state, such as `LVP01, group of 6
+   points, 6 mapped, open`, and a group that draws only a page of its points says how many it shows; the canvas says how to use the
+   keys.
+
+   **Big graphs.** The long lines from a group to its points are solid, not dashed, once a group draws more than 150 points: dashes on
+   a line tens of thousands of pixels long are what made dragging slow, and nothing else changes in how they look. Opening a group and
+   resting the pointer on a node redraw only the nodes that changed, so a graph of 2,000 nodes answers them faster than it did.
+   **Expand all** still never draws more than 600 new nodes in one go. One thing to know: when you switch **Unmapped
+   only**, fold an asset or close a group, the rows of the default columns close up. A node you pinned by hand with an Alt-drag keeps
+   the place you gave it, so rows that closed up can lie over it; **Tidy layout** puts everything back.
 
    **What a node shows.** The facts line of a source starts with a small dot and the protocol of its connector, then the words it
    always had: dot, `OPC UA`, `discovered · online · 60 points`. The dot is green for an enabled source that answered its last poll,
@@ -222,13 +284,15 @@ data-retrieval requests the connectors already use, nothing else.
    assets…**, **Remove**. A group: **Collapse** or **Expand**, **Map…**, **New asset…**. A point: **Map…**, and **New asset…** while it is
    unmapped. A mapped point also holds **Unmap…** and **Move to another asset…**, and a group with mapped points (the Ungrouped bag
    too) **Unmap this group…** and **Move this group's mappings…**. An asset holds **New sub-asset…** and, for each source with points
-   mapped to it (the first five by name), `Unmap everything from <source>…`. Most are the same action as a button on the node, and
+   mapped to it (the first five by name), `Unmap everything from <source>…`. A source, a group and an asset that has sub-assets end with
+   **Expand this branch** and **Collapse this branch** (everyone who can see Discovery has them), and an asset with sub-assets also
+   **Hide sub-assets** or **Show sub-assets**. Most are the same action as a button on the node, and
    an item is there only when the action is for your role (**Map…**, **New asset…** on a group or a point and **Create assets…** need
    `discovery.accept`, **Remove** needs `discovery.edit`, the unmap and move items need `assets.edit`, and **New sub-asset…** and
    **New asset…** (a point's, and the canvas's below) need `assets.edit` and `assets.view`, so a role that can only view sees Details
    and Collapse or Expand). An unidentified service, a selection frame, empty canvas and an asset with no item for your role open the
    canvas menu instead: **Expand all**, **Collapse all**, **Tidy layout** and **Fit view**, greyed out when the button above the
-   canvas is, and, on empty canvas only, **New asset…** for a role that has it. A mapped point and a mapped group also carry a small
+   canvas is, then **Expand selection** and **Collapse selection** (greyed out, with the reason, when nothing selected can do it), and, on empty canvas only, **New asset…** for a role that has it. A mapped point and a mapped group also carry a small
    button at the right of their title, named `Mapping actions for <name>`, which opens the same menu beside it; it adds no height to
    the node. From the keyboard, press the Menu key or Shift+F10 on a node that has the focus; anywhere else inside the canvas the
    canvas menu opens at its centre. Up and Down move (and wrap), Home and End jump, Enter chooses, Esc closes the menu and puts the
@@ -243,9 +307,12 @@ data-retrieval requests the connectors already use, nothing else.
    it come first, then names with a word that starts with it, then the rest. At most 50 are listed, and `N more` says how many are
    not. Up and Down move through the list, Enter chooses, and Esc, or a click outside, closes the card and puts the focus back where
    it was. Choosing a result opens the source and group it sits in when they are closed, glides the view to it (zooming in to at
-   least 75%, never past 100%) and outlines it in the accent colour for about 1.5 seconds. If a group is too big to draw (more than
-   600 nodes), the source opens and the group stays closed, and a message says so, for example `LVP01 has 6,000 points, too many to
-   draw at once. Showing the group instead.`; when opening the source would draw too many nodes because its groups are already open,
+   least 75%, never past 100%) and outlines it in the accent colour for about 1.5 seconds. Find reaches what the canvas has put away: for
+   a point past the first 50 of its group it shows as many more pages as it takes to draw that point; for an asset inside a folded asset it
+   shows the folded assets above it; for a source, group or point that **Unmapped only** hides it turns the switch off first, with a
+   message (`Unmapped only is off so LVP01 can be shown.`). If drawing a point would take more than 600 nodes, the group opens on the
+   page it has and a message says to go on with **Show 50 more**, for example `LVP01 has 6,000 points; the one you chose is too far down
+   to draw at once. Showing the group: use Show 50 more to go on.`; when opening the source would draw too many nodes because its groups are already open,
    those groups are closed first and the message says that. Elsewhere on the page, Ctrl+K is still the top bar's **Quick find**.
 
    **Keys on the canvas.**
@@ -258,14 +325,17 @@ data-retrieval requests the connectors already use, nothing else.
    | Alt, or Option, held when you start a drag | Move the node alone, without its children |
    | Menu key, or Shift+F10 | Open the actions of the focused node; elsewhere in the canvas, the canvas menu |
    | Up, Down, Home, End, Enter in a menu or Find | Move, jump, choose |
-   | Esc | Close the open menu or Find card (one layer at a time), then clear a selection |
+   | Arrow keys on a node that is not selected, on **Show 50 more**, or on the canvas | Move to the next, previous, parent or first child node (Down or Right on the canvas goes to the first node); on a selected node they move it instead (8 px with Snap to grid on, 5 px without) |
+   | Enter on a source, a group or an asset with sub-assets | Open or close it; on **Show 50 more** it shows the next 50 |
+   | Space on a node (Enter too on a point, an asset without sub-assets and an unidentified service) | Select it |
+   | Esc | Close the open menu or Find card (one layer at a time), then clear a selection (on a selected node it clears the selection and the focus stays on the node) |
 
    **Reduced motion.** When your system asks for less motion, the camera moves at once, the green dot does not pulse, the edges do not
    flow (they keep their dashes) and the Find outline does not pulse (it still shows for 1.5 seconds). The path highlight needs no
    setting: it never fades, so lit and dimmed nodes always change at once.
 
    **The hint under the title** is one line, `Dashed: discovered. Solid: assets. Drag a group onto an asset or press New asset…`,
-   followed by a `?` (named `What can I do on the canvas?`) that lists the keys above in six short lines.
+   followed by a `?` (named `What can I do on the canvas?`) that lists the keys above in a few short lines, one of them for the arrow keys.
 
    Each source node says when a scan last found it (`Seen in scan #6, 10 min ago`), or `Added by hand` for a source you made
    yourself, or `Not seen in a scan yet`. A scan only adds sources and refreshes their points; it never removes one, so a source

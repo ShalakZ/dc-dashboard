@@ -32,4 +32,18 @@
   /* Waiting buttons use aria-disabled, never disabled (they may hold the focus the click gave them): the looks of button:disabled, with the base hover wash taken back by naming the base colour. */
   .graph-bar button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
   .graph-bar button[aria-disabled="true"]:hover { background: var(--bg); }
+
+  /* W12b: the chevron beside Collapse all and Expand all (a menu for the selection and the branch) is drawn as the other half of a split button: 28px wide, joined to its button by taking back the 8px gap
+     and 1px of border, the corners between them square. The summary gives way first (min-width 0 above); nothing here can make the bar wrap or grow taller than its 36px. */
+  .graph-bar > button:has(+ .graph-bar-more) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .graph-bar .graph-bar-more { flex: none; width: 28px; margin-left: -9px; padding: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .graph-bar .graph-bar-more:focus-visible { position: relative; z-index: 1; } /* its ring is not cut by the button it joins */
+  .graph-bar .graph-bar-more[aria-expanded="true"] { background: var(--accent-tint); color: var(--accent); } /* like the row menu's button while its menu stands */
+  /* The Unmapped only switch is always in the bar, at its end, with its words on one line: its width never changes, so nothing jumps when the filter is turned on. */
+  .graph-bar-switch { flex: none; display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-sm); white-space: nowrap; }
+  .graph-bar-switch input { margin: 0; }
+
+  /* W12b: a disabled item of a canvas menu says why, as a second muted line inside the item (a longer reason wraps at 220px instead of widening the menu). */
+  .graph-menu-text { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 0; text-align: left; }
+  .graph-menu-reason { max-width: 220px; color: var(--text-2); font-size: var(--fs-xs); white-space: normal; }
 }

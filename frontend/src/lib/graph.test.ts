@@ -1,8 +1,8 @@
-import type { Edge } from "@xyflow/react";
-import type { RemoveSourcesResult } from "../api/types";
+import type { Edge, Node } from "@xyflow/react";
+import type { GraphModel, RemoveSourcesResult } from "../api/types";
 import {
-  BLOCK_GAP, LIVE_EDGE_LIMIT, MAX_LAYOUT_ID, SOURCE_H, UNGROUPED, buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches, nodeId, ownPlaces,
-  removalDialogText, removalOutcome, seenLine, shiftedPlaces, type OpenState, type XY,
+  BLOCK_GAP, FAN_DASH_LIMIT, LIVE_EDGE_LIMIT, MAX_LAYOUT_ID, NO_VIEW, PAGE_SIZE, SOURCE_H, UNGROUPED, buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches,
+  moreNodeIds, nodeId, ownPlaces, removalDialogText, removalOutcome, seenLine, shiftedPlaces, type GraphView, type OpenState, type XY,
 } from "./graph";
 import { model, point, source } from "../test/graphFixtures";
 
@@ -851,5 +851,520 @@ describe("removalDialogText", () => {
     const { title, message } = removalDialogText(names);
     expect(title).toBe(`Remove ${names.length} unmapped sources?`);
     expect(message).toBe(`${list} Sources with a mapped point are never touched. A scan can find these again.`);
+  });
+});
+
+describe("buildGraph with a view (W12b)", () => {
+  type TestAsset = GraphModel["assets"][number];
+  const asset = (id: number, parent_id: number | null, name = `Asset ${id}`): TestAsset => ({ id, parent_id, name, kind: "generic" });
+  const mappedTo = (id: number, assetId: number) => point(id, `p${id}`, { asset_id: assetId, mapping_id: id, mapped_metric: "voltage_v" });
+  /** `n` points p1..pn; `mapTo(i)` (i counts from 1) is the asset point i is mapped to, or null. */
+  const pts = (n: number, mapTo: (i: number) => number | null = () => null) =>
+    Array.from({ length: n }, (_, i) => { const a = mapTo(i + 1); return a === null ? point(i + 1, `p${i + 1}`) : mappedTo(i + 1, a); });
+  /** Source 1 with ONE group "G" of `n` points. */
+  const oneGroup = (n: number, mapTo?: (i: number) => number | null, extra: Partial<GraphModel> = {}) =>
+    model({ sources: [source(1, { clusters: [{ key: "G", points: pts(n, mapTo) }] })], unidentified: [], ...extra });
+  const G = nodeId.cluster(1, "G");
+  const openG: OpenState = { sources: new Set([1]), clusters: new Set([G]) };
+  const srcOnly: OpenState = { sources: new Set([1]), clusters: new Set() };
+  const paged: GraphView = { ...NO_VIEW, pageSize: PAGE_SIZE };
+  const filtered: GraphView = { ...NO_VIEW, unmappedOnly: true };
+  const closed = (...assetIds: number[]): GraphView => ({ ...NO_VIEW, assetsClosed: new Set(assetIds) });
+  const byType = (nodes: Node[], type: string) => nodes.filter((n) => n.type === type);
+  const mapEdges = (edges: Edge[]) => edges.filter((e) => e.id.startsWith("m:"));
+  const everythingOpen = (m: GraphModel): OpenState => ({
+    sources: new Set(m.sources.map((s) => s.id)),
+    clusters: new Set(m.sources.flatMap((s) => [...s.clusters.map((c) => c.key), ...(s.ungrouped.length > 0 ? [UNGROUPED] : [])].map((k) => nodeId.cluster(s.id, k)))),
+  });
+
+  describe("the Unmapped only filter", () => {
+    const A = nodeId.cluster(1, "A");
+    const B = nodeId.cluster(1, "B");
+    // Source 1: group A (p1 unmapped, p2 mapped), group B (every point mapped). Source 2: every point mapped. Source 3: no points at all.
+    const filterModel = () => model({
+      sources: [
+        source(1, { clusters: [{ key: "A", points: [point(1, "p1"), mappedTo(2, 10)] }, { key: "B", points: [mappedTo(3, 10), mappedTo(4, 11)] }] }),
+        source(2, { clusters: [{ key: "C", points: [mappedTo(5, 10)] }] }),
+        source(3),
+      ],
+    });
+    const everything: OpenState = { sources: new Set([1, 2, 3]), clusters: new Set([A, B, nodeId.cluster(2, "C")]) };
+
+    it("draws no mapped point, no group with every point mapped, and no source with every point mapped", () => {
+      const { nodes } = buildGraph(filterModel(), everything, { view: filtered });
+      expect(ids(nodes)).toEqual(["asset:10", "asset:11", A, "point:1", "src:1", "src:3", "unid:10.0.0.9:8080"].sort());
+    });
+
+    it("a source with no points stays, and so do the unidentified services and every asset", () => {
+      const { nodes } = buildGraph(filterModel(), none, { view: filtered });
+      expect(ids(nodes)).toEqual(["asset:10", "asset:11", "src:1", "src:3", "unid:10.0.0.9:8080"]);
+    });
+
+    it("draws no m: edge of any kind: not from a point, a group or a source", () => {
+      const m = filterModel();
+      for (const open of [everything, none, { sources: new Set([1, 2, 3]), clusters: new Set<string>() }]) {
+        expect(mapEdges(buildGraph(m, open, { view: filtered }).edges)).toEqual([]);
+      }
+      // the same graphs without the filter do draw them (a source, a group and a point each)
+      expect(mapEdges(buildGraph(m, none).edges).length).toBeGreaterThan(0);
+      expect(mapEdges(buildGraph(m, { sources: new Set([1]), clusters: new Set() }).edges).some((e) => e.source === A)).toBe(true);
+      expect(mapEdges(buildGraph(m, everything).edges).some((e) => e.source === "point:2")).toBe(true);
+    });
+
+    it("the group keeps the TOTAL as count and mapped count, and says how many points are visible and drawn", () => {
+      const cluster = buildGraph(filterModel(), everything, { view: filtered }).nodes.find((n) => n.id === A);
+      expect(cluster?.data).toMatchObject({ count: 2, mappedCount: 1, visibleCount: 1, shownCount: 1, expanded: true });
+    });
+
+    it("an open group draws only its unmapped points", () => {
+      const m = oneGroup(6, (i) => (i % 2 === 0 ? 10 : null), { assets: [asset(10, null)] });
+      const { nodes } = buildGraph(m, openG, { view: filtered });
+      expect(ids(byType(nodes, "point"))).toEqual(["point:1", "point:3", "point:5"]);
+    });
+
+    it("hidden sources and groups take no row: the next source stands where it would without them", () => {
+      const { nodes } = buildGraph(filterModel(), everything, { view: filtered });
+      // src:1 at 0, its one group at SOURCE_H, its one point a row below, then the block gap: 136 + 2 rows of 64 + 40
+      expect(at(nodes, "src:3")).toEqual({ x: 0, y: SOURCE_H + 2 * 64 + BLOCK_GAP });
+      expect(at(nodes, A)).toEqual({ x: 360, y: SOURCE_H });
+      expect(at(nodes, "point:1")).toEqual({ x: 720, y: SOURCE_H + 64 });
+    });
+
+    it("off (or NO_VIEW, or no view at all) is the graph it always was", () => {
+      const m = filterModel();
+      expect(buildGraph(m, everything, { view: NO_VIEW })).toEqual(buildGraph(m, everything));
+      expect(mapEdges(buildGraph(m, everything, { view: NO_VIEW }).edges).length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("paging", () => {
+    // [points, the page extent in `view.shown` (undefined = none), points drawn, points left]
+    it.each([
+      [50, undefined, 50, 0], [51, undefined, 50, 1], [100, undefined, 50, 50], [101, undefined, 50, 51],
+      [100, 100, 100, 0], [101, 100, 100, 1], [101, 150, 101, 0], [200, 120, 120, 80], [60, 10, 10, 50],
+    ])("%i visible points, extent %j: %i drawn, %i left", (total, shown, drawn, left) => {
+      const view: GraphView = shown === undefined ? paged : { ...paged, shown: new Map([[G, shown]]) };
+      const { nodes, edges } = buildGraph(oneGroup(total), openG, { view });
+      expect(byType(nodes, "point")).toHaveLength(drawn);
+      expect(nodes.find((n) => n.id === G)?.data).toMatchObject({ count: total, visibleCount: total, shownCount: drawn });
+      const more = byType(nodes, "more");
+      if (left === 0) {
+        expect(more).toHaveLength(0);
+        return;
+      }
+      expect(more).toHaveLength(1);
+      expect(more[0]).toMatchObject({
+        id: nodeId.more(G), type: "more", draggable: false, selectable: false, focusable: false,
+        data: { clusterId: G, label: "G", left, step: Math.min(PAGE_SIZE, left) },
+      });
+      expect(more[0].ariaLabel).toBeUndefined();
+      expect(edges.some((e) => e.source === nodeId.more(G) || e.target === nodeId.more(G))).toBe(false);
+    });
+
+    it("without a page size (NO_VIEW, or no view) every point is drawn and there is no more node", () => {
+      for (const options of [{}, { view: NO_VIEW }]) {
+        const { nodes } = buildGraph(oneGroup(120), openG, options);
+        expect(byType(nodes, "point")).toHaveLength(120);
+        expect(byType(nodes, "more")).toHaveLength(0);
+      }
+      expect(NO_VIEW.pageSize).toBe(Infinity);
+    });
+
+    it("draws the first points of the list, in order", () => {
+      const { nodes } = buildGraph(oneGroup(70), openG, { view: paged });
+      expect(byType(nodes, "point").map((n) => n.id)).toEqual(Array.from({ length: 50 }, (_, i) => `point:${i + 1}`));
+    });
+
+    it("the more node stands one row below the last drawn point in the point column, and takes a row like a point", () => {
+      const m = model({ sources: [source(1, { clusters: [{ key: "G", points: pts(60) }, { key: "H", points: [point(100, "h")] }] })], unidentified: [] });
+      const { nodes } = buildGraph(m, openG, { view: paged });
+      const last = at(nodes, "point:50");
+      const more = at(nodes, nodeId.more(G));
+      expect(more).toEqual({ x: 720, y: last.y + 64 });
+      expect(at(nodes, nodeId.cluster(1, "H")).y - more.y).toBe(64);
+    });
+
+    it("the more node follows its group and its source like a point, and never has a place of its own", () => {
+      const m = oneGroup(60);
+      const base = at(buildGraph(m, openG, { view: paged }).nodes, nodeId.more(G));
+      // G stands at (360, 136) by default: a session place for it shifts the more node by the same
+      const viaGroup = buildGraph(m, openG, { view: paged, moved: new Map([[G, { x: 400, y: 300 }]]) }).nodes;
+      expect(at(viaGroup, nodeId.more(G))).toEqual({ x: base.x + 40, y: base.y + 164 });
+      const viaSource = buildGraph(m, openG, { view: paged, moved: new Map([["src:1", { x: 100, y: 50 }]]) }).nodes;
+      expect(at(viaSource, nodeId.more(G))).toEqual({ x: base.x + 100, y: base.y + 50 });
+      // a place stored (or dragged) under its id is ignored
+      const stored = buildGraph(oneGroup(60, undefined, { layout: { [nodeId.more(G)]: { x: 1, y: 2 } } }), openG, { view: paged, moved: new Map([[nodeId.more(G), { x: 3, y: 4 }]]) }).nodes;
+      expect(at(stored, nodeId.more(G))).toEqual(base);
+    });
+
+    it("mapped points that are not drawn keep one edge per asset from the group, labelled with the count", () => {
+      // p3 is drawn; p51 and p52 (not drawn) are mapped to asset 10 and p53 to asset 11
+      const m = oneGroup(60, (i) => (i === 3 || i === 51 || i === 52 ? 10 : i === 53 ? 11 : null), { assets: [asset(10, null), asset(11, null)] });
+      const edges = mapEdges(buildGraph(m, openG, { view: paged }).edges);
+      expect(edges.map((e) => e.id).sort()).toEqual([`m:${G}>asset:10`, `m:${G}>asset:11`, "m:point:3>asset:10"]);
+      expect(edges.find((e) => e.id === `m:${G}>asset:10`)?.label).toBe("2 mapped");
+      expect(edges.find((e) => e.id === `m:${G}>asset:11`)?.label).toBeUndefined();
+      // once the page is extended over them, the aggregate is gone and the points carry their own edges
+      const all = mapEdges(buildGraph(m, openG, { view: { ...paged, shown: new Map([[G, 60]]) } }).edges);
+      expect(all.map((e) => e.id).sort()).toEqual(["m:point:3>asset:10", "m:point:51>asset:10", "m:point:52>asset:10", "m:point:53>asset:11"]);
+    });
+
+    it("under the filter no aggregated edge is drawn for the points that are not drawn", () => {
+      const m = oneGroup(70, (i) => (i > 60 ? 10 : null), { assets: [asset(10, null)] });
+      const { nodes, edges } = buildGraph(m, openG, { view: { ...paged, unmappedOnly: true } });
+      expect(byType(nodes, "point")).toHaveLength(50);
+      expect(nodes.find((n) => n.id === nodeId.more(G))?.data).toMatchObject({ left: 10 });
+      expect(nodes.find((n) => n.id === G)?.data).toMatchObject({ count: 70, visibleCount: 60, shownCount: 50, mappedCount: 10 });
+      expect(mapEdges(edges)).toEqual([]);
+    });
+
+    it("the aggregated edge of a live source flows like a collapsed group's, and counts toward the limit", () => {
+      const m = model({ sources: [source(1, { enabled: true, status: "online", clusters: [{ key: "G", points: pts(60, (i) => (i > 55 ? 10 : null)) }] })], unidentified: [] });
+      const { edges } = buildGraph(m, openG, { view: paged, animate: true });
+      expect(edges.find((e) => e.id === `m:${G}>asset:10`)).toMatchObject({ animated: true, label: "5 mapped", style: { strokeDasharray: "8 2" } });
+    });
+
+    it("a collapsed group is unchanged by paging: one aggregated edge per asset from the group", () => {
+      const m = oneGroup(60, (i) => (i > 55 ? 10 : null), { assets: [asset(10, null)] });
+      const { nodes, edges } = buildGraph(m, srcOnly, { view: paged });
+      expect(byType(nodes, "point")).toHaveLength(0);
+      expect(edges.find((e) => e.id === `m:${G}>asset:10`)?.label).toBe("5 mapped");
+    });
+  });
+
+  describe("fan-out edges (FAN_DASH_LIMIT)", () => {
+    const fan = (edges: Edge[]) => edges.filter((e) => e.target.startsWith("point:"));
+
+    it("the limit is 150", () => {
+      expect(FAN_DASH_LIMIT).toBe(150);
+    });
+
+    it("a group that draws 150 points keeps the dashes on its point edges; at 151 they are solid", () => {
+      const at150 = fan(buildGraph(oneGroup(150), openG).edges);
+      expect(at150).toHaveLength(150);
+      for (const e of at150) expect(e.style, e.id).toEqual({ strokeDasharray: "6 4" });
+      const at151 = fan(buildGraph(oneGroup(151), openG).edges);
+      expect(at151).toHaveLength(151);
+      for (const e of at151) {
+        expect(e.style, e.id).toEqual({});
+        expect(e.style?.strokeDasharray, e.id).toBeUndefined();
+      }
+    });
+
+    it("the source to group edge stays dashed whatever the size", () => {
+      const edge = buildGraph(oneGroup(151), openG).edges.find((e) => e.id === `e:src:1>${G}`);
+      expect(edge?.style).toEqual({ strokeDasharray: "6 4" });
+    });
+
+    it("counts the points DRAWN: 400 visible points on a page of 50 stay dashed, a page extended to 200 goes solid", () => {
+      const first = fan(buildGraph(oneGroup(400), openG, { view: paged }).edges);
+      expect(first).toHaveLength(50);
+      for (const e of first) expect(e.style).toEqual({ strokeDasharray: "6 4" });
+      const wide = fan(buildGraph(oneGroup(400), openG, { view: { ...paged, shown: new Map([[G, 200]]) } }).edges);
+      expect(wide).toHaveLength(200);
+      for (const e of wide) expect(e.style).toEqual({});
+    });
+
+    it("solid fan-out edges never flow, a live source included", () => {
+      const m = model({ sources: [source(1, { enabled: true, status: "online", clusters: [{ key: "G", points: pts(200) }] })], unidentified: [] });
+      const edges = buildGraph(m, openG, { animate: true }).edges;
+      expect(fan(edges).every((e) => e.animated === undefined)).toBe(true);
+      expect(edges.find((e) => e.id === `e:src:1>${G}`)).toMatchObject({ animated: true, style: { strokeDasharray: "6 4" } });
+    });
+  });
+
+  describe("folded assets", () => {
+    // 10 Site > (11 Hall > (12 Row A, 13 Row B), 14 Hall 2); 20 Other
+    const tree = () => [asset(10, null, "Site"), asset(11, 10, "Hall"), asset(12, 11, "Row A"), asset(13, 11, "Row B"), asset(14, 10, "Hall 2"), asset(20, null, "Other")];
+    const treeModel = (mapTo: (i: number) => number | null = () => null, n = 3) => oneGroup(n, mapTo, { assets: tree() });
+    const drawnAssets = (nodes: Node[]) => byType(nodes, "asset").map((n) => n.id);
+    const aEdges = (edges: Edge[]) => edges.filter((e) => e.id.startsWith("a:")).map((e) => e.id);
+
+    it("nothing closed: every asset is drawn, as before, and each carries its sub-asset count", () => {
+      const { nodes, edges } = buildGraph(treeModel(), none, { view: NO_VIEW });
+      expect(drawnAssets(nodes)).toEqual(["asset:10", "asset:11", "asset:12", "asset:13", "asset:14", "asset:20"]);
+      expect(aEdges(edges)).toHaveLength(4);
+      const data = (id: string) => nodes.find((n) => n.id === id)?.data;
+      expect(data("asset:10")).toMatchObject({ children: 2, collapsed: false });
+      expect(data("asset:11")).toMatchObject({ children: 2, collapsed: false });
+      expect(data("asset:12")).toMatchObject({ children: 0, collapsed: false });
+      expect(data("asset:10")).not.toHaveProperty("mappedInside");
+    });
+
+    it("a closed root hides everything under it: no node, no a: edge, no row", () => {
+      const { nodes, edges } = buildGraph(treeModel(), none, { view: closed(10) });
+      expect(drawnAssets(nodes)).toEqual(["asset:10", "asset:20"]);
+      expect(aEdges(edges)).toEqual([]);
+      expect(nodes.find((n) => n.id === "asset:10")?.data).toMatchObject({ children: 2, collapsed: true });
+      expect(nodes.find((n) => n.id === "asset:20")?.data).toMatchObject({ children: 0, collapsed: false });
+      expect(at(nodes, "asset:20")).toEqual({ x: 1200, y: 64 });
+    });
+
+    it("a closed asset in the middle hides only its own subtree; the rest keeps its edges and its rows", () => {
+      const { nodes, edges } = buildGraph(treeModel(), none, { view: closed(11) });
+      expect(drawnAssets(nodes)).toEqual(["asset:10", "asset:11", "asset:14", "asset:20"]);
+      expect(aEdges(edges).sort()).toEqual(["a:10>11", "a:10>14"]);
+      expect(nodes.find((n) => n.id === "asset:11")?.data).toMatchObject({ children: 2, collapsed: true });
+      expect(nodes.find((n) => n.id === "asset:10")?.data).toMatchObject({ children: 2, collapsed: false });
+      expect(at(nodes, "asset:14")).toEqual({ x: 1200 + 224, y: 128 });
+      expect(at(nodes, "asset:20")).toEqual({ x: 1200, y: 192 });
+    });
+
+    it("a closed asset inside a closed one adds nothing: the outermost one stands for them both", () => {
+      const nested = buildGraph(treeModel((i) => (i === 1 ? 12 : null)), { sources: new Set(), clusters: new Set() }, { view: closed(10, 11) });
+      expect(drawnAssets(nested.nodes)).toEqual(["asset:10", "asset:20"]);
+      expect(nested.edges.filter((e) => e.id.startsWith("m:")).map((e) => e.id)).toEqual(["m:src:1>asset:10"]);
+    });
+
+    it("a closed member of a pure parent cycle hides the other member and draws nobody twice or as a root by accident", () => {
+      const cycle = oneGroup(1, undefined, { assets: [asset(10, 11, "A"), asset(11, 10, "B")] });
+      const a = buildGraph(cycle, none, { view: closed(10) });
+      expect(drawnAssets(a.nodes)).toEqual(["asset:10"]);
+      expect(aEdges(a.edges)).toEqual([]);
+      const b = buildGraph(cycle, none, { view: closed(11) });
+      expect(drawnAssets(b.nodes)).toEqual(["asset:10", "asset:11"]);
+      expect(aEdges(b.edges).sort()).toEqual(aEdges(buildGraph(cycle, none).edges).sort());
+    });
+
+    it("an orphan and a self-parent are roots and are never hidden by another asset's fold", () => {
+      const m = oneGroup(1, undefined, { assets: [asset(10, null), asset(11, 10), asset(30, 99, "Orphan"), asset(31, 30), asset(40, 40, "Loop")] });
+      const { nodes } = buildGraph(m, none, { view: closed(10) });
+      expect(drawnAssets(nodes)).toEqual(["asset:10", "asset:30", "asset:31", "asset:40"]);
+      expect(nodes.find((n) => n.id === "asset:30")?.data).toMatchObject({ navParent: null });
+      expect(nodes.find((n) => n.id === "asset:40")?.data).toMatchObject({ navParent: null });
+    });
+
+    it("a hidden asset listed BEFORE its closed parent is not drawn as a root", () => {
+      const m = oneGroup(1, undefined, { assets: [asset(11, 10), asset(12, 11), asset(10, null)] });
+      expect(drawnAssets(buildGraph(m, none, { view: closed(10) }).nodes)).toEqual(["asset:10"]);
+    });
+
+    it("no asset node appears twice, whatever is closed", () => {
+      const cyc = [asset(1, 2), asset(2, 3), asset(3, 1), asset(4, 2), asset(5, null), asset(6, 5)];
+      for (const assets of [tree(), cyc]) {
+        for (const set of [[], assets.map((a) => a.id), assets.slice(0, 2).map((a) => a.id), [assets[assets.length - 1].id]]) {
+          const { nodes } = buildGraph(oneGroup(1, undefined, { assets }), none, { view: closed(...set) });
+          const drawn = drawnAssets(nodes);
+          expect(new Set(drawn).size, `${assets.length} assets, closed ${set}`).toBe(drawn.length);
+        }
+      }
+    });
+
+    describe("a mapping onto a hidden asset is drawn to the asset that hides it, one edge for all of them", () => {
+      // Site 10 with two sub-assets 11 and 12; p1 -> 11, p2 -> 12, p3 unmapped.
+      const twins = (n = 3, mapTo = (i: number): number | null => (i === 1 ? 11 : i === 2 ? 12 : null)) => oneGroup(n, mapTo, { assets: [asset(10, null), asset(11, 10), asset(12, 10)] });
+
+      it("a collapsed source", () => {
+        const edges = mapEdges(buildGraph(twins(), none, { view: closed(10) }).edges);
+        expect(edges).toHaveLength(1);
+        expect(edges[0]).toMatchObject({ id: "m:src:1>asset:10", label: "2 mapped" });
+      });
+
+      it("a collapsed group", () => {
+        const edges = mapEdges(buildGraph(twins(), srcOnly, { view: closed(10) }).edges);
+        expect(edges).toHaveLength(1);
+        expect(edges[0]).toMatchObject({ id: `m:${G}>asset:10`, label: "2 mapped" });
+      });
+
+      it("drawn points: each carries its own edge, to the same asset, with no label", () => {
+        const edges = mapEdges(buildGraph(twins(), openG, { view: closed(10) }).edges);
+        expect(edges.map((e) => e.id).sort()).toEqual(["m:point:1>asset:10", "m:point:2>asset:10"]);
+        expect(edges.every((e) => e.label === undefined)).toBe(true);
+      });
+
+      it("the aggregate for points that are not drawn yet", () => {
+        const m = twins(60, (i) => (i === 51 ? 11 : i === 52 ? 12 : null));
+        const edges = mapEdges(buildGraph(m, openG, { view: { ...closed(10), pageSize: PAGE_SIZE } }).edges);
+        expect(edges).toHaveLength(1);
+        expect(edges[0]).toMatchObject({ id: `m:${G}>asset:10`, label: "2 mapped" });
+      });
+
+      it("a point mapped to the closed asset itself adds to the same edge", () => {
+        const edges = mapEdges(buildGraph(twins(4, (i) => (i === 1 ? 11 : i === 2 ? 12 : i === 3 ? 10 : null)), srcOnly, { view: closed(10) }).edges);
+        expect(edges).toHaveLength(1);
+        expect(edges[0].label).toBe("3 mapped");
+      });
+    });
+
+    describe("mappedInside", () => {
+      const three = () => oneGroup(3, (i) => [10, 11, 12][i - 1], { assets: [asset(10, null), asset(11, 10), asset(12, 11)] });
+
+      it("counts the points mapped to the closed asset and to anything it hides; only a closed asset has it", () => {
+        const { nodes } = buildGraph(three(), none, { view: closed(10) });
+        expect(nodes.find((n) => n.id === "asset:10")?.data).toMatchObject({ collapsed: true, mappedInside: 3 });
+        const open = buildGraph(three(), none).nodes.find((n) => n.id === "asset:10");
+        expect(open?.data).not.toHaveProperty("mappedInside");
+      });
+
+      it("a nested closed asset counts under the outermost one only; the middle one, closed alone, counts its own subtree", () => {
+        const both = buildGraph(three(), none, { view: closed(10, 11) }).nodes;
+        expect(both.find((n) => n.id === "asset:10")?.data).toMatchObject({ mappedInside: 3 });
+        const middle = buildGraph(three(), none, { view: closed(11) }).nodes;
+        expect(middle.find((n) => n.id === "asset:11")?.data).toMatchObject({ collapsed: true, mappedInside: 2 });
+        expect(middle.find((n) => n.id === "asset:10")?.data).not.toHaveProperty("mappedInside");
+      });
+
+      it("counts the whole model, even points the filter hides and sources that are not drawn", () => {
+        const { nodes } = buildGraph(three(), none, { view: { ...closed(10), unmappedOnly: true } });
+        expect(byType(nodes, "source")).toHaveLength(0); // every point is mapped: the filter hides the source
+        expect(nodes.find((n) => n.id === "asset:10")?.data).toMatchObject({ mappedInside: 3 });
+      });
+
+      it("is absent when nothing inside is mapped, and a closed asset without sub-assets is not collapsed", () => {
+        const m = oneGroup(1, undefined, { assets: [asset(10, null), asset(11, 10), asset(20, null)] });
+        const { nodes } = buildGraph(m, none, { view: closed(10, 20) });
+        expect(nodes.find((n) => n.id === "asset:10")?.data).toMatchObject({ collapsed: true });
+        expect(nodes.find((n) => n.id === "asset:10")?.data).not.toHaveProperty("mappedInside");
+        expect(nodes.find((n) => n.id === "asset:20")?.data).toMatchObject({ children: 0, collapsed: false });
+      });
+    });
+
+    it("navParent is the node the walk came from: null for a root, an orphan, a self-parent and the head of a cycle", () => {
+      const m = oneGroup(1, undefined, { assets: [asset(10, null), asset(11, 10), asset(12, 11), asset(30, 99), asset(40, 40), asset(50, 51), asset(51, 50)] });
+      const nav = (id: string) => (buildGraph(m, none).nodes.find((n) => n.id === id)?.data as { navParent: string | null }).navParent;
+      expect(nav("asset:10")).toBeNull();
+      expect(nav("asset:11")).toBe("asset:10");
+      expect(nav("asset:12")).toBe("asset:11");
+      expect(nav("asset:30")).toBeNull();
+      expect(nav("asset:40")).toBeNull();
+      expect(nav("asset:50")).toBeNull(); // the head of a pure cycle
+      expect(nav("asset:51")).toBe("asset:50");
+    });
+  });
+
+  describe("labels (aria-label of every node but the more node)", () => {
+    const label = (m: GraphModel, open: OpenState, id: string, view: GraphView = NO_VIEW) => buildGraph(m, open, { view }).nodes.find((n) => n.id === id)?.ariaLabel;
+    const all = { sources: new Set([1, 2]), clusters: new Set([nodeId.cluster(1, "LVP01"), nodeId.cluster(2, "M")]) };
+
+    it("a source: its name, its groups and points (the total), open or closed", () => {
+      expect(label(model(), none, "src:1")).toBe("s1, source, 3 groups, 7 points, closed");
+      expect(label(model(), all, "src:1")).toBe("s1, source, 3 groups, 7 points, open");
+      expect(label(model(), none, "src:2")).toBe("s2, source, 1 group, 2 points, closed");
+    });
+
+    it("a group: its name, size and mapped count, open or closed", () => {
+      expect(label(model(), all, nodeId.cluster(2, "M"))).toBe("M, group of 2 points, 2 mapped, open");
+      expect(label(model(), all, nodeId.cluster(1, "LVP02"))).toBe("LVP02, group of 3 points, 0 mapped, closed");
+      expect(label(model(), all, nodeId.cluster(1, UNGROUPED))).toBe("Ungrouped, group of 1 point, 0 mapped, closed");
+    });
+
+    it("an open group that draws fewer points than it has says how many it shows (it reads 50 of 120 on screen); closed, unpaged and fully drawn groups keep their names", () => {
+      const m = oneGroup(120, (i) => (i <= 3 ? 10 : null), { assets: [asset(10, null)] });
+      expect(label(m, openG, G, paged)).toBe("G, group of 120 points, 3 mapped, open, 50 shown");
+      expect(label(m, openG, G, { ...paged, shown: new Map([[G, 100]]) })).toBe("G, group of 120 points, 3 mapped, open, 100 shown");
+      expect(label(m, openG, G, { ...paged, shown: new Map([[G, 120]]) })).toBe("G, group of 120 points, 3 mapped, open");
+      expect(label(m, srcOnly, G, paged)).toBe("G, group of 120 points, 3 mapped, closed");
+      expect(label(oneGroup(40), openG, G, paged)).toBe("G, group of 40 points, 0 mapped, open");
+      expect(label(oneGroup(50), openG, G, paged)).toBe("G, group of 50 points, 0 mapped, open");
+    });
+
+    it("the filter counts: a group paged only among its unmapped points says so, and one that fits in a page after the filter does not", () => {
+      const m = oneGroup(120, (i) => (i <= 3 ? 10 : null), { assets: [asset(10, null)] });
+      expect(label(m, openG, G, { ...paged, unmappedOnly: true })).toBe("G, group of 120 points, 3 mapped, open, 50 shown");
+      const mostlyMapped = oneGroup(120, (i) => (i <= 100 ? 10 : null), { assets: [asset(10, null)] });
+      expect(label(mostlyMapped, openG, G, { ...paged, unmappedOnly: true })).toBe("G, group of 120 points, 100 mapped, open");
+    });
+
+    it("a point: mapped to the asset's name, unmapped, or just mapped when the asset is not in the model", () => {
+      expect(label(model(), all, "point:8")).toBe("M kW, point, mapped to Site");
+      expect(label(model(), all, "point:1")).toBe("LVP01 kW, point, unmapped");
+      expect(label(model({ assets: [] }), all, "point:8")).toBe("M kW, point, mapped");
+    });
+
+    it("an asset: sub-assets, what is mapped inside a closed one, and open or closed; the parts that do not apply are left out", () => {
+      expect(label(model(), none, "asset:10")).toBe("Site, asset, 1 sub-asset, open");
+      expect(label(model(), none, "asset:10", closed(10))).toBe("Site, asset, 1 sub-asset, 2 mapped inside, closed");
+      expect(label(model(), none, "asset:11")).toBe("Panel 1, asset");
+      const wide = model({ assets: [asset(1, null, "Rack A"), asset(2, 1), asset(3, 1), asset(4, 1)] });
+      expect(label(wide, none, "asset:1")).toBe("Rack A, asset, 3 sub-assets, open");
+      expect(label(wide, none, "asset:1", closed(1))).toBe("Rack A, asset, 3 sub-assets, closed");
+    });
+
+    it("an unidentified service", () => {
+      expect(label(model(), none, "unid:10.0.0.9:8080")).toBe("10.0.0.9:8080, unidentified service");
+    });
+
+    it("every node but the more node has one, and the more node has none", () => {
+      const m = oneGroup(70, (i) => (i % 7 === 0 ? 10 : null), { assets: [asset(10, null), asset(11, 10)], unidentified: [{ host: "h", port: 1, scan_id: 1 }] });
+      const { nodes } = buildGraph(m, openG, { view: { ...paged, assetsClosed: new Set([10]) } });
+      expect(new Set(nodes.map((n) => n.type))).toEqual(new Set(["source", "cluster", "point", "more", "asset", "unidentified"]));
+      for (const n of nodes) {
+        if (n.type === "more") expect(n.ariaLabel).toBeUndefined();
+        else expect(typeof n.ariaLabel === "string" && n.ariaLabel.length > 0, n.id).toBe(true);
+      }
+    });
+  });
+
+  describe("places that are never saved or loaded: the more node", () => {
+    const more = nodeId.more(G);
+
+    it("ownPlaces never returns a more: id, whether it came from the saved layout or from this session", () => {
+      const m = model({ layout: { [more]: { x: 1, y: 2 }, "src:1": { x: 5, y: 6 } } });
+      expect([...ownPlaces(m, { moved: new Map([["more:cluster:2:Z", { x: 3, y: 4 }], ["src:2", { x: 7, y: 8 }]]) }).keys()].sort()).toEqual(["src:1", "src:2"]);
+      expect([...ownPlaces(m).keys()]).toEqual(["src:1"]);
+    });
+
+    it("layoutBatches skips a more: id and does not count it against the batch size", () => {
+      const batches = layoutBatches([["src:1", { x: 1, y: 1 }], [more, { x: 2, y: 2 }], ["src:2", { x: 3, y: 3 }]], 2);
+      expect(batches).toEqual([[{ node_id: "src:1", x: 1, y: 1 }, { node_id: "src:2", x: 3, y: 3 }]]);
+    });
+
+    it("descendantNodeIds and childNodeIds never return a more: id; moreNodeIds does that job for a drag", () => {
+      const m = oneGroup(60);
+      expect(descendantNodeIds(m, G).some((id) => id.startsWith("more:"))).toBe(false);
+      expect(descendantNodeIds(m, "src:1").some((id) => id.startsWith("more:"))).toBe(false);
+      expect(childNodeIds(m, G).some((id) => id.startsWith("more:"))).toBe(false);
+      expect(moreNodeIds(m, G)).toEqual([more]);
+      expect(moreNodeIds(m, "src:1")).toEqual([more]);
+      expect(moreNodeIds(model(), "src:1")).toEqual([nodeId.more(nodeId.cluster(1, "LVP01")), nodeId.more(nodeId.cluster(1, "LVP02")), nodeId.more(nodeId.cluster(1, UNGROUPED))]);
+      for (const id of ["point:1", "asset:10", "unid:10.0.0.9:8080", "src:99", "cluster:1:NOPE", "garbage"]) expect(moreNodeIds(model(), id), id).toEqual([]);
+    });
+  });
+
+  describe("initialView with a view", () => {
+    it("frames only the sources the filter leaves, the first of them first", () => {
+      // source 1 is all mapped (hidden), 2 and 3 are not
+      const m = model({ sources: [source(1, { clusters: [{ key: "K", points: [mappedTo(1, 10)] }] }), source(2, { clusters: [{ key: "K", points: [point(2, "x")] }] }), source(3)], unidentified: [] });
+      expect(initialView(m)?.nodes).toEqual([{ id: "src:1" }, { id: "src:2" }, { id: "src:3" }]);
+      expect(initialView(m, filtered)?.nodes).toEqual([{ id: "src:2" }, { id: "src:3" }]);
+    });
+
+    it("counts the default places over the visible sources only (the index among them)", () => {
+      // three hidden sources, then a placed one and an unplaced one: by index among ALL the unplaced one would lie 704 px down and fall out of the box
+      const hidden = (id: number) => source(id, { clusters: [{ key: "K", points: [mappedTo(id, 10)] }] });
+      const m = model({ sources: [hidden(1), hidden(2), hidden(3), source(4), source(5)], layout: { "src:4": { x: 0, y: 0 } }, unidentified: [] });
+      expect(initialView(m, filtered)?.nodes).toEqual([{ id: "src:4" }, { id: "src:5" }]);
+    });
+
+    it("with every source hidden there is nothing to frame (the whole graph is fitted)", () => {
+      const m = model({ sources: [source(1, { clusters: [{ key: "K", points: [mappedTo(1, 10)] }] })], unidentified: [] });
+      expect(initialView(m, filtered)).toBeUndefined();
+    });
+
+    it("without a filter it is what it was", () => {
+      expect(initialView(model(), NO_VIEW)).toEqual(initialView(model()));
+    });
+  });
+
+  describe("edge ids", () => {
+    it("are unique on every graph the view can make", () => {
+      const assets = [asset(10, null), asset(11, 10), asset(12, 10), asset(13, 11), asset(20, 21), asset(21, 20)];
+      const m = model({
+        assets,
+        sources: [
+          source(1, { clusters: [{ key: "G", points: pts(120, (i) => [10, 11, 12, 13, null, null][i % 6]) }, { key: "H", points: [mappedTo(900, 12), mappedTo(901, 13)] }], ungrouped: [mappedTo(950, 10)] }),
+          source(2, { clusters: [{ key: "K", points: [mappedTo(1000, 11), mappedTo(1001, 12), point(1002, "u")] }] }),
+        ],
+      });
+      const views: GraphView[] = [NO_VIEW, paged, filtered, closed(10), closed(11, 20), { ...paged, ...closed(10), unmappedOnly: true }, { ...paged, shown: new Map([[G, 80]]) }];
+      const opens = [none, everythingOpen(m), { sources: new Set([1, 2]), clusters: new Set<string>() }, openG];
+      for (const view of views) {
+        for (const open of opens) {
+          const { edges, nodes } = buildGraph(m, open, { view, animate: true });
+          expect(new Set(edges.map((e) => e.id)).size).toBe(edges.length);
+          expect(new Set(nodes.map((n) => n.id)).size).toBe(nodes.length);
+        }
+      }
+    });
   });
 });

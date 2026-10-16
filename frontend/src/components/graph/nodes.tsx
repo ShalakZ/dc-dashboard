@@ -1,8 +1,8 @@
 import { getBezierPath, Handle, Position, type ConnectionLineComponentProps, type Node, type NodeProps } from "@xyflow/react";
-import type { KeyboardEvent, MouseEvent } from "react";
+import { memo, type KeyboardEvent, type MouseEvent, type ReactElement } from "react";
 import { Icon } from "../Icon";
 import type {
-  AssetNodeData, ClusterNodeData, NodeActions, PointNodeData, SourceNodeData, UnidentifiedNodeData,
+  AssetNodeData, ClusterNodeData, MoreNodeData, NodeActions, PointNodeData, SourceNodeData, UnidentifiedNodeData,
 } from "../../lib/graph";
 import { protocolLabel, sourceStatus } from "../../lib/graphStatus";
 
@@ -26,11 +26,19 @@ const press = (action: (event: MouseEvent<HTMLElement>) => void) => (event: Mous
   action(event);
 };
 
-function Toggle({ id, name, expanded, onToggle }: { id: string; name: string; expanded: boolean; onToggle?: NodeActions["onToggle"] }) {
+/**
+ * `label` (W12b) replaces the name "Expand X" / "Collapse X": an asset's toggle hides its sub-assets and must not read like the one of a group or a source.
+ * `fold` draws a chevron instead of the minus and plus (the asset's fold: its "+" must not be read as the add handle's); the stylesheet turns it down while the
+ * sub-assets show and leaves it pointing right while they are hidden (`data-folded`).
+ */
+function Toggle({ id, name, expanded, onToggle, label, fold }: { id: string; name: string; expanded: boolean; onToggle?: NodeActions["onToggle"]; label?: string; fold?: boolean }) {
   if (!onToggle) return null;
   return (
-    <button type="button" className="nodrag" aria-label={`${expanded ? "Collapse" : "Expand"} ${name}`} onClick={press(() => onToggle(id))}>
-      {expanded ? "−" : "+"}
+    <button
+      type="button" className={fold ? "nodrag gnode-fold" : "nodrag"} data-folded={fold && !expanded ? "true" : undefined}
+      aria-label={label ?? `${expanded ? "Collapse" : "Expand"} ${name}`} onClick={press(() => onToggle(id))}
+    >
+      {fold ? <Icon name="chevron" /> : expanded ? "−" : "+"}
     </button>
   );
 }
@@ -143,8 +151,10 @@ function SourceNode({ id, data }: NodeProps<Node<SourceNodeData, "source">>) {
 }
 
 function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) {
-  const { label, count, mappedCount, expanded, onToggle, onMap, onNewAsset, onMenu, formWait } = data;
+  const { label, count, mappedCount, expanded, onToggle, onMap, onNewAsset, onMenu, formWait, visibleCount, shownCount } = data;
   const share = count > 0 ? Math.min(100, Math.round((mappedCount / count) * 100)) : 0;
+  // W12b: an open group that draws one page of its points says so. The line exists only then, and an open paged group has empty rows beside and below it, so the node may be a line taller.
+  const paged = expanded && visibleCount !== undefined && shownCount !== undefined && shownCount < visibleCount;
   return (
     <div className={onMenu ? "gnode gnode-cluster gprogress-host gnode-hasmenu" : "gnode gnode-cluster gprogress-host"}>
       <Handles>
@@ -154,6 +164,7 @@ function ClusterNode({ id, data }: NodeProps<Node<ClusterNodeData, "cluster">>) 
         </div>
         <MenuButton name={label} onMenu={onMenu} />
         <div className="muted">{mappedCount} mapped</div>
+        {paged && <div className="muted">{`${shownCount} of ${visibleCount} shown`}</div>}
         <MapButtons id={id} name={label} onMap={onMap} onNewAsset={onNewAsset} wait={formWait} />
         {/* The share of mapped points as a 3px strip on the bottom edge: absolutely placed, so it adds no height. The words stay in the line above. */}
         <span className="gprogress" aria-hidden="true" style={{ width: `${share}%` }} title={`${mappedCount} of ${count} mapped`} />
@@ -177,14 +188,47 @@ function PointNode({ id, data }: NodeProps<Node<PointNodeData, "point">>) {
   );
 }
 
+/**
+ * W12b: an asset with sub-assets has a toggle on its title row (a chevron: down while they show, right while hidden), and a hidden subtree that holds mapped points says
+ * how many in a small badge on the SAME row, so the node keeps its height (asset rows are `ROW` apart). A node with neither keeps the bare title as before.
+ */
 function AssetNode({ id, data }: NodeProps<Node<AssetNodeData, "asset">>) {
+  const { asset, children = 0, collapsed = false, mappedInside = 0, onToggleAssets } = data;
+  const toggle = children > 0 && onToggleAssets !== undefined;
+  const badge = collapsed && mappedInside > 0;
   return (
     <div className="gnode gnode-asset">
       <Handles>
-        <div className="node-title">{data.asset.name}</div>
+        {toggle || badge ? (
+          <div className="row">
+            <div className="node-title">{asset.name}</div>
+            {badge && <span className="gnode-mapped" title={`${mappedInside} mapped inside`}>{`${mappedInside} mapped`}</span>}
+            {toggle && (
+              <Toggle id={id} name={asset.name} expanded={!collapsed} onToggle={onToggleAssets} label={`${collapsed ? "Show" : "Hide"} sub-assets of ${asset.name}`} fold />
+            )}
+          </div>
+        ) : (
+          <div className="node-title">{asset.name}</div>
+        )}
       </Handles>
       {/* After the two handles above on purpose: an edge with no sourceHandle (every asset-to-asset edge) starts at the FIRST source handle in the DOM, which must stay the default one. */}
-      <AddHandle id={id} name={data.asset.name} onAdd={data.onAdd} wait={data.formWait} />
+      <AddHandle id={id} name={asset.name} onAdd={data.onAdd} wait={data.formWait} />
+    </div>
+  );
+}
+
+/**
+ * W12b: the "Show 50 more (70 left)" control at the end of a paged group's points. It stands in the point column, a row like a point but with no handles (no edge
+ * joins it) and no label of its own: the builder made its wrapper unfocusable, so the one stop is the button, named for the group. `nokey` is React Flow's own
+ * opt-out of the node's key handling, so Enter and Space on the button are the button's; a press never selects the node.
+ */
+function MoreNode({ data }: NodeProps<Node<MoreNodeData, "more">>) {
+  const { clusterId, label, left, step, onMore } = data;
+  return (
+    <div className="gnode gnode-more">
+      <button type="button" className="nodrag nokey" aria-label={`Show ${step} more points of ${label}, ${left} left`} onClick={press(() => onMore?.(clusterId))}>
+        {`Show ${step} more (${left} left)`}
+      </button>
     </div>
   );
 }
@@ -199,11 +243,23 @@ function UnidentifiedNode({ data }: NodeProps<Node<UnidentifiedNodeData, "uniden
   );
 }
 
+/**
+ * W12b speed: React Flow passes every node its absolute position, its stacking order and whether it is being dragged, and re-renders the node whenever
+ * one of them changes (a drag, a compaction of rows, Tidy layout), though none of them is drawn by a node's body. A node is the same when what it DOES
+ * draw is: its id and type, its `data` (the page and the graph reuse the old object of an unchanged node, so the reference is the test), whether it
+ * is selected, and its measured size. Everything else is ignored on purpose; a prop added here later must be one the bodies read.
+ */
+type Watched = Pick<NodeProps, "id" | "type" | "data" | "selected" | "width" | "height">;
+const sameNode = (a: Watched, b: Watched) =>
+  a.id === b.id && a.type === b.type && a.data === b.data && a.selected === b.selected && a.width === b.width && a.height === b.height;
+const memoNode = <Props extends Watched>(component: (props: Props) => ReactElement) => memo(component, sameNode);
+
 /** Defined once at module level: React Flow warns (and re-mounts every node) if this object changes between renders. */
 export const nodeTypes = {
-  source: SourceNode,
-  cluster: ClusterNode,
-  point: PointNode,
-  asset: AssetNode,
-  unidentified: UnidentifiedNode,
+  source: memoNode(SourceNode),
+  cluster: memoNode(ClusterNode),
+  point: memoNode(PointNode),
+  asset: memoNode(AssetNode),
+  unidentified: memoNode(UnidentifiedNode),
+  more: memoNode(MoreNode),
 };

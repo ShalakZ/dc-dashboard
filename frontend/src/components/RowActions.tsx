@@ -12,6 +12,8 @@ export interface RowAction {
   to?: string;
   /** A disabled action is a disabled button: skipped by the arrow keys and cannot be activated. */
   disabled?: boolean;
+  /** Why a disabled action cannot be used. The Discovery canvas menus (`GraphContextMenu`) show it under the label; `RowActions` itself ignores it. */
+  reason?: string;
   tone?: "danger";
 }
 

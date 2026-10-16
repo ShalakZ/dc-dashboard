@@ -97,6 +97,10 @@ export default defineConfig({
       name: "w7f",
       testMatch: "w7f.spec.ts",
       dependencies: ["w7e"],
+      // The chained-skeleton case (line 470) times a 150 ms fade against answers held back by 130 ms: on this machine it misses by one frame about one run in
+      // three (W7i, W7j and W12b saw it, always with the same numbers, and the Discovery wave does not touch that page). One retry keeps a flake from
+      // stopping the whole chain behind it; a real regression fails twice.
+      retries: 1,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1600, height: 1000 } },
     },
     {
@@ -231,6 +235,15 @@ export default defineConfig({
       name: "w12a",
       testMatch: "w12a.spec.ts",
       dependencies: ["w11"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
+    // WRITES NOTHING and needs nothing from the stack, like w7u: every case answers GET /api/discovery/graph (and the layout's PUT and DELETE) through page.route from a
+    // generated model (e2e/graphModel.ts), so it may stand after w12a. It measures in the page at 1440 x 900 and 1024 x 640 (each case sets its size) and keeps the
+    // graph's view settings (the Unmapped only switch, collapsed assets) in the browser's own storage, which a fresh context starts without.
+    {
+      name: "w12b",
+      testMatch: "w12b.spec.ts",
+      dependencies: ["w12a"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
   ],

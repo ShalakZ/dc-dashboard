@@ -19,7 +19,18 @@ vi.mock("@xyflow/react", async (importOriginal) => {
     }),
     ReactFlow: ({ nodes, nodeTypes, children }: any) => (
       <div data-testid="flow">
-        {nodes.map((n: any) => { const Node = nodeTypes[n.type]; return <div key={n.id} data-id={n.id}><Node id={n.id} data={n.data} /></div>; })}
+        {nodes.map((n: any) => {
+          const Node = nodeTypes[n.type];
+          // The wrapper's name, role and flags as the real wrapper sets them (a node's own `focusable`/`selectable`/`draggable` beat the canvas-wide defaults, which are on).
+          return (
+            <div
+              key={n.id} data-id={n.id} role={(n.focusable ?? true) ? "group" : undefined} aria-label={n.ariaLabel} tabIndex={(n.focusable ?? true) ? 0 : undefined}
+              data-selectable={String(n.selectable ?? true)} data-draggable={String(n.draggable ?? true)} data-focusable={String(n.focusable ?? true)}
+            >
+              <Node id={n.id} data={n.data} />
+            </div>
+          );
+        })}
         {children}
       </div>
     ),

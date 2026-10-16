@@ -15,6 +15,27 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w12b (2026-10-16, MERGE_PENDING)
+
+w12b (Discovery speed and navigation) makes the Discovery canvas quick on big graphs and adds the tools for working through them. It was
+measured first: the slow drag over about 100 to 150 points came from the dashed lines between a group and its points, which are tens of
+thousands of pixels long, so a group that draws more than 150 points now draws them solid (nothing else about them changes), and hovering
+or opening a group in a graph of about 2,000 nodes redraws only the nodes that changed. New in the bar above the canvas: a small arrow
+beside **Collapse all** and beside **Expand all** opens a menu to close or open only the **selection** (the sources, groups and assets
+you selected) or one **branch** (them and everything under them), the right-click menus of nodes, selections and empty canvas offer the
+same, and a message says how many opened or closed; an **Unmapped only** switch hides every point that is already mapped, the groups and
+sources with nothing left to map, and the lines to assets, and the summary then reads `Showing 42 of 60 points, 3 sources, 18 mapped`
+(remembered in your browser; **Find** still reaches a hidden node and turns the switch off for it). An open group of more than 50 points
+draws 50, with a **Show 50 more (70 left)** button at the end of the list; a point that is not drawn yet keeps its line to its asset, so
+no mapping disappears. An asset with sub-assets has a small arrow to fold them away (a folded asset shows how many points are mapped inside it;
+remembered in your browser; adding a sub-asset under a folded asset unfolds it). The arrow keys move between nodes (Up and Down between neighbours, Right to the first child, Left to the
+parent), Enter opens or closes a source, a group or an asset, the Menu key opens the actions, and every node has a name for a screen
+reader such as `LVP01, group of 6 points, 6 mapped, open`. Expand all still never draws more than 600 new nodes in one go. One thing
+to know: rows close up when you filter, fold or close, and a node you pinned by hand with an Alt-drag keeps its place, so closed-up rows can
+lie over it; **Tidy layout** puts everything back. No migration, no new permission, front end only, and nothing new in the Audit log.
+The usual steps of [Upgrading and going back](docs/upgrading.md) are all it needs; the code to go back to is `2d1493c`. See
+[Discovery](docs/sources-and-discovery.md) and, for the speed script, [End-to-end tests](docs/end-to-end-tests.md).
+
 ## W12a (2026-10-16, merge commit 4e14905)
 
 W12a (mapping actions) lets you take a mapping off an asset, or move it to another asset, from the places you see it, with one
