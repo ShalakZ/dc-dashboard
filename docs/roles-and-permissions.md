@@ -58,6 +58,15 @@ with it, and the API refuses a person without the permission with a 403 whatever
 `assets.edit` also lets a person move assets in the Assets Tree ([Moving assets](assets-and-kinds.md#moving-assets)); deleting the picked
 assets from the tree's pick bar needs `assets.delete` as well ([Deleting several assets](assets-and-kinds.md#deleting-several-assets)).
 
+`assets.edit` also covers taking a mapping off an asset or moving it to another one, and the 10-second Undo of either and of a mapping made
+in Discovery: **Unmap…** and **Move to another asset…** on an asset's Metrics table, on a source's Points page and on the Discovery canvas
+([Taking mappings off an asset or moving them](assets-and-kinds.md#taking-mappings-off-an-asset-or-moving-them)), and the routes under
+`/api/mappings`, `GET` included. On the Discovery canvas it is also the permission to make an asset with the New asset form (**New
+asset…**, **New sub-asset…**, the **+** on an asset node), which needs `assets.view` as well because it lists the assets. `discovery.accept` is
+what maps: **Map…**, the drop onto an asset, **Review mappings** and **Create assets…**. The two are separate: a role with
+`discovery.accept` but not `assets.edit` maps and sees the toast `Mapped 6 points to Room 1.` with no Undo, and a role with `assets.edit`
+but not `discovery.accept` can unmap and move but not map ([Sources and discovery](sources-and-discovery.md#discovery)).
+
 ## Built-in roles
 
 Viewer, Operator and Admin exist from the start. They cannot be edited or deleted (the API answers 409). Their permissions come from

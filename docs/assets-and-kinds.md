@@ -1,8 +1,9 @@
 # Assets and kinds
 
 This page is for the people who build and maintain the asset tree: the hierarchy of sites, rooms, panels, meters and equipment that
-dashboards, billing and tariffs hang from. It covers asset kinds (what each kind of asset looks like, and the Asset kinds page) and
-moving assets in the Assets Tree, including what a move does to billing.
+dashboards, billing and tariffs hang from. It covers asset kinds (what each kind of asset looks like, and the Asset kinds page),
+moving assets in the Assets Tree, including what a move does to billing, and taking a point's mapping off an asset or moving it to
+another asset.
 
 ## Asset kinds
 
@@ -16,7 +17,9 @@ button at the top of the Assets Tree opens the page.
 
 **In the asset dialogs.** The kind list in the Add and Edit asset dialogs comes from this page, and a new kind typed there under
 "Other…" is added here when the asset is saved **if you may manage asset kinds**; without that permission the dialog says so and the
-asset keeps the text.
+asset keeps the text. The **New asset** dialog on the Discovery canvas (**New asset…**, **New sub-asset…**, the + on an asset node; see
+[Sources and discovery](sources-and-discovery.md#discovery)) is this same form with the same save and the same toast, `Asset created`, so
+the icon you choose there is the icon the asset is saved with and a kind typed there is registered under the same rule.
 
 **Icons.** The 48 icons (an asset or a kind chooses one, or Automatic) are in six groups (Structure, Power, Cooling, IT and network,
 Monitoring and safety, Other) with a search box that finds an icon by its name, a keyword or its short name ("transfer" finds ATS and
@@ -173,5 +176,35 @@ from them. A single asset is still deleted from its own page, and the bar's Dele
   scrolling the page; after Cancel, or when some assets stayed, it goes back to the Delete button. If the open asset was deleted, or sits inside a deleted branch, the page moves to the parent of that deleted branch (the Assets
   Tree itself when it was a top-level asset), at once and not at the end. The tree, the fleet summary, Billing, dashboards, tariffs and
   sources refresh when the last request is done.
+
+## Taking mappings off an asset or moving them
+
+A mapping ties one point of a source to one metric of one asset. Holders of **Change assets** (`assets.edit`) can take a mapping off its
+asset, or move it to another asset, without deleting anything else, and put either back for ten seconds. The same two actions are on
+three screens: the asset page (below), the Points page of a source and the Discovery canvas (see [Sources and
+discovery](sources-and-discovery.md#discovery)). Without `assets.edit` none of them is drawn, and the routes answer 403.
+
+- **On the asset page.** With `assets.edit` the **Metrics** table has a last column with a menu button on every row, named `Actions for
+  <metric>` (a `custom` row reads `custom (kW)`, and the point's number is added, `custom (kW) #12`, when two rows would read the same).
+  Its items are **Unmap…** and **Move to another asset…**. A viewer sees the table as before, with no column.
+- **Unmap…** asks first, `Unmap "<metric>" from <asset>?`, and says what it changes: the point stops counting toward the asset, billing
+  for months that are still open is recalculated without it, closed months keep their billed figures (see [Closing a
+  month](dashboards-and-billing.md#closing-a-month)), and charts and dashboards show the asset without the point. The point and its
+  source stay as they were; the point is simply unmapped again, and can be mapped again from the Points page or Discovery.
+- **Move to another asset…** opens a dialog with a **Move to** choice of every other asset (indented as in the tree) and the same
+  billing words the other way round: months that are still open are recalculated with the point under the asset you choose, closed
+  months keep their billed figures. **Move** stays off until an asset is chosen. An asset has each metric once (any number of `custom`
+  ones), and this screen does not know what the other asset already has, so the server decides: when it already has the metric,
+  nothing changes and the toast says `<asset> already has <metric>.` Choosing an asset whose kind is a place (a room, a hall, a site)
+  shows a note, `Room 1 is a room; meters usually belong to a Panel or Rack. Move here anyway?`, which never blocks the move.
+- **The answer.** The toast says `Unmapped 1 point from Room 1.` or `Moved 1 point to Panel 1.` and carries **Undo** for 10 seconds
+  (hovering or focusing it holds it). Undo of an unmap makes the mapping again with the same point, asset, metric, scale, interval and
+  custom unit (it gets a new number), and Undo of a move puts it back on the asset it came from, but only while it is still there: a
+  mapping someone has changed since is left alone and named. After the change the focus goes to the menu button of the row that took the
+  place of the changed one (the next, else the one before), else to the **Metrics** heading.
+- **On the Points page.** The row menu's **Unmap** is now **Unmap…** (it used to act at once): it asks the same question, offers the
+  same Undo, and the point stays in the list, now unmapped.
+- **In the audit log.** An unmap is one `mapping.deleted` entry. It records the point, the asset and the metric, and also the
+  mapping's `scale`, `interval_seconds` and `custom_unit`, so the entry alone says what to put back.
 
 Related: [Sources and discovery](sources-and-discovery.md), [Dashboards and billing](dashboards-and-billing.md), [Roles and permissions](roles-and-permissions.md), [Screens](screens.md)

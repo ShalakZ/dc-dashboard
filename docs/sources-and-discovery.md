@@ -213,20 +213,29 @@ data-retrieval requests the connectors already use, nothing else.
    **Selecting several nodes.** Shift-drag on empty canvas draws a selection box (a plain drag still pans); Ctrl-click, or Cmd-click on
    a Mac, adds or removes one node. Two or more selected nodes light their paths (above); one does not. The selection survives
    opening and closing nodes and the graph refreshing. Drag any selected node and the whole selection moves; the children rule above applies once, so a source and its own group selected together move
-   their points once. Dropping a selection on an asset never maps (only one group or point maps). A frame is drawn over the
+   their points once. Dropping a selection on an asset maps it only when it is made of unmapped points of one source (item 6, **Several
+   points at once**); any other selection is only moved, and a group or a point dropped alone still maps. A frame is drawn over the
    selected nodes: click empty canvas or press Esc to clear the selection, because the buttons under the frame do not answer
    until you do.
 
    **Right-click menus.** Right-click a node for the actions it has. A source: **Details**, **Collapse** or **Expand**, **Create
-   assets…**, **Remove**. A group: **Collapse** or **Expand**, **Map…**, **New asset…**. A point: **Map…**. Each is the same action
-   as the button on the node, and an item is there only when the button is for your role (**Map…**, **New asset…** and **Create
-   assets…** need `discovery.accept`, **Remove** needs `discovery.edit`, so a role that can only view sees Details and Collapse or
-   Expand). An asset, an unidentified service, empty canvas and a selection frame open the canvas menu instead: **Expand all**,
-   **Collapse all**, **Tidy layout** and **Fit view**, greyed out when the button above the canvas is. From the keyboard, press the
-   Menu key or Shift+F10 on a node that has the focus; anywhere else inside the canvas the canvas menu opens at its centre. Up and
-   Down move (and wrap), Home and End jump, Enter chooses, Esc closes the menu and puts the focus back on the node, and Tab closes it too.
-   A click elsewhere, scrolling, resizing, moving the view and the graph refreshing close it too. The menu is never the only way:
-   every action also has a visible button.
+   assets…**, **Remove**. A group: **Collapse** or **Expand**, **Map…**, **New asset…**. A point: **Map…**, and **New asset…** while it is
+   unmapped. A mapped point also holds **Unmap…** and **Move to another asset…**, and a group with mapped points (the Ungrouped bag
+   too) **Unmap this group…** and **Move this group's mappings…**. An asset holds **New sub-asset…** and, for each source with points
+   mapped to it (the first five by name), `Unmap everything from <source>…`. Most are the same action as a button on the node, and
+   an item is there only when the action is for your role (**Map…**, **New asset…** on a group or a point and **Create assets…** need
+   `discovery.accept`, **Remove** needs `discovery.edit`, the unmap and move items need `assets.edit`, and **New sub-asset…** and
+   **New asset…** (a point's, and the canvas's below) need `assets.edit` and `assets.view`, so a role that can only view sees Details
+   and Collapse or Expand). An unidentified service, a selection frame, empty canvas and an asset with no item for your role open the
+   canvas menu instead: **Expand all**, **Collapse all**, **Tidy layout** and **Fit view**, greyed out when the button above the
+   canvas is, and, on empty canvas only, **New asset…** for a role that has it. A mapped point and a mapped group also carry a small
+   button at the right of their title, named `Mapping actions for <name>`, which opens the same menu beside it; it adds no height to
+   the node. From the keyboard, press the Menu key or Shift+F10 on a node that has the focus; anywhere else inside the canvas the
+   canvas menu opens at its centre. Up and Down move (and wrap), Home and End jump, Enter chooses, Esc closes the menu and puts the
+   focus back where it was (the node, or its `Mapping actions` button), and Tab closes it too. A click elsewhere, scrolling,
+   resizing, moving the view and the graph refreshing close it too. Three items have no button of their own: `Unmap everything from
+   <source>…` and the **New asset…** of empty canvas and of an unmapped point; the Menu key reaches them. Unmapping and moving,
+   the new asset forms and the + on an asset are in item 6.
 
    **Find.** The **Find** button at the top right of the canvas, or Ctrl+K (Cmd+K on a Mac) while the canvas has the focus (click
    empty canvas first, or with the focus on the **Find** or **Snap to grid** button), opens a search card over the canvas. Type part of
@@ -277,11 +286,12 @@ data-retrieval requests the connectors already use, nothing else.
    mappings** dialog: one row per unmapped point with a guessed metric, scale and interval, all
    editable; rows whose metric the asset already has start unchecked, and a conflicting selection
    cannot be committed. "Create mappings" commits every checked row in one transaction. Drop a cluster
-   on empty canvas and a bar offers "Create asset from this cluster", which opens the same dialog with
+   on empty canvas and a bar offers `Create asset "LVP01" from this cluster?` with a **Create asset…** button, which opens
+   **New asset** (below) for a role that may make assets, or else the same dialog with
    a new asset named after the cluster and a parent of your choice; the bar stays until you use or
    dismiss it. The same dialog opens from keyboard-reachable buttons, for admins only: **Map…** on
-   unmapped clusters and unmapped points, **New asset…** on clusters only. The Ungrouped bag and fully
-   mapped clusters get neither.
+   unmapped clusters and unmapped points, **New asset…** on clusters (and in the menu of an unmapped point). The Ungrouped bag and fully
+   mapped clusters get neither. After **Create mappings** a toast says `Mapped 6 points to Room 1.` (see **The Undo after mapping**).
 
    **Create assets…** on a source node (needs `discovery.accept`) is the click path for a whole source. It opens
    one dialog with one parent asset (or the top level) and a row per group that can become an asset: a tick, the asset's name (the
@@ -294,6 +304,80 @@ data-retrieval requests the connectors already use, nothing else.
    bag, groups that are fully mapped and groups where every point needs a decision are left out (the dialog names the last kind), and
    a point whose metric repeats another one in its group stays unmapped, as the row says. The button is missing on a source with no
    such group.
+
+   **The Undo after mapping.** The toast after **Create mappings** reads `Mapped 6 points to Room 1.` and, for a person who holds
+   `assets.edit`, carries **Undo** for 10 seconds (hovering the toast or focusing it holds it). The toast of **Create N assets** keeps
+   its own words (`Created 3 assets`, or `Created 2 of 3 assets` when a group failed) and carries the Undo for the mappings that were
+   made. A role with `discovery.accept` but not `assets.edit` maps and gets the same toast with no Undo. Undo takes off the mappings that
+   step made, each only if it is still on the asset it was made on (one that was moved since is named and left alone), and it never
+   deletes an asset: an asset the step created stays, because it may have gained sub-assets or rates meanwhile, and the toast says so,
+   `Unmapped 6 points. Room 1 stays; delete it from Assets Tree if you do not need it.` The source stays enabled, as mapping left it
+   (item 4), and the collector goes on polling it.
+
+   **Unmapping and moving** (needs `assets.edit`). A mapping can be taken off its asset, or moved to another asset, without leaving
+   Discovery: with the `Mapping actions for <name>` button of a mapped point or group, from the right-click menu, or with `Unmap
+   everything from <source>…` on an asset, which takes off every point of that source mapped to that asset. **Unmap…** asks first,
+   `Unmap "Active power" from Room 1?` (`Unmap 6 points from Room 1?` for several, `from 2 assets` when they stand on two), and says
+   that billing for months that are still open is recalculated without the points, that closed months keep their billed figures, and
+   that charts and dashboards show the asset without them. **Move to another asset…** opens a dialog with a **Move to** choice of
+   assets (the asset the mappings are on now is left out) and the matching sentence, `Billing for months that are still open is
+   recalculated with them under the asset you choose; closed months keep their billed figures.` **Move** stays off until an asset is
+   chosen, and while the choice would give that asset the same metric twice, `"Active power" would clash: Room 1 already has that
+   metric.` (an asset may have any number of `custom` mappings). Points, scans and sources are not touched. The asset page and the
+   Points page have the same two actions ([Assets and kinds](assets-and-kinds.md#taking-mappings-off-an-asset-or-moving-them)).
+
+   The work is done one mapping at a time, in the order shown, and each mapping is read from the server first. The first request that
+   fails stops the rest, and the toast says so in words: `Moved 2 of 5. "Voltage" could not be moved: The asset already has that
+   metric. 2 were not tried.` If the server gives no answer to a request, the toast says that mapping `may or may not have been`
+   unmapped or moved, so look at the asset before you try again. A mapping that was moved to another asset after the question was
+   shown is not unmapped (`"Voltage" was moved since, so it was left alone.`), and one that is already gone counts as done, not as an
+   error. While one change is running a new Unmap or Move is refused with `Still working on the last change.` When the change
+   worked, even in part, the toast carries **Undo** for 10 seconds; at most three toasts show at once, so a fourth change in quick
+   succession pushes the oldest toast, and its Undo, out. **Undo** of an unmap makes each mapping again with the point, asset,
+   metric, scale, interval and custom unit it had (it is a new mapping, with a new number); if a point was mapped again meanwhile it
+   stops there, says `It is mapped again, or the asset already has that metric.` and counts what it put back. **Undo** of a move puts
+   each mapping back on the asset it came from, but only if it is still on the asset the move put it on; one that has changed since
+   is named and left alone (`"Voltage" was changed since, so nothing was undone for it.`). The Undo does not depend on the page, so
+   it works if you have gone elsewhere in the app. Each unmap is one `mapping.deleted` audit entry, which also records `scale`,
+   `interval_seconds` and `custom_unit`, so the entry alone is enough to make the mapping again once the toast is gone.
+
+   **Rooms and halls.** Meters usually belong to a panel or a rack, not to the room around them. When the asset you map to (in
+   **Review mappings**, under **Existing asset**) or move to is a place, a note under the choice says `Room 1 is a room; meters
+   usually belong to a Panel or Rack. Map here anyway?` (`Move here anyway?` in the Move dialog). A place is an asset whose kind has
+   the site, building, hall, room or row icon on the Asset kinds page, or, for a kind that is not on that page, whose name suggests one
+   (the same guess that draws its icon); a rack is not a place. It is only a note: nothing is blocked, and its space is reserved, so
+   the dialog does not jump when it appears.
+
+   **New asset, with the real form** (needs `assets.edit` and `assets.view`). **New asset…** on a group, on an unmapped point (its
+   menu) and on empty canvas, **New sub-asset…** on an asset and the + below open the **New asset** dialog, the same form as Add asset
+   on the Assets Tree: name, parent, kind and icon, saved with the same toast, `Asset created`, and a kind typed under Other… is added
+   to the registry if you may manage kinds (`assets.kinds`). Name starts as the group's or the point's name, and Parent as the asset
+   you pressed **New sub-asset…** or the + on (none otherwise). Empty canvas and an asset only make the asset. For a group or a
+   point the **Review mappings** dialog opens next on the new asset, to choose the points (the group's or point's **New asset…** also
+   needs `discovery.accept`), and the New asset dialog says so before you save: `Next you choose the points to map. Cancel keeps the
+   new asset.` Saving makes the asset at once, so cancelling the Review leaves the new, empty asset in the tree; delete it from the
+   Assets Tree if you do not want it. While the asset list is still being read the items are greyed out, and a click is answered by a
+   message. A role with `discovery.accept` but without `assets.edit` and `assets.view` keeps the older way: the Review's own **New
+   asset** choice, with a name and a parent only.
+
+   **The + on an asset.** An asset node has a small round + at its top right corner (not the + that opens a source or a group; needs
+   `assets.edit` and `assets.view`). It shows while the pointer is on the node, while the node or the + has the keyboard focus (Tab to
+   the node, then Tab again) and while the node is selected. Click it, or press Enter or Space on it, and **New asset** opens with
+   that asset as the parent. You can also drag from it and let go on empty canvas: a dashed line follows the pointer and the same
+   dialog opens. Letting go over a node or a control does nothing, and no edge is ever made by hand. A touch screen cannot drag from
+   it; tap it, or use **New sub-asset…** in the node's menu. A screen reader reads it as `Add a sub-asset under <asset>`.
+
+   **Several points at once.** Select unmapped points of one source (Shift-drag a box, or Ctrl-click) and drag them together onto an
+   asset: one **Review mappings** dialog opens for all of them (`6 unmapped points from Plant OPC`) and they are mapped in one
+   request. If a selected point is already mapped, or the points come from two sources, nothing opens: a message says why (`2 of the
+   selected points are already mapped. Unmap them first, or select only unmapped points.` or `These points come from different
+   sources. Select the points of one source at a time.`) and the nodes go back to where they were. A selection with a group, a source
+   or an asset in it is only moved, as before. Needs `discovery.accept`.
+
+   **Who may do what.** Mapping (**Map…**, the drop, **Review mappings**, **Create assets…**) needs `discovery.accept`, and the page
+   itself `discovery.view`. Unmapping, moving, Undo and everything that makes an asset (**New asset…**, **New sub-asset…**, the +) need
+   `assets.edit`, and the New asset form also `assets.view`, because it lists the assets; a custom role may hold either side without
+   the other. The page only hides what a role lacks: each route checks the permission itself and answers 403.
 7. **Credentials.** Click a source that shows "needs credentials" (or press its **Details** button) to open its side panel, enter the
    secret (and the user name for OPC UA) and save: the source is browsed again. Secrets are stored
    encrypted and never returned by the API.
@@ -331,10 +415,14 @@ In the dev stack, a scope with targets `simulator` and ports `9000, 4840, 5020` 
 simulator protocols.
 
 Who may scan, map and accept results is set by the `sources.*` and `discovery.*` permissions (removing leftovers needs
-`discovery.edit`, Create assets… `discovery.accept`); see [Roles and permissions](roles-and-permissions.md).
+`discovery.edit`, Create assets… `discovery.accept`; unmapping, moving, the Undo and making assets from Discovery need `assets.edit`);
+see [Roles and permissions](roles-and-permissions.md).
 
 For scripts: `DELETE /api/discovery/layout` (`discovery.edit`) removes every saved node position and answers 204; calling it again is
 harmless, it writes no audit row, and `PUT /api/discovery/layout` still saves positions afterwards. It is what **Tidy layout** sends.
+`GET /api/mappings/{id}` (`assets.edit`) answers one mapping with every stored value (`point_id`, `asset_id`, `metric`, `scale`,
+`interval_seconds`, `custom_unit`) or a 404 `mapping not found`; unmapping, moving and their Undo read it before they write.
+`DELETE /api/mappings/{id}` still answers 204.
 Removing discovered sources is `POST /api/discovery/sources/remove` with `{"source_ids": [...]}`, 1 to 500 ids in a
 request (more is refused with a 422). It answers which sources were removed and which were skipped, each with the reason `mapped`,
 `manual` or `gone`, and refuses with a 409 and removes nothing while a scan is queued or running. Each scan in `GET /api/scans` carries
