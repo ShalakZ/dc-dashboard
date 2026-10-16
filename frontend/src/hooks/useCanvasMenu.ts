@@ -14,6 +14,8 @@ export interface CanvasMenu {
   via: "pointer" | "key";
   /** Where the focus goes when the menu closes (looked up when called: the element may have been replaced since). */
   returnFocus: () => HTMLElement | null;
+  /** The button the menu was opened from (`openFor`), else null: a press on it while the menu stands closes the menu and the click after it does not open it again. */
+  anchor: HTMLElement | null;
 }
 
 /** What a mouse event gives, whether it is React's or the DOM's. */
@@ -46,11 +48,18 @@ const escapeId = (id: string) => id.replace(/["\\]/g, "\\$&");
  * Opening is idempotent for the keyboard (a second open of the same target while its keyboard menu stands is ignored, and so is the
  * browser's own `contextmenu` echo within KEY_ECHO_MS); a pointer open anywhere else replaces the menu. A new `model` closes it: it holds
  * callbacks of nodes that may be gone.
+ *
+ * A node's own menu button opens its menu with `openFor(nodeId, button)`: next to the button, and a second press on that button closes the menu
+ * (the menu closes itself on any press outside it, the button's click would then open it again, so the press is noted first, see `pressed`).
  */
 export function useCanvasMenu({ model, canvas }: { model: unknown; canvas: RefObject<HTMLElement | null> }) {
   const [menu, setMenu] = useState<CanvasMenu | null>(null);
   const last = useRef<{ key: string; via: "pointer" | "key"; at: number } | null>(null);
   const sequence = useRef(0);
+  // The menu as the next press will find it, and the button that press landed on while its menu stood (null: it was not a press on the menu's own button).
+  const shown = useRef<CanvasMenu | null>(null);
+  shown.current = menu;
+  const pressed = useRef<HTMLElement | null>(null);
 
   const close = useCallback(() => {
     last.current = null;
@@ -64,13 +73,28 @@ export function useCanvasMenu({ model, canvas }: { model: unknown; canvas: RefOb
   );
   const selectionElement = useCallback(() => canvas.current?.querySelector<HTMLElement>(SELECTION) ?? null, [canvas]);
 
-  const show = useCallback((target: MenuTarget, at: MenuAt, via: "pointer" | "key", returnFocus: () => HTMLElement | null) => {
+  // Capture phase on the document, so it runs before the menu's own "a press outside closes me" listener (bubble phase) takes the menu away. A key press
+  // forgets the press: a button pressed and then left with no click (a drag away) must not swallow the next, keyboard, open.
+  useEffect(() => {
+    const note = (event: Event) => {
+      const anchor = shown.current?.anchor ?? null;
+      pressed.current = event.type === "pointerdown" && anchor && event.target instanceof Node && anchor.contains(event.target) ? anchor : null;
+    };
+    document.addEventListener("pointerdown", note, true);
+    document.addEventListener("keydown", note, true);
+    return () => {
+      document.removeEventListener("pointerdown", note, true);
+      document.removeEventListener("keydown", note, true);
+    };
+  }, []);
+
+  const show = useCallback((target: MenuTarget, at: MenuAt, via: "pointer" | "key", returnFocus: () => HTMLElement | null, anchor: HTMLElement | null = null) => {
     const key = keyOf(target);
     const before = last.current;
     const now = Date.now();
     if (before && before.key === key && before.via === "key" && (via === "key" || now - before.at < KEY_ECHO_MS)) return;
     last.current = { key, via, at: now };
-    setMenu({ id: ++sequence.current, target, at, via, returnFocus });
+    setMenu({ id: ++sequence.current, target, at, via, returnFocus, anchor });
   }, []);
 
   const point = (event: PointerLike, anchor: Element | null): MenuAt =>
@@ -110,5 +134,18 @@ export function useCanvasMenu({ model, canvas }: { model: unknown; canvas: RefOb
     }
   }, [canvas, centre, nodeElement, show]);
 
-  return { menu, openNode, openPane, openSelection, openFromKey, close };
+  /**
+   * The node's own menu button: the node's menu next to the BUTTON (the right-click and Shift+F10 openers anchor at the pointer and the node), the focus
+   * returning to the button, or to the node when the button is gone by then (an unmap takes a point's button away). Pressing the button again while its
+   * menu stands only closes it.
+   */
+  const openFor = useCallback((nodeId: string, anchor: HTMLElement) => {
+    if (pressed.current === anchor) {
+      pressed.current = null; // the second half of a press that already closed the menu
+      return;
+    }
+    show({ kind: "node", id: nodeId }, { box: boxOf(anchor) }, "key", () => (anchor.isConnected ? anchor : nodeElement(nodeId)), anchor);
+  }, [nodeElement, show]);
+
+  return { menu, openNode, openPane, openSelection, openFromKey, openFor, close };
 }

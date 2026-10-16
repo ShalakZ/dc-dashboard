@@ -9,7 +9,7 @@ spec guards, and the two scratch-stack self-tests. The unit tests are on [Develo
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Thirty-one specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Thirty-five specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`E2E_BASE_URL` changes it). `frontend/e2e/playwright.config.ts` makes each spec its own project and runs them one at a time in the
 order below, each depending on the one before; all but `journey` use a 1600×1000 window unless a spec sets its own sizes. Its
 `global-setup.ts` waits up to 120 s for the stack and refuses a database that already has users.
@@ -227,7 +227,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   create. Create assets on the collapsed source node opens one dialog with a row per group and creates one asset each under the chosen parent.
   At 1440 and 1024 px neither Scans nor Discovery scrolls sideways and the drawer fits, and a fresh load of Discovery at 1024×640 opens on the first
   sources (the first Create assets button is inside the canvas and the node text is at least 9 px at the opening zoom).
-- `w7s.spec.ts` (its own project, last in the list, after `w7r`, at 1440×900 unless a case sets its own size) checks deleting several assets
+- `w7s.spec.ts` (its own project, after `w7r`, at 1440×900 unless a case sets its own size) checks deleting several assets
   from the Assets Tree and telling the open asset from the picked ones. Each case builds its own small tree through the API, named `W7s <run> ...`
   (accounts and roles `w7s-`), and removes what it made. With two leaves picked and a third open, the open row is not on the tint and the picked
   rows are, the bar says `2 picked` and its count carries the "open asset is not counted" tooltip; Delete opens a dialog that lists both names,
@@ -244,6 +244,19 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   pick; with the stored tree width 220 its buttons lie inside the bar, and the bar is 32 px high in a column of 277 px and 64 px in one of 276 px
   or less for the admin, but 32 px at every width for the role without Delete. The browser prints its own console lines for the refusals the app
   handles on purpose (the 404s of a vanished pick, the 409s of a grown branch, the 403 of a role that lost the permission); they are not app errors.
+- `w12a.spec.ts` (its own project, last in the list, after `w11`, the tail of the chain; at 1440 and 1024 px) checks the mapping actions.
+  It works on one group of the simulator's OPC UA source: it records that group's mappings through the API first and puts every one back
+  at the end, even when a case fails, comparing scale, interval and custom unit, so the stack ends as it began. Every asset it makes is
+  named `W12a <run> ...` and is deleted again, and its accounts and roles start `w12a-`. Mapping the whole group (six points) to a room by
+  mistake shows the note `... is a room; meters usually belong to a Panel or Rack. Map here anyway?` in **Review mappings** without
+  blocking it, then the toast `Mapped 6 points to <room>.` with **Undo**; Undo takes the six mappings off and leaves the room in the
+  tree. From the group's `Mapping actions for ...` button, **Move this group's mappings…** asks first and moves all six to a panel on the
+  Discovery canvas. On the asset page, `Actions for <metric>` then **Unmap…** takes one metric off, and Undo makes the mapping again with
+  exactly the metric, scale, interval and custom unit it had (compared through the API, before and after). A viewer sees no `Actions for`
+  menu and no +, and a role with `discovery.accept` but not `assets.edit` maps and gets the toast with no Undo. The + on an asset node
+  opens **New asset** with that asset as parent and the real form: the kind and the icon chosen are saved (read back from `GET
+  /api/assets` and from the icon in the Assets Tree row, not from the Discovery node). The + and the dialogs also work from the keyboard,
+  and several unmapped points of one source selected and dragged onto an asset open one review for all of them.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with

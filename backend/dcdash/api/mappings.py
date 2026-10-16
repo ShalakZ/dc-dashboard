@@ -100,6 +100,15 @@ async def create_mapping(
     return mapping
 
 
+@router.get(
+    "/mappings/{mapping_id}", response_model=MappingOut, dependencies=[Depends(require_permission("assets.edit"))]
+)
+async def read_mapping(mapping_id: int, db: AsyncSession = Depends(get_db)) -> Mapping:
+    """One mapping with every stored value. Unmapping reads it first: the scale, interval and custom unit are in no other
+    payload, and an Undo has to post exactly them back."""
+    return await get_mapping(db, mapping_id)
+
+
 @router.patch(
     "/mappings/{mapping_id}", response_model=MappingOut, dependencies=[Depends(require_permission("assets.edit"))]
 )
@@ -135,8 +144,10 @@ async def delete_mapping(
     mapping_id: int, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)
 ) -> None:
     mapping = await get_mapping(db, mapping_id)
+    # The values an Undo needs ride along (W12a), so the audit row alone can put the mapping back once the toast is gone.
     detail = {
         "mapping_id": mapping.id, "point_id": mapping.point_id, "asset_id": mapping.asset_id, "metric": mapping.metric,
+        "scale": mapping.scale, "interval_seconds": mapping.interval_seconds, "custom_unit": mapping.custom_unit,
     }
     await db.delete(mapping)
     await audit(db, user.id, "mapping.deleted", detail)

@@ -1,4 +1,4 @@
-import { MAX_UNIT_LENGTH, acceptBody, assetChoices, bulkGroups, mappableClusters, dropPayload, metricConflicts, missingUnits, pickDropTarget, reviewRows, takenMetrics, withMetric, type ReviewRow } from "./drop";
+import { MAX_UNIT_LENGTH, acceptBody, assetChoices, bulkGroups, mappableClusters, dropPayload, metricConflicts, missingUnits, multiPointDrop, pickDropTarget, reviewRows, takenMetrics, withMetric, type ReviewRow } from "./drop";
 import { nodeId, UNGROUPED } from "./graph";
 import { model, point } from "../test/graphFixtures";
 
@@ -31,6 +31,46 @@ describe("dropPayload", () => {
     for (const id of ["src:1", "asset:10", nodeId.cluster(1, UNGROUPED), "cluster:9:x", "point:999", "nonsense"]) {
       expect(dropPayload(model(), id)).toBeNull();
     }
+  });
+});
+
+describe("multiPointDrop", () => {
+  it("several unmapped points of one source (clusters and the Ungrouped bag) yield one payload, in the order of the ids", () => {
+    const result = multiPointDrop(model(), [nodeId.point(7), nodeId.point(4), nodeId.point(1)]);
+    expect(result).toMatchObject({ payload: { kind: "points", label: "s1", source: { id: 1 } } });
+    expect("payload" in result! && result.payload.points.map((x) => x.id)).toEqual([7, 4, 1]);
+  });
+  it("a repeated id yields its point once", () => {
+    const result = multiPointDrop(model(), [nodeId.point(1), nodeId.point(2), nodeId.point(1)]);
+    expect("payload" in result! && result.payload.points.map((x) => x.id)).toEqual([1, 2]);
+  });
+  it("fewer than two nodes, or any node that is not a point, is a plain move (null)", () => {
+    expect(multiPointDrop(model(), [])).toBeNull();
+    expect(multiPointDrop(model(), [nodeId.point(1)])).toBeNull();
+    expect(multiPointDrop(model(), [nodeId.point(1), nodeId.point(1)])).toBeNull();
+    for (const other of ["src:1", "asset:10", nodeId.cluster(1, "LVP01"), nodeId.cluster(1, UNGROUPED), "nonsense"]) {
+      expect(multiPointDrop(model(), [nodeId.point(1), other])).toBeNull();
+      expect(multiPointDrop(model(), [other, nodeId.point(1)])).toBeNull();
+    }
+  });
+  it("a point the model does not hold is refused", () => {
+    expect(multiPointDrop(model(), [nodeId.point(1), nodeId.point(999)]))
+      .toEqual({ refusal: "Some of the selected points are not in the graph any more. Refresh and try again." });
+  });
+  it("mapped points are refused with their count, singular and plural", () => {
+    expect(multiPointDrop(model(), [nodeId.point(8), nodeId.point(9)]))
+      .toEqual({ refusal: "2 of the selected points are already mapped. Unmap them first, or select only unmapped points." });
+    const one = multiPointDrop(model(), [nodeId.point(1), nodeId.point(2), nodeId.point(8)]);
+    expect(one).toEqual({ refusal: "1 of the selected points is already mapped. Unmap it first, or select only unmapped points." });
+  });
+  it("points of different sources are refused", () => {
+    const m = model();
+    m.sources[1].clusters[0].points.push(point(20, "Other", {}));
+    expect(multiPointDrop(m, [nodeId.point(1), nodeId.point(20)]))
+      .toEqual({ refusal: "These points come from different sources. Select the points of one source at a time." });
+  });
+  it("a model that lacks a point is reported before a mapped one", () => {
+    expect(multiPointDrop(model(), [nodeId.point(8), nodeId.point(999)])).toMatchObject({ refusal: expect.stringContaining("not in the graph") });
   });
 });
 

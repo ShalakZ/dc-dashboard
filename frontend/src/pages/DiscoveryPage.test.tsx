@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { GraphModel, GraphPoint, GraphSource } from "../api/types";
+import type { Asset, GraphModel, GraphPoint, GraphSource } from "../api/types";
+import { AddConnectionLine } from "../components/graph/nodes";
+import { resetUndoForTests, type MappedInfo } from "../hooks/useMappingActions";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
@@ -12,9 +14,9 @@ import type { PermissionId } from "../lib/permissions";
 import { DiscoveryPage } from "./DiscoveryPage";
 
 // The bulk-create dialog is another piece (its own tests): here it only has to be mounted with the right props and closed through onClose.
-const bulk = vi.hoisted(() => ({ props: [] as { model: GraphModel; source: GraphSource; onClose: () => void }[] }));
+const bulk = vi.hoisted(() => ({ props: [] as { model: GraphModel; source: GraphSource; onClose: () => void; onMapped: (info: MappedInfo) => void }[] }));
 vi.mock("../components/graph/BulkCreateDialog", () => ({
-  BulkCreateDialog: (props: { model: GraphModel; source: GraphSource; onClose: () => void }) => {
+  BulkCreateDialog: (props: { model: GraphModel; source: GraphSource; onClose: () => void; onMapped: (info: MappedInfo) => void }) => {
     bulk.props.push(props);
     return <div role="dialog" aria-label="Create assets stub"><button type="button" onClick={props.onClose}>Close stub</button></div>;
   },
@@ -26,6 +28,8 @@ const flow = vi.hoisted(() => {
   const state = {
     intersecting: [] as { id: string; type?: string }[], nodes: [] as any[], dropAt: { x: 7, y: 8 }, partner: null as string | null,
     viewport: { x: 0, y: 0, zoom: 1 },
+    // The connection props of the "+" (W12a), as the page gave them to React Flow on its last render.
+    connect: {} as { nodesConnectable?: boolean; isValidConnection?: (c: unknown) => boolean; connectionLineComponent?: unknown; onConnectEnd?: (event: unknown, state: unknown) => void },
   };
   return {
     state, getIntersectingNodes: vi.fn((_node: unknown) => state.intersecting), getNodes: vi.fn(() => state.nodes), fitView: vi.fn(),
@@ -53,61 +57,69 @@ vi.mock("@xyflow/react", async (importOriginal) => {
     ReactFlow: ({
       nodes, edges, nodeTypes, colorMode, edgesFocusable, nodesDraggable, snapToGrid, snapGrid, selectionKeyCode, multiSelectionKeyCode, children,
       onNodeClick, onNodeDragStart, onNodeDrag, onNodeDragStop, onNodesChange, onNodeMouseEnter, onNodeMouseLeave,
-      onNodeContextMenu, onPaneContextMenu, onSelectionContextMenu, onMoveStart,
+      onNodeContextMenu, onPaneContextMenu, onSelectionContextMenu, onMoveStart, nodesConnectable, isValidConnection, connectionLineComponent, onConnectEnd,
     }: any) => {
       flow.state.nodes = nodes;
+      flow.state.connect = { nodesConnectable, isValidConnection, connectionLineComponent, onConnectEnd };
       return (
         <div
           data-testid="flow" data-color-mode={colorMode} data-edges-focusable={String(edgesFocusable)} data-nodes-draggable={String(nodesDraggable)}
           data-snap={String(snapToGrid)} data-snap-grid={snapGrid?.join(",")} data-selection-key={String(selectionKeyCode)} data-multi-key={String(multiSelectionKeyCode)}
         >
-          {edges.map((e: any) => <i key={e.id} data-edge={e.id} data-animated={String(!!e.animated)} data-class={e.className ?? ""} />)}
-          {nodes.map((n: any) => {
-            const Node = nodeTypes[n.type];
-            const dropped = () => ({ ...n, position: flow.state.dropAt });
-            return (
-              <div key={n.id} className="react-flow__node" tabIndex={0} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-selected={String(!!n.selected)} data-class={n.className ?? ""} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)} onContextMenu={(e) => onNodeContextMenu?.(e, n)}>
-                <Node id={n.id} data={n.data} />
-                <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
-                <button data-testid={`select-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "select", selected: true }])} />
-                <button data-testid={`enter-${n.id}`} onClick={(e) => onNodeMouseEnter?.(e, n)} />
-                <button data-testid={`leave-${n.id}`} onClick={(e) => onNodeMouseLeave?.(e, n)} />
-                <button data-testid={`dragstart-${n.id}`} onClick={(e) => onNodeDragStart?.(e, n, [n])} />
-                {/* A drag played in two halves (start and one move, then the drop), for what is drawn while it runs. */}
-                <button data-testid={`dragmove-${n.id}`} onClick={(e) => { onNodeDragStart?.(e, n, [n]); onNodeDrag?.(e, dropped(), [dropped()]); }} />
-                <button data-testid={`dragstop-${n.id}`} onClick={(e) => onNodeDragStop?.(e, dropped(), [dropped()])} />
-                <button
-                  data-testid={`drag-${n.id}`}
-                  onClick={(e) => {
-                    onNodeDragStart?.(e, n, [n]);
-                    onNodeDrag?.(e, dropped(), [dropped()]);
-                    onNodesChange?.([{ id: n.id, type: "position", position: flow.state.dropAt, dragging: false }]);
-                    onNodeDragStop?.(e, dropped(), [dropped()]);
-                  }}
-                />
-                <button
-                  data-testid={`dragwith-${n.id}`}
-                  onClick={(e) => {
-                    const other = nodes.find((o: any) => o.id === flow.state.partner) ?? nodes.find((o: any) => o.id !== n.id);
-                    const at = flow.state.dropAt;
-                    // A named partner moves by the same distance, as React Flow moves every node of a selection; the default one lands at 9,9.
-                    const along = flow.state.partner
-                      ? { x: other.position.x + at.x - n.position.x, y: other.position.y + at.y - n.position.y }
-                      : { x: 9, y: 9 };
-                    const together = [dropped(), { ...other, position: along }];
-                    onNodeDragStart?.(e, n, [n, other]);
-                    onNodeDrag?.(e, dropped(), together);
-                    onNodeDragStop?.(e, dropped(), together);
-                  }}
-                />
+          {/* Like the real library: the pane is the PARENT of the viewport, so every node and every edge lives INSIDE `.react-flow__pane`. The pane's own
+              context menu is the one aimed at the pane itself, never at a node or an edge that bubbles up to it (xyflow's `wrapHandler` checks the target). */}
+          <div data-testid="pane" className="react-flow__pane" onContextMenu={(e) => { if (e.target === e.currentTarget) onPaneContextMenu?.(e); }}>
+            {edges.map((e: any) => <i key={e.id} className="react-flow__edge" data-edge={e.id} data-animated={String(!!e.animated)} data-class={e.className ?? ""} />)}
+            {nodes.map((n: any) => {
+              const Node = nodeTypes[n.type];
+              const dropped = () => ({ ...n, position: flow.state.dropAt });
+              return (
+                <div key={n.id} className="react-flow__node" tabIndex={0} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-selected={String(!!n.selected)} data-class={n.className ?? ""} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)} onContextMenu={(e) => onNodeContextMenu?.(e, n)}>
+                  <Node id={n.id} data={n.data} />
+                  <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
+                  <button data-testid={`select-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "select", selected: true }])} />
+                  <button data-testid={`enter-${n.id}`} onClick={(e) => onNodeMouseEnter?.(e, n)} />
+                  <button data-testid={`leave-${n.id}`} onClick={(e) => onNodeMouseLeave?.(e, n)} />
+                  <button data-testid={`dragstart-${n.id}`} onClick={(e) => onNodeDragStart?.(e, n, [n])} />
+                  {/* A drag played in two halves (start and one move, then the drop), for what is drawn while it runs. */}
+                  <button data-testid={`dragmove-${n.id}`} onClick={(e) => { onNodeDragStart?.(e, n, [n]); onNodeDrag?.(e, dropped(), [dropped()]); }} />
+                  <button data-testid={`dragstop-${n.id}`} onClick={(e) => onNodeDragStop?.(e, dropped(), [dropped()])} />
+                  <button
+                    data-testid={`drag-${n.id}`}
+                    onClick={(e) => {
+                      onNodeDragStart?.(e, n, [n]);
+                      onNodeDrag?.(e, dropped(), [dropped()]);
+                      onNodesChange?.([{ id: n.id, type: "position", position: flow.state.dropAt, dragging: false }]);
+                      onNodeDragStop?.(e, dropped(), [dropped()]);
+                    }}
+                  />
+                  <button
+                    data-testid={`dragwith-${n.id}`}
+                    onClick={(e) => {
+                      const other = nodes.find((o: any) => o.id === flow.state.partner) ?? nodes.find((o: any) => o.id !== n.id);
+                      const at = flow.state.dropAt;
+                      // A named partner moves by the same distance, as React Flow moves every node of a selection; the default one lands at 9,9.
+                      const along = flow.state.partner
+                        ? { x: other.position.x + at.x - n.position.x, y: other.position.y + at.y - n.position.y }
+                        : { x: 9, y: 9 };
+                      const together = [dropped(), { ...other, position: along }];
+                      onNodeDragStart?.(e, n, [n, other]);
+                      onNodeDrag?.(e, dropped(), together);
+                      onNodeDragStop?.(e, dropped(), together);
+                    }}
+                  />
+                </div>
+              );
+            })}
+            {/* The rectangle a box selection leaves over its nodes: in the real library it is drawn INSIDE the pane, over the viewport, and takes the pointer
+                (a line released on it never reaches the node under it). The page's menu listens to it. */}
+            {nodes.some((n: any) => n.selected) && (
+              <div className="react-flow__nodesselection">
+                <div data-testid="selection-rect" className="react-flow__nodesselection-rect" tabIndex={-1} onContextMenu={(e) => onSelectionContextMenu?.(e, nodes.filter((n: any) => n.selected))} />
               </div>
-            );
-          })}
-          {/* The pane, the rectangle a box selection leaves over its nodes, and the camera starting to move: what the page's menu and guides listen to. */}
-          <div data-testid="pane" onContextMenu={(e) => onPaneContextMenu?.(e)} />
-          {nodes.some((n: any) => n.selected) && (
-            <div data-testid="selection-rect" className="react-flow__nodesselection-rect" tabIndex={-1} onContextMenu={(e) => onSelectionContextMenu?.(e, nodes.filter((n: any) => n.selected))} />
-          )}
+            )}
+          </div>
+          {/* The camera starting to move: what the page's guides listen to. */}
           <button data-testid="move-start" onClick={() => onMoveStart?.(null, flow.state.viewport)} />
           {children}
         </div>
@@ -134,9 +146,15 @@ const graph = (over: Partial<GraphModel> = {}): GraphModel => ({
   assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }, { id: 11, parent_id: 10, name: "Panel 1", kind: "generic" }],
   layout: {}, ...over,
 });
+/** The full asset list the New asset form reads (the graph carries only id, parent, name and kind): the same two assets as `graph()`. */
+const ASSET_LIST: Asset[] = [
+  { id: 10, parent_id: null, name: "Site", kind: "generic", sort_order: 0 },
+  { id: 11, parent_id: 10, name: "Panel 1", kind: "generic", sort_order: 0 },
+];
 const routes = (role: string, model: GraphModel | (() => GraphModel) = graph()) => ({
   "GET /api/setup": { body: { needed: false } },
   "GET /api/me": { body: userFor(role) },
+  "GET /api/assets": { body: ASSET_LIST },
   "GET /api/discovery/graph": () => ({ body: typeof model === "function" ? model() : model }),
   "PUT /api/discovery/layout": { status: 204 },
   "DELETE /api/discovery/layout": { status: 204 },
@@ -153,6 +171,9 @@ beforeEach(() => {
   flow.setCenter.mockClear();
   window.localStorage.removeItem("dcdash.discovery.snap");
 });
+
+// The latest Undo is module state in the hook: one this file's tests left unused must not be run by a later test's Ctrl+Z.
+afterEach(resetUndoForTests);
 
 describe("DiscoveryPage", () => {
   it("renders sources, assets and unidentified services collapsed", async () => {
@@ -433,10 +454,11 @@ describe("DiscoveryPage mapping", () => {
     expect(screen.getByRole("status")).toHaveTextContent('Create asset "LVP01" from this cluster?');
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await userEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Create asset…" }));
-    const review = await dialog();
-    expect(within(review).getByRole("radio", { name: "New asset" })).toBeChecked();
-    expect(within(review).getByLabelText("New asset name")).toHaveValue("LVP01");
-    expect(within(review).getByLabelText("Parent asset")).toHaveValue("");
+    // For a role that has the asset form (assets.edit and assets.view) the form comes first, named after the cluster; the Review follows on the saved asset.
+    const form = await screen.findByRole("dialog", { name: "New asset" });
+    expect(within(form).getByLabelText("Name")).toHaveValue("LVP01");
+    expect(within(form).getByLabelText("Parent")).toHaveValue("");
+    expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
@@ -510,12 +532,28 @@ describe("DiscoveryPage mapping", () => {
     expect(within(review).getAllByRole("checkbox")).toHaveLength(2);
   });
 
-  it("the New asset button opens the dialog on a new asset named after the cluster", async () => {
-    await start("admin");
+  it("the New asset button opens the asset form named after the cluster, and saving it opens the Review on the new asset", async () => {
+    let created = false;
+    const model = () => {
+      const m = graph();
+      if (created) m.assets.push({ id: 12, parent_id: null, name: "LVP01", kind: "generic" });
+      return m;
+    };
+    const calls = await start("admin", model, {
+      "POST /api/assets": ({ body }: { body: unknown }) => { created = true; return { status: 201, body: { id: 12, sort_order: 0, ...(body as object) } }; },
+    });
     await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+    const form = await screen.findByRole("dialog", { name: "New asset" });
+    expect(within(form).getByLabelText("Name")).toHaveValue("LVP01");
+    expect(within(form).getByText("Next you choose the points to map. Cancel keeps the new asset.")).toBeInTheDocument();
+    await userEvent.click(within(form).getByRole("button", { name: "Change icon" }));
+    await userEvent.click(within(form).getByRole("radio", { name: "Panel", hidden: true }));
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
     const review = await dialog();
-    expect(within(review).getByRole("radio", { name: "New asset" })).toBeChecked();
-    expect(within(review).getByLabelText("New asset name")).toHaveValue("LVP01");
+    expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument();
+    expect(within(review).getByRole("radio", { name: "Existing asset" })).toBeChecked();
+    expect(within(review).getByLabelText("Asset")).toHaveValue("12"); // the asset just made, listed by the refreshed graph
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/assets")?.body).toMatchObject({ name: "LVP01", parent_id: null, icon: "panel" }); // the icon chosen is the icon saved
   });
 
   it("a point has a Map button but no New asset button, and the Ungrouped bag and a fully mapped cluster have neither", async () => {
@@ -1912,7 +1950,7 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Plant OPC" }))).toEqual(["Details", "Expand"]);
     });
 
-    it("a group offers Expand, Map… and New asset…, and an unmapped point Map…, for a role that may accept", async () => {
+    it("a group offers Expand, Map… and New asset…, and an unmapped point Map… and New asset… (menu only), for a role that may accept and has the asset form", async () => {
       mockFetch(routes("admin"));
       open();
       await expand("Plant OPC");
@@ -1922,7 +1960,8 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
       await userEvent.keyboard("{Escape}");
       rightClick("point:1");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Map…"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Map…", "New asset…"]);
+      expect(screen.queryByRole("button", { name: "New asset from LVP01 kW…" })).not.toBeInTheDocument(); // a point draws no button for it
     });
 
     it("a point that has no action for this role (no Map…) shows the canvas's menu instead", async () => {
@@ -2193,8 +2232,9 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(screen.getByText(/Dashed: discovered/).textContent!.trim().length).toBeLessThan(100);
       await userEvent.click(screen.getByRole("button", { name: TIP }));
       const lines = within(await screen.findByRole("note")).getAllByRole("listitem").map((item) => item.textContent);
-      expect(lines).toHaveLength(6);
+      expect(lines).toHaveLength(7);
       expect(lines[0]).toContain("Alt or Option moves it alone.");
+      expect(lines.join("\n")).toContain("Ctrl+Z undoes the last mapping change for 10 seconds.");
       expect(lines.join("\n")).toMatch(/Shift-drag selects/);
       expect(lines.join("\n")).toMatch(/Ctrl\+K finds/);
       expect(lines.join("\n")).toMatch(/Shift\+F10/);
@@ -2210,6 +2250,806 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       held.release();
       await screen.findByText("Plant OPC");
       expect(screen.getAllByRole("button", { name: TIP })).toHaveLength(1);
+    });
+  });
+});
+
+// ---- W12a: unmap and move from the nodes and the menu, the Undo after mapping, the note about a room ----
+
+describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
+  type M = { id: number; point_id: number; asset_id: number; metric: GraphPoint["mapped_metric"] & string; scale: number; interval_seconds: number | null; custom_unit: string | null };
+  const mapping = (id: number, point_id: number, asset_id: number, metric: M["metric"], over: Partial<M> = {}): M =>
+    ({ id, point_id, asset_id, metric, scale: 1, interval_seconds: 5, custom_unit: null, ...over });
+  // Mapping 21: LVP01 kW on Panel 1 (11), at scale 0.001 and interval 1 (what an Undo must put back); 22: LVP01 V on Site (10); 23: Atrium's M kW on Site.
+  const KW_ON_PANEL = mapping(21, 1, 11, "active_power_kw", { scale: 0.001, interval_seconds: 1 });
+  const V_ON_SITE = mapping(22, 2, 10, "voltage_v");
+  const M_ON_SITE = mapping(23, 8, 10, "active_power_kw");
+  const KINDS = [{ id: 1, name: "room", icon: "room", asset_count: 1, starter: true }, { id: 2, name: "panel", icon: "panel", asset_count: 1, starter: true }];
+
+  /** A server that keeps the mappings, builds the graph from them and answers the mapping routes the way the API does. `dropSource1`: the first source is gone from the next graph. */
+  function server(initial: M[], extra: Record<string, unknown> = {}, permissions: PermissionId[] | "admin" = "admin") {
+    const state = { mappings: new Map(initial.map((m) => [m.id, { ...m }])) /* copies: a PATCH changes the stored mapping */, next: 900, dropSource1: false };
+    const p = (id: number, name: string, extra: Partial<GraphPoint> = {}) => {
+      const m = [...state.mappings.values()].find((x) => x.point_id === id);
+      return point(id, name, { ...extra, ...(m ? { asset_id: m.asset_id, mapping_id: m.id, mapped_metric: m.metric } : {}) });
+    };
+    const kwh = { suggestion: { metric: "energy_kwh" as const, scale: 0.001, interval_seconds: 60, custom_unit: null } };
+    const graphNow = (): GraphModel => ({
+      sources: [
+        ...(state.dropSource1 ? [] : [srcOf(1, "Plant OPC", { clusters: [{ key: "LVP01", points: [p(1, "LVP01 kW"), p(2, "LVP01 V"), p(3, "LVP01 kWh", kwh)] }] })]),
+        srcOf(2, "Atrium", { origin: "manual", clusters: [{ key: "M", points: [p(8, "M kW")] }] }),
+      ],
+      unidentified: [],
+      assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }, { id: 11, parent_id: 10, name: "Panel 1", kind: "panel" }, { id: 12, parent_id: 10, name: "Room 1", kind: "room" }],
+      layout: {},
+    });
+    const missing = { status: 404, body: { detail: "mapping not found" } };
+    const routes_: Record<string, unknown> = {};
+    for (const id of [...Array.from({ length: 30 }, (_, i) => i + 1), 900, 901, 902]) { // the ids the store hands out to new mappings start at 900
+      routes_[`GET /api/mappings/${id}`] = () => (state.mappings.has(id) ? { body: state.mappings.get(id) } : missing);
+      routes_[`DELETE /api/mappings/${id}`] = () => {
+        if (!state.mappings.delete(id)) return missing;
+        return { status: 204 };
+      };
+      routes_[`PATCH /api/mappings/${id}`] = ({ body }: { body: unknown }) => {
+        const m = state.mappings.get(id);
+        if (!m) return missing;
+        Object.assign(m, body);
+        return { body: m };
+      };
+    }
+    const user = permissions === "admin" ? routes("admin") : { ...routes("custom"), "GET /api/me": { body: userFor("custom", { permissions }) } };
+    const calls = mockFetch({
+      ...user,
+      "GET /api/discovery/graph": () => ({ body: graphNow() }),
+      "GET /api/asset-kinds": { body: KINDS },
+      ...routes_,
+      "POST /api/mappings": ({ body }: { body: unknown }) => {
+        const made = { id: state.next++, ...(body as Omit<M, "id">) };
+        state.mappings.set(made.id, made);
+        return { status: 201, body: made };
+      },
+      "POST /api/discovery/accept": ({ body }: { body: unknown }) => {
+        const b = body as { asset_id: number; points: { point_id: number; metric: M["metric"]; scale: number; interval_seconds: number | null; custom_unit: string | null }[] };
+        const ids = b.points.map((x) => { const made = mapping(state.next++, x.point_id, b.asset_id, x.metric, x); state.mappings.set(made.id, made); return made.id; });
+        return { status: 201, body: { asset_id: b.asset_id, mapping_ids: ids } };
+      },
+      ...extra,
+    });
+    return { state, calls };
+  }
+  const writes = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method !== "GET" && c.path.startsWith("/api/mappings")).map((c) => `${c.method} ${c.path}`);
+  const mappingCalls = (calls: { method: string; path: string }[]) => calls.filter((c) => c.path.startsWith("/api/mappings")).map((c) => `${c.method} ${c.path}`);
+  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+  const rightClick = (id: string) => fireEvent.contextMenu(node(id));
+  const menuButton = (name: string) => screen.findByRole("button", { name: `Mapping actions for ${name}` });
+  const undoOf = (toasts: ReturnType<typeof spyToasts>, at: number) => {
+    const action = toasts.calls[at].options?.action;
+    expect(action, `toast ${at} has an Undo`).toBeDefined();
+    return () => act(() => action!.onAction());
+  };
+
+  /** The page with Plant OPC and LVP01 open and the account known. */
+  async function start(initial: M[], permissions: PermissionId[] | "admin" = "admin", extra: Record<string, unknown> = {}) {
+    const s = server(initial, extra, permissions);
+    const { toasts } = openToasts();
+    await userEvent.click(await screen.findByRole("button", { name: "Expand Plant OPC" }));
+    await userEvent.click(screen.getByRole("button", { name: "Expand LVP01" }));
+    await accountKnown();
+    return { ...s, toasts };
+  }
+  beforeEach(() => { bulk.props.length = 0; });
+
+  describe("the menu button and the menu", () => {
+    it("a mapped point has one small button that opens the same menu as the right-click, outside the node, and Escape gives the focus back to it", async () => {
+      await start([KW_ON_PANEL]);
+      const button = await menuButton("LVP01 kW");
+      expect(button).toHaveAttribute("aria-haspopup", "menu");
+      expect(button).toHaveClass("nodrag", "nokey");
+      expect(node("point:1")).toContainElement(button);
+      await userEvent.click(button);
+      const menu = await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+      expect(node("point:1")).not.toContainElement(menu); // a menu inside the node would leak its keys into the canvas
+      expect(labelsOf(menu)).toEqual(["Unmap…", "Move to another asset…"]);
+      expect(within(menu).getByRole("menuitem", { name: "Unmap…" })).toHaveClass("danger-item");
+      expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(button).toHaveFocus();
+      rightClick("point:1");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Unmap…", "Move to another asset…"]);
+    });
+
+    it("only a mapped point has it: an unmapped point gets Map… (and New asset… in its menu) and no button", async () => {
+      await start([KW_ON_PANEL]);
+      await menuButton("LVP01 kW");
+      expect(screen.queryByRole("button", { name: "Mapping actions for LVP01 kWh" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Map LVP01 kWh to asset…" })).toBeInTheDocument();
+      rightClick("point:3");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kWh" }))).toEqual(["Map…", "New asset…"]);
+    });
+
+    it("the menu opens next to the BUTTON, not next to the whole node whose far side can be a long way from the pointer", async () => {
+      await start([KW_ON_PANEL]);
+      const button = await menuButton("LVP01 kW");
+      const box = (top: number, left: number, w: number, h: number) =>
+        ({ top, left, right: left + w, bottom: top + h, width: w, height: h, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+      node("point:1").getBoundingClientRect = () => box(100, 200, 220, 48); // the node: its menu used to open at ITS left edge, 196
+      button.getBoundingClientRect = () => box(300, 560, 20, 20); // the button at the node's top right
+      await userEvent.click(button);
+      const menu = await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+      await waitFor(() => expect(menu.style.left).toBe("556px")); // the button's left edge less the 4 px gap (the panel measures 0 wide here)
+      expect(menu.style.top).toBe("300px"); // the button's top
+    });
+
+    it("a second press on the button closes its menu and leaves the focus on the button; a third opens it again", async () => {
+      await start([KW_ON_PANEL]);
+      const button = await menuButton("LVP01 kW");
+      await userEvent.click(button);
+      expect(await screen.findByRole("menu", { name: "Actions for LVP01 kW" })).toBeInTheDocument();
+      await userEvent.click(button);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(button).toHaveFocus();
+      await userEvent.click(button);
+      expect(await screen.findByRole("menu", { name: "Actions for LVP01 kW" })).toBeInTheDocument();
+    });
+
+    it("a press on another node's button closes the first menu and opens the other's", async () => {
+      await start([KW_ON_PANEL, V_ON_SITE]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+      await userEvent.click(await menuButton("LVP01 V"));
+      expect(await screen.findByRole("menu", { name: "Actions for LVP01 V" })).toBeInTheDocument();
+      expect(screen.getAllByRole("menu")).toHaveLength(1);
+    });
+
+    it("a group with something mapped has the button too, and its menu adds the group's two items after the old ones", async () => {
+      await start([KW_ON_PANEL, V_ON_SITE]);
+      const button = await menuButton("LVP01");
+      expect(node("cluster:1:LVP01")).toContainElement(button);
+      await userEvent.click(button);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual([
+        "Collapse", "Map…", "New asset…", "Unmap this group…", "Move this group's mappings…",
+      ]);
+    });
+
+    it("a group with nothing mapped has no button, and the old menu", async () => {
+      await start([]);
+      await screen.findByRole("button", { name: "Map LVP01 to asset…" });
+      expect(screen.queryByRole("button", { name: /^Mapping actions/ })).not.toBeInTheDocument();
+      rightClick("cluster:1:LVP01");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
+    });
+
+    it("an asset's menu has one item per source with mappings on it, by name, and nothing for an asset with none (that keeps the canvas menu)", async () => {
+      await start([KW_ON_PANEL, V_ON_SITE, M_ON_SITE]);
+      await menuButton("LVP01 kW");
+      rightClick("asset:10");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Site" }))).toEqual(["New sub-asset…", "Unmap everything from Atrium…", "Unmap everything from Plant OPC…"]);
+      await userEvent.keyboard("{Escape}");
+      rightClick("asset:11");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Panel 1" }))).toEqual(["New sub-asset…", "Unmap everything from Plant OPC…"]);
+      await userEvent.keyboard("{Escape}");
+      // An asset with nothing mapped on it still has New sub-asset… (a role with the asset form), so it no longer falls back to the canvas menu.
+      rightClick("asset:12");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Room 1" }))).toEqual(["New sub-asset…"]);
+    });
+  });
+
+  describe("unmap", () => {
+    it("asks first in words that do not lie about billing; Cancel sends nothing", async () => {
+      const { calls } = await start([KW_ON_PANEL]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Unmap…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Unmap "LVP01 kW" from Panel 1?' });
+      expect(dialog).toHaveTextContent("Billing for months that are still open is recalculated without it; closed months keep their billed figures.");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(mappingCalls(calls)).toEqual([]);
+    });
+
+    it("reads the mapping, deletes it, toasts with an Undo, reads the graph again and puts the focus on the node", async () => {
+      const { calls, toasts, state } = await start([KW_ON_PANEL]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Unmap…" }));
+      await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(mappingCalls(calls)).toEqual(["GET /api/mappings/21", "DELETE /api/mappings/21"]);
+      expect(toasts.calls[0]).toMatchObject({ kind: "success", text: "Unmapped 1 point from Panel 1.", options: { durationMs: 10_000, action: { label: "Undo" } } });
+      expect(state.mappings.size).toBe(0);
+      await waitFor(() => expect(node("point:1")).toHaveFocus());
+      expect(screen.queryByRole("button", { name: "Mapping actions for LVP01 kW" })).not.toBeInTheDocument(); // it is unmapped now: Map… instead
+      expect(await screen.findByRole("button", { name: "Map LVP01 kW to asset…" })).toBeInTheDocument();
+    });
+
+    it("Undo puts the mapping back with the values that were read (scale 0.001, interval 1), and the node shows it mapped again", async () => {
+      const { calls, toasts } = await start([KW_ON_PANEL]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Unmap…" }));
+      await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      undoOf(toasts, 0)();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      expect(toasts.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+      expect(calls.filter((c) => c.method === "POST" && c.path === "/api/mappings").map((c) => c.body)).toEqual([
+        { point_id: 1, asset_id: 11, metric: "active_power_kw", scale: 0.001, interval_seconds: 1, custom_unit: null },
+      ]);
+      expect(await menuButton("LVP01 kW")).toBeInTheDocument();
+    });
+
+    it("a group's Unmap this group… takes every mapped point of the group off, naming the group and the assets", async () => {
+      const { calls, toasts } = await start([KW_ON_PANEL, V_ON_SITE]);
+      await userEvent.click(await menuButton("LVP01"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Unmap this group…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Unmap the group "LVP01" from 2 assets?' });
+      await userEvent.click(within(dialog).getByRole("button", { name: "Unmap" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(writes(calls)).toEqual(["DELETE /api/mappings/21", "DELETE /api/mappings/22"]);
+      expect(toasts.calls[0].text).toBe("Unmapped 2 points from 2 assets.");
+      await waitFor(() => expect(node("cluster:1:LVP01")).toHaveFocus());
+    });
+
+    it("an asset's Unmap everything from <source>… takes off only that source's points on that asset", async () => {
+      const { calls, toasts } = await start([KW_ON_PANEL, V_ON_SITE, M_ON_SITE]);
+      await menuButton("LVP01 kW");
+      rightClick("asset:10");
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Site" })).getByRole("menuitem", { name: "Unmap everything from Plant OPC…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Unmap the point of source "Plant OPC" from Site?' });
+      await userEvent.click(within(dialog).getByRole("button", { name: "Unmap" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(writes(calls)).toEqual(["DELETE /api/mappings/22"]); // not 23 (Atrium's) and not 21 (Panel 1's)
+      expect(toasts.calls[0].text).toBe("Unmapped 1 point from Site.");
+      await waitFor(() => expect(node("asset:10")).toHaveFocus());
+    });
+
+    it("when the node is gone after the change the focus goes to the main area", async () => {
+      const { state } = await start([KW_ON_PANEL], "admin", {
+        "DELETE /api/mappings/21": () => { state.mappings.delete(21); state.dropSource1 = true; return { status: 204 }; },
+      });
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Unmap…" }));
+      await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
+      await waitFor(() => expect(node("point:1")).toBeNull());
+      await waitFor(() => expect(document.getElementById("main")).toHaveFocus());
+    });
+  });
+
+  describe("move", () => {
+    it("a group's Move this group's mappings… moves what is not on the chosen asset already, and says the rest was there", async () => {
+      const { calls, toasts } = await start([KW_ON_PANEL, V_ON_SITE]);
+      await userEvent.click(await menuButton("LVP01"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Move this group's mappings…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Move the group "LVP01" to another asset' });
+      await userEvent.selectOptions(within(dialog).getByLabelText("Move to"), "10");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(writes(calls)).toEqual(["PATCH /api/mappings/21"]); // 22 is on Site already
+      expect(calls.find((c) => c.method === "PATCH")!.body).toEqual({ asset_id: 10 });
+      expect(toasts.calls[0]).toMatchObject({ kind: "success", text: "Moved 1 point to Site. 1 was already there.", options: { action: { label: "Undo" } } });
+      await waitFor(() => expect(node("cluster:1:LVP01")).toHaveFocus());
+    });
+
+    it("a point's Move to another asset… and its Undo send it back where it came from", async () => {
+      const { calls, toasts, state } = await start([KW_ON_PANEL]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Move to another asset…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Move "LVP01 kW" to another asset' });
+      expect(within(dialog.querySelector("select")!).queryByRole("option", { name: /Panel 1/ })).not.toBeInTheDocument(); // it is on Panel 1 already
+      await userEvent.selectOptions(within(dialog).getByLabelText("Move to"), "12");
+      expect(dialog).toHaveTextContent("Room 1 is a room; meters usually belong to a Panel or Rack. Move here anyway?");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+      await waitFor(() => expect(toasts.calls).toHaveLength(1));
+      expect(toasts.calls[0].text).toBe("Moved 1 point to Room 1.");
+      expect(state.mappings.get(21)!.asset_id).toBe(12);
+      undoOf(toasts, 0)();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      expect(toasts.calls[1]).toEqual({ kind: "success", text: "Put back 1 mapping." });
+      expect(state.mappings.get(21)!.asset_id).toBe(11);
+      expect(writes(calls).filter((w) => w.startsWith("PATCH"))).toEqual(["PATCH /api/mappings/21", "PATCH /api/mappings/21"]);
+    });
+
+    it("keeps Move off and says which point would clash when the chosen asset has the metric already (read from the graph)", async () => {
+      const { calls } = await start([KW_ON_PANEL, M_ON_SITE]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Move to another asset…" }));
+      const dialog = await screen.findByRole("dialog", { name: 'Move "LVP01 kW" to another asset' });
+      await userEvent.selectOptions(within(dialog).getByLabelText("Move to"), "10");
+      expect(within(dialog).getByRole("alert")).toHaveTextContent('"LVP01 kW" would clash: Site already has that metric.');
+      expect(within(dialog).getByRole("button", { name: "Move" })).toBeDisabled();
+      expect(writes(calls)).toEqual([]);
+    });
+  });
+
+  describe("who gets what", () => {
+    it("discovery.accept alone (no assets.edit): no button, no unmap or move item anywhere, and the old menus", async () => {
+      await start([KW_ON_PANEL, V_ON_SITE], ["discovery.view", "discovery.accept", "assets.view"]);
+      await screen.findByRole("button", { name: "Map LVP01 kWh to asset…" });
+      expect(screen.queryByRole("button", { name: /^Mapping actions/ })).not.toBeInTheDocument();
+      rightClick("point:1");
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      rightClick("cluster:1:LVP01");
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
+      await userEvent.keyboard("{Escape}");
+      rightClick("asset:10");
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+    });
+
+    it("assets.edit alone (no discovery.accept) still gets the button and the items: the two permissions are independent", async () => {
+      await start([KW_ON_PANEL], ["discovery.view", "assets.view", "assets.edit"]);
+      await userEvent.click(await menuButton("LVP01 kW"));
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Unmap…", "Move to another asset…"]);
+      expect(screen.queryByRole("button", { name: /^Map LVP01/ })).not.toBeInTheDocument();
+    });
+
+    it("a role that may only view Discovery sees none of it", async () => {
+      await start([KW_ON_PANEL], ["discovery.view"]);
+      await screen.findByText("LVP01 kW");
+      expect(screen.queryByRole("button", { name: /^Mapping actions/ })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("the toast after mapping", () => {
+    /** The Review on the unmapped LVP01 kWh (energy_kwh) mapped to Panel 1. */
+    async function mapKwh() {
+      await userEvent.click(await screen.findByRole("button", { name: "Map LVP01 kWh to asset…" }));
+      const review = await screen.findByRole("dialog", { name: "Review mappings" });
+      await userEvent.selectOptions(within(review).getByLabelText("Asset"), "11");
+      await userEvent.click(within(review).getByRole("button", { name: "Create mappings" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument());
+    }
+
+    it("with assets.edit it says what was mapped and carries an Undo that deletes only what it made, after reading it", async () => {
+      const { calls, toasts, state } = await start([KW_ON_PANEL]);
+      await mapKwh();
+      expect(toasts.calls).toHaveLength(1);
+      expect(toasts.calls[0]).toMatchObject({ kind: "success", text: "Mapped 1 point to Panel 1.", options: { durationMs: 10_000, action: { label: "Undo" } } });
+      expect(state.mappings.has(900)).toBe(true);
+      undoOf(toasts, 0)();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      expect(mappingCalls(calls)).toEqual(["GET /api/mappings/900", "DELETE /api/mappings/900"]);
+      expect(toasts.calls[1]).toEqual({ kind: "success", text: "Unmapped 1 point." });
+      expect(state.mappings.has(900)).toBe(false);
+      expect(state.mappings.has(21)).toBe(true); // what was there before is untouched
+    });
+
+    it("with discovery.accept alone it says the same, with no Undo", async () => {
+      const { toasts } = await start([KW_ON_PANEL], ["discovery.view", "discovery.accept", "assets.view"]);
+      await mapKwh();
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Mapped 1 point to Panel 1." }]);
+    });
+
+    it("pressing the Undo leaves the focus on the canvas group (named Discovery graph), not on <body>: the Undo's button went with its toast", async () => {
+      const { toasts } = await start([KW_ON_PANEL]);
+      await mapKwh();
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.body).toHaveFocus();
+      undoOf(toasts, 0)();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      await waitFor(() => expect(screen.getByRole("group", { name: "Discovery graph" })).toHaveFocus());
+    });
+
+    it("the bulk create hands its own sentence and what it made to the same toast", async () => {
+      const { toasts } = await start([KW_ON_PANEL]);
+      await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
+      await screen.findByRole("dialog", { name: "Create assets stub" });
+      const info = { text: "Created 2 of 3 assets", kind: "error" as const, mappings: [{ id: 5, assetId: 30, name: "a" }], newAssets: ["LVP01"], undoTitle: "Unmap the points it mapped; the assets stay (Ctrl+Z)" };
+      act(() => bulk.props[bulk.props.length - 1].onMapped(info));
+      expect(toasts.calls).toHaveLength(1);
+      // The dialog's own description of what its Undo does reaches the button.
+      expect(toasts.calls[0]).toMatchObject({ kind: "error", text: "Created 2 of 3 assets", options: { action: { label: "Undo", title: "Unmap the points it mapped; the assets stay (Ctrl+Z)" } } });
+    });
+
+    it("the bulk create's Undo puts the focus on the canvas group too", async () => {
+      const { toasts } = await start([KW_ON_PANEL]);
+      await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
+      await screen.findByRole("dialog", { name: "Create assets stub" });
+      act(() => bulk.props[bulk.props.length - 1].onMapped({ text: "Created 1 asset", kind: "success", mappings: [{ id: 21, assetId: 11 }], newAssets: ["LVP01"] }));
+      (document.activeElement as HTMLElement | null)?.blur();
+      undoOf(toasts, 0)();
+      await waitFor(() => expect(toasts.calls).toHaveLength(2));
+      await waitFor(() => expect(screen.getByRole("group", { name: "Discovery graph" })).toHaveFocus());
+    });
+
+    it("the bulk create's toast has no Undo for discovery.accept alone", async () => {
+      const { toasts } = await start([KW_ON_PANEL], ["discovery.view", "discovery.accept", "assets.view"]);
+      await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
+      await screen.findByRole("dialog", { name: "Create assets stub" });
+      act(() => bulk.props[bulk.props.length - 1].onMapped({ text: "Created 1 asset", kind: "success", mappings: [{ id: 5, assetId: 30 }], newAssets: ["LVP01"] }));
+      expect(toasts.calls).toEqual([{ kind: "success", text: "Created 1 asset" }]);
+    });
+  });
+
+  describe("the note about a room", () => {
+    it("choosing a room in the Review shows the note in its reserved slot and leaves Create mappings enabled", async () => {
+      await start([KW_ON_PANEL]);
+      await userEvent.click(await screen.findByRole("button", { name: "Map LVP01 kWh to asset…" }));
+      const review = await screen.findByRole("dialog", { name: "Review mappings" });
+      const select = within(review).getByLabelText("Asset");
+      await userEvent.selectOptions(select, "12");
+      await waitFor(() => expect(review).toHaveTextContent("Room 1 is a room; meters usually belong to a Panel or Rack. Map here anyway?"));
+      expect(select).toHaveAccessibleDescription(/Room 1 is a room/);
+      expect(within(review).getByRole("button", { name: "Create mappings" })).toBeEnabled();
+      await userEvent.selectOptions(select, "11"); // a panel: no note
+      expect(select).not.toHaveAccessibleDescription();
+    });
+  });
+});
+
+// ---- W12a: New asset from Discovery (the real form), the "+" on an asset node, and several points dropped together ----
+
+describe("DiscoveryPage New asset, the + and several points at once (W12a)", () => {
+  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+  const rightClick = (id: string) => fireEvent.contextMenu(node(id));
+  const post = (calls: { method: string; path: string; body?: unknown }[]) => calls.find((c) => c.method === "POST" && c.path === "/api/assets");
+  const reviewDialog = () => screen.findByRole("dialog", { name: "Review mappings" });
+  const NO_FORM_REASON = "The asset list could not be read, so a new asset cannot be made now. Refresh and try again.";
+
+  /**
+   * The page with a server that makes asset 12 when it is asked to and lists it in the next graph (`lists: false`: the graph keeps answering without it, a refresh
+   * that does not show the new asset). `hold`: the asset list is held until `release()`. `model`: the graph the server starts from.
+   */
+  function setup(permissions: PermissionId[] | "admin" = "admin", opts: { lists?: boolean; hold?: boolean; model?: () => GraphModel; extra?: Record<string, unknown> } = {}) {
+    const { lists = true, hold = false, model: base = graph, extra = {} } = opts;
+    let created: Asset | null = null;
+    const model = () => {
+      const m = base();
+      if (created && lists) m.assets.push({ id: created.id, parent_id: created.parent_id, name: created.name, kind: created.kind });
+      return m;
+    };
+    const user = permissions === "admin" ? routes("admin", model) : { ...routes("custom", model), "GET /api/me": { body: userFor("custom", { permissions }) } };
+    const calls = mockFetch({
+      ...user,
+      "POST /api/assets": ({ body }: { body: unknown }) => { created = { id: 12, sort_order: 0, ...(body as Omit<Asset, "id" | "sort_order">) }; return { status: 201, body: created }; },
+      ...extra,
+    });
+    const held = hold ? holdFetch((method, path) => method === "GET" && path === "/api/assets") : null;
+    const toasts = spyToasts();
+    renderWithProviders(<><DiscoveryPage /><SignedIn /></>, { route: "/discovery", path: "/discovery", toasts: toasts.api });
+    return { calls, toasts, release: () => held?.release() };
+  }
+  const openAll = async () => {
+    await userEvent.click(await screen.findByRole("button", { name: "Expand Plant OPC" }));
+    await userEvent.click(screen.getByRole("button", { name: "Expand LVP01" }));
+    await accountKnown();
+  };
+  /** Fills the open New asset form's icon (a Panel) and saves it. */
+  const savePanel = async (form: HTMLElement) => {
+    await userEvent.click(within(form).getByRole("button", { name: "Change icon" }));
+    await userEvent.click(within(form).getByRole("radio", { name: "Panel", hidden: true }));
+    await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+  };
+
+  beforeEach(() => {
+    flow.state.intersecting = [];
+    flow.state.connect = {};
+    flow.getIntersectingNodes.mockClear();
+  });
+
+  describe("New asset on the empty canvas and on an asset", () => {
+    it("the empty canvas's menu ends with New asset…, which opens the asset form with no parent and no note, and saves the icon chosen", async () => {
+      const { calls, toasts } = setup();
+      await openAll();
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+      expect(labelsOf(menu)).toEqual(["Expand all", "Collapse all", "Tidy layout", "Fit view", "New asset…"]);
+      await userEvent.click(within(menu).getByRole("menuitem", { name: "New asset…" }));
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Parent")).toHaveValue("");
+      expect(within(form).queryByText(/Next you choose the points to map/)).not.toBeInTheDocument(); // nothing follows the save
+      await userEvent.type(within(form).getByLabelText("Name"), "Panel 9");
+      await savePanel(form);
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument());
+      expect(post(calls)?.body).toMatchObject({ name: "Panel 9", parent_id: null, icon: "panel" });
+      expect(toasts.calls.map((c) => c.text)).toContain("Asset created");
+      expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument(); // it only creates
+    });
+
+    it.each([
+      ["an operator (neither permission)", "operator" as const, false],
+      ["assets.edit without assets.view (the form needs both)", ["discovery.view", "assets.edit"] as PermissionId[], false],
+      ["assets.view without assets.edit", ["discovery.view", "assets.view"] as PermissionId[], false],
+      ["assets.edit and assets.view", ["discovery.view", "assets.view", "assets.edit"] as PermissionId[], true],
+    ])("the empty canvas's menu has New asset… for %s: %s", async (_who, who, has) => {
+      setup(who === "operator" ? ["discovery.view"] : who);
+      await screen.findByText("Plant OPC");
+      await accountKnown();
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      const items = labelsOf(await screen.findByRole("menu", { name: "Canvas actions" }));
+      expect(items.includes("New asset…")).toBe(has);
+    });
+
+    it("an asset's menu has New sub-asset…, which opens the form with that asset as the parent and creates only", async () => {
+      const { calls } = setup();
+      await openAll();
+      rightClick("asset:11");
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Panel 1" })).getByRole("menuitem", { name: "New sub-asset…" }));
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Parent")).toHaveValue("11");
+      expect(within(form).queryByText(/Next you choose/)).not.toBeInTheDocument();
+      await userEvent.type(within(form).getByLabelText("Name"), "Breaker 1");
+      await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument());
+      expect(post(calls)?.body).toMatchObject({ name: "Breaker 1", parent_id: 11 });
+      expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument();
+    });
+
+    it("Cancel keeps nothing and sends nothing", async () => {
+      const { calls } = setup();
+      await openAll();
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      await userEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "New asset…" }));
+      await userEvent.click(within(await screen.findByRole("dialog", { name: "New asset" })).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(post(calls)).toBeUndefined();
+    });
+  });
+
+  describe("New asset from a group or a point, and the Review that follows", () => {
+    it("a group's menu item opens the form named after the group, and the Review opens on the saved asset", async () => {
+      const { calls } = setup();
+      await openAll();
+      rightClick("cluster:1:LVP01");
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for LVP01" })).getByRole("menuitem", { name: "New asset…" }));
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Name")).toHaveValue("LVP01");
+      await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+      const review = await reviewDialog();
+      expect(within(review).getByLabelText("Asset")).toHaveValue("12");
+      expect(within(review).getAllByRole("checkbox")).toHaveLength(2); // LVP01 kW and LVP01 V
+      expect(post(calls)?.body).toMatchObject({ name: "LVP01", parent_id: null });
+      // The screen where Cancel is pressed says what Cancel does to the asset just made.
+      expect(review.querySelector(".mapmove-slot")).toHaveTextContent("LVP01 was created. Cancel keeps it without any mappings.");
+    });
+
+    it("a Review opened any other way has no such line", async () => {
+      setup();
+      await openAll();
+      await userEvent.click(screen.getByRole("button", { name: "Map LVP01 to asset…" }));
+      const review = await reviewDialog();
+      expect(review.querySelector(".mapmove-slot")).toBeEmptyDOMElement();
+    });
+
+    it("an unmapped point has New asset… in its menu only, named after the point, and the Review follows with just that point", async () => {
+      setup();
+      await openAll();
+      expect(screen.queryByRole("button", { name: /New asset from LVP01 kW/ })).not.toBeInTheDocument();
+      rightClick("point:1");
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for LVP01 kW" })).getByRole("menuitem", { name: "New asset…" }));
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Name")).toHaveValue("LVP01 kW");
+      await userEvent.click(within(form).getByRole("button", { name: "Save" }));
+      const review = await reviewDialog();
+      expect(within(review).getByLabelText("Asset")).toHaveValue("12");
+      expect(within(review).getAllByRole("checkbox")).toHaveLength(1);
+      expect(review.querySelector(".mapmove-slot")).toHaveTextContent("LVP01 kW was created. Cancel keeps it without any mappings.");
+    });
+
+    it("when the graph cannot be read again the asset stays, the person is told, and no Review opens", async () => {
+      const { toasts } = setup("admin", { lists: false });
+      await openAll();
+      await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+      await userEvent.click(within(await screen.findByRole("dialog", { name: "New asset" })).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(toasts.calls).toContainEqual({ kind: "error", text: "The asset was created, but the graph could not be refreshed. Use Map… to map to it." }));
+      expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "Review mappings" })).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ["discovery.accept alone", ["discovery.view", "discovery.accept"] as PermissionId[]],
+      ["discovery.accept and assets.edit without assets.view (the form needs both)", ["discovery.view", "discovery.accept", "assets.edit"] as PermissionId[]],
+    ])("%s keeps the Review's own New asset choice (name and parent), and no form", async (_who, permissions) => {
+      const { calls } = setup(permissions);
+      await openAll();
+      await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+      const review = await reviewDialog();
+      expect(within(review).getByRole("radio", { name: "New asset" })).toBeChecked();
+      expect(within(review).getByLabelText("New asset name")).toHaveValue("LVP01");
+      expect(screen.queryByRole("dialog", { name: "New asset" })).not.toBeInTheDocument();
+      expect(post(calls)).toBeUndefined();
+      await userEvent.keyboard("{Escape}");
+      rightClick("point:1"); // an unmapped point has no New asset… for such a role
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Map…"]);
+    });
+  });
+
+  describe("until the asset list is read", () => {
+    it("the buttons and menu items that open the form say aria-disabled, a click says why, and they work once the list has come", async () => {
+      const { toasts, release } = setup("admin", { hold: true });
+      await openAll();
+      const button = screen.getByRole("button", { name: "New asset from LVP01…" });
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(button);
+      expect(toasts.calls).toContainEqual({ kind: "info", text: "Still reading the asset list. Try again in a moment." });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+      expect(within(menu).getByRole("menuitem", { name: "New asset…" })).toHaveAttribute("aria-disabled", "true");
+      await userEvent.keyboard("{Escape}");
+      release();
+      await waitFor(() => expect(screen.getByRole("button", { name: "New asset from LVP01…" })).not.toHaveAttribute("aria-disabled"));
+      await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+      expect(await screen.findByRole("dialog", { name: "New asset" })).toBeInTheDocument();
+    });
+
+    it("a list that cannot be read says so instead of opening a form with no parents to choose", async () => {
+      const { toasts } = setup("admin", { extra: { "GET /api/assets": { status: 500, body: { detail: "boom" } } } });
+      await openAll();
+      await userEvent.click(screen.getByRole("button", { name: "New asset from LVP01…" }));
+      expect(toasts.calls).toContainEqual({ kind: "info", text: NO_FORM_REASON });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("the + on an asset node (what the page gives React Flow)", () => {
+    const pane = () => screen.getByTestId("pane");
+    /** A connection released on `target`, started from `fromHandle` on `fromNode` (what React Flow reports). */
+    const released = (target: Element | null, fromHandle: { id: string | null } | null, fromNode: { id: string } | null) =>
+      act(() => { flow.state.connect.onConnectEnd?.({ target }, { fromHandle, fromNode }); });
+
+    it("connections are drawn for a role with the form, can never be made, and use the dashed line", async () => {
+      setup();
+      await openAll();
+      expect(flow.state.connect.nodesConnectable).toBe(true);
+      expect(flow.state.connect.isValidConnection?.({ source: "asset:10", target: "asset:11" })).toBe(false);
+      expect(flow.state.connect.connectionLineComponent).toBe(AddConnectionLine);
+    });
+
+    it("a role without the form draws no connection line and has no + (an asset gets no New sub-asset…)", async () => {
+      setup(["discovery.view", "assets.view"]);
+      await screen.findByText("Plant OPC");
+      await accountKnown();
+      expect(flow.state.connect.nodesConnectable).toBe(false);
+      rightClick("asset:10");
+      expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
+    });
+
+    it("a line from the + released on the empty canvas opens New sub-asset with that asset as the parent", async () => {
+      setup();
+      await openAll();
+      released(pane(), { id: "add" }, { id: "asset:11" });
+      const form = await screen.findByRole("dialog", { name: "New asset" });
+      expect(within(form).getByLabelText("Parent")).toHaveValue("11");
+      expect(within(form).queryByText(/Next you choose/)).not.toBeInTheDocument();
+    });
+
+    // In the real library every node and every edge is INSIDE `.react-flow__pane` (the mock draws them so), so the pane test alone lets a release on a
+    // node through: it was New sub-asset of the asset the line STARTED from, which is the opposite of what putting a line on another asset means.
+    it.each<[string, () => Element | null]>([
+      ["another asset node", () => node("asset:10")],
+      ["the asset it started from", () => node("asset:11")],
+      ["something drawn inside a node", () => node("asset:10").firstElementChild],
+      ["a point node", () => node("point:1")],
+      ["a group node", () => node("cluster:1:LVP01")],
+      ["a source node", () => node("src:1")],
+      ["an edge", () => document.querySelector("[data-edge]")],
+      ["the controls", () => screen.getByTestId("controls")],
+    ])("released over %s it does nothing", async (_what, target) => {
+      setup();
+      await openAll();
+      const over = target();
+      expect(over).not.toBeNull();
+      if (_what !== "the controls") expect(over!.closest(".react-flow__pane")).not.toBeNull(); // the case that matters is the one inside the pane
+      released(over, { id: "add" }, { id: "asset:11" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("released over the rectangle a box selection leaves (it covers the selected nodes inside the pane) it does nothing", async () => {
+      setup();
+      await openAll();
+      await userEvent.click(screen.getByTestId("select-asset:10"));
+      const rect = await screen.findByTestId("selection-rect");
+      expect(rect.closest(".react-flow__pane")).not.toBeNull();
+      released(rect, { id: "add" }, { id: "asset:11" });
+      released(rect.parentElement, { id: "add" }, { id: "asset:11" }); // the selection's box, around the rectangle
+      const other = document.createElement("div");
+      other.className = "react-flow__selection"; // the box being drawn
+      screen.getByTestId("pane").append(other);
+      released(other, { id: "add" }, { id: "asset:11" });
+      other.remove();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("released over a control, the minimap or a panel drawn inside the canvas it does nothing either", async () => {
+      setup();
+      await openAll();
+      for (const cls of ["react-flow__controls", "react-flow__minimap", "react-flow__panel"]) {
+        const over = document.createElement("div");
+        over.className = cls;
+        screen.getByTestId("pane").append(over);
+        released(over, { id: "add" }, { id: "asset:11" });
+        over.remove();
+      }
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("released outside the canvas, or on nothing, it does nothing", async () => {
+      setup();
+      await openAll();
+      released(document.body, { id: "add" }, { id: "asset:11" });
+      released(null, { id: "add" }, { id: "asset:11" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("a line from any other handle (or none), or from a node that is not an asset, does nothing", async () => {
+      setup();
+      await openAll();
+      released(pane(), { id: null }, { id: "asset:11" });
+      released(pane(), { id: "other" }, { id: "asset:11" });
+      released(pane(), null, null);
+      released(pane(), { id: "add" }, { id: "src:1" });
+      released(pane(), { id: "add" }, null);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("several points dropped on an asset together", () => {
+    // point:1 (LVP01 kW) and point:2 (LVP01 V) are dragged together; `dragwith-point:1` plays the drag with the partner and ends at the page's drop place.
+    const dragTogether = async (partner = "point:2") => {
+      flow.state.partner = partner;
+      await userEvent.click(screen.getByTestId("dragwith-point:1"));
+    };
+    const mappedV = () => {
+      const m = graph();
+      m.sources[0].clusters[0].points[1] = point(2, "LVP01 V", { asset_id: 10, mapping_id: 9, mapped_metric: "voltage_v" });
+      return m;
+    };
+
+    it("opens ONE Review for all of them on the asset under the pointer, puts them back and remembers nothing", async () => {
+      const { calls } = setup("admin");
+      await openAll();
+      const start = [1, 2].map((id) => [node(`point:${id}`).dataset.x, node(`point:${id}`).dataset.y]);
+      flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+      await dragTogether();
+      const review = await reviewDialog();
+      expect(within(review).getByLabelText("Asset")).toHaveValue("11");
+      expect(within(review).getAllByRole("checkbox")).toHaveLength(2);
+      expect(review).toHaveTextContent("2 unmapped points from Plant OPC");
+      expect(flow.getIntersectingNodes).toHaveBeenCalledWith(expect.objectContaining({ id: "point:1" }));
+      expect(calls.some((c) => c.method === "PUT")).toBe(false); // the layout was not saved
+      await userEvent.click(within(review).getByRole("button", { name: "Cancel" }));
+      await userEvent.click(screen.getByRole("button", { name: "Collapse LVP01" }));
+      await userEvent.click(screen.getByRole("button", { name: "Expand LVP01" }));
+      expect([1, 2].map((id) => [node(`point:${id}`).dataset.x, node(`point:${id}`).dataset.y])).toEqual(start); // a rebuild still puts them at the start
+    });
+
+    it("a refusal (one of them is mapped already) is told in a toast, opens nothing, and saves no layout", async () => {
+      const { calls, toasts } = setup("admin", { model: mappedV });
+      await openAll();
+      flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+      await dragTogether();
+      await waitFor(() => expect(toasts.calls).toContainEqual({ kind: "info", text: "1 of the selected points is already mapped. Unmap it first, or select only unmapped points." }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(calls.some((c) => c.method === "PUT")).toBe(false);
+    });
+
+    it("not over an asset it is the plain move it always was: the layout is saved for both and no dialog opens", async () => {
+      const { calls } = setup("admin");
+      await openAll();
+      flow.state.intersecting = [];
+      await dragTogether();
+      await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+      const sent = (calls.find((c) => c.method === "PUT")!.body as { nodes: { node_id: string }[] }).nodes.map((n) => n.node_id);
+      expect(sent).toEqual(expect.arrayContaining(["point:1", "point:2"]));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("a mix with a node that is not a point (over an asset) stays a plain move, and a role that may not accept never maps by dragging", async () => {
+      const { calls } = setup("admin");
+      await openAll();
+      flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+      await dragTogether("cluster:1:LVP02");
+      await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("without discovery.accept the same drag only moves the nodes", async () => {
+      const { calls, toasts } = setup(["discovery.view", "discovery.edit"]);
+      await openAll();
+      flow.state.intersecting = [{ id: "asset:11", type: "asset" }];
+      await dragTogether();
+      await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(toasts.calls).toEqual([]);
     });
   });
 });

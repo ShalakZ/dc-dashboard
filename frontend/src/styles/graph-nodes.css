@@ -18,6 +18,27 @@
   .gprogress-host { position: relative; }
   .gprogress { position: absolute; left: 0; bottom: 0; height: 3px; max-width: 100%; background: var(--accent); }
 
+  /* W12a: the mapping menu button of a mapped point or group. Absolutely placed at the node's top right (20px square), so the node is no taller; the host is positioned, and the first
+     line leaves 24px for it at the right (a point's title directly, a group's title row, whose toggle then stands left of the button). The two-class selectors beat app.css's
+     `.gnode button` (padding 0 6px) and `.icon-btn` (28px, 16px icon), which name the same properties. */
+  .gnode-hasmenu { position: relative; }
+  .gnode-hasmenu > .node-title, .gnode-hasmenu > .gnode-head { padding-right: 24px; }
+  .gnode-hasmenu .gnode-menu-btn { position: absolute; top: 5px; right: 6px; width: 20px; height: 20px; padding: 0; }
+  .gnode-hasmenu .gnode-menu-btn svg.i { width: 14px; height: 14px; }
+
+  /* W12a: the "+" of an asset node (a source Handle that opens New sub-asset): a 20px round control centred on the node's top right corner, so half of it hangs outside. Out of the layout
+     (absolute), so the node keeps its measured size. The library's sheet is UNLAYERED and names these properties on .react-flow__handle, so the ones it sets are !important here (an
+     important declaration in a layer beats an unlayered normal one). Hidden by opacity alone (and inert: pointer-events none, important because the sheet says all on a connectable handle),
+     never visibility or display: either would take it out of the Tab order and the accessibility tree, and a closed dialog could not give it the focus back (focus() on a hidden element does
+     nothing, so the focus fell to the page). It is shown when the node is hovered, holds the focus (Tab reaches the node first, then the control; the global focus ring draws on it), is
+     selected (touch has no hover), or while a line is being dragged from it. */
+  .gnode-add { top: 0 !important; width: 20px !important; height: 20px !important; padding: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; opacity: 0; pointer-events: none !important; color: var(--bg); background-color: var(--accent) !important; border: 1px solid var(--bg) !important; border-radius: 50%; }
+  .gnode-add:hover { background-color: var(--accent-hover) !important; }
+  .gnode-add svg.i { width: 12px; height: 12px; stroke-width: 2.2; }
+  .react-flow__node:hover .gnode-add, .react-flow__node:focus-within .gnode-add, .react-flow__node.selected .gnode-add, .gnode-add:focus, .gnode-add:focus-visible, .gnode-add.connectingfrom { opacity: 1; pointer-events: all !important; }
+  /* The line dragged from it: dashed and in the accent. */
+  .gconnect { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; }
+
   /* Path highlight. The wrapper gets has-focus while a path is lit (one DOM change), and only the nodes and edges of the path get lit (the rest keep their identity, so 2,000 nodes do not re-render).
      The dimming is immediate, with no opacity transition: a 120 ms fade ran on ~2,280 layers at once and made every hover 5-6 slow frames at 2,286 nodes (whole-wave review, finding 1). `.graph-canvas` is never the FIRST compound of a selector here (the clash guard in app.css.test.ts would call the class "bare" in this file and fail graph-tools.css for naming it): every rule carries a second class. */
   .graph-canvas.has-focus .react-flow__node:not(.lit) { opacity: 0.35; }

@@ -215,14 +215,22 @@ export default defineConfig({
       dependencies: ["w7t"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
-    // The LAST project, on purpose: it seeds a month of history into the stack (`docker compose exec ... python -m dcdash.seed.history`, so it runs only
+    // It seeds a month of history into the stack (`docker compose exec ... python -m dcdash.seed.history`, so it runs only
     // when COMPOSE_PROJECT_NAME starts with dcdash_e2e_ and skips itself otherwise), closes and reopens the previous month, and in afterAll deletes the
-    // seed again and puts the month back to open. Nothing may come after it that does not expect a stack that has just held a closed month. It measures
-    // 1440 x 900 first and 1024 x 640 by itself.
+    // seed again and puts the month back to open. Nothing may come after it that does not expect a stack that has just held a closed month (w12a works on
+    // mappings, assets and roles only, and does not care). It measures 1440 x 900 first and 1024 x 640 by itself.
     {
       name: "w11",
       testMatch: "w11.spec.ts",
       dependencies: ["w7u"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
+    // The tail of the chain. It READS what the projects before it left (a group of some source with nothing mapped; it scans for one itself when there is none) and puts every
+    // mapping, asset, account and role it makes back, so nothing that follows it sees a difference. Each case that needs a size sets it itself (1440 x 900, 1024 x 640).
+    {
+      name: "w12a",
+      testMatch: "w12a.spec.ts",
+      dependencies: ["w11"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
   ],

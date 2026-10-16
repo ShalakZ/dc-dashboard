@@ -2,9 +2,9 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { keys, useInvalidate } from "../../api/queries";
 import type { AcceptResult, GraphModel, GraphSource, Metric } from "../../api/types";
+import type { MappedInfo } from "../../hooks/useMappingActions";
 import { acceptBody, assetChoices, bulkGroups, type BulkGroup, type ReviewRow } from "../../lib/drop";
 import { assetLabels } from "../dashboard/AssetPicker";
-import { useToast } from "../Toasts";
 
 const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 /** The longest asset name the server accepts (AssetName in api/asset_names.py). */
@@ -29,6 +29,11 @@ function foreignUnit(row: ReviewRow): string | null {
 }
 const mappedText = (r: ReviewRow) => `${r.name}: ${r.metric === "custom" ? `custom (${(r.customUnit ?? "").trim()})` : r.metric} ×${r.scale}`;
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/**
+ * The toast says `Created 3 assets` and its Undo only unmaps the points the batch mapped (the assets stay: deleting one is a separate, guarded act). The
+ * sentence is pinned and the button is named Undo, so what it does is said in the button's description.
+ */
+const UNDO_TITLE = "Unmap the points it mapped; the assets stay (Ctrl+Z)";
 
 /**
  * Create one asset for each group of a source in one go (W7r): choose ONE parent (or the top level), tick the groups, adjust their names and
@@ -38,10 +43,13 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
  *
  * The groups are read once, when the dialog opens: a refetch of the graph while the person types must not wipe their names. Focus moves to the
  * parent select and Tab stays inside; when the dialog goes away it does NOT give the focus back (the page knows what is left to focus).
+ *
+ * The batch's one toast is the page's (`onMapped`, the dialog unmounts with the last group): the dialog keeps its own sentence ("Created 3 assets",
+ * "Created 2 of 3 assets") and hands over every mapping it made with the asset each is on, so the toast carries an Undo for exactly what was made,
+ * a partial batch included.
  */
-export function BulkCreateDialog({ model, source, onClose }: { model: GraphModel; source: GraphSource; onClose: () => void }) {
+export function BulkCreateDialog({ model, source, onMapped, onClose }: { model: GraphModel; source: GraphSource; onMapped: (info: MappedInfo) => void; onClose: () => void }) {
   const invalidate = useInvalidate();
-  const toast = useToast();
   const dialog = useRef<HTMLDivElement>(null);
   const parentSelect = useRef<HTMLSelectElement>(null);
   const rowsBox = useRef<HTMLDivElement>(null);
@@ -68,6 +76,8 @@ export function BulkCreateDialog({ model, source, onClose }: { model: GraphModel
   const alive = useRef(true);
   const close = useRef(onClose);
   close.current = onClose;
+  const mapped = useRef(onMapped);
+  mapped.current = onMapped;
 
   const choices = useMemo(() => assetChoices(model.assets), [model.assets]);
   const labels = useMemo(() => assetLabels(model.assets.map((a) => ({ ...a, sort_order: 0 }))), [model.assets]);
@@ -113,13 +123,19 @@ export function BulkCreateDialog({ model, source, onClose }: { model: GraphModel
     setFailures({});
     setOutcome(null);
     const failed: string[] = [];
+    const madeMappings: MappedInfo["mappings"][number][] = [];
+    const madeAssets: string[] = [];
     let made = 0;
     try {
       for (const [index, { group, name }] of plan.entries()) {
         if (alive.current) setProgress({ at: index + 1, of: plan.length });
         try {
-          await api.post<AcceptResult>("/api/discovery/accept", acceptBody(source.id, { kind: "new", name, parentId: target }, group.rows));
+          const result = await api.post<AcceptResult>("/api/discovery/accept", acceptBody(source.id, { kind: "new", name, parentId: target }, group.rows));
           made += 1;
+          madeAssets.push(name);
+          // The ids come back in the order of the checked rows, which are the points the body carried.
+          const sent = group.rows.filter((r) => r.checked);
+          result.mapping_ids.forEach((id, i) => madeMappings.push({ id, assetId: result.asset_id, name: sent[i]?.name }));
           if (alive.current) setCreated((current) => new Set(current).add(group.key));
         } catch (e) {
           failed.push(group.key);
@@ -135,11 +151,11 @@ export function BulkCreateDialog({ model, source, onClose }: { model: GraphModel
       setBusy(false);
     }
     if (failed.length === 0) {
-      toast.success(`Created ${plural(made, "asset")}`);
+      mapped.current({ text: `Created ${plural(made, "asset")}`, kind: "success", mappings: madeMappings, newAssets: madeAssets, undoTitle: UNDO_TITLE });
       close.current();
       return;
     }
-    toast.error(`Created ${made} of ${plural(plan.length, "asset")}`);
+    mapped.current({ text: `Created ${made} of ${plural(plan.length, "asset")}`, kind: "error", mappings: madeMappings, newAssets: madeAssets, undoTitle: UNDO_TITLE });
     // No names in it: the rows that are still listed are the ones that failed, and a list of names has no length limit (the line is a fixed slot).
     if (alive.current) setOutcome(`Created ${made} of ${plan.length}. The groups still listed were not created: fix the rows marked and press the button again.`);
   }

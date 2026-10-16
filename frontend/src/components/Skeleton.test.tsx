@@ -538,6 +538,16 @@ describe("AssetSkeleton", () => {
     expect(table.querySelectorAll("thead th")).toHaveLength(4);
     expect(table.querySelectorAll("tbody tr")).toHaveLength(3);
   });
+
+  it("draws the menu column too for a person who can edit mappings: the loaded table has a fifth, so nothing shifts when it lands", () => {
+    const { container } = render(<AssetSkeleton label="Loading the asset" canEdit />);
+    const table = container.querySelector(".table-wrap")!;
+    expect(table.querySelectorAll("thead th")).toHaveLength(5);
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(3);
+    for (const tr of table.querySelectorAll("tbody tr")) expect(tr.querySelectorAll("td")).toHaveLength(5);
+    expect(table.querySelector("table")).toHaveStyle({ tableLayout: "fixed" });
+    expect(table.querySelectorAll("col")).toHaveLength(5);
+  });
 });
 
 describe("DashboardSkeleton", () => {

@@ -1,10 +1,12 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
+import { resetUndoForTests } from "../hooks/useMappingActions";
 import type { PermissionId } from "../lib/permissions";
 import { renderWithProviders } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
+import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
 import { SourcePointsPage } from "./SourcePointsPage";
 
@@ -18,6 +20,8 @@ async function choose(row: HTMLElement, item: string) {
   await userEvent.click(within(row).getByRole("button", { name: /^Actions for / }));
   await userEvent.click(await screen.findByRole("menuitem", { name: item }));
 }
+/** Unmap… opens a confirmation (W12a): this answers it. */
+const confirmUnmap = async () => userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
 const routes = {
   "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("admin", { username: "a" }) },
   "GET /api/assets": { body: [{ id: 4, parent_id: null, name: "Panel 1", kind: "panel", sort_order: 0 }] },
@@ -26,8 +30,12 @@ const routes = {
   "POST /api/sources/2/browse": { status: 202, body: { job_id: 11 } },
   "GET /api/jobs/11": { body: { id: 11, kind: "browse_source", status: "done", result: { count: 2 }, created_at: "t", finished_at: "t" } },
   "POST /api/mappings": { status: 201, body: { id: 3, point_id: 7, asset_id: 4, metric: "active_power_kw", scale: 1, interval_seconds: 5, custom_unit: null } },
+  "GET /api/mappings/2": { body: { id: 2, point_id: 8, asset_id: 4, metric: "energy_kwh", scale: 1, interval_seconds: 60, custom_unit: null } }, // what the module reads before it deletes
   "DELETE /api/mappings/2": { status: 204 },
 };
+
+// The latest Undo is module state in the hook: one this file's tests left unused must not be run by a later test's Ctrl+Z.
+afterEach(resetUndoForTests);
 
 describe("SourcePointsPage", () => {
   it("browses, then maps an unmapped point", async () => {
@@ -51,8 +59,9 @@ describe("SourcePointsPage", () => {
     renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points" });
     const row = (await screen.findByText("panel1/energy")).closest("tr")!;
     expect(await within(row).findByText(/Panel 1 · energy_kwh/)).toBeInTheDocument(); // the asset names wait for the account (assets.view)
-    await choose(row, "Unmap");
-    expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/mappings/2")).toBe(true);
+    await choose(row, "Unmap…");
+    await confirmUnmap();
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/mappings/2")).toBe(true));
   });
 
   it("shows the API conflict message", async () => {
@@ -254,7 +263,8 @@ describe("SourcePointsPage sorting, filtering and search", () => {
     await screen.findByText("panel1/energy");
     await userEvent.type(screen.getByRole("searchbox", { name: "Search points" }), "energy");
     expect(shown()).toEqual(["panel1/energy"]);
-    await choose(screen.getByText("panel1/energy").closest("tr")!, "Unmap");
+    await choose(screen.getByText("panel1/energy").closest("tr")!, "Unmap…");
+    await confirmUnmap();
     expect(await screen.findByText("unmapped")).toBeInTheDocument();
     expect(shown()).toEqual(["panel1/energy"]);
     expect(screen.getByRole("searchbox", { name: "Search points" })).toHaveValue("energy");
@@ -424,7 +434,7 @@ describe("SourcePointsPage look (W6)", () => {
     expect(within(screen.getByText("panel1/energy").closest("tr")!).queryByText("unmapped")).not.toBeInTheDocument();
   });
 
-  it("gives each row a menu: Map for an unmapped point, Edit and a danger-toned Unmap for a mapped one, which needs no confirmation", async () => {
+  it("gives each row a menu: Map for an unmapped point, Edit and a danger-toned Unmap… for a mapped one, which asks first", async () => {
     const calls = mockFetch(routes);
     const confirm = vi.spyOn(window, "confirm");
     page();
@@ -435,13 +445,104 @@ describe("SourcePointsPage look (W6)", () => {
     const mapped = screen.getByText("panel1/energy").closest("tr")!;
     expect(within(mapped).getByRole("button", { name: "Actions for Panel 1 energy" }).closest("td")).toHaveClass("row-actions");
     await userEvent.click(within(mapped).getByRole("button", { name: "Actions for Panel 1 energy" }));
-    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Edit", "Unmap"]);
-    expect(screen.getByRole("menuitem", { name: "Unmap" })).toHaveClass("danger-item");
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Edit", "Unmap…"]);
+    expect(screen.getByRole("menuitem", { name: "Unmap…" })).toHaveClass("danger-item");
     expect(screen.getByRole("menuitem", { name: "Edit" })).not.toHaveClass("danger-item");
-    await userEvent.click(screen.getByRole("menuitem", { name: "Unmap" }));
-    expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/mappings/2")).toBe(true);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Unmap…" }));
+    // the page's own dialog (never the browser's) asks, and nothing is sent until it is answered
+    const dialog = await screen.findByRole("dialog", { name: 'Unmap "Panel 1 energy" from Panel 1?' });
+    expect(dialog).toHaveTextContent("Billing for months that are still open is recalculated without it; closed months keep their billed figures.");
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
     expect(confirm).not.toHaveBeenCalled();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(within(mapped).getByRole("button", { name: "Actions for Panel 1 energy" })).toHaveFocus(); // the dialog gives the focus back
+  });
+
+  it("Unmap… reads the mapping, deletes it, toasts with an Undo, and puts the focus on the row's menu button (the point stays in the list, now unmapped)", async () => {
+    let unmapped = false;
+    const calls = mockFetch({
+      ...routes,
+      "GET /api/sources/2/points": () => ({ body: [
+        points[0],
+        unmapped ? { ...points[1], mapping: null } : { ...points[1], mapping: { ...points[1].mapping!, scale: 0.001, interval_seconds: 5 } },
+      ] }),
+      "GET /api/mappings/2": { body: { id: 2, point_id: 8, asset_id: 4, metric: "energy_kwh", scale: 0.001, interval_seconds: 5, custom_unit: null } },
+      "DELETE /api/mappings/2": () => { unmapped = true; return { status: 204 }; },
+    });
+    const spy = spyToasts();
+    renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points", toasts: spy.api });
+    const row = (await screen.findByText("panel1/energy")).closest("tr")!;
+    await choose(row, "Unmap…");
+    await confirmUnmap();
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(calls.filter((c) => c.path === "/api/mappings/2").map((c) => c.method)).toEqual(["GET", "DELETE"]);
+    expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Unmapped 1 point from Panel 1.", options: { durationMs: 10_000, action: { label: "Undo" } } });
+    expect(await within(row).findByText("unmapped")).toBeInTheDocument();
+    await waitFor(() => expect(within(row).getByRole("button", { name: "Actions for Panel 1 energy" })).toHaveFocus());
+    act(() => spy.calls[0].options!.action!.onAction());
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/mappings")?.body).toEqual({
+      point_id: 8, asset_id: 4, metric: "energy_kwh", scale: 0.001, interval_seconds: 5, custom_unit: null,
+    });
+  });
+
+  it("after the toast's Undo the focus is on the row's menu button again, not the body (the Undo button left with its toast)", async () => {
+    let unmapped = false;
+    mockFetch({
+      ...routes,
+      "GET /api/sources/2/points": () => ({ body: [points[0], unmapped ? { ...points[1], mapping: null } : points[1]] }),
+      "DELETE /api/mappings/2": () => { unmapped = true; return { status: 204 }; },
+      "POST /api/mappings": () => { unmapped = false; return { status: 201, body: { id: 5, point_id: 8, asset_id: 4, metric: "energy_kwh", scale: 1, interval_seconds: 60, custom_unit: null } }; },
+    });
+    const spy = spyToasts();
+    renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points", toasts: spy.api });
+    const row = (await screen.findByText("panel1/energy")).closest("tr")!;
+    await choose(row, "Unmap…");
+    await confirmUnmap();
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    await waitFor(() => expect(within(row).getByRole("button", { name: "Actions for Panel 1 energy" })).toHaveFocus());
+    // Pressed from the toast, whose button holds the focus and goes away with the toast.
+    const toastButton = document.body.appendChild(document.createElement("div")).appendChild(document.createElement("button"));
+    toastButton.parentElement!.className = "toast-stack";
+    toastButton.focus();
+    act(() => spy.calls[0].options!.action!.onAction());
+    toastButton.parentElement!.remove();
+    expect(document.activeElement).toBe(document.body);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(within(row).getByRole("button", { name: "Actions for Panel 1 energy" })).toHaveFocus();
+  });
+
+  it("when the filter drops the row once it is unmapped, the focus goes to the search box (the row's button is gone)", async () => {
+    let unmapped = false;
+    mockFetch({
+      ...routes,
+      "GET /api/sources/2/points": () => ({ body: [points[0], unmapped ? { ...points[1], mapping: null } : points[1]] }),
+      "DELETE /api/mappings/2": () => { unmapped = true; return { status: 204 }; },
+    });
+    renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points", toasts: spyToasts().api });
+    await screen.findByText("panel1/energy");
+    const search = screen.getByRole("searchbox", { name: "Search points" });
+    await userEvent.type(search, "energy_kwh"); // matches the mapped row by its metric only
+    await choose(screen.getByText("panel1/energy").closest("tr")!, "Unmap…");
+    await confirmUnmap();
+    await waitFor(() => expect(screen.queryByText("panel1/energy")).not.toBeInTheDocument());
+    await waitFor(() => expect(search).toHaveFocus());
+  });
+
+  it("a delete the server refuses is an error toast, and the row keeps its mapping and the focus", async () => {
+    mockFetch({ ...routes, "DELETE /api/mappings/2": { status: 500, body: { detail: "database is busy" } } });
+    const spy = spyToasts();
+    renderWithProviders(<SourcePointsPage />, { route: "/sources/2/points", path: "/sources/:id/points", toasts: spy.api });
+    const row = (await screen.findByText("panel1/energy")).closest("tr")!;
+    await choose(row, "Unmap…");
+    await confirmUnmap();
+    await waitFor(() => expect(spy.calls).toHaveLength(1));
+    expect(spy.calls[0]).toEqual({ kind: "error", text: '"Panel 1 energy" could not be unmapped: Database is busy.' });
+    expect(within(row).queryByText("unmapped")).not.toBeInTheDocument();
+    await waitFor(() => expect(within(row).getByRole("button", { name: "Actions for Panel 1 energy" })).toHaveFocus());
   });
 
   it("a sort header is a quiet button inside the th, and only the sorted one draws the arrow", async () => {
@@ -544,8 +645,9 @@ describe("SourcePointsPage controls follow the permissions of the role (a custom
     await userEvent.keyboard("{Escape}");
     const mapped = screen.getByText("panel1/energy").closest("tr")!;
     await userEvent.click(within(mapped).getByRole("button", { name: /^Actions for / }));
-    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Edit", "Unmap"]);
-    await userEvent.click(screen.getByRole("menuitem", { name: "Unmap" }));
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Edit", "Unmap…"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Unmap…" }));
+    await confirmUnmap();
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.path === "/api/mappings/2")).toBe(true));
   });
 });

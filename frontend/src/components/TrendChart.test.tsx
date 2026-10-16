@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
+import type { SummaryMetric } from "../api/types";
 import { useAppearance } from "../auth/AppearanceProvider";
 import { CHART_HEIGHT } from "../lib/chartBox";
 import { mockFetch } from "../test/fetchMock";
@@ -547,5 +548,85 @@ describe("TrendChart while the series loads", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument()); // the retry is pending: no error yet
     expect(screen.queryByText(LABEL)).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+});
+
+// The metric the chart shows is what the person picked while it still exists, else the default of the metrics left (W12a): taking the charted
+// mapping off the asset must not leave the chart asking the server for a metric it no longer has (a 404 shown as a red line).
+describe("TrendChart follows its metric when a mapping goes", () => {
+  const row = (mapping_id: number, metric: SummaryMetric["metric"]): SummaryMetric => ({ mapping_id, point_id: mapping_id + 6, metric, unit: "kW", value: 1, ts: null, quality: 0 });
+  const ALL = [row(1, "active_power_kw"), row(2, "voltage_v"), row(3, "current_a")];
+  // The metrics the server still has; the harness changes it in the click, before the chart asks again.
+  let gone: SummaryMetric["metric"][] = [];
+  const metricOf = (url: string) => new URL(url, "http://x").searchParams.get("metric");
+  const routes = {
+    ...siteRoute,
+    "GET /api/setup": { body: { needed: false } }, "GET /api/me": { body: userFor("viewer", { username: "v" }) },
+    "GET /api/assets/4/series": ({ url }: { url: string }) => (gone.includes(metricOf(url) as SummaryMetric["metric"])
+      ? { status: 404, body: { detail: "this asset has no such metric" } }
+      : { body: series }),
+  };
+  function Harness() {
+    const [, setTick] = useState(0);
+    const flip = (m: SummaryMetric["metric"]) => { gone = gone.includes(m) ? gone.filter((x) => x !== m) : [...gone, m]; setTick((n) => n + 1); };
+    return (
+      <>
+        <button type="button" onClick={() => flip("active_power_kw")}>flip power</button>
+        <button type="button" onClick={() => flip("voltage_v")}>flip volts</button>
+        <button type="button" onClick={() => flip("current_a")}>flip current</button>
+        <TrendChart assetId={4} metrics={ALL.filter((m) => !gone.includes(m.metric))} />
+      </>
+    );
+  }
+  const askedMetrics = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url)).filter((u) => u.includes("/series")).map(metricOf);
+  const metricSelect = () => screen.getByLabelText("Metric") as HTMLSelectElement;
+  beforeEach(() => { gone = []; });
+
+  it("asks for the first metric left when the charted one is unmapped, with no error, and for the default again when it comes back", async () => {
+    mockFetch(routes);
+    renderWithProviders(<Harness />);
+    await screen.findByTestId("chart");
+    expect(metricSelect().value).toBe("active_power_kw");
+    const before = askedMetrics().length;
+    await userEvent.click(screen.getByRole("button", { name: "flip power" }));
+    await waitFor(() => expect(askedMetrics().at(-1)).toBe("voltage_v"));
+    expect(metricSelect().value).toBe("voltage_v");
+    expect(askedMetrics().slice(before)).not.toContain("active_power_kw"); // nothing asks for the metric that is gone
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("chart")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "flip power" })); // Undo puts the mapping back
+    await waitFor(() => expect(askedMetrics().at(-1)).toBe("active_power_kw"));
+    expect(metricSelect().value).toBe("active_power_kw");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps a metric the person picked through unrelated changes, and drops it only when that metric goes", async () => {
+    mockFetch(routes);
+    renderWithProviders(<Harness />);
+    await screen.findByTestId("chart");
+    await userEvent.selectOptions(metricSelect(), "voltage_v");
+    await waitFor(() => expect(askedMetrics().at(-1)).toBe("voltage_v"));
+    await userEvent.click(screen.getByRole("button", { name: "flip power" })); // another metric goes: the pick stays
+    await waitFor(() => expect(within(metricSelect()).queryByRole("option", { name: "active_power_kw" })).not.toBeInTheDocument());
+    expect(metricSelect().value).toBe("voltage_v");
+    expect(askedMetrics().at(-1)).toBe("voltage_v");
+    await userEvent.click(screen.getByRole("button", { name: "flip volts" })); // the picked one goes: the metric left is shown
+    await waitFor(() => expect(askedMetrics().at(-1)).toBe("current_a"));
+    expect(metricSelect().value).toBe("current_a");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "flip volts" })); // the pick is restored with its mapping
+    await waitFor(() => expect(askedMetrics().at(-1)).toBe("voltage_v"));
+  });
+
+  it("says there is no metric to chart when the last one goes, and charts again when one comes back", async () => {
+    mockFetch(routes);
+    renderWithProviders(<Harness />);
+    await screen.findByTestId("chart");
+    for (const name of ["flip power", "flip volts", "flip current"]) await userEvent.click(screen.getByRole("button", { name }));
+    expect(await screen.findByText("No metric to chart.")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Trend" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "flip current" }));
+    expect(await screen.findByTestId("chart")).toBeInTheDocument();
+    expect(metricSelect().value).toBe("current_a");
   });
 });

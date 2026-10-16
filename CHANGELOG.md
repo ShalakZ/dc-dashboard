@@ -15,6 +15,25 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## W12a (2026-10-16, merge commit MERGE_PENDING)
+
+W12a (mapping actions) lets you take a mapping off an asset, or move it to another asset, from the places you see it, with one
+confirmation and an Undo. In **Discovery**, a mapped point or group has a small **Mapping actions** button (the same menu as a
+right-click, or Shift+F10 on the node) with **Unmap…** and **Move to another asset…** (for a group: **Unmap this group…** and
+**Move this group's mappings…**); an asset's right-click menu has **Unmap everything from <source>…**. On the **asset page** every metric
+row has an actions menu with the same two items, and on the **Points page** **Unmap…** now asks first. Each one says what it does to
+billing (months that are still open are recalculated, closed months keep their billed figures), works one mapping at a time, stops at
+the first failure and tells you which went, and shows an **Undo** for 10 seconds (also **Ctrl+Z**); Undo puts back exactly the scale,
+interval and unit that were removed. Mapping in Discovery now gets an Undo too (**Mapped 6 points to Room 1.**), a note when the
+target is a room, building, site or row ("meters usually belong to a Panel or Rack"; it never blocks), and the Review can take several
+points dropped on an asset at once. **New asset…** in Discovery opens the same form as the Assets page (kind, icon, parent); for a
+group the Review opens on the new asset next. A small **+** on an asset node (hover, focus or select it; click, press Enter, or drag
+the line to empty canvas) adds a sub-asset. Unmap, move, Undo, New asset and the **+** need Edit assets; mapping still needs Accept
+scan results. No migration, no new permission; one new read, `GET /api/mappings/{id}` (Edit assets), and the Audit entry for a deleted
+mapping now also holds its scale, interval and unit. The usual steps of [Upgrading and going back](docs/upgrading.md) are all it
+needs; the code to go back to is `09ed32a`. See [Discovery](docs/sources-and-discovery.md) and
+[Taking mappings off an asset or moving them](docs/assets-and-kinds.md).
+
 ## W11 (2026-10-15, merge commit dee0ce8)
 
 W11 (close month) lets an administrator freeze a finished billing month, so that the bill for it stops moving. On Billing, an

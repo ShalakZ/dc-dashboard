@@ -10,6 +10,7 @@ import { ImpactDeleteDialog } from "../components/ImpactDeleteDialog";
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/Toasts";
 import { TrashButton } from "../components/TrashButton";
+import { useCreateAsset } from "../hooks/useCreateAsset";
 import { useTreeDelete } from "../hooks/useTreeDelete";
 import { useTreeMove } from "../hooks/useTreeMove";
 import { kindIconId } from "../lib/assetIcons";
@@ -116,10 +117,12 @@ export function AssetsPage() {
     }
     setDialog(null);
   };
+  // The same save Discovery's New asset uses (hooks/useCreateAsset): the request, the toast (the dialog closes and the tree is the only other sign; an
+  // edit needs no word), the kind registration or the refresh. Only the dialog's closing is the page's own.
+  const createAsset = useCreateAsset();
   const create = async (body: AssetIn, registerKind: boolean) => {
-    await api.post("/api/assets", body);
-    toast.success("Asset created"); // right after the request: the dialog closes and the tree is the only other sign (an edit needs no word)
-    await finish(registerKind && canRegister ? body.kind : null);
+    await createAsset(body, registerKind);
+    setDialog(null);
   };
   const update = async (body: AssetIn, registerKind: boolean) => {
     await api.patch(`/api/assets/${selected!.id}`, body);

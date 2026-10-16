@@ -1,8 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { keys, useInvalidate } from "../../api/queries";
-import { METRICS, type AcceptResult, type GraphModel, type Metric } from "../../api/types";
+import { METRICS, type AcceptResult, type AssetKind, type GraphModel, type Metric } from "../../api/types";
 import { useAction } from "../../hooks/useAction";
+import type { MappedInfo } from "../../hooks/useMappingActions";
+import { containerNote } from "../../lib/mappingActions";
 import { assetLabels } from "../dashboard/AssetPicker";
 import {
   MAX_UNIT_LENGTH, acceptBody, assetChoices, metricConflicts, missingUnits, reviewRows, takenMetrics, withMetric,
@@ -18,6 +20,15 @@ interface Props {
   model: GraphModel;
   payload: DropPayload;
   initialTarget: InitialTarget;
+  /** The kinds registry, for the note under the asset select when the asset is a place (a room, a hall) rather than equipment. */
+  kinds?: readonly Pick<AssetKind, "name" | "icon">[];
+  /**
+   * Set only for the Review that follows the New asset form: the name of the asset that form just made. The slot under the select then says it was made and that
+   * Cancel keeps it (Cancel is pressed on this screen, and the form's own warning was on the one before).
+   */
+  createdAsset?: string;
+  /** The page raises the "Mapped N points to X." toast (with its Undo): this dialog unmounts the moment the accept is done. */
+  onMapped: (info: MappedInfo) => void;
   onClose: () => void;
 }
 
@@ -49,7 +60,7 @@ const takenFor = (model: GraphModel, mode: Mode, assetId: number | null): Readon
  * Review and commit the mappings for what was dropped (or picked): choose the asset (existing or new), tick the points,
  * adjust metric, scale and interval, then create them all in one request. Nothing is saved until "Create mappings".
  */
-export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) {
+export function ReviewDialog({ model, payload, initialTarget, kinds, createdAsset, onMapped, onClose }: Props) {
   const invalidate = useInvalidate();
   const { run, busy, error } = useAction();
   const dialog = useRef<HTMLDivElement>(null);
@@ -59,6 +70,8 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
   // option texts as part of its own, so browser tooling that matches a label exactly would never find "Asset".
   const assetSelectId = useId();
   const parentSelectId = useId();
+  const noteId = useId();
+  const createdId = useId();
 
   const [mode, setMode] = useState<Mode>(initialTarget.kind);
   const [assetId, setAssetId] = useState<number | null>(initialTarget.kind === "existing" ? initialTarget.assetId : null);
@@ -71,6 +84,10 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
   const choices = useMemo(() => assetChoices(model.assets), [model.assets]);
   const labels = useMemo(() => assetLabels(model.assets.map((a) => ({ ...a, sort_order: 0 }))), [model.assets]);
   const taken = useMemo(() => takenFor(model, mode, assetId), [model, mode, assetId]);
+  // Mapping to a room or a hall is allowed (the note never blocks), but meters usually belong to a panel or a rack: say so under the select.
+  const chosen = mode === "existing" && assetId !== null ? model.assets.find((a) => a.id === assetId) : undefined;
+  const note = chosen ? containerNote({ name: labels.get(chosen.id) ?? chosen.name, kind: chosen.kind }, kinds, "Map") : null;
+  const described = [createdAsset !== undefined ? createdId : null, note !== null ? noteId : null].filter((id) => id !== null).join(" ") || undefined;
 
   // Moving to another asset starts the review over: which metrics are free depends on the asset.
   const retarget = (nextMode: Mode, nextAssetId: number | null) => {
@@ -112,7 +129,15 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
   const commit = () => {
     if (target === null || reason !== null) return;
     void run(async () => {
-      await api.post<AcceptResult>("/api/discovery/accept", acceptBody(payload.source.id, target, rows));
+      const result = await api.post<AcceptResult>("/api/discovery/accept", acceptBody(payload.source.id, target, rows));
+      // At once, before the lists are read again: the mappings exist, so the person hears it (and can Undo) even if the refresh fails. The ids come back in the order of the checked rows.
+      const named = rows.filter((r) => r.checked);
+      const made = result.mapping_ids.length;
+      onMapped({
+        text: `Mapped ${made} point${made === 1 ? "" : "s"} to ${target.kind === "new" ? target.name : (labels.get(result.asset_id) ?? "the asset")}.`,
+        mappings: result.mapping_ids.map((id, i) => ({ id, assetId: result.asset_id, name: named[i]?.name })),
+        newAssets: target.kind === "new" ? [target.name] : [],
+      });
       // keys.sources also covers this source's points list (its key starts with it): naming both would fetch that list twice.
       await invalidate(keys.graph, keys.sources, keys.assets, keys.fleet, keys.auditAll);
       onClose();
@@ -167,10 +192,19 @@ export function ReviewDialog({ model, payload, initialTarget, onClose }: Props) 
           {mode === "existing" ? (
             <div className="field">
               <label htmlFor={assetSelectId}>Asset</label>
-              <select id={assetSelectId} ref={assetSelect} value={assetId ?? ""} onChange={(e) => retarget("existing", e.target.value === "" ? null : Number(e.target.value))}>
+              <select
+                id={assetSelectId} ref={assetSelect} value={assetId ?? ""} aria-describedby={described}
+                onChange={(e) => retarget("existing", e.target.value === "" ? null : Number(e.target.value))}
+              >
                 <option value="">(choose)</option>
                 {choices.map((a) => <option key={a.id} value={a.id}>{indent(a.depth) + (labels.get(a.id) ?? a.name)}</option>)}
               </select>
+              {/* Always there, two lines tall: the note arriving moves nothing. It is only the select's description (read when the select is reached), not an announcer.
+                  After a New asset the first line says the asset was made and that Cancel keeps it; the note about a room follows it, so that slot is four lines tall. */}
+              <div className={createdAsset !== undefined ? "mapmove-slot mapmove-slot-created" : "mapmove-slot"}>
+                {createdAsset !== undefined && <p id={createdId} className="muted">{`${createdAsset} was created. Cancel keeps it without any mappings.`}</p>}
+                {note !== null && <p id={noteId} className="muted">{note}</p>}
+              </div>
             </div>
           ) : (
             <>

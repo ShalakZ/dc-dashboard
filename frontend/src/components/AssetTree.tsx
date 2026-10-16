@@ -12,6 +12,7 @@ import { foldableIds, readFolded, saveFolded } from "../lib/treeFold";
 import type { DropTarget } from "../lib/treeMove";
 import { createPickStore, visibleOrder, type PickStore } from "../lib/treeSelect";
 import { TREE_MIN, TREE_STEP, TREE_STEP_BIG, clampTreeWidth, clearTreeWidth, readTreeWidth, saveTreeWidth, treeMax } from "../lib/treeWidth";
+import { isUndoKey } from "../lib/undoKey";
 
 export type { DropTarget };
 
@@ -179,13 +180,6 @@ export interface AssetTreeRemove {
    * dialog is cancelled); `focusAfter` is the row to focus once every pick is gone (null: no row is left to take it).
    */
   onDelete(ids: number[], opener: HTMLElement | null, focusAfter: number | null): void;
-}
-
-/** Ctrl+Z and Cmd+Z, but not Redo (Shift) or Alt. On a layout whose key is not a Latin letter (Arabic, Cyrillic) the physical key decides. */
-function isUndoKey(e: KeyboardEvent): boolean {
-  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return false;
-  const key = e.key.toLowerCase();
-  return key === "z" || (!/^[a-z]$/.test(key) && e.code === "KeyZ");
 }
 
 /** The width right of the sidebar: the column's flex container. A container with no layout (jsdom) or no element yet gives the window's. */

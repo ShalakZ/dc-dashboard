@@ -31,7 +31,20 @@ export type NodeActions = {
   onCreateAssets?: (nodeId: string) => void;
   /** Ask to remove a discovered source that has nothing mapped (discovery.edit). */
   onRemove?: (nodeId: string) => void;
+  /** W12a: a mapped point or group, for a role with assets.edit: the small menu button on the node calls this with its own element, and the page opens the node's menu next to it (a menu inside the node would leak its keys into the canvas). */
+  onMenu?: (button: HTMLElement) => void;
+  /** W12a: the menu items "Unmap…" and "Move to another asset…" (a group: "this group"), given only to a role with assets.edit and only while something on the node is mapped. */
+  onUnmap?: (nodeId: string) => void;
+  onMove?: (nodeId: string) => void;
+  /** W12a: the "+" on an asset node (assets.edit and assets.view): opens New sub-asset with this asset as the parent. Also the menu item "New sub-asset…". */
+  onAdd?: (nodeId: string) => void;
+  /** W12a: an unmapped point's New asset… in its right-click menu only (the node draws no button for it: a point has Map… and nothing else). */
+  menuNewAsset?: (nodeId: string) => void;
+  /** W12a: the asset list the New asset form needs is not read yet: the buttons that open it (a group's New asset…, the "+") say so with aria-disabled. */
+  formWait?: boolean;
 };
+/** One source that has mappings on an asset, as the asset node's menu lists it (W12a). */
+export type MappedSource = { sourceId: number; sourceName: string; count: number };
 // These are `type`s, not interfaces: React Flow requires node data to be assignable to Record<string, unknown>.
 export type SourceNodeData = NodeActions & {
   source: GraphSource; expanded: boolean;
@@ -44,7 +57,12 @@ export type ClusterNodeData = NodeActions & {
   sourceId: number; key: string; label: string; count: number; mappedCount: number; expanded: boolean; ungrouped: boolean;
 };
 export type PointNodeData = NodeActions & { sourceId: number; clusterKey: string; point: GraphPoint };
-export type AssetNodeData = NodeActions & { asset: GraphModel["assets"][number]; depth: number };
+export type AssetNodeData = NodeActions & {
+  asset: GraphModel["assets"][number]; depth: number;
+  /** W12a: the sources with mappings on this asset (at most five, by name), for a role with assets.edit; each is a menu item that takes them all off. */
+  mapped?: MappedSource[];
+  onUnmapSource?: (nodeId: string, sourceId: number) => void;
+};
 export type UnidentifiedNodeData = NodeActions & { host: string; port: number };
 
 const X = { source: 0, cluster: 360, point: 720, asset: 1200 } as const;

@@ -125,26 +125,35 @@ test("discovery journey: scan, drag to map, create assets, audit", async ({ page
   await expect(cluster("LVP01")).toContainText("6 mapped");
   await fitView(page, cluster("LVP02"));
 
-  // 5. Real drag 2: the LVP02 cluster onto empty canvas offers a new asset
+  // 5. Real drag 2: the LVP02 cluster onto empty canvas offers a new asset. W12a: for an admin the offer opens the real New asset form first (the name is the group's, the
+  // parent is chosen there), and the Review then opens on the asset that form made, with the group's points to map.
   const pane = (await page.locator(".react-flow__pane").boundingBox())!;
   await drag(page, cluster("LVP02").locator(".node-title"), { x: pane.x + pane.width - 40, y: pane.y + pane.height - 40 });
   await expect(page.getByText('Create asset "LVP02" from this cluster?')).toBeVisible();
   await page.getByRole("button", { name: "Create asset…" }).click();
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByLabel("New asset name")).toHaveValue("LVP02");
-  await dialog.getByLabel("Parent asset").selectOption({ label: "Site" });
+  const form = page.getByRole("dialog", { name: "New asset", exact: true });
+  await expect(form).toBeVisible();
+  await expect(form.getByLabel("Name", { exact: true })).toHaveValue("LVP02");
+  await form.getByLabel(/^Parent/).selectOption({ label: "Site" });
+  await form.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(form).toBeHidden();
+  await expect(dialog, "the Review opens on the asset the form made").toBeVisible();
+  await expect(boxes).toHaveCount(6);
   await dialog.getByRole("button", { name: "Create mappings" }).click();
   await expect(dialog).toBeHidden();
   await expect(cluster("LVP02")).toContainText("6 mapped");
   await fitView(page, cluster("LVP03"));
 
-  // 6. LVP03 ... LVP10 through the buttons: no dragging
+  // 6. LVP03 ... LVP10 through the buttons: no dragging. Each New asset… is the form (parent Site), then the Review of the group on the new asset.
   for (let n = 3; n <= 10; n++) {
     const name = `LVP${String(n).padStart(2, "0")}`;
     await ensureOnCanvas(page, cluster(name));
     await cluster(name).getByRole("button", { name: `New asset from ${name}…` }).click();
+    await expect(form).toBeVisible();
+    await form.getByLabel(/^Parent/).selectOption({ label: "Site" });
+    await form.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(form).toBeHidden();
     await expect(dialog).toBeVisible();
-    await dialog.getByLabel("Parent asset").selectOption({ label: "Site" });
     await dialog.getByRole("button", { name: "Create mappings" }).click();
     await expect(dialog).toBeHidden();
     await expect(cluster(name)).toContainText("6 mapped");

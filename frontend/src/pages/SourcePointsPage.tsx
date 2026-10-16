@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { api } from "../api/client";
 import { keys, useAssets, useInvalidate, usePoints, useSources } from "../api/queries";
@@ -13,6 +14,7 @@ import { PageHeader } from "../components/PageHeader";
 import { RowActions } from "../components/RowActions";
 import { PageHeaderSkeleton, Skeleton, SkeletonRegion, TableSkeleton } from "../components/Skeleton";
 import { useAction } from "../hooks/useAction";
+import { useMappingActions } from "../hooks/useMappingActions";
 import { DEFAULT_POINT_VIEW, sortBy, viewPoints, type PointSortKey } from "../lib/points";
 
 const NO_POINTS: PointRow[] = [];
@@ -37,6 +39,9 @@ export function SourcePointsPage() {
   const { data: sources } = useSources();
   const sourceName = sources?.find((s) => s.id === sourceId)?.name ?? `source ${sourceId}`;
   const invalidate = useInvalidate();
+  const client = useQueryClient();
+  const maps = useMappingActions({ assets });
+  const search = useRef<HTMLInputElement>(null);
   const [browseJob, setBrowseJob] = useState<number | null>(null);
   const [editing, setEditing] = useState<PointRow | null>(null);
   const [view, setView] = useState(DEFAULT_POINT_VIEW);
@@ -55,7 +60,18 @@ export function SourcePointsPage() {
     else await api.post("/api/mappings", { point_id: editing!.id, ...body });
     await refresh();
   };
-  const unmap = (mappingId: number) => run(async () => { await api.del(`/api/mappings/${mappingId}`); await refresh(); });
+  // Unmap… asks, then the module deletes, toasts (with an Undo) and fetches the lists again, the points among them. The point stays in the list,
+  // now unmapped, so the focus goes back to its menu button; the list has to show what the cache holds first (a filter can drop the row, and then
+  // the search box is the nearest named thing).
+  const [refocus, setRefocus] = useState<number | null>(null);
+  useEffect(() => {
+    if (refocus === null || data !== client.getQueryData<PointRow[]>(keys.points(sourceId))) return;
+    const trigger = document.querySelector<HTMLElement>(`tr[data-point="${refocus}"] .row-menu-btn`);
+    (trigger ?? search.current)?.focus({ preventScroll: true });
+    setRefocus(null);
+  }, [refocus, data, client, sourceId]);
+  const unmap = (p: PointRow) =>
+    maps.unmap([{ id: p.mapping!.id, name: p.name, assetId: p.mapping!.asset_id }], { after: () => setRefocus(p.id) });
 
   if (isLoading) {
     // One region: the title and the trail depend on data, and the toolbar's height decides where the table lands.
@@ -97,7 +113,7 @@ export function SourcePointsPage() {
             <input type="checkbox" checked={view.unmappedOnly} onChange={(e) => setView({ ...view, unmappedOnly: e.target.checked })} />
             Unmapped only
           </label>
-          <input type="search" aria-label="Search points" placeholder="Search points" value={view.query}
+          <input ref={search} type="search" aria-label="Search points" placeholder="Search points" value={view.query}
             onChange={(e) => setView({ ...view, query: e.target.value })} />
           <span className="muted">{`Showing ${rows.length} of ${points.length} point${points.length === 1 ? "" : "s"}`}</span>
         </div>
@@ -123,13 +139,13 @@ export function SourcePointsPage() {
             </thead>
             <tbody>
               {rows.map((p) => (
-                <tr key={p.id}>
+                <tr key={p.id} data-point={p.id}>
                   <td><span className="cell-trunc" title={p.address}>{p.address}</span></td><td>{p.name}</td><td>{p.data_type}</td><td>{p.unit_hint ?? ""}</td>
                   <td>{p.mapping ? `${assetName(p.mapping.asset_id)} · ${p.mapping.metric} · every ${p.mapping.interval_seconds}s · ×${p.mapping.scale}` : <span className="muted st st-off plain">unmapped</span>}</td>
                   <td className="row-actions">
                     <RowActions label={`Actions for ${p.name}`} items={canMap ? [
                       { label: p.mapping ? "Edit" : "Map", onSelect: () => setEditing(p) },
-                      ...(p.mapping ? [{ label: "Unmap", onSelect: () => unmap(p.mapping!.id), tone: "danger" as const }] : []), // no confirm, as before
+                      ...(p.mapping ? [{ label: "Unmap…", onSelect: () => unmap(p), tone: "danger" as const }] : []),
                     ] : []} />
                   </td>
                 </tr>
@@ -144,6 +160,7 @@ export function SourcePointsPage() {
             onSubmit={save} onCancel={() => setEditing(null)} />
         </Modal>
       )}
+      {maps.dialogs}
     </>
   );
 }

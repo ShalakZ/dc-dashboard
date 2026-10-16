@@ -12,7 +12,8 @@ lacks says "No access".
   Assets, Live power, Energy today and Cost today tiles) or the asset you opened, with its live values and charts. The trail above
   an open asset (`Assets Tree / MV2 / Room 1 / LVP02`) shows each asset's own icon beside its name, the same icon as in the tree. Adding and
   editing assets and mapping points needs `assets.edit` (also needed to pick several assets and move them), deleting
-  `assets.delete`. See [Assets and kinds](assets-and-kinds.md).
+  `assets.delete`. With `assets.edit` each row of an open asset's **Metrics** table has a menu (`Actions for <metric>`) with **Unmap…** and
+  **Move to another asset…**, which ask first and offer an Undo for 10 seconds. See [Assets and kinds](assets-and-kinds.md).
 - **Asset kinds** (everyone reads, admins change): the Asset kinds button of the Assets Tree (`/assets/kinds`). Reading needs
   `assets.view`; adding, renaming, re-iconing and deleting kinds needs `assets.kinds`. See [Asset kinds](assets-and-kinds.md#asset-kinds).
 - **Dashboards** (everyone can read; operators and admins build): needs `dashboards.view`; building needs `dashboards.edit`.
@@ -33,7 +34,8 @@ lacks says "No access".
   need `sources.test`; adding, editing and deleting sources needs `sources.edit`. See
   [Sources and discovery](sources-and-discovery.md).
 - **Points** of a source (admins): the Points item of a source's row menu; needs `sources.edit`. **Browse points** asks the source
-  what it offers; **Map** ties a point to an asset.
+  what it offers; **Map** ties a point to an asset, and **Unmap…** (asks first, then offers an Undo for 10 seconds) takes it off. Both need
+  `assets.edit` and `assets.view` as well.
 - **Scans** and **Discovery** (operators and admins; only admins can change anything): need `discovery.view`. Scans lists the
   scan scopes and their results, names the ports it knows (`4840 (OPC UA)`) and warns, without blocking, about a port that looks like
   a typo of one; **Details** on a result opens that scan in a panel on the right, with the scope it covered
@@ -46,9 +48,13 @@ lacks says "No access".
   a status dot and the source's protocol, and resting the pointer on one lights its whole path; the view glides, a minimap sits at the
   bottom right, **Snap to grid** (top right) lines nodes up on an 8 px grid with guides while you drag, Shift-drag selects several
   nodes, right-click (or Shift+F10) opens a node's actions, and **Find** (or Ctrl+K on the canvas) jumps to any source, group, point or
-  asset. The `?` under the title lists the keys. Changing
+  asset. The `?` under the title lists the keys. A mapped point or group has a small `Mapping actions for <name>` button for **Unmap…** and
+  **Move to another asset…**, an asset has a **+** that adds a sub-asset (and the menu's **New asset…** items open the same **New asset**
+  form as the Assets Tree), several unmapped points of one source dropped on an asset map in one review, and the toast after mapping,
+  unmapping or moving carries an **Undo** for 10 seconds. Changing
   scopes and the layout, and removing unmapped discovered sources, needs `discovery.edit`, running a scan `discovery.scan`,
-  accepting results (**Map…**, **New asset…**, **Create assets…** for a whole source) `discovery.accept`. See
+  accepting results (**Map…**, **New asset…**, **Create assets…** for a whole source) `discovery.accept`; unmapping, moving, the Undo
+  and the New asset form (also the **+**) need `assets.edit`, the form `assets.view` too. See
   [Discovery](sources-and-discovery.md#discovery).
 
 ## Administer
