@@ -109,15 +109,17 @@ describe("the Discovery node styles (W7u)", () => {
     expect(add).not.toMatch(/(?:^|;)\s*(?:margin|float)\s*:/); // nothing that could move the node's own box
   });
 
-  it("the + is hidden with visibility and opacity, never display (display: none measures 0x0 and cannot take the focus), and shown on hover, focus, a selected node and while dragged from", () => {
+  it("the + is hidden by opacity alone and inert while hidden (never visibility or display: either takes it out of the Tab order or the accessibility tree, and a hidden control cannot take the focus back from a closed dialog); shown on hover, focus, a selected node and while dragged from", () => {
     const hidden = rule(".gnode-add");
-    expect(hidden).toMatch(/visibility:\s*hidden/);
     expect(hidden).toMatch(/opacity:\s*0\b/);
+    expect(hidden).toMatch(/pointer-events:\s*none\s*!important/); // the library's unlayered sheet says all on a connectable handle
+    expect(hidden).not.toMatch(/visibility\s*:/);
     expect(hidden).not.toMatch(/display\s*:\s*none/);
-    const shown = rule(".react-flow__node:hover .gnode-add, .react-flow__node:focus-within .gnode-add, .react-flow__node.selected .gnode-add, .gnode-add:focus-visible, .gnode-add.connectingfrom");
-    expect(shown).toMatch(/visibility:\s*visible/);
+    const shown = rule(".react-flow__node:hover .gnode-add, .react-flow__node:focus-within .gnode-add, .react-flow__node.selected .gnode-add, .gnode-add:focus, .gnode-add:focus-visible, .gnode-add.connectingfrom");
     expect(shown).toMatch(/opacity:\s*1\b/);
-    expect(rules.filter((r) => /gnode-add/.test(r.selector) && /display\s*:\s*none/.test(r.body))).toEqual([]);
+    expect(shown).toMatch(/pointer-events:\s*all\s*!important/);
+    expect(shown).not.toMatch(/visibility\s*:/);
+    expect(rules.filter((r) => /gnode-add/.test(r.selector) && /display\s*:\s*none|visibility\s*:/.test(r.body))).toEqual([]);
     expect(rule(".gnode-add svg.i")).toMatch(/width:\s*12px/);
   });
 

@@ -317,6 +317,8 @@ const pointNode = (page: Page, point: TargetPoint) => node(page, `point:${point.
 const assetNode = (page: Page, asset: ApiAsset) => node(page, `asset:${asset.id}`);
 const titleOf = (nodeEl: Locator) => nodeEl.locator(".node-title");
 const addButton = (asset: Locator) => asset.getByRole("button", { name: `Add a sub-asset under ${ROOM}`, exact: true });
+/** The + hides by opacity alone (so it stays focusable and in the accessibility tree), which Playwright counts as visible: what is drawn is the computed opacity. */
+const plusOpacity = (plus: Locator) => plus.evaluate((el) => getComputedStyle(el).opacity);
 const menuEl = (page: Page) => page.locator('.graph-menu[role="menu"]');
 const reviewDialog = (page: Page) => page.getByRole("dialog", { name: "Review mappings", exact: true });
 const formDialog = (page: Page) => page.getByRole("dialog", { name: "New asset", exact: true });
@@ -743,9 +745,12 @@ for (const size of SIZES) {
       await openDiscovery(page);
       const asset = assetNode(page, room);
       await ensureOnCanvas(page, asset);
-      await asset.hover();
+      const away = await emptySpot(page);
+      await page.mouse.move(away.x, away.y);
       const plus = addButton(asset);
-      await expect(plus, "the + shows when the node is hovered").toBeVisible();
+      await expect.poll(() => plusOpacity(plus), { message: "the + is not drawn until the node is hovered" }).toBe("0");
+      await asset.hover();
+      await expect.poll(() => plusOpacity(plus), { message: "the + shows when the node is hovered" }).toBe("1");
       await plus.click();
 
       const form = formDialog(page);
@@ -785,7 +790,7 @@ for (const size of SIZES) {
       await test.step("the drag from the + to an empty spot opens the same form, with the same parent", async () => {
         await ensureOnCanvas(page, asset);
         await asset.hover();
-        await expect(plus).toBeVisible();
+        await expect.poll(() => plusOpacity(plus), { message: "the + shows when the node is hovered" }).toBe("1");
         const from = centreOf(await boxOf(plus, "the +"));
         await dragPath(page, from, await emptySpot(page));
         await expect(form).toBeVisible();
@@ -833,6 +838,7 @@ test("8 the keyboard: Tab from an asset node to the +, Enter opens the form, Esc
       await page.keyboard.press("Tab");
       const plus = addButton(asset);
       await expect(plus, "the next stop after the node is the +").toBeFocused();
+      await expect.poll(() => plusOpacity(plus), { message: "the + is drawn while it holds the focus" }).toBe("1");
       await page.keyboard.press("Enter");
       const form = formDialog(page);
       await expect(form).toBeVisible();
@@ -840,6 +846,7 @@ test("8 the keyboard: Tab from an asset node to the +, Enter opens the form, Esc
       await page.keyboard.press("Escape");
       await expect(form).toBeHidden();
       await expect(plus, "the focus is back where the form was asked for").toBeFocused();
+      await expect.poll(() => plusOpacity(plus), { message: "and the + is drawn again, with the focus ring on it" }).toBe("1");
       expect((await assetsOf(request)).filter((a) => a.name.startsWith(CHILD)), "Escape made nothing").toHaveLength(0);
     });
     await test.step("Shift+F10 on the group: the menu lists the mapping items, Escape returns the focus to the group", async () => {
