@@ -84,6 +84,25 @@ describe("the Discovery node styles (W7u)", () => {
     expect(rule(".gprogress-host")).toMatch(/position:\s*relative/);
   });
 
+  it("the Show-more node (W12b) is the button alone: no padding, an invisible frame, the button across the node, no height of its own", () => {
+    const node = rule(".gnode.gnode-more");
+    expect(node).toMatch(/padding:\s*0\b/);
+    expect(node).toMatch(/border-color:\s*transparent/);
+    expect(node).toMatch(/background:\s*none/);
+    expect(node).not.toMatch(/(?:^|;)\s*(?:height|min-height)\s*:/);
+    expect(rule(".gnode-more button")).toMatch(/width:\s*100%/);
+  });
+
+  it("the mapped badge of a collapsed asset (W12b) is a plain rectangle in tokens, on the title row, which the title leaves room on", () => {
+    const badge = rule(".gnode-mapped");
+    expect(badge).toMatch(/border:\s*1px solid var\(--border-strong\)/);
+    expect(badge).toMatch(/border-radius:\s*var\(--radius-sm\)/);
+    expect(badge).toMatch(/color:\s*var\(--text-2\)/);
+    expect(badge).toMatch(/flex:\s*none/);
+    expect(badge).not.toMatch(/border-radius:\s*(9999|999|50%|[1-9]\d{2,})|font-family|monospace|italic/);
+    expect(rule(".gnode-asset .row .node-title")).toMatch(/min-width:\s*0/);
+  });
+
   it("the mapping menu button (W12a) is 20px and absolutely placed at the top right of a positioned node, and the first line leaves room for it: the node is no taller", () => {
     const button = rule(".gnode-hasmenu .gnode-menu-btn");
     expect(button).toMatch(/position:\s*absolute/);

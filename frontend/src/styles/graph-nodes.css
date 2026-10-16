@@ -18,6 +18,16 @@
   .gprogress-host { position: relative; }
   .gprogress { position: absolute; left: 0; bottom: 0; height: 3px; max-width: 100%; background: var(--accent); }
 
+  /* W12b: the "Show 50 more" node at the end of a paged group's points. It is the button alone: the node's own frame is invisible (the border keeps its 1px so the box is as wide as a
+     point's), so it reads as a quiet control in the point column and, at about 19px, is never taller than a point node. Two classes beat app.css's `.gnode` (padding, border, background). */
+  .gnode.gnode-more { padding: 0; border-color: transparent; background: none; }
+  .gnode-more button { width: 100%; }
+
+  /* W12b: "N mapped" on the title row of a collapsed asset that hides mapped points: a small plain rectangle like the protocol badge (never a pill), on the SAME row as the title and the toggle
+     so the node keeps its height. The title takes the free room (min-width 0 lets a long name wrap instead of pushing the badge out), the badge and the toggle stand at the right. */
+  .gnode-asset .row .node-title { flex: 1 1 auto; min-width: 0; }
+  .gnode-mapped { flex: none; padding: 0 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text-2); font-size: 11px; line-height: 1.2; white-space: nowrap; }
+
   /* W12a: the mapping menu button of a mapped point or group. Absolutely placed at the node's top right (20px square), so the node is no taller; the host is positioned, and the first
      line leaves 24px for it at the right (a point's title directly, a group's title row, whose toggle then stands left of the button). The two-class selectors beat app.css's
      `.gnode button` (padding 0 6px) and `.icon-btn` (28px, 16px icon), which name the same properties. */

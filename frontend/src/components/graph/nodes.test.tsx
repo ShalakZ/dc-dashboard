@@ -5,11 +5,14 @@ import { nodeTypes } from "./nodes";
 
 // Handles need a React Flow store; the node bodies are what is under test here. The mock draws each handle as a div that says which handle it is and whether it can
 // start or end a connection (React Flow's defaults, true, when the node did not say), and passes on what a custom handle brings (the "+": role, name, class, clicks and keys).
+// It also counts its own renders (W12b): every node draws its handles in its body, so the count moves exactly when a node component re-renders.
+const handleRenders = vi.hoisted(() => ({ count: 0 }));
 vi.mock("@xyflow/react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@xyflow/react")>()),
-  Handle: ({ id, type, isConnectableStart = true, isConnectableEnd = true, children, position: _position, ...rest }: any) => (
-    <div data-handle={id ?? type} data-start={String(isConnectableStart)} data-end={String(isConnectableEnd)} {...rest}>{children}</div>
-  ),
+  Handle: ({ id, type, isConnectableStart = true, isConnectableEnd = true, children, position: _position, ...rest }: any) => {
+    handleRenders.count++;
+    return <div data-handle={id ?? type} data-start={String(isConnectableStart)} data-end={String(isConnectableEnd)} {...rest}>{children}</div>;
+  },
 }));
 
 const point: GraphPoint = {
@@ -465,5 +468,211 @@ describe("graph nodes", () => {
     asset.unmount();
     renderNode("unidentified", "unid:10.0.0.9:8080", { host: "10.0.0.9", port: 8080 });
     expect(screen.getByText("10.0.0.9:8080 — unidentified service")).toHaveClass("node-title");
+  });
+
+  describe("the Show-more node (W12b)", () => {
+    const more = { clusterId: "cluster:1:LVP01", label: "LVP01", left: 70, step: 50 };
+    const button = () => screen.getByRole("button", { name: "Show 50 more points of LVP01, 70 left" });
+
+    it("is a node type, with no edge handles", () => {
+      expect(Object.keys(nodeTypes).sort()).toEqual(["asset", "cluster", "more", "point", "source", "unidentified"]);
+      renderNode("more", "more:cluster:1:LVP01", more);
+      expect(document.querySelector("[data-handle]")).toBeNull();
+    });
+
+    it("is ONE button: the words are Show N more (M left), the name says which group and how many are left, and it is a type=button that neither drags nor takes the node's keys", () => {
+      renderNode("more", "more:cluster:1:LVP01", more);
+      expect(screen.getAllByRole("button")).toHaveLength(1);
+      expect(button()).toHaveTextContent(/^Show 50 more \(70 left\)$/);
+      expect(button()).toHaveAttribute("type", "button");
+      expect(button()).toHaveClass("nodrag", "nokey");
+    });
+
+    it("the last page shows its own size: Show 20 more (20 left)", () => {
+      renderNode("more", "more:cluster:1:LVP01", { ...more, left: 20, step: 20 });
+      expect(screen.getByRole("button", { name: "Show 20 more points of LVP01, 20 left" })).toHaveTextContent("Show 20 more (20 left)");
+    });
+
+    it("a click reports the group's node id and does not also select the node", async () => {
+      const onMore = vi.fn();
+      const reachedNode = vi.fn();
+      const Node = nodeTypes.more as unknown as (props: { id: string; data: object }) => React.ReactElement;
+      render(<div onClick={reachedNode}><Node id="more:cluster:1:LVP01" data={{ ...more, onMore }} /></div>);
+      await userEvent.click(button());
+      expect(onMore).toHaveBeenCalledTimes(1);
+      expect(onMore).toHaveBeenCalledWith("cluster:1:LVP01");
+      expect(reachedNode).not.toHaveBeenCalled();
+    });
+
+    it("Enter and Space press it like any button (they are the button's own, not the node's)", async () => {
+      const onMore = vi.fn();
+      renderNode("more", "more:cluster:1:LVP01", { ...more, onMore });
+      await userEvent.tab();
+      expect(button()).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      await userEvent.keyboard(" ");
+      expect(onMore).toHaveBeenCalledTimes(2);
+    });
+
+    it("a node whose page gave no onMore still renders and a click does nothing", async () => {
+      renderNode("more", "more:cluster:1:LVP01", more);
+      await userEvent.click(button());
+      expect(button()).toBeInTheDocument();
+    });
+  });
+
+  describe("a paged group's line (W12b)", () => {
+    const paged = { ...cluster, count: 120, mappedCount: 4, expanded: true, visibleCount: 120, shownCount: 50 };
+
+    it("an open group that draws fewer points than it has says N of M shown, in a muted line, and keeps its title", () => {
+      renderNode("cluster", "cluster:1:LVP01", paged);
+      expect(screen.getByText("50 of 120 shown")).toHaveClass("muted");
+      expect(screen.getByText("LVP01 (120)")).toHaveClass("node-title");
+    });
+
+    it("counts the points the filter lets through, not the total (the title stays the total)", () => {
+      renderNode("cluster", "cluster:1:LVP01", { ...paged, visibleCount: 80 });
+      expect(screen.getByText("50 of 80 shown")).toBeInTheDocument();
+      expect(screen.getByText("LVP01 (120)")).toBeInTheDocument();
+    });
+
+    it.each([
+      ["a closed group", { ...paged, expanded: false }],
+      ["a group that draws all its points", { ...paged, shownCount: 120 }],
+      ["a group of the old shape (no visibleCount, no shownCount)", { ...cluster, expanded: true }],
+    ])("%s has no such line", (_name, data) => {
+      renderNode("cluster", "cluster:1:LVP01", data);
+      expect(screen.queryByText(/shown$/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("the sub-asset toggle and the mapped badge of an asset node (W12b)", () => {
+    const asset = { id: 10, parent_id: null, name: "Rack A", kind: "rack" };
+    const parent = { asset, depth: 0, children: 3, collapsed: false };
+
+    it("an open parent offers Hide sub-assets of X as a minus; a collapsed one Show sub-assets of X as a plus; both report the node id and go no further", async () => {
+      const onToggleAssets = vi.fn();
+      const reachedNode = vi.fn();
+      const Node = nodeTypes.asset as unknown as (p: { id: string; data: object }) => React.ReactElement;
+      const view = render(<div onClick={reachedNode}><Node id="asset:10" data={{ ...parent, onToggleAssets }} /></div>);
+      const hide = screen.getByRole("button", { name: "Hide sub-assets of Rack A" });
+      expect(hide).toHaveTextContent(/^−$/);
+      expect(hide).toHaveClass("nodrag");
+      expect(hide).toHaveAttribute("type", "button");
+      await userEvent.click(hide);
+      expect(onToggleAssets).toHaveBeenCalledWith("asset:10");
+      expect(reachedNode).not.toHaveBeenCalled();
+      view.rerender(<div onClick={reachedNode}><Node id="asset:10" data={{ ...parent, collapsed: true, onToggleAssets }} /></div>);
+      expect(screen.queryByRole("button", { name: "Hide sub-assets of Rack A" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show sub-assets of Rack A" })).toHaveTextContent(/^\+$/);
+    });
+
+    it("the words Expand and Collapse are not used (they belong to groups and sources)", () => {
+      renderNode("asset", "asset:10", { ...parent, onToggleAssets: vi.fn() });
+      expect(screen.queryByRole("button", { name: /expand|collapse/i })).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ["an asset with no sub-assets", { asset, depth: 0, children: 0, collapsed: false, onToggleAssets: vi.fn() }],
+      ["an asset of the old shape", { asset, depth: 0, onToggleAssets: vi.fn() }],
+      ["a parent whose page gave no onToggleAssets", parent],
+    ])("%s has no toggle", (_name, data) => {
+      renderNode("asset", "asset:10", data);
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("the + to add a sub-asset stays, beside the toggle, after the two edge handles", () => {
+      renderNode("asset", "asset:10", { ...parent, onToggleAssets: vi.fn(), onAdd: vi.fn() });
+      expect(screen.getByRole("button", { name: "Hide sub-assets of Rack A" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Add a sub-asset under Rack A" })).toBeInTheDocument();
+      expect(Array.from(document.querySelectorAll<HTMLElement>("[data-handle]")).map((h) => h.dataset.handle)).toEqual(["target", "source", "add"]);
+    });
+
+    it("a collapsed asset with points mapped inside shows N mapped as a badge on the SAME row as the title (no second line, so the node is no taller)", () => {
+      renderNode("asset", "asset:10", { ...parent, collapsed: true, mappedInside: 4, onToggleAssets: vi.fn() });
+      const badge = screen.getByText("4 mapped");
+      const title = screen.getByText("Rack A");
+      expect(title).toHaveClass("node-title");
+      expect(badge.parentElement).toBe(title.parentElement);
+      expect(badge.parentElement).toHaveClass("row");
+      expect(badge.parentElement).toContainElement(screen.getByRole("button", { name: "Show sub-assets of Rack A" }));
+    });
+
+    it.each([
+      ["an open parent", { ...parent, mappedInside: 4 }],
+      ["a collapsed parent with nothing mapped inside", { ...parent, collapsed: true }],
+      ["a collapsed parent with a zero count", { ...parent, collapsed: true, mappedInside: 0 }],
+    ])("%s has no badge", (_name, data) => {
+      renderNode("asset", "asset:10", { ...data, onToggleAssets: vi.fn() });
+      expect(screen.queryByText(/mapped/)).not.toBeInTheDocument();
+    });
+
+    it("the badge shows without the toggle too (a page that gave no onToggleAssets still tells where the mappings went)", () => {
+      renderNode("asset", "asset:10", { ...parent, collapsed: true, mappedInside: 2 });
+      expect(screen.getByText("2 mapped")).toBeInTheDocument();
+    });
+  });
+
+  describe("memoised nodes (W12b)", () => {
+    // Every node draws its two handles in its body, and the mock counts its renders: a node component that re-rendered moves the count.
+    const Node = nodeTypes.point as unknown as React.ComponentType<Record<string, unknown>>;
+    const data = { sourceId: 1, clusterKey: "LVP01", point };
+    const props = { id: "point:3", type: "point", data, selected: false, width: 220, height: 40, positionAbsoluteX: 0, positionAbsoluteY: 0, zIndex: 0, dragging: false };
+
+    const rendersOf = (change: Record<string, unknown>) => {
+      const view = render(<Node {...props} />);
+      const before = handleRenders.count;
+      view.rerender(<Node {...props} {...change} />);
+      const moved = handleRenders.count - before;
+      view.unmount();
+      return moved;
+    };
+
+    it("a change of position, stacking or dragging does not re-render the node (a drag, a compaction of rows and Tidy layout move many nodes at once)", () => {
+      expect(rendersOf({})).toBe(0);
+      expect(rendersOf({ positionAbsoluteX: 96, positionAbsoluteY: 128 })).toBe(0);
+      expect(rendersOf({ zIndex: 5 })).toBe(0);
+      expect(rendersOf({ dragging: true })).toBe(0);
+      expect(rendersOf({ isConnectable: false, draggable: false })).toBe(0);
+    });
+
+    it.each([
+      ["data", { data: { ...data } }],
+      ["selected", { selected: true }],
+      ["width", { width: 240 }],
+      ["height", { height: 64 }],
+      ["id", { id: "point:4" }],
+    ])("a change of %s re-renders it", (_name, change) => {
+      expect(rendersOf(change)).toBeGreaterThan(0);
+    });
+
+    it("every node type is memoised the same way (a position-only change leaves each alone, a new data object does not)", () => {
+      // The one property each body reads while it renders; a getter counts the reads, which also covers the `more` node (it has no handle to count).
+      const reads = { count: 0 };
+      const counted = (plain: object, key: string): object => {
+        const value = (plain as Record<string, unknown>)[key];
+        return Object.defineProperty({ ...plain }, key, { enumerable: true, get: () => (reads.count++, value) });
+      };
+      const rack = { id: 10, parent_id: null, name: "Rack A", kind: "rack" };
+      const kinds: [keyof typeof nodeTypes, object, string][] = [
+        ["source", { source, expanded: false }, "source"], ["cluster", { ...cluster, expanded: true }, "label"], ["point", data, "point"],
+        ["asset", { asset: rack, depth: 0 }, "asset"], ["unidentified", { host: "10.0.0.9", port: 8080 }, "host"],
+        ["more", { clusterId: "cluster:1:LVP01", label: "LVP01", left: 70, step: 50 }, "label"],
+      ];
+      expect(kinds.map(([type]) => type).sort()).toEqual(Object.keys(nodeTypes).sort());
+      for (const [type, plain, key] of kinds) {
+        const Each = nodeTypes[type] as unknown as React.ComponentType<Record<string, unknown>>;
+        const base = { ...props, id: `${type}:1`, type, data: counted(plain, key) };
+        const view = render(<Each {...base} />);
+        expect(reads.count, `${type} reads ${key} when it renders`).toBeGreaterThan(0);
+        reads.count = 0;
+        view.rerender(<Each {...base} positionAbsoluteX={400} positionAbsoluteY={400} />);
+        expect(reads.count, `${type} after a position-only change`).toBe(0);
+        view.rerender(<Each {...base} data={counted(plain, key)} />);
+        expect(reads.count, `${type} after a new data object`).toBeGreaterThan(0);
+        reads.count = 0;
+        view.unmount();
+      }
+    });
   });
 });
