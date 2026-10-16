@@ -245,7 +245,7 @@ async function expectFocusNamed(page: Page, message: string): Promise<void> {
 
 /** The name a node wrapper has (lib/graph.ts `ariaLabel`s). */
 const sourceName = (name: string, groups: number, points: number, open: boolean) => `${name}, source, ${plural(groups, "group")}, ${plural(points, "point")}, ${open ? "open" : "closed"}`;
-const groupName = (key: string, points: number, mapped: number, open: boolean) => `${key}, group of ${plural(points, "point")}, ${mapped} mapped, ${open ? "open" : "closed"}`;
+const groupName = (key: string, points: number, mapped: number, open: boolean, shown?: number) => `${key}, group of ${plural(points, "point")}, ${mapped} mapped, ${open ? "open" : "closed"}${shown === undefined ? "" : `, ${shown} shown`}`;
 
 const measured = (what: string, value: unknown) => {
   test.info().annotations.push({ type: "measure", description: `${what}: ${JSON.stringify(value)}` });
@@ -554,7 +554,7 @@ for (const size of SIZES) {
         await expect(pointNodes(page)).toHaveCount(PAGE_SIZE);
         await expect(moreButton(70), "the Show more button names the group and what is left").toBeVisible();
         await expect(nodeEl(page, cid)).toContainText("50 of 120 shown");
-        await expect(nodeEl(page, cid)).toHaveAttribute("aria-label", groupName(group, 120, 4, true));
+        await expect(nodeEl(page, cid)).toHaveAttribute("aria-label", groupName(group, 120, 4, true, PAGE_SIZE));
         await expect(edgeEl(page, ownEdge(4, assetB)), "a point on the page has its own edge").toHaveCount(1);
         await expect(edgeEl(page, aggregated(assetA)), "the two mapped points beyond the page keep ONE edge from the group").toHaveCount(1);
         await expect(edgeLabel(page, aggregated(assetA))).toHaveText("2 mapped");
