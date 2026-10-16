@@ -233,5 +233,14 @@ export default defineConfig({
       dependencies: ["w11"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    // WRITES NOTHING and needs nothing from the stack, like w7u: every case answers GET /api/discovery/graph (and the layout's PUT and DELETE) through page.route from a
+    // generated model (e2e/graphModel.ts), so it may stand after w12a. It measures in the page at 1440 x 900 and 1024 x 640 (each case sets its size) and keeps the
+    // graph's view settings (the Unmapped only switch, collapsed assets) in the browser's own storage, which a fresh context starts without.
+    {
+      name: "w12b",
+      testMatch: "w12b.spec.ts",
+      dependencies: ["w12a"],
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
   ],
 });
