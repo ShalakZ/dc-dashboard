@@ -82,6 +82,7 @@ const del = (path: string): Probe => ({ method: "DELETE", path });
 const ADMIN_TIER: Probe[] = [
   post("/api/assets"), patch(`/api/assets/${GONE}`), del(`/api/assets/${GONE}`),
   post("/api/mappings"), patch(`/api/mappings/${GONE}`), del(`/api/mappings/${GONE}`),
+  get(`/api/mappings/${GONE}`), // W12a: assets.edit, the read an unmap makes before it deletes; a gate that lets it through answers 404, never 403
   put("/api/dashboards/default", { dashboard_id: GONE }),
   post("/api/tariffs"), patch(`/api/tariffs/${GONE}`), del(`/api/tariffs/${GONE}`),
   put("/api/settings/billing"), // the GET moved to OPERATOR_TIER in W9b: the Tariffs page reads the currency with tariffs.view

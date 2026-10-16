@@ -672,6 +672,7 @@ const ITEM = {
   expandAll: /^Expand all/, collapseAll: /^Collapse all/, tidy: /^Tidy layout/, fit: /^Fit view/,
 };
 const itemCount = (menu: Locator, name: RegExp) => menu.getByRole("menuitem", { name }).count();
+const exactCount = (menu: Locator, name: string) => menu.getByRole("menuitem", { name, exact: true }).count();
 
 test.describe("W7u: the menus", () => {
   test("a right-click opens the menu of what is under it, at the pointer, with the focus in it; Escape closes it and gives the focus back to the node", async ({ page }) => {
@@ -723,24 +724,45 @@ test.describe("W7u: the menus", () => {
       await close(id);
     });
 
-    await test.step("an unmapped point: Map only; a mapped point has no menu of its own, so it gets the canvas menu", async () => {
+    // W12a: the admin of this spec holds assets.edit, so a point, a group and an asset have their mapping items in the menu (the node has a button for some of them, the menu
+    // has them all). A role without assets.edit keeps the shorter lists and, for an asset, the canvas menu (w12a.spec.ts case 5 checks that with a reader).
+    await test.step("an unmapped point: Map… and New asset… (the menu only: the node has no button for it), not the canvas menu", async () => {
       const id = nid.point(SMALL.bravoPower);
       await open(id);
       expect(await itemCount(menu, ITEM.map)).toBe(1);
-      expect(await itemCount(menu, ITEM.newAsset)).toBe(0);
+      expect(await itemCount(menu, ITEM.newAsset), "an admin makes the asset with the form").toBe(1);
+      expect(await exactCount(menu, "Unmap…"), "nothing is mapped on it").toBe(0);
       expect(await itemCount(menu, ITEM.expandAll), "it is not the canvas menu").toBe(0);
       await close(id);
-      await open(nid.point(SMALL.alphaMapped));
-      expect(await itemCount(menu, ITEM.expandAll), "the canvas menu").toBe(1);
-      await page.keyboard.press("Escape");
-      await expect(menu).toBeHidden();
     });
 
-    await test.step("an asset has no actions: the canvas menu", async () => {
-      await open(nid.asset(SMALL.hall));
+    await test.step("a mapped point: Unmap… and Move to another asset…, nothing to map, not the canvas menu", async () => {
+      const id = nid.point(SMALL.alphaMapped);
+      await open(id);
+      expect(await exactCount(menu, "Unmap…"), "Unmap…").toBe(1);
+      expect(await exactCount(menu, "Move to another asset…"), "Move to another asset…").toBe(1);
+      expect(await itemCount(menu, ITEM.map), "a mapped point is not mapped again").toBe(0);
+      expect(await itemCount(menu, ITEM.expandAll), "it is not the canvas menu").toBe(0);
+      await close(id);
+    });
+
+    await test.step("an asset: New sub-asset… and Unmap everything from <source>… for the source that has points on it, not the canvas menu", async () => {
+      const id = nid.asset(SMALL.hall);
+      await open(id);
+      expect(await exactCount(menu, "New sub-asset…"), "New sub-asset…").toBe(1);
+      expect(await exactCount(menu, `Unmap everything from ${SMALL_NAMES.alpha}…`), "the source with three points on the hall").toBe(1);
+      expect(await itemCount(menu, ITEM.expandAll), "it is not the canvas menu").toBe(0);
+      await close(id);
+    });
+
+    await test.step("the empty canvas: the canvas actions, and New asset… for an admin", async () => {
+      const at = await emptySpot(page);
+      await page.mouse.click(at.x, at.y, { button: "right" });
+      await expect(menu).toBeVisible();
       for (const [what, name] of [["Expand all", ITEM.expandAll], ["Collapse all", ITEM.collapseAll], ["Tidy layout", ITEM.tidy], ["Fit view", ITEM.fit]] as const) {
         expect(await itemCount(menu, name), what).toBe(1);
       }
+      expect(await exactCount(menu, "New asset…"), "the pane can make an asset at the top level").toBe(1);
       await page.keyboard.press("Escape");
       await expect(menu).toBeHidden();
     });
