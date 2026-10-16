@@ -28,10 +28,16 @@ import { rowAction } from "./shell";
 //      and Escape gives the focus back to the group.
 //   9  two unmapped points of one source dropped on the Room together: ONE Review lists both, and creating maps both.
 //   10 the Points page (not in the brief's list; the third place that unmaps): Unmap... on a row asks, the row says unmapped and has the focus, Undo maps it again with its values.
+//   11 Ctrl+Z (the whole-wave review): an unmap made from a Discovery node is taken back by Control+Z alone (the focus on the node, then on the canvas), with the same scale,
+//      interval and unit, the toast gone; inside a text field (the Find box) it is the field's own; a second press does nothing.
+//   12 New asset... on a group (admin): the real form, and the Review that follows says `<name> was created. Cancel keeps it without any mappings.`
+// Cases 2, 3, 4 and 10 also check that the focus is on something named after the toast's Undo (its button leaves with the toast), case 3 that the group's menu opens beside its
+// button and closes on a second press, and case 7 that a line from the + let go on a node opens nothing, and Escape mid-drag takes the line away.
 //
 // Locators. Playwright matches a name by case-insensitive SUBSTRING: every lookup below is `exact: true` (or an anchored expression) where a second name could contain it
 // (`Mapping actions for LVP02` is also the start of `Mapping actions for LVP02_kW`, `Map` starts `Mapping`, `Unmapped 6 points.` contains `mapped 6 points`). The Review is
-// `Review mappings`, the form `New asset`, the confirmation of an unmap `Unmap "<name>" from <asset>?`, the Move dialog `Move the group "<key>" to another asset` (`... "<key>" of "<source>" ...` when another source has a group of that name).
+// `Review mappings`, the form `New asset`, the confirmation of an unmap `Unmap "<name>" from <asset>?` (`Unmap the group "<key>" from <asset>?` for a group), the Move dialog
+// `Move the group "<key>" to another asset` (`... "<key>" of "<source>" ...` when another source has a group of that name: see `groupWhat`).
 
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost/";
 const ADMIN = { username: "admin", password: "correct-horse" };
@@ -39,6 +45,7 @@ const ADMIN = { username: "admin", password: "correct-horse" };
 const ROOM = "W12a Room";
 const PANEL = "W12a Panel";
 const CHILD = "W12a Child";
+const MADE = "W12a Made"; // the asset the group's New asset... makes (case 12); its own prefix, so that case 7's count of CHILD assets never sees it
 const ODD_UNIT = "W12aU";
 
 interface Account { username: string; password: string; role: string }
@@ -178,6 +185,29 @@ async function unmapTarget(request: APIRequestContext): Promise<void> {
     const gone = await request.delete(`/api/mappings/${p.mapping_id}`);
     expect([204, 404], `unmapping ${p.name}: ${gone.status()}`).toContain(gone.status());
   }
+}
+
+/**
+ * What a confirmation calls the target group: `the group "LVP01"`, and `the group "LVP01" of "sim"` when another source of the graph has a group of that name (the seed
+ * has one LVP01 for each source), so that the words say which one is meant. The rule of `lib/mappedRefs.ts` `mappingsWhat`.
+ */
+async function groupWhat(request: APIRequestContext): Promise<string> {
+  const shared = (await graphOf(request)).sources.some((s) => s.id !== target.sourceId && s.clusters.some((c) => c.key === target.key));
+  return `the group "${target.key}"${shared ? ` of "${target.sourceName}"` : ""}`;
+}
+
+/** The stored values of a mapping that an Undo must bring back (the id left out: it is a new one). */
+const valuesOf = (m: ApiMapping) => ({ point_id: m.point_id, asset_id: m.asset_id, metric: m.metric, scale: m.scale, interval_seconds: m.interval_seconds, custom_unit: m.custom_unit });
+/** Polls until the target group's mappings are exactly `stored` (read through GET /api/mappings/{id}: the scale, interval and custom unit are not in the graph). */
+async function expectTargetHolds(request: APIRequestContext, stored: ReturnType<typeof valuesOf>[], message: string): Promise<void> {
+  const byPoint = (a: { point_id: number }, b: { point_id: number }) => a.point_id - b.point_id;
+  await expect
+    .poll(async () => {
+      const mapped = (await targetPoints(request)).filter((p) => p.mapping_id !== null);
+      const read = await Promise.all(mapped.map((p) => json<ApiMapping>(request, `/api/mappings/${p.mapping_id}`)));
+      return read.map(valuesOf).sort(byPoint);
+    }, { message })
+    .toEqual([...stored].sort(byPoint));
 }
 
 async function sourceMappings(request: APIRequestContext, sourceId: number): Promise<SourceMappings> {
@@ -322,6 +352,7 @@ const plusOpacity = (plus: Locator) => plus.evaluate((el) => getComputedStyle(el
 const menuEl = (page: Page) => page.locator('.graph-menu[role="menu"]');
 const reviewDialog = (page: Page) => page.getByRole("dialog", { name: "Review mappings", exact: true });
 const formDialog = (page: Page) => page.getByRole("dialog", { name: "New asset", exact: true });
+const canvasGroup = (page: Page) => page.getByRole("group", { name: "Discovery graph", exact: true });
 
 const mappedText = (count: number, asset: string) => `Mapped ${count} point${count === 1 ? "" : "s"} to ${asset}.`;
 const NOTE = `${ROOM} is a room; meters usually belong to a Panel or Rack. Map here anyway?`;
@@ -331,6 +362,12 @@ async function boxOf(locator: Locator, what: string) {
   const box = await locator.boundingBox();
   expect(box, `${what} has a box`).not.toBeNull();
   return box!;
+}
+/** The distance between the nearest edges of two boxes (0 when they touch or overlap). */
+function gapBetween(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }): number {
+  const dx = Math.max(0, b.x - (a.x + a.width), a.x - (b.x + b.width));
+  const dy = Math.max(0, b.y - (a.y + a.height), a.y - (b.y + b.height));
+  return Math.hypot(dx, dy);
 }
 const frames = (page: Page) => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
 
@@ -528,6 +565,8 @@ test.describe("W12a: mapping from Discovery, and taking it back", () => {
       await expect(undone, "the asset existed before, so nothing is said about it staying").not.toContainText("stays");
       await expectTargetOn(page.request, null, "Undo took every mapping off");
       expect((await assetsOf(page.request)).some((a) => a.id === room.id), "the Room is still there").toBe(true);
+      // The Undo's button left with its toast: the focus must be on something named (the graph), not on the page body.
+      await expect(canvasGroup(page), "after the Undo the focus is on the Discovery graph").toBeFocused();
     } finally {
       await unmapTarget(page.request);
     }
@@ -542,17 +581,25 @@ test.describe("W12a: mapping from Discovery, and taking it back", () => {
       await expectTargetOn(page.request, room.id, "mapped to the Room");
 
       const cluster = clusterNode(page);
-      await test.step("Mapping actions for <group> opens the group's menu with the mapping items", async () => {
-        await cluster.getByRole("button", { name: `Mapping actions for ${target.key}`, exact: true }).click();
+      await test.step("Mapping actions for <group> opens the group's menu beside its button with the mapping items; a second press on the button closes it", async () => {
+        const button = cluster.getByRole("button", { name: `Mapping actions for ${target.key}`, exact: true });
         const menu = menuEl(page);
+        await button.click();
         await expect(menu).toBeVisible();
+        // Next to the button the mouse is on, not on the far side of the node (the node is wider than that).
+        const gap = gapBetween(await boxOf(button, "the node's menu button"), await boxOf(menu, "the menu"));
+        expect(gap, "the menu opens within 120 px of the button that opened it").toBeLessThanOrEqual(120);
         await expect(menu.getByRole("menuitem", { name: "Unmap this group…", exact: true })).toHaveCount(1);
+
+        await button.click();
+        await expect(menu, "a second press on the button closes the menu and does not open it again").toBeHidden();
+        await button.click();
+        await expect(menu, "and a third press opens it once more").toBeVisible();
         await menu.getByRole("menuitem", { name: "Move this group's mappings…", exact: true }).click();
       });
 
       // A group label that more than one source has names its source: `Move the group "LVP01" of "sim" to another asset`.
-      const own = `${target.key}`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const move = page.getByRole("dialog", { name: new RegExp(`^Move the group "${own}"( of "[^"]+")? to another asset$`) });
+      const move = page.getByRole("dialog", { name: `Move ${await groupWhat(page.request)} to another asset`, exact: true });
       await test.step("the Move dialog: the billing sentence, no move to where they are, the Panel is a choice and no note comes with it", async () => {
         await expect(move).toBeVisible();
         await expect(move).toContainText("Billing for months that are still open is recalculated with them under the asset you choose; closed months keep their billed figures.");
@@ -575,6 +622,7 @@ test.describe("W12a: mapping from Discovery, and taking it back", () => {
         await undoOf(moved).click();
         await expect(toast(page, `Put back ${target.points.length} mappings.`)).toBeVisible();
         await expectTargetOn(page.request, room.id, "every mapping is on the Room again");
+        await expect(cluster, "the Undo's button left with its toast: the focus is back on the group, not on the body").toBeFocused();
       });
     } finally {
       await unmapTarget(page.request);
@@ -627,7 +675,9 @@ test("4 one metric unmapped from the asset page: it asks, the row goes, Undo bri
       await undoOf(unmapped).click();
       await expect(toast(page, "Put back 1 mapping.")).toBeVisible();
       await expect(trigger, "the row is back").toBeVisible();
-      const back = (await json<ApiSummary>(request, `/api/assets/${panel.id}/summary`)).metrics.find((m) => m.metric === "custom");
+      // The Undo's button left with its toast: the focus is on a row's menu button (the restored row's place) or the Metrics heading, never the body.
+      await expect(page.locator(".metrics-table .row-menu-btn:focus, #metrics-heading:focus"), "the focus is on the table or its heading after the Undo").toHaveCount(1);
+      const back =(await json<ApiSummary>(request, `/api/assets/${panel.id}/summary`)).metrics.find((m) => m.metric === "custom");
       expect(back, "the custom row is in the summary again").toBeDefined();
       const after = await json<ApiMapping>(request, `/api/mappings/${back!.mapping_id}`);
       expect(after.id, "the mapping is a new one").not.toBe(stored.id);
@@ -801,6 +851,43 @@ for (const size of SIZES) {
         await expect(form).toBeHidden();
         expect((await assetsOf(request)).filter((a) => a.name.startsWith(CHILD)), "cancelling made nothing").toHaveLength(1);
       });
+      await test.step("a line from the + let go on another asset or back on its own node opens nothing and makes no edge", async () => {
+        const edges = page.locator(".react-flow__edge");
+        // The library draws every node INSIDE the canvas pane, so a release on a node is not a release on the empty canvas.
+        for (const [what, onto] of [["another asset", assetNode(page, panel)], ["its own node", asset]] as const) {
+          await ensureOnCanvas(page, asset);
+          await ensureOnCanvas(page, assetNode(page, panel));
+          await asset.hover();
+          await expect.poll(() => plusOpacity(plus), { message: "the + shows when the node is hovered" }).toBe("1");
+          await stopped(onto);
+          const count = await edges.count();
+          await dragPath(page, centreOf(await boxOf(plus, "the +")), centreOf(await boxOf(onto, what)));
+          await frames(page);
+          await page.waitForTimeout(500); // a dialog would open after the paint that follows the release
+          await expect(page.getByRole("dialog"), `a line let go on ${what} opens no dialog`).toHaveCount(0);
+          expect(await edges.count(), `a line let go on ${what} makes no edge`).toBe(count);
+          await expect(page.locator(".gconnect"), "and the line is gone").toHaveCount(0);
+        }
+      });
+      await test.step("Escape in the middle of the drag takes the line away, and letting go afterwards opens nothing", async () => {
+        await ensureOnCanvas(page, asset);
+        await asset.hover();
+        await expect.poll(() => plusOpacity(plus), { message: "the + shows when the node is hovered" }).toBe("1");
+        const from = centreOf(await boxOf(plus, "the +"));
+        const to = await emptySpot(page);
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(from.x + 6, from.y + 6, { steps: 3 });
+        await page.mouse.move(to.x, to.y, { steps: 25 });
+        await expect(page.locator(".gconnect"), "the dashed line follows the pointer").toHaveCount(1);
+        await page.keyboard.press("Escape");
+        await expect(page.locator(".gconnect"), "Escape takes the line away").toHaveCount(0);
+        await page.mouse.up();
+        await frames(page);
+        await page.waitForTimeout(500);
+        await expect(page.getByRole("dialog"), "and letting go afterwards opens no dialog").toHaveCount(0);
+        expect((await assetsOf(request)).filter((a) => a.name.startsWith(CHILD)), "nothing was made").toHaveLength(1);
+      });
       await test.step("the canvas menu's New asset... opens the form with no parent", async () => {
         const at = await emptySpot(page);
         await page.mouse.click(at.x, at.y, { button: "right" });
@@ -931,9 +1018,130 @@ test("10 the Points page: Unmap… on a row asks, the row says unmapped and hold
     await undoOf(unmapped).click();
     await expect(toast(page, "Put back 1 mapping.")).toBeVisible();
     await expect(row).toContainText(PANEL);
+    await expect(row.getByRole("button", { name: `Actions for ${point.name}`, exact: true }), "the Undo's button left with its toast: the focus is back on the row's menu, not on the body").toBeFocused();
     const back = (await sourceMappings(request, target.sourceId)).find((p) => p.point === point.id);
     expect(back?.mapping, "the point is mapped again with the values it had").toEqual({ asset_id: panel.id, metric: point.metric, scale: 0.5, interval_seconds: 9, custom_unit: null });
   } finally {
+    await unmapTarget(request);
+  }
+});
+
+test("11 Ctrl+Z takes an unmap made from a Discovery node back with the keyboard alone, with the same values; not inside a text field; a second press does nothing", async ({ page }) => {
+  test.setTimeout(240_000);
+  await signInAs(page, ADMIN);
+  const request = page.request;
+  const [odd, plain] = target.points;
+  // What the browser (not this spec's own requests) writes to the mappings: a press that starts nothing leaves this empty.
+  const writes: string[] = [];
+  page.on("request", (r) => { if (r.method() !== "GET" && r.url().includes("/api/mappings")) writes.push(`${r.method()} ${r.url()}`); });
+  const count = 2;
+  try {
+    // Values off their defaults, so that an Undo which posted the defaults instead would be caught.
+    const oddMade = await mapOne(request, odd, panel.id, { metric: "custom", custom_unit: ODD_UNIT, scale: 0.001, interval_seconds: 7 });
+    const plainMade = await mapOne(request, plain, panel.id, { scale: 0.5, interval_seconds: 9 });
+    const stored = [valuesOf(await json<ApiMapping>(request, `/api/mappings/${oddMade.id}`)), valuesOf(await json<ApiMapping>(request, `/api/mappings/${plainMade.id}`))];
+    const what = await groupWhat(request);
+
+    await openOnGroup(page);
+    const cluster = clusterNode(page);
+    const unmapGroup = async (): Promise<Locator> => {
+      await ensureOnCanvas(page, cluster);
+      await cluster.getByRole("button", { name: `Mapping actions for ${target.key}`, exact: true }).click();
+      await menuEl(page).getByRole("menuitem", { name: "Unmap this group…", exact: true }).click();
+      const ask = page.getByRole("dialog", { name: `Unmap ${what} from ${PANEL}?`, exact: true });
+      await expect(ask, "the confirmation names the group (and its source when the name is not unique)").toBeVisible();
+      await ask.getByRole("button", { name: "Unmap", exact: true }).click();
+      await expect(ask).toBeHidden();
+      const raised = toast(page, `Unmapped ${count} points from ${PANEL}.`);
+      await expect(raised).toBeVisible();
+      await expect(undoOf(raised)).toBeVisible();
+      await expectTargetOn(request, null, "both mappings are gone");
+      return raised;
+    };
+
+    const raised = await unmapGroup();
+    await expect(cluster, "the focus is on the group the action was about").toBeFocused();
+
+    await test.step("Ctrl+Z inside a text field is the field's own: in the Find box the mapping stays unmapped and the toast stays", async () => {
+      await page.keyboard.press("Control+k");
+      const find = page.getByRole("combobox", { name: "Search the graph", exact: true });
+      await expect(find).toBeFocused();
+      await find.fill(target.key);
+      writes.length = 0;
+      await page.keyboard.press("Control+z");
+      await page.waitForTimeout(600);
+      expect(writes, "nothing was written to the mappings").toEqual([]);
+      await expect(raised, "the Undo toast is still there").toBeVisible();
+      await expectTargetOn(request, null, "still unmapped");
+      await page.keyboard.press("Escape");
+      await expect(find).toBeHidden();
+      await expect(cluster, "Escape gives the focus back to the group").toBeFocused();
+    });
+
+    await test.step("Ctrl+Z with the focus on the group: the mappings are back with the same scale, interval and unit, the toast has gone, a second press does nothing", async () => {
+      await page.keyboard.press("Control+z");
+      await expect(raised, "the shortcut takes the Undo toast away").toBeHidden();
+      await expect(toast(page, `Put back ${count} mappings.`)).toBeVisible();
+      await expect(page.getByRole("button", { name: "Undo", exact: true }), "no Undo button is left on screen").toHaveCount(0);
+      await expectTargetHolds(request, stored, "scale, interval, custom unit, metric, point and asset are what they were");
+      await expect(cluster, "the focus is on the group again").toBeFocused();
+
+      const ids = (await targetPoints(request)).map((p) => p.mapping_id);
+      writes.length = 0;
+      await page.keyboard.press("Control+z");
+      await page.waitForTimeout(600);
+      expect(writes, "a second Ctrl+Z starts nothing").toEqual([]);
+      await expect(toast(page, "Unmapped"), "and raises no toast").toHaveCount(0);
+      expect((await targetPoints(request)).map((p) => p.mapping_id), "the mappings are the ones the first press made").toEqual(ids);
+    });
+
+    await test.step("Ctrl+Z with the focus on the canvas itself does the same", async () => {
+      const again = await unmapGroup();
+      await canvasGroup(page).focus();
+      await expect(canvasGroup(page)).toBeFocused();
+      await page.keyboard.press("Control+z");
+      await expect(again).toBeHidden();
+      await expect(toast(page, `Put back ${count} mappings.`)).toBeVisible();
+      await expectTargetHolds(request, stored, "the mappings are back with their values");
+    });
+  } finally {
+    await unmapTarget(request);
+  }
+});
+
+test("12 New asset… on a group (admin) makes the asset with the real form, and the Review that follows says it was created and that Cancel keeps it", async ({ page }) => {
+  test.setTimeout(240_000);
+  await signInAs(page, ADMIN);
+  const request = page.request;
+  const name = `${MADE} ${target.key}`;
+  try {
+    await openOnGroup(page);
+    const cluster = clusterNode(page);
+    await ensureOnCanvas(page, cluster);
+    await cluster.getByRole("button", { name: `New asset from ${target.key}…`, exact: true }).click();
+
+    const form = formDialog(page);
+    await expect(form, "an editor gets the real form, not the Review's own choice").toBeVisible();
+    await expect(form).toContainText("Cancel keeps the new asset.");
+    await form.getByLabel("Name", { exact: true }).fill(name);
+    await form.getByRole("button", { name: "Save", exact: true }).click();
+
+    const review = reviewDialog(page);
+    await expect(review, "Save goes on to the Review on the new asset").toBeVisible();
+    const made = (await assetsOf(request)).find((a) => a.name === name);
+    expect(made, `the asset ${name} was created`).toBeDefined();
+    const chosen = review.getByLabel("Asset", { exact: true });
+    await expect(chosen, "the new asset is chosen").toHaveValue(String(made!.id));
+    const created = `${name} was created. Cancel keeps it without any mappings.`;
+    await expect(review.getByText(created, { exact: true }), "the Review says what Cancel does").toBeVisible();
+    await expect(chosen, "and the select is described by it").toHaveAccessibleDescription(new RegExp(created.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+    await review.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(review).toBeHidden();
+    expect((await assetsOf(request)).some((a) => a.id === made!.id), "Cancel keeps the asset").toBe(true);
+    await expectTargetOn(request, null, "and it has no mappings");
+  } finally {
+    for (const a of (await assetsOf(request)).filter((x) => x.name.startsWith(MADE)).sort((x, y) => y.id - x.id)) await deleteAsset(request, a.id);
     await unmapTarget(request);
   }
 });
