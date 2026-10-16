@@ -323,11 +323,11 @@ async function emptySpot(page: Page): Promise<XY> {
   return spot;
 }
 
-/** Shift-drag a box around `ids` (the nodes inside it, and room of 14 px around them, and nothing else). The Shift key is let go whatever happens. */
-async function boxSelect(page: Page, ids: string[]): Promise<void> {
+/** Shift-drag a box around `ids` (the nodes inside it, and room of `margin` px around them, and nothing else: a small source node on a zoomed-out canvas needs about 30). The Shift key is let go whatever happens. */
+async function boxSelect(page: Page, ids: string[], margin = 14): Promise<void> {
   const boxes = await Promise.all(ids.map((id) => boxOf(nodeEl(page, id), `node ${id}`)));
-  const [x0, y0] = [Math.min(...boxes.map((b) => b.x)) - 14, Math.min(...boxes.map((b) => b.y)) - 14];
-  const [x1, y1] = [Math.max(...boxes.map((b) => b.x + b.width)) + 14, Math.max(...boxes.map((b) => b.y + b.height)) + 14];
+  const [x0, y0] = [Math.min(...boxes.map((b) => b.x)) - margin, Math.min(...boxes.map((b) => b.y)) - margin];
+  const [x1, y1] = [Math.max(...boxes.map((b) => b.x + b.width)) + margin, Math.max(...boxes.map((b) => b.y + b.height)) + margin];
   const onPane = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.classList.contains("react-flow__pane") ?? false, [x0, y0]);
   expect(onPane, `the corner (${x0.toFixed(0)}, ${y0.toFixed(0)}) of the box is on the empty canvas`).toBe(true);
   await page.keyboard.down("Shift");
@@ -867,7 +867,10 @@ for (const size of SIZES) {
 
       await test.step("the bar's branch items: Collapse this branch closes Alpha and forgets its groups, Expand this branch opens it with both", async () => {
         await fitViewNow(page);
-        await boxSelect(page, [alpha]);
+        // Space on the focused node selects it (React Flow): a box around one small source node on a zoomed-out canvas is too fiddly to prove anything here.
+        await nodeEl(page, alpha).focus();
+        await page.keyboard.press("Space");
+        await expect.poll(() => selectedIds(page), { message: "Alpha is selected" }).toEqual([alpha]);
         await collapseMore.click();
         await page.getByRole("menu", { name: "Collapse options", exact: true }).getByRole("menuitem", { name: "Collapse this branch", exact: true }).click();
         await expect(polite("Closed 1 source and 2 groups.")).toBeVisible();
