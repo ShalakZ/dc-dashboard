@@ -759,6 +759,13 @@ describe("AssetPage mapping actions (W12a)", () => {
       "GET /api/me": { body: userFor(role, { username: "a" }) },
       "GET /api/asset-kinds": { body: [] },
       "GET /api/assets/4/summary": () => ({ body: { ...summary(null), metrics: rowsFor() } }),
+      // Like the server: a metric the asset has no mapping for is a 404 (what the Trend chart used to ask for after its metric was unmapped).
+      "GET /api/assets/4/series": ({ url }) => {
+        const metric = new URL(url, "http://x").searchParams.get("metric");
+        return [...store.values()].some((m) => m.asset_id === 4 && m.metric === metric)
+          ? { body: { metric, unit: "kW", points: [] } }
+          : { status: 404, body: { detail: "this asset has no such metric" } };
+      },
       ...Object.fromEntries([1, 2].flatMap((id) => [
         [`GET /api/mappings/${id}`, () => (store.has(id) ? { body: store.get(id) } : { status: 404, body: { detail: "mapping not found" } })],
         [`DELETE /api/mappings/${id}`, () => { store.delete(id); return { status: 204 }; }],
@@ -828,6 +835,21 @@ describe("AssetPage mapping actions (W12a)", () => {
     expect(spy.calls[0]).toMatchObject({ kind: "success", text: "Unmapped 1 point from Panel 1.", options: { durationMs: 10_000, action: { label: "Undo" } } });
     await waitFor(() => expect(screen.queryByRole("button", { name: "Actions for voltage_v" })).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Actions for active_power_kw" })).toBeInTheDocument();
+  });
+
+  it("unmapping the metric the Trend chart shows moves the chart to a metric that is left, with no error line", async () => {
+    serve("admin");
+    show();
+    await screen.findByRole("region", { name: "Trend" });
+    await choose("active_power_kw", "Unmap…");
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Unmap" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Actions for active_power_kw" })).not.toBeInTheDocument());
+    const trend = screen.getByRole("region", { name: "Trend" });
+    await waitFor(() => expect(within(trend).getByLabelText("Metric")).toHaveValue("voltage_v"));
+    const asked = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url)).filter((u) => u.includes("/api/assets/4/series"));
+    await waitFor(() => expect(asked().at(-1)).toContain("metric=voltage_v")); // the chart asks for the metric that is left, not the one that is gone
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("this asset has no such metric")).not.toBeInTheDocument();
   });
 
   it("Undo puts back what was read: the point, the metric, the scale and the interval", async () => {

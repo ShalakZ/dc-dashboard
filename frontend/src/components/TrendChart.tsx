@@ -104,9 +104,12 @@ export function seriesToOption(series: Series, range: Range, query: Query = rang
 
 export function TrendChart({ assetId, metrics }: { assetId: number; metrics: SummaryMetric[] }) {
   const available = [...new Set(metrics.map((m) => m.metric))]; // two mappings of one metric are one entry in the picker
-  const [metric, setMetric] = useState<Metric | null>(
-    available.includes("active_power_kw") ? "active_power_kw" : (available[0] ?? null),
-  );
+  // What the person picked; the metric charted is derived from it on every render, because the picked one can go (an unmap) and come back (its Undo)
+  // while this component stays mounted, and a metric the asset no longer has is a 404 from the series route.
+  const [picked, setPicked] = useState<Metric | null>(null);
+  const metric: Metric | null = picked !== null && available.includes(picked)
+    ? picked
+    : available.includes("active_power_kw") ? "active_power_kw" : (available[0] ?? null);
   const [range, setRange] = useState<Range>("1h");
   const [mappingId, setMappingId] = useState<number | undefined>(undefined);
   const mappings = metrics.filter((m) => m.metric === metric);
@@ -124,7 +127,7 @@ export function TrendChart({ assetId, metrics }: { assetId: number; metrics: Sum
     <section className="trend-frame" aria-label="Trend" onPointerEnter={(e) => { if (e.pointerType === "mouse") setHover(true); }} onPointerLeave={() => setHover(false)}>
       <div className="row trend-bar">
         <label>Metric
-          <select value={metric} onChange={(e) => setMetric(e.target.value as Metric)}>
+          <select value={metric} onChange={(e) => setPicked(e.target.value as Metric)}>
             {available.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
         </label>

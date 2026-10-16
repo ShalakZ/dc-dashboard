@@ -671,6 +671,11 @@ test("4 one metric unmapped from the asset page: it asks, the row goes, Undo bri
       expect((await request.get(`/api/mappings/${oddMade.id}`)).status(), "the mapping is gone").toBe(404);
       await expect(page.getByRole("button", { name: plainLabel, exact: true }), "the focus lands on a row of the table").toBeFocused();
     });
+    await test.step("the Trend chart follows: it shows the metric that is left and the server is not asked for the one that went (no 'no such metric' line)", async () => {
+      const metricPicker = page.getByRole("region", { name: "Trend", exact: true }).getByLabel("Metric", { exact: true });
+      await expect(metricPicker, "the Trend's Metric is the one metric left").toHaveValue(plain.metric);
+      await expect(page.getByText("this asset has no such metric"), "no error about the unmapped metric").toHaveCount(0);
+    });
     await test.step("Undo brings the row back, and the mapping holds the same values (a new id)", async () => {
       await undoOf(unmapped).click();
       await expect(toast(page, "Put back 1 mapping.")).toBeVisible();
