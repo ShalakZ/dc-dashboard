@@ -22,6 +22,17 @@ describe("isUndoKey", () => {
     expect(key({ key: "Dead", code: "KeyY" })).toBe(false);
   });
 
+  it("the key that TYPES z undoes on any layout, and the physical Z position of a layout that types another ASCII character does not", () => {
+    expect(key({ key: "z", code: "KeyY" }), "QWERTZ: the key that types z sits where QWERTY has Y").toBe(true);
+    expect(key({ key: "y", code: "KeyZ" }), "QWERTZ: the physical Z position types y").toBe(false);
+    expect(key({ key: "w", code: "KeyZ" }), "AZERTY: the Z position types w").toBe(false);
+    expect(key({ key: ";", code: "KeyZ" }), "Dvorak: the Z position types a semicolon").toBe(false);
+    expect(key({ key: ";", code: "KeyZ", ctrlKey: false, metaKey: true }), "Dvorak, Cmd").toBe(false);
+    expect(key({ key: "z", code: "Slash" }), "Dvorak: the key that types z is on the Slash position").toBe(true);
+    expect(key({ key: "Dead", code: "KeyZ" }), "a dead key on that position").toBe(false);
+    expect(key({ key: "Unidentified", code: "KeyZ" })).toBe(false);
+  });
+
   it("is not Redo (Shift), not Alt, and needs Ctrl or Cmd", () => {
     expect(key({ shiftKey: true })).toBe(false);
     expect(key({ altKey: true })).toBe(false);

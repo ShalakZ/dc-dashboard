@@ -99,11 +99,26 @@ function Leaving({ capture }: { capture: (actions: Actions) => void }) {
   return <div><Probes />{here && <Host capture={capture} />}</div>;
 }
 
-type Setup = { role?: string; inject?: Parameters<typeof mappingRoutes>[1]; takenFor?: (assetId: number) => ReadonlySet<Metric>; page?: (capture: (actions: Actions) => void) => ReactElement };
-function setup(store: Map<number, Mapping>, { role = "admin", inject, takenFor, page }: Setup = {}) {
+/**
+ * A control that depends on a list the Undo refreshes, like a node's "Mapping actions" button (it exists only while the node has mappings): it
+ * is drawn while the graph probe says `shown`, and the data reaches it through TanStack Query and a render, some time AFTER the refetch resolved.
+ */
+function Removable() {
+  const { data } = useQuery({ queryKey: keys.graph, queryFn: () => api.get<{ shown: boolean }>("/api/probe/graph"), staleTime: Infinity });
+  return data?.shown ? <button type="button">Mapping actions for Panel 2</button> : null;
+}
+/** The graph probe's answers, one per fetch: `shownAt(n)` says whether the n-th fetch (1 is the first) still shows the control. */
+const graphAnswers = (shownAt: (n: number) => boolean): Routes => {
+  let n = 0;
+  return { "GET /api/probe/graph": () => { n += 1; return { body: { shown: shownAt(n) } }; } };
+};
+const withRemovable = (capture: (actions: Actions) => void) => <><Harness capture={capture} /><Removable /></>;
+
+type Setup = { role?: string; inject?: Parameters<typeof mappingRoutes>[1]; takenFor?: (assetId: number) => ReadonlySet<Metric>; page?: (capture: (actions: Actions) => void) => ReactElement; routes?: Routes };
+function setup(store: Map<number, Mapping>, { role = "admin", inject, takenFor, page, routes }: Setup = {}) {
   const calls = mockFetch({
     "GET /api/me": { body: userFor(role) }, "GET /api/setup": { body: { needed: false } },
-    ...probeRoutes, ...mappingRoutes(store, inject),
+    ...probeRoutes, ...mappingRoutes(store, inject), ...routes,
   });
   const spy = spyToasts();
   let actions!: Actions;
@@ -803,7 +818,7 @@ describe("useMappingActions: an Undo returns the focus (it runs the after() its 
     await waitFor(() => expect(spy.calls).toHaveLength(2));
     await waitFor(() => expect(fetched(calls)).toEqual(EVERY(3)));
     await idle();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 150)); // longer than the two frames an Undo's after() waits for
     expect(after).toHaveBeenCalledTimes(1);
   });
 
@@ -884,20 +899,18 @@ describe("useMappingActions: Ctrl+Z undoes the latest mapping action", () => {
     expect(spy.calls).toHaveLength(1);
   });
 
-  // The two tests below are a pair: the first leaves an Undo unused (its toast is up for 10 s), the second must find nothing, whatever order the file runs in.
-  it("(pair 1) leaves an Undo unused", async () => {
+  // One test, not a pair across two: it raises an Undo, forgets it itself, and finds nothing, whatever order the file runs in (afterEach does the same between tests).
+  it("resetUndoForTests forgets an Undo that is still young and unused: Ctrl+Z does nothing", async () => {
     const { calls, actions, spy } = setup(store(mapping(1)));
     await ready(actions, calls);
     act(() => actions().mappedToast({ text: "Mapped 1 point to Room 1.", mappings: [{ id: 1, assetId: 1 }], newAssets: [] }));
     expect(spy.calls).toHaveLength(1);
-  });
-
-  it("(pair 2) finds no Undo left by the test before it: Ctrl+Z does nothing", async () => {
-    const { calls, actions } = setup(store(mapping(1)), { role: "operator" });
-    await ready(actions, calls, false);
+    expect(spy.calls[0].options!.signal!.aborted).toBe(false);
+    resetUndoForTests();
     expect(press().defaultPrevented).toBe(false);
     expect(actions().undoLatest()).toBe(false);
     expect(writes(calls)).toEqual([]);
+    expect(spy.calls[0].options!.signal!.aborted, "the toast was not touched").toBe(false);
   });
 
   it("works on a keyboard layout whose typed key is not a Latin letter: the physical Z key counts", async () => {
@@ -919,16 +932,21 @@ describe("useMappingActions: Ctrl+Z undoes the latest mapping action", () => {
     const settled = async (calls: { path: string }[], refreshes: number) => {
       await waitFor(() => expect(fetched(calls)).toEqual(EVERY(refreshes)));
       await idle();
-      await new Promise((resolve) => setTimeout(resolve, 50)); // after() runs a tick after the last refetch
+      await new Promise((resolve) => setTimeout(resolve, 150)); // an Undo's after() waits two frames (about 35 ms here) after the last refetch
     };
     const focused = (el: HTMLElement) => { el.focus(); expect(document.activeElement).toBe(el); return el; };
+    /** An `after()` that really moves the focus, to a named element: a wrongly run one shows in `document.activeElement`, not only in a count. */
+    const focusing = (target: HTMLElement) => vi.fn(() => { target.focus(); });
+    const menuButton = () => screen.findByRole("button", { name: "Mapping actions for Panel 2" });
 
     it("Ctrl+Z with the focus on a node undoes, and leaves that focus alone", async () => {
-      const after = vi.fn();
+      const sentinel = element("button", { class: "sentinel" });
+      const after = focusing(sentinel);
       const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
       await ready(actions, calls);
       await unmapOne(actions, spy, 1, after);
       await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+      expect(document.activeElement, "the action's own after() put the focus on the sentinel").toBe(sentinel);
       const node = focused(element("button", { class: "react-flow__node" }));
       expect(press().defaultPrevented).toBe(true);
       await waitFor(() => expect(spy.calls).toHaveLength(2));
@@ -940,7 +958,7 @@ describe("useMappingActions: Ctrl+Z undoes the latest mapping action", () => {
     it.each<[string, () => void]>([
       ["nowhere (the body)", () => undefined],
       ["the toast's own button", () => { focused(element("button", {}, element("div", { class: "toast-stack" }))); }],
-      ["a button that has just been removed with its toast", () => { focused(element("button", {}, element("div", { class: "toast-stack" }))).remove(); }],
+      ["the body again, after the toast's button was removed with its toast", () => { focused(element("button", {}, element("div", { class: "toast-stack" }))).remove(); }],
     ])("an Undo pressed from the toast with the focus on %s runs after()", async (_where, place) => {
       const after = vi.fn();
       const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
@@ -954,8 +972,9 @@ describe("useMappingActions: Ctrl+Z undoes the latest mapping action", () => {
     });
 
     it("every Undo is covered: a move's and a mapping made in Discovery's keep a focus that is somewhere real too", async () => {
-      const after = vi.fn();
-      const afterMade = vi.fn();
+      const sentinel = element("button", { class: "sentinel" });
+      const after = focusing(sentinel);
+      const afterMade = focusing(sentinel);
       const s = store(mapping(1, { asset_id: 2 }), mapping(2));
       const { calls, actions, spy } = setup(s);
       await ready(actions, calls);
@@ -978,8 +997,93 @@ describe("useMappingActions: Ctrl+Z undoes the latest mapping action", () => {
       expect(document.activeElement).toBe(node);
     });
 
+    describe("the check is made after the redraw, not when the refetch resolves", () => {
+      it("the refetch removes the control that has the focus: the focus is lost by then, so after() runs and puts it on its named element", async () => {
+        const target = element("button", { class: "named-target" });
+        const after = focusing(target);
+        const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })), { page: withRemovable, routes: graphAnswers((n) => n < 3) });
+        await ready(actions, calls);
+        await unmapOne(actions, spy, 1, after);
+        await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+        const menu = focused(await menuButton());
+        expect(press().defaultPrevented).toBe(true);
+        await waitFor(() => expect(spy.calls).toHaveLength(2));
+        await settled(calls, 3);
+        expect(menu.isConnected, "the third fetch took the control away").toBe(false);
+        expect(after).toHaveBeenCalledTimes(2);
+        expect(document.activeElement).toBe(target);
+      });
+
+      it("the same through the toast's button, for the Undo of a move and of a mapping made in Discovery", async () => {
+        const target = element("button", { class: "named-target" });
+        const afterMove = focusing(target);
+        const afterMade = focusing(target);
+        const s = store(mapping(1, { asset_id: 2 }), mapping(2));
+        const { calls, actions, spy } = setup(s, { page: withRemovable, routes: graphAnswers((n) => n < 3) });
+        await ready(actions, calls);
+        act(() => actions().move([refM(1, "active_power_kw", 2, "kW")], { after: afterMove }));
+        await screen.findByRole("dialog");
+        await userEvent.selectOptions(within(screen.getByRole("dialog")).getByLabelText("Move to"), "3");
+        await confirm("Move");
+        await waitFor(() => expect(afterMove).toHaveBeenCalledTimes(1));
+        focused(await menuButton());
+        pressUndo(spy, 0); // fetch 3 hides the control
+        await waitFor(() => expect(spy.calls).toHaveLength(2));
+        await settled(calls, 3);
+        expect(afterMove).toHaveBeenCalledTimes(2);
+        expect(document.activeElement).toBe(target);
+        act(() => actions().mappedToast({ text: "Mapped 1 point to Room 1.", mappings: [{ id: 2, assetId: 1 }], newAssets: [], after: afterMade }));
+        focused(element("button", { class: "react-flow__node" }));
+        pressUndo(spy, 2);
+        await waitFor(() => expect(spy.calls).toHaveLength(4));
+        await settled(calls, 4);
+        expect(afterMade, "a focus on a real node is the person's own").not.toHaveBeenCalled();
+        expect(document.activeElement?.className).toBe("react-flow__node");
+      });
+
+      it("the refetch redraws the page but the control with the focus stays: that focus is the person's own, after() does not run", async () => {
+        const target = element("button", { class: "named-target" });
+        const after = focusing(target);
+        const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })), { page: withRemovable, routes: graphAnswers(() => true) });
+        await ready(actions, calls);
+        await unmapOne(actions, spy, 1, after);
+        await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+        const menu = focused(await menuButton());
+        expect(press().defaultPrevented).toBe(true);
+        await waitFor(() => expect(spy.calls).toHaveLength(2));
+        await settled(calls, 3);
+        expect(menu.isConnected).toBe(true);
+        expect(after).toHaveBeenCalledTimes(1);
+        expect(document.activeElement).toBe(menu);
+      });
+
+      it("a focus on something that is no longer in the page counts as lost even when it is not the body", async () => {
+        const target = element("button", { class: "named-target" });
+        const after = focusing(target);
+        const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
+        await ready(actions, calls);
+        await unmapOne(actions, spy, 1, after);
+        await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+        // A browser answers the body when the focused element is removed, so this is a stand-in: an element that is not in the page and not the body.
+        const gone = document.createElement("button");
+        const active = vi.spyOn(document, "activeElement", "get").mockReturnValue(gone);
+        try {
+          expect(gone.isConnected).toBe(false);
+          expect(document.activeElement).not.toBe(document.body);
+          expect(document.activeElement?.closest(".toast-stack")).toBeNull();
+          expect(press().defaultPrevented).toBe(true);
+          await waitFor(() => expect(after).toHaveBeenCalledTimes(2));
+        } finally {
+          active.mockRestore();
+        }
+        await waitFor(() => expect(spy.calls).toHaveLength(2));
+        expect(document.activeElement).toBe(target);
+      });
+    });
+
     it("a dialog opened while a slow Undo runs keeps its focus", async () => {
-      const after = vi.fn();
+      const sentinel = element("button", { class: "sentinel" });
+      const after = focusing(sentinel);
       const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
       await ready(actions, calls);
       await unmapOne(actions, spy, 1, after);

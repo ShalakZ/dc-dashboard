@@ -34,6 +34,7 @@ import { useCreateAsset } from "../hooks/useCreateAsset";
 import { useGraphHighlight } from "../hooks/useGraphHighlight";
 import { useMappingActions, type MappedInfo } from "../hooks/useMappingActions";
 import { reducedMotion, useReducedMotion } from "../hooks/useReducedMotion";
+import { afterPaint } from "../lib/afterPaint";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
   buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches, ownPlaces, removalDialogText, removalOutcome, seenLine,
@@ -67,9 +68,6 @@ function HintLine() {
     </>
   );
 }
-
-/** Two animation frames: the nodes React Flow was given a moment ago are in its store and drawn. */
-const afterPaint = () => new Promise<void>((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); });
 
 /** A node's box for the camera: its measured size, else the width of a node and the height of a short one (a node not yet measured). */
 const NODE_W = 220;
