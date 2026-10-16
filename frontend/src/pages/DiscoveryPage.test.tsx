@@ -3,7 +3,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import type { Asset, GraphModel, GraphPoint, GraphSource } from "../api/types";
 import { AddConnectionLine } from "../components/graph/nodes";
-import type { MappedInfo } from "../hooks/useMappingActions";
+import { resetUndoForTests, type MappedInfo } from "../hooks/useMappingActions";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
 import { renderWithProviders } from "../test/render";
@@ -111,11 +111,15 @@ vi.mock("@xyflow/react", async (importOriginal) => {
                 </div>
               );
             })}
+            {/* The rectangle a box selection leaves over its nodes: in the real library it is drawn INSIDE the pane, over the viewport, and takes the pointer
+                (a line released on it never reaches the node under it). The page's menu listens to it. */}
+            {nodes.some((n: any) => n.selected) && (
+              <div className="react-flow__nodesselection">
+                <div data-testid="selection-rect" className="react-flow__nodesselection-rect" tabIndex={-1} onContextMenu={(e) => onSelectionContextMenu?.(e, nodes.filter((n: any) => n.selected))} />
+              </div>
+            )}
           </div>
-          {/* The rectangle a box selection leaves over its nodes, and the camera starting to move: what the page's menu and guides listen to. */}
-          {nodes.some((n: any) => n.selected) && (
-            <div data-testid="selection-rect" className="react-flow__nodesselection-rect" tabIndex={-1} onContextMenu={(e) => onSelectionContextMenu?.(e, nodes.filter((n: any) => n.selected))} />
-          )}
+          {/* The camera starting to move: what the page's guides listen to. */}
           <button data-testid="move-start" onClick={() => onMoveStart?.(null, flow.state.viewport)} />
           {children}
         </div>
@@ -167,6 +171,9 @@ beforeEach(() => {
   flow.setCenter.mockClear();
   window.localStorage.removeItem("dcdash.discovery.snap");
 });
+
+// The latest Undo is module state in the hook: one this file's tests left unused must not be run by a later test's Ctrl+Z.
+afterEach(resetUndoForTests);
 
 describe("DiscoveryPage", () => {
   it("renders sources, assets and unidentified services collapsed", async () => {
@@ -2225,8 +2232,9 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(screen.getByText(/Dashed: discovered/).textContent!.trim().length).toBeLessThan(100);
       await userEvent.click(screen.getByRole("button", { name: TIP }));
       const lines = within(await screen.findByRole("note")).getAllByRole("listitem").map((item) => item.textContent);
-      expect(lines).toHaveLength(6);
+      expect(lines).toHaveLength(7);
       expect(lines[0]).toContain("Alt or Option moves it alone.");
+      expect(lines.join("\n")).toContain("Ctrl+Z undoes the last mapping change for 10 seconds.");
       expect(lines.join("\n")).toMatch(/Shift-drag selects/);
       expect(lines.join("\n")).toMatch(/Ctrl\+K finds/);
       expect(lines.join("\n")).toMatch(/Shift\+F10/);
@@ -2624,11 +2632,11 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       const { toasts } = await start([KW_ON_PANEL]);
       await userEvent.click(await screen.findByRole("button", { name: /^Create assets for/ }));
       await screen.findByRole("dialog", { name: "Create assets stub" });
-      const info = { text: "Created 2 of 3 assets", kind: "error" as const, mappings: [{ id: 5, assetId: 30, name: "a" }], newAssets: ["LVP01"], undoTitle: "Unmap the points it mapped; the assets stay" };
+      const info = { text: "Created 2 of 3 assets", kind: "error" as const, mappings: [{ id: 5, assetId: 30, name: "a" }], newAssets: ["LVP01"], undoTitle: "Unmap the points it mapped; the assets stay (Ctrl+Z)" };
       act(() => bulk.props[bulk.props.length - 1].onMapped(info));
       expect(toasts.calls).toHaveLength(1);
       // The dialog's own description of what its Undo does reaches the button.
-      expect(toasts.calls[0]).toMatchObject({ kind: "error", text: "Created 2 of 3 assets", options: { action: { label: "Undo", title: "Unmap the points it mapped; the assets stay" } } });
+      expect(toasts.calls[0]).toMatchObject({ kind: "error", text: "Created 2 of 3 assets", options: { action: { label: "Undo", title: "Unmap the points it mapped; the assets stay (Ctrl+Z)" } } });
     });
 
     it("the bulk create's Undo puts the focus on the canvas group too", async () => {
@@ -2922,6 +2930,22 @@ describe("DiscoveryPage New asset, the + and several points at once (W12a)", () 
       expect(over).not.toBeNull();
       if (_what !== "the controls") expect(over!.closest(".react-flow__pane")).not.toBeNull(); // the case that matters is the one inside the pane
       released(over, { id: "add" }, { id: "asset:11" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("released over the rectangle a box selection leaves (it covers the selected nodes inside the pane) it does nothing", async () => {
+      setup();
+      await openAll();
+      await userEvent.click(screen.getByTestId("select-asset:10"));
+      const rect = await screen.findByTestId("selection-rect");
+      expect(rect.closest(".react-flow__pane")).not.toBeNull();
+      released(rect, { id: "add" }, { id: "asset:11" });
+      released(rect.parentElement, { id: "add" }, { id: "asset:11" }); // the selection's box, around the rectangle
+      const other = document.createElement("div");
+      other.className = "react-flow__selection"; // the box being drawn
+      screen.getByTestId("pane").append(other);
+      released(other, { id: "add" }, { id: "asset:11" });
+      other.remove();
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 

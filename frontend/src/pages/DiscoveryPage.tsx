@@ -59,6 +59,7 @@ function HintLine() {
           <li>Shift-drag selects. Ctrl or Cmd adds.</li>
           <li>Ctrl+K finds while the canvas has focus.</li>
           <li>Right-click or Shift+F10 opens the actions.</li>
+          <li>Ctrl+Z undoes the last mapping change for 10 seconds.</li>
           <li>Hovering or selecting lights the path.</li>
           <li>Click empty space or press Escape to clear a selection.</li>
         </ul>
@@ -289,14 +290,15 @@ function Canvas({ model }: { model: GraphModel }) {
   /**
    * A line dragged from an asset's "+" and let go on the empty canvas: New sub-asset under that asset. Only the "+" (handle `add`) and only the empty pane count: a
    * release over a node, an edge or a control does nothing, and no connection is ever made (`isValidConnection`). The library draws every node and edge INSIDE
-   * `.react-flow__pane`, so being in the pane is not enough: the release must be on nothing else. Touch has no drag here: a finger's end event is aimed at the
-   * element the touch began on, never at the pane, so the tap on the "+" and the node's menu do the same job there.
+   * `.react-flow__pane`, so being in the pane is not enough: the release must be on nothing else. That includes the rectangle a box selection leaves: it is
+   * drawn over the selected nodes, inside the pane, and takes the pointer, so a release on it would otherwise reach no node and open a dialog. Touch has no
+   * drag here: a finger's end event is aimed at the element the touch began on, never at the pane, so the tap on the "+" and the node's menu do the same job there.
    */
   const onConnectEnd: OnConnectEnd = useCallback((event, state) => {
     if (state.fromHandle?.id !== "add") return;
     const target = event.target as Element | null;
     if (!target?.closest?.(".react-flow__pane")) return;
-    if (target.closest(".react-flow__node, .react-flow__edge, .react-flow__minimap, .react-flow__controls, .react-flow__panel")) return;
+    if (target.closest(".react-flow__node, .react-flow__edge, .react-flow__nodesselection, .react-flow__nodesselection-rect, .react-flow__selection, .react-flow__minimap, .react-flow__controls, .react-flow__panel")) return;
     const parentId = state.fromNode ? pickDropTarget([state.fromNode]) : null;
     if (parentId !== null) openNewAsset({ parentId });
   }, [openNewAsset]);

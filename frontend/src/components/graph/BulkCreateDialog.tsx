@@ -33,7 +33,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
  * The toast says `Created 3 assets` and its Undo only unmaps the points the batch mapped (the assets stay: deleting one is a separate, guarded act). The
  * sentence is pinned and the button is named Undo, so what it does is said in the button's description.
  */
-const UNDO_TITLE = "Unmap the points it mapped; the assets stay";
+const UNDO_TITLE = "Unmap the points it mapped; the assets stay (Ctrl+Z)";
 
 /**
  * Create one asset for each group of a source in one go (W7r): choose ONE parent (or the top level), tick the groups, adjust their names and

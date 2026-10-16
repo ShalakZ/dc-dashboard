@@ -200,8 +200,8 @@ export function ReviewDialog({ model, payload, initialTarget, kinds, createdAsse
                 {choices.map((a) => <option key={a.id} value={a.id}>{indent(a.depth) + (labels.get(a.id) ?? a.name)}</option>)}
               </select>
               {/* Always there, two lines tall: the note arriving moves nothing. It is only the select's description (read when the select is reached), not an announcer.
-                  After a New asset the first line says the asset was made and that Cancel keeps it; the note about a room follows it. */}
-              <div className="mapmove-slot">
+                  After a New asset the first line says the asset was made and that Cancel keeps it; the note about a room follows it, so that slot is four lines tall. */}
+              <div className={createdAsset !== undefined ? "mapmove-slot mapmove-slot-created" : "mapmove-slot"}>
                 {createdAsset !== undefined && <p id={createdId} className="muted">{`${createdAsset} was created. Cancel keeps it without any mappings.`}</p>}
                 {note !== null && <p id={noteId} className="muted">{note}</p>}
               </div>

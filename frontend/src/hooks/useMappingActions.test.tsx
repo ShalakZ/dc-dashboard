@@ -11,7 +11,7 @@ import { renderWithProviders } from "../test/render";
 import { spyToasts } from "../test/toasts";
 import { userFor } from "../test/users";
 import { isBusy } from "../lib/mappingActions";
-import { useMappingActions } from "./useMappingActions";
+import { resetUndoForTests, useMappingActions } from "./useMappingActions";
 
 // Room 1 (room)
 //   Panel 1, Panel 2
@@ -38,6 +38,9 @@ function Probes() {
 const probeRoutes: Routes = Object.fromEntries(Object.keys(PROBED).map((name) => [`GET /api/probe/${name}`, { body: {} }]));
 const EVERY = (n: number) => Object.fromEntries(Object.keys(PROBED).map((name) => [name, n]));
 const fetched = (calls: { path: string }[]) => Object.fromEntries(Object.keys(PROBED).map((name) => [name, calls.filter((c) => c.path === `/api/probe/${name}`).length]));
+
+// The latest Undo is module state: an entry one test left unused (younger than 10 s) must not be run by the next test's Ctrl+Z.
+afterEach(resetUndoForTests);
 
 type Actions = ReturnType<typeof useMappingActions>;
 function Harness({ capture, takenFor }: { capture: (actions: Actions) => void; takenFor?: (assetId: number) => ReadonlySet<Metric> }) {
@@ -874,10 +877,122 @@ describe("useMappingActions: Ctrl+Z undoes the latest mapping action", () => {
   it("with no Undo at all it does nothing", async () => {
     const { calls, actions, spy } = setup(store(mapping(1)), { role: "operator" });
     await ready(actions, calls, false);
+    expect(actions().undoLatest(), "no entry is left over from an earlier test").toBe(false);
     act(() => actions().mappedToast({ text: "Mapped 1 point to Room 1.", mappings: [{ id: 1, assetId: 1 }], newAssets: [] }));
     expect(press().defaultPrevented).toBe(false);
     expect(writes(calls)).toEqual([]);
     expect(spy.calls).toHaveLength(1);
+  });
+
+  // The two tests below are a pair: the first leaves an Undo unused (its toast is up for 10 s), the second must find nothing, whatever order the file runs in.
+  it("(pair 1) leaves an Undo unused", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1)));
+    await ready(actions, calls);
+    act(() => actions().mappedToast({ text: "Mapped 1 point to Room 1.", mappings: [{ id: 1, assetId: 1 }], newAssets: [] }));
+    expect(spy.calls).toHaveLength(1);
+  });
+
+  it("(pair 2) finds no Undo left by the test before it: Ctrl+Z does nothing", async () => {
+    const { calls, actions } = setup(store(mapping(1)), { role: "operator" });
+    await ready(actions, calls, false);
+    expect(press().defaultPrevented).toBe(false);
+    expect(actions().undoLatest()).toBe(false);
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it("works on a keyboard layout whose typed key is not a Latin letter: the physical Z key counts", async () => {
+    const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 }), mapping(2, { point_id: 42 })));
+    await ready(actions, calls);
+    await unmapOne(actions, spy, 1);
+    expect(press({ key: String.fromCodePoint(0x44f), code: "KeyY" }).defaultPrevented, "Cyrillic, another physical key").toBe(false);
+    expect(press({ key: String.fromCodePoint(0x44f), code: "KeyZ", shiftKey: true }).defaultPrevented, "Cyrillic, redo").toBe(false);
+    expect(press({ key: String.fromCodePoint(0x44f), code: "KeyZ" }).defaultPrevented, "Cyrillic").toBe(true);
+    await waitFor(() => expect(spy.calls).toHaveLength(2));
+    expect(posts(calls)).toBe(1);
+    await unmapOne(actions, spy, 2);
+    expect(press({ key: String.fromCodePoint(0x626), code: "KeyZ" }).defaultPrevented, "Arabic").toBe(true);
+    await waitFor(() => expect(spy.calls).toHaveLength(4));
+    await idle();
+  });
+
+  describe("the Undo's after() moves the focus only when it was lost", () => {
+    const settled = async (calls: { path: string }[], refreshes: number) => {
+      await waitFor(() => expect(fetched(calls)).toEqual(EVERY(refreshes)));
+      await idle();
+      await new Promise((resolve) => setTimeout(resolve, 50)); // after() runs a tick after the last refetch
+    };
+    const focused = (el: HTMLElement) => { el.focus(); expect(document.activeElement).toBe(el); return el; };
+
+    it("Ctrl+Z with the focus on a node undoes, and leaves that focus alone", async () => {
+      const after = vi.fn();
+      const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
+      await ready(actions, calls);
+      await unmapOne(actions, spy, 1, after);
+      await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+      const node = focused(element("button", { class: "react-flow__node" }));
+      expect(press().defaultPrevented).toBe(true);
+      await waitFor(() => expect(spy.calls).toHaveLength(2));
+      await settled(calls, 3);
+      expect(after, "the action's own after() ran once; the Undo's did not").toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(node);
+    });
+
+    it.each<[string, () => void]>([
+      ["nowhere (the body)", () => undefined],
+      ["the toast's own button", () => { focused(element("button", {}, element("div", { class: "toast-stack" }))); }],
+      ["a button that has just been removed with its toast", () => { focused(element("button", {}, element("div", { class: "toast-stack" }))).remove(); }],
+    ])("an Undo pressed from the toast with the focus on %s runs after()", async (_where, place) => {
+      const after = vi.fn();
+      const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
+      await ready(actions, calls);
+      await unmapOne(actions, spy, 1, after);
+      await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+      place();
+      pressUndo(spy, 0);
+      await waitFor(() => expect(spy.calls).toHaveLength(2));
+      await waitFor(() => expect(after).toHaveBeenCalledTimes(2));
+    });
+
+    it("every Undo is covered: a move's and a mapping made in Discovery's keep a focus that is somewhere real too", async () => {
+      const after = vi.fn();
+      const afterMade = vi.fn();
+      const s = store(mapping(1, { asset_id: 2 }), mapping(2));
+      const { calls, actions, spy } = setup(s);
+      await ready(actions, calls);
+      act(() => actions().move([refM(1, "active_power_kw", 2, "kW")], { after }));
+      await screen.findByRole("dialog");
+      await userEvent.selectOptions(within(screen.getByRole("dialog")).getByLabelText("Move to"), "3");
+      await confirm("Move");
+      await waitFor(() => expect(spy.calls).toHaveLength(1));
+      await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+      const node = focused(element("button", { class: "react-flow__node" }));
+      pressUndo(spy, 0);
+      await waitFor(() => expect(spy.calls).toHaveLength(2));
+      await settled(calls, 3);
+      expect(after).toHaveBeenCalledTimes(1);
+      act(() => actions().mappedToast({ text: "Mapped 1 point to Room 1.", mappings: [{ id: 2, assetId: 1 }], newAssets: [], after: afterMade }));
+      pressUndo(spy, 2);
+      await waitFor(() => expect(spy.calls).toHaveLength(4));
+      await settled(calls, 4);
+      expect(afterMade).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(node);
+    });
+
+    it("a dialog opened while a slow Undo runs keeps its focus", async () => {
+      const after = vi.fn();
+      const { calls, actions, spy } = setup(store(mapping(1, { point_id: 41 })));
+      await ready(actions, calls);
+      await unmapOne(actions, spy, 1, after);
+      await waitFor(() => expect(after).toHaveBeenCalledTimes(1));
+      const gate = holdFetch((method, path) => method === "POST" && path === "/api/mappings");
+      expect(press().defaultPrevented).toBe(true); // the Undo starts; its POST waits
+      const field = focused(element("button", {}, element("div", { role: "dialog" })));
+      gate.release();
+      await waitFor(() => expect(spy.calls).toHaveLength(2));
+      await settled(calls, 3);
+      expect(after).toHaveBeenCalledTimes(1);
+      expect(document.activeElement, "the dialog's own control still has the focus").toBe(field);
+    });
   });
 
   it("is ignored in a field, beside an open dialog, on the Assets Tree, with other modifiers, or once the default was prevented; the Undo is still there after", async () => {

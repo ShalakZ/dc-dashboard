@@ -58,7 +58,7 @@ const routes = (accept: Accept = created(), assets?: GraphModel["assets"]) => ({
  * The Undo of "Created 3 assets" only unmaps the points the batch mapped (the assets stay, a separate and guarded delete): the dialog says so in the Undo
  * button's description, because the sentence it raises is pinned and a person reads `Created 3 assets [Undo]` as "take the assets away".
  */
-const UNDO_TITLE = "Unmap the points it mapped; the assets stay";
+const UNDO_TITLE = "Unmap the points it mapped; the assets stay (Ctrl+Z)";
 
 /**
  * The page's side of the dialog: `maps.mappedToast`, which raises the toast (with its Undo only for assets.edit). Here it records the info the dialog

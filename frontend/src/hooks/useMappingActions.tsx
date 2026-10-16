@@ -9,6 +9,7 @@ import {
   BUSY_TEXT, UNDO_MS, deleteMappings, enqueue, isBusy, moveBack, moveMappings, moveOutcome, reasonOf, restoreMappings, undoOutcome,
   unmapMappings, unmapOutcome, unmapPrompt, type MappingRef, type Outcome,
 } from "../lib/mappingActions";
+import { isUndoKey } from "../lib/undoKey";
 import { useConfirm } from "./useConfirm";
 
 type AssetLike = Pick<Asset, "id" | "parent_id" | "name" | "kind">;
@@ -18,8 +19,8 @@ interface MoveRequest { refs: readonly MoveRef[]; what?: string; after?: () => v
 /**
  * What a dialog that has just made mappings tells the page (it unmounts at once, so the page owns the toast): the sentence, the mappings it made
  * (and which asset each is on, for the Undo's check) and the names of the assets it made on the way. `kind: "error"` is a batch that made only
- * part of what was asked: the toast says so and still carries the Undo for the part that went. `after` runs once the Undo has refreshed the lists
- * (the caller puts the focus somewhere named: the Undo's button leaves with its toast); `undoTitle` is the Undo button's description (the
+ * part of what was asked: the toast says so and still carries the Undo for the part that went. `after` runs once the Undo has refreshed the lists,
+ * and only if the focus is lost by then (the caller puts the focus somewhere named: the Undo's button leaves with its toast); `undoTitle` is the Undo button's description (the
  * default tells about Ctrl+Z; a caller whose Undo does less than the toast's words suggest says what it does instead).
  */
 export interface MappedInfo {
@@ -91,6 +92,25 @@ function startLatestUndo(): boolean {
 }
 
 /**
+ * Whether the keyboard focus has gone nowhere: on the page itself, on the toast area (the Undo's own button, which leaves with its toast), or on
+ * something no longer in the page. A focus anywhere else is the person's own (a node they arrowed to, a field, a dialog they opened while the Undo
+ * was still running) and an Undo must not take it away.
+ */
+function focusIsLost(): boolean {
+  const active = document.activeElement;
+  return !active || active === document.body || !active.isConnected || active.closest(".toast-stack") !== null;
+}
+
+/** An Undo's `after()`: the action's own, but run only if the focus is lost at the moment it would run (after the restore and the refresh), not when the Undo began. */
+const whenFocusLost = (after: (() => void) | undefined): (() => void) | undefined =>
+  after && (() => { if (focusIsLost()) after(); });
+
+/** For tests only: forgets the latest Undo, which is module state and would otherwise outlive the test that raised it (a younger-than-10-seconds entry runs on the next Ctrl+Z). */
+export function resetUndoForTests(): void {
+  lastUndo = null;
+}
+
+/**
  * Where Ctrl+Z is not ours: in a field (the browser's own undo of the text), on the Assets Tree (it undoes its own moves), and beside an open
  * dialog (the person is answering something else).
  */
@@ -111,7 +131,10 @@ const shortcutIgnored = (target: EventTarget | null): boolean =>
  *
  * An Undo outlives the page that raised it: its closures hold the toast api, the invalidate function and plain values, never component state.
  * An Undo runs the SAME `after()` as the action it undoes (a mapping made in Discovery: `MappedInfo.after`): the Undo's button leaves with
- * its toast, which would drop the focus on the body, and the caller's target (the row, the node) is back by then. It also has a second way in:
+ * its toast, which would drop the focus on the body, and the caller's target (the row, the node) is back by then. But only when the focus really
+ * was lost, checked when `after()` is about to run (the Undo takes a second or more): a focus on a node, in a field or in a dialog opened meanwhile
+ * is the person's own (Ctrl+Z is pressed with the focus somewhere real, always). The action's own `after()` is unconditional (its opener is gone).
+ * It also has a second way in:
  * Ctrl+Z (Cmd+Z), for the latest Undo of any action of this hook while its toast is up. Every mounted instance listens, the entry's `used` flag
  * lets only one act; `undoLatest()` is the same thing for a caller (and a test) that has no key event.
  */
@@ -139,7 +162,7 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
   // instance may start it, and it keeps working after the page that raised it has gone as long as another instance (or none: the toast) is there.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || (event.key ?? "").toLowerCase() !== "z") return; // Ctrl+Shift+Z is redo
+      if (!isUndoKey(event)) return; // Ctrl+Shift+Z is redo; a layout with no Latin Z (Arabic, Cyrillic) is read by its physical key
       if (event.defaultPrevented || shortcutIgnored(event.target)) return;
       if (startLatestUndo()) event.preventDefault();
     };
@@ -194,7 +217,7 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
       await execute(() => unmapMappings(refs), (result) => {
         // A delete of unknown outcome keeps its mapping as the LAST of `removed`: the Undo needs to know it, to read a 409 for it as "still mapped".
         const unsureId = result.failed?.unknown ? result.removed[result.removed.length - 1]?.id : undefined;
-        const putBack = () => { void execute(() => restoreMappings(result.removed, nameOf, unsureId), (put) => say(undoOutcome("restore", put, result.removed.length)), opts.after); };
+        const putBack = () => { void execute(() => restoreMappings(result.removed, nameOf, unsureId), (put) => say(undoOutcome("restore", put, result.removed.length)), whenFocusLost(opts.after)); };
         say(unmapOutcome(result, where.text, refs.length), result.removed.length > 0 ? undoOptions(putBack) : undefined);
       }, opts.after);
     })();
@@ -218,7 +241,7 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
     }
     const target = labels.get(toAssetId) ?? "the asset";
     void execute(() => moveMappings(request.refs, toAssetId), (result) => {
-      const back = () => { void execute(() => moveBack(result.moved), (put) => say(undoOutcome("moveBack", put, result.moved.length)), request.after); };
+      const back = () => { void execute(() => moveBack(result.moved), (put) => say(undoOutcome("moveBack", put, result.moved.length)), whenFocusLost(request.after)); };
       const outcome = moveOutcome(result, request.refs.length, target, request.refs.length === 1 ? request.refs[0].metric : undefined);
       say(outcome, result.moved.length > 0 ? undoOptions(back) : undefined);
     }, request.after);
@@ -229,7 +252,7 @@ export function useMappingActions({ assets, kinds, takenFor }: Options): {
       toast[kind](text);
       return;
     }
-    const undo = () => { void execute(() => deleteMappings(mappings), (result) => say(undoOutcome("deleteMade", result, mappings.length, newAssets)), after); };
+    const undo = () => { void execute(() => deleteMappings(mappings), (result) => say(undoOutcome("deleteMade", result, mappings.length, newAssets)), whenFocusLost(after)); };
     toast[kind](text, undoOptions(undo, undoTitle));
   }
 

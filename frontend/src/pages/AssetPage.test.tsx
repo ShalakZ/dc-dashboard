@@ -5,6 +5,7 @@ import { Route, Routes, useLocation } from "react-router";
 import { keys, useAssets } from "../api/queries";
 import type { Mapping, SummaryMetric } from "../api/types";
 import { PARTIAL_TIP } from "../components/Figure";
+import { resetUndoForTests } from "../hooks/useMappingActions";
 import { formatSiteClock } from "../lib/siteTime";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
@@ -59,6 +60,9 @@ beforeEach(() => {
   FakeEventSource.last = null;
   vi.stubGlobal("EventSource", FakeEventSource);
 });
+
+// The latest Undo is module state in the hook: one this file's tests left unused must not be run by a later test's Ctrl+Z.
+afterEach(resetUndoForTests);
 
 describe("AssetPage", () => {
   it("renders live value from stream and dash for null", async () => {

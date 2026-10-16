@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useRef } from "react";
@@ -629,5 +630,18 @@ describe("ReviewDialog after a New asset (W12a, the continuation)", () => {
     const { slot } = await openCreated(existing(11));
     expect(slot).toHaveClass("mapmove-slot");
     expect(slot.closest(".field")).toContainElement(screen.getByLabelText("Asset"));
+  });
+
+  // The created line (one or two lines) AND the room note (one or two) can both arrive in it, so it reserves four lines, not the two of the plain Review.
+  it("the continuation reserves a taller slot than a Review that does not follow a New asset", async () => {
+    const created = await openCreated(existing(11));
+    expect(created.slot).toHaveClass("mapmove-slot", "mapmove-slot-created");
+    cleanup();
+    const plain = await openCreated(existing(11), null);
+    expect(plain.slot).toHaveClass("mapmove-slot");
+    expect(plain.slot).not.toHaveClass("mapmove-slot-created");
+    const css = readFileSync("src/styles/bulk-assets.css", "utf8");
+    expect(css).toMatch(/\.mapmove-slot\s*\{[^}]*min-height:\s*2lh/);
+    expect(css).toMatch(/\.mapmove-slot-created\s*\{[^}]*min-height:\s*4lh/);
   });
 });

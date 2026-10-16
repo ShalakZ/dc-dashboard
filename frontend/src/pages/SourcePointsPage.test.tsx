@@ -2,6 +2,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch } from "../test/fetchMock";
 import { holdFetch } from "../test/holdFetch";
+import { resetUndoForTests } from "../hooks/useMappingActions";
 import type { PermissionId } from "../lib/permissions";
 import { renderWithProviders } from "../test/render";
 import { accountKnown, SignedIn } from "../test/signedIn";
@@ -32,6 +33,9 @@ const routes = {
   "GET /api/mappings/2": { body: { id: 2, point_id: 8, asset_id: 4, metric: "energy_kwh", scale: 1, interval_seconds: 60, custom_unit: null } }, // what the module reads before it deletes
   "DELETE /api/mappings/2": { status: 204 },
 };
+
+// The latest Undo is module state in the hook: one this file's tests left unused must not be run by a later test's Ctrl+Z.
+afterEach(resetUndoForTests);
 
 describe("SourcePointsPage", () => {
   it("browses, then maps an unmapped point", async () => {
