@@ -1,6 +1,6 @@
 import {
   Background, Controls, ReactFlow, ReactFlowProvider, useEdgesState, useNodesState, useReactFlow,
-  type Edge, type Node, type OnConnectEnd, type OnNodeDrag,
+  type Edge, type Node, type NodeMouseHandler, type OnConnectEnd, type OnNodeDrag,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -44,6 +44,7 @@ import { cameraMs, keepInView, unionRect } from "../lib/graphCamera";
 import { buildFindIndex, findMatches, findPlan, type FindEntry } from "../lib/graphFind";
 import { alignGuides, type Rect } from "../lib/graphGuides";
 import { readSnap, SNAP_GRID, writeSnap } from "../lib/graphPrefs";
+import { reuseEdges, reuseNodes } from "../lib/graphReuse";
 import { canCollapse, canExpand, collapseAll, expandAll, expandNote, graphSummary } from "../lib/graphView";
 import { mappedRefs, mappedSourcesByAsset, mappingsWhat } from "../lib/mappedRefs";
 
@@ -450,15 +451,10 @@ function Canvas({ model }: { model: GraphModel }) {
   useEffect(() => {
     // New node objects carry no size, which would hide every node until React Flow measures them again: keep what it knows. A selection (a box drawn
     // with Shift, a Ctrl-click) must also outlive a rebuild: an expand, a collapse or a refresh keeps the nodes that are still there selected.
-    setNodes((current) => {
-      const known = new Map(current.map((n) => [n.id, n]));
-      return seeded.nodes.map((n) => {
-        const was = known.get(n.id);
-        if (!was || (!was.measured && !was.selected)) return n;
-        return { ...n, ...(was.measured ? { measured: was.measured } : {}), ...(was.selected ? { selected: true } : {}) };
-      });
-    });
-    setEdges(seeded.edges);
+    // A node or edge the rebuild did not change stays the SAME object, so React Flow re-renders only what moved; when nothing changed the previous array
+    // comes back and React skips the update (W12b, lib/graphReuse.ts).
+    setNodes((current) => reuseNodes(current, seeded.nodes));
+    setEdges((current) => reuseEdges(current, seeded.edges));
   }, [seeded, setNodes, setEdges]);
 
   // The path highlight: hovering, keyboard focus or a selection lights the node's whole path (only the path's nodes and edges become new objects; the
@@ -702,6 +698,12 @@ function Canvas({ model }: { model: GraphModel }) {
     setNodes((current) => (current.some((n) => n.selected) ? current.map((n) => (n.selected ? { ...n, selected: false } : n)) : current));
   }, [setNodes]);
   const canvasKeys = useCanvasKeys({ canvas, openFind, openMenuFor: openFromKey, onEscape: clearSelection });
+  // Stable, because React Flow re-renders every node wrapper when one of these props changes identity: as inline arrows they cost a render of the
+  // whole graph on each hover (measured, W12b).
+  const onNodeClick: NodeMouseHandler = useCallback((_event, node) => {
+    if (node.type === "source") setSelectedId((node.data as SourceNodeData).source.id);
+  }, []);
+  const onNodeContextMenu: NodeMouseHandler = useCallback((event, node) => openNode(node.id, event), [openNode]);
 
   // The menu's items come from the node's own callbacks (the ones its buttons use), so a role sees exactly the actions it has buttons for.
   const nodeActions = (node: Node): RowAction[] => {
@@ -808,10 +810,10 @@ function Canvas({ model }: { model: GraphModel }) {
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onNodeClick={(_event, node) => { if (node.type === "source") setSelectedId((node.data as SourceNodeData).source.id); }}
+            onNodeClick={onNodeClick}
             onNodeMouseEnter={highlight.onNodeMouseEnter}
             onNodeMouseLeave={highlight.onNodeMouseLeave}
-            onNodeContextMenu={(event, node) => openNode(node.id, event)}
+            onNodeContextMenu={onNodeContextMenu}
             onPaneContextMenu={openPane}
             onSelectionContextMenu={openSelection} // while a box selection stands, its rectangle takes the right-click that would reach a node
             onMoveStart={closeMenu} // the menu is placed at a point of the screen: the canvas moving under it closes it
