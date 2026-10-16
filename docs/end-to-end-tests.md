@@ -9,7 +9,7 @@ spec guards, and the two scratch-stack self-tests. The unit tests are on [Develo
 > `scripts/e2e.sh` does exactly that (it always names the project `dcdash_e2e`, refuses any other name
 > and cannot reach `dcdash_dbdata`).
 
-Thirty-five specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
+Thirty-six specs (`frontend/e2e/*.spec.ts`) run in one `playwright test` run against the dev-profile stack on `http://localhost/`
 (`E2E_BASE_URL` changes it). `frontend/e2e/playwright.config.ts` makes each spec its own project and runs them one at a time in the
 order below, each depending on the one before; all but `journey` use a 1600×1000 window unless a spec sets its own sizes. Its
 `global-setup.ts` waits up to 120 s for the stack and refuses a database that already has users.
@@ -244,7 +244,7 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   pick; with the stored tree width 220 its buttons lie inside the bar, and the bar is 32 px high in a column of 277 px and 64 px in one of 276 px
   or less for the admin, but 32 px at every width for the role without Delete. The browser prints its own console lines for the refusals the app
   handles on purpose (the 404s of a vanished pick, the 409s of a grown branch, the 403 of a role that lost the permission); they are not app errors.
-- `w12a.spec.ts` (its own project, last in the list, after `w11`, the tail of the chain; at 1440 and 1024 px) checks the mapping actions.
+- `w12a.spec.ts` (its own project, after `w11`, the tail of the chain until `w12b`; at 1440 and 1024 px) checks the mapping actions.
   It works on one group of the simulator's OPC UA source: it records that group's mappings through the API first and puts every one back
   at the end, even when a case fails, comparing scale, interval and custom unit, so the stack ends as it began. Every asset it makes is
   named `W12a <run> ...` and is deleted again, and its accounts and roles start `w12a-`. Mapping the whole group (six points) to a room by
@@ -257,6 +257,27 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   opens **New asset** with that asset as parent and the real form: the kind and the icon chosen are saved (read back from `GET
   /api/assets` and from the icon in the Assets Tree row, not from the Discovery node). The + and the dialogs also work from the keyboard,
   and several unmapped points of one source selected and dragged onto an asset open one review for all of them.
+- `w12b.spec.ts` (its own project, last in the list, after `w12a`, the tail of the chain; at 1440 and 1024 px) checks the faster, paged,
+  filtered Discovery canvas. Every graph is mocked in the page (`page.route`, like `w7u.spec.ts`), so nothing is written to the stack and
+  it needs no clean-up. **Expand all** on a 500-point graph draws its first point within 900 ms (three times the target; a miss is
+  measured once more alone before it counts). A group of 200 points draws its lines to the points solid and a group of 60 dashed, and
+  the lines from a source to its groups stay dashed. A group of 120 opens with 50 points and **Show 50 more** (`70 left`); pressing it
+  with the mouse or the Enter key draws 100, then 120 and then the button is gone, the focus is on a point and never on the page; a
+  mapped point past the first page keeps its line to its asset (one line labelled `N mapped`), and closing and opening the group
+  starts again at 50. **Unmapped only** puts `Showing U of N points` at the start of the summary (whole at 1024 px with the sidebar
+  open), takes away mapped points, fully mapped groups and sources and every mapped line, is still on after a reload, is turned off
+  by Find on a mapped point with the message `Unmapped only is off so <name> can be shown.`, and mapping a point while it is on leaves
+  the focus on a named element. An asset with sub-assets folds (`Hide sub-assets of <name>`): its `N mapped` badge appears, its
+  sub-assets and their lines go, the mapped lines end on the folded asset as one summed line, **Show** brings them back, the fold is
+  still there after a reload, and a role that can only view still has the toggle. With nothing selected the arrow beside **Expand
+  all** and **Collapse all** is greyed out and says why; a box of two groups and **Expand selection** open both and the message says
+  `Opened 2 groups.`; **Expand this branch** on a closed source opens it and its groups, **Collapse this branch** closes them, from the
+  bar and from the right-click menu. With the keyboard, Tab onto a node, then Down and Up walk between sibling groups, Right goes to
+  the first child and Left back to the parent, Enter opens and closes a group and does nothing to a point, the Menu key opens the
+  node's actions, a node's name reads like `LVP01, group of 6 points, 6 mapped, open`, the view pans to a node that was off screen
+  without changing the zoom, and the focus is never on the page itself. In a graph of about 2,000 nodes (ten sources of four groups of
+  49 points) closing and opening one group, and resting the pointer on a node, stay within three times the measured times (rerun once
+  alone on a miss), and none of it prints a console error.
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
@@ -294,5 +315,24 @@ recreates `api`, which then runs the database migrations. Otherwise rebuild your
 are not re-tagged) and publishes only on `127.0.0.1` (ports 18080 and 18443 by default), so neither takes
 ports 80 and 443. They run in a Compose project whose name must start with `dcdash_e2e`, and they delete only
 that project's own volume; see [Practise a restore](backup-and-restore.md#practise-a-restore).
+
+**Measuring Discovery speed.** `discovery-perf.mjs` (in the `frontend/scripts` folder) times the Discovery canvas on any build of the front end, with no
+stack and no Docker: it serves a `dist` folder and answers every `/api` request itself with a mocked graph (the builder of
+`frontend/e2e/graphModel.ts`), in headless Chromium at 1440×900. From `frontend/`:
+
+    npx vite build --outDir /tmp/dist-x --emptyOutDir
+    node <path to discovery-perf.mjs> <label> /tmp/dist-x <out.json> [scenario ...]
+
+The scenarios are `expandAll:<points>` (click on **Expand all** to the first point drawn and visible; 60, 150 or 500), `expandOne:<points>`
+(the click that opens the one group of a source of that many points, up to 2000; the source is opened first and not timed), `toggle` (closing and opening one group in a graph of about 2,000 nodes), `hover` (the
+work after the 120 ms dwell on a node, in that graph), `drag` (frames per second while dragging in it), and `dragLive` and `hoverLive` (the
+same with online sources, whose lines flow), `dragGroup:<points>` (one open group), and `dragW7u` and `hoverW7u` (the 2,286-node graph of
+W7u). With none named it runs `expandAll:60`, `:150`, `:500`, `expandOne:60`, `:150`, `:500`, `:2000`, `hover` and `drag`. A scenario
+with the suffix `All` (`dragGroupAll:<points>`, `dragW7uAll`, `hoverW7uAll`, `expandOneAll:<points>`) first presses every **Show 50 more**
+so that all the pages are drawn: that is the like-for-like number against a build from before paging, where nothing is hidden and the `All`
+scenario equals the plain one. Run the plain scenario as well for how it feels to a person, with only the first page drawn.
+`REPEAT=n` sets the samples per scenario (default 3, the median is printed, every sample is kept in the file) and `CPU_SLOWDOWN=4` runs the
+page on a CPU four times slower, which is nearer a laptop reached over a remote desktop. Compare two builds by running the same scenarios,
+on the same machine, with the same `REPEAT`, and keep the output files: a number is only worth anything next to the other build's.
 
 Related: [Developing](developing.md), [Adding a connector](adding-a-connector.md), [Backup and restore](backup-and-restore.md).
