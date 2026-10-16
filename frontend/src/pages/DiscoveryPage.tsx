@@ -465,10 +465,9 @@ function Canvas({ model }: { model: GraphModel }) {
     await afterPaint(); // the refreshed nodes are in React Flow's store and drawn
     if (!mounted.current) return;
     const element = canvas.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectorId(id)}"]`);
-    // A focus that already stands somewhere else (the person pressed on, a key moved it) is not taken back: only a lost focus (<body>, or an element that is gone)
-    // or one still inside the node itself (its menu button) is put right.
-    const now = document.activeElement;
-    if (now && now !== document.body && now.isConnected && !element?.contains(now)) return;
+    // A focus the person has already put on the canvas group itself (a click on the empty canvas, a key) is not taken back; anything else (a lost focus, the
+    // node's own menu button, the toast that has just gone) is put right as before.
+    if (document.activeElement === canvas.current) return;
     (element ?? document.getElementById("main"))?.focus({ preventScroll: true });
   }, []);
   /**
