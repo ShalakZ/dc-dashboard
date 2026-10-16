@@ -693,6 +693,13 @@ for (const size of SIZES) {
         const dialog = page.getByRole("dialog", { name: "Review mappings" });
         await expect(dialog).toBeVisible();
         await dialog.getByRole("combobox", { name: "Asset", exact: true }).selectOption(String(SMALL.rack));
+        // The Rack already has active_power_kw: that row starts unticked ("This asset already has ..."), so give it a metric the Rack lacks and tick it.
+        const row = dialog.getByRole("row", { name: new RegExp(name) });
+        const tick = row.getByRole("checkbox");
+        if (!(await tick.isChecked())) {
+          await row.getByRole("combobox").selectOption("frequency_hz");
+          if (!(await tick.isChecked())) await tick.check();
+        }
         await dialog.getByRole("button", { name: "Create mappings", exact: true }).click();
         await expect(dialog).toBeHidden();
         await expect(nodeEl(page, id), `${name} is mapped now, so the filter takes its node away`).toHaveCount(0);
@@ -787,7 +794,8 @@ for (const size of SIZES) {
       const collapseMore = barButton(page, "More ways to collapse");
       const [alpha, bravo] = [nid.source(SMALL.alpha), nid.source(SMALL.bravo)];
       const [lvp01, lvp02] = [nid.cluster(SMALL.alpha, SMALL_GROUPS.lvp01), nid.cluster(SMALL.alpha, SMALL_GROUPS.lvp02)];
-      const polite = (text: string | RegExp) => toast(page, text);
+      // `.last()`: the same words may still be on screen from the step before (a toast stays for several seconds), as in w12a.
+      const polite = (text: string | RegExp) => toast(page, text).last();
 
       await test.step("nothing is selected: both chevrons are aria-disabled, with the reason in their title and as their description; a click opens nothing", async () => {
         for (const chevron of [expandMore, collapseMore]) {

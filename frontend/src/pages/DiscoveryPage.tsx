@@ -93,7 +93,8 @@ const nap = (ms: number) => new Promise<void>((resolve) => { window.setTimeout(r
  * What a screen reader is told when a node takes the focus. The library's own sentence says Enter or Space selects it and the arrows move a SELECTED node, which
  * is no longer all there is to say here. Module level, so the prop keeps its identity.
  */
-const ARIA_LABELS = { "node.a11yDescription.default": "Arrow keys move between nodes. Enter opens or closes. Space selects." };
+const ARIA_TEXT = "Arrow keys move between nodes. Enter opens or closes. Space selects.";
+const ARIA_LABELS = { "node.a11yDescription.default": ARIA_TEXT, "node.a11yDescription.keyboardDisabled": ARIA_TEXT }; // the library picks one of the two by whether a node can be moved: both say the same
 
 /** The alignment guides while a node is dragged. Visual only; if a measurement ever shows they cost a frame, this is the one switch (the helper and its tests stay). */
 const GUIDES_ENABLED = true;
