@@ -159,9 +159,9 @@ const TIMED_ALL = async ({ buttonScript, lastSel }) => {
 };
 
 // Presses every "Show N more" control on the page until none is left (nothing to do on a build without paging).
-async function pressAllMore(page) {
+async function pressAllMore(page, prefix = "more:") {
   for (let i = 0; i < 400; i++) {
-    const more = page.locator('.react-flow__node[data-id^="more:"] button').first();
+    const more = page.locator(`.react-flow__node[data-id^="${prefix}"] button`).first();
     if ((await more.count()) === 0) break;
     await more.dispatchEvent("click");
     await page.waitForTimeout(120);
@@ -250,9 +250,12 @@ async function openW7u(browser, all = false) {
   for (const g of [1, 2]) {
     const group = page.locator(`.react-flow__node[data-id="cluster:${bigSourceId(1)}:${bigGroup(1, g)}"]`);
     await group.waitFor({ state: "attached" });
-    await group.getByRole("button", { name: `Expand ${bigGroup(1, g)}`, exact: true }).dispatchEvent("click");
+    // A build that pages draws 51 nodes for a group of 1000 points, so Expand all may already have opened the group.
+    const expand = group.getByRole("button", { name: `Expand ${bigGroup(1, g)}`, exact: true });
+    if ((await expand.count()) > 0) await expand.dispatchEvent("click");
   }
-  if (all) await pressAllMore(page);
+  // Only the two groups W7u opened: pressing the other four groups' controls would draw 6,000 points, not W7u's 2,286 nodes.
+  if (all) for (const g of [1, 2]) await pressAllMore(page, `more:cluster:${bigSourceId(1)}:${bigGroup(1, g)}`);
   // Every node is in the DOM on a build that draws them all (>= 2,000); a build that draws only what is on screen settles at fewer: wait until the count holds still.
   let still = 0, lastCount = -1;
   await poll(async () => { const n = await page.locator(".react-flow__node").count(); still = n === lastCount ? still + 1 : 0; lastCount = n; return n >= 2000 || still >= 8 ? n : 0; }, (n) => n > 0, 120_000);
