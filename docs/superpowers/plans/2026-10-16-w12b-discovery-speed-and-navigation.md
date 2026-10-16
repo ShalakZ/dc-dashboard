@@ -1,0 +1,185 @@
+# w12b Discovery speed and navigation Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax. Headless run: nobody answers questions; decisions are Rulings in `.waves/w12b/progress.md`.
+
+**Goal:** Make big Discovery graphs fast, and add expand/collapse of a selection or a branch, an "Unmapped only" filter, collapsible asset subtrees, paged groups and arrow-key navigation (brief: `.waves/w12b.md`).
+
+**Architecture:** Front end only, no migration, no permission, no backend change (tier M). The slow drag was measured to come from dashed LONG edges, the slow hover and toggle from re-rendering every node, so the speed fixes are small (edge style, stable props, reuse of unchanged node objects) and the rest is a pure model layer (`lib/graph.ts`, `graphView.ts`, `graphFind.ts`, new `graphNav.ts`) plus thin UI.
+
+**Tech Stack:** React 19, @xyflow/react 12.12, Vitest, Playwright, TypeScript. Plan, ledger and briefs: `.waves/w12b/`. Scratch stack: project `dcdash_e2e_w12b_vis`, ports **18217 / 18571** (both free at 06:17).
+
+## Global Constraints
+- LESSONS C is binding: every implementer edits files with the Edit tool or an anchored `sed`, never with a script that rewrites a whole file; after any scripted edit check the size and `git diff --stat` of that file. One commit per task, `git add` named files only, trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
+- UI rules: simple, clean, slick; no cream background, no italic accent words, no "01/02/03" labels, no monospace labels, no pill buttons; new colours/spacing are tokens inside `@layer w6` (a new colour goes into EVERY preset); icons inline SVG; full width; the widgets are untouched. `app.css.test.ts` guards: tokens only in `@layer w6`, one page class per page file, every selector names a class.
+- Playwright matches names by case-insensitive SUBSTRING: every new `aria-label`/heading/label is audited against the `getByLabel(`/`getByRole(` values in `frontend/e2e/*.ts`.
+- Implementers run only `npx vitest run <files>`, `npm run typecheck`, `npm run build`, the e2e type check, git, grep, and (to LOOK) node scripts with `playwright-core`. Never docker, `scripts/*`, or `npx playwright test`.
+- Out of scope: toolbar regrouping, source card, icons (w12c); mapping actions (w12a); the widgets.
+
+## Facts checked in the code (the brief is not law)
+- `buildGraph` rebuilds every node/edge; `DiscoveryPage` `seeded` memo maps every node through `nodeData` (fresh `data` objects), the effect `setNodes`/`setEdges` with all-new objects: a toggle re-renders ALL nodes (measured below). `onlyRenderVisibleElements` is NOT used and is NOT taken (Ruling 1).
+- `EXPAND_NODE_BUDGET = 600` new nodes caps Expand all (`expandAll`, `expandNote`); `findPlan` uses the same budget. Hint tip lists 7 lines (`DiscoveryPage.test.tsx:2231 toHaveLength(7)`); the subtitle line is <= 100 chars (`w7u.spec.ts:895`).
+- xyflow: a focused SELECTED node moves 5 px per arrow key (NodeWrapper `onKeyDown`), Enter/Space/Escape select. `Node.ariaLabel` sets the wrapper's `aria-label` (role defaults to `group`). `getNodesInside` renders a node with no `handleBounds` once, whatever the culling.
+- `RowAction` (`label`, `onSelect`, `disabled`, `tone`) has no reason field; `GraphContextMenu` re-implements the menu (it can be opened at a button's box with `{ box }`).
+- Preferences: `graphPrefs.ts` keeps Snap in localStorage per browser (`readStored`/`writeStored`). No per-account store for graph prefs exists; adding one needs a backend change (Ruling 6).
+
+## Measurements (BEFORE, main 2d1493c; harness `frontend/scripts/discovery-perf.mjs`, commit c34a793; idle 32-core machine, headless Chromium 1440x900, median of 3; raw files `.waves/w12b/before*.json`, `sweep-*.json`)
+| metric | 1x CPU | 4x slower CPU |
+|---|---|---|
+| Expand all, 60 / 150 / 500 points: click to first visible point | 28 / 39 / 103 ms (busy 0/0/68) | 150: 165 ms, 500: 417 ms |
+| Expand ONE group, 60 / 150 / 500 / 2000 points | 24 / 38 / 99 / 374 ms | 2000: 1,481 ms |
+| Toggle one group of 49 points in a 2,022-node graph: collapse / expand | 131 / 228 ms | 538 / 974 ms |
+| Hover in a 2,022-node graph: work after the 120 ms dwell / class to paint | 44 / 17 ms | 180 ms |
+| Drag, 2,022 nodes (10 sources x 4 groups x 49 points), fps | 57.9 | 54 (300-point group) |
+| Drag, ONE open group of 50/100/150/300/500/1000 points (dashed edges), fps | 60/60/60/58/**24**/**8** | |
+| Same, `stroke-dasharray:none` at 150/500/1000 points | 60/60/60 | |
+| W7u's graph (2 open groups of 1000 points, 2,286 nodes), fps | **8.5** (16 long tasks, 4.5 s) ; edges hidden 57 ; dashes off 50.5 | |
+| Hover with the two inline ReactFlow handlers made stable (throwaway spike) | 11.5 ms (was 44) | |
+Reading: the slow drag is the dash pattern on 64,000 px long fan-out edges (dash count grows with edge length x edge count, so with the square of a group's points; it fits the owner's "slow over 100-150 points"); not node count, not JavaScript. Hover and toggle are React work on every node.
+
+## Targets (the brief's, with the measurement rule)
+Same harness on the same graphs before and after. 1x CPU: Expand all at 500 points < 300 ms (met before: 103 ms; must not regress), hover work < 16 ms, drag at ~2,000 drawn nodes >= 30 fps (W7u's shape included, with 1000-point groups shown through "Show 50 more"), toggle of one branch in a 2,022-node graph < 60 ms. 4x CPU numbers are reported too; a target missed there is explained, not hidden.
+
+## Rulings taken in this plan (also in the ledger)
+1. No `onlyRenderVisibleElements`: a one-prop spike drew 2 nodes after Expand all in the harness, and the measured bottleneck is the edges, which culling does not remove (a fan-out edge crosses the viewport).
+2. Fan-out edges (group to point) draw SOLID once a group draws more than `FAN_DASH_LIMIT = 150` points; below that they stay dashed. Source to group edges stay dashed. Cost if wrong: a long list looks solid.
+3. Paging: a group with more than 50 shown-eligible points opens with 50; the control is a small `more` node at the END of the list (where the person is looking), not a button in the cluster node (brief said "in the node"): a 500-point list is 32,000 px tall and the cluster is far from its end. The cluster node says "50 of 120 shown". Mapped points that are not drawn yet keep a summed `N mapped` edge from the cluster to their asset (a mapping is never hidden). Cost: one new node type.
+4. Budget: unchanged 600 new nodes, with a group costing its DRAWN points (page) + 1 for the `more` node. No confirmation dialog: the faster graph does not need one.
+5. Arrow keys: plain arrows navigate (capture phase) unless the focused node is SELECTED, where xyflow's 5 px nudge stays (nothing the user could do before is lost). Enter toggles; Space still selects.
+6. Filter, asset collapse and the paging extent are remembered in localStorage per browser (like Snap), not per account (a per-account store needs a backend change).
+7. Expand all and Collapse all do NOT touch asset subtrees (assets have their own toggle and the branch/selection actions).
+8. "Selection" = the selected nodes (box select or click) that can open or close: sources, groups, assets that have sub-assets. "Branch" = those nodes and everything under them that can open or close. The bar's two chevron menus and the right-click menus offer the same.
+9. Unmapped only hides mapped points, groups whose points are all mapped and sources with at least one point and all mapped (a source with no points stays), and draws no `m:` edges; the count line is `<summary>, showing U of N points` where U counts unmapped points of every source. Find on a hidden node turns the filter off with a toast.
+
+## Existing tests that will change (A1 grep done 06:25: `getByLabel(`, `getByRole("group"`, hint list, bar buttons, big groups)
+- `src/pages/DiscoveryPage.test.tsx:2231` `toHaveLength(7)` -> 8 (one new tip line); `:2161` the 700-point group; any test that counts nodes of a group over 50 points.
+- `src/lib/graphFind.test.ts` (1000-point groups at :155, "too many to draw" notes): a point deep in a big group now extends the page instead of falling back to the group; signature stays compatible (new trailing `view` param, optional `view` in the plan).
+- `src/lib/graphView.test.ts` (`expandAll`/`canExpand`/`graphSummary` signatures gain an optional trailing `view`; defaults keep every old call valid).
+- `src/components/graph/nodes.test.tsx` (AssetNode gains an optional toggle only when `children > 0`; ClusterNode a line only when paged; `nodeTypes` gains `more`).
+- `src/hooks/useCanvasKeys.test.tsx` if the hook's signature changes (the nav hook is separate: `useGraphNav`).
+- e2e: `w7u.spec.ts` perf and big cases (`arrive(page, bigModel(PERF_SHAPES))` at 986-989 uses point 500 of a 1000-point group: now paged; 1087 waits for 2,000 drawn nodes: use `DRAG_SHAPES`), the hint list at 895-905, the canvas menu item lists at 641/762/797; `w7t.spec.ts` (:128 "what Expand all would draw", :915-991 budget numbers and bar boxes: the bar gains two chevron buttons and a switch, `boxOf` row checks); `w7a.spec.ts:104`; `w12a.spec.ts:717` pane menu items. New `aria-label`s: node wrappers get `"<name>, <kind>..."` labels: audit against `getByLabel(` values naming nodes (`Expand LVP01`, `Map ... to asset…` are buttons inside and stay unique); `getByRole("group")` calls in e2e are scoped to dialogs/nav, none touches the canvas except the canvas wrapper `Discovery graph`.
+
+## LESSONS B/front-end checklists that apply
+Late content reserves a slot (the count suffix and the "N of M shown" line: reserved heights, no layout shift); focus lands on something named after every expand/collapse/show-more (never `<body>`; no native `disabled` on a focused button: use `aria-disabled` + click guard); one announcer per area (use toasts for "Opened 3 groups", no new `role=status`); a menu closes on Escape innermost-first; buttons are `type="button"`; check 1440 / 1024 and the dark theme; new tokens in every preset.
+
+## File map
+- Create: `frontend/src/lib/graphReuse.ts` (+test), `frontend/src/lib/graphNav.ts` (+test), `frontend/src/hooks/useGraphNav.ts` (+test), `frontend/src/components/graph/GraphBar.tsx` (+test), `frontend/e2e/w12b.spec.ts`.
+- Modify: `lib/graph.ts`, `lib/graphView.ts`, `lib/graphFind.ts`, `lib/graphPrefs.ts` (+tests), `components/graph/nodes.tsx`, `components/graph/GraphContextMenu.tsx` (reason line), `components/RowActions.tsx` (type only: `reason?`), `pages/DiscoveryPage.tsx`, `styles/graph-nodes.css`, the bar css (`discovery-tidy.css` or a new `graph-bar.css` imported like its siblings), `e2e/graphModel.ts` (export `DRAG_SHAPES`), `e2e/playwright.config.ts` (project `w12b` after `w12a`), old e2e specs listed above, docs.
+
+## Interfaces (the contract between parallel tasks)
+```ts
+// lib/graph.ts (T3)
+export const PAGE_SIZE = 50;
+export const FAN_DASH_LIMIT = 150;
+export const nodeId = { ...existing, more: (clusterId: string) => `more:${clusterId}` };
+export interface GraphView {
+  unmappedOnly: boolean;
+  shown: ReadonlyMap<string, number>;        // cluster node id -> points the page shows (absent = PAGE_SIZE when the visible points exceed it)
+  assetsClosed: ReadonlySet<number>;         // asset ids whose sub-assets are hidden
+}
+export const NO_VIEW: GraphView;             // { unmappedOnly: false, shown: new Map(), assetsClosed: new Set() } (frozen)
+export function visiblePoints(group: Group, view: GraphView): GraphPoint[];            // the filter applied
+export function drawnCount(group: Group, clusterId: string, view: GraphView): number;  // points drawn while the group is open: min(visible, shown ?? PAGE_SIZE when visible > PAGE_SIZE)
+export function sourceVisible(source: GraphSource, view: GraphView): boolean;          // false when unmappedOnly and the source has >= 1 point and all are mapped
+export function groupVisible(group: Group, view: GraphView): boolean;                  // false when unmappedOnly and the group has >= 1 point and all are mapped
+BuildOptions.view?: GraphView;                                                         // buildGraph(model, open, { view })
+export type MoreNodeData = NodeActions & { clusterId: string; label: string; left: number; step: number };  // node type "more"; onMore?: (clusterId: string) => void in NodeActions
+ClusterNodeData += { visibleCount: number; shownCount: number };                       // shownCount = drawnCount
+AssetNodeData += { children: number; collapsed: boolean; mappedInside?: number };      // NodeActions.onToggleAssets?: (nodeId: string) => void
+// every built Node carries ariaLabel; the `more` node is { draggable: false, selectable: false }
+export function initialView(model: GraphModel, view?: GraphView): FitViewOptions | undefined;   // frames only visible sources
+
+// lib/graphView.ts (T3)
+canExpand/canCollapse/expandAll/graphSummary gain a trailing optional `view: GraphView = NO_VIEW` (expandAll(model, open, budget = EXPAND_NODE_BUDGET, view = NO_VIEW)).
+export interface Change { open: OpenState; assetsClosed: ReadonlySet<number>; opened: { sources: number; groups: number; assets: number }; closed: { sources: number; groups: number; assets: number }; kept: { sources: number; groups: number } }
+export function targetsOf(model: GraphModel, ids: readonly string[], branch: boolean): string[];   // ids that can open/close (source, cluster, asset with sub-assets), plus everything under them when branch
+export function expandTargets(model, open, assetsClosed, ids, branch, view = NO_VIEW, budget = EXPAND_NODE_BUDGET): Change;
+export function collapseTargets(model, open, assetsClosed, ids, branch): Change;
+export function changeNote(change: Change, verb: "expand" | "collapse"): string | null;            // "Opened 3 groups and 1 source." / "Closed 2 groups." / budget sentence; null when nothing changed
+export function summaryLine(model, view): string;   // = graphSummary(model, view)
+
+// lib/graphFind.ts (T3)
+findPlan(model, open, entry, budget = EXPAND_NODE_BUDGET, view = NO_VIEW): FindPlan & { view?: GraphView }  // view present only when it must change (page extended, ancestors of a collapsed asset reopened, the filter turned off)
+// lib/graphPrefs.ts (T3)
+readUnmappedOnly()/writeUnmappedOnly(on), readAssetsClosed(): Set<number>/writeAssetsClosed(set)   // keys dcdash.discovery.unmapped-only, dcdash.discovery.assets-closed; junk reads as default
+
+// lib/graphNav.ts (T6a), pure
+export type NavMove = "up" | "down" | "left" | "right";
+export interface NavIndex;
+export function navIndex(nodes: readonly Node[]): NavIndex;                   // draw order; parent from node data (point -> cluster -> source, more -> cluster, asset -> parent asset if drawn)
+export function navTarget(index: NavIndex, from: string, move: NavMove): string | null;  // up/down: previous/next sibling (same parent, same column), left: parent, right: first child; null = stay
+export function navFirst(index: NavIndex): string | null;                     // the first node of the discovered column
+
+// lib/graphReuse.ts (T2)
+export function reuseNodes(previous: readonly Node[], next: readonly Node[]): Node[];  // an unchanged node (type, x/y, className, ariaLabel, flags, shallow-equal data) keeps the OLD object (so measured/selected/dragging stay); a changed one is the new object with the old `measured` and `selected`
+export function reuseEdges(previous: readonly Edge[], next: readonly Edge[]): Edge[];  // an equal edge (shallow, style by shallow) keeps the old object
+```
+
+## Tasks (execution order: Wave A parallel, Wave B parallel, Wave C one, then T7 and T8)
+
+### Task 1: harness + BEFORE (DONE, c34a793)
+- [x] `frontend/scripts/discovery-perf.mjs` committed; BEFORE numbers above; scratch scripts copied and checked (guard refuses `dcdash`).
+
+### Task 2 (Wave A): speed (stable props + reuse of unchanged nodes) — files: `pages/DiscoveryPage.tsx`, `lib/graphReuse.ts`, `lib/graphReuse.test.ts`
+- [ ] Failing tests for `reuseNodes`/`reuseEdges` (unchanged keeps identity incl. `measured`; changed data/position/className returns the new object with old `measured` and `selected`; removed/added ids; same array returned when nothing changed; a position that differs only because of a drag is NOT reused over the build position).
+- [ ] Implement them (shallow compare, no module-level cache: memory must not grow with repeated toggles).
+- [ ] In `DiscoveryPage`: the effect uses `reuseNodes(current, seeded.nodes)` (keeping the old `measured`/`selected` rule) and `setEdges((cur) => reuseEdges(cur, seeded.edges))`; `onNodeClick` and `onNodeContextMenu` become stable `useCallback`s (they were inline arrows that re-rendered every node on a hover). Do NOT touch anything else in the file (Wave C owns it afterwards).
+- [ ] Tests: `npx vitest run src/lib/graphReuse.test.ts src/pages/DiscoveryPage.test.tsx src/pages/DiscoveryPage.canvas.test.tsx`; typecheck; commit.
+- Acceptance (controller measures with the harness): hover work < 16 ms, toggle < 60 ms at 1x.
+
+### Task 3 (Wave A): the model layer — files: `lib/graph.ts`, `lib/graphView.ts`, `lib/graphFind.ts`, `lib/graphPrefs.ts` and their tests
+- [ ] Types and helpers of the Interfaces block; `buildGraph` with `options.view`:
+  - Filter: sources/groups hidden per Ruling 9; hidden nodes take no row; `m:` edges not drawn while `unmappedOnly`; mapped points not drawn.
+  - Paging: an open group draws `drawnCount` points; if fewer than visible, a `more` node (id `more:<cid>`, type `more`, `left`, `step = min(PAGE_SIZE, left)`, positioned in the next point row, parentShift = the cluster's, NOT draggable/selectable, no edge) and the undrawn MAPPED points' assets get an aggregated `m:<cid>><asset>` edge (label `N mapped` when N > 1) so no mapping disappears (skipped under the filter).
+  - Assets: `assetsClosed` hides descendants (no node, no `a:` edge, no row); a mapped point's edge targets the nearest visible ancestor (`visibleOf`); the collapsed asset carries `mappedInside` = points mapped to it or anything under it (counted over the whole model), `children`, `collapsed`; cycle-safe like the existing walk.
+  - Fan-out edges: a group with `drawnCount > FAN_DASH_LIMIT` gets its `e:cluster>point` edges WITHOUT `strokeDasharray` (style `SOLID_FAN = {}`); otherwise as now.
+  - `ariaLabel` on every node (kind, name, state), e.g. `LVP01, group of 6 points, 6 mapped, open`; source `Plant OPC, source, 3 groups, 120 points, open|closed`; point `PT-1, point, mapped to Rack A | unmapped`; asset `Rack A, asset, 3 sub-assets, 12 mapped inside, open|closed` (the counts only when > 0); more `Show 50 more points of LVP01, 70 left`; unidentified `10.0.0.5:502, unidentified service`.
+  - `descendantNodeIds(model, cluster id)` also returns the cluster's `more` id (it follows a dragged cluster); `childNodeIds` unchanged.
+- [ ] `graphView.ts`: `expandAll`/`canExpand`/`canCollapse`/`graphSummary` take `view` (cost of opening a group = `drawnCount` + 1 when paged; hidden sources/groups ignored; summary suffix `, showing U of N points` only while `unmappedOnly`); `targetsOf`, `expandTargets` (a generalised `expandAll` over a scope, same budget rule, `kept` counts what did not fit), `collapseTargets`, `changeNote` (plural words as `expandNote`; budget sentence reused), per Ruling 8 (selection acts on the ids; branch on the ids and everything under them; a collapsed-asset branch closes every descendant that has sub-assets).
+- [ ] `graphFind.ts`: `findPlan(..., view)`: a point is drawn by extending its group's page to `ceil((index+1)/PAGE_SIZE)*PAGE_SIZE` (clamped), cost counted with `drawnCount`; over budget falls back to the group exactly as before with the old note; an asset inside a collapsed asset reopens its ancestors; a node hidden by the filter turns it off (`view.unmappedOnly=false`, note "Unmapped only is off so <name> can be shown."). The returned `view` is absent when unchanged.
+- [ ] `graphPrefs.ts` read/write (junk, missing, throwing storage = defaults).
+- [ ] Tests for all of it: filter on/off rows and edges, paging boundaries (50, 51, 100, exactly 150/151 for dashes), mapped-edge preservation under paging and under a collapsed asset (incl. nested collapse and a cycle), `mappedInside`, ariaLabel strings, `initialView` with hidden first source, budget costs, selection vs branch counts, Find plans. Update the old tests listed under "Existing tests that will change" (lib ones). Typecheck; commit. Do NOT edit `DiscoveryPage.tsx`, `nodes.tsx`.
+
+### Task 6a (Wave A): navigation model — files: `lib/graphNav.ts`, `lib/graphNav.test.ts` (new only)
+- [ ] `navIndex`, `navTarget`, `navFirst` per the Interfaces block; tests: sources up/down, source right -> first group, group right -> first point, point left -> group, `more` is the last child of its group, roots of the asset column are siblings of each other (not of sources), unidentified nodes sit in the source column after the last source, an asset's left goes to its parent asset, a missing id returns null, a single-child list stays put.
+
+### Task 4 (Wave B): node UI — files: `components/graph/nodes.tsx` (+test), `styles/graph-nodes.css` (+css test if the guards need it)
+- [ ] `MoreNode` (type `more`, in `nodeTypes`): one `type="button"` "Show 50 more (70 left)" calling `data.onMore?.(data.clusterId)`, `nodrag nokey` classes like the other node buttons, same width as a point node, no handles.
+- [ ] ClusterNode: when expanded and `shownCount < visibleCount` a muted line "50 of 120 shown" (a reserved slot is not needed: it only exists on open paged groups, which have empty rows below). AssetNode: when `children > 0` a toggle button (aria-label `Hide sub-assets of X` / `Show sub-assets of X`, text `−`/`+`, calls `onToggleAssets(id)`) and, when `collapsed && mappedInside`, a muted line "N mapped inside". No label may contain the words "Expand"/"Collapse" followed by a group name.
+- [ ] CSS only with tokens/classes inside `@layer w6`; nothing taller than a point node for `more`; check dark mode by reading the token use.
+
+### Task 5a (Wave B): the bar — files: `components/graph/GraphBar.tsx` (+test), the bar stylesheet, `components/graph/GraphContextMenu.tsx` + `components/RowActions.tsx` (type `reason?: string`; a disabled item shows its reason as a muted second line inside the item)
+- [ ] `GraphBar` props: `summary`, `collapsible`, `expandable`, `tidying`, `unmappedOnly`, `onUnmappedOnly(on)`, `onCollapseAll`, `onExpandAll`, `onTidy`, `selection: { count: number }`, `onExpandSelection`, `onCollapseSelection`, `onExpandBranch`, `onCollapseBranch`. It renders EXACTLY the old markup for the summary `<p class="graph-summary" aria-live="polite" aria-atomic="true">`, `Collapse all`, `Expand all`, `Tidy layout` (names, `aria-disabled` + titles unchanged), then two small chevron buttons `More ways to collapse` / `More ways to expand` (`aria-haspopup="menu"`, `aria-expanded`) placed next to their button, opening `GraphContextMenu` at the button's box with the items `Collapse selection`, `Collapse this branch` / `Expand selection`, `Expand this branch` (disabled with reason "Select a source, group or asset first." when `selection.count === 0`), and the switch `Unmapped only` (a labelled `role="switch"` checkbox; the same words as the Points page checkbox) that reserves its width. Escape closes the menu and returns the focus to the chevron. Button names must not substring-collide with `Expand all`/`Collapse all` under `exact: true` lookups.
+- [ ] Tests: renders/clicks/disabled reasons/keyboard (Enter opens, arrows, Escape returns focus), the switch toggles and calls back, the old buttons still `aria-disabled` rather than `disabled`.
+
+### Task 6b (Wave B): keyboard — files: `hooks/useGraphNav.ts` (+test)
+- [ ] `useGraphNav({ canvas, nodes, onToggle, onMore, focusNode })` returns `{ onKeyDownCapture }` for the canvas wrapper. Acts only when the event target is the canvas wrapper itself or a `.react-flow__node` wrapper (never a button/input inside a node, the Find card or a menu; never behind `[aria-modal="true"]`), with no Ctrl/Meta/Alt: ArrowUp/Down/Left/Right per `navTarget` (on the canvas wrapper, Down/Right focus `navFirst`), Enter toggles a source/group (`onToggle`), an asset with sub-assets (`onToggleAssets` through `onToggle`'s id switch is the page's job: the hook takes one `onToggle(id)` and the page routes by prefix), or presses a `more` node (`onMore(clusterId)`). It `preventDefault` + `stopPropagation` a handled key so xyflow's own handler never sees it, EXCEPT arrows when the focused node is selected (xyflow nudges it: Ruling 5). `focusNode(id)` is supplied by the page: pan with `keepInView` (never zoom), then focus the element with `preventScroll`.
+- [ ] Tests with a fake DOM of three nodes: each arrow, Enter, an arrow inside a button ignored, modifiers ignored, a selected node's arrows left alone.
+
+### Task 7a (Wave C): the page — files: `pages/DiscoveryPage.tsx` (+ its two test files)
+Consumes Tasks 2-6b; this is the only task editing the page.
+- [ ] State: `unmappedOnly` (prefs), `shown` map, `assetsClosed` (prefs), memoised `view`; `buildGraph(model, open, { ..., view })`; `initialView(model, view)` (also in `refit`); `canExpand/canCollapse/expandAll/graphSummary` with `view`; the bar becomes `<GraphBar .../>`; hint tip gets ONE new line ("Arrow keys move between nodes. Enter opens or closes one.") and the existing e2e/unit pins are updated.
+- [ ] Callbacks (stable, through refs like `mapsRef`): `onMore(clusterId)` adds `PAGE_SIZE` to the group's page (focus moves to the first newly shown point, or the group node when all are shown, via `focusNode`); `onToggleAssets(nodeId)`; `selectedNow` (selected node ids) -> `onExpandSelection/onCollapseSelection/onExpandBranch/onCollapseBranch` using `expandTargets`/`collapseTargets` and a toast of `changeNote` (the announcement); the selection count feeds `GraphBar`.
+- [ ] Menus: a node's menu gains `Expand this branch` / `Collapse this branch` (nodes that can open or close; branch of THAT node); the box-selection menu and the pane menu gain `Expand selection` / `Collapse selection` (disabled with a reason when nothing is selected); keep every old item and label.
+- [ ] Find: apply `plan.view` (pages, asset ancestors, filter off + toast) before the glide.
+- [ ] Keyboard: `useGraphNav` wired on the canvas wrapper (`onKeyDownCapture`), nodes list from the built order, `focusNode` as above; the node `ariaLabel`s come from `buildGraph`.
+- [ ] Drag: `more` follows a dragged cluster (via `descendantNodeIds`); a box selection never contains a `more` node; `multiPointDrop` unaffected.
+- [ ] Update `DiscoveryPage.test.tsx` and add tests for: filter + count + remembered across remount, show more + focus, asset toggle + "N mapped inside" + remembered, selection/branch actions + toasts + disabled reasons, Find reaching a paged point / hidden mapped point / collapsed asset, arrow keys and Enter, focus never on body after expand/collapse/show more. Typecheck; build; commit.
+
+### Task 7b (starts with Wave C; e2e): `frontend/e2e/w12b.spec.ts`, `playwright.config.ts`, `graphModel.ts`, old specs (A1)
+- [ ] Project `w12b` after `w12a` (the run lists `w12b`); export `DRAG_SHAPES` (10 x 4 x 49) from `graphModel.ts`; fix the old specs per "Existing tests that will change" (w7u perf and big cases use `DRAG_SHAPES`; point 500 cases use Show more or Find).
+- [ ] Cases at 1440 and 1024 (mocked graphs via `page.route`, like w7u): Expand all on a 500-point graph is responsive (duration measured in the page, limit 900 ms = 3x the target, one rerun alone before it counts); a group of 200 points draws solid fan-out edges and 60 dashed (computed `stroke-dasharray`); Show 50 more (counts, `N left`, focus, undrawn mapped point keeps its aggregated edge); Unmapped only (count line, mapped edges gone, Find turns it off, remembered after reload); asset subtree collapse (`N mapped inside`, edge on the ancestor, remembered); Expand/Collapse selection and branch from the bar and from the right-click menu with the toast text; arrow keys (siblings, child, parent, Enter, ContextMenu key) and the node `aria-label`; a toggle in a 2,022-node graph stays under 3x its target (400 ms) measured in the page.
+
+### Task 8: docs + close-out — files: `docs/screens.md`, `docs/sources-and-discovery.md`, `docs/end-to-end-tests.md` (spec count/harness note), `CHANGELOG.md` (top section, merge hash filled after the merge), `docs/superpowers/backlog.md` (next free section after AV), roadmap row (next free `O-` after O-41), this plan's execution log. Run `backend/tests/test_readme_ops.py test_field_debugging_doc.py test_docs_links.py` right after the docs edits.
+
+## Gates (once, near the end)
+Targeted tests per task; at the end: full `npm test`, `npm run typecheck`, `npm run build`, the e2e type check (prints nothing), `vis-rebuild.sh` (judged by `N passed`, 0 failed, and `[w12b]` listed); AFTER numbers with the harness on a build of the final commit (1x and 4x). Backend untouched: the doc tests + `test_repo_hygiene.py` only. Then ONE whole-wave Opus review in a real browser (1440/1024, keyboard), ONE fix wave, re-run what the fix touched, a scoped re-review only if a fix changed logic. Gallery to `.waves/gallery/w12b/`.
+
+## Review Focus
+1. BEFORE and AFTER measured the same way, targets met or the gap explained (4x included).
+2. Nothing lost: edges of undrawn/paged/collapsed mappings, highlight, drop-to-map, Alt-drag, box select, Find, Tidy, Undo/Ctrl+Z (w12a), the w7t/w7u/w12a behaviours on a large graph.
+3. Collapsing, paging or filtering never hides a mapping from the person who must fix it (count line, Find, aggregated edges).
+4. Keyboard and screen reader parity for every new control; focus never lands on `<body>` after expand/collapse/show more/filter.
+5. No unbounded growth on repeated toggles (reuse keeps no cache; the `shown` map is per group).
+
+## Execution log
+(filled by the controller)
