@@ -44,6 +44,7 @@ vi.mock("../components/graph/GraphMiniMap", () => ({ GraphMiniMap: () => <div da
 
 // React Flow measures the DOM, which jsdom cannot do: render the nodes plainly and expose the props the page wires up.
 // `data-draggable` is React Flow's own rule for one node (a node's `draggable` beats the canvas-wide `nodesDraggable`; undefined follows it).
+// So are `data-selectable` and `data-focusable` (the canvas-wide defaults are on), and the wrapper's `role` ("group" while focusable), `aria-label` and `tabIndex`, as the real wrapper sets them.
 // `drag-{id}` plays a whole drag as React Flow does it (start, a move, the final position change, stop) and ends at `flow.state.dropAt` (7,8 unless a test says otherwise).
 vi.mock("@xyflow/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@xyflow/react")>();
@@ -74,7 +75,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
               const Node = nodeTypes[n.type];
               const dropped = () => ({ ...n, position: flow.state.dropAt });
               return (
-                <div key={n.id} className="react-flow__node" tabIndex={0} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-selected={String(!!n.selected)} data-class={n.className ?? ""} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)} onContextMenu={(e) => onNodeContextMenu?.(e, n)}>
+                <div key={n.id} className="react-flow__node" role={(n.focusable ?? true) ? "group" : undefined} aria-label={n.ariaLabel} tabIndex={(n.focusable ?? true) ? 0 : undefined} data-selectable={String((n.selectable ?? true))} data-focusable={String((n.focusable ?? true))} data-id={n.id} data-x={n.position.x} data-y={n.position.y} data-width={n.measured?.width} data-selected={String(!!n.selected)} data-class={n.className ?? ""} data-draggable={String(!!(n.draggable || (nodesDraggable && typeof n.draggable === "undefined")))} onClick={(e) => onNodeClick?.(e, n)} onContextMenu={(e) => onNodeContextMenu?.(e, n)}>
                   <Node id={n.id} data={n.data} />
                   <button data-testid={`measure-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "dimensions", dimensions: { width: 100, height: 40 } }])} />
                   <button data-testid={`select-${n.id}`} onClick={() => onNodesChange?.([{ id: n.id, type: "select", selected: true }])} />
@@ -1554,7 +1555,11 @@ describe("DiscoveryPage Tidy layout, the bar, collapse and expand all (W7t)", ()
       expect(summary).toHaveAttribute("aria-atomic", "true");
       expect(summary).not.toHaveAttribute("role");
       expect(summary).toHaveAttribute("title", summary.textContent as string);
-      expect(within(bar).getAllByRole("button").map((b) => b.textContent)).toEqual(["Collapse all", "Expand all", "Tidy layout"]);
+      // W12b: a chevron beside each of the first two (named by aria-label, it draws only an icon) and the Unmapped only switch (not a button); the three old names keep their order.
+      expect(within(bar).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
+        "Collapse all", "More ways to collapse", "Expand all", "More ways to expand", "Tidy layout",
+      ]);
+      expect(within(bar).getByRole("switch", { name: "Unmapped only" })).not.toBeChecked();
       for (const button of within(bar).getAllByRole("button")) expect(button).toHaveAttribute("type", "button");
     });
 
@@ -1611,19 +1616,26 @@ describe("DiscoveryPage Tidy layout, the bar, collapse and expand all (W7t)", ()
       expect(flow.fitView).not.toHaveBeenCalled();
     });
 
+    // W12b: a group costs the points of its first page (50) and the Show more node, not all its points: 13 groups of 60 points cost 51 each, 14 for the
+    // source's groups come first, so eleven of them fit under 600 and the other two stay closed (the small group after them still fits).
     it("a graph too big to open whole opens what fits and says what stayed closed in a toast; Expand all stays active", async () => {
       const big = graph();
-      big.sources[0].clusters = [{ key: "Huge", points: Array.from({ length: 700 }, (_, i) => point(100 + i, `H${i}`)) }, { key: "Small", points: [point(900, "S")] }];
+      big.sources[0].clusters = [
+        ...Array.from({ length: 13 }, (_, g) => ({ key: `G${g}`, points: Array.from({ length: 60 }, (_, i) => point(1000 + g * 100 + i, `G${g} p${i}`)) })),
+        { key: "Small", points: [point(900, "S")] },
+      ];
       big.sources[0].ungrouped = [];
       mockFetch(routes("operator", big));
       const { toasts } = openToasts();
       await screen.findByText("Plant OPC");
       await userEvent.click(screen.getByRole("button", { name: "Expand all" }));
-      expect(toasts.calls).toEqual([{ kind: "info", text: "Opened 1 source and 1 group. 1 group stays closed: opening it would draw more than 600 nodes." }]);
+      expect(toasts.calls).toEqual([{ kind: "info", text: "Opened 1 source and 12 groups. 2 groups stay closed: opening them would draw more than 600 nodes." }]);
       expect(screen.getByText("S")).toBeInTheDocument(); // the small group's point is drawn
-      expect(screen.queryByText("H0")).not.toBeInTheDocument();
+      expect(screen.getByText("G0 p49")).toBeInTheDocument(); // an open group draws its first page...
+      expect(screen.queryByText("G0 p50")).not.toBeInTheDocument(); // ...and not the rest
+      expect(screen.queryByText("G11 p0")).not.toBeInTheDocument(); // a group that did not fit stays closed
       expect(screen.getByRole("button", { name: "Expand all" })).not.toHaveAttribute("aria-disabled");
-    });
+    }, 20_000); // (about 600 nodes are drawn, each with the mock's helper buttons)
   });
 
   describe("while the graph loads", () => {
@@ -1924,7 +1936,7 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
 
   // ---- W7u (part 2): right-click menus, Find, alignment guides, the shorter hint and its tip ----
 
-  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.querySelector(".graph-menu-text > span")?.textContent ?? item.textContent); // (a disabled item with a reason says it in a second span: the label is the first)
   const viewOnly = () => mockFetch({ ...routes("custom"), "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view"] }) } });
   const rightClick = (id: string) => fireEvent.contextMenu(node(id));
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1936,7 +1948,7 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       await screen.findByRole("button", { name: /Create assets for/ }); // (the account is known: the node's own buttons are there)
       rightClick("src:1");
       const menu = await screen.findByRole("menu", { name: "Actions for Plant OPC" });
-      expect(labelsOf(menu)).toEqual(["Details", "Expand", "Create assets…", "Remove"]);
+      expect(labelsOf(menu)).toEqual(["Details", "Expand", "Create assets…", "Remove", "Expand this branch", "Collapse this branch"]); // (W12b: the branch items come last)
       expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus();
       expect(within(menu).getByRole("menuitem", { name: "Remove" })).toHaveClass("danger-item");
     });
@@ -1947,7 +1959,7 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       await screen.findByText("Plant OPC");
       await accountKnown();
       rightClick("src:1");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Plant OPC" }))).toEqual(["Details", "Expand"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Plant OPC" }))).toEqual(["Details", "Expand", "Expand this branch", "Collapse this branch"]);
     });
 
     it("a group offers Expand, Map… and New asset…, and an unmapped point Map… and New asset… (menu only), for a role that may accept and has the asset form", async () => {
@@ -1957,7 +1969,7 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       await expand("LVP01");
       await screen.findByRole("button", { name: "Map LVP01 to asset…" });
       rightClick("cluster:1:LVP01");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…", "Expand this branch", "Collapse this branch"]);
       await userEvent.keyboard("{Escape}");
       rightClick("point:1");
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01 kW" }))).toEqual(["Map…", "New asset…"]);
@@ -1970,14 +1982,14 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       await expand("Plant OPC");
       await expand("LVP01");
       rightClick("point:1");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Canvas actions" }))).toEqual(["Expand all", "Collapse all", "Tidy layout", "Fit view"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Canvas actions" }))).toEqual(["Expand all", "Collapse all", "Tidy layout", "Fit view", "Expand selection", "Collapse selection"]);
     });
 
-    it("so does an asset, and so does the empty canvas", async () => {
+    it("so does a leaf asset, and so does the empty canvas (an asset with sub-assets has its own: the branch and the fold)", async () => {
       mockFetch(routes("operator"));
       open();
       await screen.findByText("Plant OPC");
-      rightClick("asset:10");
+      rightClick("asset:11");
       expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
       await userEvent.keyboard("{Escape}");
       fireEvent.contextMenu(screen.getByTestId("pane"));
@@ -2043,7 +2055,7 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       await screen.findByText("Plant OPC");
       act(() => node("src:1").focus());
       fireEvent.keyDown(node("src:1"), { key: "F10", shiftKey: true });
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Plant OPC" }))).toEqual(["Details", "Expand"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Plant OPC" }))).toEqual(["Details", "Expand", "Expand this branch", "Collapse this branch"]);
       await userEvent.keyboard("{Escape}");
       expect(node("src:1")).toHaveFocus();
       fireEvent.keyDown(node("src:1"), { key: "ContextMenu" });
@@ -2157,16 +2169,19 @@ describe("DiscoveryPage premium canvas (W7u)", () => {
       expect(flow.setCenter.mock.calls[0][2]).toEqual({ zoom: expected, duration: zoom === 2 ? 0 : 300 });
     });
 
-    it("a point in a group too big to draw opens the source only, says so, and centres on the group", async () => {
+    it("a point too far down a big group to draw opens the group on its first page, says how to go on, and centres on the group", async () => {
       const points = Array.from({ length: 700 }, (_, i) => kw(1000 + i, `BIG pt ${i}`));
       serverWith("operator", [srcOf(1, "Big", { clusters: [{ key: "BIG", points }], point_count: 700 })]);
       const { toasts } = openToasts();
       await screen.findByText("Big");
       await search("BIG pt 699");
       await waitFor(() => expect(flow.setCenter).toHaveBeenCalledTimes(1));
-      expect(toasts.calls).toEqual([{ kind: "info", text: "BIG has 700 points, too many to draw at once. Showing the group instead." }]);
+      expect(toasts.calls).toEqual([{ kind: "info", text: "BIG has 700 points; the one you chose is too far down to draw at once. Showing the group: use Show 50 more to go on." }]);
       expect(node("cluster:1:BIG")).not.toBeNull();
       expect(node("point:1699")).toBeNull();
+      expect(node("point:1049")).not.toBeNull(); // the first page is drawn,
+      expect(node("point:1050")).toBeNull(); // and no more
+      expect(node("more:cluster:1:BIG")).not.toBeNull();
       const [x, y] = at("cluster:1:BIG");
       expect(flow.setCenter).toHaveBeenCalledWith(x + 110, y + 40, expect.anything());
     });
@@ -2320,7 +2335,7 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
   }
   const writes = (calls: { method: string; path: string }[]) => calls.filter((c) => c.method !== "GET" && c.path.startsWith("/api/mappings")).map((c) => `${c.method} ${c.path}`);
   const mappingCalls = (calls: { method: string; path: string }[]) => calls.filter((c) => c.path.startsWith("/api/mappings")).map((c) => `${c.method} ${c.path}`);
-  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.querySelector(".graph-menu-text > span")?.textContent ?? item.textContent); // (a disabled item with a reason says it in a second span: the label is the first)
   const rightClick = (id: string) => fireEvent.contextMenu(node(id));
   const menuButton = (name: string) => screen.findByRole("button", { name: `Mapping actions for ${name}` });
   const undoOf = (toasts: ReturnType<typeof spyToasts>, at: number) => {
@@ -2409,7 +2424,7 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       expect(node("cluster:1:LVP01")).toContainElement(button);
       await userEvent.click(button);
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual([
-        "Collapse", "Map…", "New asset…", "Unmap this group…", "Move this group's mappings…",
+        "Collapse", "Map…", "New asset…", "Unmap this group…", "Move this group's mappings…", "Expand this branch", "Collapse this branch",
       ]);
     });
 
@@ -2418,14 +2433,16 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       await screen.findByRole("button", { name: "Map LVP01 to asset…" });
       expect(screen.queryByRole("button", { name: /^Mapping actions/ })).not.toBeInTheDocument();
       rightClick("cluster:1:LVP01");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…", "Expand this branch", "Collapse this branch"]);
     });
 
     it("an asset's menu has one item per source with mappings on it, by name, and nothing for an asset with none (that keeps the canvas menu)", async () => {
       await start([KW_ON_PANEL, V_ON_SITE, M_ON_SITE]);
       await menuButton("LVP01 kW");
       rightClick("asset:10");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Site" }))).toEqual(["New sub-asset…", "Unmap everything from Atrium…", "Unmap everything from Plant OPC…"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Site" }))).toEqual([
+        "New sub-asset…", "Unmap everything from Atrium…", "Unmap everything from Plant OPC…", "Expand this branch", "Collapse this branch", "Hide sub-assets", // (Site has sub-assets)
+      ]);
       await userEvent.keyboard("{Escape}");
       rightClick("asset:11");
       expect(labelsOf(await screen.findByRole("menu", { name: "Actions for Panel 1" }))).toEqual(["New sub-asset…", "Unmap everything from Plant OPC…"]);
@@ -2568,9 +2585,9 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
       expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
       await userEvent.keyboard("{Escape}");
       rightClick("cluster:1:LVP01");
-      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…"]);
+      expect(labelsOf(await screen.findByRole("menu", { name: "Actions for LVP01" }))).toEqual(["Collapse", "Map…", "New asset…", "Expand this branch", "Collapse this branch"]);
       await userEvent.keyboard("{Escape}");
-      rightClick("asset:10");
+      rightClick("asset:11"); // (a leaf: Site has sub-assets, so it has the branch items of its own)
       expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
     });
 
@@ -2678,7 +2695,7 @@ describe("DiscoveryPage unmap, move and the Undo after mapping (W12a)", () => {
 // ---- W12a: New asset from Discovery (the real form), the "+" on an asset node, and several points dropped together ----
 
 describe("DiscoveryPage New asset, the + and several points at once (W12a)", () => {
-  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+  const labelsOf = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map((item) => item.querySelector(".graph-menu-text > span")?.textContent ?? item.textContent); // (a disabled item with a reason says it in a second span: the label is the first)
   const rightClick = (id: string) => fireEvent.contextMenu(node(id));
   const post = (calls: { method: string; path: string; body?: unknown }[]) => calls.find((c) => c.method === "POST" && c.path === "/api/assets");
   const reviewDialog = () => screen.findByRole("dialog", { name: "Review mappings" });
@@ -2726,12 +2743,12 @@ describe("DiscoveryPage New asset, the + and several points at once (W12a)", () 
   });
 
   describe("New asset on the empty canvas and on an asset", () => {
-    it("the empty canvas's menu ends with New asset…, which opens the asset form with no parent and no note, and saves the icon chosen", async () => {
+    it("the empty canvas's menu has New asset… after the four canvas items (the selection items of W12b come last), and it opens the asset form with no parent and no note, and saves the icon chosen", async () => {
       const { calls, toasts } = setup();
       await openAll();
       fireEvent.contextMenu(screen.getByTestId("pane"));
       const menu = await screen.findByRole("menu", { name: "Canvas actions" });
-      expect(labelsOf(menu)).toEqual(["Expand all", "Collapse all", "Tidy layout", "Fit view", "New asset…"]);
+      expect(labelsOf(menu)).toEqual(["Expand all", "Collapse all", "Tidy layout", "Fit view", "New asset…", "Expand selection", "Collapse selection"]);
       await userEvent.click(within(menu).getByRole("menuitem", { name: "New asset…" }));
       const form = await screen.findByRole("dialog", { name: "New asset" });
       expect(within(form).getByLabelText("Parent")).toHaveValue("");
@@ -2899,7 +2916,7 @@ describe("DiscoveryPage New asset, the + and several points at once (W12a)", () 
       await screen.findByText("Plant OPC");
       await accountKnown();
       expect(flow.state.connect.nodesConnectable).toBe(false);
-      rightClick("asset:10");
+      rightClick("asset:11"); // (a leaf: Site has sub-assets, so it has the branch items of its own)
       expect(await screen.findByRole("menu", { name: "Canvas actions" })).toBeInTheDocument();
     });
 
@@ -3050,6 +3067,455 @@ describe("DiscoveryPage New asset, the + and several points at once (W12a)", () 
       await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(toasts.calls).toEqual([]);
+    });
+  });
+});
+
+// ---- W12b: Unmapped only, Show more, folded assets, expand and collapse of a selection or a branch, and where the focus goes ----
+
+describe("DiscoveryPage Unmapped only, Show more, folded assets and branches (W12b)", () => {
+  const FILTER = "dcdash.discovery.unmapped-only";
+  const FOLDED = "dcdash.discovery.assets-closed";
+  // (a voltage, not the kW the other points suggest: Site may hold each metric once, and the Review refuses a clash)
+  const on = (id: number, extra: Partial<GraphPoint> = {}) => kw(id, `pt ${id}`, { asset_id: 10, mapping_id: id + 500, mapped_metric: "voltage_v", ...extra });
+  const at = (id: string) => [Number(node(id).dataset.x), Number(node(id).dataset.y)];
+  const expand = async (name: string) => userEvent.click(await screen.findByRole("button", { name: `Expand ${name}` }));
+  const count = (prefix: string) => document.querySelectorAll(`[data-id^="${prefix}"]`).length;
+  const edgeIds = () => [...document.querySelectorAll("[data-edge]")].map((e) => e.getAttribute("data-edge"));
+  const switchOf = () => screen.getByRole("switch", { name: "Unmapped only" });
+  const moreButton = () => within(node("more:cluster:1:BIG")).getByRole("button", { name: /^Show \d+ more points of BIG/ }); // (the mock draws test buttons beside it)
+  const summaryText = () => (document.querySelector(".graph-summary") as HTMLElement).textContent;
+  const search = async (text: string) => {
+    await userEvent.click(screen.getByRole("button", { name: "Find" }));
+    await userEvent.type(await screen.findByRole("combobox"), text);
+    await userEvent.keyboard("{Enter}");
+  };
+  /** One source "Big" with one group "BIG" of `n` points; `mappedAt` are the indexes mapped to Site. Point ids are 1000 + the index. */
+  const big = (n: number, mappedAt: number[] = []) => srcOf(1, "Big", {
+    clusters: [{ key: "BIG", points: Array.from({ length: n }, (_, i) => (mappedAt.includes(i) ? on(1000 + i, { name: `BIG pt ${i}` }) : kw(1000 + i, `BIG pt ${i}`))) }], point_count: n,
+  });
+  /** Alpha: G1 holds point 11 (mapped), 12 and 13; G2 holds 21 (mapped) and 22. Omega: H holds 31 (mapped). The filter leaves 12, 13 and 22 of 6. */
+  const mixed = () => world([
+    srcOf(1, "Alpha", { clusters: [{ key: "G1", points: [on(11), kw(12, "pt 12"), kw(13, "pt 13")] }, { key: "G2", points: [on(21), kw(22, "pt 22")] }], point_count: 5 }),
+    srcOf(2, "Omega", { clusters: [{ key: "H", points: [on(31)] }], point_count: 1 }),
+  ]);
+
+  describe("Unmapped only", () => {
+    it("hides the mapped points, and a group or a source with nothing left to map; the count line leads with how many are left", async () => {
+      mockFetch(routes("operator", world([
+        srcOf(1, "Alpha", { clusters: [{ key: "G1", points: [on(11), kw(12, "pt 12")] }, { key: "G2", points: [on(21)] }], point_count: 3 }),
+        srcOf(2, "Omega", { clusters: [{ key: "H", points: [on(31)] }], point_count: 1 }),
+      ])));
+      open();
+      await screen.findByText("Alpha");
+      expect(summaryText()).toBe("2 sources, 4 points, 3 mapped");
+      await userEvent.click(switchOf());
+      expect(summaryText()).toBe("Showing 1 of 4 points, 2 sources, 3 mapped");
+      expect(node("src:2")).toBeNull(); // every point of Omega is mapped
+      await expand("Alpha");
+      expect(node("cluster:1:G1")).not.toBeNull();
+      expect(node("cluster:1:G2")).toBeNull(); // nothing left to map in G2
+      await expand("G1");
+      expect(node("point:12")).not.toBeNull();
+      expect(node("point:11")).toBeNull();
+      expect(edgeIds().some((id) => id!.startsWith("m:"))).toBe(false); // a mapping is not drawn while the filter is on
+      await userEvent.click(switchOf());
+      expect(summaryText()).toBe("2 sources, 4 points, 3 mapped");
+      expect(node("src:2")).not.toBeNull();
+      expect(node("point:11")).not.toBeNull();
+      expect(node("cluster:1:G2")).not.toBeNull();
+    });
+
+    it("is remembered: a page opened again starts with the filter on", async () => {
+      mockFetch(routes("operator", mixed()));
+      const first = open();
+      await screen.findByText("Alpha");
+      await userEvent.click(switchOf());
+      expect(window.localStorage.getItem(FILTER)).toBe("on");
+      first.unmount();
+      mockFetch(routes("operator", mixed()));
+      open();
+      await screen.findByText("Alpha");
+      expect(switchOf()).toBeChecked();
+      expect(summaryText()).toBe("Showing 3 of 6 points, 2 sources, 3 mapped");
+      expect(node("src:2")).toBeNull();
+      await userEvent.click(switchOf());
+      expect(window.localStorage.getItem(FILTER)).toBe("off");
+    });
+
+    it("Find on a mapped point turns it off, says so and shows the point", async () => {
+      window.localStorage.setItem(FILTER, "on");
+      mockFetch(routes("operator", mixed()));
+      const { toasts } = openToasts();
+      await screen.findByText("Alpha");
+      expect(switchOf()).toBeChecked();
+      await search("pt 11");
+      await waitFor(() => expect(node("point:11")).not.toBeNull());
+      expect(toasts.calls).toEqual([{ kind: "info", text: "Unmapped only is off so pt 11 can be shown." }]);
+      expect(switchOf()).not.toBeChecked();
+      expect(window.localStorage.getItem(FILTER)).toBe("off");
+    });
+
+    it("Expand all counts only what the filter leaves, and the bar says nothing is closed when the rest is open", async () => {
+      window.localStorage.setItem(FILTER, "on");
+      mockFetch(routes("operator", mixed()));
+      open();
+      await screen.findByText("Alpha");
+      await userEvent.click(screen.getByRole("button", { name: "Expand all" }));
+      expect(node("cluster:1:G2")).not.toBeNull();
+      expect(node("point:22")).not.toBeNull();
+      expect(node("point:21")).toBeNull();
+      expect(screen.getByRole("button", { name: "Expand all" })).toHaveAttribute("aria-disabled", "true"); // Omega is not on the canvas, so it is not closed
+    });
+  });
+
+  describe("Show more", () => {
+    it("an open group draws one page and a Show more node that says what is left; each press adds a page and the focus follows the first new point", async () => {
+      mockFetch(routes("operator", world([big(120)])));
+      open();
+      await expand("Big");
+      await expand("BIG");
+      expect(count("point:")).toBe(50);
+      expect(within(node("cluster:1:BIG")).getByText("50 of 120 shown")).toBeInTheDocument();
+      const more = within(node("more:cluster:1:BIG")).getByRole("button", { name: "Show 50 more points of BIG, 70 left" });
+      expect(more).toHaveTextContent("Show 50 more (70 left)");
+      expect(node("more:cluster:1:BIG")).toHaveAttribute("data-draggable", "false");
+      expect(node("more:cluster:1:BIG")).toHaveAttribute("data-selectable", "false");
+      expect(node("more:cluster:1:BIG")).not.toHaveAttribute("tabindex");
+      await userEvent.click(more);
+      expect(count("point:")).toBe(100);
+      await waitFor(() => expect(node("point:1050")).toHaveFocus());
+      expect(document.body).not.toHaveFocus();
+      expect(moreButton()).toHaveTextContent("Show 20 more (20 left)");
+      await userEvent.click(moreButton());
+      expect(count("point:")).toBe(120);
+      expect(node("more:cluster:1:BIG")).toBeNull(); // the last page: the node is gone
+      await waitFor(() => expect(node("point:1100")).toHaveFocus());
+      expect(within(node("cluster:1:BIG")).queryByText(/shown/)).not.toBeInTheDocument();
+    });
+
+    it("a group of exactly one page has no Show more node, and 51 points have one", async () => {
+      mockFetch(routes("operator", world([big(50)])));
+      open();
+      await expand("Big");
+      await expand("BIG");
+      expect(count("point:")).toBe(50);
+      expect(node("more:cluster:1:BIG")).toBeNull();
+    });
+
+    it("a mapped point that is not drawn yet keeps one edge from its group to its asset; showing it moves the edge to the point", async () => {
+      mockFetch(routes("operator", world([big(120, [100, 101])])));
+      open();
+      await expand("Big");
+      await expand("BIG");
+      expect(edgeIds()).toContain("m:cluster:1:BIG>asset:10");
+      expect(edgeIds().filter((id) => id!.startsWith("m:"))).toHaveLength(1); // two undrawn points, one summed edge
+      await userEvent.click(moreButton());
+      await userEvent.click(moreButton());
+      expect(edgeIds()).not.toContain("m:cluster:1:BIG>asset:10");
+      expect(edgeIds()).toEqual(expect.arrayContaining(["m:point:1100>asset:10", "m:point:1101>asset:10"]));
+    });
+
+    it("the pages are for this visit: a group closed and opened again starts at one page", async () => {
+      mockFetch(routes("operator", world([big(120)])));
+      open();
+      await expand("Big");
+      await expand("BIG");
+      await userEvent.click(moreButton());
+      expect(count("point:")).toBe(100);
+      await userEvent.click(screen.getByRole("button", { name: "Collapse BIG" }));
+      await expand("BIG");
+      expect(count("point:")).toBe(50);
+    });
+
+    it("Find on a point further down extends the page to reach it, with no toast", async () => {
+      mockFetch(routes("operator", world([big(200)])));
+      const { toasts } = openToasts();
+      await screen.findByText("Big");
+      await search("BIG pt 120");
+      await waitFor(() => expect(node("point:1120")).not.toBeNull());
+      expect(count("point:")).toBe(150);
+      expect(moreButton()).toHaveTextContent("Show 50 more (50 left)");
+      expect(toasts.calls).toEqual([]);
+    });
+  });
+
+  describe("folded assets", () => {
+    // Site has Panel 1 and Panel 2; one point is mapped to each of them and one is not.
+    const tree = () => world([
+      srcOf(1, "Plant", { clusters: [{ key: "G", points: [on(1, { asset_id: 11 }), on(2, { asset_id: 12 }), kw(3, "pt 3")] }], point_count: 3 }),
+    ], { assets: [{ id: 10, parent_id: null, name: "Site", kind: "generic" }, { id: 11, parent_id: 10, name: "Panel 1", kind: "generic" }, { id: 12, parent_id: 10, name: "Panel 2", kind: "generic" }] });
+
+    it("Hide sub-assets takes the children away, says how many mapped points sit inside, and moves their edges to the asset that stands for them", async () => {
+      mockFetch(routes("operator", tree()));
+      open();
+      await expand("Plant");
+      await expand("G");
+      expect(edgeIds()).toEqual(expect.arrayContaining(["m:point:1>asset:11", "m:point:2>asset:12", "a:10>11", "a:10>12"]));
+      await userEvent.click(screen.getByRole("button", { name: "Hide sub-assets of Site" }));
+      expect(node("asset:11")).toBeNull();
+      expect(node("asset:12")).toBeNull();
+      expect(within(node("asset:10")).getByText("2 mapped")).toBeInTheDocument();
+      expect(edgeIds()).toEqual(expect.arrayContaining(["m:point:1>asset:10", "m:point:2>asset:10"]));
+      expect(edgeIds().some((id) => id!.startsWith("a:"))).toBe(false);
+      expect(window.localStorage.getItem(FOLDED)).toBe("[10]");
+      await userEvent.click(screen.getByRole("button", { name: "Show sub-assets of Site" }));
+      expect(node("asset:11")).not.toBeNull();
+      expect(window.localStorage.getItem(FOLDED)).toBe("[]");
+    });
+
+    it("is remembered after the page is opened again, and an asset that is gone from the model is forgotten", async () => {
+      window.localStorage.setItem(FOLDED, "[10,99]");
+      mockFetch(routes("operator", tree()));
+      open();
+      await screen.findByText("Site");
+      expect(node("asset:11")).toBeNull();
+      expect(screen.getByRole("button", { name: "Show sub-assets of Site" })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Show sub-assets of Site" }));
+      expect(window.localStorage.getItem(FOLDED)).toBe("[]");
+    });
+
+    it("a role that can only look at Discovery has the toggle too, and a leaf asset has none", async () => {
+      mockFetch({ ...routes("custom", tree()), "GET /api/me": { body: userFor("custom", { permissions: ["discovery.view"] }) } });
+      open();
+      await screen.findByText("Site");
+      await accountKnown();
+      expect(screen.getByRole("button", { name: "Hide sub-assets of Site" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /sub-assets of Panel/ })).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Hide sub-assets of Site" }));
+      expect(node("asset:11")).toBeNull();
+    });
+
+    it("the asset's menu folds and unfolds it, and Find on a hidden sub-asset shows it again", async () => {
+      window.localStorage.setItem(FOLDED, "[10]");
+      mockFetch(routes("operator", tree()));
+      open();
+      await screen.findByText("Site");
+      await search("Panel 2");
+      await waitFor(() => expect(node("asset:12")).not.toBeNull());
+      expect(window.localStorage.getItem(FOLDED)).toBe("[]");
+      fireEvent.contextMenu(node("asset:10"));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Site" })).getByRole("menuitem", { name: "Hide sub-assets" }));
+      expect(node("asset:12")).toBeNull();
+    });
+  });
+
+  describe("expand and collapse a selection or a branch", () => {
+    const pick = (id: string) => userEvent.click(screen.getByTestId(`select-${id}`));
+    const chevron = (name: string) => screen.getByRole("button", { name });
+
+    it("the bar's Expand selection opens the selected source, and Expand this branch opens its groups too; a toast says what changed", async () => {
+      mockFetch(routes("operator"));
+      const { toasts } = openToasts();
+      await screen.findByText("Plant OPC");
+      await pick("src:1");
+      await userEvent.click(chevron("More ways to expand"));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Expand options" })).getByRole("menuitem", { name: "Expand selection" }));
+      expect(node("cluster:1:LVP01")).not.toBeNull();
+      expect(node("point:1")).toBeNull(); // the groups stay closed: only the selection
+      expect(toasts.calls.at(-1)).toEqual({ kind: "info", text: "Opened 1 source." });
+      await userEvent.click(chevron("More ways to expand"));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Expand options" })).getByRole("menuitem", { name: "Expand this branch" }));
+      expect(node("point:1")).not.toBeNull();
+      expect(toasts.calls.at(-1)).toEqual({ kind: "info", text: "Opened 3 groups." });
+      expect(chevron("More ways to expand")).toHaveFocus(); // the menu gave the focus back to the chevron
+    });
+
+    it("Collapse selection closes the selected group only; Collapse this branch closes the source and its groups", async () => {
+      mockFetch(routes("operator"));
+      const { toasts } = openToasts();
+      await expand("Plant OPC");
+      await expand("LVP01");
+      await expand("LVP02");
+      await pick("cluster:1:LVP01");
+      await userEvent.click(chevron("More ways to collapse"));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Collapse options" })).getByRole("menuitem", { name: "Collapse selection" }));
+      expect(node("point:1")).toBeNull();
+      expect(node("point:3")).not.toBeNull();
+      expect(toasts.calls.at(-1)).toEqual({ kind: "info", text: "Closed 1 group." });
+      await pick("src:1");
+      await userEvent.click(chevron("More ways to collapse"));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Collapse options" })).getByRole("menuitem", { name: "Collapse this branch" }));
+      expect(node("cluster:1:LVP02")).toBeNull();
+      expect(toasts.calls.at(-1)).toEqual({ kind: "info", text: "Closed 1 source and 1 group." });
+    });
+
+    it("a node's own menu has Expand this branch and Collapse this branch for THAT node, whatever is selected", async () => {
+      mockFetch(routes("operator"));
+      const { toasts } = openToasts();
+      await screen.findByText("Plant OPC");
+      await pick("asset:11"); // something else is selected
+      fireEvent.contextMenu(node("src:1"));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for Plant OPC" })).getByRole("menuitem", { name: "Expand this branch" }));
+      expect(toasts.calls.at(-1)).toEqual({ kind: "info", text: "Opened 1 source and 3 groups." });
+      expect(node("point:1")).not.toBeNull();
+      fireEvent.contextMenu(node("cluster:1:LVP01"));
+      await userEvent.click(within(await screen.findByRole("menu", { name: "Actions for LVP01" })).getByRole("menuitem", { name: "Collapse this branch" }));
+      expect(toasts.calls.at(-1)).toEqual({ kind: "info", text: "Closed 1 group." });
+      expect(node("point:1")).toBeNull();
+      expect(node("point:3")).not.toBeNull();
+    });
+
+    it("the pane's menu has Expand selection and Collapse selection, disabled with the reason while nothing is selected", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      fireEvent.contextMenu(screen.getByTestId("pane"));
+      const menu = await screen.findByRole("menu", { name: "Canvas actions" });
+      for (const name of [/^Expand selection/, /^Collapse selection/]) {
+        const item = within(menu).getByRole("menuitem", { name });
+        expect(item).toHaveAttribute("aria-disabled", "true");
+        expect(item).toHaveAttribute("title", "Select a source, group or asset first.");
+      }
+      await userEvent.keyboard("{Escape}");
+      await pick("src:1");
+      fireEvent.contextMenu(screen.getByTestId("selection-rect"));
+      const menu2 = await screen.findByRole("menu", { name: "Canvas actions" });
+      expect(within(menu2).getByRole("menuitem", { name: "Expand selection" })).not.toHaveAttribute("aria-disabled");
+      expect(within(menu2).getByRole("menuitem", { name: /^Collapse selection/ })).toHaveAttribute("title", "Everything selected is already closed.");
+    });
+
+    it("the bar's chevrons say why they cannot open: nothing selected, then nothing that opens or closes", async () => {
+      mockFetch(routes("operator"));
+      open();
+      await screen.findByText("Plant OPC");
+      expect(chevron("More ways to expand")).toHaveAttribute("aria-disabled", "true");
+      expect(chevron("More ways to expand")).toHaveAttribute("title", "Select a source, group or asset first.");
+      await pick("asset:11");
+      expect(chevron("More ways to collapse")).toHaveAttribute("title", "Nothing selected opens or closes.");
+      await userEvent.click(chevron("More ways to collapse"));
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      await pick("src:1");
+      expect(chevron("More ways to expand")).not.toHaveAttribute("aria-disabled");
+    });
+  });
+
+  describe("dragging with a Show more node", () => {
+    const puts = <T extends { method: string }>(calls: T[]) => calls.filter((c) => c.method === "PUT");
+    const sentIds = (call: { body?: unknown }) => (call.body as { nodes: { node_id: string }[] }).nodes.map((n) => n.node_id);
+    beforeEach(() => { flow.state.intersecting = []; }); // (an earlier describe may have left a node under every drop, which would open the Review instead of moving the group)
+
+    it("a source drag takes the Show more node along, and the node is never sent to the layout", async () => {
+      const calls = mockFetch(routes("admin", world([big(120)])));
+      open();
+      await expand("Big");
+      await expand("BIG");
+      const before = at("more:cluster:1:BIG");
+      flow.state.dropAt = { x: 100, y: 50 };
+      await userEvent.click(screen.getByTestId("drag-src:1"));
+      expect(at("more:cluster:1:BIG")).toEqual([before[0] + 100, before[1] + 50]);
+      await waitFor(() => expect(puts(calls)).toHaveLength(1));
+      expect(sentIds(puts(calls)[0])).toEqual(["src:1"]);
+    });
+
+    it("an Alt drag of a paged group sends no Show more id, and the node stays where it stands", async () => {
+      const calls = mockFetch(routes("admin", world([big(120)])));
+      open();
+      await expand("Big");
+      await expand("BIG");
+      const before = at("more:cluster:1:BIG");
+      fireEvent.click(screen.getByTestId("drag-cluster:1:BIG"), { altKey: true });
+      await waitFor(() => expect(puts(calls)).toHaveLength(1));
+      const sent = sentIds(puts(calls)[0]);
+      expect(sent).toContain("cluster:1:BIG");
+      expect(sent.every((id) => !id.startsWith("more:"))).toBe(true);
+      expect(at("more:cluster:1:BIG")).toEqual(before);
+    });
+
+    it("a plain drag of a paged group takes the node along too", async () => {
+      const calls = mockFetch(routes("admin", world([big(120)])));
+      open();
+      await expand("Big");
+      await expand("BIG");
+      const before = at("more:cluster:1:BIG");
+      const group = at("cluster:1:BIG");
+      flow.state.dropAt = { x: group[0] + 30, y: group[1] + 40 };
+      await userEvent.click(screen.getByTestId("drag-cluster:1:BIG"));
+      expect(at("more:cluster:1:BIG")).toEqual([before[0] + 30, before[1] + 40]);
+      await waitFor(() => expect(puts(calls)).toHaveLength(1));
+      expect(sentIds(puts(calls)[0]).every((id) => !id.startsWith("more:"))).toBe(true);
+    });
+  });
+
+  describe("the focus after a mapping that the filter removes from the canvas", () => {
+    /** The server maps whatever the Review sends; `done` is the set of mapped point ids, `base` those mapped from the start. */
+    const serve = (base: number[]) => {
+      const done = new Set(base);
+      const model = () => world([
+        srcOf(1, "Alpha", {
+          clusters: [
+            { key: "G1", points: [11, 12, 13].map((id) => (done.has(id) ? on(id) : kw(id, `pt ${id}`))) },
+            { key: "G2", points: [21].map((id) => (done.has(id) ? on(id) : kw(id, `pt ${id}`))) },
+          ],
+          point_count: 4,
+        }),
+        srcOf(2, "Omega", { clusters: [{ key: "H", points: [31].map((id) => (done.has(id) ? on(id) : kw(id, `pt ${id}`))) }], point_count: 1 }),
+      ]);
+      const calls = mockFetch({
+        ...routes("admin", model),
+        "GET /api/asset-kinds": { body: [] },
+        "POST /api/discovery/accept": ({ body }: { body: unknown }) => {
+          const sent = (body as { points: { point_id: number }[] }).points;
+          for (const p of sent) done.add(p.point_id);
+          return { status: 201, body: { asset_id: 10, mapping_ids: sent.map((p) => p.point_id + 500) } };
+        },
+      });
+      return { done, calls };
+    };
+    const mapPoint = async (id: number) => {
+      await userEvent.click(await screen.findByRole("button", { name: `Map pt ${id} to asset…` }));
+      const review = await screen.findByRole("dialog", { name: "Review mappings" });
+      await userEvent.selectOptions(within(review).getByLabelText("Asset"), "10");
+      await userEvent.click(within(review).getByRole("button", { name: "Create mappings" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    };
+    const start = async (base: number[]) => {
+      window.localStorage.setItem(FILTER, "on");
+      serve(base);
+      openToasts();
+      await expand("Alpha");
+      await expand("G1");
+      await accountKnown();
+    };
+
+    it("goes to the next unmapped point of the same group", async () => {
+      await start([]);
+      await mapPoint(11);
+      await waitFor(() => expect(node("point:11")).toBeNull());
+      await waitFor(() => expect(node("point:12")).toHaveFocus());
+    });
+
+    it("goes to the group when no unmapped point follows", async () => {
+      await start([]);
+      await mapPoint(13);
+      await waitFor(() => expect(node("point:13")).toBeNull());
+      await waitFor(() => expect(node("cluster:1:G1")).toHaveFocus());
+    });
+
+    it("goes to the source when the filter hides the whole group", async () => {
+      await start([12, 13]);
+      await mapPoint(11);
+      await waitFor(() => expect(node("cluster:1:G1")).toBeNull());
+      await waitFor(() => expect(node("src:1")).toHaveFocus());
+    });
+
+    it("goes to the canvas group, which is named, when the filter hides the whole source", async () => {
+      await start([12, 13, 21]); // point 11 is the only one of Alpha left to map
+      await mapPoint(11);
+      await waitFor(() => expect(node("src:1")).toBeNull());
+      await waitFor(() => expect(screen.getByRole("group", { name: "Discovery graph" })).toHaveFocus());
+    });
+
+    it("leaves the focus alone when the filter is off", async () => {
+      window.localStorage.setItem(FILTER, "off");
+      serve([]);
+      openToasts();
+      await expand("Alpha");
+      await expand("G1");
+      await accountKnown();
+      await mapPoint(11);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(node("point:12")).not.toHaveFocus();
     });
   });
 });

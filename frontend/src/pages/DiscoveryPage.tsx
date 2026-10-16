@@ -15,6 +15,7 @@ import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { AlignGuides, type AlignGuidesHandle } from "../components/graph/AlignGuides";
 import { BulkCreateDialog } from "../components/graph/BulkCreateDialog";
 import { CanvasTools } from "../components/graph/CanvasTools";
+import { GraphBar } from "../components/graph/GraphBar";
 import { GraphContextMenu } from "../components/graph/GraphContextMenu";
 import { GraphMiniMap } from "../components/graph/GraphMiniMap";
 import { NewAssetDialog } from "../components/graph/NewAssetDialog";
@@ -37,15 +38,21 @@ import { reducedMotion, useReducedMotion } from "../hooks/useReducedMotion";
 import { afterPaint } from "../lib/afterPaint";
 import { dropPayload, mappableClusters, multiPointDrop, pickDropTarget, takenMetrics, type DropPayload } from "../lib/drop";
 import {
-  buildGraph, childNodeIds, descendantNodeIds, initialView, isRemovable, layoutBatches, ownPlaces, removalDialogText, removalOutcome, seenLine,
-  shiftedPlaces, type AssetNodeData, type ClusterNodeData, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
+  buildGraph, childNodeIds, descendantNodeIds, drawnCount, groupsOf, initialView, isRemovable, layoutBatches, moreNodeIds, nodeId, ownPlaces, PAGE_SIZE, pruneShown,
+  removalDialogText, removalOutcome, seenLine, shiftedPlaces, visiblePoints,
+  type AssetNodeData, type ClusterNodeData, type Group, type GraphView, type MappedSource, type NodeActions, type OpenState, type PointNodeData, type SourceNodeData, type XY,
 } from "../lib/graph";
 import { cameraMs, keepInView, unionRect } from "../lib/graphCamera";
 import { buildFindIndex, findMatches, findPlan, type FindEntry } from "../lib/graphFind";
 import { alignGuides, type Rect } from "../lib/graphGuides";
-import { readSnap, SNAP_GRID, writeSnap } from "../lib/graphPrefs";
+import {
+  readAssetsClosed, readSnap, readUnmappedOnly, SNAP_GRID, writeAssetsClosed, writeSnap, writeUnmappedOnly,
+} from "../lib/graphPrefs";
 import { reuseEdges, reuseNodes } from "../lib/graphReuse";
-import { canCollapse, canExpand, collapseAll, expandAll, expandNote, graphSummary } from "../lib/graphView";
+import {
+  canCollapse, canExpand, changeNote, collapseAll, collapseTargets, EXPAND_NODE_BUDGET, expandAll, expandNote, expandTargets, graphSummary, selectionStates,
+  type Change,
+} from "../lib/graphView";
 import { mappedRefs, mappedSourcesByAsset, mappingsWhat } from "../lib/mappedRefs";
 
 /** One line under the title; the rest of what the canvas can do is in the tip beside it (the same line in the loading branch, so nothing moves when the graph arrives). */
@@ -114,7 +121,19 @@ type Callbacks = {
   onCreateAssets: (id: string) => void; onRemove: (id: string) => void;
   onMenu: (button: HTMLElement) => void; onUnmap: (id: string) => void; onMove: (id: string) => void; onUnmapSource: (id: string, sourceId: number) => void;
   onAdd: (id: string) => void;
+  /** W12b: the `more` node's button, and the fold of an asset's sub-assets (the latter is given to every role). */
+  onMore: (clusterId: string) => void; onToggleAssets: (id: string) => void;
 };
+
+/** The group a group node stands for. A group key may hold colons, so the id is matched whole, group by group. */
+function groupOfNode(model: GraphModel, clusterId: string): Group | undefined {
+  for (const source of model.sources) {
+    if (!clusterId.startsWith(`cluster:${source.id}:`)) continue;
+    const group = groupsOf(source).find((g) => nodeId.cluster(source.id, g.key) === clusterId);
+    if (group) return group;
+  }
+  return undefined;
+}
 
 const NO_MAPPED: ReadonlyMap<number, MappedSource[]> = new Map();
 
@@ -142,11 +161,15 @@ interface SourceFacts { seen: string; groups: number; removable: boolean }
  *
  * For a role that can make an asset by the form (`canForm`: assets.edit and assets.view) an asset node gets the "+" (`onAdd`) and an unmapped point
  * the menu-only New asset… (`menuNewAsset`); the group's New asset… button is given by `canAccept` alone, as before (what it opens depends on `canForm`).
+ *
+ * W12b: the `more` node gets `onMore` and EVERY asset node gets `onToggleAssets` (the fold only changes the view, so no permission is needed; the node draws
+ * the button only when the asset has sub-assets).
  */
 function nodeData(
   node: Node, { canAccept, canRemove, canEdit, canForm, formWait }: NodeGates, facts: ReadonlyMap<number, SourceFacts>, mappedBy: ReadonlyMap<number, MappedSource[]>,
-  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource, onAdd }: Callbacks,
+  { onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets }: Callbacks,
 ): Node["data"] {
+  if (node.type === "more") return { ...node.data, onMore };
   if (node.type === "source") {
     const data = node.data as SourceNodeData;
     const fact = facts.get(data.source.id);
@@ -169,9 +192,9 @@ function nodeData(
     if (canAccept && point.asset_id === null) return { ...node.data, onMap, ...(canForm ? { menuNewAsset: onNewAsset, ...(formWait ? { formWait } : {}) } : {}) };
     if (canEdit && point.mapping_id !== null) return { ...node.data, onMenu, onUnmap, onMove };
   }
-  if (node.type === "asset" && (canEdit || canForm)) {
+  if (node.type === "asset") {
     const mapped = canEdit ? mappedBy.get((node.data as AssetNodeData).asset.id) : undefined;
-    return { ...node.data, ...(mapped ? { mapped, onUnmapSource } : {}), ...(canForm ? { onAdd, ...(formWait ? { formWait } : {}) } : {}) };
+    return { ...node.data, onToggleAssets, ...(mapped ? { mapped, onUnmapSource } : {}), ...(canForm ? { onAdd, ...(formWait ? { formWait } : {}) } : {}) };
   }
   return node.data;
 }
@@ -188,6 +211,14 @@ function Canvas({ model }: { model: GraphModel }) {
   const { run, error: saveError } = useAction();
   const timezone = useSite().data?.timezone ?? "UTC"; // the "10 min ago" of a source counts on the site's clock; UTC until it is read
   const [open, setOpen] = useState<OpenState>({ sources: new Set(), clusters: new Set() });
+  // ---- The view (W12b): the filter and the folded assets are remembered per browser, the pages only for this visit (a closed group starts again at one page) ----
+  const [unmappedOnly, setUnmappedOnlyState] = useState(readUnmappedOnly);
+  const [shown, setShown] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const [assetsClosed, setAssetsClosedState] = useState<ReadonlySet<number>>(() => {
+    const known = new Set(model.assets.map((a) => a.id));
+    return new Set([...readAssetsClosed()].filter((id) => known.has(id)));
+  });
+  const view = useMemo<GraphView>(() => ({ unmappedOnly, shown, assetsClosed, pageSize: PAGE_SIZE }), [unmappedOnly, shown, assetsClosed]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Where the user has dragged nodes this session. A rebuild (expand, collapse, refresh) puts these back instead of
   // snapping the nodes to the saved layout, which this person may never change or whose save may not have reloaded yet.
@@ -241,6 +272,7 @@ function Canvas({ model }: { model: GraphModel }) {
   // The offer has no timer (WCAG 2.2.1): it stays until it is dismissed, used, replaced by a newer one, or another drag starts.
   const openReview = useCallback((payload: DropPayload, initialTarget: InitialTarget, createdAsset?: string) => {
     setOffer(null);
+    refocus.current = null; // a mapping that was left unfinished must not move the focus when this one closes
     setReview({ key: ++reviewCount.current, payload, initialTarget, createdAsset });
   }, []);
   const closeReview = useCallback(() => setReview(null), []);
@@ -307,7 +339,7 @@ function Canvas({ model }: { model: GraphModel }) {
   const { menu, openNode, openPane, openSelection, openFromKey, openFor, close: closeMenu } = useCanvasMenu({ model, canvas });
   // Where the canvas opens (the first sources, readable). Taken once, when the canvas mounts: a refresh never moves the view, and the Controls'
   // fit-view button (it passes no options) still fits everything, so a drop onto an asset that lies out of view is a click away.
-  const [opening] = useState(() => initialView(model));
+  const [opening] = useState(() => initialView(model, view));
   const onSelect = useCallback((id: string) => setSelectedId(Number(id.slice("src:".length))), []);
   const closePanel = useCallback(() => {
     const id = selectedId;
@@ -327,6 +359,21 @@ function Canvas({ model }: { model: GraphModel }) {
   }, []);
   const openNow = useRef(open);
   useEffect(() => { openNow.current = open; }, [open]);
+  // The view of the moment, for the same reason; the folded assets are set at once by their setter (two quick presses must not both start from the old set).
+  const viewNow = useRef(view);
+  useEffect(() => { viewNow.current = view; }, [view]);
+  const assetsClosedNow = useRef(assetsClosed);
+  const setAssetsClosed = useCallback((next: ReadonlySet<number>) => {
+    assetsClosedNow.current = next;
+    setAssetsClosedState(next);
+    writeAssetsClosed(next, new Set(modelRef.current.assets.map((a) => a.id)));
+  }, []);
+  const setUnmappedOnly = useCallback((on: boolean) => {
+    setUnmappedOnlyState(on);
+    writeUnmappedOnly(on);
+  }, []);
+  // A group that is no longer open goes back to one page: its entry is dropped (the same map comes back when nothing is, so nothing renders).
+  useEffect(() => { setShown((current) => pruneShown(current, open)); }, [open]);
 
   /**
    * After a source has opened: pan, never zoom, just enough to bring the source and its groups inside the canvas with a margin. Waits until the new
@@ -359,7 +406,10 @@ function Canvas({ model }: { model: GraphModel }) {
   const sourceOf = useCallback((id: string) => model.sources.find((s) => s.id === Number(id.slice("src:".length))), [model]);
   const onCreateAssets = useCallback((id: string) => {
     const source = sourceOf(id);
-    if (source) setCreateFor(source);
+    if (source) {
+      refocus.current = null;
+      setCreateFor(source);
+    }
   }, [sourceOf]);
   const closeCreate = useCallback(() => {
     focusAfterCreate.current = createFor?.id ?? null;
@@ -400,12 +450,85 @@ function Canvas({ model }: { model: GraphModel }) {
     (element ?? document.getElementById("main"))?.focus({ preventScroll: true });
   }, []);
   /**
+   * "Show 50 more" of a group: its page grows by a page (never past its visible points). The `more` node, whose button had the focus, goes when the last page
+   * is shown, so the focus moves on at once: to the first point just drawn, or to the group itself when there is nothing new to go to.
+   */
+  const onMore = useCallback((clusterId: string) => {
+    const group = groupOfNode(modelRef.current, clusterId);
+    if (!group) return;
+    const now = viewNow.current;
+    const visible = visiblePoints(group, now);
+    const drawn = drawnCount(group, clusterId, now);
+    if (drawn >= visible.length) {
+      void focusNode(clusterId);
+      return;
+    }
+    setShown((current) => new Map(current).set(clusterId, Math.min(visible.length, drawn + PAGE_SIZE)));
+    void focusNode(nodeId.point(visible[drawn].id));
+  }, [focusNode]);
+  /** The fold of an asset's sub-assets: kept per browser. The button stays where it is, so the focus does not move. */
+  const onToggleAssets = useCallback((id: string) => {
+    setAssetsClosed(toggled(assetsClosedNow.current, Number(id.slice("asset:".length))));
+  }, [setAssetsClosed]);
+
+  // ---- After a mapping, with "Unmapped only" on (W12b): the node the person acted on may be gone, and a focus on <body> helps nobody ----
+  /** What was mapped, as the nodes that stood for it: set when the mapping succeeds, used once the dialog has closed and the graph is read again. */
+  const refocus = useRef<{ sourceId: number; clusterId?: string; pointId?: number } | null>(null);
+  const keepFocusAfter = (subject: NonNullable<typeof refocus.current>) => {
+    if (viewNow.current.unmappedOnly) refocus.current = subject;
+  };
+  /**
+   * The node to hand the focus to when the filter has taken the mapped one away, nearest first: the next unmapped point of the same group, the group, the
+   * source. A node that is not on the canvas (the filter hides a group once all its points are mapped, a source once all of its are) is passed over;
+   * none left means the canvas group, which is named.
+   */
+  const focusAfterFilter = useCallback(async (subject: NonNullable<typeof refocus.current>) => {
+    await afterPaint(); // the graph that was read again is drawn, and the dialog has handed the focus back to what it could
+    if (!mounted.current) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return; // the focus is somewhere that still stands: leave it
+    const ids: string[] = [];
+    const source = modelRef.current.sources.find((s) => s.id === subject.sourceId);
+    if (source && subject.pointId !== undefined) {
+      const group = groupsOf(source).find((g) => g.points.some((p) => p.id === subject.pointId));
+      if (group) {
+        const at = group.points.findIndex((p) => p.id === subject.pointId);
+        for (const p of group.points.slice(at + 1)) if (p.asset_id === null) ids.push(nodeId.point(p.id));
+        ids.push(nodeId.cluster(source.id, group.key));
+      }
+    } else if (subject.clusterId) {
+      ids.push(subject.clusterId);
+    }
+    ids.push(nodeId.source(subject.sourceId));
+    const target = ids.map((id) => canvas.current?.querySelector<HTMLElement>(`.react-flow__node[data-id="${selectorId(id)}"]`)).find((el) => el);
+    (target ?? canvas.current)?.focus({ preventScroll: true });
+  }, []);
+  // The dialog that mapped has closed (Review after its lists were read again, the bulk dialog after its last group): now look at where the focus is.
+  useEffect(() => {
+    if (review !== null || createFor !== null || refocus.current === null) return;
+    const subject = refocus.current;
+    refocus.current = null;
+    void focusAfterFilter(subject);
+  }, [review, createFor, focusAfterFilter]);
+  /**
    * The toast a Review or a bulk create raises has an Undo; its button leaves with the toast, so when the Undo is done (the lists read again) the focus goes to the
    * canvas group, which is named: the keyboard person carries on from the graph, not from the top of the page.
    */
   const onMapped = useCallback((info: MappedInfo) => {
     mapsRef.current.mappedToast({ ...info, after: () => canvas.current?.focus({ preventScroll: true }) });
   }, []);
+  /** A Review that mapped `payload`: the toast, and (filter on) the node to hand the focus to if the mapped one is gone. */
+  const onReviewMapped = (info: MappedInfo, payload: DropPayload) => {
+    onMapped(info);
+    keepFocusAfter(payload.kind === "cluster"
+      ? { sourceId: payload.source.id, clusterId: nodeId.cluster(payload.source.id, payload.label) }
+      : { sourceId: payload.source.id, pointId: payload.points[0]?.id });
+  };
+  /** A bulk create of the groups of `source`. */
+  const onBulkMapped = (info: MappedInfo, source: GraphSource) => {
+    onMapped(info);
+    keepFocusAfter({ sourceId: source.id });
+  };
   // The menu opens next to the button itself (not next to the whole node, whose far side can be a long way from the pointer), and a second press on the button closes it.
   const onMenu = useCallback((button: HTMLElement) => {
     const id = button.closest<HTMLElement>(".react-flow__node")?.dataset.id;
@@ -437,15 +560,15 @@ function Canvas({ model }: { model: GraphModel }) {
   };
 
   const seeded = useMemo(() => {
-    const built = buildGraph(model, open, { moved: moved.current, ignoreSaved: tidyRuns > 0, animate: !reduced });
+    const built = buildGraph(model, open, { moved: moved.current, ignoreSaved: tidyRuns > 0, animate: !reduced, view });
     const nodes: Node[] = built.nodes.map((n) => ({
       ...n,
       data: nodeData(n, { canAccept, canRemove, canEdit: canEditAssets, canForm, formWait }, facts, mappedBy, {
-        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource, onAdd,
+        onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets,
       }),
     }));
     return { nodes, edges: built.edges };
-  }, [model, open, tidyRuns, reduced, canAccept, canRemove, canEditAssets, canForm, formWait, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource, onAdd]);
+  }, [model, open, view, tidyRuns, reduced, canAccept, canRemove, canEditAssets, canForm, formWait, facts, mappedBy, onToggle, onSelect, onMap, onNewAsset, onCreateAssets, onRemove, onMenu, onUnmap, onMove, onUnmapSource, onAdd, onMore, onToggleAssets]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(seeded.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(seeded.edges);
   useEffect(() => {
@@ -459,7 +582,17 @@ function Canvas({ model }: { model: GraphModel }) {
 
   // The path highlight: hovering, keyboard focus or a selection lights the node's whole path (only the path's nodes and edges become new objects; the
   // wrapper's `has-focus` class dims the rest). The CURRENT nodes and edges of each rebuild go in, so it forgets a node that has gone. Not while dragging.
-  const selectedIds = useMemo(() => (dragging ? NO_IDS : nodes.filter((n) => n.selected).map((n) => n.id)), [nodes, dragging]);
+  // `selectedNow` is the selection as it stands (the expand and collapse actions read it, a drag or not); it keeps its identity while the same nodes are
+  // selected, so what is worked out from it (`states`) is not worked out again on every frame of a drag.
+  const selection = useRef<readonly string[]>(NO_IDS);
+  const selectedNow = useMemo(() => {
+    const ids = nodes.filter((n) => n.selected).map((n) => n.id);
+    const before = selection.current;
+    if (ids.length === before.length && ids.every((id, i) => id === before[i])) return before;
+    selection.current = ids;
+    return ids;
+  }, [nodes]);
+  const selectedIds = dragging ? NO_IDS : selectedNow;
   const { shownNodes, shownEdges, active: dimming, handlers: highlight } = useGraphHighlight({ nodes, edges, selectedIds, dragging });
   // The node Find has just jumped to wears the class `flash`: set through its className (a class added to the element itself would be lost the next time
   // React Flow rewrites the node's classes, e.g. when the focus lights its path). One new object, made after the highlight's own, so `lit flash` sit together.
@@ -477,6 +610,9 @@ function Canvas({ model }: { model: GraphModel }) {
     const below = new Set<string>();
     if (!alone) for (const n of dragged) for (const id of descendantNodeIds(model, n.id)) if (!draggedIds.has(id)) below.add(id);
     const followers = new Set([...below].filter((id) => live.has(id)));
+    // A paged group's "Show 50 more" node stands under its points, so it moves with the group (and with a dragged source's groups). It follows and nothing
+    // more: it is never in `below` or `pins`, so it never gets a place of its own and is never saved (the layout would hold an id no build reads).
+    if (!alone) for (const n of dragged) for (const id of moreNodeIds(model, n.id)) if (live.has(id) && !draggedIds.has(id)) followers.add(id);
     // What the guides line up with: every node that stands still during this drag. Not the dragged ones (the other nodes of a selection included) and
     // not their followers, which move with them: each would line up with itself on every frame.
     if (GUIDES_ENABLED) guideOthers.current = everyone.filter((n) => !draggedIds.has(n.id) && !followers.has(n.id)).map(rectOf);
@@ -574,19 +710,33 @@ function Canvas({ model }: { model: GraphModel }) {
 
   // The bar above the canvas: what the graph holds, Collapse all, Expand all and Tidy layout. A button with nothing to do keeps its place and says so
   // (aria-disabled and a click guard, never `disabled`: it may hold the focus the click gave it).
-  const summary = useMemo(() => graphSummary(model), [model]);
-  const collapsible = canCollapse(model, open);
-  const expandable = canExpand(model, open);
+  // These are worked out once per change of the graph, the open set, the view or the selection, not on every render (a hover renders the page).
+  const summary = useMemo(() => graphSummary(model, view), [model, view]);
+  const collapsible = useMemo(() => canCollapse(model, open, view), [model, open, view]);
+  const expandable = useMemo(() => canExpand(model, open, view), [model, open, view]);
+  const states = useMemo(() => selectionStates(model, open, view, selectedNow), [model, open, view, selectedNow]);
   const onCollapseAll = () => {
     if (collapsible) setOpen(collapseAll());
   };
   const onExpandAll = () => {
     if (!expandable) return;
-    const result = expandAll(model, open);
+    const result = expandAll(model, open, EXPAND_NODE_BUDGET, view);
     setOpen(result.open);
     const note = expandNote(result); // what the node budget kept closed, if anything
     if (note) toast.info(note);
   };
+  /**
+   * Expand or collapse the given nodes (the selection, or one node's branch): the new open set and folds, and a toast saying what changed. The toast is the
+   * announcement for a screen reader (the bar's one live region is the summary, which these do not change); nothing to say, nothing is said.
+   */
+  const applyChange = (change: Change, verb: "expand" | "collapse") => {
+    if (change.open !== open) setOpen(change.open);
+    if (change.assetsClosed !== assetsClosed) setAssetsClosed(change.assetsClosed);
+    const note = changeNote(change, verb);
+    if (note) toast.info(note);
+  };
+  const expandBy = (ids: readonly string[], branch: boolean) => applyChange(expandTargets(model, open, view, ids, branch), "expand");
+  const collapseBy = (ids: readonly string[], branch: boolean) => applyChange(collapseTargets(model, open, view, ids, branch), "collapse");
 
   // Tidy layout: every node back to its default column. The model of the moment is read after the awaits (a refresh may have come in meanwhile).
   const tidyLayout = useTidyLayout({
@@ -597,7 +747,7 @@ function Canvas({ model }: { model: GraphModel }) {
     await afterPaint(); // the rebuilt nodes are in React Flow's store
     if (!mounted.current) return; // the person left the page meanwhile
     // The opening rules (W7r), as if no place were saved; the camera glides there (at once under reduced motion).
-    void fitView({ ...initialView({ ...modelRef.current, layout: {} }), duration: cameraMs(reducedMotion()) });
+    void fitView({ ...initialView({ ...modelRef.current, layout: {} }, viewNow.current), duration: cameraMs(reducedMotion()) });
   }, [fitView]);
   const onTidy = async () => {
     if (tidyBusy.current) return;
@@ -676,8 +826,15 @@ function Canvas({ model }: { model: GraphModel }) {
    * off screen with no animation, which would cut the glide short and lose the zoom.
    */
   const onFind = useCallback(async (entry: FindEntry) => {
-    const plan = findPlan(modelRef.current, openNow.current, entry); // the model and the open set of the moment: a refresh may have come in while the card was open
+    const now = viewNow.current;
+    const plan = findPlan(modelRef.current, openNow.current, entry, EXPAND_NODE_BUDGET, now); // the model, open set and view of the moment: a refresh may have come in while the card was open
     if (plan.open !== openNow.current) setOpen(plan.open); // the very same object when nothing has to open: no rebuild
+    if (plan.view) {
+      // The jump needs a longer page, an unfolded asset or no filter: change those first (one batch with the open set), then wait for the paint as below.
+      setShown(plan.view.shown);
+      if (plan.view.assetsClosed !== now.assetsClosed) setAssetsClosed(plan.view.assetsClosed);
+      if (plan.view.unmappedOnly !== now.unmappedOnly) setUnmappedOnly(plan.view.unmappedOnly);
+    }
     if (plan.note) toast.info(plan.note);
     await afterPaint(); // the nodes just opened are in React Flow's store
     if (!mounted.current) return;
@@ -692,7 +849,7 @@ function Canvas({ model }: { model: GraphModel }) {
     setFlashId(plan.targetId); // (the outline holds under reduced motion too; the CSS drops only the pulse)
     flashTimer.current = window.setTimeout(() => setFlashId(null), FLASH_MS);
     element.focus({ preventScroll: true });
-  }, [toast, getNodes, getZoom, setCenter]);
+  }, [toast, getNodes, getZoom, setCenter, setAssetsClosed, setUnmappedOnly]);
 
   const clearSelection = useCallback(() => {
     setNodes((current) => (current.some((n) => n.selected) ? current.map((n) => (n.selected ? { ...n, selected: false } : n)) : current));
@@ -707,7 +864,7 @@ function Canvas({ model }: { model: GraphModel }) {
 
   // The menu's items come from the node's own callbacks (the ones its buttons use), so a role sees exactly the actions it has buttons for.
   const nodeActions = (node: Node): RowAction[] => {
-    const d = node.data as NodeActions & Pick<AssetNodeData, "mapped" | "onUnmapSource"> & { expanded?: boolean };
+    const d = node.data as NodeActions & Pick<AssetNodeData, "mapped" | "onUnmapSource" | "children" | "collapsed"> & { expanded?: boolean };
     const group = node.type === "cluster";
     const items: RowAction[] = [];
     if (d.onSelect) items.push({ label: "Details", onSelect: () => d.onSelect?.(node.id) });
@@ -723,6 +880,16 @@ function Canvas({ model }: { model: GraphModel }) {
     if (d.onUnmap) items.push({ label: group ? "Unmap this group…" : "Unmap…", tone: "danger", onSelect: () => d.onUnmap?.(node.id) });
     if (d.onMove) items.push({ label: group ? "Move this group's mappings…" : "Move to another asset…", onSelect: () => d.onMove?.(node.id) });
     for (const m of d.mapped ?? []) items.push({ label: `Unmap everything from ${m.sourceName}…`, tone: "danger", onSelect: () => d.onUnmapSource?.(node.id, m.sourceId) });
+    // W12b, last: the branch of THIS node (whatever is selected), for a node that opens or closes; an asset with sub-assets also folds them.
+    const hasChildren = (d.children ?? 0) > 0;
+    if (node.type === "source" || group || (node.type === "asset" && hasChildren)) {
+      const branch = selectionStates(model, open, view, [node.id]);
+      items.push(
+        { label: "Expand this branch", disabled: !branch.expandBranch.enabled, reason: branch.expandBranch.reason, onSelect: () => expandBy([node.id], true) },
+        { label: "Collapse this branch", disabled: !branch.collapseBranch.enabled, reason: branch.collapseBranch.reason, onSelect: () => collapseBy([node.id], true) },
+      );
+    }
+    if (hasChildren && d.onToggleAssets) items.push({ label: d.collapsed ? "Show sub-assets" : "Hide sub-assets", onSelect: () => d.onToggleAssets?.(node.id) });
     return items;
   };
   const nodeName = (node: Node): string => {
@@ -735,6 +902,11 @@ function Canvas({ model }: { model: GraphModel }) {
     { label: "Collapse all", disabled: !collapsible, onSelect: onCollapseAll },
     { label: "Tidy layout", disabled: tidying, onSelect: () => void onTidy() },
     { label: "Fit view", onSelect: () => void fitView({ duration: cameraMs(reducedMotion()) }) },
+  ];
+  /** W12b: what the selected nodes (a box selection, a Ctrl-click) can open or close; a disabled one says why. */
+  const selectionActions = (): RowAction[] => [
+    { label: "Expand selection", disabled: !states.expandSelection.enabled, reason: states.expandSelection.reason, onSelect: () => expandBy(selectedNow, false) },
+    { label: "Collapse selection", disabled: !states.collapseSelection.enabled, reason: states.collapseSelection.reason, onSelect: () => collapseBy(selectedNow, false) },
   ];
   // A node with no actions of its own (an asset with nothing mapped on it, an unidentified service) and a box selection get the canvas's menu.
   let menuItems: RowAction[] = [];
@@ -750,6 +922,7 @@ function Canvas({ model }: { model: GraphModel }) {
       menuItems = canvasActions();
       // The empty canvas (not a node with nothing of its own, not a selection) can also make an asset, at the top level, with nothing to map after it.
       if (canForm && aimed.kind === "pane") menuItems.push({ label: "New asset…", disabled: formWait, onSelect: () => openNewAsset({ parentId: null }) });
+      menuItems.push(...selectionActions());
     }
   }
 
@@ -774,23 +947,15 @@ function Canvas({ model }: { model: GraphModel }) {
           </>
         }
       />
-      <div className="graph-bar">
-        {/* The one announcer of this area: React leaves the text alone when the numbers do not change, so it speaks only when they do. */}
-        <p className="graph-summary" aria-live="polite" aria-atomic="true" title={summary}>{summary}</p>
-        <button
-          type="button"
-          aria-disabled={!collapsible || undefined}
-          title={collapsible ? undefined : "Nothing is open"}
-          onClick={onCollapseAll}
-        >Collapse all</button>
-        <button
-          type="button"
-          aria-disabled={!expandable || undefined}
-          title={expandable ? undefined : "Everything is open"}
-          onClick={onExpandAll}
-        >Expand all</button>
-        <button type="button" aria-disabled={tidying || undefined} onClick={() => void onTidy()}>Tidy layout</button>
-      </div>
+      <GraphBar
+        summary={summary} collapsible={collapsible} expandable={expandable} tidying={tidying}
+        unmappedOnly={unmappedOnly} onUnmappedOnly={setUnmappedOnly}
+        onCollapseAll={onCollapseAll} onExpandAll={onExpandAll} onTidy={() => void onTidy()}
+        expandSelection={states.expandSelection} collapseSelection={states.collapseSelection}
+        expandBranch={states.expandBranch} collapseBranch={states.collapseBranch}
+        onExpandSelection={() => expandBy(selectedNow, false)} onCollapseSelection={() => collapseBy(selectedNow, false)}
+        onExpandBranch={() => expandBy(selectedNow, true)} onCollapseBranch={() => collapseBy(selectedNow, true)}
+      />
       {saveError && <p className="error" role="alert">{saveError}</p>}
       <div className="graph-layout">
         {/* tabIndex -1: a click on the empty canvas puts the focus here (no ring for a mouse), so the canvas's own keys work after it. `has-focus` dims everything off the lit path. */}
@@ -858,10 +1023,10 @@ function Canvas({ model }: { model: GraphModel }) {
       {canAccept && review && (
         <ReviewDialog
           key={review.key} model={model} payload={review.payload} initialTarget={review.initialTarget} kinds={kinds} createdAsset={review.createdAsset}
-          onMapped={onMapped} onClose={closeReview}
+          onMapped={(info) => onReviewMapped(info, review.payload)} onClose={closeReview}
         />
       )}
-      {canAccept && createFor && <BulkCreateDialog model={model} source={createFor} onMapped={onMapped} onClose={closeCreate} />}
+      {canAccept && createFor && <BulkCreateDialog model={model} source={createFor} onMapped={(info) => onBulkMapped(info, createFor)} onClose={closeCreate} />}
       {/* Beside the Review and outside the canvas, like it: the form's keys and focus must not reach the canvas's handlers. */}
       {canForm && newAsset && assetList.data && (
         <NewAssetDialog
