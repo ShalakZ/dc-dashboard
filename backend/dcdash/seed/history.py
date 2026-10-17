@@ -44,7 +44,7 @@ import os
 import random
 import sys
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -70,6 +70,7 @@ MAX_DAYS = 366
 STEP = timedelta(minutes=5)
 STEP_SECONDS = int(STEP.total_seconds())
 STEP_HOURS = STEP.total_seconds() / 3600
+INTERVAL_CHOICES = (5, 10, 15, 30, 60)  # minutes: the sample spacings the pilot-hall layout may use (each divides an hour)
 JITTER = 0.03  # +-3 % on the power
 GAP_HOURS = 6
 GAP_FROM_LOCAL = time(9, 0)  # the gap runs 09:00 to 15:00 local, so the next value arrives on the same local day
@@ -119,14 +120,14 @@ def base_kw(ts: datetime, zone: ZoneInfo) -> float:
     return load_kw(local.hour + local.minute / 60 + local.second / 3600)
 
 
-def _floor(ts: datetime) -> datetime:
+def _floor(ts: datetime, step_seconds: int = STEP_SECONDS) -> datetime:
     seconds = int(ts.timestamp())
-    return datetime.fromtimestamp(seconds - seconds % STEP_SECONDS, timezone.utc)
+    return datetime.fromtimestamp(seconds - seconds % step_seconds, timezone.utc)
 
 
-def _ceil(ts: datetime) -> datetime:
-    floored = _floor(ts)
-    return floored if floored == ts else floored + STEP
+def _ceil(ts: datetime, step_seconds: int = STEP_SECONDS) -> datetime:
+    floored = _floor(ts, step_seconds)
+    return floored if floored == ts else floored + timedelta(seconds=step_seconds)
 
 
 def hour_floor(ts: datetime) -> datetime:
@@ -147,22 +148,27 @@ class Plan:
     reset_index: int  # index of the sample at which Panel C's counter has dropped back
     gap: tuple[datetime, datetime] | None  # [from, to): Panel A has no samples at all
     raw_retention_days: int
+    step_seconds: int = STEP_SECONDS  # the sample spacing; the pilot-hall layout uses others (INTERVAL_CHOICES)
+
+    @property
+    def step(self) -> timedelta:
+        return timedelta(seconds=self.step_seconds)
 
     @property
     def clamped(self) -> bool:
-        return self.start > _ceil(self.wanted_start)
+        return self.start > _ceil(self.wanted_start, self.step_seconds)
 
     @property
     def count(self) -> int:
         """Samples per panel, before Panel A's gap is taken out."""
-        return int((self.end - self.start) / STEP) + 1
+        return int((self.end - self.start) / self.step) + 1
 
     def times(self) -> list[datetime]:
-        return [self.start + i * STEP for i in range(self.count)]
+        return [self.start + i * self.step for i in range(self.count)]
 
     @property
     def reset_at(self) -> datetime:
-        return self.start + self.reset_index * STEP
+        return self.start + self.reset_index * self.step
 
     def in_gap(self, ts: datetime) -> bool:
         return self.gap is not None and self.gap[0] <= ts < self.gap[1]
@@ -189,13 +195,15 @@ def _gap_window(start: datetime, end: datetime, tz: str, current_month: datetime
 
 def make_plan(
     now: datetime, tz: str, days: int | None, seed: int = DEFAULT_SEED,
-    raw_retention_days: int = FACTORY_STORAGE_SETTINGS.raw_retention_days,
+    raw_retention_days: int = FACTORY_STORAGE_SETTINGS.raw_retention_days, step_seconds: int = STEP_SECONDS,
 ) -> Plan:
-    """The range: from the start of the previous site month (or now minus `days`) to now, on 5-minute marks, but never earlier than
-    `now - (raw_retention_days - 1) days`. Raises Refused when the default range would keep less than a day of the previous month."""
+    """The range: from the start of the previous site month (or now minus `days`) to now, on marks `step_seconds` apart (5 minutes
+    by default), but never earlier than `now - (raw_retention_days - 1) days`. Raises Refused when the default range would keep less
+    than a day of the previous month."""
     now = now.astimezone(timezone.utc)
     wanted = resolve_range("last_month", now, tz)[0] if days is None else now - timedelta(days=days)
-    start, end = _ceil(max(wanted, now - timedelta(days=raw_retention_days - 1))), _floor(now)
+    start = _ceil(max(wanted, now - timedelta(days=raw_retention_days - 1)), step_seconds)
+    end = _floor(now, step_seconds)
     this_month = month_start(now, tz)
     if days is None and this_month - start < MIN_PREVIOUS_MONTH:
         raise Refused(
@@ -203,8 +211,10 @@ def make_plan(
             f"{start:%Y-%m-%d} UTC and less than a day of the previous month is left to seed. Raise the raw retention "
             "(Settings, Storage) or run this earlier in the month"
         )
-    plan = Plan(tz, seed, now, wanted, start, end, 0, None, raw_retention_days)
-    return Plan(tz, seed, now, wanted, start, end, plan.count // 2, _gap_window(start, end, tz, this_month), raw_retention_days)
+    plan = Plan(tz, seed, now, wanted, start, end, 0, None, raw_retention_days, step_seconds)
+    return Plan(
+        tz, seed, now, wanted, start, end, plan.count // 2, _gap_window(start, end, tz, this_month), raw_retention_days, step_seconds
+    )
 
 
 def build_series(plan: Plan) -> dict[str, list[tuple[datetime, float]]]:
@@ -359,10 +369,16 @@ async def write_readings(pool: asyncpg.Pool, plan: Plan, created: Created) -> in
         point_id = created.point_ids[name]
         for ts, value in series:
             by_day[ts.date()].append((point_id, ts, value, GOOD))
+    return await write_batches(pool, ((day, by_day[day]) for day in sorted(by_day)))
+
+
+async def write_batches(pool: asyncpg.Pool, batches: Iterable[tuple[date, list[Row]]]) -> int:
+    """Each batch (a UTC day and its rows) through the collector's own `Writer`, one flush per batch, in the order given. Returns
+    how many rows were written. A batch must fit the Writer's buffer; the checks on the buffer and on flush() are described in
+    write_readings."""
     writer = Writer(pool)
     total = 0
-    for day in sorted(by_day):
-        rows = by_day[day]
+    for day, rows in batches:
         writer.add(rows)
         if writer.pending != len(rows):
             raise RuntimeError(f"the write buffer dropped readings of {day} before they were written")
@@ -395,9 +411,10 @@ async def refresh_rollups(pool: asyncpg.Pool, plan: Plan) -> None:
     await _refresh(pool, "readings_1h", lo, plan.now)
 
 
-async def _undo(pool: asyncpg.Pool, plan: Plan, created: Created) -> None:
+async def _undo(pool: asyncpg.Pool, plan: Plan, created: Created, undo: str = UNDO) -> None:
     """Take back a seed that failed after its rows were committed. Readings have no foreign key, so they are deleted by point;
-    the rollups are refreshed again so that they forget the deleted readings (this window was checked by pending_drop first)."""
+    the rollups are refreshed again so that they forget the deleted readings (this window was checked by pending_drop first).
+    `undo` is the sentence that tells the operator how to remove the seed by hand if a step here fails."""
     steps = (
         ("DELETE FROM readings WHERE point_id = ANY($1::int[])", sorted(created.point_ids.values())),
         ("DELETE FROM sources WHERE id = $1", created.source_id),  # cascades points, mappings and point_latest
@@ -407,7 +424,7 @@ async def _undo(pool: asyncpg.Pool, plan: Plan, created: Created) -> None:
         try:
             await pool.execute(sql, arg)
         except Exception as exc:
-            print(f"could not clean up ({exc}); {UNDO}", file=sys.stderr)
+            print(f"could not clean up ({exc}); {undo}", file=sys.stderr)
     try:
         await refresh_rollups(pool, plan)
     except Exception as exc:
