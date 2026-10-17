@@ -396,6 +396,9 @@ function Canvas({ model }: { model: GraphModel }) {
   const canvas = useRef<HTMLDivElement>(null);
   // The right-click menu's state is up here because a mapped node's own menu button opens it (`onMenu`), and the nodes are built below.
   const { menu, openNode, openPane, openSelection, openFromKey, openFor, close: closeMenu } = useCanvasMenu({ model, canvas });
+  // Whether a menu is open, as a ref: the hover handler below reads it when the pointer enters a node, so that handler keeps one identity (see `tip`).
+  const menuOpenNow = useRef(false);
+  menuOpenNow.current = menu !== null;
   // Where the canvas opens (the first sources, readable). Taken once, when the canvas mounts: a refresh never moves the view, and the Controls'
   // fit-view button (it passes no options) still fits everything, so a drop onto an asset that lies out of view is a click away.
   const [opening] = useState(() => initialView(model, view));
@@ -713,6 +716,12 @@ function Canvas({ model }: { model: GraphModel }) {
   // life of the page, so the handlers below that combine them with the highlight's have one too: a new handler identity would re-render every node wrapper (measured, W12b).
   const tip = useValueTip();
   const { enter: tipEnter, leave: tipLeave, focus: tipFocus, blur: tipBlur, hide: tipHide } = tip;
+  // The card steps aside for a layer above it. It sits over the canvas menu (z-index 200 against 90), and one Escape would close both, so it goes the moment a canvas
+  // menu (the right-click one and a node's own button's) or the Find card opens, and the enter handler below starts nothing while either stands. `tipHide` forgets the
+  // hover too, so after the layer closes the card returns on the next enter, not by itself.
+  useEffect(() => {
+    if (menu !== null || findOpen) tipHide();
+  }, [menu, findOpen, tipHide]);
   // The node Find has just jumped to wears the class `flash`: set through its className (a class added to the element itself would be lost the next time
   // React Flow rewrites the node's classes, e.g. when the focus lights its path). One new object, made after the highlight's own, so `lit flash` sit together.
   const flashed = useMemo(
@@ -1015,7 +1024,9 @@ function Canvas({ model }: { model: GraphModel }) {
     highlight.onNodeMouseEnter(event, node);
     const mappingId = mappingOf(node);
     const wrapper = event.currentTarget instanceof Element ? event.currentTarget.closest(".react-flow__node") ?? event.currentTarget : null;
-    if (mappingId !== null && wrapper) tipEnter(node.id, mappingId, wrapper);
+    // A menu or the Find card is open (read from refs, so this handler keeps its identity): the card starts nothing, the highlight above still follows the pointer.
+    if (menuOpenNow.current || findOpenNow.current) tipLeave();
+    else if (mappingId !== null && wrapper) tipEnter(node.id, mappingId, wrapper);
     else tipLeave(); // a node that has no value to show: the card of the one just left goes after its short grace
   }, [highlight, tipEnter, tipLeave]);
   const onNodeMouseLeave: NodeMouseHandler = useCallback((event, node) => {

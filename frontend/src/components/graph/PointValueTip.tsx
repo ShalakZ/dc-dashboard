@@ -9,6 +9,11 @@ import { describeLatest } from "../../lib/valueTip";
 
 const NODE = ".react-flow__node";
 
+// The layers that sit above the card and own the Escape key while the focus is in them: the Find card, the canvas menu, a dialog (the confirm, the
+// forms) and anything marked modal. The card's listener is in the capture phase on the document, so it hears the key before any of them.
+const ABOVE = '.graph-find, .graph-menu, [role="dialog"], [aria-modal="true"]';
+const inAbove = (node: EventTarget | null) => node instanceof Element && node.closest(ABOVE) !== null;
+
 // The node's wrapper element, found by its data-id (an id holds colons, so no id selector; the attribute value is quoted).
 const wrapperOf = (nodeId: string): HTMLElement | null =>
   document.querySelector<HTMLElement>(`${NODE}[data-id="${nodeId.replace(/["\\]/g, "\\$&")}"]`);
@@ -20,8 +25,9 @@ const wrapperOf = (nodeId: string): HTMLElement | null =>
  * The card is a `role="tooltip"` portal on the page (position: fixed, below the node, flipped above at the window edge) and never takes the pointer.
  * While it shows, its id is appended to the node wrapper's own aria-describedby (React Flow puts its description there) and the exact previous
  * value comes back when the card hides or unmounts. It dismisses itself, and calls `onDismiss` (the caller's `hide()`), on Escape (the key goes no
- * further: the card is the innermost layer), on any scroll or resize (a fixed card would be left behind) and when its node leaves the DOM (a collapse,
- * a refetch). A read that fails says so once; the next hover tries again. A node that goes while the read is in flight just drops the answer.
+ * further: the card is the innermost layer, but only when it is: with the focus or the key's target in the Find card, a menu or a dialog, or when the
+ * key is already handled, the key is left for that layer), on any scroll or resize (a fixed card would be left behind) and when its node leaves the
+ * DOM (a collapse, a refetch). A read that fails says so once; the next hover tries again. A node that goes while the read is in flight just drops the answer.
  */
 export function PointValueTip({ target, canView, onDismiss }: { target: ValueTipTarget | null; canView: boolean; onDismiss?: () => void }) {
   const [gone, setGone] = useState<ValueTipTarget | null>(null);
@@ -64,6 +70,7 @@ function ValueCard({ target, onGone }: { target: ValueTipTarget; onGone: () => v
     const dismiss = () => gone.current();
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (event.defaultPrevented || inAbove(event.target) || inAbove(document.activeElement)) return; // a layer above the card has this key
       event.stopPropagation();
       dismiss();
     };

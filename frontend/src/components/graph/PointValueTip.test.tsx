@@ -181,6 +181,68 @@ describe("PointValueTip", () => {
     document.removeEventListener("keydown", heard);
   });
 
+  // The card's Escape listener runs first (capture phase on the document), so it must not take the key from a layer that is above it.
+  describe("Escape belongs to the topmost layer", () => {
+    const layers: [string, string][] = [
+      ["the Find card", '<div class="graph-find"><input aria-label="in find" /></div>'],
+      ["a canvas menu", '<div class="graph-menu"><button type="button">in menu</button></div>'],
+      ["a dialog", '<div role="dialog"><button type="button">in dialog</button></div>'],
+      ["a modal", '<div aria-modal="true"><button type="button">in modal</button></div>'],
+    ];
+    it.each(layers)("leaves the key alone, and the card up, while the focus is in %s", async (_name, html) => {
+      mockFetch(route(7, latest()));
+      const heard = vi.fn();
+      document.addEventListener("keydown", heard);
+      const { enter, advance } = setup();
+      const layer = document.body.appendChild(document.createElement("div"));
+      layer.innerHTML = html;
+      enter("p:1", 7);
+      advance(VALUE_DWELL_MS);
+      await screen.findByText("12.40 kW, 3 s ago");
+      const inside = layer.querySelector<HTMLElement>("input, button")!;
+      inside.focus();
+      fireEvent.keyDown(inside, { key: "Escape" });
+      expect(card()).not.toBeNull();
+      expect(heard).toHaveBeenCalledTimes(1); // not stopped: the layer's own handler hears it
+      document.removeEventListener("keydown", heard);
+      layer.remove();
+    });
+
+    it("leaves a key another layer has already handled (defaultPrevented)", async () => {
+      mockFetch(route(7, latest()));
+      const { enter, advance } = setup();
+      enter("p:1", 7);
+      advance(VALUE_DWELL_MS);
+      await screen.findByText("12.40 kW, 3 s ago");
+      const handled = (event: KeyboardEvent) => event.preventDefault();
+      window.addEventListener("keydown", handled, true); // (the window's capture phase runs before the document's)
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      window.removeEventListener("keydown", handled, true);
+      expect(card()).not.toBeNull();
+    });
+
+    it("still takes the key when the focus is outside every layer (on the canvas, or on the page)", async () => {
+      mockFetch(route(7, latest()));
+      const { enter, advance, node } = setup();
+      enter("p:1", 7);
+      advance(VALUE_DWELL_MS);
+      await screen.findByText("12.40 kW, 3 s ago");
+      screen.getByRole("button", { name: "Point one" }).focus();
+      fireEvent.keyDown(node("p:1"), { key: "Escape" });
+      expect(card()).toBeNull();
+    });
+  });
+
+  it("says a failed read has no value, with its age and bad reading", async () => {
+    mockFetch(route(7, latest({ value: null, quality: 1, age_seconds: 4 })));
+    const { enter, advance } = setup();
+    enter("p:1", 7);
+    advance(VALUE_DWELL_MS);
+    expect(await screen.findByText("No value, 4 s ago, bad reading")).toBeInTheDocument();
+    expect(card()).toHaveClass("gtip-bad");
+    expect(screen.queryByText("No reading yet")).toBeNull();
+  });
+
   it("an Escape with no card up is nobody's business", () => {
     mockFetch({});
     const heard = vi.fn();

@@ -4515,6 +4515,74 @@ describe("DiscoveryPage last value card (W12c)", () => {
     await waitFor(() => expect(card()).toBeNull());
   });
 
+  // ---- the card beside a menu and Find: the card (z-index 200) would cover the menu (90), and one Escape would close both ----
+
+  it("a right-click on the point with the card showing takes the card away, and ONE Escape then closes the menu only", async () => {
+    mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    fireEvent.contextMenu(node("point:1"));
+    await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+    await waitFor(() => expect(card()).toBeNull());
+    expect(node("point:1").getAttribute("aria-describedby")).toBe("flow-node-desc"); // and its id is off the node again
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(node("point:1")).toHaveFocus();
+    expect(card()).toBeNull();
+  });
+
+  it("the node's own menu button does the same (the pointer rests on the node when it is pressed)", async () => {
+    mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    await userEvent.click(screen.getByRole("button", { name: "Mapping actions for LVP01 kW" }));
+    await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+    await waitFor(() => expect(card()).toBeNull());
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mapping actions for LVP01 kW" })).toHaveFocus();
+  });
+
+  it("resting on a mapped point while a menu is open shows no card and asks for nothing; it shows again once the menu has closed", async () => {
+    const calls = mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.contextMenu(node("point:1")); // the menu first, no card yet
+    await screen.findByRole("menu", { name: "Actions for LVP01 kW" });
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await rest(600); // (longer than the dwell)
+    expect(card()).toBeNull();
+    expect(latestCalls(calls)).toHaveLength(0);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+  });
+
+  it("opening Find takes a shown card away, no card shows while Find is open, and Escape in the Find field closes Find first", async () => {
+    const calls = mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
+    open();
+    await expandBoth();
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    await userEvent.click(screen.getByRole("button", { name: "Find" }));
+    const field = await screen.findByRole("combobox");
+    await waitFor(() => expect(card()).toBeNull());
+    expect(latestCalls(calls)).toHaveLength(1); // the one read of the first show
+    fireEvent.click(screen.getByTestId("leave-point:1"));
+    fireEvent.click(screen.getByTestId("enter-point:1"));
+    await rest(600);
+    expect(card()).toBeNull(); // Find is open: nothing starts
+    expect(latestCalls(calls)).toHaveLength(1);
+    act(() => field.focus());
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument(); // the first Escape closes Find
+  });
+
   it("the hover handlers React Flow is given keep one identity across renders (a new identity re-renders every node), and so does the move handler", async () => {
     mockFetch({ ...routes("admin", mappedWorld()), ...latestRoute() });
     open();
