@@ -27,7 +27,8 @@ import { latestBody, node as nid, SMALL, SMALL_GROUPS, SMALL_NAMES, smallModel, 
 //             for <name>` menu, whose items equal the right-click menu's; a role with discovery.view only has no such button and no Remove or Create assets in the right-click menu.
 //   icons     a `gicon` of the right drawing on every node kind; an asset with a chosen icon shows that one; Find's options carry an icon.
 //   value     the card for a mapped point (mocked answers): after the dwell, the words, the age counting, stale / bad reading / no reading / a failed read, none for an unmapped point, one read per hover, the
-//             node's aria-describedby restored, Escape and a pan hide it, keyboard focus shows it; a role without assets.view asks for nothing.
+//             node's aria-describedby restored, Escape and a pan hide it, keyboard focus shows it; a role without assets.view asks for nothing. A row with a time and no value (the collector's failed
+//             read, quality 1) says "No value, N s ago, bad reading", not "No reading yet"; a right-click on the point with the card showing takes the card away, and one Escape closes the menu only.
 //   look      light and dark: text contrast of the new parts, no sideways scroll.
 //   route     the real stack: GET /api/mappings/{id}/latest is 200 for the administrator, 404 for an unknown mapping, 401 signed out and 403 for a role without assets.view; the graph's assets carry icon and kind_icon.
 //
@@ -858,6 +859,36 @@ test.describe("W12c: the last value of a mapped point", () => {
     });
   }
 
+  // The collector writes a failed read as a row WITH a time, value NULL and quality 1: it must not read as a point that was never polled.
+  test("a failed read (a row with a time and no value, quality 1) says No value and bad reading, never No reading yet", async ({ page }) => {
+    test.setTimeout(120_000);
+    const stub = await arrive(page, smallModel(), { width: 1440, height: 900 });
+    stub.answer = (id) => ({ status: 200, body: latestBody(id, { value: null, quality: 1, age_seconds: 4 }) });
+    await openAlpha(page);
+    await hover(page, MAPPED);
+    await expect(tooltip(page)).toHaveText(/^No value, \d+ s ago, bad reading$/);
+    await expect(tooltip(page)).not.toContainText("No reading yet");
+    await expect(tooltip(page), "the bad tone").toHaveClass(/gtip-bad/);
+    expect(stub.latest.length, "one read").toBe(1);
+  });
+
+  test("a right-click on the point with the card showing takes the card away, and ONE Escape closes the menu only", async ({ page }) => {
+    test.setTimeout(150_000);
+    await arrive(page, smallModel(), { width: 1440, height: 900 });
+    await openAlpha(page);
+    const before = await describedBy(page, MAPPED);
+    await hover(page, MAPPED);
+    await expect(tooltip(page)).toBeVisible();
+    await titleOf(page, MAPPED).click({ button: "right" });
+    const menu = page.getByRole("menu", { name: /^Actions for / });
+    await expect(menu, "the point's menu opens").toBeVisible();
+    await expect(tooltip(page), "the card steps aside: it would cover the menu").toHaveCount(0);
+    expect(await describedBy(page, MAPPED), "and its id is off the node again").toBe(before);
+    await page.keyboard.press("Escape");
+    await expect(menu, "one Escape closes the menu").toHaveCount(0);
+    expect(await focusedNodeId(page), "and the focus is back on the node").toBe(MAPPED);
+  });
+
   test("a read that fails says so once and does not retry; the next hover tries again", async ({ page }) => {
     test.setTimeout(120_000);
     const stub = await arrive(page, smallModel(), { width: 1440, height: 900 });
@@ -1109,9 +1140,10 @@ test.describe("W12c: the real route", () => {
         expect(body.mapping_id).toBe(id);
         expect(typeof body.stale).toBe("boolean");
         expect(typeof body.unit).toBe("string");
-        if (body.value === null) expect([body.ts, body.quality, body.age_seconds], "no reading: the rest is null too").toEqual([null, null, null]);
+        // No row at all (no time): everything else is null. A row has a time, a quality and an age; its value is null for a failed read (quality 1).
+        if (body.ts === null) expect([body.value, body.quality, body.age_seconds], "no reading: the rest is null too").toEqual([null, null, null]);
         else {
-          expect(typeof body.value).toBe("number");
+          if (body.value !== null) expect(typeof body.value).toBe("number");
           expect(typeof body.quality, "a reading has a quality").toBe("number");
           expect(body.age_seconds, "and an age from the database's clock").toBeGreaterThanOrEqual(0);
           expect(typeof body.ts).toBe("string");

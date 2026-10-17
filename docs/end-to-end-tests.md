@@ -288,12 +288,16 @@ order below, each depending on the one before; all but `journey` use a 1600×100
   button opens the shortcuts list, and so does the `?` key on the canvas; Escape closes it and returns the focus to where it was, and
   Tab from the open list never lands on the page itself. A source is a card with a one-line short name, its protocol and address, the
   status in words, `N of N mapped`, **Details** and a `Source actions for <name>` menu that holds **Create assets for N groups…** and
-  **Remove from Discovery…**. Every kind of node carries its icon, and an asset given a chosen icon through the API shows that icon (the
-  case puts the asset back as it found it). Everything is also looked at in light and dark. The last-value card is checked with
-  answers made up in the page (`page.route`, a fresh reading, a stale one, a bad one and none): the text it shows, the word `stale`,
-  no card on an unmapped point, and the node's description (`aria-describedby`) back to what it was once the card has gone. One case
-  asks the real stack for `GET /api/mappings/{id}/latest` on a real mapping (200 for the administrator, 403 for a role that holds
-  only `discovery.view`) and checks that a role without `assets.view` makes no value request at all.
+  **Remove from Discovery…**. Every kind of node carries its icon, and an asset the generated model gives a chosen icon (`icon: "rack"`)
+  shows that icon instead of its kind's; nothing is set through the API for this. Everything is also looked at in light and dark. The
+  last-value card is checked with answers made up in the page (`page.route`, a fresh reading, a stale one, a bad one and none): the
+  text it shows, the word `stale`, no card on an unmapped point, and the node's description (`aria-describedby`) back to what it was
+  once the card has gone. Two cases cover the failed read and the menu. A failed read (a row with a time and no value, quality 1)
+  says `No value, N s ago, bad reading` in the bad tone, never `No reading yet`, which is for a point with no row at all. A right-click
+  on a mapped point with its card showing takes the card away (it would cover the menu), and one Escape then closes the menu only and
+  puts the focus back on the node. A separate case, also with made-up answers, checks that a role without `assets.view` makes no value
+  request at all and shows no card. One case asks the real stack for `GET /api/mappings/{id}/latest` on a real mapping (200 for the
+  administrator, 404 for an unknown one, 401 signed out and 403 for a role that holds only `discovery.view`).
 
 It needs a fresh database (setup must still be pending), so the run starts the stack from scratch in a
 separate Compose project (its own `dcdash_e2e_dbdata` volume; stop your normal stack first with
