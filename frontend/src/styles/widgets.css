@@ -72,6 +72,7 @@
   .widget-table tbody tr:last-child > td { border-bottom: 0; }
   .widget-table td:first-child { overflow-wrap: anywhere; } /* the asset name only, never a figure */
   .widget-table :is(th, td).num { text-align: right; font-variant-numeric: tabular-nums; }
+  .widget-table td.muted { color: var(--stale); } /* nothing recorded, or a stale reading: the words and the age are the signal, the dimming is support (the layer's td colour is more specific than .muted) */
   .widget-table .cell-age { display: inline-block; margin-left: 4px; color: var(--text-2); font-size: var(--fs-xs); white-space: nowrap; } /* may drop under the figure, never splits */
 
   /* ===== Gauge (Task 3): a 180 degree SVG arc, then the scale ends, the figure and the name as plain text in the flow below it ===== */
@@ -87,6 +88,10 @@
   .gauge-figure.muted { color: var(--stale); }
   .gauge-figure.none, .gauge-figure[title] { color: var(--text-2); font-size: var(--fs-sm); font-weight: 400; line-height: 1.4; }
   .gauge-name { min-width: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-sm); text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+  /* a stale gauge adds " · 47 min ago" to the name's line: the name gives way first (an ellipsis), the age never does */
+  .gauge-name:has(> small) { display: flex; justify-content: center; gap: 4px; }
+  .gauge-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .gauge-name > small { flex: none; font-size: var(--fs-xs); }
 
   /* ===== Charts (Task 4): the canvas box ===== */
   .widget-chart { height: 100%; min-width: 0; min-height: 140px; }

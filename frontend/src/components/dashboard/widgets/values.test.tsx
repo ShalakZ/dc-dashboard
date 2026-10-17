@@ -1,79 +1,50 @@
 import { render, screen } from "@testing-library/react";
-import { MUTED_FIGURE } from "../../../lib/widgetFormat";
 import { config, valueRow, valuesData } from "../../../test/dashboardFixtures";
 import { LiveValuesContext } from "../LiveValuesContext";
-import { GaugeWidget, gaugeOption } from "./GaugeWidget";
+import { GaugeWidget, gaugeFillPath } from "./GaugeWidget";
 import { StatWidget } from "./StatWidget";
 import { TableWidget } from "./TableWidget";
-
-vi.mock("echarts-for-react", () => ({
-  default: (props: { option: { series?: { type?: string }[] } }) => (
-    <pre data-testid="chart" data-kind={props.option.series?.[0]?.type}>{JSON.stringify(props.option)}</pre>
-  ),
-}));
 
 const stream = (value: number | null, quality = 0, connected = true, ts = "2026-10-08T06:00:00.000Z") => ({
   values: new Map([[7, { ts, value, quality }]]), connected, register: () => {},
 });
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+const bigOf = (text: string) => screen.getByText(text).closest(".big")!; // the figure sits in span.stat-num inside div.big
 
+// The gauge's own cases (the arc, the meter attributes, the no-data words) are in GaugeWidget.test.tsx; these are the ones that go through the stream.
 describe("gauge", () => {
-  type GaugeOpt = { series: { type: string; min: number; max: number; pointer: { show: boolean }; progress: { show: boolean }; data: { value: number }[]; detail: { formatter: () => string; color?: string; offsetCenter: [number, string] }; title: { show: boolean; offsetCenter: [number, string] } }[] };
-  const gauge = (args: Partial<Parameters<typeof gaugeOption>[0]> = {}) =>
-    gaugeOption({ value: 12.5, min: 0, max: 100, unit: "kW", name: "LV Panel 1", ...args }) as unknown as GaugeOpt;
-
-  it("uses the configured range, the unit and the markers of the figure", () => {
-    const option = gauge();
-    expect(option.series[0]).toMatchObject({ type: "gauge", min: 0, max: 100, data: [{ value: 12.5 }], pointer: { show: true }, progress: { show: true } });
-    expect(option.series[0].detail.formatter()).toBe("12.50 kW");
-    expect(gauge({ estimated: true, partial: true }).series[0].detail.formatter()).toBe("~12.50* kW");
-  });
-
-  it("positions the asset name (the series title) below the value, not at the default centre over the needle", () => {
-    const { title, detail } = gauge().series[0];
-    expect(title.show).toBe(true);
-    expect(Array.isArray(title.offsetCenter)).toBe(true);
-    expect(parseFloat(title.offsetCenter[1])).toBeGreaterThan(parseFloat(detail.offsetCenter[1])); // 70 % for the value
-  });
-
-  it("draws no needle and no progress for a missing figure, only a dash, never a zero", () => {
-    const empty = gauge({ value: null, min: 10, max: 20 });
-    expect(empty.series[0].pointer.show).toBe(false);
-    expect(empty.series[0].progress.show).toBe(false);
-    expect(empty.series[0].detail.formatter()).toBe("—");
-    expect(gauge({ value: null, noData: true }).series[0].detail.formatter()).toBe("no data");
-    expect(empty.series[0].data[0].value).toBe(10); // parked at the scale's start so the dash still has a place to show
-  });
-
-  it("dims the figure when it is stale or recorded nothing", () => {
-    expect(gauge().series[0].detail.color).toBeUndefined();
-    expect(gauge({ muted: true }).series[0].detail.color).toBe(MUTED_FIGURE); // the stat's muted colour, which reads at 4.5:1
-  });
+  const cfg = config({ aggregation: "last", min: 0, max: 200 });
+  const reading = () => screen.getByRole("meter");
+  const fillOf = (container: HTMLElement) => container.querySelector("path.gauge-fill")?.getAttribute("d");
 
   it("renders the fetched value, a live value for a live gauge, and ignores the stream when not live", () => {
-    const cfg = config({ aggregation: "last", min: 0, max: 200 });
     const data = valuesData({ type: "gauge" });
     const { unmount } = render(<GaugeWidget data={data} config={cfg} live={false} />);
-    expect(screen.getByTestId("chart").textContent).toContain('"value":10.5');
+    expect(reading()).toHaveAttribute("aria-valuenow", "10.5");
+    expect(screen.getByText("10.50")).toBeInTheDocument();
     unmount();
-    render(<LiveValuesContext.Provider value={stream(33.5)}><GaugeWidget data={data} config={cfg} live /></LiveValuesContext.Provider>);
-    expect(screen.getByTestId("chart").textContent).toContain('"value":33.5');
-    expect(screen.getByTestId("chart").textContent).toContain('"max":200');
+    const live = render(<LiveValuesContext.Provider value={stream(33.5)}><GaugeWidget data={data} config={cfg} live /></LiveValuesContext.Provider>);
+    expect(reading()).toHaveAttribute("aria-valuenow", "33.5");
+    expect(reading()).toHaveAttribute("aria-valuemax", "200");
+    expect(screen.getByText("33.50")).toBeInTheDocument();
+    expect(fillOf(live.container)).toBe(gaugeFillPath(33.5 / 200));
+    live.unmount();
+    render(<LiveValuesContext.Provider value={stream(33.5)}><GaugeWidget data={data} config={cfg} live={false} /></LiveValuesContext.Provider>);
+    expect(reading()).toHaveAttribute("aria-valuenow", "10.5");
   });
 
-  it("goes back to the fetched value when the stream has dropped, and draws no needle when the live reading went bad", () => {
-    const cfg = config({ aggregation: "last", min: 0, max: 200 });
+  it("goes back to the fetched value when the stream has dropped, and draws no fill when the live reading went bad", () => {
     const data = valuesData({ type: "gauge" });
     const { unmount } = render(<LiveValuesContext.Provider value={stream(33.5, 0, false)}><GaugeWidget data={data} config={cfg} live /></LiveValuesContext.Provider>);
-    expect(screen.getByTestId("chart").textContent).toContain('"value":10.5');
+    expect(reading()).toHaveAttribute("aria-valuenow", "10.5");
     unmount();
-    render(<LiveValuesContext.Provider value={stream(7, 1)}><GaugeWidget data={data} config={cfg} live /></LiveValuesContext.Provider>);
-    expect(screen.getByTestId("chart").textContent).toContain('"pointer":{"show":false}');
+    const bad = render(<LiveValuesContext.Provider value={stream(7, 1)}><GaugeWidget data={data} config={cfg} live /></LiveValuesContext.Provider>);
+    expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+    expect(bad.container.querySelector("path.gauge-fill")).toBeNull();
   });
 
   it("says how old a stale reading is", () => {
-    const cfg = config({ aggregation: "last" });
-    render(<GaugeWidget data={valuesData({ type: "gauge", values: [valueRow({ ts: minutesAgo(12), stale: true })] })} config={cfg} live={false} />);
+    render(<GaugeWidget data={valuesData({ type: "gauge", values: [valueRow({ ts: minutesAgo(12), stale: true })] })} config={config({ aggregation: "last" })} live={false} />);
     expect(screen.getByText("12 min ago")).toBeInTheDocument();
   });
 });
@@ -84,15 +55,24 @@ describe("stat", () => {
     expect(screen.getByText("10.50")).toBeInTheDocument();
     expect(screen.getByText("kW")).toBeInTheDocument();
     expect(screen.getByText("LV Panel 1")).toBeInTheDocument();
-    expect(screen.getByText("10.50")).not.toHaveClass("muted");
+    expect(bigOf("10.50")).not.toHaveClass("muted");
   });
 
-  it("marks estimated (~) and partial (*) figures and says what the markers mean", () => {
+  it("draws the figure, the unit and the name in the classes of the stylesheet", () => {
+    const { container } = render(<StatWidget data={valuesData()} live={false} />);
+    expect(container.querySelector(".stat > .big > .stat-num")).toHaveTextContent("10.50");
+    expect(container.querySelector(".stat > .big > small.stat-unit")).toHaveTextContent("kW");
+    expect(container.querySelector(".stat > .stat-name")).toHaveTextContent("LV Panel 1");
+    expect(container.querySelector(".big")).toHaveTextContent("10.50 kW");
+    expect(container.querySelector(".stat-age")).toBeNull();
+  });
+
+  it("marks estimated (~) and partial (*) figures; the hint that explains them is the frame's footer, not drawn here", () => {
     const row = valueRow({ value: 12.3, estimated: true, partial: true, point_id: null });
     render(<StatWidget data={valuesData({ source: "cost", unit: "QAR", values: [row] })} live={false} />);
     expect(screen.getByText("~12.30*")).toBeInTheDocument();
     expect(screen.getByText("QAR")).toBeInTheDocument();
-    expect(screen.getByText("~ estimated, * partial, some hours have no rate")).toBeInTheDocument();
+    expect(screen.queryByText(/estimated|partial|no rate/)).not.toBeInTheDocument();
   });
 
   it("shows a dash when there is no figure or no asset", () => {
@@ -106,14 +86,14 @@ describe("stat", () => {
 
   it("mutes a figure that recorded nothing, and says so in its title", () => {
     render(<StatWidget data={valuesData({ source: "energy", metric: null, unit: "kWh", values: [valueRow({ value: 0, no_data: true, point_id: null })] })} live={false} />);
-    expect(screen.getByText("0.00")).toHaveClass("muted");
-    expect(screen.getByText("0.00")).toHaveAttribute("title", "no data");
+    expect(bigOf("0.00")).toHaveClass("muted");
+    expect(bigOf("0.00")).toHaveAttribute("title", "no data");
   });
 
   it("says 'no data' for a metric with no reading, not the dash that means a missing rate", () => {
     render(<StatWidget data={valuesData({ values: [valueRow({ value: null, no_data: true, point_id: null })] })} live={false} />);
     const big = screen.getByTitle("no data");
-    expect(big).toHaveClass("muted");
+    expect(big).toHaveClass("muted", "none"); // words, not a measurement: the stylesheet draws them small
     expect(big).toHaveTextContent(/^no data$/);
     expect(screen.queryByText("—")).not.toBeInTheDocument();
   });
@@ -127,13 +107,21 @@ describe("stat", () => {
 
   it("gives a measured figure no title", () => {
     render(<StatWidget data={valuesData()} live={false} />);
-    expect(screen.getByText("10.50")).not.toHaveAttribute("title");
+    expect(bigOf("10.50")).not.toHaveAttribute("title");
   });
 
   it("dims a stale reading and says how old it is", () => {
     render(<StatWidget data={valuesData({ values: [valueRow({ ts: minutesAgo(12), stale: true })] })} live={false} />);
-    expect(screen.getByText("10.50")).toHaveClass("muted");
+    expect(bigOf("10.50")).toHaveClass("muted");
+    expect(bigOf("10.50")).not.toHaveClass("none");
     expect(screen.getByText("12 min ago")).toBeInTheDocument();
+  });
+
+  it("puts the age of a stale reading on its own line, behind a clock", () => {
+    const { container } = render(<StatWidget data={valuesData({ values: [valueRow({ ts: minutesAgo(12), stale: true })] })} live={false} />);
+    const age = container.querySelector(".stat > .stat-age")!;
+    expect(age).toHaveTextContent("12 min ago");
+    expect(age.querySelector("svg.i")).toHaveAttribute("aria-hidden", "true");
   });
 
   it("shows no age for a fresh reading", () => {
@@ -171,14 +159,14 @@ describe("stat", () => {
   it("treats a streamed value as fresh and takes its age from the stream, whatever the fetched row says", () => {
     const row = valueRow({ ts: "2026-10-08T10:20:00.000000+03:00", stale: true, no_data: false });
     render(<LiveValuesContext.Provider value={stream(11.25, 0, true, "2026-10-08T07:30:00.000Z")}><StatWidget data={valuesData({ values: [row] })} live /></LiveValuesContext.Provider>);
-    expect(screen.getByText("11.25")).not.toHaveClass("muted");
+    expect(bigOf("11.25")).not.toHaveClass("muted");
     expect(screen.queryByText(/ago/)).not.toBeInTheDocument();
   });
 
   it("keeps the fetched, newer reading and its staleness when the stream entry is older", () => {
     const row = valueRow({ ts: "2026-10-08T10:20:00.000000+03:00", stale: true });
     render(<LiveValuesContext.Provider value={stream(11.25, 0, true, "2026-10-08T07:10:00.000Z")}><StatWidget data={valuesData({ values: [row] })} live /></LiveValuesContext.Provider>);
-    expect(screen.getByText("10.50")).toHaveClass("muted");
+    expect(bigOf("10.50")).toHaveClass("muted");
     expect(screen.getByText(/ago/)).toBeInTheDocument();
   });
 });
@@ -195,7 +183,18 @@ describe("table", () => {
     expect(screen.getByRole("row", { name: /LV Panel 1/ })).toHaveTextContent("10.50");
     expect(screen.getByRole("row", { name: /LV Panel 2/ })).toHaveTextContent("~4.25");
     expect(screen.getByRole("row", { name: /LV Panel 3/ })).toHaveTextContent("—");
-    expect(screen.getByText("~ estimated")).toBeInTheDocument();
+    expect(screen.queryByText(/estimated/)).not.toBeInTheDocument(); // the hint is the frame's footer now
+  });
+
+  it("is a widget table with the value column, head and cells, right aligned", () => {
+    const { container } = render(<TableWidget data={valuesData({ type: "table", unit: "kW" })} />);
+    expect(container.querySelector("table.widget-table")).not.toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Asset" })).not.toHaveClass("num");
+    expect(screen.getByRole("columnheader", { name: "Value (kW)" })).toHaveClass("num");
+    const row = screen.getByRole("row", { name: /LV Panel 1/ });
+    expect(row.firstElementChild).not.toHaveClass("num");
+    expect(row.lastElementChild).toHaveClass("num");
+    expect(container.querySelector("p")).toBeNull(); // no hint paragraph under the table
   });
 
   it("mutes the figure of an asset that recorded nothing and dims a stale reading with its age", () => {
@@ -208,6 +207,8 @@ describe("table", () => {
     expect(screen.getByRole("row", { name: /Quiet/ }).lastElementChild).toHaveClass("muted");
     expect(screen.getByRole("row", { name: /Old/ }).lastElementChild).toHaveClass("muted");
     expect(screen.getByRole("row", { name: /Old/ })).toHaveTextContent("12 min ago");
+    expect(screen.getByRole("row", { name: /Old/ }).querySelector("td .cell-age")).toHaveTextContent("12 min ago");
+    expect(screen.getByRole("row", { name: /Fresh/ }).querySelector(".cell-age")).toBeNull();
     expect(screen.getByRole("row", { name: /Fresh/ }).lastElementChild).not.toHaveClass("muted");
   });
 
