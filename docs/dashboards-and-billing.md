@@ -27,23 +27,77 @@ Dashboards are shared by everyone.
 - **Widgets.** Five types: time series, bar, stat, gauge and table. A widget shows a metric, energy or cost for up to 20 assets (a stat
   or a gauge shows one). A metric widget offers only assets that have a mapping for that metric. Custom metrics are not available in
   widgets; they stay on the asset page.
+- **Look.** Widgets follow the theme like the rest of the app: Light, Dark or Match my device, and each Theme colour, in the profile
+  panel. A card in dark mode is a dark card, and the chart text, grid lines, legend and tooltip are drawn in the same colours, so an
+  open chart repaints in the new look as soon as you switch, without a reload. A **gauge** is a half-circle arc filled from its minimum
+  to the latest value; the two ends of the scale are written under the ends of the arc, and the figure, its unit and the asset name are
+  written under the arc, never on it, so they stay readable on the smallest card. A value outside the scale fills the arc to its end
+  and the figure still shows the real reading; a gauge with no reading shows the empty arc and "no data" in place of the figure.
 - **Time ranges.** A dashboard has one time range and a widget may override it. The ranges are the rolling `1h`, `6h`, `24h`, `7d`,
   `30d` and the calendar `today`, `yesterday`, `this_month`, `last_month` (in the site timezone); there are no custom date ranges, and
   changing the range on the page affects that visit only.
 - **Live values.** Stat and gauge widgets that show the latest value follow the live stream while their range ends now (the rolling
   ranges, `today` and `this_month`; not `yesterday` or `last_month`); every widget also refreshes every 30 seconds.
+- **Details.** Every card on a dashboard has an information button in its title bar (**Details for <title>**). It opens a panel on the
+  right, **Details: <title>**, which says exactly what the card shows, from the answer the card already has (nothing is fetched again).
+  The button waits while the card is still loading, and it is not there while you edit the dashboard, in the widget form's Preview,
+  or when the widget could not be loaded. Escape, **Close** or a click outside the panel shuts it and puts you back on the button.
+  The panel has:
+  - **What it shows**: the type, the metric (with its unit) or Energy or Cost, what one figure is in words (for example "Total per
+    hour", "Average of each bucket, with the lowest and highest as a band" or "The latest reading"), and the assets. Each asset is a link
+    to its page for a role that may open the Assets Tree, and plain text for one that may not. Assets left out are listed: those
+    removed, and those without the metric (by name when the page already has them, else a count).
+  - **Time window**: the real window of the answer, from and to in the site time zone with the zone named (for example "2026-10-17
+    10:46 to 2026-10-18 10:46 (Asia/Qatar)"), the range's name, and what the data is. For a metric chart over time it also names the
+    stored data that served it (the raw readings, the 1-minute roll-up or the hourly roll-up). It never states the width of a time
+    series bucket, because the server chooses it and the answer does not carry it.
+  - **Freshness**, for the latest reading of a metric in a stat, a gauge or a table: "Last reading 12:04:31 (9 s ago)" per asset, the
+    age counting up every second while the panel is open, with a sentence when the reading is stale (older than three polling
+    intervals of its meter, and at least a minute). When the range has ended (`yesterday`, `last_month`) there is no reading time to
+    show, only the hour of the roll-up the last value belongs to ("Last value of the hour from 23:00 (hourly roll-up)"), and nothing
+    is called stale.
+  - **What the markers mean here**: one line for each marker this card actually uses (`~`, `*`, the dash for no rate, "no data").
+  - **Per asset**: the state of each asset in words (estimated, partial, no rate, no data, stale). A bar chart of one figure per asset
+    adds its value. A chart adds a **figures table** as text, since a chart is a picture: for a metric, **Lowest** and **Highest**
+    (the extremes of the stored readings, because the roll-ups keep them), the start of the bucket the highest fell in ("Highest in the
+    bucket from"), and the **Last bucket**; for energy and cost, the highest bucket, the last bucket and **Total of the buckets
+    shown**. A total appears only when every bucket has a value, and it carries `~` or `*` when any bucket does; a cost whose highest
+    hour cannot be named because some hours have no rate shows "— unpriced hours" instead of a number. There is no average over the buckets,
+    because buckets hold different numbers of readings and it would not be exact.
+  - **Download CSV** at the foot of the panel: the same export as the card's CSV button.
+
+  A chart is also a labelled picture for a screen reader: its name gives the kind, the assets, the metric and unit and the window, and
+  points to Details for the figures. Hovering a chart shows the time and, per asset, the figure with its unit and the state in words
+  (estimated, partial, no rate) beside its `~` or `*`.
+- **Legend.** A chart with more than one asset has a legend. Clicking an entry hides or shows that asset: its line and, in a metric time
+  series, its min-max band go together. The choice is kept for that asset while the chart refreshes (every 30 seconds), also when a
+  `~` or `*` appears on or leaves its name; it is forgotten when you leave the dashboard, and if every asset is switched off the next
+  refresh shows them all again. The legend is part of the chart picture and is not reachable with the keyboard: the same names and figures are in
+  Details.
 - **Editing.** **Edit** (operators and admins) opens the grid editor: drag a widget by its title bar, resize it from the corner or the
-  edges, **Add widget**, then **Save**, which stores the whole dashboard in one step. Widgets always close up vertically (there are no
+  edges, **Add widget**, then **Save**, which stores the whole dashboard in one step. While you edit, a card shows a grip, an Edit
+  (pencil) and a Delete (trash) button in its title bar in place of the Details and CSV buttons, and its figures do not follow the
+  live stream. The **Preview** in the widget form is the same card a dashboard draws for the same settings, without the Details and
+  CSV buttons. Widgets always close up vertically (there are no
   gaps), in the editor and in the view alike: dropping a widget on an occupied place moves the others down only as far as needed, and a
   dashboard saved earlier with gaps is shown closed up without being rewritten until someone changes it and saves. If someone else saved
   first you are told, nothing is overwritten, and you can reload their version. Leaving the editor from inside the app, or closing the
   page, asks first when something is unsaved; a session that expires while you edit does not: the app signs you out and the unsaved
   edits are dropped without a prompt.
-- **Missing data.** A widget whose asset was deleted shows "N assets removed" and draws the rest. A metric with no reading in the range
-  says "no data" (the dash is only for a missing rate), and a cost chart with unpriced buckets says "— no rate" under its title.
-- **CSV.** Every widget has a CSV button: UTF-8 with a byte-order mark, times in the site timezone with their offset, columns
+- **Missing data.** A widget whose asset was deleted shows an "N assets removed" chip in its title bar and draws the rest; assets that
+  exist but have no reading of the widget's metric are counted the same way ("N assets without this metric"). On a card narrower than
+  about 280 px a chip shows only its count (the words stay for a screen reader), and Details lists what was left out. A metric with no
+  reading in the range says "no data" (the dash is only for a missing rate). A cost with no rate shows the dash, never zero, in every
+  kind of widget that can show a cost (stat, table, bar chart and time series; a gauge is always a metric); in a chart the dash is in
+  the tooltip and, in a bar chart, in the place the bar would be, and in a grouped bar chart that place is the asset's own among the
+  bars. The line under the card says "— no rate" for all of them, next to the other markers it explains (`~ estimated`, `* partial,
+  some hours have no rate`), and for energy and cost on a rolling range it also starts with the window really covered ("since 10:00").
+  That line is the same on every widget type, whether or not the chart's legend is on.
+- **CSV.** Every widget in a dashboard has a CSV button in its title bar, and the Details panel has the same one as **Download CSV**
+  at its foot: UTF-8 with a byte-order mark, times in the site timezone with their offset, columns
   `asset,source,unit,timestamp,value,estimated,partial,no_data`. Text starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a
-  leading apostrophe so that spreadsheets do not run it as a formula.
+  leading apostrophe so that spreadsheets do not run it as a formula. On a card narrower than about 200 px the title bar has no room
+  for the CSV button, so it moves into Details.
 
 ## The default dashboard
 
@@ -246,6 +300,8 @@ Billing.
 - One counter reset per hour is recovered exactly; a second one inside the same hour may understate that hour.
 - Energy estimated from power is an estimate, not a measurement.
 - The currency is one per site, there are no time-of-use tariffs, and custom metrics cannot be used in widgets.
+- A widget's Details panel says only what the widget's own answer proves. It does not show the source point's address, how many
+  readings a figure rests on or alarm limits, nor the width of a time series bucket, nor an average over buckets.
 - Closing a month has limits of its own (one snapshot per close, what a restore does to closed months, a close that lands during an
   edit): see [Closing a month](#closing-a-month).
 
