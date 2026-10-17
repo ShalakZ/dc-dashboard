@@ -525,10 +525,14 @@ def test_a_rack_is_about_the_sum_of_its_feeds_and_a_panel_follows_its_feeds(smal
     rack = next(r for r in layout.racks if r.hall == 1 and r.status == "live" and plain(r))
     both = [a + b for a, b in zip(feed_power(f"{rack.node}/a"), feed_power(f"{rack.node}/b"))]
     zone = ZoneInfo(ZONE)
-    expected = [rack.kw * pilot_hall.curve(history.base_kw(ts, zone)) for ts in times[:-1]]
-    # 12 %, not 8: each local day now has its own factor of 0.95 to 1.05 (`day_factor`) on top of the +-3 % jitter, and these 73
-    # samples cover four local days (two of them only in part), so the mean can sit up to 5 % off the flat curve
-    assert sum(both) / len(both) == pytest.approx(sum(expected) / len(expected), rel=0.12)
+    # the curve and the factor of the LOCAL day of each instant: the same two numbers the series multiplies the rack's load by
+    expected = [
+        rack.kw * pilot_hall.curve(history.base_kw(ts, zone)) * pilot_hall.day_factor(ts.astimezone(zone).date(), plan.seed)
+        for ts in times[:-1]
+    ]
+    # with the day factor in the expected value only the +-3 % jitter is left over 72 instants x 2 feeds (0.2 % for the default seed);
+    # 1 % keeps a 5x margin and is still tighter than the 2 to 3 % this window's four factors move the mean by
+    assert sum(both) / len(both) == pytest.approx(sum(expected) / len(expected), rel=0.01)
     assert sum(feed_power(f"{rack.node}/a")) / sum(both) == pytest.approx(rack.share_a, abs=0.02)
 
     # Panel 1B carries the Feed B of Hall 1 Pod A: plain counters only; its current is the power of those feeds
@@ -662,6 +666,71 @@ def test_the_daily_totals_vary_but_stay_within_five_percent():
     spread = (max(totals) - min(totals)) / (sum(totals) / 3)
     assert 0.005 < spread < 0.12  # more than a jitter's worth apart (so not "every day the same"), less than 0.95..1.05 can give
     assert all(abs(total / (sum(totals) / 3) - 1) < 0.06 for total in totals)
+
+
+RATIO_TOLERANCE = 0.005  # the +-3 % jitter of 209 feeds leaves up to 0.45 % at its worst instant for the default seed
+
+
+def _day_ratios(plan: history.Plan, layout: pilot_hall.Layout, frames) -> list[tuple[datetime, float]]:
+    """At each instant: the hall's kW as the 209 twins report it, over what the flat curve alone would give the same feeds
+    (rack load x share x `curve`). Without the +-3 % jitter (it averages out over 209 feeds) that is exactly the day factor."""
+    zone = ZoneInfo(plan.tz)
+    rack_of = {feed: rack for rack in layout.racks for feed in rack.feeds}
+    twins = _twins(layout)
+    assert len(twins) == 209
+    ratios = []
+    for ts, values in frames:
+        present = [twin for twin in twins if twin.id in values]  # the gap feed's twin emits nothing inside its hole
+        flat = pilot_hall.curve(history.base_kw(ts, zone))
+        nominal = sum(
+            rack_of[twin.node].kw * (rack_of[twin.node].share_a if twin.node.endswith("/a") else 1 - rack_of[twin.node].share_a) * flat
+            for twin in present
+        )
+        ratios.append((ts, sum(values[twin.id] for twin in present) / nominal))
+    return ratios
+
+
+def test_the_day_factor_follows_the_local_date(small):
+    plan, layout, frames = small  # three days at 60 minutes in Asia/Qatar (UTC+3, no daylight saving): four local days, two in part
+    zone = ZoneInfo(plan.tz)
+    ratios = _day_ratios(plan, layout, frames)
+    assert len(ratios) == plan.count == 73
+    for ts, ratio in ratios:
+        local_day = ts.astimezone(zone).date()
+        assert ratio == pytest.approx(pilot_hall.day_factor(local_day, plan.seed), rel=RATIO_TOLERANCE), (ts, local_day)
+    assert len({ts.astimezone(zone).date() for ts, _ in ratios}) == 4
+
+    # local 23:00 and local 00:00 of one night are the same UTC date (20:00 and 21:00) but two local dates, so a factor keyed on
+    # the UTC date would give both the same number; the series gives each the factor of its own local day (the night of the 14th
+    # is a night where the two days' factors are far apart, 1.040 and 0.996 for the default seed)
+    by_ts = dict(ratios)
+    late, midnight = datetime(2026, 10, 14, 20, 0, tzinfo=timezone.utc), datetime(2026, 10, 14, 21, 0, tzinfo=timezone.utc)
+    assert late.date() == midnight.date()
+    assert late.astimezone(zone).date() == date(2026, 10, 14) and midnight.astimezone(zone).date() == date(2026, 10, 15)
+    before, after = pilot_hall.day_factor(date(2026, 10, 14), plan.seed), pilot_hall.day_factor(date(2026, 10, 15), plan.seed)
+    assert abs(before - after) > 0.02  # far more than the tolerance, so a wrong date would be seen
+    assert by_ts[late] == pytest.approx(before, rel=RATIO_TOLERANCE) and by_ts[midnight] == pytest.approx(after, rel=RATIO_TOLERANCE)
+    assert abs(by_ts[late] - by_ts[midnight]) > 0.02
+
+
+def test_the_day_factor_follows_the_local_date_on_a_daylight_saving_day():
+    now = datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc)
+    plan = history.make_plan(now, "Europe/Berlin", 5, raw_retention_days=30, step_seconds=HOUR)
+    layout = pilot_hall.build_layout()
+    zone = ZoneInfo(plan.tz)
+    frames = list(pilot_hall.samples(plan, layout))
+    ratios = _day_ratios(plan, layout, frames)
+    on_the_day = [ts for ts, _ in ratios if ts.astimezone(zone).date() == date(2026, 10, 25)]
+    assert len(on_the_day) == 25  # the clocks go back that night: one local date holds 25 hourly instants
+    for ts, ratio in ratios:
+        assert ratio == pytest.approx(pilot_hall.day_factor(ts.astimezone(zone).date(), plan.seed), rel=RATIO_TOLERANCE), ts
+    # the first two instants of the local 25th are the UTC 24th (22:00 and 23:00): a factor keyed on the UTC date would give them
+    # the 24th's, and the two days' factors are far apart for the default seed (0.971 and 1.017)
+    by_ts = dict(ratios)
+    start = datetime(2026, 10, 24, 22, 0, tzinfo=timezone.utc)
+    assert start.astimezone(zone).date() == date(2026, 10, 25) and start.astimezone(zone).hour == 0
+    assert abs(pilot_hall.day_factor(date(2026, 10, 24), plan.seed) - pilot_hall.day_factor(date(2026, 10, 25), plan.seed)) > 0.02
+    assert by_ts[start] == pytest.approx(pilot_hall.day_factor(date(2026, 10, 25), plan.seed), rel=RATIO_TOLERANCE)
 
 
 def test_the_series_is_deterministic_and_the_seed_changes_it(small):
@@ -1400,7 +1469,7 @@ async def test_the_default_interval_is_run_against_the_database(site, allowed, c
     assert await site.fetchval("SELECT count(*) FROM mappings") == 442
     assert await site.fetchval("SELECT count(*) FROM readings") == expected
     per_point = {row["n"] for row in await site.fetch("SELECT count(*) AS n FROM readings GROUP BY point_id")}
-    assert per_point == {plan.count}  # every point holds a sample at every quarter hour of the range (no gap in a single day)
+    assert per_point == {plan.count}  # every point holds a sample at every half hour of the range (no gap in a single day)
 
 
 async def test_a_day_cut_into_small_batches_still_writes_every_reading(site, allowed, monkeypatch, capsys):
