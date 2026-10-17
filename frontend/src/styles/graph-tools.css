@@ -1,5 +1,5 @@
 @layer w6 {
-  /* W7u: the Discovery canvas's own tools (Find, Snap to grid), the right-click menu, the alignment guides, the minimap, the selection box
+  /* W7u: the Discovery canvas's own tools (the Find card; its button and Snap to grid are in the bar since w12c), the right-click menu, the alignment guides, the minimap, the selection box
      and the canvas's focus ring. Tokens only. React Flow's own sheet is UNLAYERED, so a rule here that must beat one of its declarations
      (a panel's z-index and margin) says !important; a custom property it exposes (--xy-*) needs no such help.
      Rules on .graph-canvas are rooted in .graph-layout: graph-nodes.css names .graph-canvas with a second class, and the page-file guard
@@ -9,9 +9,8 @@
      Find card can be as wide as the room the canvas has; the empty part lets every click and drag through to the canvas. */
   .graph-tools { left: 0; z-index: 12 !important; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; pointer-events: none; }
   .graph-tools > * { pointer-events: auto; }
-  .graph-tools-bar { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 
-  /* The Find card opens UNDER the two buttons and over the canvas: it moves nothing. */
+  /* The Find card opens over the canvas, at its top right, and moves nothing (its button is in the bar above the canvas). */
   .graph-find { box-sizing: border-box; width: min(360px, 100%); padding: 8px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); }
   .graph-find-field { display: flex; align-items: center; gap: 8px; }
   .graph-find-field svg.i { flex: none; color: var(--text-2); }
@@ -48,8 +47,4 @@
      arrival (Escape from a menu, say) does, inside the box so the panel's border does not clip it. */
   .graph-layout .graph-canvas:focus { outline: none; }
   .graph-layout .graph-canvas:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
-
-  /* The tip beside the page's hint ("What can I do on the canvas?"): six short lines in the shared bubble. */
-  .graph-hint-list { margin: 0; padding-left: 1.1em; }
-  .graph-hint-list li + li { margin-top: 4px; }
 }

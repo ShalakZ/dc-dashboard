@@ -11,12 +11,23 @@ export const EXPAND_NODE_BUDGET = 600;
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+export interface GraphCounts {
+  sources: number;
+  /** The points the graph draws, not the sources' `point_count`. */
+  points: number;
+  mapped: number;
+  /** Sources that need credentials. */
+  needing: number;
+  /** The points the "Unmapped only" filter leaves: `points - mapped`. */
+  unmapped: number;
+}
+
 /**
- * "3 sources, 120 points, 6 mapped, 1 needs credentials": the line above the canvas. Counts the points the graph draws, not `point_count`.
- * While the "Unmapped only" filter is on it leads with how many points that leaves ("Showing 42 of 120 points, 3 sources, 6 mapped"): the
- * figures stay the whole graph's, so a person can always see how much is mapped and how much the filter hides.
+ * The figures behind the line above the canvas and the bar's chips. They are the whole graph's whatever the view: the "Unmapped only" filter
+ * changes the words that are said about them (`graphSummary`), not the figures, so a person can always see how much is mapped and how much the
+ * filter hides. The view is accepted so a caller passes the same arguments as to `graphSummary`.
  */
-export function graphSummary(model: GraphModel, view: GraphView = NO_VIEW): string {
+export function graphCounts(model: GraphModel, _view: GraphView = NO_VIEW): GraphCounts {
   let points = 0;
   let mapped = 0;
   let needing = 0;
@@ -27,9 +38,19 @@ export function graphSummary(model: GraphModel, view: GraphView = NO_VIEW): stri
       if (p.asset_id !== null) mapped++;
     }
   }
-  const [sourceText, pointText] = [plural(model.sources.length, "source", "sources"), plural(points, "point", "points")];
+  return { sources: model.sources.length, points, mapped, needing, unmapped: points - mapped };
+}
+
+/**
+ * "3 sources, 120 points, 6 mapped, 1 needs credentials": the line above the canvas. Counts the points the graph draws, not `point_count`.
+ * While the "Unmapped only" filter is on it leads with how many points that leaves ("Showing 42 of 120 points, 3 sources, 6 mapped"): the
+ * figures stay the whole graph's, so a person can always see how much is mapped and how much the filter hides.
+ */
+export function graphSummary(model: GraphModel, view: GraphView = NO_VIEW): string {
+  const { sources, points, mapped, needing, unmapped } = graphCounts(model, view);
+  const [sourceText, pointText] = [plural(sources, "source", "sources"), plural(points, "point", "points")];
   const parts = view.unmappedOnly
-    ? [`Showing ${points - mapped} of ${pointText}`, sourceText, `${mapped} mapped`]
+    ? [`Showing ${unmapped} of ${pointText}`, sourceText, `${mapped} mapped`]
     : [sourceText, pointText, `${mapped} mapped`];
   if (needing > 0) parts.push(`${needing} ${needing === 1 ? "needs" : "need"} credentials`);
   return parts.join(", ");

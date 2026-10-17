@@ -1,47 +1,71 @@
 @layer w6 {
-  /* W7r: the Discovery graph's node lines and buttons (Remove, Create assets, last seen) and the header's Clear unmapped. Tokens only; every rule is scoped by a class this piece owns. */
-
-  /* A source node holds Details, Create assets… and Remove: three buttons do not always fit the 220px node (app.css gives .gnode .row nowrap and space-between), so the
-     row wraps and starts at the left. The extra specificity is on purpose: app.css loads first and names the same two properties. */
-  .gnode .row.gnode-actions { flex-wrap: wrap; justify-content: flex-start; gap: 2px 4px; margin-top: 2px; }
-  /* Remove keeps to the right end of the row it is on (alone on the second row when the three do not fit), away from Details, the button that is pressed far more often. */
-  .gnode-remove { margin-left: auto; }
-
-  /* The last-seen line is ONE line, so a node never changes height when the graph is read again and the time text changes ("Seen in scan #6, 9 min ago" -> "10 min ago"); the whole text is in its title. */
-  .gnode-seen { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  /* Clear unmapped waits with aria-disabled, never disabled (a disabled button drops the focus it holds, and the dialog hands the focus back to it): the looks of button:disabled,
-     with the base hover wash taken back by naming the base colour. */
-  .discovery-clear[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
-  .discovery-clear[aria-disabled="true"]:hover { background: var(--bg); }
-
-  /* W7t: Remove on a source node is the bin alone (its name is the aria-label, its tooltip the title): Details, Create assets… and the bin share one row of the 220px node. 14px keeps the row as tall as its text buttons. */
-  .gnode-remove svg.i { width: 14px; height: 14px; }
-
-  /* W7t: the header's actions while the graph loads are the real buttons' words, hidden (visibility keeps their width and takes them out of the tab order and the accessibility tree): the same width
-     as the real Refresh and Clear unmapped, so the hint beside them wraps onto the same lines and the canvas does not drop when the graph arrives. */
-  .graph-actions-space { display: flex; gap: 8px; visibility: hidden; }
-
-  /* W7t: the bar between the header and the canvas (the summary on the left, Collapse all, Expand all and Tidy layout on the right). One rule gives the bar and the place held for it while the graph loads
-     the same height and the same gap, so the canvas does not drop when the bar arrives (the page is exactly one window tall). */
+  /* W12c: the bar between the header and the canvas. Left to right: the chips (what the graph holds), View controls, a divider, Canvas controls, a divider, Page controls. One rule gives the bar and the place held for it
+     while the graph loads the same height and the same gap, so the canvas does not drop when the bar arrives (the page is exactly one window tall); the bar is 36px in every state and never wraps.
+     The bar is a size container: its width tiers are the @container rules below, measured against the bar's OWN width, so the sidebar's two states need no rule of their own. Tokens only. */
   .graph-bar, .graph-bar-space { flex: none; box-sizing: border-box; height: 36px; margin-bottom: 8px; }
-  .graph-bar { display: flex; align-items: center; gap: 8px; }
-  /* ONE line that gives way to the buttons (min-width 0): the whole text is in its title. */
-  .graph-summary { flex: 1 1 0; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: var(--fs-sm); }
+  .graph-bar { position: relative; container-type: inline-size; display: flex; align-items: center; gap: 8px; }
   .graph-bar button { flex: none; }
+
+  /* The one live sentence is read, not drawn: the chips show the same numbers. Visually hidden with the clip pattern (never display: none: that would drop it from the accessibility tree and silence it). */
+  .graph-summary { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  /* The chips take the free room (flex 1 1 0, min-width 0) and the controls keep their widths, so a chip that appears (needs credentials) moves nothing at its right. A chip is icon, number and words; its words go first. */
+  .gbar-chips { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 0 14px; height: 20px; overflow: hidden; } /* one row of whole chips: a chip that does not fit is not drawn, never cut in half */
+  .gbar-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap; }
+  .gbar-chip svg.i { width: 16px; height: 16px; }
+  .gbar-chip-num { color: var(--text); font-weight: 600; }
+  .gbar-chip-warn { color: var(--text); }
+  .gbar-chip-warn svg.i { color: var(--warn-icon); }
+  .gbar-divider { flex: none; width: 1px; height: 20px; background: var(--border-strong); }
+  .gbar-group { flex: none; display: flex; align-items: center; gap: 8px; }
+
   /* Waiting buttons use aria-disabled, never disabled (they may hold the focus the click gave them): the looks of button:disabled, with the base hover wash taken back by naming the base colour. */
   .graph-bar button[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
   .graph-bar button[aria-disabled="true"]:hover { background: var(--bg); }
 
   /* W12b: the chevron beside Collapse all and Expand all (a menu for the selection and the branch) is drawn as the other half of a split button: 28px wide, joined to its button by taking back the 8px gap
-     and 1px of border, the corners between them square. The summary gives way first (min-width 0 above); nothing here can make the bar wrap or grow taller than its 36px. */
-  .graph-bar > button:has(+ .graph-bar-more) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+     and 1px of border, the corners between them square. */
+  .gbar-group > button:has(+ .graph-bar-more) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   .graph-bar .graph-bar-more { flex: none; width: 28px; margin-left: -9px; padding: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
   .graph-bar .graph-bar-more:focus-visible { position: relative; z-index: 1; } /* its ring is not cut by the button it joins */
   .graph-bar .graph-bar-more[aria-expanded="true"] { background: var(--accent-tint); color: var(--accent); } /* like the row menu's button while its menu stands */
-  /* The Unmapped only switch is always in the bar, at its end, with its words on one line: its width never changes, so nothing jumps when the filter is turned on. */
-  .graph-bar-switch { flex: none; display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-sm); white-space: nowrap; }
+  /* The Unmapped only switch is always in the bar, with its words on one line: its width never changes, so nothing jumps when the filter is turned on. */
+  .graph-bar-switch { flex: none; display: flex; align-items: center; gap: 6px; margin: 0; font-size: var(--fs-sm); white-space: nowrap; }
   .graph-bar-switch input { margin: 0; }
+  .graph-bar-switch svg.i { width: 16px; height: 16px; color: var(--text-2); }
+  /* The overflow button holds the controls the narrow tier takes out of the bar and Clear unmapped. A role that may not clear unmapped sees it only inside the narrow tier. */
+  .graph-bar .gbar-overflow[aria-expanded="true"] { background: var(--accent-tint); color: var(--accent); }
+  .graph-bar .gbar-overflow-narrow { display: none; }
+
+  /* The width tiers, measured (Chromium on Linux, 2026-10-17, GraphBar's own markup with the built stylesheet in a wrapper 1920 down to 460px wide; the fallback sans for "Segoe UI" is wider than
+     Segoe UI, so the thresholds err on the safe side). "Worst" is 12 sources, 1,240 points with the filter on and 2 sources needing credentials: four chips with four-digit counts.
+       what a part needs (px)                              typical     worst
+       controls with their words, all in the bar             961        961   (925: a role without Clear unmapped, no overflow button)
+       controls as icons, all in the bar                     442        442   (406)
+       controls as icons, three of them in the menu          315        315
+       chips with their words                                295        539
+       chips as icon and number                              136        267
+       the bar = controls + 8 gap + chips
+         words + labels                                     1264       1508
+         icon and number + labels                           1105       1236
+         icon and number + icons                             586        717
+     Thresholds are the worst case's need, rounded up, so that no chip is ever dropped at any count: 1520 (chips lose their words), 1240 (controls lose their words), 720 (Unmapped only, Tidy layout and
+     Snap to grid go to the overflow menu). Sweep at 1920 1500 1400 1300 1200 1100 1000 900 800 700 600 500: the bar is 36px tall at every width, its scrollWidth equals its clientWidth (nothing clips) and
+     nothing wraps; the chips draw whole chips from the left and drop the rest only when the room is below even their icon-and-number width (the worst case under about 590 inside the narrowest tier). */
+  /* Tier 1: the chips keep their icon and number, their words go (the full words are in each chip's title and in the summary sentence). The chips are decoration (aria-hidden), so display: none is right here. */
+  @container (max-width: 1520px) {
+    .gbar-chip-word { display: none; }
+  }
+  /* Tier 2: the controls keep their icon and lose their words VISUALLY: the words stay in the accessibility tree (the clip pattern, never display: none), so every control keeps its name. */
+  @container (max-width: 1240px) {
+    .gbar-lbl { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .gbar-group button:not(.icon-btn, .graph-bar-more) { padding: 0 8px; }
+  }
+  /* Tier 3: Unmapped only, Tidy layout and Snap to grid leave the bar (their menu twins in the overflow menu carry the names), and the overflow button is drawn for every role. */
+  @container (max-width: 720px) {
+    .gbar-narrow { display: none; }
+    .graph-bar .gbar-overflow-narrow { display: grid; } /* .icon-btn is a grid: the same look as the overflow button of a role that may clear unmapped */
+  }
 
   /* W12b: a disabled item of a canvas menu says why, as a second muted line inside the item (a longer reason wraps at 220px instead of widening the menu). */
   .graph-menu-text { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 0; text-align: left; }

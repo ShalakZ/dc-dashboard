@@ -1,7 +1,7 @@
 import type { GraphModel } from "../api/types";
 import { NO_VIEW, PAGE_SIZE, UNGROUPED, nodeId, type GraphView, type OpenState } from "./graph";
 import {
-  EXPAND_NODE_BUDGET, canCollapse, canExpand, changeNote, collapseAll, collapseTargets, expandAll, expandNote, expandTargets, graphSummary,
+  EXPAND_NODE_BUDGET, canCollapse, canExpand, changeNote, collapseAll, collapseTargets, expandAll, expandNote, expandTargets, graphCounts, graphSummary,
   selectionStates, targetsOf, type Change,
 } from "./graphView";
 import { model, point, source } from "../test/graphFixtures";
@@ -51,6 +51,36 @@ describe("graphSummary", () => {
       source(2), source(3),
     ];
     expect(graphSummary(model({ sources }))).toBe("3 sources, 120 points, 6 mapped, 1 needs credentials");
+  });
+});
+
+describe("graphCounts (the figures behind the summary and the bar's chips)", () => {
+  it("the fixture graph: sources, points, mapped, the ones the filter leaves and the sources needing credentials", () => {
+    expect(graphCounts(model())).toEqual({ sources: 2, points: 9, mapped: 2, needing: 0, unmapped: 7 });
+  });
+
+  it("counts the points the graph draws in groups and in the Ungrouped bag alike, and the sources needing credentials", () => {
+    const sources = [
+      source(1, { needs_credentials: true, clusters: [{ key: "A", points: [point(1, "a", { asset_id: 10 }), point(2, "b")] }], ungrouped: [point(3, "c", { asset_id: 11 })] }),
+      source(2, { needs_credentials: true, point_count: 99 }),
+      source(3),
+    ];
+    expect(graphCounts(model({ sources }))).toEqual({ sources: 3, points: 3, mapped: 2, needing: 2, unmapped: 1 });
+  });
+
+  it("an empty graph is all zeros", () => {
+    expect(graphCounts(model({ sources: [], unidentified: [] }))).toEqual({ sources: 0, points: 0, mapped: 0, needing: 0, unmapped: 0 });
+  });
+
+  it("the figures stay the whole graph's whatever the view: the filter changes the words of the summary, not the counts", () => {
+    expect(graphCounts(model(), view({ unmappedOnly: true }))).toEqual(graphCounts(model()));
+    expect(graphCounts(model(), NO_VIEW)).toEqual(graphCounts(model()));
+  });
+
+  it("graphSummary says the same words it always did, built from the same figures", () => {
+    const counts = graphCounts(model());
+    expect(graphSummary(model())).toBe(`${counts.sources} sources, ${counts.points} points, ${counts.mapped} mapped`);
+    expect(graphSummary(model(), view({ unmappedOnly: true }))).toBe(`Showing ${counts.unmapped} of ${counts.points} points, ${counts.sources} sources, ${counts.mapped} mapped`);
   });
 });
 
