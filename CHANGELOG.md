@@ -15,6 +15,28 @@ heading is NOT a place to go back to, because it already contains that wave.
 
 **The next release** gets its section at the TOP of this page, above the newest one.
 
+## w12c (2026-10-17, MERGE_PENDING)
+
+w12c (Discovery visual polish) tidies the look of Discovery without changing what it does. The bar above the canvas is one regrouped bar:
+on the left four small counts with icons (sources, points, mapped, and **needs credentials** when a source does), then **Collapse all** and
+**Expand all** with their menus, **Unmapped only**, **Tidy layout**, then **Find** and **Snap to grid**, then three icon buttons: **Refresh**,
+**Keyboard shortcuts and controls** and a **More** menu that holds **Clear unmapped (N)**. On a narrower window the words leave the buttons
+one at a time (the icons stay, with tooltips and names for a screen reader), and on a still narrower one **Unmapped only**, **Tidy layout**
+and **Snap to grid** move into the **More** menu; the **Find** card still opens at the top right of the canvas. The `?` hint beside the title
+is gone: the keyboard button (or the `?` key while the canvas has the focus) opens a small bubble that lists the real controls in groups
+with key caps. A source's card is calmer: the protocol icon, a short name (the host and port move to a grey line under it), a status dot
+with its word, a bar and the words `60 of 60 mapped`, **Details** as the one visible button, and a **Source actions** `...` button that
+opens the same menu as a right-click, where **Create assets for N groups...** and **Remove from Discovery...** now are. Every node has an
+icon: an asset shows the icon the Assets Tree shows for it, a group, a point (by its metric: power, energy, voltage, current, other) and a
+source (by protocol: OPC UA, Modbus, simulator). The page title has its icon like the other pages, and the **Find** results show the same
+icons. Resting the pointer on a **mapped** point (or focusing it by keyboard) shows its last value, for example `51.43 A, 3 s ago`, with
+the word `stale` when the reading is older than its interval allows, `No value ... bad reading` when the poll failed, and `No reading yet`
+when there is none; a person who may not view assets sees no card and nothing is asked of the server. Behind it: `GET /api/discovery/graph`
+now gives each asset its `icon` and `kind_icon`, and a new read `GET /api/mappings/{id}/latest` (needs `assets.view`) gives the value, unit,
+time, quality, age and `stale` of one mapping. No migration, no new permission, nothing new in the Audit log. The usual steps of
+[Upgrading and going back](docs/upgrading.md) are all it needs; the code to go back to is `bd96e05`. See
+[Discovery](docs/sources-and-discovery.md), [Screens](docs/screens.md) and [End-to-end tests](docs/end-to-end-tests.md).
+
 ## w12b (2026-10-16, 0909a1e)
 
 w12b (Discovery speed and navigation) makes the Discovery canvas quick on big graphs and adds the tools for working through them. It was

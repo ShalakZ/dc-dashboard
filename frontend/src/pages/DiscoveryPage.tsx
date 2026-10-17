@@ -718,7 +718,8 @@ function Canvas({ model }: { model: GraphModel }) {
   const { enter: tipEnter, leave: tipLeave, focus: tipFocus, blur: tipBlur, hide: tipHide } = tip;
   // The card steps aside for a layer above it. It sits over the canvas menu (z-index 200 against 90), and one Escape would close both, so it goes the moment a canvas
   // menu (the right-click one and a node's own button's) or the Find card opens, and the enter handler below starts nothing while either stands. `tipHide` forgets the
-  // hover too, so after the layer closes the card returns on the next enter, not by itself.
+  // pointer's hover too. The card can still return by itself after the layer closes: Escape from a node's menu gives the keyboard focus back to the node, and a
+  // keyboard focus on a mapped point shows the card (the same rule as the node's focus ring). A pointer user who closes the menu by a click does not get it.
   useEffect(() => {
     if (menu !== null || findOpen) tipHide();
   }, [menu, findOpen, tipHide]);
